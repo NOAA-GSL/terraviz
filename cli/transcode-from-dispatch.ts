@@ -232,7 +232,7 @@ export function isCloudflareChallenge(contentType: string | null, body: string):
   return body.includes('_cf_chl_opt') || body.includes('challenge-platform')
 }
 
-async function postTranscodeComplete(
+export async function postTranscodeComplete(
   server: ServerEnv,
   datasetId: string,
   uploadId: string,
@@ -274,6 +274,62 @@ async function postTranscodeComplete(
       )
     }
     throw new Error(`transcode-complete returned ${res.status}: ${body}`)
+  }
+
+  // 2xx is necessary but not sufficient. A Pages deploy that
+  // doesn't have the /transcode-complete route handler returns
+  // the SPA's index.html with status 200 for any unmatched API
+  // path — exactly what the CLI was trusting as success. Verify
+  // the response is JSON with the row payload the route is
+  // supposed to return; if it's HTML (or anything other shape),
+  // the workflow is talking to the wrong deploy. PR #112
+  // followup — caught after a smoke-test "transcoding cleared"
+  // log lied because the workflow was hitting a main-branch
+  // deploy that predated this PR's route handler.
+  const contentType = res.headers.get('content-type') ?? ''
+  const body = await res.text().catch(() => '')
+  if (!contentType.toLowerCase().includes('application/json')) {
+    let zone = 'unknown'
+    try {
+      zone = new URL(url).hostname
+    } catch {
+      /* keep the fallback */
+    }
+    const snippet = body.slice(0, 200).replace(/\s+/g, ' ').trim()
+    throw new Error(
+      `transcode-complete returned a 2xx response with non-JSON content-type ` +
+        `"${contentType}" from ${zone}. The route handler did not run — most ` +
+        `likely the Pages deploy at this hostname does not have the ` +
+        `/transcode-complete function file yet (the deploy is on a branch ` +
+        `that predates the publisher transcode pipeline). Check that ` +
+        `TERRAVIZ_SERVER points at a deploy that includes the publisher API ` +
+        `routes. Body preview: ${snippet}`,
+    )
+  }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(body)
+  } catch (err) {
+    throw new Error(
+      `transcode-complete returned 2xx with Content-Type ${contentType} but ` +
+        `the body is not parseable JSON: ${err instanceof Error ? err.message : String(err)}`,
+    )
+  }
+  // The success response always carries a `dataset` field (either
+  // the freshly-cleared row or, on idempotent retry, the
+  // already-cleared row). Either shape proves the route ran.
+  // `typeof null === 'object'` in JS so the null case needs an
+  // explicit guard.
+  const dataset =
+    typeof parsed === 'object' && parsed !== null
+      ? (parsed as { dataset?: unknown }).dataset
+      : undefined
+  if (typeof dataset !== 'object' || dataset === null) {
+    throw new Error(
+      `transcode-complete returned 2xx JSON but the body shape doesn't match ` +
+        `the route's contract (expected { dataset: {...}, ... }). The deploy ` +
+        `may be serving a different route handler. Body: ${body.slice(0, 200)}`,
+    )
   }
 }
 

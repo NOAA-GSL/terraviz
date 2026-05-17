@@ -9,8 +9,13 @@
  * already-tested helpers in `cli/lib/`.
  */
 
-import { describe, expect, it } from 'vitest'
-import { parseArgs, loadServerEnv, isCloudflareChallenge } from './transcode-from-dispatch'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import {
+  isCloudflareChallenge,
+  loadServerEnv,
+  parseArgs,
+  postTranscodeComplete,
+} from './transcode-from-dispatch'
 
 const GOOD_DS = '01HXAAAAAAAAAAAAAAAAAAAAAA'
 const GOOD_UP = '01HYAAAAAAAAAAAAAAAAAAAAAA'
@@ -212,5 +217,115 @@ describe('isCloudflareChallenge', () => {
 
   it('returns false for plain HTML without challenge markers', () => {
     expect(isCloudflareChallenge('text/html', '<html><body>Hello</body></html>')).toBe(false)
+  })
+})
+
+describe('postTranscodeComplete — response validation', () => {
+  // PR #112 followup: a smoke-test run on a half-deployed
+  // environment (PR's preview Worker doing the upload, but the
+  // workflow's TERRAVIZ_SERVER still pointing at production
+  // which was on a pre-3pd main) returned a 200 with the SPA's
+  // index.html for /api/v1/publish/.../transcode-complete. The
+  // CLI's `res.ok` check trusted the 2xx and logged "row
+  // updated, transcoding cleared" — but the route handler had
+  // never run, so the dataset row stayed `transcoding=1` and
+  // the publisher portal was stuck. These tests pin the new
+  // content-type + body-shape checks so the same class of
+  // deploy-mismatch failure surfaces as a loud error in the
+  // GHA log rather than a quiet lie.
+  const ENV = {
+    server: 'https://terraviz.example.org',
+    accessClientId: 'cf-client-id',
+    accessClientSecret: 'cf-client-secret',
+  }
+  const DATASET = '01KRPHXAAAAAAAAAAAAAAAAAAA'
+  const UPLOAD = '01KRVJHSZBQKS9CS5GFWKPEHH0'
+  const DIGEST = 'sha256:' + 'a'.repeat(64)
+
+  let fetchSpy: ReturnType<typeof vi.fn>
+  beforeEach(() => {
+    fetchSpy = vi.fn()
+    vi.stubGlobal('fetch', fetchSpy)
+  })
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  function htmlResponse(body: string, status = 200): Response {
+    return new Response(body, {
+      status,
+      headers: { 'Content-Type': 'text/html; charset=UTF-8' },
+    })
+  }
+  function jsonResponse(body: unknown, status = 200): Response {
+    return new Response(JSON.stringify(body), {
+      status,
+      headers: { 'Content-Type': 'application/json; charset=utf-8' },
+    })
+  }
+
+  it('resolves cleanly on a 200 with the expected { dataset: ... } shape', async () => {
+    fetchSpy.mockResolvedValue(
+      jsonResponse({
+        dataset: { id: DATASET, transcoding: null, data_ref: 'r2:videos/...' },
+        idempotent: false,
+      }),
+    )
+    await expect(postTranscodeComplete(ENV, DATASET, UPLOAD, DIGEST)).resolves.toBeUndefined()
+  })
+
+  it('resolves on the idempotent retry shape ({ dataset, idempotent: true })', async () => {
+    fetchSpy.mockResolvedValue(
+      jsonResponse({
+        dataset: { id: DATASET, transcoding: null },
+        idempotent: true,
+      }),
+    )
+    await expect(postTranscodeComplete(ENV, DATASET, UPLOAD, DIGEST)).resolves.toBeUndefined()
+  })
+
+  it('throws when a 200 response carries text/html (deploy missing the route)', async () => {
+    // The exact failure that bit a real smoke-test: Pages
+    // served the SPA's index.html as a 200 fallback for the
+    // unmatched API path. The old code logged success here.
+    fetchSpy.mockResolvedValue(
+      htmlResponse(
+        '<!DOCTYPE html><html><head><title>Terraviz</title></head><body>...</body></html>',
+      ),
+    )
+    await expect(postTranscodeComplete(ENV, DATASET, UPLOAD, DIGEST)).rejects.toThrow(
+      /non-JSON content-type "text\/html/,
+    )
+  })
+
+  it('throws when the 200 response body is not parseable JSON despite the header', async () => {
+    fetchSpy.mockResolvedValue(
+      new Response('not actually json', {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+    await expect(postTranscodeComplete(ENV, DATASET, UPLOAD, DIGEST)).rejects.toThrow(
+      /not parseable JSON/,
+    )
+  })
+
+  it('throws when the 200 JSON body is missing the dataset field', async () => {
+    // A response from a wrong route handler that happens to
+    // return JSON. Could be any number of misconfig scenarios
+    // (a different route claimed this path, a stale build, etc.).
+    fetchSpy.mockResolvedValue(jsonResponse({ unrelated: 'shape' }))
+    await expect(postTranscodeComplete(ENV, DATASET, UPLOAD, DIGEST)).rejects.toThrow(
+      /body shape doesn't match/,
+    )
+  })
+
+  it("throws when the 200 JSON's dataset field isn't an object", async () => {
+    // A 200 with `dataset: null` could come from a misbehaving
+    // wrapper. Still a contract violation; should fail loud.
+    fetchSpy.mockResolvedValue(jsonResponse({ dataset: null }))
+    await expect(postTranscodeComplete(ENV, DATASET, UPLOAD, DIGEST)).rejects.toThrow(
+      /body shape doesn't match/,
+    )
   })
 })
