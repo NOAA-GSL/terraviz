@@ -32,6 +32,7 @@ import { renderChipInput } from './chip-input'
 import { renderAssetUploader } from './asset-uploader'
 import { renderMarkdown } from '../../../services/markdownRenderer'
 import type { PublisherDatasetDetail } from '../types'
+import { ROUTE_CHANGE_START_EVENT } from '../router'
 
 export type DatasetFormMode = 'create' | 'edit'
 
@@ -1002,6 +1003,12 @@ function renderForm(
         fetchFn: ctx.fetchFn,
         sleep: ctx.sleep,
         onUploaded: outcome => {
+          // Bail if the user navigated away during the upload
+          // (which can take minutes for a multi-GB video). Without
+          // this guard, the deferred callback would call update()
+          // or mutate #dataset-data-ref on the next page's DOM.
+          // PR #112 followup — dataset-form.ts:onUploaded race.
+          if (disposed) return
           // On a direct upload (image), the server already wrote
           // `data_ref` to the row. Mirror the field-state so a
           // subsequent form save doesn't clobber it with an empty
@@ -1122,7 +1129,27 @@ function renderForm(
   shell.appendChild(form)
   content.replaceChildren(shell)
 
+  // Track whether this form mount is still the active page so
+  // deferred callbacks (notably the asset-uploader's onUploaded,
+  // which can fire after a multi-minute upload completes) don't
+  // clobber the next page's DOM if the user navigated away while
+  // the upload was in flight. The router fires
+  // ROUTE_CHANGE_START_EVENT before the destination handler
+  // renders into `content`; from that moment any update() or
+  // post-upload DOM mutation from this form mount is unsafe.
+  // The listener is wired per-renderForm-call and detached by
+  // update() before it re-renders (which immediately re-binds a
+  // fresh listener on the new mount). PR #112 followup —
+  // dataset-form.ts:onUploaded race.
+  let disposed = false
+  const onRouteStart = (): void => {
+    disposed = true
+  }
+  window.addEventListener(ROUTE_CHANGE_START_EVENT, onRouteStart)
+
   function update(): void {
+    if (disposed) return
+    window.removeEventListener(ROUTE_CHANGE_START_EVENT, onRouteStart)
     renderForm(content, state, ctx)
   }
 
