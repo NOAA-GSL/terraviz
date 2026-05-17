@@ -130,9 +130,16 @@ against the same `DEFAULT_RENDITIONS` ladder, calls
 with the Access service-token headers. Stage-specific exit codes
 (1 arg / 2 download / 3 encode / 4 upload / 5 PATCH) so an
 operator skimming the GHA UI sees which stage broke without
-digging into the log. Per-dataset concurrency cap so a
-publisher re-uploading the same video twice doesn't race two
-encodes against the same R2 prefix.
+digging into the log. Per-dataset concurrency cap (the
+`transcoding_in_progress` guard chain — pre-mint check in
+/asset, JS overlap check + atomic SQL stamp in /complete,
+active-upload-id binding in /transcode-complete) so a publisher
+re-uploading the same video twice doesn't dispatch two
+overlapping workflows. Each upload still gets its own R2
+prefix (`videos/{dataset_id}/{upload_id}/`), so the encodes
+themselves wouldn't actually race for object keys — the cap
+prevents the duplicate work, the stale /transcode-complete
+callback that follows it, and the wasted compute.
 
 **3pd/C — Portal asset uploader.** New
 `components/asset-uploader.ts` mounts alongside the 3pc/F-fix2

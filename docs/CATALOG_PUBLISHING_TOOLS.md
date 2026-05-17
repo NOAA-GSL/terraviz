@@ -305,9 +305,13 @@ Behavior:
 - **Image** (`image/png` / `image/jpeg` / `image/webp`): the
   presigned PUT lands the image at
   `r2:datasets/{id}/by-digest/sha256/{hex}/asset.{ext}`
-  (content-addressed; the digest in the path is the same value
-  `content_digest` carries on the dataset row, so two publishers
-  uploading byte-identical images share the same R2 object).
+  (content-addressed within the dataset's prefix — the digest
+  in the path is the same value `content_digest` carries on
+  the dataset row, so re-uploading byte-identical bytes to
+  the same dataset lands the same R2 object instead of a
+  duplicate. Cross-dataset dedup is NOT what this layout
+  does — the dataset id is part of the key, so different
+  datasets carry independent copies of identical bytes).
   The finalize step writes `data_ref` directly — no transcode.
   (A client-side downsample preview before upload — so the
   publisher sees roughly what the 2048-wide variant will look

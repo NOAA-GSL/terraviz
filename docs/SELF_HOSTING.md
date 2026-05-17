@@ -754,8 +754,12 @@ and `MOCK_STREAM` use.
 for public repos. A 5-minute 1080p source encodes in ~3 minutes
 on the `ubuntu-22.04` runner. At 50 uploads/month with average
 5-minute sources that's 150 CI-minutes — well under the ceiling.
-R2 egress is the dominant ongoing cost: at 4K @ ~25 Mbps the
-ladder lands ~250 MB per minute of source content.
+R2 **storage** is the dominant ongoing R2 cost (egress is
+zero-rated): at 4K @ ~25 Mbps the ladder lands ~250 MB per
+minute of source content, billed monthly until manually
+deleted. R2 also charges per-operation (class A / class B)
+fees — a 50-MP4-per-month deploy is well below the
+free-operation ceiling, so storage is what to watch.
 
 ### 8f. Next steps
 

@@ -192,8 +192,12 @@ Conservative estimate from `migrate-r2-hls.ts` calibration: a 5-min
 at 50 uploads/month with average 5-min sources that's 150
 CI-minutes — well under the free tier ceiling. Workers Paid usage
 on the trigger side is negligible (one POST to GitHub per upload).
-R2 storage is the dominant cost: at 4K @ ~25 Mbps the ladder lands
-~250 MB per minute of source.
+R2 **storage** dominates the R2 line item — R2 has zero egress
+fees, so playback / download traffic doesn't add to the bill.
+At 4K @ ~25 Mbps the ladder lands ~250 MB per minute of source,
+billed monthly until manually deleted. R2 also charges per-
+operation (class A/class B) fees but a small-volume deploy
+sits well under the free-operation ceiling.
 
 ### Why GitHub Actions and not a Worker
 
