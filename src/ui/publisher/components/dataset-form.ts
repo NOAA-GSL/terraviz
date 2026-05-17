@@ -826,8 +826,27 @@ interface RenderContext {
    *  same flip even after render N+1 has supplanted it. The
    *  listener that flips this lives in `renderDatasetForm` so
    *  it's bound once per mount, not once per re-render. PR #112
-   *  followup — dataset-form.ts:disposed race. */
-  lifecycle: { disposed: boolean }
+   *  followup — dataset-form.ts:disposed race.
+   *
+   *  `uploader` caches the asset-uploader DOM element across
+   *  renderForm calls so a parent re-render (input change,
+   *  save-in-progress repaint) doesn't tear down an in-flight
+   *  upload. Without this, the uploader's internal `state`
+   *  closure variables (XHR controller, progress, mid-flight
+   *  promise chain) all keep running on a detached element
+   *  while a fresh idle uploader mounts in the new DOM — and
+   *  the publisher sees "Choose a file" even though an upload
+   *  is still progressing in the background, with no way to
+   *  see its progress or cancel. `uploaderFormat` records the
+   *  format the cached uploader was constructed for; a format
+   *  change forces a fresh uploader (its mime-acceptance logic
+   *  is set at construction time). PR #112 followup —
+   *  dataset-form.ts:asset uploader subtree preservation. */
+  lifecycle: {
+    disposed: boolean
+    uploader?: HTMLElement
+    uploaderFormat?: string
+  }
 }
 
 function renderForm(
@@ -976,6 +995,14 @@ function renderForm(
     // transcode turns out to be a common workflow; today's
     // assumption is that it's a corner case worth a static
     // notice + a reload prompt rather than another poll loop.
+    //
+    // Clear the cached uploader: this branch doesn't mount one,
+    // so the cached element (if any from a prior render) is
+    // about to be unreachable. The uploader's in-flight state,
+    // if any, has already arrived at this branch via
+    // ctx.isTranscoding = true — its work is done.
+    ctx.lifecycle.uploader = undefined
+    ctx.lifecycle.uploaderFormat = undefined
     const refDisplay = document.createElement('div')
     refDisplay.className = 'publisher-field'
     const refLabel = document.createElement('span')
@@ -1011,8 +1038,21 @@ function renderForm(
     label.className = 'publisher-field-label'
     label.textContent = t('publisher.datasetForm.field.dataRef')
     uploaderWrap.appendChild(label)
-    uploaderWrap.appendChild(
-      renderAssetUploader({
+    // Reuse the previously-mounted uploader DOM across renders
+    // when the format is unchanged. This preserves the
+    // uploader's internal state (in-flight XHR, progress,
+    // mid-flight promise chain) so a parent re-render — e.g.
+    // the publisher edits the title while a multi-GB upload is
+    // progressing — doesn't tear down the upload UI. Format
+    // changes still recreate the uploader: its mime-acceptance
+    // logic is set at construction time, and a publisher
+    // switching format mid-upload is a meaningful state
+    // change. PR #112 followup — dataset-form.ts:asset uploader
+    // subtree preservation.
+    if (ctx.lifecycle.uploader && ctx.lifecycle.uploaderFormat === state.format) {
+      uploaderWrap.appendChild(ctx.lifecycle.uploader)
+    } else {
+      const uploaderEl = renderAssetUploader({
         datasetId: ctx.datasetId,
         format: state.format,
         currentDataRef: state.dataRef || null,
@@ -1048,14 +1088,27 @@ function renderForm(
             // the publisher sees what the row now points at.
             const manual = content.querySelector<HTMLInputElement>('#dataset-data-ref')
             if (manual) manual.value = outcome.dataRef
+            // The uploader's job is done — drop the cache so a
+            // future format change or new upload starts fresh.
+            ctx.lifecycle.uploader = undefined
+            ctx.lifecycle.uploaderFormat = undefined
           } else {
             state.dataRef = ''
             ctx.isTranscoding = true
+            // Cache cleared by the isTranscoding branch on next
+            // render (transcoding-locked branch doesn't mount
+            // an uploader at all); the in-flight upload's
+            // completion has already arrived here.
+            ctx.lifecycle.uploader = undefined
+            ctx.lifecycle.uploaderFormat = undefined
             update()
           }
         },
-      }),
-    )
+      })
+      ctx.lifecycle.uploader = uploaderEl
+      ctx.lifecycle.uploaderFormat = state.format
+      uploaderWrap.appendChild(uploaderEl)
+    }
     identityCard.appendChild(uploaderWrap)
     // Manual ref input — for editors who want to swap to a
     // legacy `vimeo:` / `url:` ref or paste an already-encoded
