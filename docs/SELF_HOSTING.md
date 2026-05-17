@@ -637,8 +637,8 @@ Both halves are required. A misconfigured deploy fails closed:
 Access service tokens (`CF-Access-Client-Id` /
 `CF-Access-Client-Secret`) bypass Access but **not** Bot Fight
 Mode, the Cloudflare Managed Ruleset, or any custom WAF rule. If
-your zone has either of those active — Bot Fight Mode is on by
-default on the Pro plan and up — the GHA runner's final POST to
+your zone has any of those active — Bot Fight Mode is on by
+default on the Free plan and up — the GHA runner's final POST to
 `/api/v1/publish/datasets/{id}/transcode-complete` gets served a
 `Just a moment...` JS-challenge interstitial at the edge and
 never reaches the publisher Worker. ffmpeg finishes, the HLS
@@ -646,10 +646,17 @@ bundle lands in R2, and then the runner exits non-zero at stage
 5 (PATCH failure) with the challenge HTML in the body. The
 dataset row stays flagged `transcoding=1`.
 
-Fix: add a WAF Skip custom rule scoped to the transcode-complete
-endpoint, gated on the Access service-token header so the skip
-only fires for legitimate service-token traffic. In the Cloudflare
-dashboard for the zone the Pages deploy serves from:
+The fix is **two rules** that together cover both layers
+Cloudflare runs at: a WAF Custom Rule for the WAF stack, and
+(on Free plans, or any zone with plain Bot Fight Mode enabled)
+a Configuration Rule that overrides the zone-wide Bot Fight Mode
+toggle for this one path. Both are gated on the Access
+service-token header so the exemption only fires for legitimate
+service-token traffic.
+
+**Step 1 — WAF Custom Rule (covers Managed Ruleset, custom rules,
+Super Bot Fight Mode on Pro+, Browser Integrity Check, Security
+Level):**
 
 1. Security → WAF → Custom rules → Create rule.
 2. Name it something like `transcode-complete service token skip`.
@@ -659,17 +666,54 @@ dashboard for the zone the Pages deploy serves from:
      and ends_with(http.request.uri.path, "/transcode-complete")
      and len(http.request.headers["cf-access-client-id"][0]) > 0)
    ```
-4. Action: **Skip**. Tick Bot Fight Mode, the Cloudflare Managed
-   Ruleset, the OWASP Managed Ruleset (if enabled), and "All
-   remaining custom rules."
+4. Action: **Skip**. Tick:
+   - All remaining custom rules
+   - All managed rules
+   - All Super Bot Fight Mode Rules (Pro+; inert on Free)
+   - Browser Integrity Check (under "More components to skip")
+   - Security Level (under "More components to skip")
 5. Deploy.
 
-Safe because (a) the header gate means only requests carrying
-a service-token id can skip, (b) Cloudflare Access still
-validates the service token after the skip — a forged header
-can't actually authenticate, and (c) the `/transcode-complete`
-route handler enforces `role='service'` independently before
-mutating the row.
+**Step 2 — Configuration Rule (Free plan especially: covers plain
+Bot Fight Mode, which Step 1's Skip action CANNOT reach):**
+
+The WAF Custom Rule's Skip action's "All Super Bot Fight Mode
+Rules" only covers SBFM (Pro+ feature). Plain Bot Fight Mode
+on Free/Pro is a zone-wide toggle at a different layer and isn't
+skippable from a WAF Custom Rule. Use a Configuration Rule
+instead — that rule type CAN override Bot Fight Mode on a
+per-path basis.
+
+1. Rules → Configuration Rules → Create rule. (Note: "Rules"
+   is a top-level zone nav item, separate from "Security →
+   Security rules.")
+2. Name it something like `transcode-complete bot fight mode
+   override`.
+3. Same field expression as Step 1.
+4. Under **"Then the settings are"**, scroll to find **Bot
+   Fight Mode** and toggle it **Off**.
+5. Deploy.
+
+Both rules use the same `cf-access-client-id` header gate. Safe
+because (a) only requests carrying a service-token id can match,
+(b) Cloudflare Access still validates the token after the
+exemption — a forged header without the matching secret can't
+actually authenticate, and (c) the `/transcode-complete` route
+handler enforces `role='service'` independently before mutating
+the row.
+
+**Verifying which rule is firing.** If the workflow still 403s
+after deploying both, check Security → Events. The event row
+names the specific check that fired. Match it back to the rule
+layer:
+
+| Event "Service" column says | Fixed by |
+|---|---|
+| `Bot fight mode` (Free/Pro plain BFM) | Configuration Rule (Step 2) |
+| `Managed challenge` from a Managed Ruleset rule | WAF Custom Rule (Step 1), "All managed rules" |
+| `Super Bot Fight Mode` (Pro+) | WAF Custom Rule, "All Super Bot Fight Mode Rules" |
+| `Browser Integrity Check` | WAF Custom Rule, "Browser Integrity Check" |
+| `Security level` | WAF Custom Rule, "Security Level" |
 
 The CLI emits a specific operator-actionable error when it
 detects the challenge response, so a future occurrence of this
