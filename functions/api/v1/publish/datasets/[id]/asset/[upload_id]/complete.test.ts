@@ -1501,6 +1501,57 @@ describe('POST .../asset/{upload_id}/complete — video transcode dispatch (3pd)
     expect(upload.status).toBe('pending')
   })
 
+  it('returns 409 transcoding_in_progress on a corrupted transcoding=1 + NULL active row', async () => {
+    // PR #112 followup — the earlier overlap guard only
+    // rejected when `active_transcode_upload_id` was populated.
+    // A row stamped before migration 0012 (or left in this
+    // shape by a partial manual edit) would fall through the
+    // guard, the new upload would re-stamp, and a second
+    // workflow could run alongside whatever workflow left the
+    // row stuck. The corrupted-state path now refuses with the
+    // same envelope but a clearer operator-action message.
+    const { sqlite, datasetId, kv } = setupEnv({ datasetPublished: false })
+    sqlite
+      .prepare(
+        `UPDATE datasets
+           SET transcoding = 1,
+               active_transcode_upload_id = NULL,
+               source_digest = ?
+         WHERE id = ?`,
+      )
+      .run(HELLO_DIGEST, datasetId)
+    const env = {
+      CATALOG_DB: asD1(sqlite),
+      CATALOG_KV: kv,
+      MOCK_R2: 'true',
+      MOCK_GITHUB_DISPATCH: 'true',
+    }
+    insertPending(sqlite, {
+      uploadId: 'UP-STUCK-RECOVERY',
+      datasetId,
+      kind: 'data',
+      target: 'r2',
+      target_ref: `r2:uploads/${datasetId}/${'X'.repeat(26)}/source.mp4`,
+      mime: 'video/mp4',
+      claimed_digest: HELLO_DIGEST,
+    })
+    const res = await completeHandler(ctx({ env, datasetId, uploadId: 'UP-STUCK-RECOVERY' }))
+    expect(res.status).toBe(409)
+    const body = await readJson<{ error: string; message: string }>(res)
+    expect(body.error).toBe('transcoding_in_progress')
+    // Message explicitly cites the corrupted state + operator-
+    // action SQL so the publisher knows this is operator
+    // territory, not just "wait a bit."
+    expect(body.message).toContain('inconsistent state')
+    expect(body.message).toContain('UPDATE datasets')
+    // The corrupted row is untouched — no second stamp landed.
+    const row = sqlite
+      .prepare(`SELECT transcoding, active_transcode_upload_id FROM datasets WHERE id = ?`)
+      .get(datasetId) as { transcoding: number | null; active_transcode_upload_id: string | null }
+    expect(row.transcoding).toBe(1)
+    expect(row.active_transcode_upload_id).toBeNull()
+  })
+
   it('binds active_transcode_upload_id to the upload id when stamping transcoding', async () => {
     // The /transcode-complete handler verifies the callback's
     // upload_id matches `datasets.active_transcode_upload_id`,

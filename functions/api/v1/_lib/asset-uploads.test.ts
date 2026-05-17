@@ -729,6 +729,51 @@ describe('transcoding lifecycle UPDATEs are scoped to active_transcode_upload_id
     expect(row.active_transcode_upload_id).toBe(UPLOAD_B)
   })
 
+  it('stampTranscodingForVideoSource refuses (changes=0) on a corrupted transcoding=1 + active=NULL row', async () => {
+    // PR #112 followup — the earlier `active_transcode_upload_id
+    // IS NULL OR = ?` SQL guard was too permissive: a row with
+    // transcoding=1 but NULL active binding (pre-migration-0012,
+    // manual reset, partial revert) would let a fresh stamp take
+    // over and dispatch a second workflow alongside whatever was
+    // already running. The new guard
+    // (`transcoding IS NULL OR active = ?`) refuses unless the
+    // row is genuinely non-transcoding or already bound to this
+    // upload.
+    const { d1, sqlite } = makeDb()
+    // Manually craft the corrupted state — the lifecycle helpers
+    // never produce this on their own, but a pre-migration or
+    // operator edit could leave a row in this shape.
+    sqlite
+      .prepare(
+        `UPDATE datasets
+           SET transcoding = 1,
+               active_transcode_upload_id = NULL,
+               updated_at = ?
+         WHERE id = ?`,
+      )
+      .run('2026-04-29T12:00:00.000Z', DATASET_ID)
+    const { stampTranscodingForVideoSource } = await import('./asset-uploads')
+    const changes = await stampTranscodingForVideoSource(
+      d1,
+      DATASET_ID,
+      uploadStub(UPLOAD_A),
+      '2026-04-29T12:05:00.000Z',
+    )
+    expect(changes).toBe(0)
+    // Row state unchanged — the stamp didn't take over a
+    // corrupted-but-transcoding row.
+    const row = sqlite
+      .prepare(
+        `SELECT transcoding, active_transcode_upload_id FROM datasets WHERE id = ?`,
+      )
+      .get(DATASET_ID) as {
+      transcoding: number | null
+      active_transcode_upload_id: string | null
+    }
+    expect(row.transcoding).toBe(1)
+    expect(row.active_transcode_upload_id).toBeNull()
+  })
+
   it('stampTranscodingForVideoSource preserves content_digest on a PUBLISHED row', async () => {
     // PR #112 followup (asset-uploads.ts:404): published rows
     // keep `data_ref` pointing at the prior HLS bundle while

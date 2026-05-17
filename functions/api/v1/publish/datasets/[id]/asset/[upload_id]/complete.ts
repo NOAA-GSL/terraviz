@@ -413,25 +413,42 @@ export const onRequestPost: PagesFunction<CatalogEnv, keyof RouteParams> = async
     }
 
     // Concurrency guard: refuse to start a second video transcode
-    // on a row whose previous upload is still in flight. The
-    // earlier upload may not have called /complete (this same
-    // upload retried) or may belong to a different upload entirely
-    // — only the latter is the race we want to block. Idempotent
-    // retries on the same upload fall through to the existing
-    // dispatch path; the upload-row status check above already
-    // short-circuits a true repeat (status='completed') before
-    // we get here. Server-side counterpart to the dataset-form
-    // edit-mode gate; see migration 0012.
-    if (
-      dataset.transcoding &&
-      dataset.active_transcode_upload_id &&
-      dataset.active_transcode_upload_id !== uploadId
-    ) {
+    // on a row whose previous upload is still in flight, OR on a
+    // row in an inconsistent transcoding state. Three sub-cases
+    // all return 409:
+    //
+    //   • `transcoding=1 AND active=otherUpload` — the row is
+    //     legitimately transcoding for someone else. Wait for it
+    //     to finish.
+    //   • `transcoding=1 AND active=NULL` — corrupted state
+    //     (pre-migration-0012 row, manual D1 edit, or a partial
+    //     reset). The stamp and clear paths set the two columns
+    //     in lockstep, so a NULL active with transcoding=1 means
+    //     the row is in a shape the lifecycle never produces.
+    //     PR #112 followup flagged this as a fall-through hole
+    //     where the new upload would re-stamp and a second
+    //     workflow could run alongside whatever prior workflow
+    //     left the row stuck. Operator must clear (UPDATE
+    //     datasets SET transcoding = NULL,
+    //     active_transcode_upload_id = NULL WHERE id = '...')
+    //     before any new upload can take over.
+    //   • `transcoding=1 AND active=uploadId` — retry of THIS
+    //     upload, falls through to the alreadyStamped recovery
+    //     branch below; not a conflict.
+    //
+    // The upload-row status check above already short-circuits
+    // a true status='completed' repeat before we get here.
+    if (dataset.transcoding && dataset.active_transcode_upload_id !== uploadId) {
+      const activeLabel = dataset.active_transcode_upload_id ?? '(none — corrupted state)'
+      const detail = dataset.active_transcode_upload_id
+        ? `Wait for that workflow to finish (or have an operator clear the row) before starting another.`
+        : `The row is in an inconsistent state (transcoding=1 with no active upload binding). ` +
+          `Have an operator reset the row (UPDATE datasets SET transcoding = NULL, ` +
+          `active_transcode_upload_id = NULL WHERE id = '${datasetId}') before retrying.`
       return jsonError(
         409,
         'transcoding_in_progress',
-        `Dataset ${datasetId} is already transcoding upload ${dataset.active_transcode_upload_id}. ` +
-          'Wait for that workflow to finish (or have an operator clear the row) before starting another.',
+        `Dataset ${datasetId} is already transcoding upload ${activeLabel}. ${detail}`,
       )
     }
 
