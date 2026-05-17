@@ -412,6 +412,67 @@ describe('POST /api/v1/publish/datasets/{id}/asset — config errors', () => {
     expect(body.errors[0]).toMatchObject({ field: 'mime', code: 'mime_format_mismatch' })
   })
 
+  it('returns 409 transcoding_in_progress when minting a video upload on a transcoding row', async () => {
+    // PR #112 followup — fail-fast guard so the publisher doesn't
+    // burn a 2-hour presigned URL + a multi-GB upload only to get
+    // 409d at /complete. The downstream guard in /complete still
+    // runs (defense in depth); this just stops a wasted upload
+    // at the mint step.
+    const { env, sqlite, datasetId } = setupEnv()
+    sqlite
+      .prepare(
+        `UPDATE datasets
+           SET transcoding = 1, active_transcode_upload_id = ?
+         WHERE id = ?`,
+      )
+      .run('UP-PRIOR-XXXXXXXXXXXXXXXX', datasetId)
+    const res = await assetInit(
+      ctx({
+        env,
+        datasetId,
+        body: {
+          kind: 'data',
+          mime: 'video/mp4',
+          size: 5_000_000_000, // 5 GB — the scenario this guard exists for
+          content_digest: HAPPY_DIGEST,
+        },
+      }),
+    )
+    expect(res.status).toBe(409)
+    const body = await readJson<{ error: string; message: string }>(res)
+    expect(body.error).toBe('transcoding_in_progress')
+    expect(body.message).toContain('UP-PRIOR-XXXXXXXXXXXXXXXX')
+  })
+
+  it('does NOT block an image upload while a video transcode is in flight', async () => {
+    // Scope check on the guard above: image / aux uploads run
+    // through their own (synchronous) finalize path and aren't
+    // affected by an in-flight video transcode. The publisher
+    // should still be able to update a thumbnail or legend
+    // while the video bundle finishes.
+    const { env, sqlite, datasetId } = setupEnv()
+    sqlite
+      .prepare(
+        `UPDATE datasets
+           SET transcoding = 1, active_transcode_upload_id = ?
+         WHERE id = ?`,
+      )
+      .run('UP-VIDEO-INFLIGHT-XXXXXXXX', datasetId)
+    const res = await assetInit(
+      ctx({
+        env,
+        datasetId,
+        body: {
+          kind: 'thumbnail',
+          mime: 'image/png',
+          size: 1234,
+          content_digest: HAPPY_DIGEST,
+        },
+      }),
+    )
+    expect(res.status).toBe(201)
+  })
+
   it('accepts application/json upload for a tour/json dataset', async () => {
     const { env, sqlite, datasetId } = setupEnv()
     sqlite

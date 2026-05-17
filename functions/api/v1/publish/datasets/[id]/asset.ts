@@ -167,6 +167,31 @@ export const onRequestPost: PagesFunction<CatalogEnv, 'id'> = async context => {
     )
   }
 
+  // Refuse to mint a fresh video-source upload while the row is
+  // already transcoding. The overlap-guard in
+  // /asset/{upload_id}/complete would 409 the same case later,
+  // but a 2-hour presigned PUT URL paired with the 10 GB
+  // MAX_BYTES_DATA cap means a publisher (or stale edit-page
+  // tab) could waste a multi-GB upload before learning the row
+  // is locked. Failing fast at mint time saves the bandwidth.
+  // PR #112 followup — asset.ts:pre-mint-transcoding-check.
+  //
+  // Scope is video-only — image and aux uploads don't go through
+  // the transcoding lifecycle, so a parallel image upload during
+  // a video transcode is harmless.
+  if (isVideoSourceUpload(kind, mime) && existing.transcoding) {
+    return jsonError(
+      409,
+      'transcoding_in_progress',
+      `Dataset ${id} is already transcoding ` +
+        (existing.active_transcode_upload_id
+          ? `upload ${existing.active_transcode_upload_id}`
+          : `(no active upload binding — corrupted state, contact an operator)`) +
+        `. Wait for the workflow to finish (the "Transcoding…" badge on the detail ` +
+        `page will clear when it does) before starting a new upload.`,
+    )
+  }
+
   const target = chooseTarget(kind, mime)
   const uploadId = newUlid()
   const now = new Date().toISOString()
