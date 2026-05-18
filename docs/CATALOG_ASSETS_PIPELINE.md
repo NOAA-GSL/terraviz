@@ -40,16 +40,19 @@ operator-driven via `cli/migrate-r2-hls.ts`), and the **trigger**
 (3pd's contribution — letting a publisher kick off the same
 transcode from the portal instead of running the CLI by hand).
 
-> **Future work — image-sequence input.** The publisher portal
+> **In flight — image-sequence input.** The publisher portal
 > currently accepts a single MP4 as the video source. Many
 > catalog datasets originate as numbered frames (one PNG per
 > simulation step / model output / animation frame), and
 > ffmpeg accepts image sequences as readily as MP4 files —
-> the pipeline change is bounded. Design sketched in
+> the pipeline change is bounded. Design in
 > [`CATALOG_IMAGE_SEQUENCE_PLAN.md`](CATALOG_IMAGE_SEQUENCE_PLAN.md);
 > tracking issue
 > [zyra-project/terraviz#114](https://github.com/zyra-project/terraviz/issues/114).
-> Lands as Phase 3pe; depends on 3pd merging first.
+> Ingest half lands as Phase 3pf (depends on Phase 3pe being on
+> `main` — shipped via PR #116); exposure half (`/frames`
+> endpoints, Orbit `<<LOAD_FRAME:...>>` marker, search time-range
+> filter) lands later as Phase 3pg.
 
 ### What ffmpeg actually produces
 
@@ -62,8 +65,12 @@ texturing needs:
 | 1080p | 2160 × 1080 | ~5 Mbps |
 | 720p | 1440 × 720 | ~2 Mbps |
 
-H.264 main profile, AAC 192kbps audio, **6-second VOD segments**.
-The bundle is laid out under `r2:videos/{dataset_id}/{upload_id}/`:
+H.264 main profile, AAC 192kbps audio, **6-second VOD segments**,
+**30 fps output** (forced via `-r 30` on ffmpeg regardless of source
+frame rate — the tour engine's `frameRate` task hard-codes 30 fps as
+the assumed source rate, so normalising on encode keeps a tour saying
+"play at 5 fps" actually running at 5 fps for any source). The bundle
+is laid out under `r2:videos/{dataset_id}/{upload_id}/`:
 
 ```
 videos/{dataset_id}/{upload_id}/master.m3u8        # the variant playlist consumed by hls.js

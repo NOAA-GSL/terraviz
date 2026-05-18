@@ -24,15 +24,18 @@ sub-phase (see [`CATALOG_BACKEND_PLAN.md`](CATALOG_BACKEND_PLAN.md)
 §"Phase 3 — Publisher portal (staff)" → "Sub-phase execution
 plan").
 
-Phase 3 sub-phases are tagged `3pa`–`3ph` in commit prefixes,
+Phase 3 sub-phases are tagged `3pa`–`3pj` in commit prefixes,
 CHANGELOG entries, and the table referenced above. The
 `p`-qualified letters keep the portal work distinct from the
 unrelated R2 + HLS video-pipeline sub-phases that already claimed
-the bare `3a`–`3h` slots in `git log`. The `3pe` slot was
-originally penciled in for the tour creator; the SPA-side
-`?preview=` consumer that finishes the 3pd upload loop landed
-under that letter instead and shifted tour creator / bulk
-import / webhook fan-out down a step. Prep work that ships
+the bare `3a`–`3h` slots in `git log`. The original allocation
+(`3pa`–`3pg`) has shifted twice as scope landed: the `3pe` slot
+was originally penciled in for tour creator but the SPA-side
+`?preview=` consumer claimed it (shipped via PR #116); the `3pf`
+and `3pg` slots are now image-sequence upload (ingest + exposure
+respectively, see [`CATALOG_IMAGE_SEQUENCE_PLAN.md`](CATALOG_IMAGE_SEQUENCE_PLAN.md)),
+which pushes tour creator / bulk import / webhook fan-out down
+two more steps to `3ph` / `3pi` / `3pj`. Prep work that ships
 before the first sub-phase uses `3-pre/<letter>`. See the
 backend-plan section for the full explanation.
 
@@ -283,12 +286,23 @@ to a pure R2 + GitHub Actions pipeline; the full design lives in
 [`CATALOG_ASSETS_PIPELINE.md`](CATALOG_ASSETS_PIPELINE.md) §"Video
 pipeline (R2 + GitHub Actions — current)".
 
-> **Future work — image-sequence input.** A planned sub-phase
-> (originally drafted under the 3pe slot, now scheduled after
-> 3pf tour creator) extends this uploader to accept a stack of
-> individual frames (PNG / JPEG / WebP) as the source for a
-> video dataset, for the many cases where publishers have
-> numbered frames on disk but no MP4. Design in
+> **In flight — image-sequence input.** Phase 3pf extends this
+> uploader to accept a stack of individual frames (PNG / JPEG /
+> WebP) as the source for a video dataset, for the many cases
+> where publishers have numbered frames on disk but no MP4.
+> Adds a tabbed picker, parallel-bounded multi-PUT queue, and a
+> `kind: 'frames'` dispatch payload variant; the GHA runner
+> branches on `kind` and runs ffmpeg against the image-sequence
+> input with `-r 30` (matching the 30-fps invariant the tour
+> engine assumes — see
+> [`CATALOG_ASSETS_PIPELINE.md`](CATALOG_ASSETS_PIPELINE.md)
+> §"What ffmpeg actually produces"). Frame metadata
+> (`frame_count`, `frame_extension`,
+> `frame_source_filenames_ref`) lands on the dataset row in 3pf
+> so the exposure half (Phase 3pg — `/frames` endpoints, Orbit
+> marker, search time-range filter) can ship without back-fill.
+> Tour creator / bulk import / webhook fan-out shift to
+> Phase 3ph / 3pi / 3pj. Design in
 > [`CATALOG_IMAGE_SEQUENCE_PLAN.md`](CATALOG_IMAGE_SEQUENCE_PLAN.md);
 > tracking issue
 > [zyra-project/terraviz#114](https://github.com/zyra-project/terraviz/issues/114).
