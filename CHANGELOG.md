@@ -16,6 +16,155 @@ referenced in [`README.md`](README.md).
 
 ---
 
+## Phase 3pf — Image-sequence upload ingest
+
+**Branch:** `claude/image-sequence-upload`
+**Commits:** 3pf-pre through 3pf/E.
+
+Extends the 3pd asset uploader to accept a stack of individual
+frames (PNG / JPEG / WebP) as the source for a video dataset.
+Many catalog datasets originate as numbered frames — model output
+dumps, hourly observation pipelines, rendered animations from
+external tools — and stitching them into an MP4 with local
+ffmpeg before upload was an afternoon's work. The catalog already
+runs ffmpeg in GitHub Actions for every video upload; ffmpeg's
+image-sequence input mode is a one-flag change. 3pf threads that
+through the publisher API, the GHA runner, and the portal UI so
+the publisher's interaction is just "drag the directory into the
+uploader."
+
+Same per-upload R2 prefix versioning, `active_transcode_upload_id`
+binding, and `/transcode-complete` callback as the MP4 path —
+every concurrency-safety property the MP4 flow has comes along for
+free. Frame metadata (`frame_count`, `frame_extension`,
+`frame_source_filenames_ref`) lands on the dataset row in this
+phase so the exposure half (Phase 3pg — `/frames` endpoints,
+Orbit `<<LOAD_FRAME:...>>` marker, search time-range filter,
+browse date scrubber) can ship without a back-fill.
+
+Full design: [`docs/CATALOG_IMAGE_SEQUENCE_PLAN.md`](docs/CATALOG_IMAGE_SEQUENCE_PLAN.md).
+Tracking issue: [zyra-project/terraviz#114](https://github.com/zyra-project/terraviz/issues/114).
+
+**3pf-pre — Doc prep.** Letter renumbering across the canonical
+plan + the image-sequence design doc: 3pe was taken by the SPA
+preview consumer, so image-sequence ingest claims 3pf and
+exposure claims 3pg; tour creator / bulk import / webhook fan-out
+shift to 3ph / 3pi / 3pj. Same commit adopts four design
+decisions before code lands: 30-fps output normalisation (incl.
+the ride-along MP4-path fix below), 10 000 frame cap, per-frame
+mime + `frames` array as the request discriminator (not a
+non-standard `image-sequence/*` MIME family), and the
+publisher-facing "Frame rate" picker dropped in favour of a
+single 30-fps invariant.
+
+**3pf/A — Migrations + helpers.** Migration 0013 adds
+`frame_count INTEGER` to `asset_uploads`. Migration 0014 adds
+`frame_count`, `frame_extension`, `frame_source_filenames_ref` to
+`datasets`. New `validateImageSequenceInit` in
+`functions/api/v1/_lib/asset-uploads.ts` enforces the cap, mime
+allowlist, per-frame digest format, unique filenames, no mixed
+mimes, and the declared-size-equals-sum cross-check. New R2 key
+helpers `buildFrameKey` (5-digit zero-padded indexes →
+`uploads/{ds}/{up}/frames/{NNNNN}.{ext}`), `isFrameKey`,
+`buildFrameSequencePrefix`, `buildFrameSourceFilenamesKey` in
+`r2-store.ts`. 41 new unit tests.
+
+**3pf/B — Route handler branches.** `POST /api/v1/publish/
+datasets/{id}/asset` discriminates on the presence of a `frames`
+array in the body. The image-sequence branch enforces
+`dataset.format === 'video/mp4'`, runs the validator, mints N
+presigned PUTs + one for the source-filenames blob, and inserts
+a single `asset_uploads` row with `frame_count = N`.
+`POST .../asset/{upload_id}/complete` branches on
+`upload.frame_count` after the status checks: HEADs every frame
+key + the source-filenames blob, stamps the dataset row via the
+new `stampTranscodingForFrameSource` (sister to
+`stampTranscodingForVideoSource`, also writes the three frame
+metadata columns), and dispatches with the new
+`kind: 'frames'` payload shape. `TranscodeDispatchPayload`
+becomes a discriminated union; `TranscodingStampSnapshot` carries
+the three new columns so the dispatch-failure revert restores
+them losslessly. 10 new wire-level tests.
+
+**3pf/C — GHA runner branch + 30-fps normalisation.** The
+`cli/transcode-from-dispatch.ts` script learns
+`--source-kind={video,frames}` (default `video` so legacy
+dispatches keep working unchanged). On the frames path the
+runner downloads N frames in a bounded-concurrency pool, verifies
+the source-filenames JSON blob's hash against the dispatch
+payload's `source_digest`, and invokes ffmpeg's image-sequence
+input mode (`-framerate 30 -i frames/%05d.{ext}`) against the
+same HLS ladder the MP4 path produces. Same commit adds
+`-r:v:N 30` to every rendition in `cli/lib/ffmpeg-hls.ts:buildFfmpegArgs`,
+which normalises the encode to 30 fps for **both** source kinds —
+closes a pre-existing latent bug where a non-30-fps MP4 source
+(e.g. 60 fps from some animation tools) broke the tour engine's
+`frameRate` task. The tour engine hard-codes 30 fps as the
+assumed source rate when computing playback-rate, so this
+invariant now holds by construction rather than by source-file
+discipline. New exit code 6 = frame-fetch or source-filenames
+digest mismatch. The workflow YAML
+(`.github/workflows/transcode-hls.yml`) validates `kind` and
+branches its argv accordingly.
+
+**3pf/D — Portal multi-file uploader.** The asset uploader on the
+dataset edit form (already extant from 3pd for single-file
+uploads) gains a tab strip when `format === 'video/mp4'`:
+"Upload MP4" / "Upload frames". The frames tab mounts an
+`<input type="file" multiple>` constrained to PNG / JPEG / WebP.
+After picking, the publisher sees a frame count + total size
+summary and a single "Upload N frame(s)" button; clicking it
+drives the pipeline: chunked SHA-256 of each frame, canonical
+source-filenames JSON build + its own SHA-256, `POST /asset` with
+the manifest, parallel-bounded PUT (5 concurrent) of every frame +
+the source-filenames blob, `POST /complete`. Status line shows
+"Hashing 47/240…" / "Uploading 47/240…" — aggregate counter, not
+per-frame bars. Pre-network gates fail fast on empty / oversize /
+mixed-mime / unsupported-mime selections. Outcome is always
+`{ mode: 'transcoding' }`; the detail page's existing 5 s polling
+loop picks up the workflow's `/transcode-complete` callback.
+
+Deferred to follow-up (called out in the design doc): thumbnail
+strip, manual-order textarea, display-naming preview panel.
+
+**Operator notes.**
+
+- **No new bindings, no new secrets, no manual D1 setup.** Same
+  Pages bindings the 3pd transcode pipeline uses (`GITHUB_OWNER`,
+  `GITHUB_REPO`, `GITHUB_DISPATCH_TOKEN`, the R2 set); same GHA
+  secrets the runner needs (`R2_S3_ENDPOINT`,
+  `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `TERRAVIZ_SERVER`,
+  `CF_ACCESS_CLIENT_ID`, `CF_ACCESS_CLIENT_SECRET`). The same R2
+  bucket CORS policy + WAF skip rules from §8e of the
+  self-hosting walkthrough cover the image-sequence path because
+  the upload PUTs land at the same hostname and the
+  `/transcode-complete` callback fires through the same Access
+  service-token path.
+- **Migrations 0013 + 0014 apply automatically** the next time
+  the operator runs `npx wrangler d1 migrations apply CATALOG_DB
+  --remote` (see §8b.5 of the self-hosting walkthrough). Both
+  add columns whose NULL defaults are correct on every existing
+  row — no data backfill is required.
+- **MP4 transcode behaviour change.** The `-r:v:N 30` flag on
+  the MP4 path is a behaviour change: a publisher's previously-
+  acceptable 60 fps source will now be re-encoded at 30 fps.
+  This is intentional (the tour engine's playback-rate math
+  depends on it) and the loss of source fps is bounded — only
+  ~30 of the ~136 SOS catalog rows have audio, none of them are
+  hand-crafted animation, and existing published rows are
+  unaffected because the bundle they served is still in R2.
+  Operators who specifically want to preserve >30 fps source
+  fps should not adopt 3pf without first revising the tour
+  engine's `frameRate` task to read the encoded fps from the
+  manifest.
+- **Frame count cap of 10 000.** Covers ~5.5 minutes of 30 fps
+  content or ~1.1 years of hourly timeseries data. The
+  in-browser SHA-256 hash budget at the cap is ~100 s on a
+  typical laptop; the `POST /asset` response of 10 000
+  presigned URLs is ~10 MB JSON. Both bounded.
+
+---
+
 ## Phase 3pe — SPA-side `?preview=` consumer
 
 **Branch:** `claude/review-publisher-dashboard-M6Lry`

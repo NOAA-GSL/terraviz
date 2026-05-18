@@ -40,19 +40,23 @@ operator-driven via `cli/migrate-r2-hls.ts`), and the **trigger**
 (3pd's contribution — letting a publisher kick off the same
 transcode from the portal instead of running the CLI by hand).
 
-> **In flight — image-sequence input.** The publisher portal
-> currently accepts a single MP4 as the video source. Many
+> **Image-sequence input (Phase 3pf — shipped).** The publisher
+> portal also accepts a stack of individual frames (PNG / JPEG /
+> WebP, up to 10 000 per upload) as the video source. Many
 > catalog datasets originate as numbered frames (one PNG per
-> simulation step / model output / animation frame), and
-> ffmpeg accepts image sequences as readily as MP4 files —
-> the pipeline change is bounded. Design in
+> simulation step / model output / animation frame); ffmpeg's
+> image-sequence input mode handles them as readily as a single
+> MP4. The upload flow is end-to-end the same — same R2 prefix
+> versioning, same `/transcode-complete` callback, same `kind`
+> discriminator on the `repository_dispatch` payload picks
+> between the MP4 and image-sequence ffmpeg invocations. Design
+> in
 > [`CATALOG_IMAGE_SEQUENCE_PLAN.md`](CATALOG_IMAGE_SEQUENCE_PLAN.md);
 > tracking issue
 > [zyra-project/terraviz#114](https://github.com/zyra-project/terraviz/issues/114).
-> Ingest half lands as Phase 3pf (depends on Phase 3pe being on
-> `main` — shipped via PR #116); exposure half (`/frames`
-> endpoints, Orbit `<<LOAD_FRAME:...>>` marker, search time-range
-> filter) lands later as Phase 3pg.
+> The frames-as-data exposure half (`/frames` endpoints, Orbit
+> `<<LOAD_FRAME:...>>` marker, search time-range filter,
+> per-frame addressing for the SPA) lands later as Phase 3pg.
 
 ### What ffmpeg actually produces
 

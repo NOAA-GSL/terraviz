@@ -286,18 +286,20 @@ to a pure R2 + GitHub Actions pipeline; the full design lives in
 [`CATALOG_ASSETS_PIPELINE.md`](CATALOG_ASSETS_PIPELINE.md) §"Video
 pipeline (R2 + GitHub Actions — current)".
 
-> **In flight — image-sequence input.** Phase 3pf extends this
-> uploader to accept a stack of individual frames (PNG / JPEG /
-> WebP) as the source for a video dataset, for the many cases
-> where publishers have numbered frames on disk but no MP4.
-> Adds a tabbed picker, parallel-bounded multi-PUT queue, and a
-> `kind: 'frames'` dispatch payload variant; the GHA runner
-> branches on `kind` and runs ffmpeg against the image-sequence
-> input with `-r 30` (matching the 30-fps invariant the tour
-> engine assumes — see
+> **Image-sequence input (Phase 3pf — shipped).** The uploader
+> grew a second tab — "Upload frames" alongside the original
+> "Upload MP4" — for video-format datasets. The frames tab
+> mounts a multi-file picker constrained to PNG / JPEG / WebP
+> (up to 10 000 per upload), runs SHA-256 over every frame
+> in-browser, mints presigned PUTs in one round trip, ships them
+> to R2 in a bounded-concurrency pool (5 parallel), and posts
+> `/complete` to fire a `kind: 'frames'` `repository_dispatch`.
+> The GHA runner branches on `kind` and runs ffmpeg against the
+> image-sequence input with the catalog-wide 30-fps invariant
+> (see
 > [`CATALOG_ASSETS_PIPELINE.md`](CATALOG_ASSETS_PIPELINE.md)
-> §"What ffmpeg actually produces"). Frame metadata
-> (`frame_count`, `frame_extension`,
+> §"What ffmpeg actually produces" for the rationale). Frame
+> metadata (`frame_count`, `frame_extension`,
 > `frame_source_filenames_ref`) lands on the dataset row in 3pf
 > so the exposure half (Phase 3pg — `/frames` endpoints, Orbit
 > marker, search time-range filter) can ship without back-fill.
@@ -306,6 +308,10 @@ pipeline (R2 + GitHub Actions — current)".
 > [`CATALOG_IMAGE_SEQUENCE_PLAN.md`](CATALOG_IMAGE_SEQUENCE_PLAN.md);
 > tracking issue
 > [zyra-project/terraviz#114](https://github.com/zyra-project/terraviz/issues/114).
+> Deferred polish (not in v1): thumbnail strip, manual-order
+> textarea for publishers whose filenames don't naturally sort,
+> display-naming preview panel showing what consumers will see
+> on the wire.
 
 Behavior:
 

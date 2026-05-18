@@ -8,13 +8,17 @@ documents the MP4-input video pipeline) and
 [`CATALOG_PUBLISHING_TOOLS.md`](CATALOG_PUBLISHING_TOOLS.md) (which
 documents the publisher portal); UX conventions inherited from both.
 
-> **Status: pre-implementation revision.** Design sketched in
-> response to a Phase 3pd review thread; implementation kicked off
-> after PR #116 (Phase 3pe — SPA preview consumer) merged. The
-> ingest half lands under sub-phase letter `3pf` (the slot
-> originally penciled in for tour creator, which shifted to `3ph`
-> when the SPA preview consumer claimed `3pe`); the exposure half
-> claims `3pg`. Tracking issue:
+> **Status: ingest shipped (Phase 3pf); exposure scheduled
+> (Phase 3pg).** The ingest half (3pf/A through 3pf/E)
+> implements §"Phase 1 — Batch image-sequence upload" below.
+> Publishers can drag a directory of frames into the portal
+> uploader, the GHA runner encodes the resulting bundle at
+> 30 fps, and the dataset becomes playable like any other video
+> dataset. The exposure half (§"Frames as data" — `/frames`
+> endpoints, Orbit `<<LOAD_FRAME:...>>` marker, search
+> time-range filter, browse date scrubber, CLI commands) is
+> Phase 3pg, scheduled after 3pf bakes for a release cycle.
+> Tracking issue:
 > [zyra-project/terraviz#114](https://github.com/zyra-project/terraviz/issues/114).
 
 ---
