@@ -562,6 +562,41 @@ describe('renderDatasetDetailPage', () => {
     expect(mount.querySelector('.publisher-modal')).toBeNull()
   })
 
+  it('surfaces the server error code in the action banner on 5xx', async () => {
+    // 3pe-review/D — before this fix `kind: 'server'` fell through to
+    // the "Couldn't reach the server" network message, hiding 503
+    // codes like `preview_unconfigured` from publishers on mobile
+    // without DevTools. Now the banner includes the status + the
+    // typed `error` field from the JSON body so misconfig is
+    // diagnosable from the portal.
+    const fetchFn = vi
+      .fn()
+      // initial GET succeeds
+      .mockResolvedValueOnce(detailResponse(dataset()))
+      // POST preview returns 503 with the typed envelope
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            error: 'preview_unconfigured',
+            message: 'Preview tokens are not configured on this deployment.',
+          }),
+          { status: 503, headers: { 'Content-Type': 'application/json' } },
+        ),
+      )
+      // re-fetch after error for the banner paint
+      .mockResolvedValueOnce(detailResponse(dataset()))
+    await renderDatasetDetailPage(mount, '01AAAAAAAAAAAAAAAAAAAAAAAA', {
+      fetchFn: fetchFn as unknown as typeof fetch,
+    })
+    mount.querySelector<HTMLButtonElement>('.publisher-detail-preview')!.click()
+    for (let i = 0; i < 12; i++) await Promise.resolve()
+    const banner = mount.querySelector('.publisher-detail-action-error')?.textContent ?? ''
+    expect(banner).toContain('503')
+    expect(banner).toContain('preview_unconfigured')
+    // And the modal should NOT have opened.
+    expect(mount.querySelector('.publisher-modal')).toBeNull()
+  })
+
   it('closes the preview modal on Close click', async () => {
     const fetchFn = vi
       .fn()

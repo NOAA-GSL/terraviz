@@ -808,7 +808,7 @@ async function dispatchPreview(
       // Surface as an inline banner — same path as the dispatch
       // action handler so the publisher sees a consistent error
       // pattern across every detail-page button.
-      const errorMessage = actionErrorMessage(result.kind)
+      const errorMessage = actionErrorMessage(result)
       const fresh = await publisherGet<DatasetDetailResponse>(endpoint(id), {
         fetchFn: options.fetchFn,
         sleep: options.sleep,
@@ -1055,7 +1055,7 @@ async function dispatchAction(
   const errorMessage =
     result.kind === 'validation'
       ? formatValidationErrors(result.errors)
-      : actionErrorMessage(result.kind)
+      : actionErrorMessage(result)
   const fresh = await publisherGet<DatasetDetailResponse>(endpoint(id), {
     fetchFn: options.fetchFn,
     sleep: options.sleep,
@@ -1074,10 +1074,68 @@ async function dispatchAction(
   renderError(content, fresh.kind)
 }
 
-function actionErrorMessage(kind: 'validation' | 'network' | 'server' | 'not_found'): string {
-  if (kind === 'network') return t('publisher.datasetDetail.action.error.network')
-  if (kind === 'validation') return t('publisher.datasetDetail.action.error.validation')
-  if (kind === 'not_found') return t('publisher.datasetDetail.notFound')
+/**
+ * Map a `publisherSend` failure result to a user-facing message.
+ *
+ * Accepts the full result (not just `kind`) so the `server` branch
+ * can surface the HTTP status + the server's typed `error` code
+ * from the body — which is exactly the info a publisher needs to
+ * diagnose a misconfigured deployment (e.g. a `503` carrying
+ * `preview_unconfigured` tells the operator their binding table
+ * is missing `PREVIEW_SIGNING_KEY` on the Preview environment).
+ * Before 3pe-review/D the `server` case silently fell through to
+ * the network message, which made misconfig look like a flaky
+ * connection.
+ */
+/**
+ * Shape we accept from `publisherSend` failure results. Matches
+ * api.ts's `PublisherSendResult` minus the success case; we keep
+ * `session` in the union for assignment compatibility even though
+ * every caller guards against it earlier with a redirect-back to
+ * Access — that's why a 'session' branch silently falls through
+ * to the generic network message rather than throwing.
+ */
+type ActionErrorResult =
+  | { kind: 'network' | 'session' | 'not_found' }
+  | { kind: 'validation' }
+  | { kind: 'server'; status?: number; body?: string }
+
+function actionErrorMessage(result: ActionErrorResult): string {
+  // Check 'server' first so TS narrows the variant cleanly — the
+  // combined `'network' | 'session' | 'not_found'` literal union
+  // in the sibling variant trips up TS's narrowing if we eliminate
+  // the others first.
+  if (result.kind === 'server') {
+    // Compose a detail string from whatever we have. The publisher
+    // API's typed envelope is `{ error: <code>, message: <text> }`,
+    // so parse the body and prefer the terse stable `error` code
+    // over the variable human message. Falls back to the raw
+    // status when the body isn't JSON. Surfacing the code here
+    // (e.g. `503: preview_unconfigured`) is what makes
+    // misconfigured deployments diagnosable from the portal
+    // without DevTools — fix for the symptom that drove
+    // 3pe-review/D, where `preview_unconfigured` was masked as a
+    // generic "Couldn't reach the server" message.
+    const status = result.status ?? '5xx'
+    let detail = String(status)
+    if (result.body) {
+      try {
+        const parsed = JSON.parse(result.body) as { error?: unknown }
+        if (typeof parsed.error === 'string' && parsed.error.length > 0) {
+          detail = `${status}: ${parsed.error}`
+        }
+      } catch {
+        // Non-JSON body — leave detail as just the status code.
+      }
+    }
+    return t('publisher.datasetDetail.action.error.server', { detail })
+  }
+  if (result.kind === 'validation') return t('publisher.datasetDetail.action.error.validation')
+  if (result.kind === 'not_found') return t('publisher.datasetDetail.notFound')
+  // 'network' or 'session' both surface as the network message —
+  // callers guard 'session' before reaching here, but keep the
+  // fallback so a future caller that forgets the guard doesn't
+  // produce a blank banner.
   return t('publisher.datasetDetail.action.error.network')
 }
 
