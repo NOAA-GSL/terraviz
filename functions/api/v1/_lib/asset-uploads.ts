@@ -156,6 +156,268 @@ export function validateAssetInit(
 }
 
 /**
+ * Body shape `POST .../asset` accepts when initiating an
+ * image-sequence upload (Phase 3pf). The presence of the `frames`
+ * array is what routes the request into the image-sequence code
+ * path; the parent body's `mime` field carries the per-frame MIME
+ * (every frame must claim the same one — see
+ * `validateImageSequenceInit`). Distinct from `AssetInitBody` so
+ * the parsers stay focused; the route handler decides which
+ * validator to call based on whether `frames` is present.
+ */
+export interface ImageSequenceInitBody {
+  kind?: unknown
+  mime?: unknown
+  /** Sum of every frame's `size` (bytes). Cross-checked against
+   *  the array totals — declared mismatch fails the request. */
+  size?: unknown
+  frames?: unknown
+}
+
+/** One entry in the `frames` array passed by the client. */
+export interface ImageSequenceFrameInit {
+  filename: string
+  digest: string
+  size: number
+}
+
+export interface ValidatedImageSequenceInit {
+  kind: 'data'
+  mime: string
+  /** Lowercase `png` / `jpg` / `webp` matching the `extForMime`
+   *  convention so the R2 key the runner reads matches the one the
+   *  PUT lands at. */
+  extension: string
+  /** Frames in the order the publisher provided them. Encode order
+   *  is the array index; the per-frame R2 key embeds that index. */
+  frames: ImageSequenceFrameInit[]
+  totalSize: number
+}
+
+/**
+ * Frame-count cap. Covers ~5.5 minutes of 30 fps content or ~1.1
+ * years of hourly timeseries data, while keeping the in-browser
+ * SHA-256 hash budget (~10 ms per frame on a typical laptop) and
+ * the `POST /asset` response size (~1 KB presigned URL per frame,
+ * ~10 MB JSON at the cap) both bounded. See
+ * `docs/CATALOG_IMAGE_SEQUENCE_PLAN.md` §Open questions Q4 for the
+ * rationale. The `buildFrameKey` helper hard-bounds at 99 999 via
+ * its five-digit index format, so this cap is the binding
+ * constraint.
+ */
+export const MAX_IMAGE_SEQUENCE_FRAMES = 10_000
+
+/** Aggregate-size cap on an image-sequence upload. Same 10 GB
+ *  ceiling as the MP4-source path — the runner's GHA budget is
+ *  what determines the absolute upper bound. */
+const SIZE_IMAGE_SEQUENCE_TOTAL = SIZE_10_GB
+
+/** Per-frame mime allow-list for image-sequence uploads. The
+ *  validator additionally enforces that every frame in a single
+ *  upload claims the *same* mime — mixed PNG + JPEG is rejected.
+ *  See `docs/CATALOG_IMAGE_SEQUENCE_PLAN.md` §Open questions Q2. */
+const IMAGE_SEQUENCE_MIME_ALLOWLIST: ReadonlySet<string> = new Set([
+  'image/png',
+  'image/jpeg',
+  'image/webp',
+])
+
+/**
+ * Validate the body for `POST .../asset` when the client is
+ * starting an image-sequence upload. Returns the cleaned-up shape
+ * on success or a typed `errors` array (same envelope the
+ * single-file validator returns).
+ *
+ * Rejection cases worth calling out explicitly:
+ *
+ *   - `frames` must be a non-empty array of length ≤
+ *     MAX_IMAGE_SEQUENCE_FRAMES. Empty arrays would mint an
+ *     `asset_uploads` row that the /complete handler couldn't
+ *     reason about; the cap closes the in-browser-hashing and
+ *     JSON-response-size axes.
+ *   - `mime` must be a single value from the image-sequence
+ *     allow-list. The per-frame mime is what ffmpeg's
+ *     image-sequence input mode expects — mixed mimes inside one
+ *     sequence would force the runner to demux, which the runner
+ *     deliberately doesn't do (see plan §Open questions Q2).
+ *   - Every frame's `digest` must match the same `sha256:<64hex>`
+ *     shape the single-file path enforces.
+ *   - Every frame's `filename` must be a non-empty string. The
+ *     publisher's display naming is computed server-side from
+ *     `slug` + `start_time` + `period` (see plan §"Frames as
+ *     data"); the original filenames are kept only for the
+ *     `source_filenames.json` audit blob.
+ *   - Filenames must be unique within the upload. Duplicates
+ *     would leave the publisher unable to distinguish their
+ *     frames in the source-filenames manifest later.
+ *   - The declared `size` on the parent body must equal the sum
+ *     of `frames[*].size`. Surfaces a client/server disagreement
+ *     before any bytes move.
+ */
+export function validateImageSequenceInit(
+  body: ImageSequenceInitBody,
+):
+  | { ok: true; value: ValidatedImageSequenceInit }
+  | { ok: false; errors: AssetInitValidationError[] } {
+  const errors: AssetInitValidationError[] = []
+
+  // `kind` must be `data` for image-sequence uploads — the only
+  // supported sequence target today is the dataset's `data_ref`.
+  if (body.kind !== 'data') {
+    errors.push({
+      field: 'kind',
+      code: 'invalid_kind',
+      message: 'kind must be "data" for image-sequence uploads.',
+    })
+  }
+
+  let mime: string | null = null
+  if (typeof body.mime !== 'string' || !body.mime) {
+    errors.push({ field: 'mime', code: 'invalid_mime', message: 'mime is required.' })
+  } else if (!IMAGE_SEQUENCE_MIME_ALLOWLIST.has(body.mime)) {
+    errors.push({
+      field: 'mime',
+      code: 'mime_not_allowed',
+      message: `mime "${body.mime}" is not allowed for an image-sequence upload. Allowed: ${[...IMAGE_SEQUENCE_MIME_ALLOWLIST].join(', ')}.`,
+    })
+  } else {
+    mime = body.mime
+  }
+
+  if (!Array.isArray(body.frames)) {
+    errors.push({
+      field: 'frames',
+      code: 'invalid_frames',
+      message: 'frames must be an array.',
+    })
+    return { ok: false, errors }
+  }
+  if (body.frames.length === 0) {
+    errors.push({
+      field: 'frames',
+      code: 'frames_empty',
+      message: 'frames must contain at least one entry.',
+    })
+  }
+  if (body.frames.length > MAX_IMAGE_SEQUENCE_FRAMES) {
+    errors.push({
+      field: 'frames',
+      code: 'frames_too_many',
+      message: `frames count ${body.frames.length} exceeds the cap of ${MAX_IMAGE_SEQUENCE_FRAMES}.`,
+    })
+  }
+
+  // Per-frame validation. Each error references the offending
+  // index in the field path so a publisher fixing a malformed
+  // 47th frame doesn't have to manually count.
+  const seenFilenames = new Set<string>()
+  let totalSize = 0
+  const validatedFrames: ImageSequenceFrameInit[] = []
+  for (let i = 0; i < body.frames.length; i++) {
+    const f = body.frames[i] as Record<string, unknown> | null | undefined
+    if (!f || typeof f !== 'object' || Array.isArray(f)) {
+      errors.push({
+        field: `frames[${i}]`,
+        code: 'invalid_frame',
+        message: `frames[${i}] must be an object.`,
+      })
+      continue
+    }
+    const { filename, digest, size } = f as {
+      filename?: unknown
+      digest?: unknown
+      size?: unknown
+    }
+    if (typeof filename !== 'string' || filename.length === 0) {
+      errors.push({
+        field: `frames[${i}].filename`,
+        code: 'invalid_filename',
+        message: `frames[${i}].filename must be a non-empty string.`,
+      })
+    } else if (seenFilenames.has(filename)) {
+      errors.push({
+        field: `frames[${i}].filename`,
+        code: 'duplicate_filename',
+        message: `frames[${i}].filename "${filename}" is duplicated within the upload.`,
+      })
+    } else {
+      seenFilenames.add(filename)
+    }
+    if (typeof digest !== 'string' || !/^sha256:[0-9a-f]{64}$/.test(digest)) {
+      errors.push({
+        field: `frames[${i}].digest`,
+        code: 'invalid_digest',
+        message: `frames[${i}].digest must be sha256:<64 lowercase hex chars>.`,
+      })
+    }
+    if (typeof size !== 'number' || !Number.isInteger(size) || size <= 0) {
+      errors.push({
+        field: `frames[${i}].size`,
+        code: 'invalid_size',
+        message: `frames[${i}].size must be a positive integer (bytes).`,
+      })
+    } else {
+      totalSize += size
+    }
+    if (
+      typeof filename === 'string' &&
+      filename.length > 0 &&
+      typeof digest === 'string' &&
+      /^sha256:[0-9a-f]{64}$/.test(digest) &&
+      typeof size === 'number' &&
+      Number.isInteger(size) &&
+      size > 0
+    ) {
+      validatedFrames.push({ filename, digest, size })
+    }
+  }
+
+  if (totalSize > SIZE_IMAGE_SEQUENCE_TOTAL) {
+    errors.push({
+      field: 'size',
+      code: 'size_exceeded',
+      message: `Aggregate frame size ${formatBytes(totalSize)} exceeds the ${formatBytes(SIZE_IMAGE_SEQUENCE_TOTAL)} cap.`,
+    })
+  }
+
+  if (
+    typeof body.size !== 'number' ||
+    !Number.isInteger(body.size) ||
+    body.size <= 0
+  ) {
+    errors.push({
+      field: 'size',
+      code: 'invalid_size',
+      message: 'size must be a positive integer (bytes) and equal the sum of frames[*].size.',
+    })
+  } else if (body.size !== totalSize && validatedFrames.length === body.frames.length) {
+    // Only flag the sum-mismatch when every frame's size parsed
+    // cleanly — otherwise the per-frame errors above are the
+    // root cause and a sum-mismatch report would be noise.
+    errors.push({
+      field: 'size',
+      code: 'size_sum_mismatch',
+      message: `Declared size ${body.size} does not match the sum of frames[*].size (${totalSize}).`,
+    })
+  }
+
+  if (errors.length) return { ok: false, errors }
+  // Non-null narrowing — `mime` is set above on the success path
+  // because the validator returns early on shape errors; the
+  // explicit `!` makes the type narrowing visible.
+  return {
+    ok: true,
+    value: {
+      kind: 'data',
+      mime: mime!,
+      extension: extForMime(mime!),
+      frames: validatedFrames,
+      totalSize,
+    },
+  }
+}
+
+/**
  * Per-kind size cap. Exposed for tests + the route handler to surface
  * in error messages without re-deriving the bytes-to-MB conversion.
  */

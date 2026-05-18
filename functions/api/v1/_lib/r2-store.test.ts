@@ -25,6 +25,10 @@
 import { describe, expect, it } from 'vitest'
 import {
   buildAssetKey,
+  buildFrameKey,
+  buildFrameSequencePrefix,
+  buildFrameSourceFilenamesKey,
+  isFrameKey,
   isVideoSourceKey,
   MOCK_R2_HOST,
   presignPut,
@@ -109,6 +113,102 @@ describe('isVideoSourceKey', () => {
   it('rejects keys outside the uploads/ namespace', () => {
     expect(isVideoSourceKey(`datasets/${DS}/by-digest/sha256/abc/asset.mp4`)).toBe(false)
     expect(isVideoSourceKey(`videos/${DS}/${UP}/master.m3u8`)).toBe(false)
+  })
+})
+
+describe('buildFrameKey', () => {
+  const DS = '01HXAAAAAAAAAAAAAAAAAAAAAA'
+  const UP = '01HYAAAAAAAAAAAAAAAAAAAAAA'
+
+  it('emits a zero-padded five-digit index in the canonical layout', () => {
+    expect(buildFrameKey(DS, UP, 0, 'png')).toBe(`uploads/${DS}/${UP}/frames/00000.png`)
+    expect(buildFrameKey(DS, UP, 47, 'jpg')).toBe(`uploads/${DS}/${UP}/frames/00047.jpg`)
+    expect(buildFrameKey(DS, UP, 9999, 'webp')).toBe(`uploads/${DS}/${UP}/frames/09999.webp`)
+    expect(buildFrameKey(DS, UP, 99999, 'png')).toBe(`uploads/${DS}/${UP}/frames/99999.png`)
+  })
+
+  it('rejects non-ULID ids', () => {
+    expect(() => buildFrameKey('NOTAULID', UP, 0, 'png')).toThrow(/datasetId/)
+    expect(() => buildFrameKey(DS, 'NOTAULID', 0, 'png')).toThrow(/uploadId/)
+  })
+
+  it('rejects out-of-range indices', () => {
+    expect(() => buildFrameKey(DS, UP, -1, 'png')).toThrow(/index/)
+    expect(() => buildFrameKey(DS, UP, 100000, 'png')).toThrow(/index/)
+    expect(() => buildFrameKey(DS, UP, 1.5, 'png')).toThrow(/index/)
+  })
+
+  it('rejects malformed extensions', () => {
+    // Defends against a future code path that might pass `.png` or
+    // `PNG` from a misread mime helper — the resulting R2 key would
+    // contain a stray dot or a case mismatch ffmpeg's glob doesn't
+    // expect. Helper rejects rather than silently building a
+    // broken key.
+    expect(() => buildFrameKey(DS, UP, 0, '.png')).toThrow(/ext/)
+    expect(() => buildFrameKey(DS, UP, 0, 'PNG')).toThrow(/ext/)
+    expect(() => buildFrameKey(DS, UP, 0, '')).toThrow(/ext/)
+  })
+})
+
+describe('isFrameKey', () => {
+  const DS = '01HXAAAAAAAAAAAAAAAAAAAAAA'
+  const UP = '01HYAAAAAAAAAAAAAAAAAAAAAA'
+
+  it('accepts the canonical uploads/{ULID}/{ULID}/frames/{NNNNN}.{ext} shape', () => {
+    expect(isFrameKey(`uploads/${DS}/${UP}/frames/00000.png`)).toBe(true)
+    expect(isFrameKey(`uploads/${DS}/${UP}/frames/00047.jpg`)).toBe(true)
+    expect(isFrameKey(`uploads/${DS}/${UP}/frames/99999.webp`)).toBe(true)
+  })
+
+  it('rejects the MP4-source layout (precise predicate per upload-shape)', () => {
+    expect(isFrameKey(`uploads/${DS}/${UP}/source.mp4`)).toBe(false)
+  })
+
+  it('rejects the sibling source-filenames blob', () => {
+    expect(isFrameKey(`uploads/${DS}/${UP}/source_filenames.json`)).toBe(false)
+  })
+
+  it('rejects non-five-digit index segments', () => {
+    expect(isFrameKey(`uploads/${DS}/${UP}/frames/0.png`)).toBe(false)
+    expect(isFrameKey(`uploads/${DS}/${UP}/frames/000000.png`)).toBe(false)
+    expect(isFrameKey(`uploads/${DS}/${UP}/frames/abcde.png`)).toBe(false)
+  })
+
+  it('rejects non-ULID id segments', () => {
+    expect(isFrameKey(`uploads/short/${UP}/frames/00000.png`)).toBe(false)
+    expect(isFrameKey(`uploads/${DS}/short/frames/00000.png`)).toBe(false)
+  })
+
+  it('rejects keys outside the uploads/ namespace', () => {
+    expect(isFrameKey(`videos/${DS}/${UP}/frames/00000.png`)).toBe(false)
+    expect(isFrameKey(`datasets/${DS}/frames/00000.png`)).toBe(false)
+  })
+})
+
+describe('buildFrameSequencePrefix + buildFrameSourceFilenamesKey', () => {
+  const DS = '01HXAAAAAAAAAAAAAAAAAAAAAA'
+  const UP = '01HYAAAAAAAAAAAAAAAAAAAAAA'
+
+  it('frame prefix ends with a trailing slash so list operations exclude siblings', () => {
+    // The trailing slash matters: an R2 list against
+    // `uploads/.../{UP}/frames/` returns only the per-frame
+    // objects, not the sibling `source_filenames.json` blob.
+    expect(buildFrameSequencePrefix(DS, UP)).toBe(`uploads/${DS}/${UP}/frames/`)
+  })
+
+  it('source-filenames key sits alongside frames/, not inside it', () => {
+    // The blob lives at `…/source_filenames.json` (one level up
+    // from frames/). Keeping it outside the frames directory means
+    // the list-by-prefix used by /complete enumerates exactly the
+    // upload's frames.
+    expect(buildFrameSourceFilenamesKey(DS, UP)).toBe(`uploads/${DS}/${UP}/source_filenames.json`)
+  })
+
+  it('both reject non-ULID ids', () => {
+    expect(() => buildFrameSequencePrefix('NOTAULID', UP)).toThrow(/datasetId/)
+    expect(() => buildFrameSequencePrefix(DS, 'NOTAULID')).toThrow(/uploadId/)
+    expect(() => buildFrameSourceFilenamesKey('NOTAULID', UP)).toThrow(/datasetId/)
+    expect(() => buildFrameSourceFilenamesKey(DS, 'NOTAULID')).toThrow(/uploadId/)
   })
 })
 

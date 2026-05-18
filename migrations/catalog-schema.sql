@@ -23,7 +23,7 @@ CREATE TABLE asset_uploads (
   status          TEXT NOT NULL,              -- pending | completed | failed
   failure_reason  TEXT,                       -- machine-readable code; NULL when status != failed
   created_at      TEXT NOT NULL,
-  completed_at    TEXT,                       -- stamped on completed | failed
+  completed_at    TEXT, frame_count INTEGER,                       -- stamped on completed | failed
   FOREIGN KEY (dataset_id)   REFERENCES datasets(id) ON DELETE CASCADE,
   FOREIGN KEY (publisher_id) REFERENCES publishers(id)
 );
@@ -163,7 +163,7 @@ CREATE TABLE datasets (
 
   published_at       TEXT,
   retracted_at       TEXT,
-  publisher_id       TEXT, legacy_id TEXT, color_table_ref TEXT, probing_info TEXT, bbox_n REAL, bbox_s REAL, bbox_w REAL, bbox_e REAL, celestial_body TEXT, radius_mi REAL, lon_origin REAL, is_flipped_in_y INTEGER, transcoding INTEGER, active_transcode_upload_id TEXT,
+  publisher_id       TEXT, legacy_id TEXT, color_table_ref TEXT, probing_info TEXT, bbox_n REAL, bbox_s REAL, bbox_w REAL, bbox_e REAL, celestial_body TEXT, radius_mi REAL, lon_origin REAL, is_flipped_in_y INTEGER, transcoding INTEGER, active_transcode_upload_id TEXT, frame_count INTEGER, frame_extension TEXT, frame_source_filenames_ref TEXT,
   FOREIGN KEY (publisher_id) REFERENCES publishers(id)
 );
 
