@@ -310,8 +310,14 @@ class InteractiveSphere {
       // not in place of, the public catalog. On error we surface
       // a typed message via setError and fall through to the
       // empty-globe path so the visitor isn't left staring at a
-      // blank loading overlay.
+      // blank loading overlay with no globe and no browse panel.
+      // Falling through bypasses the `?dataset=` branch below
+      // because that id won't be in the public catalog (it's the
+      // draft we just failed to fetch) \u2014 re-attempting it would
+      // overwrite our typed preview error with a generic
+      // "Dataset not found".
       const previewParams = this.getPreviewParamsFromUrl()
+      let previewFailed = false
       if (previewParams) {
         this.setLoadingStatus('Loading preview\u2026', 50)
         try {
@@ -336,13 +342,12 @@ class InteractiveSphere {
             : err instanceof Error
               ? err.message
               : 'Failed to load preview.'
-          this.setLoading(false)
           this.setError(message)
-          return
+          previewFailed = true
         }
       }
 
-      const datasetId = this.getDatasetIdFromUrl()
+      const datasetId = previewFailed ? null : this.getDatasetIdFromUrl()
       if (datasetId) {
         this.setLoadingStatus('Loading dataset\u2026', 50)
         await this.loadDataset(datasetId, 'url')
