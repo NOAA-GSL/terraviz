@@ -73,6 +73,9 @@ describe('GET /api/v1/datasets/{id}/preview/{token}/manifest', () => {
     const res = await onRequestGet(ctx)
     expect(res.status).toBe(401)
     expect((await readJson<{ error: string }>(res)).error).toBe('invalid_token')
+    // Errors must be non-cacheable so a token issued seconds after
+    // an earlier 401 doesn't get masked by an intermediary cache.
+    expect(res.headers.get('cache-control')).toContain('no-store')
   })
 
   it('returns 401 token_id_mismatch when path id and token id differ', async () => {

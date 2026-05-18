@@ -44,11 +44,16 @@ import { makeDataRefResolver } from '../../../_lib/data-ref-resolver'
 import { resolveAssetRefStrict } from '../../../_lib/r2-public-url'
 
 const CONTENT_TYPE = 'application/json; charset=utf-8'
+// Errors are explicitly non-cacheable: RFC 9111 lets intermediaries
+// heuristically cache 4xx/5xx without an explicit directive. With a
+// 15-minute token TTL, a cached 401 right before mint can make a
+// freshly issued token appear invalid.
+const NO_STORE = 'private, no-store'
 
 function jsonError(status: number, error: string, message: string): Response {
   return new Response(JSON.stringify({ error, message }), {
     status,
-    headers: { 'Content-Type': CONTENT_TYPE },
+    headers: { 'Content-Type': CONTENT_TYPE, 'Cache-Control': NO_STORE },
   })
 }
 
