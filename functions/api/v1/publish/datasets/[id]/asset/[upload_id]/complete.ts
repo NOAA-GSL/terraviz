@@ -44,6 +44,10 @@ import type { DatasetRow } from '../../../../../_lib/catalog-store'
 import { getDatasetForPublisher } from '../../../../../_lib/dataset-mutations'
 import { isConfigurationError, isUpstreamError } from '../../../../../_lib/errors'
 import { isLoopbackHost } from '../../../../../_lib/loopback'
+import {
+  FRAME_OPERATION_CONCURRENCY,
+  runBoundedPool,
+} from '../../../../../_lib/bounded-pool'
 import { invalidateSnapshot } from '../../../../../_lib/snapshot'
 import {
   buildFrameKey,
@@ -838,8 +842,17 @@ async function handleFrameSourceComplete(
     )
     const sourceFilenamesKey = buildFrameSourceFilenamesKey(datasetId, uploadId)
     const allKeys = [...frameKeys, sourceFilenamesKey]
-    const existences = await Promise.all(
-      allKeys.map(key => verifyObjectExists(context.env, key)),
+    // Bounded-concurrency HEAD pool rather than `Promise.all` —
+    // Cloudflare Workers cap outbound subrequests at 50 (free) /
+    // 1000 (paid) per invocation, so 10 001 parallel HEADs at the
+    // frame cap would surface as `Too many subrequests` 5xx and
+    // leave the asset_uploads row stuck `pending`. 16 workers is
+    // well below the paid-tier cap and high enough that the
+    // HEAD-all wall-clock stays small. Phase 3pf-review/G —
+    // Copilot discussion_r3263466382.
+    const existences = await runBoundedPool(
+      allKeys.map(key => () => verifyObjectExists(context.env, key)),
+      FRAME_OPERATION_CONCURRENCY,
     )
     for (let i = 0; i < existences.length; i++) {
       const result = existences[i]

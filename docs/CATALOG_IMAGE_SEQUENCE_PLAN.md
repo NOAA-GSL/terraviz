@@ -292,7 +292,7 @@ The runner gains an image-sequence input branch in
    a trusted set of per-frame digests to compare against during
    the per-frame download.
 3. Download all N frames from R2 (concurrent with a small queue —
-   ~10 parallel S3 GETs is comfortable on the runner; same shape
+   16 parallel S3 GETs is comfortable on the runner; same shape
    as the browser upload queue). Each frame is re-hashed in the
    download stream and compared against its declared digest from
    the manifest. Mismatch fails the whole encode (exit code 6).

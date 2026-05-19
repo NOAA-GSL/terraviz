@@ -301,9 +301,12 @@ describe('renderAssetUploader — frames tab (3pf/D)', () => {
 
   function pickFrames(mount: HTMLElement, files: File[]): void {
     // The frames tab has its own multi-file input (id=
-    // `dataset-asset-frames`). The MP4 tab's input is
-    // `dataset-asset-file`.
-    const input = mount.querySelector<HTMLInputElement>('#dataset-asset-frames')!
+    // `dataset-asset-frames-<suffix>`). The MP4 tab's input id is
+    // `dataset-asset-file-<suffix>`. The suffix is randomized per
+    // uploader instance — query by id-prefix selector.
+    const input = mount.querySelector<HTMLInputElement>(
+      'input[type="file"][id^="dataset-asset-frames-"]',
+    )!
     Object.defineProperty(input, 'files', {
       value: {
         length: files.length,
@@ -352,11 +355,11 @@ describe('renderAssetUploader — frames tab (3pf/D)', () => {
         onUploaded: () => {},
       }),
     )
-    expect(mount.querySelector('#dataset-asset-frames')).toBeNull()
+    expect(mount.querySelector('input[id^="dataset-asset-frames-"]')).toBeNull()
     clickFramesTab(mount)
-    expect(mount.querySelector('#dataset-asset-frames')).not.toBeNull()
+    expect(mount.querySelector('input[id^="dataset-asset-frames-"]')).not.toBeNull()
     // Single-file picker is no longer present.
-    expect(mount.querySelector('#dataset-asset-file')).toBeNull()
+    expect(mount.querySelector('input[id^="dataset-asset-file-"]')).toBeNull()
   })
 
   it('shows the frame-count + size summary after files are picked', () => {

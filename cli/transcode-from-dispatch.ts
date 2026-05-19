@@ -78,6 +78,7 @@
  */
 
 import { createHash } from 'node:crypto'
+import { readFile } from 'node:fs/promises'
 import {
   createWriteStream,
   existsSync,
@@ -281,7 +282,7 @@ async function verifySourceFilenamesBlob(
       `source-filenames digest mismatch. expected=${args.sourceDigest} actual=${result.digest}`,
     )
   }
-  const text = await import('node:fs/promises').then(fs => fs.readFile(destPath, 'utf-8'))
+  const text = await readFile(destPath, 'utf-8')
   const parsed = JSON.parse(text) as unknown
   if (!Array.isArray(parsed)) {
     throw new Error('source-filenames JSON is not an array')

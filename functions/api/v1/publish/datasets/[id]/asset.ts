@@ -47,6 +47,10 @@ import { getDatasetForPublisher } from '../../../_lib/dataset-mutations'
 import { isConfigurationError } from '../../../_lib/errors'
 import { isLoopbackHost } from '../../../_lib/loopback'
 import {
+  FRAME_OPERATION_CONCURRENCY,
+  runBoundedPool,
+} from '../../../_lib/bounded-pool'
+import {
   buildAssetKey,
   buildFrameKey,
   buildFrameSequencePrefix,
@@ -506,23 +510,30 @@ async function handleImageSequenceInit(
   let frameMints: ImageSequenceInitFrameResponse[]
   let sourceFilenamesMint: ImageSequenceInitResponse['source_filenames']
   try {
-    // Per-frame mints — parallel via Promise.all because each
-    // presign is a SigV4 computation independent of the others.
-    // The mock path returns deterministic URLs without any work.
-    const framePresigns = await Promise.all(
-      frames.map((f, index) => {
-        const key = buildFrameKey(id, uploadId, index, extension)
-        return presignPut(context.env, key, {
-          contentType: mime,
-          // Video-tier TTL covers multi-GB sequence uploads on a
-          // residential uplink; the typical 240-frame 4K PNG batch
-          // is ~7 GB but the publisher hashes + PUTs frames serially
-          // (bounded concurrency), so the practical upload time
-          // tracks the MP4 path.
-          ttlSeconds: R2_PUT_TTL_VIDEO_SECONDS,
-        }).then(presigned => ({ presigned, frame: f, index }))
-      }),
-    )
+    // Per-frame mints — bounded-concurrency via `runBoundedPool`
+    // rather than `Promise.all`. Each `presignPut` is a SigV4
+    // HMAC computation; at the 10 000-frame cap, 10 001
+    // concurrent presigns would burst the Workers CPU-time
+    // budget on a single invocation. 16 parallel workers keeps
+    // the SigV4 burst bounded while still being faster than
+    // strict sequential. Phase 3pf-review/G — Copilot
+    // discussion_r3263466400. Mock-mode `presignPut` is just
+    // string construction so the budget concern doesn't apply
+    // there, but the same code path works.
+    const framePresignJobs = frames.map((f, index) => async () => {
+      const key = buildFrameKey(id, uploadId, index, extension)
+      const presigned = await presignPut(context.env, key, {
+        contentType: mime,
+        // Video-tier TTL covers multi-GB sequence uploads on a
+        // residential uplink; the typical 240-frame 4K PNG batch
+        // is ~7 GB but the publisher hashes + PUTs frames serially
+        // (bounded concurrency), so the practical upload time
+        // tracks the MP4 path.
+        ttlSeconds: R2_PUT_TTL_VIDEO_SECONDS,
+      })
+      return { presigned, frame: f, index }
+    })
+    const framePresigns = await runBoundedPool(framePresignJobs, FRAME_OPERATION_CONCURRENCY)
     frameMints = framePresigns.map(({ presigned, frame, index }) => ({
       filename: frame.filename,
       index,

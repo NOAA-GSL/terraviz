@@ -24,6 +24,14 @@
  */
 
 import type { AssetKind } from './r2-store'
+// Frame-count cap is shared with the GHA runner + portal
+// uploader via a single source of truth in
+// `src/types/image-sequence-constants.ts`. Re-exported below so
+// existing call sites that import from this module keep working
+// without churning their import paths. Phase 3pf-review/F —
+// Copilot discussion_r3263124306.
+import { MAX_IMAGE_SEQUENCE_FRAMES } from '../../../../src/types/image-sequence-constants'
+export { MAX_IMAGE_SEQUENCE_FRAMES }
 
 const SIZE_10_GB = 10 * 1024 * 1024 * 1024
 const SIZE_100_MB = 100 * 1024 * 1024
@@ -205,14 +213,6 @@ export interface ValidatedImageSequenceInit {
   sourceFilenamesDigest: string
 }
 
-// Frame-count cap is shared with the GHA runner + portal
-// uploader via a single source of truth in
-// `cli/lib/image-sequence-constants.ts`. Re-exported here so
-// existing call sites that import from this module keep working
-// without churning their import paths. Phase 3pf-review/F —
-// Copilot discussion_r3263124306.
-import { MAX_IMAGE_SEQUENCE_FRAMES } from '../../../../src/types/image-sequence-constants'
-export { MAX_IMAGE_SEQUENCE_FRAMES }
 
 /** Aggregate-size cap on an image-sequence upload. Same 10 GB
  *  ceiling as the MP4-source path — the runner's GHA budget is
@@ -299,11 +299,46 @@ export function validateImageSequenceInit(
     })
     return { ok: false, errors }
   }
-  // Cap + emptiness are sanity bounds, not soft suggestions —
-  // early-return BEFORE the O(N) per-frame loop below so a
-  // hostile client can't trigger a 1 000 000-iteration
-  // validation pass with a single request. Phase 3pf-review/E —
-  // Copilot discussion_r3263124264.
+
+  // Validate the cheap shape-only fields BEFORE bailing on
+  // frame-count violations, so the publisher sees mime + digest +
+  // size errors alongside `frames_too_many` and fixes them all in
+  // one pass. Phase 3pf-review/G — Copilot
+  // discussion_r3263466554. The per-frame O(N) loop is still
+  // gated behind the cap (Phase 3pf-review/E,
+  // discussion_r3263124264) — that's the DoS-protection
+  // invariant — but the shape checks happen first.
+
+  if (
+    typeof body.size !== 'number' ||
+    !Number.isInteger(body.size) ||
+    body.size <= 0
+  ) {
+    errors.push({
+      field: 'size',
+      code: 'invalid_size',
+      message: 'size must be a positive integer (bytes) and equal the sum of frames[*].size.',
+    })
+  }
+  if (
+    typeof body.source_filenames_digest !== 'string' ||
+    !/^sha256:[0-9a-f]{64}$/.test(body.source_filenames_digest)
+  ) {
+    errors.push({
+      field: 'source_filenames_digest',
+      code: 'invalid_digest',
+      message:
+        'source_filenames_digest must be sha256:<64 lowercase hex chars>. The client ' +
+        'computes it from the canonical JSON of {filename, index} entries so the GHA ' +
+        "runner can re-verify the manifest's contents before encoding.",
+    })
+  }
+
+  // Cap + emptiness are sanity bounds — return BEFORE the O(N)
+  // per-frame loop below so a hostile client can't trigger a
+  // 1 000 000-iteration validation pass with a single request.
+  // Shape errors accumulated above are surfaced alongside the
+  // count violation.
   if (body.frames.length === 0) {
     errors.push({
       field: 'frames',
@@ -394,44 +429,22 @@ export function validateImageSequenceInit(
     })
   }
 
+  // Sum-mismatch (declared total ≠ sum of per-frame sizes) lands
+  // here rather than alongside `invalid_size` above because it's
+  // a cross-validation against the per-frame loop's result; only
+  // flag it when every frame's `size` parsed cleanly so the
+  // per-frame errors aren't drowned out by sum-mismatch noise.
   if (
-    typeof body.size !== 'number' ||
-    !Number.isInteger(body.size) ||
-    body.size <= 0
+    typeof body.size === 'number' &&
+    Number.isInteger(body.size) &&
+    body.size > 0 &&
+    body.size !== totalSize &&
+    validatedFrames.length === body.frames.length
   ) {
-    errors.push({
-      field: 'size',
-      code: 'invalid_size',
-      message: 'size must be a positive integer (bytes) and equal the sum of frames[*].size.',
-    })
-  } else if (body.size !== totalSize && validatedFrames.length === body.frames.length) {
-    // Only flag the sum-mismatch when every frame's size parsed
-    // cleanly — otherwise the per-frame errors above are the
-    // root cause and a sum-mismatch report would be noise.
     errors.push({
       field: 'size',
       code: 'size_sum_mismatch',
       message: `Declared size ${body.size} does not match the sum of frames[*].size (${totalSize}).`,
-    })
-  }
-
-  // `source_filenames_digest` is the SHA-256 of the canonical
-  // source-filenames JSON blob the publisher PUTs alongside the
-  // frames. Owning it here keeps the route handler's mint step
-  // from running against a malformed claim (N + 1 SigV4
-  // computations before a 400 was the prior shape) and makes the
-  // validator the single source of truth for the body's shape.
-  if (
-    typeof body.source_filenames_digest !== 'string' ||
-    !/^sha256:[0-9a-f]{64}$/.test(body.source_filenames_digest)
-  ) {
-    errors.push({
-      field: 'source_filenames_digest',
-      code: 'invalid_digest',
-      message:
-        'source_filenames_digest must be sha256:<64 lowercase hex chars>. The client ' +
-        'computes it from the canonical JSON of {filename, index} entries so the GHA ' +
-        "runner can re-verify the manifest's contents before encoding.",
     })
   }
 

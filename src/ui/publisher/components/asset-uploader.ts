@@ -278,10 +278,21 @@ export function renderAssetUploader(options: AssetUploaderOptions): HTMLElement 
   // on the same page (vanishingly rare but cheap to protect
   // against) don't collide. Phase 3pf-review/F — Copilot
   // discussion_r3263124279.
-  const TAB_VIDEO_ID = `dataset-asset-tab-video-${Math.random().toString(36).slice(2, 8)}`
-  const TAB_FRAMES_ID = `dataset-asset-tab-frames-${Math.random().toString(36).slice(2, 8)}`
+  // Per-instance random suffix shared across every id this
+  // uploader emits — the tab buttons, the tabpanels, and the
+  // two file inputs. Two uploaders on the same page is
+  // vanishingly rare on the dataset edit form but cheap to
+  // guard against: duplicate `<label for=...>` associations
+  // resolve to whichever input is first in the DOM, and screen
+  // readers announce the wrong control. Phase 3pf-review/G —
+  // Copilot discussion_r3263466409.
+  const ID_SUFFIX = Math.random().toString(36).slice(2, 8)
+  const TAB_VIDEO_ID = `dataset-asset-tab-video-${ID_SUFFIX}`
+  const TAB_FRAMES_ID = `dataset-asset-tab-frames-${ID_SUFFIX}`
   const PANEL_VIDEO_ID = `${TAB_VIDEO_ID}-panel`
   const PANEL_FRAMES_ID = `${TAB_FRAMES_ID}-panel`
+  const FILE_INPUT_ID = `dataset-asset-file-${ID_SUFFIX}`
+  const FRAMES_INPUT_ID = `dataset-asset-frames-${ID_SUFFIX}`
 
   function paint(): void {
     const frag = document.createDocumentFragment()
@@ -383,7 +394,7 @@ export function renderAssetUploader(options: AssetUploaderOptions): HTMLElement 
     const inputRow = document.createElement('div')
     inputRow.className = 'publisher-asset-uploader-input-row'
 
-    const inputId = 'dataset-asset-file'
+    const inputId = FILE_INPUT_ID
     const label = document.createElement('label')
     label.className = 'publisher-asset-uploader-label'
     label.setAttribute('for', inputId)
@@ -469,7 +480,7 @@ export function renderAssetUploader(options: AssetUploaderOptions): HTMLElement 
     // disabled-while-busy rule as the single-file picker.
     const inputRow = document.createElement('div')
     inputRow.className = 'publisher-asset-uploader-input-row'
-    const inputId = 'dataset-asset-frames'
+    const inputId = FRAMES_INPUT_ID
     const label = document.createElement('label')
     label.className = 'publisher-asset-uploader-label'
     label.setAttribute('for', inputId)
@@ -588,21 +599,20 @@ export function renderAssetUploader(options: AssetUploaderOptions): HTMLElement 
         ...INITIAL_FRAMES,
         stage: 'error',
         errorDetail: t('publisher.assetUploader.frames.tooMany', {
+          actual: String(picked.length),
           max: String(MAX_FRAMES),
         }),
       }
       paint()
       return
     }
-    if (picked.length < 1) {
-      framesState = {
-        ...INITIAL_FRAMES,
-        stage: 'error',
-        errorDetail: t('publisher.assetUploader.frames.tooFew'),
-      }
-      paint()
-      return
-    }
+    // No `picked.length < 1` branch here — the caller (the input
+    // `change` listener) silently returns on an empty selection
+    // (e.g. when the publisher clicks Cancel in the file picker),
+    // so `handleFramesPicked` is only ever invoked with at least
+    // one file. Phase 3pf-review/G — Copilot
+    // discussion_r3263466451 flagged the prior dead `picked.length
+    // < 1` error branch.
     // Enforce uniform mime — ffmpeg's image-sequence demuxer
     // expects one extension across the sequence, and the
     // server-side `validateImageSequenceInit` rejects mixed mimes
@@ -815,11 +825,21 @@ export function renderAssetUploader(options: AssetUploaderOptions): HTMLElement 
         // beyond that we surface the error and the publisher's
         // recovery is re-pick (the orphan-frames cost is bounded
         // by the per-upload R2 prefix's lifecycle policy).
+        //
+        // Backoff sequence: 200 ms, 400 ms, 1500 ms — the longer
+        // final backoff was added in 3pf-review/G (Copilot
+        // discussion_r3263466526) because the failure mode here
+        // is asymmetrically expensive (all N frames already in
+        // R2, only the small JSON sidecar left to land), so an
+        // extra second of patience before giving up beats a
+        // forced re-pick + re-hash + re-upload of the whole
+        // batch.
         const blob = new Blob([sourceFilenamesJson], { type: 'application/json' })
         const blobFetch = options.fetchFn ?? globalThis.fetch
         const blobSleep = options.sleep ?? ((ms: number) => new Promise<void>(r => setTimeout(r, ms)))
+        const BLOB_BACKOFFS_MS = [200, 400, 1500]
         let blobErr: Error | null = null
-        for (let attempt = 0; attempt < 3; attempt++) {
+        for (let attempt = 0; attempt < BLOB_BACKOFFS_MS.length + 1; attempt++) {
           blobErr = null
           try {
             const blobRes = await blobFetch(init.source_filenames.url, {
@@ -835,7 +855,9 @@ export function renderAssetUploader(options: AssetUploaderOptions): HTMLElement 
           } catch (err) {
             blobErr = err instanceof Error ? err : new Error(String(err))
           }
-          if (attempt < 2) await blobSleep(200 * (attempt + 1))
+          if (attempt < BLOB_BACKOFFS_MS.length) {
+            await blobSleep(BLOB_BACKOFFS_MS[attempt])
+          }
         }
         if (blobErr) throw blobErr
       }
@@ -872,14 +894,27 @@ export function renderAssetUploader(options: AssetUploaderOptions): HTMLElement 
   ): void {
     if (result.ok) return
     if (result.kind === 'session') {
-      if (handleSessionError({ navigate: options.navigate }) === 'show-error') {
-        framesState = {
-          ...framesState,
-          stage: 'error',
-          errorDetail: t('publisher.assetUploader.sessionExpired'),
-        }
-        paint()
+      const outcome = handleSessionError({ navigate: options.navigate })
+      // Always clear progress state on a session error — even if
+      // the handler triggered a redirect/navigate, the UI may
+      // briefly stay mounted while the new page loads, and the
+      // prior `'minting' / 'uploading' / 'completing'` stage text
+      // would otherwise display indefinitely if for any reason
+      // the navigation didn't unmount the component. The
+      // `'show-error'` branch surfaces the typed
+      // `sessionExpired` message; the redirect branch falls back
+      // to a neutral error so the publisher sees something
+      // meaningful while they wait. Phase 3pf-review/G — Copilot
+      // discussion_r3263466461.
+      framesState = {
+        ...framesState,
+        stage: 'error',
+        errorDetail:
+          outcome === 'show-error'
+            ? t('publisher.assetUploader.sessionExpired')
+            : t('publisher.assetUploader.status.error'),
       }
+      paint()
       return
     }
     let detail: string
