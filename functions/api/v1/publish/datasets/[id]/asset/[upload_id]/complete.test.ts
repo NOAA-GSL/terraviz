@@ -88,14 +88,17 @@ interface PendingUploadOptions {
   declared_size?: number
 }
 
-function insertPending(sqlite: ReturnType<typeof seedFixtures>, opts: PendingUploadOptions) {
+function insertPending(
+  sqlite: ReturnType<typeof seedFixtures>,
+  opts: PendingUploadOptions & { frame_count?: number | null },
+) {
   sqlite
     .prepare(
       `INSERT INTO asset_uploads
         (id, dataset_id, publisher_id, kind, target, target_ref, mime,
          declared_size, claimed_digest, status, failure_reason,
-         created_at, completed_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NULL, ?, NULL)`,
+         created_at, completed_at, frame_count)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NULL, ?, NULL, ?)`,
     )
     .run(
       opts.uploadId,
@@ -108,6 +111,7 @@ function insertPending(sqlite: ReturnType<typeof seedFixtures>, opts: PendingUpl
       opts.declared_size ?? HELLO_BYTES.byteLength,
       opts.claimed_digest,
       '2026-04-29T12:00:00.000Z',
+      opts.frame_count ?? null,
     )
 }
 
@@ -1666,5 +1670,168 @@ describe('POST .../asset/{upload_id}/complete — video transcode dispatch (3pd)
     const res = await completeHandler(prodCtx)
     expect(res.status).toBe(500)
     expect((await readJson<{ error: string }>(res)).error).toBe('mock_github_dispatch_unsafe')
+  })
+})
+
+describe('POST .../asset/{upload_id}/complete — image-sequence dispatch (3pf)', () => {
+  // Frame-source uploads use a single asset_uploads row with
+  // `frame_count = N`; the route branches on that non-NULL value
+  // to take the multi-key HEAD + frames dispatch path. The
+  // upload's `claimed_digest` is the SHA-256 of the canonical
+  // source-filenames JSON (not the frames themselves) — same
+  // shape the runner re-verifies.
+  const UPLOAD_ID = '01HZAAAAAAAAAAAAAAAAAAAAAA'
+  const SOURCE_FILENAMES_DIGEST = `sha256:${'f'.repeat(64)}`
+
+  function seedFrameUpload(
+    sqlite: ReturnType<typeof seedFixtures>,
+    datasetId: string,
+    frameCount: number,
+    mime = 'image/png',
+  ) {
+    insertPending(sqlite, {
+      uploadId: UPLOAD_ID,
+      datasetId,
+      kind: 'data',
+      target: 'r2',
+      // The prefix-shaped target_ref matches what /asset writes.
+      // /complete reads `frame_count` + `mime` and rebuilds the
+      // per-frame keys via `buildFrameKey`, so the target_ref is
+      // informational rather than load-bearing on the read path.
+      target_ref: `r2:uploads/${datasetId}/${UPLOAD_ID}/frames/`,
+      mime,
+      declared_size: frameCount * 4_000_000,
+      claimed_digest: SOURCE_FILENAMES_DIGEST,
+      frame_count: frameCount,
+    })
+  }
+
+  it('stamps transcoding=1, populates frame metadata, fires frames dispatch, returns 202', async () => {
+    const { sqlite, datasetId, kv } = setupEnv({ datasetPublished: false })
+    const env = {
+      CATALOG_DB: asD1(sqlite),
+      CATALOG_KV: kv,
+      // MOCK_R2 short-circuits the HEAD-every-frame loop — no
+      // real bytes have been uploaded to the mock-r2.localhost
+      // PUT URLs, so the HEAD checks would 404. Trust matches
+      // the same bargain the MP4 path makes in mock mode.
+      MOCK_R2: 'true',
+      MOCK_GITHUB_DISPATCH: 'true',
+    }
+    seedFrameUpload(sqlite, datasetId, 3)
+
+    const res = await completeHandler(ctx({ env, datasetId, uploadId: UPLOAD_ID }))
+    expect(res.status).toBe(202)
+    const body = await readJson<{ transcoding: boolean; verified_digest: string }>(res)
+    expect(body.transcoding).toBe(true)
+    expect(body.verified_digest).toBe(SOURCE_FILENAMES_DIGEST)
+
+    const row = sqlite
+      .prepare(
+        `SELECT transcoding, active_transcode_upload_id, frame_count,
+                frame_extension, frame_source_filenames_ref
+         FROM datasets WHERE id = ?`,
+      )
+      .get(datasetId) as {
+      transcoding: number | null
+      active_transcode_upload_id: string | null
+      frame_count: number | null
+      frame_extension: string | null
+      frame_source_filenames_ref: string | null
+    }
+    expect(row.transcoding).toBe(1)
+    expect(row.active_transcode_upload_id).toBe(UPLOAD_ID)
+    expect(row.frame_count).toBe(3)
+    // Extension comes from extForMime — `png` for image/png,
+    // `jpg` for image/jpeg, `webp` for image/webp. Matches the
+    // R2 key the /asset PUT lands at.
+    expect(row.frame_extension).toBe('png')
+    expect(row.frame_source_filenames_ref).toMatch(/\/source_filenames\.json$/)
+  })
+
+  it('returns 409 frames_require_video_format when the row format changed between mint and complete', async () => {
+    const { sqlite, datasetId, kv } = setupEnv({ datasetPublished: false })
+    const env = {
+      CATALOG_DB: asD1(sqlite),
+      CATALOG_KV: kv,
+      MOCK_R2: 'true',
+      MOCK_GITHUB_DISPATCH: 'true',
+    }
+    seedFrameUpload(sqlite, datasetId, 3)
+    // Simulate a format-mutation between /asset and /complete.
+    sqlite.prepare(`UPDATE datasets SET format = 'image/png' WHERE id = ?`).run(datasetId)
+
+    const res = await completeHandler(ctx({ env, datasetId, uploadId: UPLOAD_ID }))
+    expect(res.status).toBe(409)
+    const body = await readJson<{ errors: Array<{ code: string }> }>(res)
+    expect(body.errors[0].code).toBe('frames_require_video_format')
+  })
+
+  it('returns 409 transcoding_in_progress when another upload owns the row', async () => {
+    const { sqlite, datasetId, kv } = setupEnv({ datasetPublished: false })
+    const env = {
+      CATALOG_DB: asD1(sqlite),
+      CATALOG_KV: kv,
+      MOCK_R2: 'true',
+      MOCK_GITHUB_DISPATCH: 'true',
+    }
+    seedFrameUpload(sqlite, datasetId, 3)
+    sqlite
+      .prepare(
+        `UPDATE datasets SET transcoding = 1, active_transcode_upload_id = 'OTHER' WHERE id = ?`,
+      )
+      .run(datasetId)
+
+    const res = await completeHandler(ctx({ env, datasetId, uploadId: UPLOAD_ID }))
+    expect(res.status).toBe(409)
+    expect((await readJson<{ error: string }>(res)).error).toBe('transcoding_in_progress')
+  })
+
+  it('returns 409 asset_missing when one of the frame keys is not present in R2', async () => {
+    const { sqlite, datasetId, kv } = setupEnv({ datasetPublished: false })
+    // No MOCK_R2 — real R2 binding that we control. Bucket
+    // returns null on every head() so the first frame's HEAD
+    // fails and the route surfaces 409.
+    const env = {
+      CATALOG_DB: asD1(sqlite),
+      CATALOG_KV: kv,
+      CATALOG_R2: makeBucket(null),
+      MOCK_GITHUB_DISPATCH: 'true',
+    }
+    seedFrameUpload(sqlite, datasetId, 3)
+
+    const res = await completeHandler(ctx({ env, datasetId, uploadId: UPLOAD_ID }))
+    expect(res.status).toBe(409)
+    expect((await readJson<{ error: string }>(res)).error).toBe('asset_missing')
+    // The asset_uploads row is now marked failed so a retry mints
+    // a fresh upload rather than re-running this one.
+    const status = sqlite
+      .prepare(`SELECT status, failure_reason FROM asset_uploads WHERE id = ?`)
+      .get(UPLOAD_ID) as { status: string; failure_reason: string }
+    expect(status.status).toBe('failed')
+    expect(status.failure_reason).toBe('asset_missing')
+  })
+
+  it('idempotent retry on a completed frame-source upload returns 200 with transcoding=true', async () => {
+    const { sqlite, datasetId, kv } = setupEnv({ datasetPublished: false })
+    const env = {
+      CATALOG_DB: asD1(sqlite),
+      CATALOG_KV: kv,
+      MOCK_R2: 'true',
+      MOCK_GITHUB_DISPATCH: 'true',
+    }
+    seedFrameUpload(sqlite, datasetId, 3)
+    // First call stamps + dispatches + marks completed.
+    const first = await completeHandler(ctx({ env, datasetId, uploadId: UPLOAD_ID }))
+    expect(first.status).toBe(202)
+    // Second call hits the shared idempotent-retry branch ABOVE
+    // the frames-source fork (status === 'completed' is checked
+    // first). Should return 200 with transcoding: true because
+    // the row is still mid-workflow.
+    const second = await completeHandler(ctx({ env, datasetId, uploadId: UPLOAD_ID }))
+    expect(second.status).toBe(200)
+    const body = await readJson<{ idempotent: boolean; transcoding: boolean }>(second)
+    expect(body.idempotent).toBe(true)
+    expect(body.transcoding).toBe(true)
   })
 })

@@ -94,6 +94,20 @@ export const DEFAULT_SEGMENT_SECONDS = 6
 export const DEFAULT_AUDIO_BITRATE_KBPS = 192
 export const MASTER_PLAYLIST_NAME = 'master.m3u8'
 
+/**
+ * Catalog-wide output frame rate. The tour engine's `frameRate`
+ * task in `src/services/tourEngine.ts:execDatasetAnimation`
+ * hard-codes 30 fps as the assumed source rate when computing
+ * playback rate as `requestedFps / 30`; encoding everything at
+ * 30 fps keeps that math correct by construction for any source
+ * (MP4 OR image-sequence). The image-sequence path also passes
+ * `-framerate 30` on the input side via the runner's
+ * `inputArgs`. Both halves use this constant so a future change
+ * (e.g. raising to 60 fps to match a future tour-engine update)
+ * is a one-line edit.
+ */
+export const OUTPUT_FRAME_RATE = 30
+
 /** Bytes of FFmpeg stderr to retain for error reporting. The
  * accumulator below trims itself once total bytes exceeds 2 ×
  * this value so memory is bounded regardless of encode duration. */
@@ -130,6 +144,15 @@ export interface EncodeHlsOptions {
    * typically silent — calling them out explicitly is faster than
    * the probe, but the probe is the safe default. */
   hasAudio?: boolean
+  /** Pre-`-i` flags to insert into the ffmpeg argv. The
+   *  image-sequence path (Phase 3pf) uses `['-framerate', '30']`
+   *  to tell ffmpeg's image-sequence demuxer how to read the
+   *  numbered frames at `inputPath` (which itself takes a
+   *  printf-style pattern like `frames/%05d.png`). MP4 callers
+   *  leave this empty — ffmpeg reads the source's encoded fps
+   *  directly and the `-r 30` on each output rendition then
+   *  normalises the encode. */
+  inputArgs?: readonly string[]
 }
 
 export interface EncodedHls {
@@ -187,6 +210,7 @@ export function buildFfmpegArgs(
   segmentSeconds: number,
   audioBitrateKbps: number,
   hasAudio: boolean = true,
+  inputArgs: readonly string[] = [],
 ): string[] {
   const splits = renditions.length
   const filterParts: string[] = [`[0:v]split=${splits}` + renditions.map((_, i) => `[s${i}]`).join('')]
@@ -197,7 +221,21 @@ export function buildFfmpegArgs(
   }
   const filterComplex = filterParts.join(';')
 
-  const args: string[] = ['-y', '-i', inputPath, '-filter_complex', filterComplex]
+  // `inputArgs` lets the caller insert pre-`-i` flags. The
+  // image-sequence path uses `['-framerate', '30']` to declare
+  // the input frame rate — ffmpeg's image-sequence demuxer
+  // defaults to 25 fps otherwise. The MP4 path passes an empty
+  // array; ffmpeg reads the source's encoded fps directly. The
+  // `-r 30` we add to each *output* below then normalises both
+  // paths to 30 fps regardless of source.
+  const args: string[] = [
+    '-y',
+    ...inputArgs,
+    '-i',
+    inputPath,
+    '-filter_complex',
+    filterComplex,
+  ]
 
   // Per-rendition video output streams. -map "[vN]" picks up the
   // labelled output from the filter graph; -c:v:N / -crf:v:N /
@@ -212,8 +250,21 @@ export function buildFfmpegArgs(
     args.push(`-maxrate:v:${i}`, `${r.maxBitrateKbps}k`)
     // bufsize ~ 2x maxrate is the standard CBR-ish recommendation.
     args.push(`-bufsize:v:${i}`, `${r.maxBitrateKbps * 2}k`)
-    args.push(`-keyint_min:v:${i}`, String(segmentSeconds * 30)) // assume up to 30 fps
-    args.push(`-g:v:${i}`, String(segmentSeconds * 30))
+    // Force 30 fps output across every rendition. The tour
+    // engine's `frameRate` task in `src/services/tourEngine.ts`
+    // hard-codes 30 as the assumed source rate when computing
+    // playback rate, so a non-30-fps encode breaks tour playback
+    // speed. Normalising here makes the invariant true for both
+    // the MP4-source path (which used to pass source fps
+    // through) and the image-sequence path (3pf/C) — fixes the
+    // pre-3pf latent bug where a 60 fps MP4 source published
+    // pre-3pf produced a video that ran at 2× whatever the tour
+    // requested. With `-r 30` on the output side, the
+    // `-keyint_min` / `-g` math (segmentSeconds × 30) below is
+    // now correct by construction rather than by assumption.
+    args.push(`-r:v:${i}`, String(OUTPUT_FRAME_RATE))
+    args.push(`-keyint_min:v:${i}`, String(segmentSeconds * OUTPUT_FRAME_RATE))
+    args.push(`-g:v:${i}`, String(segmentSeconds * OUTPUT_FRAME_RATE))
     args.push(`-sc_threshold:v:${i}`, '0')
   }
 
@@ -328,6 +379,7 @@ export async function encodeHls(options: EncodeHlsOptions): Promise<EncodedHls> 
     segmentSeconds,
     audioBitrateKbps,
     hasAudio,
+    options.inputArgs ?? [],
   )
 
   const start = Date.now()

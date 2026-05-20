@@ -40,7 +40,32 @@ export interface GitHubDispatchEnv {
   MOCK_GITHUB_DISPATCH?: string
 }
 
-export interface TranscodeDispatchPayload {
+/**
+ * Discriminated union — the workflow runner branches on `kind`.
+ *
+ *   - `'video'`: legacy single-MP4 source (Phase 3pd). The runner
+ *     fetches `source_key`, re-verifies `source_digest`, and runs
+ *     ffmpeg's `-i <file>` input mode.
+ *   - `'frames'`: image-sequence source (Phase 3pf). The runner
+ *     reconstructs the per-frame prefix from `dataset_id` +
+ *     `upload_id` + `extension`, fetches all `frame_count` frames
+ *     in parallel, re-verifies the source-filenames blob's
+ *     digest (`source_digest` is the SHA-256 of the canonical
+ *     JSON), and runs ffmpeg's `-framerate 30 -i frames/%05d.{ext}`
+ *     image-sequence input mode with `-r 30` on the output side
+ *     to normalise the encode to 30 fps. The tour engine's
+ *     `frameRate` task hard-codes 30 fps as the assumed source
+ *     rate — see `src/services/tourEngine.ts:execDatasetAnimation`
+ *     — so the same 30-fps invariant is enforced for both source
+ *     kinds. The 3pf runner update also lands `-r 30` on the
+ *     MP4-source path for the same reason.
+ */
+export type TranscodeDispatchPayload =
+  | TranscodeVideoDispatchPayload
+  | TranscodeFramesDispatchPayload
+
+export interface TranscodeVideoDispatchPayload {
+  kind: 'video'
   /** Dataset id the workflow will encode for. */
   dataset_id: string
   /** Upload id (asset_uploads row ULID). The workflow uses this
@@ -56,6 +81,29 @@ export interface TranscodeDispatchPayload {
    *  it against `--dataset-id` / `--upload-id` before fetching. */
   source_key: string
   /** SHA-256 of the source bytes — workflow re-verifies before encoding. */
+  source_digest: string
+}
+
+export interface TranscodeFramesDispatchPayload {
+  kind: 'frames'
+  dataset_id: string
+  upload_id: string
+  /** Number of source frames the runner should fetch. The runner
+   *  reads `frames/00000.{ext}` through `frames/{NNNNN-1}.{ext}`
+   *  under the upload's R2 prefix. */
+  frame_count: number
+  /** File extension on each per-frame R2 key (`png` / `jpg` /
+   *  `webp` matching the `extForMime` convention; jpg not jpeg).
+   *  The runner uses it in the ffmpeg input glob
+   *  `frames/%05d.{ext}`. */
+  extension: string
+  /** SHA-256 of the canonical source-filenames JSON blob (the
+   *  publisher's original filenames in encode order). The runner
+   *  re-verifies the blob's bytes match this digest before
+   *  starting the encode. Doesn't cover the frames themselves —
+   *  per-frame digests live on the client manifest and were
+   *  trusted at /complete time the same way the MP4 source's
+   *  claimed digest is. */
   source_digest: string
 }
 

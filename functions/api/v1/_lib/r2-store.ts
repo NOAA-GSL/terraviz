@@ -105,6 +105,25 @@ export const MOCK_R2_HOST = 'https://mock-r2.localhost'
 export const VIDEO_SOURCE_KEY_PREFIX = 'uploads'
 
 /**
+ * Throw if `value` isn't a Crockford-ULID-shaped string (26 base32
+ * chars from the `0-9A-HJKMNP-TV-Z` alphabet). The dataset_id /
+ * upload_id arguments to every key-building helper are
+ * canonically ULIDs minted by `newUlid()`; rejecting any other
+ * shape fails fast on a misrouted call rather than letting an
+ * arbitrary string land in an R2 key path. `label` is the
+ * argument name surfaced in the error so a stack trace points
+ * at the offending parameter.
+ */
+const ULID_PATTERN = /^[0-9A-HJKMNP-TV-Z]{26}$/
+function assertUlid(label: string, value: string): void {
+  if (!ULID_PATTERN.test(value)) {
+    throw new Error(
+      `${label} must be a ULID (26 base32 chars), got "${value}"`,
+    )
+  }
+}
+
+/**
  * Build the R2 key for a video source upload that's destined for
  * transcoding. `r2:uploads/{dataset_id}/{upload_id}/source.mp4`.
  * Used only for `kind='data'` + `mime='video/mp4'` uploads in
@@ -120,16 +139,8 @@ export const VIDEO_SOURCE_KEY_PREFIX = 'uploads'
  * fresh upload_id and a fresh source key.
  */
 export function buildVideoSourceKey(datasetId: string, uploadId: string): string {
-  if (!/^[0-9A-HJKMNP-TV-Z]{26}$/.test(datasetId)) {
-    throw new Error(
-      `buildVideoSourceKey: datasetId must be a ULID (26 base32 chars), got "${datasetId}"`,
-    )
-  }
-  if (!/^[0-9A-HJKMNP-TV-Z]{26}$/.test(uploadId)) {
-    throw new Error(
-      `buildVideoSourceKey: uploadId must be a ULID (26 base32 chars), got "${uploadId}"`,
-    )
-  }
+  assertUlid('buildVideoSourceKey: datasetId', datasetId)
+  assertUlid('buildVideoSourceKey: uploadId', uploadId)
   return `${VIDEO_SOURCE_KEY_PREFIX}/${datasetId}/${uploadId}/source.mp4`
 }
 
@@ -153,6 +164,118 @@ const VIDEO_SOURCE_KEY_PATTERN = new RegExp(
 
 export function isVideoSourceKey(key: string): boolean {
   return VIDEO_SOURCE_KEY_PATTERN.test(key)
+}
+
+/**
+ * Build the R2 key for a single frame in an image-sequence source
+ * upload (Phase 3pf). Frames land at
+ * `uploads/{dataset_id}/{upload_id}/frames/{NNNNN}.{ext}` —
+ * five-digit zero-padded index so lexicographic key order matches
+ * encode order, and so ffmpeg's `-i frames/%05d.{ext}` input glob
+ * picks them up without further re-numbering.
+ *
+ * The five-digit format hard-bounds the per-upload frame count to
+ * 99 999 frames; the `validateImageSequenceInit` validator caps at
+ * 10 000 (see `asset-uploads.ts`), so there's ten-times headroom
+ * before the index format itself becomes a constraint. If a future
+ * publisher-API change ever raises the cap above 99 999, widening
+ * here is mechanical — but the `validateImageSequenceInit` cap
+ * keeps the in-browser hash budget and the JSON response size
+ * bounded long before the key format runs out of digits, so this
+ * is a sanity invariant not a tunable.
+ *
+ * Per-upload prefix (the `{upload_id}` segment) is what protects
+ * an already-published row from re-upload races: a fresh upload
+ * lands at a fresh prefix, and the existing transcoded bundle keeps
+ * serving until /transcode-complete swaps `data_ref` atomically.
+ * Same property the MP4 path uses; the `frames/` subdirectory keeps
+ * source frames separable from any future per-upload auxiliary
+ * asset that might live alongside.
+ */
+export const FRAME_KEY_INDEX_DIGITS = 5
+
+export function buildFrameKey(
+  datasetId: string,
+  uploadId: string,
+  index: number,
+  ext: string,
+): string {
+  assertUlid('buildFrameKey: datasetId', datasetId)
+  assertUlid('buildFrameKey: uploadId', uploadId)
+  if (!Number.isInteger(index) || index < 0 || index > 99999) {
+    throw new Error(
+      `buildFrameKey: index must be an integer in [0, 99999], got ${index}`,
+    )
+  }
+  if (!/^[a-z0-9]+$/.test(ext)) {
+    throw new Error(
+      `buildFrameKey: ext must be a lowercase-alphanumeric extension, got "${ext}"`,
+    )
+  }
+  const padded = String(index).padStart(FRAME_KEY_INDEX_DIGITS, '0')
+  return `${VIDEO_SOURCE_KEY_PREFIX}/${datasetId}/${uploadId}/frames/${padded}.${ext}`
+}
+
+/**
+ * Does an R2 key look like a per-frame upload for an image-sequence
+ * source? Matches the shape `buildFrameKey` produces:
+ * `uploads/{ULID}/{ULID}/frames/{NNNNN}.{ext}` — both ids must be
+ * ULIDs, the directory must be exactly `frames`, the filename must
+ * be five base-10 digits + a lowercase-alphanumeric extension.
+ *
+ * Used by /asset/{upload_id}/complete to refuse HEAD-checking a key
+ * whose shape doesn't match either the MP4 source layout (which has
+ * its own predicate `isVideoSourceKey`) or this one. A malformed
+ * `target_ref` on an asset_uploads row therefore fails fast at
+ * /complete time rather than producing an opaque "404 from HEAD"
+ * later.
+ */
+const FRAME_KEY_PATTERN = new RegExp(
+  `^${VIDEO_SOURCE_KEY_PREFIX}/[0-9A-HJKMNP-TV-Z]{26}/[0-9A-HJKMNP-TV-Z]{26}/frames/\\d{${FRAME_KEY_INDEX_DIGITS}}\\.[a-z0-9]+$`,
+)
+
+export function isFrameKey(key: string): boolean {
+  return FRAME_KEY_PATTERN.test(key)
+}
+
+/** R2 key prefix that holds all frames for one image-sequence upload.
+ *  `uploads/{datasetId}/{uploadId}/frames/`. The trailing slash is
+ *  intentional — passing this prefix to an R2 `list` operation
+ *  returns exactly the per-frame objects without picking up the
+ *  sibling `source_filenames.json` blob. */
+export function buildFrameSequencePrefix(datasetId: string, uploadId: string): string {
+  assertUlid('buildFrameSequencePrefix: datasetId', datasetId)
+  assertUlid('buildFrameSequencePrefix: uploadId', uploadId)
+  return `${VIDEO_SOURCE_KEY_PREFIX}/${datasetId}/${uploadId}/frames/`
+}
+
+/**
+ * R2 key for the auxiliary JSON blob that records the publisher's
+ * original per-frame filenames in encode order:
+ * `uploads/{dataset_id}/{upload_id}/source_filenames.json`. Lives
+ * alongside the frames (not inside `frames/`) so a list against
+ * `buildFrameSequencePrefix` enumerates only the frames themselves.
+ *
+ * The blob carries an array shaped `[{ index, filename, digest }, ...]`
+ * with one entry per frame in encode order. `index` is the
+ * zero-based position and matches the encoded `frames/{NNNNN}` key;
+ * `filename` preserves the publisher's on-disk name; `digest` is
+ * the `sha256:<hex>` of the frame bytes PUT to R2, used by the
+ * transcode runner to verify each frame against what the publisher
+ * signed off on (see `cli/transcode-from-dispatch.ts`).
+ *
+ * The frames-as-data exposure work (Phase 3pg) surfaces `filename`
+ * on `/frames` responses so consumers that need to map back to the
+ * publisher's on-disk convention (downstream pipelines, federated
+ * mirrors) can do so. Display naming in the UI uses a derived
+ * `{slug}_{timestamp|index}.{ext}` form instead — see
+ * `CATALOG_IMAGE_SEQUENCE_PLAN.md` §"Frames as data" for the
+ * rationale.
+ */
+export function buildFrameSourceFilenamesKey(datasetId: string, uploadId: string): string {
+  assertUlid('buildFrameSourceFilenamesKey: datasetId', datasetId)
+  assertUlid('buildFrameSourceFilenamesKey: uploadId', uploadId)
+  return `${VIDEO_SOURCE_KEY_PREFIX}/${datasetId}/${uploadId}/source_filenames.json`
 }
 
 /**
@@ -180,16 +303,8 @@ export const VIDEO_BUNDLE_KEY_PREFIX = 'videos'
  * the upload row.
  */
 export function buildVideoBundleMasterKey(datasetId: string, uploadId: string): string {
-  if (!/^[0-9A-HJKMNP-TV-Z]{26}$/.test(datasetId)) {
-    throw new Error(
-      `buildVideoBundleMasterKey: datasetId must be a ULID (26 base32 chars), got "${datasetId}"`,
-    )
-  }
-  if (!/^[0-9A-HJKMNP-TV-Z]{26}$/.test(uploadId)) {
-    throw new Error(
-      `buildVideoBundleMasterKey: uploadId must be a ULID (26 base32 chars), got "${uploadId}"`,
-    )
-  }
+  assertUlid('buildVideoBundleMasterKey: datasetId', datasetId)
+  assertUlid('buildVideoBundleMasterKey: uploadId', uploadId)
   return `${VIDEO_BUNDLE_KEY_PREFIX}/${datasetId}/${uploadId}/master.m3u8`
 }
 

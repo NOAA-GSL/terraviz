@@ -290,6 +290,302 @@ describe('renderAssetUploader', () => {
   })
 })
 
+describe('renderAssetUploader — frames tab (3pf/D)', () => {
+  let mount: HTMLDivElement
+
+  beforeEach(() => {
+    mount = document.createElement('div')
+    document.body.appendChild(mount)
+    sessionStorage.clear()
+  })
+
+  function pickFrames(mount: HTMLElement, files: File[]): void {
+    // The frames tab has its own multi-file input (id=
+    // `dataset-asset-frames-<suffix>`). The MP4 tab's input id is
+    // `dataset-asset-file-<suffix>`. The suffix is randomized per
+    // uploader instance — query by id-prefix selector.
+    const input = mount.querySelector<HTMLInputElement>(
+      'input[type="file"][id^="dataset-asset-frames-"]',
+    )!
+    Object.defineProperty(input, 'files', {
+      value: {
+        length: files.length,
+        item: (i: number) => files[i] ?? null,
+        ...Object.fromEntries(files.map((f, i) => [i, f])),
+      } as unknown as FileList,
+      configurable: true,
+    })
+    input.dispatchEvent(new Event('change', { bubbles: true }))
+  }
+
+  function clickFramesTab(mount: HTMLElement): void {
+    const tabs = mount.querySelectorAll<HTMLButtonElement>(
+      '.publisher-asset-uploader-tab',
+    )
+    // Second tab is the frames tab (order is video then frames).
+    tabs[1]!.click()
+  }
+
+  it('renders the tab strip only when format is video/mp4', () => {
+    // Image dataset → no tab strip.
+    mount.appendChild(
+      renderAssetUploader({
+        datasetId: '01AAAAAAAAAAAAAAAAAAAAAAAA',
+        format: 'image/png',
+        onUploaded: () => {},
+      }),
+    )
+    expect(mount.querySelector('.publisher-asset-uploader-tabs')).toBeNull()
+    // Video dataset → tab strip with two tabs.
+    mount.replaceChildren(
+      renderAssetUploader({
+        datasetId: '01AAAAAAAAAAAAAAAAAAAAAAAA',
+        format: 'video/mp4',
+        onUploaded: () => {},
+      }),
+    )
+    expect(mount.querySelectorAll('.publisher-asset-uploader-tab')).toHaveLength(2)
+  })
+
+  it('switches to the frames picker when the frames tab is clicked', () => {
+    mount.appendChild(
+      renderAssetUploader({
+        datasetId: '01AAAAAAAAAAAAAAAAAAAAAAAA',
+        format: 'video/mp4',
+        onUploaded: () => {},
+      }),
+    )
+    expect(mount.querySelector('input[id^="dataset-asset-frames-"]')).toBeNull()
+    clickFramesTab(mount)
+    expect(mount.querySelector('input[id^="dataset-asset-frames-"]')).not.toBeNull()
+    // Single-file picker is no longer present.
+    expect(mount.querySelector('input[id^="dataset-asset-file-"]')).toBeNull()
+  })
+
+  it('shows the frame-count + size summary after files are picked', () => {
+    mount.appendChild(
+      renderAssetUploader({
+        datasetId: '01AAAAAAAAAAAAAAAAAAAAAAAA',
+        format: 'video/mp4',
+        onUploaded: () => {},
+      }),
+    )
+    clickFramesTab(mount)
+    pickFrames(mount, [
+      new File(['a'.repeat(1024)], 'frame_001.png', { type: 'image/png' }),
+      new File(['b'.repeat(2048)], 'frame_002.png', { type: 'image/png' }),
+    ])
+    const summary = mount.querySelector('.publisher-asset-uploader-frames-summary')
+    expect(summary).not.toBeNull()
+    expect(summary?.textContent).toContain('2')
+    // "Start upload" button is visible.
+    expect(
+      Array.from(mount.querySelectorAll('button')).some(b =>
+        b.textContent?.includes('Upload 2'),
+      ),
+    ).toBe(true)
+  })
+
+  it('rejects mixed-mime frame batches before any network call', () => {
+    const fetchSpy = vi.fn()
+    mount.appendChild(
+      renderAssetUploader({
+        datasetId: '01AAAAAAAAAAAAAAAAAAAAAAAA',
+        format: 'video/mp4',
+        onUploaded: () => {},
+        fetchFn: fetchSpy as unknown as typeof fetch,
+      }),
+    )
+    clickFramesTab(mount)
+    pickFrames(mount, [
+      new File(['a'], 'frame_001.png', { type: 'image/png' }),
+      new File(['b'], 'frame_002.jpg', { type: 'image/jpeg' }),
+    ])
+    // Error surface visible.
+    expect(mount.querySelector('.publisher-asset-uploader-status-error')).not.toBeNull()
+    // No fetch ever fired — the validation gate is client-side.
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it('rejects unsupported mimes (e.g., TIFF)', () => {
+    mount.appendChild(
+      renderAssetUploader({
+        datasetId: '01AAAAAAAAAAAAAAAAAAAAAAAA',
+        format: 'video/mp4',
+        onUploaded: () => {},
+      }),
+    )
+    clickFramesTab(mount)
+    pickFrames(mount, [
+      new File(['a'], 'frame_001.tif', { type: 'image/tiff' }),
+    ])
+    expect(mount.querySelector('.publisher-asset-uploader-status-error')).not.toBeNull()
+  })
+
+  it('drives the full mint → PUT → complete flow and signals onUploaded with transcoding mode', async () => {
+    const fetchSpy = vi
+      .fn()
+      // /asset response with two presigned frames + source-filenames blob
+      .mockResolvedValueOnce(
+        jsonResponse({
+          upload_id: '01UPLOADAAAAAAAAAAAAAAAAAA',
+          kind: 'data',
+          target: 'r2',
+          frames: [
+            {
+              filename: 'frame_001.png',
+              index: 0,
+              method: 'PUT',
+              url: 'https://r2.test/frames/00000.png',
+              headers: {},
+              key: 'uploads/X/Y/frames/00000.png',
+            },
+            {
+              filename: 'frame_002.png',
+              index: 1,
+              method: 'PUT',
+              url: 'https://r2.test/frames/00001.png',
+              headers: {},
+              key: 'uploads/X/Y/frames/00001.png',
+            },
+          ],
+          source_filenames: {
+            method: 'PUT',
+            url: 'https://r2.test/source_filenames.json',
+            headers: {},
+            key: 'uploads/X/Y/source_filenames.json',
+          },
+          expires_at: '2026-01-01T00:00:00.000Z',
+          mock: false,
+        }),
+      )
+      // source-filenames blob PUT (via fetch, not XHR)
+      .mockResolvedValueOnce(new Response(null, { status: 200 }))
+      // /complete response → transcoding=true
+      .mockResolvedValueOnce(
+        jsonResponse({
+          dataset: { data_ref: '' },
+          transcoding: true,
+        }),
+      )
+
+    const onUploaded = vi.fn()
+    mount.appendChild(
+      renderAssetUploader({
+        datasetId: '01AAAAAAAAAAAAAAAAAAAAAAAA',
+        format: 'video/mp4',
+        onUploaded,
+        fetchFn: fetchSpy as unknown as typeof fetch,
+        xhrFactory: fakeXhrFactory(),
+        // Deterministic hashes so the test doesn't time-bound on
+        // SHA-256 computation. The validator only checks shape.
+        hashFn: async (_f: File) => `sha256:${'a'.repeat(64)}`,
+      }),
+    )
+    clickFramesTab(mount)
+    pickFrames(mount, [
+      new File(['a'.repeat(100)], 'frame_001.png', { type: 'image/png' }),
+      new File(['b'.repeat(100)], 'frame_002.png', { type: 'image/png' }),
+    ])
+    // Click the "Start upload" button.
+    const startBtn = Array.from(mount.querySelectorAll('button')).find(b =>
+      b.textContent?.includes('Upload 2'),
+    )!
+    startBtn.click()
+    // Allow the async runFrameSequence pipeline to flush —
+    // `crypto.subtle.digest` (used for the canonical
+    // source-filenames hash) yields to a macrotask, so
+    // microtask-only drains aren't enough.
+    for (let i = 0; i < 16; i++) await new Promise(r => setTimeout(r, 0))
+
+    // The /asset POST + the blob PUT + the /complete POST.
+    expect(fetchSpy).toHaveBeenCalledTimes(3)
+    // First call is /asset — verify the body carried `frames`
+    // (the discriminator) and a valid `source_filenames_digest`.
+    const initBody = JSON.parse(fetchSpy.mock.calls[0][1].body as string) as {
+      frames: Array<{ filename: string; digest: string }>
+      source_filenames_digest: string
+    }
+    expect(initBody.frames).toHaveLength(2)
+    expect(initBody.source_filenames_digest).toMatch(/^sha256:[0-9a-f]{64}$/)
+
+    // onUploaded fires with transcoding mode (frame-source uploads
+    // always go through the transcode pipeline).
+    expect(onUploaded).toHaveBeenCalledWith({ mode: 'transcoding' })
+  })
+
+  it('retries a transient source-filenames blob PUT failure', async () => {
+    // 3pf-review/C — the prior shape threw on the first non-2xx
+    // and left the asset_uploads row stuck `'pending'` with every
+    // frame already in R2. Two retries with short backoffs absorb
+    // a network blip.
+    const fetchSpy = vi
+      .fn()
+      // /asset response
+      .mockResolvedValueOnce(
+        jsonResponse({
+          upload_id: '01UPLOADAAAAAAAAAAAAAAAAAA',
+          kind: 'data',
+          target: 'r2',
+          frames: [
+            {
+              filename: 'frame_001.png',
+              index: 0,
+              method: 'PUT',
+              url: 'https://r2.test/frames/00000.png',
+              headers: {},
+              key: 'uploads/X/Y/frames/00000.png',
+            },
+          ],
+          source_filenames: {
+            method: 'PUT',
+            url: 'https://r2.test/source_filenames.json',
+            headers: {},
+            key: 'uploads/X/Y/source_filenames.json',
+          },
+          expires_at: '2026-01-01T00:00:00.000Z',
+          mock: false,
+        }),
+      )
+      // First blob PUT: 503 (transient)
+      .mockResolvedValueOnce(new Response(null, { status: 503 }))
+      // Second blob PUT: succeeds
+      .mockResolvedValueOnce(new Response(null, { status: 200 }))
+      // /complete response → transcoding=true
+      .mockResolvedValueOnce(
+        jsonResponse({ dataset: { data_ref: '' }, transcoding: true }),
+      )
+
+    const onUploaded = vi.fn()
+    mount.appendChild(
+      renderAssetUploader({
+        datasetId: '01AAAAAAAAAAAAAAAAAAAAAAAA',
+        format: 'video/mp4',
+        onUploaded,
+        fetchFn: fetchSpy as unknown as typeof fetch,
+        xhrFactory: fakeXhrFactory(),
+        hashFn: async () => `sha256:${'a'.repeat(64)}`,
+        // Skip the retry backoff so the test doesn't time-bound.
+        sleep: () => Promise.resolve(),
+      }),
+    )
+    clickFramesTab(mount)
+    pickFrames(mount, [
+      new File(['a'.repeat(100)], 'frame_001.png', { type: 'image/png' }),
+    ])
+    const startBtn = Array.from(mount.querySelectorAll('button')).find(b =>
+      b.textContent?.includes('Upload 1'),
+    )!
+    startBtn.click()
+    for (let i = 0; i < 16; i++) await new Promise(r => setTimeout(r, 0))
+
+    // 4 calls: /asset + first blob PUT (failed) + second blob PUT
+    // (succeeded) + /complete.
+    expect(fetchSpy).toHaveBeenCalledTimes(4)
+    expect(onUploaded).toHaveBeenCalledWith({ mode: 'transcoding' })
+  })
+})
+
 describe('hashFileSha256', () => {
   // PR #112 followup — the upload-flow tests all inject `hashFn`,
   // so the real `@noble/hashes` dynamic imports and the chunked

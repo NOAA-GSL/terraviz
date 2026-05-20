@@ -55,9 +55,19 @@ import type { CatalogEnv } from '../../../_lib/env'
 import type { PublisherData } from '../../_middleware'
 import type { DatasetRow } from '../../../_lib/catalog-store'
 import { writeDatasetAudit } from '../../../_lib/audit-store'
-import { clearTranscoding, getAssetUpload, markVideoUploadCompleted } from '../../../_lib/asset-uploads'
+import {
+  clearTranscoding,
+  extForMime,
+  type FrameSourceCompleteFields,
+  getAssetUpload,
+  markTranscodingUploadCompleted,
+} from '../../../_lib/asset-uploads'
 import { invalidateSnapshot } from '../../../_lib/snapshot'
-import { buildVideoBundleMasterKey, isVideoSourceKey } from '../../../_lib/r2-store'
+import {
+  buildFrameSourceFilenamesKey,
+  buildVideoBundleMasterKey,
+  isVideoSourceKey,
+} from '../../../_lib/r2-store'
 
 const CONTENT_TYPE = 'application/json; charset=utf-8'
 
@@ -162,7 +172,7 @@ export const onRequestPost: PagesFunction<CatalogEnv, 'id'> = async context => {
       // dataset row (clearTranscoding) but failed to mark the
       // upload (transient D1 error after the first UPDATE). The
       // workflow's retry then lands here — without the catch-up
-      // markVideoUploadCompleted, the upload row stays `pending`
+      // markTranscodingUploadCompleted, the upload row stays `pending`
       // and a later /asset/.../complete retry on the same upload
       // would re-stamp transcoding=1 and dispatch another
       // workflow. The mark step is itself idempotent
@@ -170,7 +180,7 @@ export const onRequestPost: PagesFunction<CatalogEnv, 'id'> = async context => {
       // completed row is a no-op. PR #112 followup —
       // transcode-complete.ts:idempotent-skips-mark.
       const now = new Date().toISOString()
-      await markVideoUploadCompleted(db, validated.upload_id, now)
+      await markTranscodingUploadCompleted(db, validated.upload_id, now)
       return new Response(
         JSON.stringify({ dataset: existing, idempotent: true }),
         {
@@ -246,6 +256,21 @@ export const onRequestPost: PagesFunction<CatalogEnv, 'id'> = async context => {
   // forged body can't point the row at another dataset's bundle.
   const dataRef = `r2:${buildVideoBundleMasterKey(id, validated.upload_id)}`
 
+  // Image-sequence uploads need the frame_* columns to swap
+  // atomically alongside data_ref. `stampTranscodingForFrameSource`
+  // intentionally withheld those writes on a published-row
+  // re-upload so a mid-transcode `/frames` read wouldn't see the
+  // new upload's prefix while data_ref still pointed at the old
+  // bundle; the swap happens HERE (Phase 3pf-review/E).
+  const frameSource: FrameSourceCompleteFields | null =
+    upload.frame_count != null
+      ? {
+          frame_count: upload.frame_count,
+          frame_extension: extForMime(upload.mime),
+          frame_source_filenames_ref: `r2:${buildFrameSourceFilenamesKey(id, validated.upload_id)}`,
+        }
+      : null
+
   const now = new Date().toISOString()
   // The UPDATE itself has `AND active_transcode_upload_id = ?`,
   // so it's atomic with the JS-level check above — if a
@@ -255,7 +280,14 @@ export const onRequestPost: PagesFunction<CatalogEnv, 'id'> = async context => {
   // mirrors the explicit check's `transcode_upload_mismatch`
   // shape so the workflow's retry logic treats them the same
   // way: "another upload took over; this run is stale."
-  const changes = await clearTranscoding(db, id, validated.upload_id, dataRef, now)
+  const changes = await clearTranscoding(
+    db,
+    id,
+    validated.upload_id,
+    dataRef,
+    now,
+    frameSource,
+  )
   if (changes === 0) {
     return jsonError(
       409,
@@ -275,7 +307,7 @@ export const onRequestPost: PagesFunction<CatalogEnv, 'id'> = async context => {
   // `pending` state is just bookkeeping debt. PR #112 followup —
   // closes the alreadyCompleted recovery vector by making
   // `upload.status` the only signal a retry of /complete needs.
-  await markVideoUploadCompleted(db, validated.upload_id, now)
+  await markTranscodingUploadCompleted(db, validated.upload_id, now)
 
   // Refresh the row so the response carries the latest state.
   const updated = await db

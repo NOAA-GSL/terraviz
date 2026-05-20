@@ -44,8 +44,14 @@ import type { DatasetRow } from '../../../../../_lib/catalog-store'
 import { getDatasetForPublisher } from '../../../../../_lib/dataset-mutations'
 import { isConfigurationError, isUpstreamError } from '../../../../../_lib/errors'
 import { isLoopbackHost } from '../../../../../_lib/loopback'
+import {
+  FRAME_OPERATION_CONCURRENCY,
+  runBoundedPool,
+} from '../../../../../_lib/bounded-pool'
 import { invalidateSnapshot } from '../../../../../_lib/snapshot'
 import {
+  buildFrameKey,
+  buildFrameSourceFilenamesKey,
   isVideoSourceKey,
   verifyContentDigest,
   verifyObjectExists,
@@ -55,11 +61,14 @@ import { dispatchTranscode } from '../../../../../_lib/github-dispatch'
 import { mimeMatchesFormat } from '../../asset'
 import {
   applyAssetAndMarkCompleted,
+  extForMime,
   getAssetUpload,
   markAssetUploadFailed,
-  markVideoUploadCompleted,
+  markTranscodingUploadCompleted,
   revertTranscodingStamp,
+  stampTranscodingForFrameSource,
   stampTranscodingForVideoSource,
+  type AssetUploadRow,
 } from '../../../../../_lib/asset-uploads'
 import {
   type JobQueue,
@@ -156,6 +165,16 @@ export const onRequestPost: PagesFunction<CatalogEnv, keyof RouteParams> = async
       'upload_failed',
       `Upload ${uploadId} previously failed (${upload.failure_reason ?? 'unknown'}). Mint a fresh upload to retry.`,
     )
+  }
+
+  // Phase 3pf image-sequence branch: a non-NULL `frame_count` on
+  // the asset_uploads row means the publisher uploaded N frames at
+  // `uploads/{ds}/{up}/frames/{NNNNN}.{ext}` rather than a single
+  // `source.mp4`. The HEAD verification, stamp, and dispatch shape
+  // all differ from the single-file path; route into the
+  // image-sequence helper so each branch's logic stays focused.
+  if (upload.frame_count != null) {
+    return handleFrameSourceComplete(context, datasetId, uploadId, dataset, upload)
   }
 
   // Re-verify upload.mime still matches dataset.format. The
@@ -497,7 +516,7 @@ export const onRequestPost: PagesFunction<CatalogEnv, keyof RouteParams> = async
     // row was already in the `transcoding=1 +
     // active_transcode_upload_id = uploadId` state. That branch
     // was meant to absorb the case "stamp succeeded, dispatch
-    // succeeded, markVideoUploadCompleted failed transiently"
+    // succeeded, markTranscodingUploadCompleted failed transiently"
     // without firing a duplicate dispatch. PR #112 followup
     // pointed out that the same row state can ALSO be produced
     // by "stamp succeeded, dispatch failed, revertTranscodingStamp
@@ -543,6 +562,14 @@ export const onRequestPost: PagesFunction<CatalogEnv, keyof RouteParams> = async
       data_ref: dataset.data_ref,
       content_digest: dataset.content_digest,
       source_digest: dataset.source_digest,
+      // The MP4 stamp doesn't write these, so the revert leaves
+      // them at the row's pre-stamp values (NULL on a fresh row,
+      // or the prior upload's values if this is a re-upload of an
+      // image-sequence row — in that case the revert is a no-op
+      // on the frame columns, which is what we want).
+      frame_count: dataset.frame_count,
+      frame_extension: dataset.frame_extension,
+      frame_source_filenames_ref: dataset.frame_source_filenames_ref,
     }
     const stamped = await stampTranscodingForVideoSource(
       context.env.CATALOG_DB!,
@@ -563,6 +590,7 @@ export const onRequestPost: PagesFunction<CatalogEnv, keyof RouteParams> = async
     // 2. Fire the external side effect.
     try {
       await dispatchTranscode(context.env, {
+        kind: 'video',
         dataset_id: datasetId,
         upload_id: uploadId,
         source_key: upload.target_ref.slice('r2:'.length),
@@ -612,7 +640,7 @@ export const onRequestPost: PagesFunction<CatalogEnv, keyof RouteParams> = async
     //    succeeded. A later /complete retry on the same upload
     //    would now read status='completed' and short-circuit
     //    cleanly via the idempotent branch above.
-    await markVideoUploadCompleted(context.env.CATALOG_DB!, uploadId, now)
+    await markTranscodingUploadCompleted(context.env.CATALOG_DB!, uploadId, now)
 
     const updatedAfterDispatch = await context.env.CATALOG_DB!
       .prepare(`SELECT * FROM datasets WHERE id = ?`)
@@ -677,6 +705,302 @@ export const onRequestPost: PagesFunction<CatalogEnv, keyof RouteParams> = async
     }),
     {
       status: 200,
+      headers: { 'Content-Type': CONTENT_TYPE, 'Cache-Control': 'private, no-store' },
+    },
+  )
+}
+
+/**
+ * Phase 3pf — finalise an image-sequence upload.
+ *
+ * Parallel to the video-source branch in the main handler but with
+ * three differences:
+ *
+ *   1. HEAD-checks every per-frame key + the source-filenames blob
+ *      (the MP4 path HEAD-checks a single `source.mp4`).
+ *   2. Stamps `frame_count`, `frame_extension`, and
+ *      `frame_source_filenames_ref` on the dataset row alongside
+ *      the usual transcoding lifecycle columns
+ *      (`stampTranscodingForFrameSource`).
+ *   3. Dispatches with `kind: 'frames'` so the GHA runner branches
+ *      to its image-sequence ffmpeg invocation. The dispatch's
+ *      `source_digest` carries the SHA-256 of the canonical
+ *      source-filenames JSON (the runner re-verifies before
+ *      starting the encode); per-frame digest verification stays
+ *      a "trust the publisher's claim" trade — same bargain the
+ *      MP4 path makes for the source MP4's hash, on the same
+ *      logic (re-hashing N × 30 MB frames inside the Worker would
+ *      blow past the 128 MB memory cap).
+ *
+ * Mock-mode handling, transcoding-overlap guards, dispatch-failure
+ * revert + lost-race logging — all mirror the MP4 path. The
+ * compensating revert clears the three new frame columns via
+ * `revertTranscodingStamp` (extended in 3pf/B to do so), so a
+ * dispatch failure on a frames upload leaves the row in exactly
+ * the state it was in before /complete fired.
+ */
+async function handleFrameSourceComplete(
+  context: Parameters<PagesFunction<CatalogEnv, keyof RouteParams>>[0],
+  datasetId: string,
+  uploadId: string,
+  dataset: DatasetRow,
+  upload: AssetUploadRow,
+): Promise<Response> {
+  // Re-verify dataset.format is still video/mp4. The format could
+  // have been mutated between /asset and /complete (the route
+  // accepts format changes on non-transcoding rows). Closes the
+  // same gap the MP4 path's mime/format re-check closes.
+  if (dataset.format !== 'video/mp4') {
+    return new Response(
+      JSON.stringify({
+        errors: [
+          {
+            field: 'format',
+            code: 'frames_require_video_format',
+            message:
+              `Upload ${uploadId} was minted for an image-sequence upload (frame_count=` +
+              `${upload.frame_count}) targeting a video dataset, but dataset ${datasetId}'s ` +
+              `format is now "${dataset.format}". The format was changed between mint and ` +
+              `complete; mint a fresh upload after deciding whether the row should accept ` +
+              `frames (set format=video/mp4) or a single image (use the single-file flow).`,
+          },
+        ],
+      }),
+      { status: 409, headers: { 'Content-Type': CONTENT_TYPE } },
+    )
+  }
+
+  const frameCount = upload.frame_count as number
+  // `extension` is recomputed from `upload.mime` rather than
+  // stored on the asset_uploads row. This relies on `extForMime`
+  // being stable across the mint → complete window: if a future
+  // change ever flipped `image/jpeg` from `jpg` to `jpeg`, an
+  // upload minted before the change but completed after would
+  // HEAD the wrong keys (the bytes landed at `jpg`-suffixed
+  // keys; the new mapping would look for `jpeg`-suffixed ones).
+  // The mapping is intentionally well-known + stable (it mirrors
+  // the canonical Web MIME ↔ extension associations), so the
+  // risk is low. If we ever need to mutate it, add a
+  // `frame_extension` column to asset_uploads in a migration so
+  // the mint-time value is the source of truth. Phase 3pf-review/E
+  // — Copilot discussion_r3263124313.
+  const extension = extForMime(upload.mime)
+
+  // Concurrency guard — same logic as the MP4 path. A row already
+  // transcoding for a different upload refuses to take over.
+  if (dataset.transcoding && dataset.active_transcode_upload_id !== uploadId) {
+    const activeLabel = dataset.active_transcode_upload_id ?? '(none — corrupted state)'
+    const detail = dataset.active_transcode_upload_id
+      ? `Wait for that workflow to finish (or have an operator clear the row) before starting another.`
+      : `The row is in an inconsistent state (transcoding=1 with no active upload binding). ` +
+        `Have an operator reset the row before retrying.`
+    return jsonError(
+      409,
+      'transcoding_in_progress',
+      `Dataset ${datasetId} is already transcoding upload ${activeLabel}. ${detail}`,
+    )
+  }
+
+  // Mock-mode loopback refusal — same defense in depth as the
+  // MP4 path. A misconfigured production deploy with MOCK_R2=true
+  // could otherwise short-circuit the HEAD checks and stamp the
+  // row as transcoding without any frames present.
+  const mockR2 = context.env.MOCK_R2 === 'true'
+  if (mockR2) {
+    const url = new URL(context.request.url)
+    if (!isLoopbackHost(url.hostname)) {
+      return jsonError(
+        500,
+        'mock_r2_unsafe',
+        `MOCK_R2=true refuses to honor a non-loopback hostname (got "${url.hostname}").`,
+      )
+    }
+  }
+
+  // HEAD every frame + the source-filenames blob in parallel.
+  // Mock mode skips R2 access (no real bytes were uploaded; the
+  // mock-r2.localhost URLs aren't reachable). For real R2 a
+  // missing object fails the upload — the publisher's PUTs either
+  // didn't all land or didn't reach R2 at all.
+  if (!mockR2) {
+    // Pre-check the R2 binding once before issuing N+1 parallel
+    // HEADs. The prior shape ran every HEAD against a missing
+    // binding before the first one's `'binding_missing'` reason
+    // surfaced as 503 — that's ~10001 amplified errors in the
+    // request log at the 10 000-frame cap for what's a single
+    // operator misconfiguration. Phase 3pf-review/E —
+    // Copilot suppressed-confidence #4.
+    if (!context.env.CATALOG_R2) {
+      return jsonError(
+        503,
+        'r2_binding_missing',
+        'CATALOG_R2 binding is not configured on this deployment.',
+      )
+    }
+    const frameKeys = Array.from({ length: frameCount }, (_, i) =>
+      buildFrameKey(datasetId, uploadId, i, extension),
+    )
+    const sourceFilenamesKey = buildFrameSourceFilenamesKey(datasetId, uploadId)
+    const allKeys = [...frameKeys, sourceFilenamesKey]
+    // Bounded-concurrency HEAD pool rather than `Promise.all` —
+    // Cloudflare Workers cap outbound subrequests at 50 (free) /
+    // 1000 (paid) per invocation, so 10 001 parallel HEADs at the
+    // frame cap would surface as `Too many subrequests` 5xx and
+    // leave the asset_uploads row stuck `pending`. 16 workers is
+    // well below the paid-tier cap and high enough that the
+    // HEAD-all wall-clock stays small. Phase 3pf-review/G —
+    // Copilot discussion_r3263466382.
+    const existences = await runBoundedPool(
+      allKeys.map(key => () => verifyObjectExists(context.env, key)),
+      FRAME_OPERATION_CONCURRENCY,
+    )
+    for (let i = 0; i < existences.length; i++) {
+      const result = existences[i]
+      if (!result.ok) {
+        if (result.reason === 'binding_missing') {
+          return jsonError(
+            503,
+            'r2_binding_missing',
+            'CATALOG_R2 binding is not configured on this deployment.',
+          )
+        }
+        // 'missing' — one of the keys never landed. Mark the
+        // upload failed and surface the offending key so the
+        // publisher's client can highlight which frame to retry.
+        const failedAt = new Date().toISOString()
+        await markAssetUploadFailed(
+          context.env.CATALOG_DB!,
+          uploadId,
+          'asset_missing',
+          failedAt,
+        )
+        return jsonError(
+          409,
+          'asset_missing',
+          `Object at ${allKeys[i]} is not present in R2. The publisher likely never ` +
+            `uploaded the bytes; mint a fresh upload to retry.`,
+        )
+      }
+    }
+  }
+
+  // Capture the pre-stamp snapshot for the revert path. All three
+  // frame columns are NULL on a fresh row; on a re-upload of an
+  // already-transcoded sequence they're the prior upload's values
+  // (the revert restores them, which is a no-op for a successful
+  // dispatch and lossless for a failed one).
+  const now = new Date().toISOString()
+  const priorStampState = {
+    data_ref: dataset.data_ref,
+    content_digest: dataset.content_digest,
+    source_digest: dataset.source_digest,
+    frame_count: dataset.frame_count,
+    frame_extension: dataset.frame_extension,
+    frame_source_filenames_ref: dataset.frame_source_filenames_ref,
+  }
+  const sourceFilenamesKey = buildFrameSourceFilenamesKey(datasetId, uploadId)
+  const stamped = await stampTranscodingForFrameSource(
+    context.env.CATALOG_DB!,
+    datasetId,
+    upload,
+    frameCount,
+    extension,
+    `r2:${sourceFilenamesKey}`,
+    now,
+  )
+  if (stamped === 0) {
+    return jsonError(
+      409,
+      'transcoding_in_progress',
+      `Dataset ${datasetId}'s active transcode binding changed between the freshness check ` +
+        `and the stamp step — a concurrent upload took over. Wait for that workflow to ` +
+        'finish (or have an operator clear the row) before starting another.',
+    )
+  }
+
+  // Mock-mode dispatch loopback refusal — same as the MP4 path.
+  if (context.env.MOCK_GITHUB_DISPATCH === 'true') {
+    const url = new URL(context.request.url)
+    if (!isLoopbackHost(url.hostname)) {
+      // Roll back the stamp before refusing so the row doesn't
+      // sit stuck `transcoding=1`.
+      await revertTranscodingStamp(
+        context.env.CATALOG_DB!,
+        datasetId,
+        upload,
+        priorStampState,
+        new Date().toISOString(),
+      ).catch(err =>
+        console.error(
+          `[asset/complete] failed to revert frame-source stamp on ${datasetId}:`,
+          err,
+        ),
+      )
+      return jsonError(
+        500,
+        'mock_github_dispatch_unsafe',
+        `MOCK_GITHUB_DISPATCH=true refuses to honor a non-loopback hostname (got "${url.hostname}").`,
+      )
+    }
+  }
+
+  try {
+    await dispatchTranscode(context.env, {
+      kind: 'frames',
+      dataset_id: datasetId,
+      upload_id: uploadId,
+      frame_count: frameCount,
+      extension,
+      // `claimed_digest` on the asset_uploads row is the
+      // source-filenames JSON hash (set at /asset mint time). The
+      // runner re-hashes the blob's bytes and refuses to encode if
+      // they don't match.
+      source_digest: upload.claimed_digest,
+    })
+  } catch (err) {
+    try {
+      const reverted = await revertTranscodingStamp(
+        context.env.CATALOG_DB!,
+        datasetId,
+        upload,
+        priorStampState,
+        new Date().toISOString(),
+      )
+      if (reverted === 0) {
+        console.warn(
+          `[asset/complete] revert of frame-source transcoding stamp on ${datasetId} was a ` +
+            `no-op — another upload took over the active binding before the ` +
+            `dispatch-failure handler ran (upload ${uploadId} lost the race).`,
+        )
+      }
+    } catch (revertErr) {
+      console.error(
+        `[asset/complete] failed to revert frame-source stamp on ${datasetId}:`,
+        revertErr,
+      )
+    }
+    const message = err instanceof Error ? err.message : String(err)
+    if (isConfigurationError(err)) {
+      return jsonError(503, 'github_dispatch_unconfigured', message)
+    }
+    return jsonError(502, 'github_dispatch_upstream_error', message)
+  }
+
+  await markTranscodingUploadCompleted(context.env.CATALOG_DB!, uploadId, now)
+
+  const updatedAfterDispatch = await context.env.CATALOG_DB!
+    .prepare(`SELECT * FROM datasets WHERE id = ?`)
+    .bind(datasetId)
+    .first<DatasetRow>()
+  return new Response(
+    JSON.stringify({
+      dataset: updatedAfterDispatch,
+      upload: { ...upload, status: 'completed', completed_at: now },
+      verified_digest: upload.claimed_digest,
+      transcoding: true,
+    }),
+    {
+      status: 202,
       headers: { 'Content-Type': CONTENT_TYPE, 'Cache-Control': 'private, no-store' },
     },
   )

@@ -118,6 +118,25 @@ export interface DatasetRow {
    * each other (see migration 0012). NULL when `transcoding` is
    * NULL. Migration 0012. */
   active_transcode_upload_id: string | null
+  /** Number of source frames for an image-sequence-source video
+   *  dataset (Phase 3pf). NULL for MP4-source video, image, and
+   *  tour rows. Populated by /complete when stamping
+   *  `transcoding=1`; the manifest serializer reads it to surface
+   *  the frames-as-data envelope in Phase 3pg. Migration 0014. */
+  frame_count: number | null
+  /** File extension on each per-frame R2 key — `png` / `jpg` /
+   *  `webp` matching the `extForMime` convention. Paired with
+   *  `frame_count`; populated by /complete and read by the
+   *  manifest serializer to build the `urlTemplate`. NULL on
+   *  non-sequence rows. Migration 0014. */
+  frame_extension: string | null
+  /** R2 key of the auxiliary JSON blob recording the publisher's
+   *  original frame filenames in encode order. Surfaced by the
+   *  frames-as-data API (Phase 3pg) as `originalFilename` on
+   *  /frames responses for tooling that needs to map back to the
+   *  publisher's on-disk convention. NULL on non-sequence rows.
+   *  Migration 0014. */
+  frame_source_filenames_ref: string | null
   /** SHA-256 of the asset's *delivered bytes*. Carried for
    * single-blob assets (R2 images, captions, legends) where one
    * hash describes the whole object. Always NULL for HLS bundles:

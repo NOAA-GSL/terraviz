@@ -1,0 +1,55 @@
+-- 0013_asset_uploads_frame_count.sql — Phase 3pf — image-sequence
+-- upload provenance on `asset_uploads`.
+--
+-- Phase 3pd (PR #112) shipped the MP4-source video transcode flow:
+-- one presigned-PUT per asset_uploads row, source.mp4 lands in R2,
+-- /complete fires the GHA dispatch, /transcode-complete swaps
+-- `data_ref` to the HLS bundle. Phase 3pf extends the same
+-- pipeline to accept a stack of individual PNG / JPEG / WebP
+-- frames as the video source — model output dumps, hourly
+-- observation feeds, rendered animation frame sets — and runs
+-- ffmpeg's image-sequence input mode against the same HLS ladder.
+-- See `docs/CATALOG_IMAGE_SEQUENCE_PLAN.md` for the full design.
+--
+-- An image-sequence upload still gets exactly one asset_uploads
+-- row (the publisher's intent is "encode these N frames into one
+-- video dataset"); the row's `kind` stays `data` and its `mime`
+-- carries the per-frame MIME (`image/png` / `image/jpeg` /
+-- `image/webp`). What's different is the bytes layout in R2 — N
+-- frames at `uploads/{dataset_id}/{upload_id}/frames/{NNNNN}.{ext}`
+-- instead of one `uploads/{dataset_id}/{upload_id}/source.mp4`.
+--
+-- Adding `frame_count INTEGER` to `asset_uploads` lets every
+-- handler that touches the row know which layout to expect
+-- without re-parsing `target_ref` or HEAD-checking R2:
+--
+--   - /asset/{upload_id}/complete branches on `frame_count`:
+--     NULL → HEAD source.mp4 (existing MP4 path);
+--     non-NULL → HEAD each of N frame keys in parallel.
+--   - The dispatch payload carries `kind: 'video'` vs.
+--     `kind: 'frames'` (see github-dispatch.ts) so the GHA
+--     runner runs the right ffmpeg invocation; the column
+--     value is what `/complete` reads to decide which `kind`
+--     to send.
+--
+-- Lifecycle: starts NULL on every existing row (the MP4 path
+-- doesn't populate it), set to N at INSERT time for image-
+-- sequence uploads, never updated thereafter. The column
+-- doubles as the test the publisher API reads at
+-- /asset-mint time to refuse mixing the two upload shapes
+-- against a single row (`validateImageSequenceInit` rejects
+-- a sequence-init body when the row already carries an
+-- in-flight MP4 transcode; the converse is enforced via the
+-- existing transcoding-overlap guard).
+--
+-- The corresponding dataset-row columns (`frame_count`,
+-- `frame_extension`, `frame_source_filenames_ref`) land in
+-- migration 0014 — both together to keep the schema additions
+-- co-located with the new feature's commit boundary even though
+-- they target two different tables.
+--
+-- No index. The column is read with the row, never queried
+-- independently; the `asset_uploads` row's primary key lookup
+-- by upload id is the only access pattern.
+
+ALTER TABLE asset_uploads ADD COLUMN frame_count INTEGER;

@@ -577,3 +577,103 @@ describe('POST /api/v1/publish/datasets/{id}/asset — mock flag', () => {
   // when only one half of the pair is mocked" deleted in 3pd/A
   // along with the rest of the Stream-routing test coverage.
 })
+
+describe('POST /api/v1/publish/datasets/{id}/asset — image-sequence (3pf)', () => {
+  function seqBody(
+    frameCount: number,
+    overrides: Partial<{ mime: string; source_filenames_digest: string }> = {},
+  ): Record<string, unknown> {
+    const frames = Array.from({ length: frameCount }, (_, i) => ({
+      filename: `frame_${String(i + 1).padStart(5, '0')}.png`,
+      digest: `sha256:${String(i).padStart(64, '0').slice(0, 64)}`,
+      size: 4_000_000,
+    }))
+    const size = frames.reduce((sum, f) => sum + f.size, 0)
+    return {
+      kind: 'data',
+      mime: overrides.mime ?? 'image/png',
+      frames,
+      size,
+      source_filenames_digest: overrides.source_filenames_digest ?? `sha256:${'f'.repeat(64)}`,
+    }
+  }
+
+  it('mints one presigned PUT per frame + one for the source-filenames blob', async () => {
+    const { env, datasetId, sqlite } = setupEnv()
+    const res = await assetInit(ctx({ env, body: seqBody(3), datasetId }))
+    expect(res.status).toBe(201)
+    const body = await readJson<{
+      upload_id: string
+      kind: 'data'
+      target: 'r2'
+      frames: Array<{ filename: string; index: number; key: string; url: string }>
+      source_filenames: { key: string }
+      mock: boolean
+    }>(res)
+    expect(body.target).toBe('r2')
+    expect(body.frames).toHaveLength(3)
+    // Indexes are zero-padded to 5 digits in the R2 key, matching
+    // the `%05d` glob ffmpeg's image-sequence input reads.
+    expect(body.frames[0].key).toMatch(/\/frames\/00000\.png$/)
+    expect(body.frames[1].key).toMatch(/\/frames\/00001\.png$/)
+    expect(body.frames[2].key).toMatch(/\/frames\/00002\.png$/)
+    // The source-filenames blob lives one level up from frames/.
+    expect(body.source_filenames.key).toMatch(/\/source_filenames\.json$/)
+    expect(body.source_filenames.key).not.toContain('/frames/')
+    // The asset_uploads row carries frame_count = N so /complete
+    // can branch its HEAD-all loop without re-parsing target_ref.
+    const row = sqlite
+      .prepare(`SELECT frame_count, mime, target_ref FROM asset_uploads WHERE id = ?`)
+      .get(body.upload_id) as {
+      frame_count: number | null
+      mime: string
+      target_ref: string
+    }
+    expect(row.frame_count).toBe(3)
+    expect(row.mime).toBe('image/png')
+    // target_ref is the prefix with a trailing slash so a future
+    // R2 list operation against it returns only the frames.
+    expect(row.target_ref).toMatch(/^r2:uploads\/[^/]+\/[^/]+\/frames\/$/)
+  })
+
+  it('rejects with frames_require_video_format when the dataset format is not video/mp4', async () => {
+    const { env, datasetId, sqlite } = setupEnv()
+    sqlite.prepare(`UPDATE datasets SET format = 'image/png' WHERE id = ?`).run(datasetId)
+    const res = await assetInit(ctx({ env, body: seqBody(3), datasetId }))
+    expect(res.status).toBe(400)
+    const body = await readJson<{ errors: Array<{ code: string }> }>(res)
+    expect(body.errors[0].code).toBe('frames_require_video_format')
+  })
+
+  it('refuses to mint while the row is already transcoding', async () => {
+    const { env, datasetId, sqlite } = setupEnv()
+    sqlite
+      .prepare(
+        `UPDATE datasets SET transcoding = 1, active_transcode_upload_id = 'OTHER' WHERE id = ?`,
+      )
+      .run(datasetId)
+    const res = await assetInit(ctx({ env, body: seqBody(3), datasetId }))
+    expect(res.status).toBe(409)
+    expect((await readJson<{ error: string }>(res)).error).toBe('transcoding_in_progress')
+  })
+
+  it('rejects an invalid source_filenames_digest', async () => {
+    const { env, datasetId } = setupEnv()
+    const body = seqBody(3, { source_filenames_digest: 'not-a-digest' })
+    const res = await assetInit(ctx({ env, body, datasetId }))
+    expect(res.status).toBe(400)
+    const responseBody = await readJson<{ errors: Array<{ field: string; code: string }> }>(res)
+    expect(responseBody.errors[0].field).toBe('source_filenames_digest')
+  })
+
+  it('surfaces per-frame validation errors from validateImageSequenceInit', async () => {
+    const { env, datasetId } = setupEnv()
+    const body = seqBody(2)
+    // Mutate one frame's digest to break the per-frame format check.
+    ;(body.frames as Array<Record<string, unknown>>)[1].digest = 'sha256:not-hex'
+    const res = await assetInit(ctx({ env, body, datasetId }))
+    expect(res.status).toBe(400)
+    const responseBody = await readJson<{ errors: Array<{ field: string; code: string }> }>(res)
+    expect(responseBody.errors.some(e => e.field === 'frames[1].digest')).toBe(true)
+  })
+})

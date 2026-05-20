@@ -20,6 +20,7 @@ const ENV_OK = {
 }
 
 const PAYLOAD = {
+  kind: 'video' as const,
   dataset_id: '01HX0000000000000000000000',
   upload_id: '01HY0000000000000000000000',
   source_key: 'uploads/01HX0000000000000000000000/01HY0000000000000000000000/source.mp4',

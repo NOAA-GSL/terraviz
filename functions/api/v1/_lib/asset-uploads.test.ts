@@ -24,7 +24,9 @@ import {
   markAssetUploadCompleted,
   markAssetUploadFailed,
   maxSizeForKind,
+  MAX_IMAGE_SEQUENCE_FRAMES,
   validateAssetInit,
+  validateImageSequenceInit,
 } from './asset-uploads'
 
 const SHA64 = 'a'.repeat(64)
@@ -199,6 +201,220 @@ describe('maxSizeForKind', () => {
   })
 })
 
+describe('validateImageSequenceInit', () => {
+  // Helper: build a happy-path body with N frames whose digests
+  // are deterministic-but-unique so failure-mode tests can shape
+  // it from a known-good baseline.
+  function happyBody(frameCount: number, mime = 'image/png'): Record<string, unknown> {
+    const frames = Array.from({ length: frameCount }, (_, i) => ({
+      filename: `frame_${String(i + 1).padStart(5, '0')}.png`,
+      digest: `sha256:${String(i).padStart(64, '0').slice(0, 64)}`,
+      size: 4_000_000,
+    }))
+    const size = frames.reduce((sum, f) => sum + f.size, 0)
+    return {
+      kind: 'data',
+      mime,
+      frames,
+      size,
+      // Validator now owns the digest's shape check — every
+      // happy-path body needs a well-formed value to pass.
+      source_filenames_digest: `sha256:${'f'.repeat(64)}`,
+    }
+  }
+
+  it('accepts a happy-path body and surfaces totals + extension', () => {
+    const result = validateImageSequenceInit(happyBody(3))
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.kind).toBe('data')
+    expect(result.value.mime).toBe('image/png')
+    expect(result.value.extension).toBe('png')
+    expect(result.value.frames).toHaveLength(3)
+    expect(result.value.totalSize).toBe(12_000_000)
+  })
+
+  it('maps image/jpeg → extension "jpg" so R2 keys use one extension convention', () => {
+    // Stay consistent with the single-image content-addressed
+    // path that already uses `jpg` for JPEG via `extForMime`.
+    const body = happyBody(2, 'image/jpeg')
+    // Mutate filenames to .jpg so the test fixture is internally
+    // consistent — the per-frame mime is what drives extension
+    // selection, not the filename, but readers expect them to
+    // line up.
+    ;(body.frames as Array<Record<string, unknown>>).forEach((f, i) => {
+      f.filename = `frame_${String(i + 1).padStart(5, '0')}.jpg`
+    })
+    const result = validateImageSequenceInit(body)
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.extension).toBe('jpg')
+  })
+
+  it('rejects a missing frames array', () => {
+    const result = validateImageSequenceInit({ kind: 'data', mime: 'image/png', size: 100 })
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.errors.some(e => e.code === 'invalid_frames')).toBe(true)
+  })
+
+  it('rejects an empty frames array', () => {
+    const result = validateImageSequenceInit({
+      kind: 'data',
+      mime: 'image/png',
+      size: 0,
+      frames: [],
+    })
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.errors.some(e => e.code === 'frames_empty')).toBe(true)
+  })
+
+  it('rejects frames over the cap', () => {
+    const result = validateImageSequenceInit(happyBody(MAX_IMAGE_SEQUENCE_FRAMES + 1))
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.errors.some(e => e.code === 'frames_too_many')).toBe(true)
+  })
+
+  it('rejects a mime outside the image-sequence allowlist', () => {
+    const result = validateImageSequenceInit(happyBody(2, 'video/mp4'))
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.errors.some(e => e.code === 'mime_not_allowed')).toBe(true)
+  })
+
+  it('rejects a non-data kind', () => {
+    const body = happyBody(2)
+    body.kind = 'thumbnail'
+    const result = validateImageSequenceInit(body)
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.errors.some(e => e.code === 'invalid_kind')).toBe(true)
+  })
+
+  it('rejects duplicate filenames', () => {
+    const body = happyBody(3)
+    const frames = body.frames as Array<Record<string, unknown>>
+    frames[2].filename = frames[0].filename
+    const result = validateImageSequenceInit(body)
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    const dup = result.errors.find(e => e.code === 'duplicate_filename')
+    expect(dup).toBeDefined()
+    expect(dup?.field).toBe('frames[2].filename')
+  })
+
+  it('rejects per-frame digests that aren\'t sha256:<64hex>', () => {
+    const body = happyBody(2)
+    ;(body.frames as Array<Record<string, unknown>>)[1].digest = 'sha256:not-hex'
+    const result = validateImageSequenceInit(body)
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    const e = result.errors.find(e => e.field === 'frames[1].digest')
+    expect(e?.code).toBe('invalid_digest')
+  })
+
+  it('rejects non-positive-integer per-frame sizes', () => {
+    const body = happyBody(2)
+    ;(body.frames as Array<Record<string, unknown>>)[0].size = 0
+    ;(body.frames as Array<Record<string, unknown>>)[1].size = 'big'
+    const result = validateImageSequenceInit(body)
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.errors.filter(e => e.code === 'invalid_size').length).toBe(2)
+  })
+
+  it('rejects an aggregate over 10 GB', () => {
+    // Construct a body whose individual frame sizes are valid but
+    // whose sum exceeds the 10 GB ceiling. 10 frames at 1.1 GB
+    // each = 11 GB.
+    const frames = Array.from({ length: 10 }, (_, i) => ({
+      filename: `frame_${i}.png`,
+      digest: `sha256:${'a'.repeat(64)}`,
+      size: 1_100_000_000,
+    }))
+    // Filenames need to be unique too.
+    frames.forEach((f, i) => {
+      f.filename = `frame_${i}.png`
+      f.digest = `sha256:${String(i).padStart(64, '0').slice(0, 64)}`
+    })
+    const total = frames.reduce((sum, f) => sum + f.size, 0)
+    const result = validateImageSequenceInit({
+      kind: 'data',
+      mime: 'image/png',
+      frames,
+      size: total,
+    })
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.errors.some(e => e.code === 'size_exceeded')).toBe(true)
+  })
+
+  it('rejects a declared total that does not match the sum of per-frame sizes', () => {
+    const body = happyBody(3)
+    body.size = 12_000_001 // off by 1
+    const result = validateImageSequenceInit(body)
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.errors.some(e => e.code === 'size_sum_mismatch')).toBe(true)
+  })
+
+  it('rejects a missing or malformed source_filenames_digest', () => {
+    // Validator owns the field's shape check (3pf-review/A) so the
+    // route handler's mint step never runs against a malformed
+    // claim. The MAX_TOTAL_BYTES sum + this digest gate are the
+    // last two body-shape pre-conditions a successful mint depends
+    // on.
+    const missing = happyBody(2)
+    delete missing.source_filenames_digest
+    const missingResult = validateImageSequenceInit(missing)
+    expect(missingResult.ok).toBe(false)
+    if (missingResult.ok) return
+    expect(
+      missingResult.errors.some(
+        e => e.field === 'source_filenames_digest' && e.code === 'invalid_digest',
+      ),
+    ).toBe(true)
+
+    const malformed = happyBody(2)
+    malformed.source_filenames_digest = 'not-a-digest'
+    const malformedResult = validateImageSequenceInit(malformed)
+    expect(malformedResult.ok).toBe(false)
+    if (malformedResult.ok) return
+    expect(
+      malformedResult.errors.some(
+        e => e.field === 'source_filenames_digest' && e.code === 'invalid_digest',
+      ),
+    ).toBe(true)
+  })
+
+  it('surfaces the validated source-filenames digest on the success path', () => {
+    const body = happyBody(2)
+    body.source_filenames_digest = `sha256:${'b'.repeat(64)}`
+    const result = validateImageSequenceInit(body)
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.sourceFilenamesDigest).toBe(`sha256:${'b'.repeat(64)}`)
+  })
+
+  it('suppresses the sum-mismatch report when per-frame size errors are the root cause', () => {
+    // A frame with a non-numeric size produces an invalid_size
+    // error AND would otherwise produce a (noisy) sum-mismatch
+    // error too. The validator only surfaces the per-frame
+    // error so the publisher's fix-it message points at the
+    // actual problem.
+    const body = happyBody(2)
+    ;(body.frames as Array<Record<string, unknown>>)[1].size = 'big'
+    body.size = 4_000_000 // would never match because one frame's size doesn't sum
+    const result = validateImageSequenceInit(body)
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.errors.some(e => e.code === 'size_sum_mismatch')).toBe(false)
+    expect(result.errors.some(e => e.code === 'invalid_size')).toBe(true)
+  })
+})
+
 describe('extForMime', () => {
   it('maps allowlist mimes onto the documented extensions', () => {
     expect(extForMime('video/mp4')).toBe('mp4')
@@ -238,6 +454,7 @@ describe('asset_uploads row helpers', () => {
       status: 'pending',
       failure_reason: null,
       completed_at: null,
+      frame_count: null,
     })
   })
 
@@ -315,6 +532,7 @@ describe('applyAssetToDataset — atomic json_set merge', () => {
         failure_reason: null,
         created_at: '2026-04-29T12:00:00.000Z',
         completed_at: null,
+      frame_count: null,
       },
       HAPPY_DIGEST,
       '2026-04-29T12:01:00.000Z',
@@ -353,6 +571,7 @@ describe('applyAssetToDataset — atomic json_set merge', () => {
         failure_reason: null,
         created_at: '2026-04-29T12:00:00.000Z',
         completed_at: null,
+      frame_count: null,
       },
       HAPPY_DIGEST,
       '2026-04-29T12:01:00.000Z',
@@ -388,6 +607,7 @@ describe('applyAssetToDataset — atomic json_set merge', () => {
         failure_reason: null,
         created_at: '2026-04-29T12:00:00.000Z',
         completed_at: null,
+      frame_count: null,
       },
       HAPPY_DIGEST,
       '2026-04-29T12:01:00.000Z',
@@ -421,6 +641,7 @@ describe('applyAssetToDataset — atomic json_set merge', () => {
         failure_reason: null,
         created_at: '2026-04-29T12:00:00.000Z',
         completed_at: null,
+      frame_count: null,
       },
       HAPPY_DIGEST,
       '2026-04-29T12:01:00.000Z',
@@ -480,6 +701,9 @@ describe('transcoding lifecycle UPDATEs are scoped to active_transcode_upload_id
       failure_reason: null,
       created_at: '2026-04-29T12:00:00.000Z',
       completed_at: null,
+      // NULL on every MP4-source row — the field discriminates
+      // sequence uploads from single-file uploads.
+      frame_count: null,
     }
   }
 
@@ -560,6 +784,9 @@ describe('transcoding lifecycle UPDATEs are scoped to active_transcode_upload_id
         data_ref: 'r2:datasets/old/asset.png',
         content_digest: priorContentDigest,
         source_digest: priorSourceDigest,
+      frame_count: null,
+        frame_extension: null,
+        frame_source_filenames_ref: null,
       },
       '2026-04-29T12:05:00.000Z',
     )
@@ -597,7 +824,14 @@ describe('transcoding lifecycle UPDATEs are scoped to active_transcode_upload_id
       d1,
       DATASET_ID,
       uploadStub(UPLOAD_A),
-      { data_ref: '', content_digest: null, source_digest: null },
+      {
+        data_ref: '',
+        content_digest: null,
+        source_digest: null,
+      frame_count: null,
+        frame_extension: null,
+        frame_source_filenames_ref: null,
+      },
       '2026-04-29T12:05:00.000Z',
     )
     expect(changes).toBe(1)
@@ -627,7 +861,14 @@ describe('transcoding lifecycle UPDATEs are scoped to active_transcode_upload_id
       d1,
       DATASET_ID,
       uploadStub(UPLOAD_A),
-      { data_ref: 'r2:videos/old/master.m3u8', content_digest: null, source_digest: null },
+      {
+        data_ref: 'r2:videos/old/master.m3u8',
+        content_digest: null,
+        source_digest: null,
+      frame_count: null,
+        frame_extension: null,
+        frame_source_filenames_ref: null,
+      },
       '2026-04-29T12:05:00.000Z',
     )
     expect(changes).toBe(0)

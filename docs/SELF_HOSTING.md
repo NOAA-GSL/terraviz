@@ -548,11 +548,34 @@ different env vars / flags:
 
 ### 8e. Video transcode pipeline (R2 + GitHub Actions)
 
-The publisher portal's video uploads (Phase 3pd) hand off to a
-GitHub Actions workflow that runs ffmpeg against the 4K / 1080p /
-720p 2:1 spherical HLS ladder. The workflow doesn't need a fork
-of the repo or any commit access — it fires via the
+The publisher portal's video uploads (Phase 3pd, extended by
+Phase 3pf to accept image-sequence sources) hand off to a GitHub
+Actions workflow that runs ffmpeg against the 4K / 1080p / 720p
+2:1 spherical HLS ladder. The workflow doesn't need a fork of the
+repo or any commit access — it fires via the
 `repository_dispatch` event, which is a pure event API.
+
+Two source shapes feed the same pipeline:
+
+- **MP4 source** (Phase 3pd). The publisher uploads one
+  `source.mp4`; the workflow downloads it, re-verifies the
+  digest, and runs ffmpeg.
+- **Image-sequence source** (Phase 3pf). The publisher uploads N
+  frames (PNG / JPEG / WebP, up to 10 000 per upload). The
+  workflow downloads every frame in a bounded-concurrency pool,
+  re-verifies the canonical source-filenames JSON's digest, and
+  runs ffmpeg's image-sequence input mode against the same
+  ladder. The portal exposes both shapes as tabs on the asset
+  uploader for video-format datasets; everything else
+  (transcode-complete callback, R2 bucket layout, recovery
+  semantics) is identical.
+
+Both source shapes encode to **30 fps output** regardless of
+source frame rate (Phase 3pf forced this invariant via
+`-r:v:N 30` on every rendition). The tour engine's `frameRate`
+task hard-codes 30 fps as the assumed source rate when computing
+playback rate, so the normalisation matters for tour playback to
+work correctly across the catalog.
 
 **R2 bucket CORS policy (REQUIRED for the browser uploader).**
 The asset-uploader performs a cross-origin XHR PUT directly to

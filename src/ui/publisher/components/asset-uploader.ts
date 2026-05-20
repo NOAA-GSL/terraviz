@@ -32,6 +32,7 @@
  */
 
 import { t, type MessageKey } from '../../../i18n'
+import { MAX_IMAGE_SEQUENCE_FRAMES as MAX_FRAMES } from '../../../types/image-sequence-constants'
 import {
   clearWarmupFlag,
   handleSessionError,
@@ -143,6 +144,80 @@ const STAGE_STATUS_KEY: Record<Stage, MessageKey> = {
   error: 'publisher.assetUploader.status.error',
 }
 
+/** Tab discriminator on a video dataset's uploader. The tab strip
+ *  is mounted only when `options.format === 'video/mp4'` since
+ *  image-sequence input is video-only by design. */
+type UploaderTab = 'video' | 'frames'
+
+/** Per-frame mime allowlist mirrors `validateImageSequenceInit`
+ *  on the publisher API. Worth duplicating client-side so the
+ *  picker rejects the file before any network call. */
+const FRAME_MIME_ALLOWLIST: ReadonlySet<string> = new Set([
+  'image/png',
+  'image/jpeg',
+  'image/webp',
+])
+
+/** Frame-count cap is the single source of truth from
+ *  `cli/lib/image-sequence-constants.ts` (imported at the top of
+ *  this file). The hash budget + JSON-response-size discussion
+ *  lives in `docs/CATALOG_IMAGE_SEQUENCE_PLAN.md` §Open Q4.
+ *  Phase 3pf-review/F — Copilot discussion_r3263124306. */
+
+/** Aggregate-size cap mirrors `SIZE_IMAGE_SEQUENCE_TOTAL` on the
+ *  publisher API (10 GB). Enforced client-side as well as
+ *  server-side so a publisher who drags in tens of GB of high-res
+ *  PNGs gets a fail-fast rejection before the ~100 s in-browser
+ *  hash budget burns. The two values must agree — if a future
+ *  change raises the server cap, raise this constant too. */
+const MAX_TOTAL_BYTES = 10 * 1024 * 1024 * 1024
+
+/** Bounded concurrency for the per-frame PUT pool. 5 matches the
+ *  Phase 3pf plan recommendation — high enough that R2's edge
+ *  parallelises the writes, low enough that a typical residential
+ *  uplink doesn't get saturated by HTTP/1.1 connection limits or
+ *  the browser's per-host socket cap. */
+const FRAME_UPLOAD_CONCURRENCY = 5
+
+/** Stage labels for the frame-sequence flow. Distinct from `Stage`
+ *  because the frame stages carry an N/M counter for "hashing 47/240"
+ *  / "uploading 47/240" status lines. */
+type FramesStage =
+  | 'idle'
+  | 'picked'
+  | 'hashing'
+  | 'minting'
+  | 'uploading'
+  | 'completing'
+  | 'done-transcoding'
+  | 'error'
+
+interface FramesState {
+  stage: FramesStage
+  /** Picked + lexicographically-sorted files. Cleared on retry. */
+  files: File[]
+  /** Resolved per-frame MIME (`image/png` / `image/jpeg` /
+   *  `image/webp`). Computed once in `handleFramesPicked` from
+   *  the first file's `type` (or filename fallback) and asserted
+   *  to match every subsequent file — so the run path uses a
+   *  verified value rather than re-deriving on a potentially
+   *  empty array. */
+  mime: string
+  /** 1-based progress counter for `hashing` / `uploading` stages. */
+  current: number
+  /** Aggregate progress fraction 0..1 for the visible `<progress>`. */
+  progress: number
+  errorDetail?: string
+}
+
+const INITIAL_FRAMES: FramesState = {
+  stage: 'idle',
+  files: [],
+  mime: '',
+  current: 0,
+  progress: 0,
+}
+
 /** Chunk size for incremental hashing — 8 MB. Large enough that
  *  per-chunk overhead is negligible, small enough that 4K video
  *  uploads don't blow the tab's memory budget. */
@@ -190,9 +265,105 @@ export function renderAssetUploader(options: AssetUploaderOptions): HTMLElement 
   root.className = 'publisher-asset-uploader'
 
   let state: StageState = INITIAL
+  let framesState: FramesState = INITIAL_FRAMES
+  // Tab strip is only mounted for video-format datasets — that's
+  // where image-sequence input is meaningful (the catalog encodes
+  // every frames upload to a video HLS bundle). Image / tour
+  // datasets see the single-file picker unchanged.
+  let activeTab: UploaderTab = 'video'
+  const tabsEnabled = options.format === 'video/mp4'
+
+  // Stable ids used to wire the tab buttons to their tabpanel via
+  // ARIA. Per-instance unique enough that two uploaders mounted
+  // on the same page (vanishingly rare but cheap to protect
+  // against) don't collide. Phase 3pf-review/F — Copilot
+  // discussion_r3263124279.
+  // Per-instance random suffix shared across every id this
+  // uploader emits — the tab buttons, the tabpanels, and the
+  // two file inputs. Two uploaders on the same page is
+  // vanishingly rare on the dataset edit form but cheap to
+  // guard against: duplicate `<label for=...>` associations
+  // resolve to whichever input is first in the DOM, and screen
+  // readers announce the wrong control. Phase 3pf-review/G —
+  // Copilot discussion_r3263466409.
+  const ID_SUFFIX = Math.random().toString(36).slice(2, 8)
+  const TAB_VIDEO_ID = `dataset-asset-tab-video-${ID_SUFFIX}`
+  const TAB_FRAMES_ID = `dataset-asset-tab-frames-${ID_SUFFIX}`
+  const PANEL_VIDEO_ID = `${TAB_VIDEO_ID}-panel`
+  const PANEL_FRAMES_ID = `${TAB_FRAMES_ID}-panel`
+  const FILE_INPUT_ID = `dataset-asset-file-${ID_SUFFIX}`
+  const FRAMES_INPUT_ID = `dataset-asset-frames-${ID_SUFFIX}`
 
   function paint(): void {
-    root.replaceChildren(buildBody(state))
+    const frag = document.createDocumentFragment()
+    if (tabsEnabled) {
+      frag.appendChild(buildTabStrip())
+    }
+    if (tabsEnabled && activeTab === 'frames') {
+      const panel = buildFramesBody(framesState)
+      // Wrap in a tabpanel-roled container so the panel announces
+      // its tab parentage to screen readers.
+      const wrapper = document.createElement('div')
+      wrapper.id = PANEL_FRAMES_ID
+      wrapper.setAttribute('role', 'tabpanel')
+      wrapper.setAttribute('aria-labelledby', TAB_FRAMES_ID)
+      wrapper.appendChild(panel)
+      frag.appendChild(wrapper)
+    } else if (tabsEnabled) {
+      const panel = buildBody(state)
+      const wrapper = document.createElement('div')
+      wrapper.id = PANEL_VIDEO_ID
+      wrapper.setAttribute('role', 'tabpanel')
+      wrapper.setAttribute('aria-labelledby', TAB_VIDEO_ID)
+      wrapper.appendChild(panel)
+      frag.appendChild(wrapper)
+    } else {
+      frag.appendChild(buildBody(state))
+    }
+    root.replaceChildren(frag)
+  }
+
+  function buildTabStrip(): HTMLElement {
+    const strip = document.createElement('div')
+    strip.className = 'publisher-asset-uploader-tabs'
+    strip.setAttribute('role', 'tablist')
+    for (const tab of ['video', 'frames'] as UploaderTab[]) {
+      const btn = document.createElement('button')
+      btn.type = 'button'
+      btn.id = tab === 'video' ? TAB_VIDEO_ID : TAB_FRAMES_ID
+      btn.className =
+        'publisher-asset-uploader-tab' +
+        (activeTab === tab ? ' publisher-asset-uploader-tab-active' : '')
+      btn.setAttribute('role', 'tab')
+      btn.setAttribute('aria-selected', activeTab === tab ? 'true' : 'false')
+      btn.setAttribute(
+        'aria-controls',
+        tab === 'video' ? PANEL_VIDEO_ID : PANEL_FRAMES_ID,
+      )
+      btn.textContent = t(
+        tab === 'video'
+          ? 'publisher.assetUploader.tab.video'
+          : 'publisher.assetUploader.tab.frames',
+      )
+      // Disable tab switching once an upload is in flight on
+      // either side — flipping mid-upload would either lose the
+      // in-flight state (frames → video) or risk firing a
+      // duplicate dispatch (video → frames mid-transcode).
+      const lockedSingle =
+        state.stage !== 'idle' && state.stage !== 'error' && state.stage !== 'done-direct'
+      const lockedFrames =
+        framesState.stage !== 'idle' &&
+        framesState.stage !== 'picked' &&
+        framesState.stage !== 'error'
+      btn.disabled = lockedSingle || lockedFrames
+      btn.addEventListener('click', () => {
+        if (activeTab === tab) return
+        activeTab = tab
+        paint()
+      })
+      strip.appendChild(btn)
+    }
+    return strip
   }
 
   function buildBody(s: StageState): DocumentFragment {
@@ -223,7 +394,7 @@ export function renderAssetUploader(options: AssetUploaderOptions): HTMLElement 
     const inputRow = document.createElement('div')
     inputRow.className = 'publisher-asset-uploader-input-row'
 
-    const inputId = 'dataset-asset-file'
+    const inputId = FILE_INPUT_ID
     const label = document.createElement('label')
     label.className = 'publisher-asset-uploader-label'
     label.setAttribute('for', inputId)
@@ -285,6 +456,481 @@ export function renderAssetUploader(options: AssetUploaderOptions): HTMLElement 
     }
 
     return frag
+  }
+
+  function buildFramesBody(s: FramesState): DocumentFragment {
+    const frag = document.createDocumentFragment()
+
+    if (options.currentDataRef && s.stage === 'idle') {
+      const current = document.createElement('p')
+      current.className = 'publisher-asset-uploader-current'
+      const label = document.createElement('span')
+      label.className = 'publisher-asset-uploader-current-label'
+      label.textContent = t('publisher.assetUploader.current')
+      const value = document.createElement('span')
+      value.className = 'publisher-asset-uploader-current-value publisher-field-value-mono'
+      value.textContent = options.currentDataRef
+      current.appendChild(label)
+      current.appendChild(value)
+      frag.appendChild(current)
+    }
+
+    // Multi-file picker — `multiple` lets the publisher select
+    // many frames at once via their OS file picker (Shift-click
+    // or Cmd/Ctrl-click). It does NOT enable folder picking;
+    // that requires the non-standard `webkitdirectory` attribute,
+    // which is uneven across browsers (notably mobile Safari) so
+    // we rely on multi-select instead. Same disabled-while-busy
+    // rule as the single-file picker.
+    const inputRow = document.createElement('div')
+    inputRow.className = 'publisher-asset-uploader-input-row'
+    const inputId = FRAMES_INPUT_ID
+    const label = document.createElement('label')
+    label.className = 'publisher-asset-uploader-label'
+    label.setAttribute('for', inputId)
+    label.textContent = t('publisher.assetUploader.frames.pickFiles')
+    inputRow.appendChild(label)
+
+    const input = document.createElement('input')
+    input.type = 'file'
+    input.id = inputId
+    input.multiple = true
+    input.className = 'publisher-asset-uploader-input'
+    input.accept = [...FRAME_MIME_ALLOWLIST].join(',') + ',.png,.jpg,.jpeg,.webp'
+    input.disabled =
+      s.stage !== 'idle' && s.stage !== 'picked' && s.stage !== 'error'
+    input.addEventListener('change', () => {
+      const picked = Array.from(input.files ?? [])
+      if (picked.length === 0) return
+      handleFramesPicked(picked)
+    })
+    inputRow.appendChild(input)
+    frag.appendChild(inputRow)
+
+    if (s.stage === 'picked' && s.files.length > 0) {
+      // Summary line — frame count + total size. Per the Phase 3pf
+      // plan, the thumbnail strip + manual-order textarea + display-
+      // naming preview are deferred to a follow-up; v1 ships the
+      // count + size as the minimum useful affordance.
+      const total = s.files.reduce((sum, f) => sum + f.size, 0)
+      const summary = document.createElement('p')
+      summary.className = 'publisher-asset-uploader-frames-summary'
+      summary.textContent = t('publisher.assetUploader.frames.frameCount', {
+        count: String(s.files.length),
+        size: formatBytes(total),
+      })
+      frag.appendChild(summary)
+
+      const startBtn = document.createElement('button')
+      startBtn.type = 'button'
+      startBtn.className = 'publisher-button publisher-button-primary'
+      startBtn.textContent = t('publisher.assetUploader.frames.startUpload', {
+        count: String(s.files.length),
+      })
+      startBtn.addEventListener('click', () => {
+        void runFrameSequence(s.files)
+      })
+      frag.appendChild(startBtn)
+    }
+
+    // Stage-specific status line.
+    if (s.stage !== 'idle' && s.stage !== 'picked') {
+      const status = document.createElement('p')
+      status.className = `publisher-asset-uploader-status publisher-asset-uploader-status-${s.stage}`
+      status.setAttribute('role', 'status')
+      status.textContent = framesStatusText(s)
+      frag.appendChild(status)
+    }
+
+    if (
+      s.stage === 'hashing' ||
+      s.stage === 'minting' ||
+      s.stage === 'uploading' ||
+      s.stage === 'completing'
+    ) {
+      const bar = document.createElement('progress')
+      bar.className = 'publisher-asset-uploader-progress'
+      bar.max = 1
+      bar.value = s.progress
+      frag.appendChild(bar)
+    }
+
+    if (s.stage === 'error' && s.errorDetail) {
+      const det = document.createElement('details')
+      det.className = 'publisher-asset-uploader-error-details'
+      const summary = document.createElement('summary')
+      summary.textContent = t('publisher.assetUploader.errorDetails')
+      det.appendChild(summary)
+      const pre = document.createElement('pre')
+      pre.textContent = s.errorDetail
+      det.appendChild(pre)
+      frag.appendChild(det)
+    }
+
+    return frag
+  }
+
+  function framesStatusText(s: FramesState): string {
+    if (s.stage === 'hashing') {
+      return t('publisher.assetUploader.frames.hashingProgress', {
+        current: String(s.current),
+        total: String(s.files.length),
+      })
+    }
+    if (s.stage === 'uploading') {
+      return t('publisher.assetUploader.frames.uploadingProgress', {
+        current: String(s.current),
+        total: String(s.files.length),
+      })
+    }
+    if (s.stage === 'minting') return t('publisher.assetUploader.status.minting')
+    if (s.stage === 'completing') return t('publisher.assetUploader.status.completing')
+    if (s.stage === 'done-transcoding')
+      return t('publisher.assetUploader.status.doneTranscoding')
+    if (s.stage === 'error') return t('publisher.assetUploader.status.error')
+    return ''
+  }
+
+  /**
+   * Validate the picked file list (count + uniform mime), sort
+   * lexicographically by filename, and move into the `picked`
+   * stage so the publisher sees the count + a "Start upload"
+   * button before any network call.
+   */
+  function handleFramesPicked(picked: File[]): void {
+    if (picked.length > MAX_FRAMES) {
+      framesState = {
+        ...INITIAL_FRAMES,
+        stage: 'error',
+        errorDetail: t('publisher.assetUploader.frames.tooMany', {
+          actual: String(picked.length),
+          max: String(MAX_FRAMES),
+        }),
+      }
+      paint()
+      return
+    }
+    // No `picked.length < 1` branch here — the caller (the input
+    // `change` listener) silently returns on an empty selection
+    // (e.g. when the publisher clicks Cancel in the file picker),
+    // so `handleFramesPicked` is only ever invoked with at least
+    // one file. Phase 3pf-review/G — Copilot
+    // discussion_r3263466451 flagged the prior dead `picked.length
+    // < 1` error branch.
+    // Enforce uniform mime — ffmpeg's image-sequence demuxer
+    // expects one extension across the sequence, and the
+    // server-side `validateImageSequenceInit` rejects mixed mimes
+    // anyway. Failing fast here saves the 30+ second hash budget.
+    let firstMime = ''
+    for (const f of picked) {
+      const mime = f.type || mimeFromFilename(f.name)
+      if (!FRAME_MIME_ALLOWLIST.has(mime)) {
+        framesState = {
+          ...INITIAL_FRAMES,
+          stage: 'error',
+          errorDetail: t('publisher.assetUploader.frames.unsupportedMime', {
+            actual: mime || 'unknown',
+          }),
+        }
+        paint()
+        return
+      }
+      if (!firstMime) firstMime = mime
+      else if (mime !== firstMime) {
+        framesState = {
+          ...INITIAL_FRAMES,
+          stage: 'error',
+          errorDetail: t('publisher.assetUploader.frames.mixedMime', {
+            actual: mime,
+            expected: firstMime,
+          }),
+        }
+        paint()
+        return
+      }
+    }
+    // Aggregate-size cap mirrors the server's
+    // `SIZE_IMAGE_SEQUENCE_TOTAL` (10 GB) so a publisher who picks
+    // tens of GB of high-res PNGs fails fast rather than waiting
+    // out the in-browser hash budget before the server rejects.
+    const totalBytes = picked.reduce((sum, f) => sum + f.size, 0)
+    if (totalBytes > MAX_TOTAL_BYTES) {
+      framesState = {
+        ...INITIAL_FRAMES,
+        stage: 'error',
+        errorDetail: t('publisher.assetUploader.frames.totalSizeExceeded', {
+          actual: formatBytes(totalBytes),
+          max: formatBytes(MAX_TOTAL_BYTES),
+        }),
+      }
+      paint()
+      return
+    }
+    // Lexicographic sort by filename. Deterministic encode order
+    // for the typical `frame_00001.png … frame_99999.png` shape;
+    // the manual-order textarea is a deferred follow-up for
+    // publishers whose filenames don't naturally sort.
+    const sorted = [...picked].sort((a, b) => a.name.localeCompare(b.name))
+    framesState = {
+      ...INITIAL_FRAMES,
+      stage: 'picked',
+      files: sorted,
+      mime: firstMime,
+    }
+    paint()
+  }
+
+  /**
+   * Drive the multi-frame upload: hash every frame, build the
+   * canonical source-filenames JSON, POST /asset for the
+   * presigned-URL bundle, parallel-bounded PUT every frame plus
+   * the source-filenames blob, then POST /complete. Outcome is
+   * always `transcoding` mode — frame-source uploads land at the
+   * same /transcode-complete callback the MP4 path uses.
+   */
+  async function runFrameSequence(files: File[]): Promise<void> {
+    if (!options.datasetId) {
+      options.onMissingDataset?.()
+      return
+    }
+    const total = files.length
+    try {
+      // 1. Hash every frame. Serial to keep the in-browser memory
+      //    budget bounded (~8 MB peak per `hashFileSha256` call).
+      framesState = {
+        ...framesState,
+        stage: 'hashing',
+        current: 0,
+        progress: 0,
+      }
+      paint()
+      const frameDigests: Array<{ filename: string; digest: string; size: number }> = []
+      for (let i = 0; i < files.length; i++) {
+        const f = files[i]
+        const digest = await (options.hashFn ?? hashFileSha256)(f)
+        frameDigests.push({ filename: f.name, digest, size: f.size })
+        framesState = {
+          ...framesState,
+          current: i + 1,
+          progress: (i + 1) / total / 2, // hashing is ~half the perceived wait
+        }
+        paint()
+      }
+
+      // 2. Build canonical source-filenames JSON. Stable order +
+      //    minimal whitespace so server-side hash agrees with the
+      //    client hash bit-for-bit. The shape is documented at
+      //    `docs/CATALOG_IMAGE_SEQUENCE_PLAN.md` §"Frames as data".
+      //    Each entry carries the per-frame `digest` so the GHA
+      //    runner can re-hash every downloaded frame and compare —
+      //    without the digest in the canonical JSON, the per-frame
+      //    SHA-256 work we just did in the browser would be wasted
+      //    (the runner would have no claim to verify against).
+      //    The runner's `verifySourceFilenamesBlob` re-hashes the
+      //    whole JSON to confirm the manifest itself is untampered;
+      //    `downloadFrames` then verifies each frame against its
+      //    declared digest. Phase 3pf-review/D — Copilot
+      //    discussion_r3263124234.
+      const sourceFilenames = frameDigests.map((f, index) => ({
+        index,
+        filename: f.filename,
+        digest: f.digest,
+      }))
+      const sourceFilenamesJson = JSON.stringify(sourceFilenames)
+      const sourceFilenamesDigest = await sha256OfString(sourceFilenamesJson)
+
+      // 3. Mint presigned PUTs.
+      framesState = { ...framesState, stage: 'minting', progress: 0.5 }
+      paint()
+      const totalSize = frameDigests.reduce((sum, f) => sum + f.size, 0)
+      const initResult = await publisherSend<ImageSequenceInitResponse>(
+        `/api/v1/publish/datasets/${encodeURIComponent(options.datasetId)}/asset`,
+        {
+          kind: 'data',
+          // Use the mime resolved + asserted-uniform during
+          // handleFramesPicked, not a re-derivation from
+          // files[0].type — by here we already know every file's
+          // mime matches and is in the allowlist. (The prior
+          // fallback to `'image/png'` could mask an invariant
+          // violation by sending a wrong mime to the server.)
+          mime: framesState.mime,
+          frames: frameDigests,
+          size: totalSize,
+          source_filenames_digest: sourceFilenamesDigest,
+        },
+        { fetchFn: options.fetchFn, sleep: options.sleep },
+      )
+      if (!initResult.ok) {
+        return failFrames('mint', initResult)
+      }
+      clearWarmupFlag()
+      const init = initResult.data
+
+      // 4. PUT every frame + the source-filenames blob.
+      //    Parallel-bounded so the browser doesn't open more
+      //    concurrent connections than the per-host cap.
+      if (!init.mock) {
+        framesState = {
+          ...framesState,
+          stage: 'uploading',
+          current: 0,
+          progress: 0.5,
+        }
+        paint()
+        const uploadJobs: Array<() => Promise<void>> = []
+        for (let i = 0; i < init.frames.length; i++) {
+          const mint = init.frames[i]
+          const file = files[i]
+          uploadJobs.push(async () => {
+            await putWithProgress(
+              { method: mint.method, url: mint.url, headers: mint.headers },
+              file,
+              () => {
+                /* per-frame progress isn't shown — N progress bars
+                   would be unusable; the aggregate counter ticks
+                   on completion only. */
+              },
+              options.xhrFactory,
+            )
+            // Stage-guard: a sibling worker may have failed and
+            // transitioned `framesState` into `'error'` while this
+            // PUT was mid-flight (`runBoundedQueue`'s
+            // first-failure-wins only stops workers BETWEEN
+            // iterations; the await above can still resolve after
+            // the error transition). Mutating `current` / `progress`
+            // on top of the error state would surface as a stale
+            // counter overwriting the error banner, so skip the
+            // update unless the stage is still 'uploading'.
+            if (framesState.stage !== 'uploading') return
+            framesState = {
+              ...framesState,
+              current: framesState.current + 1,
+              progress: 0.5 + (framesState.current + 1) / total / 2,
+            }
+            paint()
+          })
+        }
+        await runBoundedQueue(uploadJobs, FRAME_UPLOAD_CONCURRENCY)
+        // PUT the source-filenames blob alongside. JSON body, so
+        // we don't bother with XHR-progress — it's <1 MB and
+        // completes in one round-trip on a typical uplink.
+        // Honour `options.fetchFn` (defaults to globalThis.fetch)
+        // so tests can capture the request without touching the
+        // network, mirroring how `publisherSend` resolves its
+        // fetch implementation.
+        //
+        // Retry on transient failure: if this PUT fails after
+        // every frame has already landed, the publisher is in a
+        // strictly worse spot than a frame failure — the frames
+        // are sitting in R2, the asset_uploads row is still
+        // `'pending'`, and re-picking files mints a fresh
+        // upload_id leaving the prior frames orphaned. Two
+        // retries with short backoffs absorb a network blip;
+        // beyond that we surface the error and the publisher's
+        // recovery is re-pick (the orphan-frames cost is bounded
+        // by the per-upload R2 prefix's lifecycle policy).
+        //
+        // Backoff sequence: 200 ms, 400 ms, 1500 ms — the longer
+        // final backoff was added in 3pf-review/G (Copilot
+        // discussion_r3263466526) because the failure mode here
+        // is asymmetrically expensive (all N frames already in
+        // R2, only the small JSON sidecar left to land), so an
+        // extra second of patience before giving up beats a
+        // forced re-pick + re-hash + re-upload of the whole
+        // batch.
+        const blob = new Blob([sourceFilenamesJson], { type: 'application/json' })
+        const blobFetch = options.fetchFn ?? globalThis.fetch
+        const blobSleep = options.sleep ?? ((ms: number) => new Promise<void>(r => setTimeout(r, ms)))
+        const BLOB_BACKOFFS_MS = [200, 400, 1500]
+        let blobErr: Error | null = null
+        for (let attempt = 0; attempt < BLOB_BACKOFFS_MS.length + 1; attempt++) {
+          blobErr = null
+          try {
+            const blobRes = await blobFetch(init.source_filenames.url, {
+              method: init.source_filenames.method,
+              headers: init.source_filenames.headers,
+              body: blob,
+            })
+            if (blobRes.ok) {
+              blobErr = null
+              break
+            }
+            blobErr = new Error(`source-filenames PUT returned ${blobRes.status}`)
+          } catch (err) {
+            blobErr = err instanceof Error ? err : new Error(String(err))
+          }
+          if (attempt < BLOB_BACKOFFS_MS.length) {
+            await blobSleep(BLOB_BACKOFFS_MS[attempt])
+          }
+        }
+        if (blobErr) throw blobErr
+      }
+
+      // 5. Finalize.
+      framesState = { ...framesState, stage: 'completing', progress: 1 }
+      paint()
+      const completeResult = await publisherSend<AssetCompleteResponse>(
+        `/api/v1/publish/datasets/${encodeURIComponent(options.datasetId)}/asset/${init.upload_id}/complete`,
+        {},
+        { fetchFn: options.fetchFn, sleep: options.sleep },
+      )
+      if (!completeResult.ok) {
+        return failFrames('complete', completeResult)
+      }
+      framesState = { ...framesState, stage: 'done-transcoding', progress: 1 }
+      paint()
+      // Frame-source completion always lands in transcoding mode —
+      // the dispatch fires alongside the stamp.
+      options.onUploaded({ mode: 'transcoding' })
+    } catch (err) {
+      framesState = {
+        ...framesState,
+        stage: 'error',
+        errorDetail: err instanceof Error ? err.message : String(err),
+      }
+      paint()
+    }
+  }
+
+  function failFrames<T>(
+    stage: 'mint' | 'complete',
+    result: PublisherSendResult<T>,
+  ): void {
+    if (result.ok) return
+    if (result.kind === 'session') {
+      const outcome = handleSessionError({ navigate: options.navigate })
+      // Always clear progress state on a session error — even if
+      // the handler triggered a redirect/navigate, the UI may
+      // briefly stay mounted while the new page loads, and the
+      // prior `'minting' / 'uploading' / 'completing'` stage text
+      // would otherwise display indefinitely if for any reason
+      // the navigation didn't unmount the component. The
+      // `'show-error'` branch surfaces the typed
+      // `sessionExpired` message; the redirect branch falls back
+      // to a neutral error so the publisher sees something
+      // meaningful while they wait. Phase 3pf-review/G — Copilot
+      // discussion_r3263466461.
+      framesState = {
+        ...framesState,
+        stage: 'error',
+        errorDetail:
+          outcome === 'show-error'
+            ? t('publisher.assetUploader.sessionExpired')
+            : t('publisher.assetUploader.status.error'),
+      }
+      paint()
+      return
+    }
+    let detail: string
+    if (result.kind === 'validation') {
+      detail = result.errors.map(e => `${e.field}: ${e.message}`).join('; ')
+    } else if (result.kind === 'server') {
+      detail = `${stage}: HTTP ${result.status ?? '?'} ${result.body ?? ''}`
+    } else {
+      detail = `${stage}: ${result.kind}`
+    }
+    framesState = { ...framesState, stage: 'error', errorDetail: detail }
+    paint()
   }
 
   async function run(file: File): Promise<void> {
@@ -494,6 +1140,83 @@ function mimeFromFilename(name: string): string {
  * progress, so this stays on XHR even though the rest of the
  * portal uses fetch.
  */
+/** Wire shape of the publisher API's image-sequence /asset
+ *  response (Phase 3pf). Mirrors the type returned by the
+ *  route handler in `functions/api/v1/publish/datasets/[id]/asset.ts`. */
+interface ImageSequenceInitResponse {
+  upload_id: string
+  kind: 'data'
+  target: 'r2'
+  frames: Array<{
+    filename: string
+    index: number
+    method: 'PUT'
+    url: string
+    headers: Record<string, string>
+    key: string
+  }>
+  source_filenames: {
+    method: 'PUT'
+    url: string
+    headers: Record<string, string>
+    key: string
+  }
+  expires_at: string
+  mock: boolean
+}
+
+/** SHA-256 of a JS string (UTF-8 bytes). Returns `sha256:<hex>`
+ *  to match the publisher API's claimed-digest format. Used for
+ *  the canonical source-filenames JSON the publisher PUTs as a
+ *  sibling of the frames; the GHA runner re-verifies. */
+async function sha256OfString(s: string): Promise<string> {
+  const bytes = new TextEncoder().encode(s)
+  const buf = await crypto.subtle.digest('SHA-256', bytes)
+  const hex = Array.from(new Uint8Array(buf))
+    .map(b => b.toString(16).padStart(2, '0'))
+    .join('')
+  return `sha256:${hex}`
+}
+
+/** Format bytes for the frame-summary line. Same shape as the
+ *  publisher API's `formatBytes` in `asset-uploads.ts` so the
+ *  client and server agree on cap-message wording. */
+function formatBytes(n: number): string {
+  if (n >= 1024 * 1024 * 1024) return `${(n / (1024 * 1024 * 1024)).toFixed(1)} GB`
+  if (n >= 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(0)} MB`
+  if (n >= 1024) return `${(n / 1024).toFixed(0)} KB`
+  return `${n} B`
+}
+
+/** Run a list of async jobs through a bounded-concurrency pool.
+ *  The worker functions are invoked in order but resolve in
+ *  whatever order the network returns. First-failure aborts the
+ *  remaining workers — same pattern the runner-side
+ *  `downloadFrames` uses. */
+async function runBoundedQueue(
+  jobs: Array<() => Promise<void>>,
+  concurrency: number,
+): Promise<void> {
+  let cursor = 0
+  let firstError: Error | null = null
+  async function worker(): Promise<void> {
+    while (firstError === null) {
+      const i = cursor++
+      if (i >= jobs.length) return
+      try {
+        await jobs[i]()
+      } catch (err) {
+        if (firstError === null) {
+          firstError = err instanceof Error ? err : new Error(String(err))
+        }
+        return
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: concurrency }, () => worker()))
+  if (firstError) throw firstError
+}
+
 function putWithProgress(
   r2: { method: 'PUT'; url: string; headers: Record<string, string> },
   file: File,
