@@ -350,7 +350,29 @@ export async function encodeHls(options: EncodeHlsOptions): Promise<EncodedHls> 
     if (!existsSync(patternDir)) {
       throw new Error(`encodeHls: input pattern directory ${patternDir} does not exist`)
     }
-    if (readdirSync(patternDir).length === 0) {
+    // `existsSync` returning true says nothing about file-vs-dir
+    // or read permissions, so guard `readdirSync` against
+    // ENOTDIR (patternDir is a regular file) and EACCES
+    // (unreadable). Without this, those errors would surface as
+    // raw Node messages rather than the consistent
+    // `encodeHls: ...` prefix the rest of the pre-flight uses.
+    let dirEntries: string[]
+    try {
+      const st = statSync(patternDir)
+      if (!st.isDirectory()) {
+        throw new Error(
+          `encodeHls: input pattern parent ${patternDir} is not a directory`,
+        )
+      }
+      dirEntries = readdirSync(patternDir)
+    } catch (err) {
+      if (err instanceof Error && err.message.startsWith('encodeHls:')) throw err
+      const message = err instanceof Error ? err.message : String(err)
+      throw new Error(
+        `encodeHls: input pattern directory ${patternDir} is not readable: ${message}`,
+      )
+    }
+    if (dirEntries.length === 0) {
       throw new Error(`encodeHls: input pattern directory ${patternDir} is empty`)
     }
   } else if (!existsSync(options.inputPath)) {

@@ -440,6 +440,29 @@ describe('encodeHls', () => {
     expect(spawnImpl).not.toHaveBeenCalled()
   })
 
+  it('refuses an ffmpeg printf pattern whose parent path is a regular file', async () => {
+    // `existsSync` returns true for files too; without the
+    // `isDirectory()` guard, `readdirSync` would throw raw
+    // ENOTDIR rather than the consistent `encodeHls: ...`
+    // prefix. Copilot review on PR #118 — discussion_r3275753115.
+    const tmp = mkdtempSync(join(tmpdir(), 'ffhls-'))
+    try {
+      // Create a regular file at the "directory" position.
+      writeFileSync(join(tmp, 'frames'), 'oops, file not dir')
+      const spawnImpl = vi.fn()
+      await expect(
+        encodeHls({
+          inputPath: join(tmp, 'frames', '%05d.png'),
+          outputDir: join(tmp, 'out'),
+          spawnImpl: spawnImpl as unknown as Parameters<typeof encodeHls>[0]['spawnImpl'],
+        }),
+      ).rejects.toThrow(/is not a directory/)
+      expect(spawnImpl).not.toHaveBeenCalled()
+    } finally {
+      rmSync(tmp, { recursive: true, force: true })
+    }
+  })
+
   it('matches the URL check case-insensitively (HTTP:// works too)', async () => {
     const tmp = mkdtempSync(join(tmpdir(), 'ffhls-'))
     try {
