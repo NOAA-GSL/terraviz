@@ -42,6 +42,12 @@ export interface Dataset {
    * post-cutover ULID-keyed rows.
    */
   legacyId?: string
+  /**
+   * URL-safe slug (`sea-ice-extent`, `ssta`) — drives display naming
+   * for the Phase 3pg image-sequence frame buttons. The catalog
+   * always sets a slug; older SOS-source rows may omit it.
+   */
+  slug?: string
   title: string
   format: DatasetFormat
   dataLink: string
@@ -361,6 +367,26 @@ export type ChatAction =
   | { type: 'add-marker'; lat: number; lng: number; label?: string }
   | { type: 'toggle-labels'; visible: boolean }
   | { type: 'highlight-region'; geojson: GeoJSON.GeoJSON; label?: string }
+  /**
+   * Load a single frame from a Phase 3pg image-sequence dataset.
+   * `frameQuery` is the verbatim payload from the LLM's
+   * `<<LOAD_FRAME:DATASET_ID:query>>` marker — one of:
+   *   - an ISO 8601 timestamp like `2026-05-16T12:00:00Z`,
+   *   - `index=N` (zero-based, where N is in [0, frame_count)),
+   *   - `latest` / `first` (resolved by the client against the
+   *     dataset's `frame_count`).
+   * `displayName` is the chat-UI-ready button label, derived using
+   * the dataset's `slug` + the resolved frame timestamp / index.
+   * Servers/clients render it consistently per the `/frames`
+   * endpoint convention; clients can also compute it locally.
+   */
+  | {
+      type: 'load-frame'
+      datasetId: string
+      datasetTitle: string
+      frameQuery: string
+      displayName: string
+    }
 
 /**
  * Snapshot of the LLM context used to generate an AI response.

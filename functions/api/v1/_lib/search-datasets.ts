@@ -69,6 +69,21 @@ export interface SearchDatasetsHit {
   peer_id: string
   /** Cosine similarity score from Vectorize. Higher = more similar. */
   score: number
+  /**
+   * Image-sequence indicator (Phase 3pg/C). Present only when the
+   * row was transcoded from a frames upload; carries the count
+   * plus the time origin / period so Orbit's LLM can decide
+   * whether `<<LOAD_FRAME:...>>` makes sense and pick a reasonable
+   * timestamp / index from the conversation. Omitted entirely for
+   * MP4-source rows — older clients ignore the field, and an
+   * LLM that doesn't see it falls back to the regular
+   * `<<LOAD:...>>` marker for whole-sequence playback.
+   */
+  frames?: {
+    count: number
+    startTime?: string
+    period?: string
+  }
 }
 
 export interface SearchDatasetsFilters {
@@ -272,7 +287,7 @@ function toHit(
   localNodeId: string | null,
   metadata: DatasetVectorMetadata | undefined,
 ): SearchDatasetsHit {
-  return {
+  const hit: SearchDatasetsHit = {
     id: row.id,
     title: row.title,
     abstract_snippet: snippet(row.abstract),
@@ -280,6 +295,14 @@ function toHit(
     peer_id: derivePeerId(row.origin_node, localNodeId, metadata),
     score,
   }
+  if (row.frame_count != null) {
+    hit.frames = {
+      count: row.frame_count,
+      ...(row.start_time ? { startTime: row.start_time } : {}),
+      ...(row.period ? { period: row.period } : {}),
+    }
+  }
+  return hit
 }
 
 function extractCategories(decorations: DecorationRows): string[] {

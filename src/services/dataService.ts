@@ -46,6 +46,8 @@ interface WireDataset {
   id: string
   /** Phase 1d/T — bulk-import provenance (e.g. `INTERNAL_SOS_768`). */
   legacyId?: string
+  /** Phase 3pg/C — URL-safe slug used for frame-button display naming. */
+  slug?: string
   title: string
   format: string
   dataLink: string
@@ -96,6 +98,7 @@ function wireToDataset(d: WireDataset): Dataset {
   return {
     id: d.id,
     legacyId: d.legacyId,
+    slug: d.slug,
     title: d.title,
     format: d.format as DatasetFormat,
     dataLink: d.dataLink,

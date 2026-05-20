@@ -63,6 +63,7 @@ import { initVrButton } from './ui/vrButton'
 import { flyToOnGlobe, isVrActive } from './services/vrSession'
 import type { VrDatasetTexture } from './services/vrScene'
 import { overlayOptionsFromDataset } from './services/datasetOverlayOptions'
+import { resolveFrameQuery } from './utils/frames'
 import { bootstrapI18n } from './i18n/bootstrap'
 
 // Phase 5: set a body class so CSS can target mobile-native adaptations
@@ -1726,6 +1727,7 @@ class InteractiveSphere {
     initPlaybackPositioning()
     initChatUI({
       onLoadDataset: (id) => { void this.selectDatasetFromChat(id) },
+      onLoadFrame: (id, frameQuery) => { void this.loadFrameFromChat(id, frameQuery) },
       onFlyTo: (lat, lon, altitude) => {
         void this.renderer?.flyTo(lat, lon, altitude)
         // Also rotate the VR globe if a session is live. Fire-and-
@@ -1767,6 +1769,79 @@ class InteractiveSphere {
   /** Load a dataset selected via the chat panel, updating URL and notifying chat of the change. */
   /** Orbit-driven dataset load. Tags the layer_loaded trigger so we
    * can tell chat-initiated loads apart from browse/url/tour. */
+  /**
+   * Phase 3pg/C — resolve a frame query against the parent
+   * sequence dataset and load the resulting image. Falls back to
+   * loading the parent dataset (HLS) if the row has no frames
+   * envelope, so the user always gets something useful even if
+   * the LLM emitted a load_frame against a non-sequence row.
+   *
+   * The frame is rendered as a one-off image overlay on the
+   * globe — same code path the existing image-dataset loader
+   * uses. The parent sequence is not modified; clicking a
+   * different frame later re-renders against the same dataset
+   * row.
+   */
+  private async loadFrameFromChat(datasetId: string, frameQuery: string): Promise<void> {
+    const dataset = this.appState.datasets.find(d => d.id === datasetId)
+    if (!dataset) {
+      logger.warn('[App] loadFrameFromChat: unknown dataset', datasetId)
+      return
+    }
+    if (!dataset.frames) {
+      // Non-sequence row — chat UI shouldn't have emitted a
+      // load-frame for this, but defend against a stale catalog /
+      // race between manifest refresh and click.
+      logger.warn('[App] loadFrameFromChat: dataset has no frames envelope; falling back to dataset load.')
+      void this.selectDatasetFromChat(datasetId)
+      return
+    }
+    const resolved = resolveFrameQuery(dataset, frameQuery)
+    if (!resolved) {
+      logger.warn('[App] loadFrameFromChat: could not resolve frame query', { datasetId, frameQuery })
+      return
+    }
+    this.announce(`Loading frame: ${resolved.displayName}`)
+    // Build a synthetic single-frame dataset off the parent's
+    // metadata. Format is `image/*` so the loader picks the image
+    // render path (rather than HLS). Title carries the display
+    // name so the info panel reads cleanly.
+    const frameDataset: Dataset = {
+      ...dataset,
+      id: `${dataset.id}#frame=${resolved.index}`,
+      title: `${dataset.title} — ${resolved.displayName}`,
+      format: 'image/png' as Dataset['format'],
+      dataLink: resolved.url,
+      // Drop the parent's time controls; a single frame is a
+      // still image, not a playback target.
+      startTime: undefined,
+      endTime: undefined,
+      period: undefined,
+      frames: undefined,
+    }
+    const primary = this.viewports.getPrimary()
+    if (!primary) {
+      logger.warn('[App] loadFrameFromChat: no primary renderer; cannot render frame')
+      return
+    }
+    // Single frames are still images — keep the playback transport
+    // hidden and the time label off (the parent sequence's playback
+    // UI would be misleading on a one-off image).
+    const loaderCallbacks = {
+      showPlaybackControls: (_show: boolean) => { /* no-op for frame loads */ },
+      showTimeLabel: (_show: boolean) => { /* no-op for frame loads */ },
+    }
+    try {
+      await loadImageDataset(frameDataset, primary, this.appState, this.isMobile, loaderCallbacks)
+      this.appState.currentDataset = frameDataset
+      notifyDatasetChanged(frameDataset)
+      this.announce(`Loaded frame: ${resolved.displayName}`)
+    } catch (err) {
+      logger.error('[App] loadFrameFromChat failed:', err)
+      this.announce('Failed to load frame.')
+    }
+  }
+
   private async selectDatasetFromChat(id: string): Promise<void> {
     const gen = ++this.loadGeneration
     logger.debug('[App] selectDatasetFromChat:', id, 'gen:', gen)

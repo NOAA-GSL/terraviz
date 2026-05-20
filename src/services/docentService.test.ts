@@ -1679,6 +1679,64 @@ describe('validateAndCleanText — Phase 5 markers', () => {
     expect(cleanedText).not.toContain('MARKER')
     expect(cleanedText).not.toContain('REGION')
   })
+
+  describe('<<LOAD_FRAME:...>> markers (3pg/C)', () => {
+    const sequenceDataset = makeDataset({
+      id: 'SEQ_001',
+      title: 'Daily SST Anomaly',
+      slug: 'ssta',
+      startTime: '2026-05-16T00:00:00.000Z',
+      period: 'PT1H',
+      frames: {
+        count: 24,
+        urlTemplate: 'https://assets.test/uploads/SEQ_001/01HYUP/frames/{index}.png',
+      },
+    })
+
+    it('extracts a load-frame globe action for a sequence dataset with ISO query', () => {
+      const text = '<<LOAD_FRAME:SEQ_001:2026-05-16T03:00:00Z>>'
+      const { globeActions, cleanedText } = validateAndCleanText(text, [sequenceDataset])
+      const frameAction = globeActions.find(g => g.type === 'load-frame')
+      expect(frameAction).toBeDefined()
+      expect(frameAction).toMatchObject({
+        type: 'load-frame',
+        datasetId: 'SEQ_001',
+        datasetTitle: 'Daily SST Anomaly',
+        frameQuery: '2026-05-16T03:00:00Z',
+        displayName: 'ssta_20260516T030000Z.png',
+      })
+      expect(cleanedText).not.toContain('LOAD_FRAME')
+    })
+
+    it('extracts load-frame for `latest` / `index=N` / bare integer', () => {
+      const text =
+        '<<LOAD_FRAME:SEQ_001:latest>>\n<<LOAD_FRAME:SEQ_001:index=3>>\n<<LOAD_FRAME:SEQ_001:7>>'
+      const { globeActions } = validateAndCleanText(text, [sequenceDataset])
+      const frames = globeActions.filter(g => g.type === 'load-frame')
+      expect(frames).toHaveLength(3)
+    })
+
+    it('silently drops markers for unknown / non-sequence datasets', () => {
+      const text =
+        '<<LOAD_FRAME:UNKNOWN:latest>>\n<<LOAD_FRAME:TEST_001:latest>>'
+      const { globeActions, cleanedText } = validateAndCleanText(text, datasets)
+      expect(globeActions.filter(g => g.type === 'load-frame')).toHaveLength(0)
+      // Strip step removes the literal markers from display anyway.
+      expect(cleanedText).not.toContain('LOAD_FRAME')
+    })
+
+    it('drops the marker but leaves valid <<LOAD:ID>> markers intact when mixed', () => {
+      const text = 'Try this: <<LOAD:TEST_001>>\nOr just this frame: <<LOAD_FRAME:SEQ_001:first>>'
+      const { validIds, globeActions, cleanedText } = validateAndCleanText(text, [
+        ...datasets,
+        sequenceDataset,
+      ])
+      expect(validIds.has('TEST_001')).toBe(true)
+      expect(globeActions.some(g => g.type === 'load-frame')).toBe(true)
+      expect(cleanedText).toContain('<<LOAD:TEST_001>>')
+      expect(cleanedText).not.toContain('LOAD_FRAME')
+    })
+  })
 })
 
 describe('processMessage — Phase 5 tool calls', () => {
