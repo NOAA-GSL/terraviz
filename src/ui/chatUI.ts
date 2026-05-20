@@ -1027,8 +1027,16 @@ function renderChatText(
   text: string,
   actions?: ChatAction[],
 ): { html: string; inlinedIds: Set<string> } {
-  // Strip raw markers that appear during streaming (all action types)
-  let clean = text.replace(/<?<LOAD:[^>]+>>?\n?/g, '')
+  // Strip raw markers that appear during streaming (all action types).
+  // LOAD_FRAME must come before LOAD (the LOAD regex requires `:`
+  // right after `LOAD` so it wouldn't match `<<LOAD_FRAME:...>>` —
+  // verified — but stripping LOAD_FRAME first keeps the order
+  // intent-obvious for future readers). Phase 3pg-review/C —
+  // Copilot discussion_r3277396454: the LOAD_FRAME marker was
+  // visibly flickering in the transcript during stream because
+  // the renderer hadn't been taught to strip it yet.
+  let clean = text.replace(/<?<LOAD_FRAME:[^>]+>>?\n?/g, '')
+  clean = clean.replace(/<?<LOAD:[^>]+>>?\n?/g, '')
   clean = clean.replace(/<?<FLY:[^>]+>>?\n?/g, '')
   clean = clean.replace(/<?<TIME:[^>]+>>?\n?/g, '')
   clean = clean.replace(/<?<BOUNDS:[^>]+>>?\n?/g, '')

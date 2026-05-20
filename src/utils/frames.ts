@@ -51,6 +51,13 @@ export function resolveFrameQuery(
 
 function parseFrameQueryToIndex(query: string, dataset: Dataset): number | null {
   const count = dataset.frames!.count
+  // A zero-or-negative count means the row is corrupt or mid-
+  // ingest. `latest`/`first` against count=0 would otherwise
+  // return -1 and emit a key like `frames/-0001.png` that R2
+  // 404s. Fail closed so the chat parser drops the marker
+  // rather than emitting a broken button. Phase 3pg-review/C —
+  // Copilot discussion_r3277396427.
+  if (!Number.isInteger(count) || count <= 0) return null
   const lower = query.toLowerCase()
   if (lower === 'latest' || lower === 'last') return count - 1
   if (lower === 'first') return 0
@@ -79,6 +86,11 @@ function parseFrameQueryToIndex(query: string, dataset: Dataset): number | null 
 
 function clampToFrameRange(n: number, count: number): number | null {
   if (!Number.isInteger(n)) return null
+  // Defence in depth: parseFrameQueryToIndex already refuses to
+  // call us with count <= 0, but the helper might be reused
+  // someday — return null rather than producing an invalid
+  // index.
+  if (count <= 0) return null
   if (n < 0) return 0
   if (n >= count) return count - 1
   return n

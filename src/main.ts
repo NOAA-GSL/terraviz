@@ -130,6 +130,31 @@ function triggerToTourSource(
  * don't recognise falls through to a generic message so a new code
  * landing server-side doesn't surface as an empty banner.
  */
+/**
+ * Phase 3pg/C — derive an image MIME type from a frame URL's
+ * extension. The server allows `png` / `jpg` / `jpeg` / `webp`
+ * frame sequences (per `buildFrameKey`'s `[a-z0-9]+` extension
+ * rule), so the synthetic single-frame dataset built by
+ * `loadFrameFromChat` needs a `format` that matches the actual
+ * bytes the URL points at. Falls back to `image/png` for
+ * unknown extensions — same shape the per-frame HEAD handler
+ * uses for the `Content-Type` header.
+ */
+function mimeForFrameUrl(url: string): string {
+  const ext = /\.([a-z0-9]+)(?:\?|#|$)/i.exec(url)?.[1]?.toLowerCase()
+  switch (ext) {
+    case 'png':
+      return 'image/png'
+    case 'jpg':
+    case 'jpeg':
+      return 'image/jpeg'
+    case 'webp':
+      return 'image/webp'
+    default:
+      return 'image/png'
+  }
+}
+
 function previewErrorMessage(code: string): string {
   switch (code) {
     case 'invalid_token':
@@ -1806,11 +1831,19 @@ class InteractiveSphere {
     // metadata. Format is `image/*` so the loader picks the image
     // render path (rather than HLS). Title carries the display
     // name so the info panel reads cleanly.
+    //
+    // Derive the format from the resolved URL's extension rather
+    // than hard-coding `image/png` — the server allows `jpg` /
+    // `webp` sequences too and bakes the extension into
+    // `frames.urlTemplate`. A hard-coded PNG would mislead any
+    // downstream logic that branches on `dataset.format`. Phase
+    // 3pg-review/C — Copilot discussion_r3277396472.
+    const format = mimeForFrameUrl(resolved.url)
     const frameDataset: Dataset = {
       ...dataset,
       id: `${dataset.id}#frame=${resolved.index}`,
       title: `${dataset.title} — ${resolved.displayName}`,
-      format: 'image/png' as Dataset['format'],
+      format: format as Dataset['format'],
       dataLink: resolved.url,
       // Drop the parent's time controls; a single frame is a
       // still image, not a playback target.

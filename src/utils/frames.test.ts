@@ -92,6 +92,28 @@ describe('resolveFrameQuery (3pg/C)', () => {
     expect(resolveFrameQuery(BASE_DATASET, 'next thursday')).toBeNull()
     expect(resolveFrameQuery(BASE_DATASET, 'index=banana')).toBeNull()
   })
+
+  it('fails closed when frames.count is 0 (corrupt or mid-ingest row)', () => {
+    // Phase 3pg-review/C — Copilot discussion_r3277396427. The
+    // pre-fix path would resolve `latest` to `-1` and emit a
+    // padded `-0001.png` key that R2 404s.
+    const corrupt: Dataset = {
+      ...BASE_DATASET,
+      frames: { ...BASE_DATASET.frames!, count: 0 },
+    }
+    expect(resolveFrameQuery(corrupt, 'latest')).toBeNull()
+    expect(resolveFrameQuery(corrupt, 'first')).toBeNull()
+    expect(resolveFrameQuery(corrupt, 'index=0')).toBeNull()
+    expect(resolveFrameQuery(corrupt, '0')).toBeNull()
+  })
+
+  it('fails closed for negative count', () => {
+    const negative: Dataset = {
+      ...BASE_DATASET,
+      frames: { ...BASE_DATASET.frames!, count: -5 },
+    }
+    expect(resolveFrameQuery(negative, 'latest')).toBeNull()
+  })
 })
 
 describe('parseIsoDurationMs (3pg/C)', () => {
