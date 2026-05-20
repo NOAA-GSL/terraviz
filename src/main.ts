@@ -1857,6 +1857,17 @@ class InteractiveSphere {
       logger.warn('[App] loadFrameFromChat: no primary renderer; cannot render frame')
       return
     }
+    // Match the normal `loadDataset` teardown so the globe's
+    // day/night / city-lights / atmosphere / cloud overlay are
+    // hidden before the frame texture lands — otherwise the
+    // single frame renders with those effects layered on top of
+    // it, which doesn't match how any other dataset displays. The
+    // primary loadDataset call orders these as: cloud overlay →
+    // night lights → sun lighting; mirror that order so a future
+    // shared helper can replace both call sites uniformly.
+    primary.removeCloudOverlay?.()
+    primary.removeNightLights?.()
+    primary.disableSunLighting?.()
     // Single frames are still images — keep the playback transport
     // hidden and the time label off (the parent sequence's playback
     // UI would be misleading on a one-off image).
