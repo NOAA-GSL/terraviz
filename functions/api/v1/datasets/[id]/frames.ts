@@ -43,7 +43,7 @@
 
 import type { CatalogEnv } from '../../_lib/env'
 import { getPublicDataset } from '../../_lib/catalog-store'
-import { buildFramesUrlTemplate } from '../../_lib/r2-public-url'
+import { buildFramesUrlTemplate, isR2PublicConfigured } from '../../_lib/r2-public-url'
 import {
   findClosestFrameIndex,
   findFrameWindow,
@@ -195,6 +195,23 @@ export const onRequestGet: PagesFunction<CatalogEnv, 'id'> = async context => {
   }
   const endIndex = Math.min(windowTo, startIndex + limitOrErr - 1)
 
+  // Two distinct failure modes for `buildFramesUrlTemplate`:
+  //   - deployment misconfig (no `R2_PUBLIC_BASE`/`MOCK_R2`) — a
+  //     503 the operator needs to fix.
+  //   - bad row data (malformed `frame_source_filenames_ref` or
+  //     extension) — a 500 the publisher's row landed in a state
+  //     `clearTranscoding` shouldn't produce.
+  // Pre-checking the env lets the post-fact `null` surface as the
+  // correct row-data error rather than misleading the operator
+  // into chasing an env config that's already fine. Phase 3pg-
+  // review/B — Copilot discussion_r3277221658.
+  if (!isR2PublicConfigured(context.env)) {
+    return jsonError(
+      503,
+      'r2_unconfigured',
+      'R2_PUBLIC_BASE / MOCK_R2 must be configured for the frame surface.',
+    )
+  }
   const urlTemplate = buildFramesUrlTemplate(
     context.env,
     row.frame_source_filenames_ref,
@@ -202,9 +219,10 @@ export const onRequestGet: PagesFunction<CatalogEnv, 'id'> = async context => {
   )
   if (!urlTemplate) {
     return jsonError(
-      503,
-      'r2_unconfigured',
-      'R2_PUBLIC_BASE / MOCK_R2 must be configured for the frame surface.',
+      500,
+      'invalid_frame_metadata',
+      `Dataset ${id}'s frame_source_filenames_ref or frame_extension is malformed; ` +
+        'frame URLs cannot be built. An operator should inspect the row.',
     )
   }
 

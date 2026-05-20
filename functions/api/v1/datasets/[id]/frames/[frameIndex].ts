@@ -22,7 +22,7 @@
 
 import type { CatalogEnv } from '../../../_lib/env'
 import { getPublicDataset } from '../../../_lib/catalog-store'
-import { buildFramesUrlTemplate } from '../../../_lib/r2-public-url'
+import { buildFramesUrlTemplate, isR2PublicConfigured } from '../../../_lib/r2-public-url'
 import { loadFrameManifest } from '../../../_lib/frames-manifest'
 
 const CONTENT_TYPE = 'application/json; charset=utf-8'
@@ -52,17 +52,21 @@ async function resolveFrame(
   if (!env.CATALOG_R2) {
     return jsonError(503, 'binding_missing', 'CATALOG_R2 binding is not configured.')
   }
-  // Accept both `47` and `00047`. The Number() coercion rejects
-  // anything non-numeric, and the integer + non-negative guard
-  // catches the remaining shapes.
-  const idx = Number(frameIndexRaw)
-  if (!Number.isInteger(idx) || idx < 0) {
+  // Accept canonical base-10 indexes only: `47`, `00047`. The
+  // route contract says "non-negative integer", and a bare digit
+  // regex enforces that strictly — `Number(...)` would silently
+  // accept `3e2`, `0x10`, `3.0`, `1_000`, leading `+`, etc., any
+  // of which lands at a key that doesn't exist in R2 and 404s
+  // with a confusing message. Phase 3pg-review/B — Copilot
+  // discussion_r3277221610.
+  if (!/^\d+$/.test(frameIndexRaw)) {
     return jsonError(
       400,
       'invalid_frame_index',
-      'frameIndex must be a non-negative integer.',
+      'frameIndex must be a non-negative base-10 integer.',
     )
   }
+  const idx = parseInt(frameIndexRaw, 10)
   const row = await getPublicDataset(env.CATALOG_DB, id)
   if (!row) return jsonError(404, 'not_found', `Dataset ${id} not found.`)
   if (
@@ -83,6 +87,17 @@ async function resolveFrame(
       `Dataset ${id} has frames 0..${row.frame_count - 1}; got ${idx}.`,
     )
   }
+  // Pre-check the env so the post-fact `null` from
+  // `buildFramesUrlTemplate` surfaces as the right error code
+  // (row data vs deployment misconfig). Phase 3pg-review/B —
+  // Copilot discussion_r3277221688.
+  if (!isR2PublicConfigured(env)) {
+    return jsonError(
+      503,
+      'r2_unconfigured',
+      'R2_PUBLIC_BASE / MOCK_R2 must be configured for the frame surface.',
+    )
+  }
   const template = buildFramesUrlTemplate(
     env,
     row.frame_source_filenames_ref,
@@ -90,9 +105,10 @@ async function resolveFrame(
   )
   if (!template) {
     return jsonError(
-      503,
-      'r2_unconfigured',
-      'R2_PUBLIC_BASE / MOCK_R2 must be configured for the frame surface.',
+      500,
+      'invalid_frame_metadata',
+      `Dataset ${id}'s frame_source_filenames_ref or frame_extension is malformed; ` +
+        'frame URLs cannot be built. An operator should inspect the row.',
     )
   }
   const manifestKey = row.frame_source_filenames_ref.startsWith('r2:')

@@ -295,7 +295,19 @@ function toHit(
     peer_id: derivePeerId(row.origin_node, localNodeId, metadata),
     score,
   }
-  if (row.frame_count != null) {
+  // Frame surface predicate matches the wire serializer
+  // (`dataset-serializer.ts`) and the `/frames` endpoints: all
+  // three columns must be set in lockstep, since `clearTranscoding`
+  // writes them atomically. Surfacing `hit.frames` on a partially-
+  // null row would advertise a frame surface that
+  // `WireDataset.frames` / `/frames` would then refuse — confusing
+  // for the LLM and any other consumer. Phase 3pg-review/B —
+  // Copilot discussion_r3277221713.
+  if (
+    row.frame_count != null &&
+    row.frame_extension != null &&
+    row.frame_source_filenames_ref != null
+  ) {
     hit.frames = {
       count: row.frame_count,
       ...(row.start_time ? { startTime: row.start_time } : {}),

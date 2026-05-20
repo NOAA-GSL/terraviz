@@ -146,6 +146,27 @@ export function resolveAssetRefStrict(
 }
 
 /**
+ * Has the operator bound an R2 public-read origin?
+ *
+ * Returns true when either `R2_PUBLIC_BASE` is set (production
+ * custom domain) or `MOCK_R2=true` is set (local dev). The
+ * `R2_S3_ENDPOINT` fallback that `resolveR2PublicUrl` honours
+ * isn't counted — assets surfaced through the strict variants
+ * (image / HLS / frames) won't resolve to readable bytes through
+ * the S3 endpoint on a typical non-public-bucket production
+ * setup, so it doesn't satisfy "configured" for those surfaces.
+ *
+ * Phase 3pg-review/B — Copilot discussion_r3277221658 /
+ * discussion_r3277221688. Lets handlers distinguish "deployment
+ * misconfig" (return `r2_unconfigured`) from "row data is bad"
+ * (return `invalid_frame_metadata`) when `buildFramesUrlTemplate`
+ * returns null.
+ */
+export function isR2PublicConfigured(env: CatalogEnv): boolean {
+  return !!(env.R2_PUBLIC_BASE?.trim() || env.MOCK_R2 === 'true')
+}
+
+/**
  * Frame-source-filenames-ref shape produced by `clearTranscoding`:
  * `r2:uploads/{datasetId}/{uploadId}/source_filenames.json`. Phase
  * 3pg/A extracts the `{uploadId}` from this to build per-frame URL

@@ -320,6 +320,29 @@ describe('GET /api/v1/datasets/{id}/frames (3pg/B)', () => {
     expect((await readJson<{ error: string }>(res)).error).toBe('r2_unconfigured')
   })
 
+  it('returns 500 invalid_frame_metadata when env is OK but the row is malformed', async () => {
+    // Same as Copilot pass-2: split the failure modes so the
+    // operator sees the actual cause. Phase 3pg-review/B —
+    // discussion_r3277221658. Force a malformed
+    // `frame_source_filenames_ref` so `buildFramesUrlTemplate`
+    // returns null even though R2_PUBLIC_BASE is set.
+    const sqlite = seedFramesRow()
+    sqlite
+      .prepare(
+        `UPDATE datasets SET frame_source_filenames_ref = 'r2:bogus/not/the/canonical/shape.json' WHERE id = ?`,
+      )
+      .run(DATASET_ID)
+    const env = {
+      CATALOG_DB: asD1(sqlite),
+      CATALOG_KV: makeKV(),
+      CATALOG_R2: makeBucket(buildManifest(5)),
+      R2_PUBLIC_BASE: PUBLIC_BASE,
+    }
+    const res = await onRequestGet(makeCtx<'id'>({ env, params: { id: DATASET_ID } }))
+    expect(res.status).toBe(500)
+    expect((await readJson<{ error: string }>(res)).error).toBe('invalid_frame_metadata')
+  })
+
   it('returns 503 when the manifest blob is missing', async () => {
     const sqlite = seedFramesRow()
     const env = {

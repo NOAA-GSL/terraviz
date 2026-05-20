@@ -110,6 +110,24 @@ describe('GET /api/v1/datasets/{id}/frames/{frameIndex} (3pg/B)', () => {
     expect(res.status).toBe(400)
   })
 
+  it('rejects non-canonical numeric forms (3e2, 0x10, 3.0, leading +)', async () => {
+    // The route contract says "non-negative base-10 integer".
+    // `Number()` would silently accept these forms; the digit-
+    // only regex rejects them with the same error code as
+    // alpha input. Phase 3pg-review/B — Copilot
+    // discussion_r3277221610.
+    const env = envWithFrames(5)
+    for (const variant of ['3e2', '0x10', '3.0', '+3', '-1', '1_000', ' 3 ']) {
+      const res = await onRequestGet(
+        makeCtx<'id' | 'frameIndex'>({
+          env,
+          params: { id: DATASET_ID, frameIndex: variant },
+        }),
+      )
+      expect(res.status, `variant ${JSON.stringify(variant)}`).toBe(400)
+    }
+  })
+
   it('HEAD returns 200 with digest + content-type but no body', async () => {
     const env = envWithFrames(5)
     const res = await onRequestHead(

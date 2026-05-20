@@ -484,3 +484,89 @@ describe('searchDatasets — limit', () => {
     expect(result.datasets.length).toBeLessThanOrEqual(VECTORIZE_MAX_TOP_K)
   })
 })
+
+describe('searchDatasets — frames indicator (3pg-review/B)', () => {
+  // Predicate must require all three frame columns in lockstep —
+  // matches the serializer + endpoint policy so the LLM doesn't
+  // see a `frames` hint that would then fail on /frames or get
+  // omitted from `WireDataset.frames`. Copilot
+  // discussion_r3277221713.
+  function seedFramedRow(updates: {
+    frame_count: number | null
+    frame_extension: string | null
+    frame_source_filenames_ref: string | null
+  }): Database.Database {
+    const db = seed([
+      {
+        id: 'DS_SEQ',
+        title: 'Daily SST Anomaly',
+        abstract: 'Hourly SST frames.',
+        categories: ['Ocean'],
+        keywords: ['ssta'],
+      },
+    ])
+    db.prepare(
+      `UPDATE datasets
+          SET frame_count = ?, frame_extension = ?,
+              frame_source_filenames_ref = ?,
+              start_time = '2026-05-16T00:00:00.000Z',
+              period = 'PT1H'
+        WHERE id = 'DS_SEQ'`,
+    ).run(updates.frame_count, updates.frame_extension, updates.frame_source_filenames_ref)
+    return db
+  }
+
+  it('surfaces hit.frames when all three columns are set', async () => {
+    const db = seedFramedRow({
+      frame_count: 24,
+      frame_extension: 'png',
+      frame_source_filenames_ref:
+        'r2:uploads/01HXAAAAAAAAAAAAAAAAAAAAAA/01HYAAAAAAAAAAAAAAAAAAAAAA/source_filenames.json',
+    })
+    const env = freshEnv(db)
+    await indexAll(env, ['DS_SEQ'])
+    const result = await searchDatasets(env, { query: 'ssta' })
+    expect(result.datasets[0].frames).toEqual({
+      count: 24,
+      startTime: '2026-05-16T00:00:00.000Z',
+      period: 'PT1H',
+    })
+  })
+
+  it('omits hit.frames when frame_extension is null (partial-null row)', async () => {
+    const db = seedFramedRow({
+      frame_count: 24,
+      frame_extension: null,
+      frame_source_filenames_ref:
+        'r2:uploads/01HXAAAAAAAAAAAAAAAAAAAAAA/01HYAAAAAAAAAAAAAAAAAAAAAA/source_filenames.json',
+    })
+    const env = freshEnv(db)
+    await indexAll(env, ['DS_SEQ'])
+    const result = await searchDatasets(env, { query: 'ssta' })
+    expect(result.datasets[0].frames).toBeUndefined()
+  })
+
+  it('omits hit.frames when frame_source_filenames_ref is null', async () => {
+    const db = seedFramedRow({
+      frame_count: 24,
+      frame_extension: 'png',
+      frame_source_filenames_ref: null,
+    })
+    const env = freshEnv(db)
+    await indexAll(env, ['DS_SEQ'])
+    const result = await searchDatasets(env, { query: 'ssta' })
+    expect(result.datasets[0].frames).toBeUndefined()
+  })
+
+  it('omits hit.frames for non-frames (MP4-source) rows', async () => {
+    const db = seedFramedRow({
+      frame_count: null,
+      frame_extension: null,
+      frame_source_filenames_ref: null,
+    })
+    const env = freshEnv(db)
+    await indexAll(env, ['DS_SEQ'])
+    const result = await searchDatasets(env, { query: 'ssta' })
+    expect(result.datasets[0].frames).toBeUndefined()
+  })
+})
