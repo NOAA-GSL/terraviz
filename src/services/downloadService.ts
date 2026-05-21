@@ -7,6 +7,7 @@
 import type { Dataset } from '../types'
 import { dataService } from './dataService'
 import { apiFetch, isManifestUrl } from './catalogSource'
+import { proxyCaptionUrl } from '../utils/captionProxy'
 import { logger } from '../utils/logger'
 
 const IS_TAURI = !!(window as any).__TAURI__
@@ -349,10 +350,12 @@ export async function downloadDataset(dataset: Dataset): Promise<void> {
     logger.warn('[Download] Skipping non-HTTP legend ref:', dataset.legendLink)
   }
   if (isHttpUrl(dataset.closedCaptionLink)) {
-    // Caption URLs from sos.noaa.gov need to go through the proxy
-    const captionUrl = dataset.closedCaptionLink.includes('sos.noaa.gov')
-      ? `https://video-proxy.zyra-project.org/captions?url=${encodeURIComponent(dataset.closedCaptionLink)}`
-      : dataset.closedCaptionLink
+    // Caption URLs from sos.noaa.gov need to go through the proxy.
+    // Host-matched (not substring) so a URL like
+    //   https://attacker.example/sos.noaa.gov/foo.srt
+    // isn't accidentally routed through the proxy. See
+    // `src/utils/captionProxy.ts`.
+    const captionUrl = proxyCaptionUrl(dataset.closedCaptionLink)
     assets.push({ url: captionUrl, filename: 'captions.srt' })
     hasCaption = true
   } else if (dataset.closedCaptionLink) {

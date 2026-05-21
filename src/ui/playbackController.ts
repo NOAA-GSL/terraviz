@@ -7,6 +7,7 @@
 import type { HLSService } from '../services/hlsService'
 import type { AppState, Dataset } from '../types'
 import { logger } from '../utils/logger'
+import { proxyCaptionUrl } from '../utils/captionProxy'
 import { t } from '../i18n'
 
 // --- Playback constants ---
@@ -238,9 +239,7 @@ export async function loadCaptions(
   state: PlaybackState,
 ): Promise<void> {
   try {
-    const fetchUrl = captionUrl.includes('sos.noaa.gov')
-      ? `https://video-proxy.zyra-project.org/captions?url=${encodeURIComponent(captionUrl)}`
-      : captionUrl
+    const fetchUrl = proxyCaptionUrl(captionUrl)
 
     const response = await fetch(fetchUrl)
     if (!response.ok) throw new Error(`HTTP ${response.status}`)
