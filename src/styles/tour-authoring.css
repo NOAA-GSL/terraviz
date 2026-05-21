@@ -75,6 +75,28 @@
     color: #ff8a8a;
 }
 
+/* Phase 3pt/G — publish button in the dock header. */
+.tour-authoring-dock-publish {
+    background: rgba(121, 201, 138, 0.18);
+    border: 1px solid rgba(121, 201, 138, 0.4);
+    color: #d6f1dd;
+    border-radius: 0.35rem;
+    padding: 0.18rem 0.55rem;
+    font-size: 0.7rem;
+    cursor: pointer;
+    margin-inline-end: 0.4rem;
+}
+
+.tour-authoring-dock-publish:hover,
+.tour-authoring-dock-publish:focus-visible {
+    background: rgba(121, 201, 138, 0.32);
+}
+
+.tour-authoring-dock-publish:disabled {
+    cursor: progress;
+    opacity: 0.7;
+}
+
 .tour-authoring-dock-close:hover,
 .tour-authoring-dock-close:focus-visible {
     color: #fff;

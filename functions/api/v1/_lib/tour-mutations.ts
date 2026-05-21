@@ -239,6 +239,147 @@ export async function readTourDraftJson(
   }
 }
 
+/**
+ * Phase 3pt/G — list tours visible to the caller. Honours the
+ * same role gating `getTourForPublisher` uses (staff / admin /
+ * service see every row; community publishers see only their
+ * own). Cursor pagination via `id < ?` since `tours.id` is a
+ * ULID — lexicographic order matches creation order, so a
+ * fresh tour landing at the top doesn't shift the cursor's
+ * position on the rest of the list.
+ */
+export interface ListToursResult {
+  tours: TourRow[]
+  next_cursor: string | null
+}
+
+export async function listToursForPublisher(
+  env: CatalogEnv,
+  publisher: PublisherRow,
+  options: { limit: number; cursor?: string },
+): Promise<ListToursResult> {
+  const db = env.CATALOG_DB!
+  // Fetch limit+1 so we can compute `next_cursor` without a
+  // separate COUNT — the extra row is what the next page's
+  // cursor will be.
+  const fetchLimit = options.limit + 1
+  const cursorBound = options.cursor && options.cursor.length > 0 ? options.cursor : null
+  let rows: TourRow[]
+  if (isPrivileged(publisher)) {
+    rows = cursorBound
+      ? ((await db
+          .prepare('SELECT * FROM tours WHERE id < ? ORDER BY id DESC LIMIT ?')
+          .bind(cursorBound, fetchLimit)
+          .all<TourRow>()).results ?? [])
+      : ((await db
+          .prepare('SELECT * FROM tours ORDER BY id DESC LIMIT ?')
+          .bind(fetchLimit)
+          .all<TourRow>()).results ?? [])
+  } else {
+    rows = cursorBound
+      ? ((await db
+          .prepare(
+            'SELECT * FROM tours WHERE publisher_id = ? AND id < ? ORDER BY id DESC LIMIT ?',
+          )
+          .bind(publisher.id, cursorBound, fetchLimit)
+          .all<TourRow>()).results ?? [])
+      : ((await db
+          .prepare(
+            'SELECT * FROM tours WHERE publisher_id = ? ORDER BY id DESC LIMIT ?',
+          )
+          .bind(publisher.id, fetchLimit)
+          .all<TourRow>()).results ?? [])
+  }
+  let next_cursor: string | null = null
+  if (rows.length > options.limit) {
+    // Slice off the sentinel row; its id becomes the next
+    // page's cursor.
+    next_cursor = rows[options.limit - 1]?.id ?? null
+    rows = rows.slice(0, options.limit)
+  }
+  return { tours: rows, next_cursor }
+}
+
+/**
+ * Phase 3pt/G — publish a tour. Copies the current draft blob
+ * to an immutable `tours/{id}/published/{publish_id}.json` key,
+ * flips the row's `tour_json_ref` to that path, and stamps
+ * `published_at`. The draft blob stays put — the publisher can
+ * continue editing the draft after publishing, and a future
+ * publish creates a new immutable snapshot.
+ *
+ * The R2 copy uses a fresh ULID for the publish-id segment so
+ * each publish has a stable URL even after multiple republish
+ * cycles. Old published bundles aren't deleted — federation
+ * subscribers may still be holding the prior `tour_json_ref`.
+ */
+export async function publishTour(
+  env: CatalogEnv,
+  publisher: PublisherRow,
+  id: string,
+): Promise<
+  | { ok: true; tour: TourRow; publishId: string }
+  | { ok: false; status: number; error: string; message: string }
+> {
+  const row = await getTourForPublisher(env.CATALOG_DB!, publisher, id)
+  if (!row) {
+    return { ok: false, status: 404, error: 'not_found', message: `Tour ${id} not found.` }
+  }
+  if (!env.CATALOG_R2) {
+    return {
+      ok: false,
+      status: 503,
+      error: 'binding_missing',
+      message: 'CATALOG_R2 binding is not configured.',
+    }
+  }
+  // Read the current draft. A missing blob is a server-side
+  // data-consistency problem (clearTranscoding analogue —
+  // createDraftTour writes the seed blob; only a hand-delete
+  // can produce this state). Refuse to publish rather than
+  // pointing the row at a nonexistent ref.
+  const draft = await env.CATALOG_R2.get(tourDraftR2Key(id))
+  if (!draft) {
+    return {
+      ok: false,
+      status: 503,
+      error: 'draft_missing',
+      message: `Tour ${id}'s draft.json is not in R2; refusing to publish.`,
+    }
+  }
+  const text = await draft.text()
+  // Validate the draft is JSON before the copy — a corrupt
+  // draft would otherwise be promoted to an immutable
+  // published blob.
+  try {
+    JSON.parse(text)
+  } catch {
+    return {
+      ok: false,
+      status: 500,
+      error: 'invalid_draft_blob',
+      message: `Tour ${id}'s draft.json is not valid JSON; refusing to publish.`,
+    }
+  }
+  const publishId = newUlid()
+  const publishedKey = `tours/${id}/published/${publishId}.json`
+  await env.CATALOG_R2.put(publishedKey, text, {
+    httpMetadata: { contentType: 'application/json; charset=utf-8' },
+  })
+  const now = new Date().toISOString()
+  await env.CATALOG_DB!
+    .prepare(
+      'UPDATE tours SET tour_json_ref = ?, published_at = ?, updated_at = ? WHERE id = ?',
+    )
+    .bind(`r2:${publishedKey}`, now, now, id)
+    .run()
+  const updated = await env.CATALOG_DB!
+    .prepare('SELECT * FROM tours WHERE id = ?')
+    .bind(id)
+    .first<TourRow>()
+  return { ok: true, tour: updated!, publishId }
+}
+
 export async function getTourForPublisher(
   db: D1Database,
   publisher: PublisherRow,

@@ -36,7 +36,7 @@ import {
   removeTaskAt,
   updateTaskAt,
 } from './state'
-import { fetchTourJson } from './api'
+import { fetchTourJson, publishTour } from './api'
 import { createAutosaveManager, type AutosaveStatus } from './autosave'
 
 /**
@@ -90,6 +90,12 @@ export function mountTourAuthoringDock(
   // Phase 3pt/E — autosave status surfaced in the dock header.
   let autosaveStatus: AutosaveStatus = 'idle'
   let autosaveError = ''
+  // Phase 3pt/G — publish lifecycle. `idle` → user can click;
+  // `publishing` → server round-trip in flight; `published` →
+  // success badge displayed briefly. `error` carries the
+  // server's message in the title tooltip.
+  let publishStatus: 'idle' | 'publishing' | 'published' | 'error' = 'idle'
+  let publishError = ''
   // Phase 3pt-review/A — per-mount input ids so duplicate-id
   // label associations can't happen if a second dock ever
   // coexists.
@@ -122,6 +128,48 @@ export function mountTourAuthoringDock(
 
   function requestAutosave(): void {
     autosave.requestSave({ tourTasks: state.tasks })
+  }
+
+  /**
+   * Phase 3pt/G — publish the current draft. Flushes any
+   * pending autosave first so the published snapshot matches
+   * what the publisher just captured (otherwise a fresh
+   * capture could publish with stale R2 content). Surfaces
+   * server-side errors via the publishStatus badge.
+   */
+  async function runPublish(): Promise<void> {
+    // Need a real id; can't publish a `new` sentinel.
+    if (autosave.getTourId() === 'new') {
+      // Trigger a flush which mints the draft + saves the
+      // current state. If the publisher just clicked Publish
+      // before any capture, the empty `{tourTasks: []}` lands
+      // first; publishing an empty tour is allowed (the row
+      // exists, the file is well-formed).
+      await autosave.flush()
+    } else {
+      await autosave.flush()
+    }
+    const id = autosave.getTourId()
+    if (id === 'new') {
+      // Flush didn't promote — autosave failed; surface that
+      // instead of a misleading publish error.
+      publishStatus = 'error'
+      publishError = autosaveError || 'Could not create draft before publishing.'
+      render()
+      return
+    }
+    publishStatus = 'publishing'
+    publishError = ''
+    render()
+    const result = await publishTour(id)
+    if ('error' in result) {
+      publishStatus = 'error'
+      publishError = result.error
+    } else {
+      publishStatus = 'published'
+      publishError = ''
+    }
+    render()
   }
 
   // Phase 3pt/E — re-opening an existing tour. Fetch the
@@ -157,6 +205,10 @@ export function mountTourAuthoringDock(
               role="status"
               aria-live="polite"
               title="${escapeAttr(autosaveError || autosaveStatusLabel(autosaveStatus))}">${escapeHtml(autosaveStatusLabel(autosaveStatus))}</span>
+        <button type="button" class="tour-authoring-dock-publish"
+                data-action="publish"
+                ${publishStatus === 'publishing' ? 'disabled' : ''}
+                aria-label="${escapeAttr(t('tour.dock.publish.aria'))}">${escapeHtml(publishButtonLabel(publishStatus))}</button>
         <button type="button" class="tour-authoring-dock-close"
                 aria-label="${escapeAttr(t('tour.dock.discard.aria'))}">×</button>
       </div>
@@ -297,6 +349,11 @@ export function mountTourAuthoringDock(
     root.querySelector('.tour-authoring-dock-close')?.addEventListener('click', () => {
       callbacks.onDiscard()
     })
+    root
+      .querySelector<HTMLButtonElement>('[data-action="publish"]')
+      ?.addEventListener('click', () => {
+        void runPublish()
+      })
     root
       .querySelector<HTMLButtonElement>('[data-action="capture-camera"]')
       ?.addEventListener('click', () => pushCaptured(captureCameraStep(callbacks)))
@@ -498,10 +555,7 @@ export function mountTourAuthoringDock(
   }
 }
 
-/** Phase 3pt/E — render the autosave status badge text. The
- *  badge has its own CSS class per status so a colour change
- *  signals state without the user having to read the label.
- *  Error tooltip carries the server's message verbatim. */
+/** Phase 3pt/E — render the autosave status badge text. */
 function autosaveStatusLabel(status: AutosaveStatus): string {
   switch (status) {
     case 'saving':
@@ -512,6 +566,22 @@ function autosaveStatusLabel(status: AutosaveStatus): string {
       return t('tour.dock.autosave.error')
     case 'idle':
       return t('tour.dock.autosave.idle')
+  }
+}
+
+/** Phase 3pt/G — render the publish-button label per status. */
+function publishButtonLabel(
+  status: 'idle' | 'publishing' | 'published' | 'error',
+): string {
+  switch (status) {
+    case 'publishing':
+      return t('tour.dock.publish.publishing')
+    case 'published':
+      return t('tour.dock.publish.published')
+    case 'error':
+      return t('tour.dock.publish.error')
+    case 'idle':
+      return t('tour.dock.publish.idle')
   }
 }
 

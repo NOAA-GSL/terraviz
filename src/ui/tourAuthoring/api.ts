@@ -72,6 +72,64 @@ export async function saveTourJson(
   return result.data
 }
 
+/**
+ * Phase 3pt/G — list the publisher's tours for the
+ * /publish/tours landing page. Pagination via the same cursor
+ * shape datasets.ts uses (the `next_cursor` field is forwarded
+ * verbatim; clients pass it back as `?cursor=`).
+ */
+export interface TourListItem extends TourSummary {
+  description: string | null
+  thumbnail_ref: string | null
+  visibility: string
+  published_at: string | null
+  publisher_id: string | null
+}
+
+export async function listTours(opts?: {
+  limit?: number
+  cursor?: string
+  fetchFn?: typeof fetch
+}): Promise<
+  | { tours: TourListItem[]; next_cursor: string | null }
+  | { error: string; kind: 'not_found' | 'network' | 'session' | 'server' | 'validation' }
+> {
+  const params = new URLSearchParams()
+  if (opts?.limit !== undefined) params.set('limit', String(opts.limit))
+  if (opts?.cursor !== undefined) params.set('cursor', opts.cursor)
+  const qs = params.toString()
+  const result = await publisherGet<{ tours: TourListItem[]; next_cursor: string | null }>(
+    `/api/v1/publish/tours${qs ? `?${qs}` : ''}`,
+    { fetchFn: opts?.fetchFn },
+  )
+  if (!result.ok) {
+    return { error: errorLabel(result), kind: result.kind }
+  }
+  return result.data
+}
+
+/**
+ * Phase 3pt/G — publish a tour. Server snapshots the draft
+ * blob to an immutable `tours/{id}/published/{publish_id}.json`
+ * key and flips `tour_json_ref` + `published_at`. Returns the
+ * updated row + the publish_id so the dock can surface a
+ * "Published as v…" confirmation.
+ */
+export async function publishTour(
+  id: string,
+  opts?: { fetchFn?: typeof fetch },
+): Promise<{ tour: TourSummary; publish_id: string } | { error: string }> {
+  const result = await publisherSend<{ tour: TourSummary; publish_id: string }>(
+    `/api/v1/publish/tours/${encodeURIComponent(id)}/publish`,
+    {},
+    { method: 'POST', fetchFn: opts?.fetchFn },
+  )
+  if (!result.ok) {
+    return { error: errorLabel(result) }
+  }
+  return result.data
+}
+
 /** Surface a short string for the dock's autosave-status badge.
  *  The dock doesn't try to handle validation errors specifically —
  *  the JSON-editor validation in `dock.ts` should keep them out of

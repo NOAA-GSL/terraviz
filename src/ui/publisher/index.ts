@@ -185,10 +185,9 @@ function datasetEditPage(
 }
 
 function toursPage(mount: HTMLElement): RouteHandler {
-  // Phase 3pt/A — replaces the earlier 3pe placeholder with the
-  // tour-creator landing page. Real tour list + autosave land in
-  // tour/E.
-  return () => renderToursPage(mount)
+  // Phase 3pt/A introduced the landing page; tour/G upgrades it
+  // to a real list backed by GET /api/v1/publish/tours.
+  return () => void renderToursPage(mount)
 }
 
 function importPage(mount: HTMLElement): RouteHandler {
