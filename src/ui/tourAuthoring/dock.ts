@@ -32,6 +32,9 @@ import type {
 import {
   appendTask,
   createEmptyState,
+  moveTask,
+  removeTaskAt,
+  updateTaskAt,
 } from './state'
 
 /**
@@ -77,6 +80,16 @@ export function mountTourAuthoringDock(
   callbacks: TourAuthoringCallbacks,
 ): TourAuthoringHandle {
   let state = createEmptyState(tourId)
+  // Phase 3pt/D — index of the task currently expanded for inline
+  // JSON edit; -1 when no row is being edited. Single-row at a
+  // time keeps the UI obvious (no juggling unsaved drafts across
+  // rows) and mirrors how the SOS authoring tool surfaces task
+  // edits.
+  let editingIndex = -1
+  // Drag source index — tracked across `dragstart`/`drop` events
+  // so the drop handler can compute the move without parsing the
+  // DataTransfer payload (which can be flaky cross-browser).
+  let draggingIndex = -1
   const root = document.createElement('div')
   root.className = 'tour-authoring-dock'
   root.setAttribute('aria-label', t('tour.dock.aria'))
@@ -144,12 +157,7 @@ export function mountTourAuthoringDock(
       <ol class="tour-authoring-task-list" aria-label="${escapeAttr(t('tour.dock.taskList.aria'))}">
         ${state.tasks.length === 0
           ? `<li class="tour-authoring-task-empty">${escapeHtml(t('tour.dock.taskList.empty'))}</li>`
-          : state.tasks
-              .map((task, i) => `<li class="tour-authoring-task">
-                <span class="tour-authoring-task-index">${i + 1}.</span>
-                <span class="tour-authoring-task-label">${escapeHtml(describeTask(task))}</span>
-              </li>`)
-              .join('')}
+          : state.tasks.map((task, i) => renderTaskRow(task, i)).join('')}
       </ol>
     `
     wireButtons()
@@ -163,6 +171,38 @@ export function mountTourAuthoringDock(
         <button type="button" class="tour-authoring-chip" data-action="env" data-task="${taskKey}" data-state="off">${escapeHtml(t('tour.dock.env.off'))}</button>
       </div>
     `
+  }
+
+  /** Phase 3pt/D — render one task row with drag handle, label,
+   *  edit/delete buttons, and (when expanded) the inline JSON
+   *  editor. `draggable=true` on the `<li>` itself opts the row
+   *  into HTML5 drag-and-drop; the dragover/drop handlers are
+   *  delegated on the `<ol>` to keep the per-row markup terse. */
+  function renderTaskRow(task: TourTaskDef, i: number): string {
+    const isEditing = editingIndex === i
+    const json = JSON.stringify(task, null, 2)
+    return `<li class="tour-authoring-task${isEditing ? ' tour-authoring-task-editing' : ''}"
+                draggable="true" data-task-index="${i}">
+      <span class="tour-authoring-task-handle" aria-hidden="true">☰</span>
+      <span class="tour-authoring-task-index">${i + 1}.</span>
+      <span class="tour-authoring-task-label">${escapeHtml(describeTask(task))}</span>
+      <button type="button" class="tour-authoring-task-btn" data-action="edit-task" data-index="${i}"
+              aria-label="${escapeAttr(t('tour.dock.task.edit.aria', { n: i + 1 }))}">✎</button>
+      <button type="button" class="tour-authoring-task-btn" data-action="delete-task" data-index="${i}"
+              aria-label="${escapeAttr(t('tour.dock.task.delete.aria', { n: i + 1 }))}">×</button>
+      ${isEditing
+        ? `<div class="tour-authoring-task-editor">
+            <textarea class="tour-authoring-task-editor-input"
+                      aria-label="${escapeAttr(t('tour.dock.task.editor.aria', { n: i + 1 }))}"
+                      data-index="${i}">${escapeHtml(json)}</textarea>
+            <div class="tour-authoring-task-editor-actions">
+              <span class="tour-authoring-task-editor-error" data-error-for="${i}"></span>
+              <button type="button" class="tour-authoring-chip" data-action="cancel-edit">${escapeHtml(t('tour.dock.task.editor.cancel'))}</button>
+              <button type="button" class="tour-authoring-chip" data-action="save-edit" data-index="${i}">${escapeHtml(t('tour.dock.task.editor.save'))}</button>
+            </div>
+          </div>`
+        : ''}
+    </li>`
   }
 
   function pushCaptured(task: TourTaskDef | null): void {
@@ -228,6 +268,114 @@ export function mountTourAuthoringDock(
     root
       .querySelector<HTMLButtonElement>('[data-action="capture-unload-all"]')
       ?.addEventListener('click', () => pushCaptured({ unloadAllDatasets: '' }))
+
+    // Phase 3pt/D — task-row controls. Per-row click handlers for
+    // edit / delete / save / cancel; delegated drag handlers on
+    // the parent `<ol>` for reorder.
+    root
+      .querySelectorAll<HTMLButtonElement>('[data-action="delete-task"]')
+      .forEach(btn => {
+        btn.addEventListener('click', () => {
+          const idx = parseInt(btn.dataset.index ?? '', 10)
+          if (Number.isInteger(idx)) {
+            state = removeTaskAt(state, idx)
+            if (editingIndex === idx) editingIndex = -1
+            else if (editingIndex > idx) editingIndex -= 1
+            render()
+          }
+        })
+      })
+    root
+      .querySelectorAll<HTMLButtonElement>('[data-action="edit-task"]')
+      .forEach(btn => {
+        btn.addEventListener('click', () => {
+          const idx = parseInt(btn.dataset.index ?? '', 10)
+          if (!Number.isInteger(idx)) return
+          // Toggle behaviour: clicking the same row's edit button
+          // again collapses the editor. Single-row-at-a-time
+          // expansion keeps the UI obvious.
+          editingIndex = editingIndex === idx ? -1 : idx
+          render()
+        })
+      })
+    root
+      .querySelector<HTMLButtonElement>('[data-action="cancel-edit"]')
+      ?.addEventListener('click', () => {
+        editingIndex = -1
+        render()
+      })
+    root
+      .querySelector<HTMLButtonElement>('[data-action="save-edit"]')
+      ?.addEventListener('click', () => {
+        const idx = editingIndex
+        if (idx < 0) return
+        const textarea = root.querySelector<HTMLTextAreaElement>(
+          `.tour-authoring-task-editor-input[data-index="${idx}"]`,
+        )
+        const errorEl = root.querySelector<HTMLElement>(`[data-error-for="${idx}"]`)
+        if (!textarea || !errorEl) return
+        const parsed = parseEditorJson(textarea.value)
+        if (parsed.ok) {
+          state = updateTaskAt(state, idx, parsed.task)
+          editingIndex = -1
+          render()
+        } else {
+          // Inline error keeps the user in the editor with their
+          // text intact — no popup, no nav. Same defensive shape
+          // the dataset-form validators use.
+          errorEl.textContent = parsed.error
+          errorEl.classList.add('tour-authoring-task-editor-error-visible')
+        }
+      })
+
+    const list = root.querySelector<HTMLOListElement>('.tour-authoring-task-list')
+    if (list) {
+      list.addEventListener('dragstart', e => {
+        const li = (e.target as HTMLElement | null)?.closest<HTMLLIElement>('.tour-authoring-task')
+        if (!li) return
+        draggingIndex = parseInt(li.dataset.taskIndex ?? '', 10)
+        if (e.dataTransfer) {
+          e.dataTransfer.effectAllowed = 'move'
+          // Older Safari requires SOMETHING to be set on the
+          // DataTransfer for the drag to register at all. The
+          // payload itself is ignored — we read `draggingIndex`
+          // on drop, which is more reliable across browsers.
+          e.dataTransfer.setData('text/plain', String(draggingIndex))
+        }
+        li.classList.add('tour-authoring-task-dragging')
+      })
+      list.addEventListener('dragover', e => {
+        if (draggingIndex < 0) return
+        e.preventDefault()
+        if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'
+      })
+      list.addEventListener('drop', e => {
+        const li = (e.target as HTMLElement | null)?.closest<HTMLLIElement>('.tour-authoring-task')
+        if (!li || draggingIndex < 0) return
+        e.preventDefault()
+        const dropIndex = parseInt(li.dataset.taskIndex ?? '', 10)
+        if (Number.isInteger(dropIndex) && dropIndex !== draggingIndex) {
+          state = moveTask(state, draggingIndex, dropIndex)
+          // Keep the editor following the moved task if it was
+          // the one being edited; otherwise leave the user where
+          // they were (defensive: clear if the index now points
+          // at a different row).
+          if (editingIndex === draggingIndex) {
+            editingIndex = dropIndex
+          } else if (editingIndex >= 0) {
+            editingIndex = -1
+          }
+        }
+        draggingIndex = -1
+        render()
+      })
+      list.addEventListener('dragend', () => {
+        draggingIndex = -1
+        root
+          .querySelectorAll('.tour-authoring-task-dragging')
+          .forEach(el => el.classList.remove('tour-authoring-task-dragging'))
+      })
+    }
   }
 
   render()
@@ -298,6 +446,40 @@ function captureCurrentDataset(callbacks: TourAuthoringCallbacks): TourTaskDef |
   }
   const params: LoadDatasetTaskParams = { id: dataset.id }
   return { loadDataset: params }
+}
+
+/**
+ * Phase 3pt/D — parse + validate text from the inline JSON
+ * editor. Returns the parsed `TourTaskDef` on success, an
+ * error string on failure. The shape check is intentionally
+ * minimal: a `TourTaskDef` is any object with exactly one own
+ * property whose key matches a known task name. Stricter
+ * per-task validation lives in `tourEngine.ts` at run-time —
+ * mirroring it here would couple the editor to the engine's
+ * private validator surface.
+ */
+function parseEditorJson(
+  text: string,
+): { ok: true; task: TourTaskDef } | { ok: false; error: string } {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(text)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return { ok: false, error: t('tour.dock.task.editor.error.json', { detail: message }) }
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return { ok: false, error: t('tour.dock.task.editor.error.shape') }
+  }
+  const keys = Object.keys(parsed)
+  if (keys.length !== 1) {
+    return { ok: false, error: t('tour.dock.task.editor.error.shape') }
+  }
+  // Trust that the single-key object is a TourTaskDef shape —
+  // tourEngine will validate against its discriminated union at
+  // run-time. Casting through `unknown` keeps the type system
+  // honest about the trust boundary.
+  return { ok: true, task: parsed as unknown as TourTaskDef }
 }
 
 /**

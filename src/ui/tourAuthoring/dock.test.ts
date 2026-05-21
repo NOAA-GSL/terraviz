@@ -293,6 +293,198 @@ describe('mountTourAuthoringDock (tour/A)', () => {
     expect(label).toContain('on')
   })
 
+  describe('task editor (tour/D)', () => {
+    function dock() {
+      return mountTourAuthoringDock('new', {
+        getMapView: () => makeView(),
+        getCurrentDataset: () => null,
+        onDiscard: () => {},
+      })
+    }
+    function addThreeCaptures(): void {
+      // Three flyTo tasks at distinct positions so reordering is
+      // observable in the rendered labels.
+      const positions: [number, number][] = [[10, 20], [30, 40], [50, 60]]
+      for (const [lat, lng] of positions) {
+        document.querySelectorAll('.tour-authoring-dock').forEach(el => el.remove())
+        // Re-mount with the next position pre-loaded so the
+        // capture button picks it up.
+      }
+      // Simpler: just click camera 3 times against the same view; the
+      // task labels will be identical, but the count + index checks
+      // still work and the reorder behaviour is observable via
+      // expanded JSON.
+    }
+    void addThreeCaptures
+
+    it('removes a task when the delete button is clicked', () => {
+      dock()
+      const cam = document.querySelector<HTMLButtonElement>(
+        '[data-action="capture-camera"]',
+      )!
+      cam.click()
+      cam.click()
+      expect(document.querySelectorAll('.tour-authoring-task')).toHaveLength(2)
+      document
+        .querySelector<HTMLButtonElement>(
+          '.tour-authoring-task:first-child [data-action="delete-task"]',
+        )!
+        .click()
+      expect(document.querySelectorAll('.tour-authoring-task')).toHaveLength(1)
+    })
+
+    it('expands an inline JSON editor when the edit button is clicked', () => {
+      dock()
+      document
+        .querySelector<HTMLButtonElement>('[data-action="capture-camera"]')!
+        .click()
+      document
+        .querySelector<HTMLButtonElement>('[data-action="edit-task"]')!
+        .click()
+      const editor = document.querySelector<HTMLTextAreaElement>(
+        '.tour-authoring-task-editor-input',
+      )!
+      expect(editor).toBeTruthy()
+      // Pretty-printed JSON of the captured flyTo task.
+      expect(editor.value).toContain('"flyTo"')
+      expect(editor.value).toContain('"lat"')
+    })
+
+    it('saves an edited task back into state when Save is clicked', () => {
+      dock()
+      document
+        .querySelector<HTMLButtonElement>('[data-action="capture-camera"]')!
+        .click()
+      document
+        .querySelector<HTMLButtonElement>('[data-action="edit-task"]')!
+        .click()
+      const editor = document.querySelector<HTMLTextAreaElement>(
+        '.tour-authoring-task-editor-input',
+      )!
+      editor.value = JSON.stringify({ pauseSeconds: 7 })
+      document
+        .querySelector<HTMLButtonElement>('[data-action="save-edit"]')!
+        .click()
+      // Editor collapses; label reflects the new task shape.
+      expect(document.querySelector('.tour-authoring-task-editor-input')).toBeNull()
+      const label = document.querySelector('.tour-authoring-task-label')?.textContent ?? ''
+      expect(label).toContain('Pause 7')
+    })
+
+    it('shows an inline error and keeps the editor open when Save sees invalid JSON', () => {
+      dock()
+      document
+        .querySelector<HTMLButtonElement>('[data-action="capture-camera"]')!
+        .click()
+      document
+        .querySelector<HTMLButtonElement>('[data-action="edit-task"]')!
+        .click()
+      const editor = document.querySelector<HTMLTextAreaElement>(
+        '.tour-authoring-task-editor-input',
+      )!
+      editor.value = '{not valid json'
+      document
+        .querySelector<HTMLButtonElement>('[data-action="save-edit"]')!
+        .click()
+      const error = document.querySelector<HTMLElement>(
+        '.tour-authoring-task-editor-error',
+      )!
+      expect(error.classList.contains('tour-authoring-task-editor-error-visible')).toBe(true)
+      expect(error.textContent).toContain('Invalid JSON')
+      // Editor still open — user's text preserved (untouched DOM).
+      expect(document.querySelector('.tour-authoring-task-editor-input')).toBeTruthy()
+    })
+
+    it('rejects JSON that is not a single-key object', () => {
+      dock()
+      document
+        .querySelector<HTMLButtonElement>('[data-action="capture-camera"]')!
+        .click()
+      document
+        .querySelector<HTMLButtonElement>('[data-action="edit-task"]')!
+        .click()
+      const editor = document.querySelector<HTMLTextAreaElement>(
+        '.tour-authoring-task-editor-input',
+      )!
+      editor.value = '{"flyTo": {}, "pauseSeconds": 5}'
+      document
+        .querySelector<HTMLButtonElement>('[data-action="save-edit"]')!
+        .click()
+      const error = document.querySelector<HTMLElement>(
+        '.tour-authoring-task-editor-error',
+      )!
+      expect(error.textContent).toMatch(/exactly one task key/)
+    })
+
+    it('collapses the editor on Cancel without modifying state', () => {
+      dock()
+      document
+        .querySelector<HTMLButtonElement>('[data-action="capture-camera"]')!
+        .click()
+      const beforeLabel = document
+        .querySelector('.tour-authoring-task-label')!
+        .textContent
+      document
+        .querySelector<HTMLButtonElement>('[data-action="edit-task"]')!
+        .click()
+      const editor = document.querySelector<HTMLTextAreaElement>(
+        '.tour-authoring-task-editor-input',
+      )!
+      editor.value = JSON.stringify({ pauseSeconds: 99 })
+      document
+        .querySelector<HTMLButtonElement>('[data-action="cancel-edit"]')!
+        .click()
+      expect(document.querySelector('.tour-authoring-task-editor-input')).toBeNull()
+      // Label unchanged.
+      expect(document.querySelector('.tour-authoring-task-label')?.textContent).toBe(
+        beforeLabel,
+      )
+    })
+
+    it('reorders tasks on a drag-drop gesture (drop later → reorder later)', () => {
+      dock()
+      const cam = document.querySelector<HTMLButtonElement>(
+        '[data-action="capture-camera"]',
+      )!
+      cam.click()
+      cam.click()
+      cam.click()
+      // Edit task 1 to make it identifiable.
+      document
+        .querySelector<HTMLButtonElement>('[data-action="edit-task"]')!
+        .click()
+      const editor = document.querySelector<HTMLTextAreaElement>(
+        '.tour-authoring-task-editor-input',
+      )!
+      editor.value = JSON.stringify({ pauseSeconds: 1 })
+      document
+        .querySelector<HTMLButtonElement>('[data-action="save-edit"]')!
+        .click()
+      // The labels now read: ["Pause 1 sec", "Camera → ...", "Camera → ..."].
+      const items = Array.from(
+        document.querySelectorAll<HTMLLIElement>('.tour-authoring-task'),
+      )
+      expect(items[0].querySelector('.tour-authoring-task-label')?.textContent).toContain(
+        'Pause',
+      )
+      // Drag item 0 onto item 2 → it should land at index 2.
+      const list = document.querySelector<HTMLOListElement>('.tour-authoring-task-list')!
+      const transfer = new DataTransfer()
+      // Use the items[0] (Pause) and items[2] (Camera) refs.
+      items[0].dispatchEvent(
+        new DragEvent('dragstart', { bubbles: true, dataTransfer: transfer }),
+      )
+      items[2].dispatchEvent(new DragEvent('dragover', { bubbles: true, dataTransfer: transfer }))
+      items[2].dispatchEvent(new DragEvent('drop', { bubbles: true, dataTransfer: transfer }))
+      list.dispatchEvent(new DragEvent('dragend', { bubbles: true }))
+      const afterLabels = Array.from(
+        document.querySelectorAll('.tour-authoring-task-label'),
+      ).map(el => el.textContent ?? '')
+      // After moving index 0 → index 2: [Cam, Cam, Pause]
+      expect(afterLabels[2]).toContain('Pause')
+    })
+  })
+
   it('captures altmi from zoom (higher zoom → lower altitude)', () => {
     // Inverse of `execFlyTo`'s zoom math in `tourEngine.ts`:
     //   altKm = (6371 × 2) / 2^zoom
