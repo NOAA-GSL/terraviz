@@ -9,6 +9,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { formatBytes, __test__ } from './downloadService'
+import { proxyCaptionUrl } from '../utils/captionProxy'
 
 const { isHttpUrl, extFromUrl, pickBestVideoFile, orderImageCandidates } = __test__
 
@@ -125,22 +126,29 @@ describe('image resolution candidate generation', () => {
 describe('caption URL proxying', () => {
   it('proxies sos.noaa.gov caption URLs through video-proxy', () => {
     const captionLink = 'https://sos.noaa.gov/media/captions/ocean_acidification.srt'
-    const proxied = captionLink.includes('sos.noaa.gov')
-      ? `https://video-proxy.zyra-project.org/captions?url=${encodeURIComponent(captionLink)}`
-      : captionLink
-
-    expect(proxied).toBe(
+    expect(proxyCaptionUrl(captionLink)).toBe(
       'https://video-proxy.zyra-project.org/captions?url=https%3A%2F%2Fsos.noaa.gov%2Fmedia%2Fcaptions%2Focean_acidification.srt'
     )
   })
 
   it('passes non-NOAA caption URLs through unchanged', () => {
     const captionLink = 'https://example.com/captions/test.srt'
-    const proxied = captionLink.includes('sos.noaa.gov')
-      ? `https://video-proxy.zyra-project.org/captions?url=${encodeURIComponent(captionLink)}`
-      : captionLink
+    expect(proxyCaptionUrl(captionLink)).toBe(captionLink)
+  })
 
-    expect(proxied).toBe(captionLink)
+  it('does not proxy URLs whose path contains sos.noaa.gov', () => {
+    // Regression for CodeQL "Incomplete URL substring sanitization":
+    // a substring check would route this through the proxy, leaking
+    // attacker-chosen URLs through our caption worker.
+    const spoof = 'https://attacker.example/sos.noaa.gov/foo.srt'
+    expect(proxyCaptionUrl(spoof)).toBe(spoof)
+  })
+
+  it('proxies subdomains of sos.noaa.gov', () => {
+    const sub = 'https://media.sos.noaa.gov/captions/ocean.srt'
+    expect(proxyCaptionUrl(sub)).toBe(
+      `https://video-proxy.zyra-project.org/captions?url=${encodeURIComponent(sub)}`
+    )
   })
 })
 
