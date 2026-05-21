@@ -177,6 +177,21 @@ And from pass B:
     extra fetched row is used only to detect hasMore; the cursor
     is the last *returned* row's id.
 
+**tour-review/C — rename UI.** The 28-file PR shipped tours
+that auto-named themselves `Untitled tour XXXXXX` with no way to
+rename short of `curl`. The dock header now carries a free-text
+title input alongside the autosave badge: typing fires a
+debounced (800 ms) PUT to `/api/v1/publish/tours/{id}` with
+`{ title }`. For a fresh `'new'` tour the title save waits for
+the autosave manager to mint the row, then PUTs onto the
+resolved id. Server-side `validateTitle` (≥3 chars, ≤200 chars,
+no control characters) is mirrored client-side so obviously-
+invalid input doesn't waste a round-trip; anything else gets
+the server's message in an inline `role=alert` div under the
+header. Re-renders during typing preserve caret position + focus
+via the same `activeElement` + `selectionStart/End` round-trip
+that browsers use for form-restore.
+
 **Not in this PR (deferred).**
 
   - **Preview** ("Play from here") — would run `tourEngine`

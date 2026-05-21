@@ -131,6 +131,33 @@ export async function publishTour(
 }
 
 /**
+ * Phase 3pt-review/C — patch a tour's metadata (title /
+ * description / visibility). PUTs the `tours` row's mutable
+ * columns. Lives on a different endpoint than `saveTourJson`
+ * because the R2 tour-file blob doesn't carry these — they're
+ * D1 columns and surface in the list view.
+ */
+export async function updateTourMetadata(
+  id: string,
+  body: {
+    title?: string
+    description?: string
+    visibility?: string
+  },
+  opts?: { fetchFn?: typeof fetch },
+): Promise<{ tour: TourSummary } | { error: string }> {
+  const result = await publisherSend<{ tour: TourSummary }>(
+    `/api/v1/publish/tours/${encodeURIComponent(id)}`,
+    body,
+    { method: 'PUT', fetchFn: opts?.fetchFn },
+  )
+  if (!result.ok) {
+    return { error: errorLabel(result) }
+  }
+  return result.data
+}
+
+/**
  * Phase 3pt/G — hard-delete a tour. Removes the D1 row +
  * best-effort drops the draft R2 blob. Used by the tour list
  * page's × button on each row. The publisher confirms via

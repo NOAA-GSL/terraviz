@@ -768,6 +768,250 @@ describe('mountTourAuthoringDock (tour/A)', () => {
     })
   })
 
+  describe('tour-review/C — rename', () => {
+    it('renders a title input in the dock header', () => {
+      mountTourAuthoringDock('new', {
+        getMapView: () => makeView(),
+        getCurrentDataset: () => null,
+        onDiscard: () => {},
+      })
+      const input = document.querySelector<HTMLInputElement>(
+        '.tour-authoring-dock-title-input',
+      )
+      expect(input).toBeTruthy()
+      expect(input!.placeholder).toBe('Untitled tour')
+      expect(input!.getAttribute('aria-label')).toBe('Tour title')
+      expect(input!.maxLength).toBe(200)
+    })
+
+    it('seeds the title input from fetchTourJson when re-opening a tour', async () => {
+      vi.spyOn(tourApi, 'fetchTourJson').mockResolvedValue({
+        tour: {
+          id: '01HXAAAAAAAAAAAAAAAAAAAAAA',
+          slug: 'hurricane-tour',
+          title: 'Hurricane Tour',
+          tour_json_ref: 'r2:tours/01HXAAAAAAAAAAAAAAAAAAAAAA/draft.json',
+          updated_at: '2026-05-21T20:30:00.000Z',
+        },
+        tourFile: { tourTasks: [] },
+      })
+      mountTourAuthoringDock('01HXAAAAAAAAAAAAAAAAAAAAAA', {
+        getMapView: () => makeView(),
+        getCurrentDataset: () => null,
+        onDiscard: () => {},
+      })
+      // fetchTourJson is async — pump microtasks until the
+      // seeded render fires.
+      for (let i = 0; i < 5; i++) await Promise.resolve()
+      const input = document.querySelector<HTMLInputElement>(
+        '.tour-authoring-dock-title-input',
+      )!
+      expect(input.value).toBe('Hurricane Tour')
+    })
+
+    it('PUTs the trimmed title after the debounce window when an id exists', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true })
+      vi.spyOn(tourApi, 'fetchTourJson').mockResolvedValue({
+        tour: {
+          id: '01HXCCCCCCCCCCCCCCCCCCCCCC',
+          slug: 's',
+          title: 'Old name',
+          tour_json_ref: 'r',
+          updated_at: '2026-05-21T20:30:00.000Z',
+        },
+        tourFile: { tourTasks: [] },
+      })
+      const updateSpy = vi.spyOn(tourApi, 'updateTourMetadata').mockResolvedValue({
+        tour: {
+          id: '01HXCCCCCCCCCCCCCCCCCCCCCC',
+          slug: 's',
+          title: 'New name',
+          tour_json_ref: 'r',
+          updated_at: '2026-05-21T20:30:05.000Z',
+        },
+      })
+      mountTourAuthoringDock('01HXCCCCCCCCCCCCCCCCCCCCCC', {
+        getMapView: () => makeView(),
+        getCurrentDataset: () => null,
+        onDiscard: () => {},
+      })
+      for (let i = 0; i < 5; i++) await Promise.resolve()
+      const input = document.querySelector<HTMLInputElement>(
+        '.tour-authoring-dock-title-input',
+      )!
+      input.value = '  New name  '
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+      // Below the debounce window — nothing fires yet.
+      vi.advanceTimersByTime(500)
+      expect(updateSpy).not.toHaveBeenCalled()
+      // Past the debounce — the PUT fires with the trimmed value.
+      vi.advanceTimersByTime(400)
+      vi.useRealTimers()
+      for (let i = 0; i < 5; i++) await Promise.resolve()
+      expect(updateSpy).toHaveBeenCalledWith(
+        '01HXCCCCCCCCCCCCCCCCCCCCCC',
+        { title: 'New name' },
+      )
+    })
+
+    it('coalesces fast typing into a single PUT after the last keystroke', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true })
+      vi.spyOn(tourApi, 'fetchTourJson').mockResolvedValue({
+        tour: {
+          id: '01HXDDDDDDDDDDDDDDDDDDDDDD',
+          slug: 's',
+          title: 'Old',
+          tour_json_ref: 'r',
+          updated_at: '2026-05-21T20:30:00.000Z',
+        },
+        tourFile: { tourTasks: [] },
+      })
+      const updateSpy = vi.spyOn(tourApi, 'updateTourMetadata').mockResolvedValue({
+        tour: {
+          id: '01HXDDDDDDDDDDDDDDDDDDDDDD',
+          slug: 's',
+          title: 'Hurricane Tour 2025',
+          tour_json_ref: 'r',
+          updated_at: '2026-05-21T20:30:05.000Z',
+        },
+      })
+      mountTourAuthoringDock('01HXDDDDDDDDDDDDDDDDDDDDDD', {
+        getMapView: () => makeView(),
+        getCurrentDataset: () => null,
+        onDiscard: () => {},
+      })
+      for (let i = 0; i < 5; i++) await Promise.resolve()
+      const input = document.querySelector<HTMLInputElement>(
+        '.tour-authoring-dock-title-input',
+      )!
+      for (const v of ['H', 'Hu', 'Hur', 'Hurricane Tour 2025']) {
+        input.value = v
+        input.dispatchEvent(new Event('input', { bubbles: true }))
+        vi.advanceTimersByTime(100)
+      }
+      vi.advanceTimersByTime(1000)
+      vi.useRealTimers()
+      for (let i = 0; i < 5; i++) await Promise.resolve()
+      expect(updateSpy).toHaveBeenCalledTimes(1)
+      expect(updateSpy).toHaveBeenCalledWith(
+        '01HXDDDDDDDDDDDDDDDDDDDDDD',
+        { title: 'Hurricane Tour 2025' },
+      )
+    })
+
+    it('skips the PUT when the trimmed title is below the server minimum', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true })
+      vi.spyOn(tourApi, 'fetchTourJson').mockResolvedValue({
+        tour: {
+          id: '01HXEEEEEEEEEEEEEEEEEEEEEE',
+          slug: 's',
+          title: 'Old',
+          tour_json_ref: 'r',
+          updated_at: '2026-05-21T20:30:00.000Z',
+        },
+        tourFile: { tourTasks: [] },
+      })
+      const updateSpy = vi.spyOn(tourApi, 'updateTourMetadata')
+      mountTourAuthoringDock('01HXEEEEEEEEEEEEEEEEEEEEEE', {
+        getMapView: () => makeView(),
+        getCurrentDataset: () => null,
+        onDiscard: () => {},
+      })
+      for (let i = 0; i < 5; i++) await Promise.resolve()
+      const input = document.querySelector<HTMLInputElement>(
+        '.tour-authoring-dock-title-input',
+      )!
+      input.value = 'ab'
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+      vi.advanceTimersByTime(1000)
+      vi.useRealTimers()
+      for (let i = 0; i < 5; i++) await Promise.resolve()
+      expect(updateSpy).not.toHaveBeenCalled()
+    })
+
+    it('mints the draft via autosave before PUTting the title for a new tour', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true })
+      const createSpy = vi.spyOn(tourApi, 'createDraftTour').mockResolvedValue({
+        tour: {
+          id: '01HXFFFFFFFFFFFFFFFFFFFFFF',
+          slug: 's',
+          title: 'Untitled tour FFFFFF',
+          tour_json_ref: 'r',
+          updated_at: '2026-05-21T20:30:00.000Z',
+        },
+      })
+      vi.spyOn(tourApi, 'saveTourJson').mockResolvedValue({
+        tour: {
+          id: '01HXFFFFFFFFFFFFFFFFFFFFFF',
+          slug: 's',
+          title: 'Untitled tour FFFFFF',
+          tour_json_ref: 'r',
+          updated_at: '2026-05-21T20:30:00.000Z',
+        },
+      })
+      const updateSpy = vi.spyOn(tourApi, 'updateTourMetadata').mockResolvedValue({
+        tour: {
+          id: '01HXFFFFFFFFFFFFFFFFFFFFFF',
+          slug: 's',
+          title: 'Hurricane Tour',
+          tour_json_ref: 'r',
+          updated_at: '2026-05-21T20:30:05.000Z',
+        },
+      })
+      mountTourAuthoringDock('new', {
+        getMapView: () => makeView(),
+        getCurrentDataset: () => null,
+        onDiscard: () => {},
+      })
+      const input = document.querySelector<HTMLInputElement>(
+        '.tour-authoring-dock-title-input',
+      )!
+      input.value = 'Hurricane Tour'
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+      vi.advanceTimersByTime(1000)
+      vi.useRealTimers()
+      for (let i = 0; i < 20; i++) await Promise.resolve()
+      expect(createSpy).toHaveBeenCalled()
+      expect(updateSpy).toHaveBeenCalledWith(
+        '01HXFFFFFFFFFFFFFFFFFFFFFF',
+        { title: 'Hurricane Tour' },
+      )
+    })
+
+    it('surfaces a server error inline under the header', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true })
+      vi.spyOn(tourApi, 'fetchTourJson').mockResolvedValue({
+        tour: {
+          id: '01HXGGGGGGGGGGGGGGGGGGGGGG',
+          slug: 's',
+          title: 'Old',
+          tour_json_ref: 'r',
+          updated_at: '2026-05-21T20:30:00.000Z',
+        },
+        tourFile: { tourTasks: [] },
+      })
+      vi.spyOn(tourApi, 'updateTourMetadata').mockResolvedValue({
+        error: 'Server error (500)',
+      })
+      mountTourAuthoringDock('01HXGGGGGGGGGGGGGGGGGGGGGG', {
+        getMapView: () => makeView(),
+        getCurrentDataset: () => null,
+        onDiscard: () => {},
+      })
+      for (let i = 0; i < 5; i++) await Promise.resolve()
+      const input = document.querySelector<HTMLInputElement>(
+        '.tour-authoring-dock-title-input',
+      )!
+      input.value = 'New name'
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+      vi.advanceTimersByTime(1000)
+      vi.useRealTimers()
+      for (let i = 0; i < 5; i++) await Promise.resolve()
+      const errorDiv = document.querySelector('.tour-authoring-dock-title-errormsg')
+      expect(errorDiv?.textContent).toContain('Server error (500)')
+    })
+  })
+
   it('captures altmi from zoom (higher zoom → lower altitude)', () => {
     // Inverse of `execFlyTo`'s zoom math in `tourEngine.ts`:
     //   altKm = (6371 × 2) / 2^zoom

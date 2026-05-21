@@ -36,7 +36,7 @@ import {
   removeTaskAt,
   updateTaskAt,
 } from './state'
-import { fetchTourJson, publishTour } from './api'
+import { fetchTourJson, publishTour, updateTourMetadata } from './api'
 import { createAutosaveManager, type AutosaveStatus } from './autosave'
 
 /**
@@ -103,6 +103,15 @@ export function mountTourAuthoringDock(
   // server's message in the title tooltip.
   let publishStatus: 'idle' | 'publishing' | 'published' | 'error' = 'idle'
   let publishError = ''
+  // Phase 3pt-review/C — rename UI. `titleValue` mirrors the
+  // input's text and is the only source of truth while the
+  // publisher is typing (re-renders preserve it via the same
+  // pattern editorBuffer uses for the JSON editor). `titleSaveTimer`
+  // debounces the PUT round-trip; `titleSaveError` surfaces a
+  // failed save as inline text under the input.
+  let titleValue = ''
+  let titleSaveError = ''
+  let titleSaveTimer: ReturnType<typeof setTimeout> | null = null
   // Phase 3pt-review/A — per-mount input ids so duplicate-id
   // label associations can't happen if a second dock ever
   // coexists.
@@ -199,9 +208,67 @@ export function mountTourAuthoringDock(
         ? result.tourFile.tourTasks
         : []
       state = { ...state, tasks }
+      // Phase 3pt-review/C — seed the title input with the
+      // persisted name so the publisher can rename it.
+      titleValue = result.tour?.title ?? ''
       autosaveStatus = 'saved'
       render()
     })
+  }
+
+  /**
+   * Phase 3pt-review/C — debounced title PUT. The title lives
+   * in the D1 row, not the R2 TourFile, so renames go through
+   * a separate endpoint from the autosave loop. For a `'new'`
+   * tour we first need the autosave manager to mint the row;
+   * we trigger that via `requestSave` + `flush`, then PUT the
+   * title onto the resolved id.
+   *
+   * Server-side `validateTitle` requires ≥3 chars after trim;
+   * we mirror that here so the round-trip doesn't fire on
+   * obviously-invalid input. Stricter validation (control
+   * chars) is delegated — the server's message lands in
+   * `titleSaveError` on failure.
+   */
+  async function persistTitle(): Promise<void> {
+    const trimmed = titleValue.trim()
+    if (trimmed.length < 3) {
+      // Below the server's minimum — bail without a round-trip
+      // and clear any prior error so the input doesn't look stuck.
+      if (titleSaveError) {
+        titleSaveError = ''
+        render()
+      }
+      return
+    }
+    if (autosave.getTourId() === 'new') {
+      autosave.requestSave({ tourTasks: state.tasks })
+      await autosave.flush()
+    }
+    const id = autosave.getTourId()
+    if (id === 'new') {
+      // Autosave failed to mint a row — its status badge is
+      // already showing the error; don't double-surface.
+      return
+    }
+    const result = await updateTourMetadata(id, { title: trimmed })
+    if ('error' in result) {
+      titleSaveError = result.error
+      render()
+      return
+    }
+    if (titleSaveError) {
+      titleSaveError = ''
+      render()
+    }
+  }
+
+  function scheduleTitleSave(): void {
+    if (titleSaveTimer !== null) clearTimeout(titleSaveTimer)
+    titleSaveTimer = setTimeout(() => {
+      titleSaveTimer = null
+      void persistTitle()
+    }, 800)
   }
 
   function render(): void {
@@ -211,9 +278,24 @@ export function mountTourAuthoringDock(
     // each with on+off), and the rotation-rate input. Phase 3pt/D
     // ships drag-to-reorder + click-to-edit on the task list; for
     // now the list is render-only.
+    //
+    // Phase 3pt-review/C — restore focus + selection on the title
+    // input across re-renders. Without this an autosave-status
+    // flip during typing would yank focus mid-keystroke.
+    const active = document.activeElement
+    const titleWasFocused =
+      active instanceof HTMLInputElement &&
+      active.classList.contains('tour-authoring-dock-title-input')
+    const titleSelectionStart = titleWasFocused ? (active.selectionStart ?? 0) : 0
+    const titleSelectionEnd = titleWasFocused ? (active.selectionEnd ?? 0) : 0
     root.innerHTML = `
       <div class="tour-authoring-dock-header">
         <span class="tour-authoring-dock-title">${escapeHtml(t('tour.dock.title'))}</span>
+        <input type="text" class="tour-authoring-dock-title-input"
+               value="${escapeAttr(titleValue)}"
+               maxlength="200"
+               placeholder="${escapeAttr(t('tour.dock.titleInput.placeholder'))}"
+               aria-label="${escapeAttr(t('tour.dock.titleInput.aria'))}">
         <span class="tour-authoring-dock-status tour-authoring-dock-status-${autosaveStatus}"
               role="status"
               aria-live="polite"
@@ -226,6 +308,9 @@ export function mountTourAuthoringDock(
         <button type="button" class="tour-authoring-dock-close"
                 aria-label="${escapeAttr(t('tour.dock.discard.aria'))}">×</button>
       </div>
+      ${titleSaveError
+        ? `<div class="tour-authoring-dock-title-errormsg" role="alert">${escapeHtml(titleSaveError)}</div>`
+        : ''}
       ${publishStatus === 'error' && publishError
         ? `<div class="tour-authoring-dock-publish-errormsg" role="alert">${escapeHtml(publishError)}</div>`
         : ''}
@@ -294,6 +379,18 @@ export function mountTourAuthoringDock(
       </ol>
     `
     wireButtons()
+    // Phase 3pt-review/C — restore focus + selection on the
+    // title input so a re-render during typing doesn't yank
+    // the caret out from under the publisher.
+    if (titleWasFocused) {
+      const input = root.querySelector<HTMLInputElement>(
+        '.tour-authoring-dock-title-input',
+      )
+      if (input) {
+        input.focus()
+        input.setSelectionRange(titleSelectionStart, titleSelectionEnd)
+      }
+    }
   }
 
   function renderEnvRow(taskKey: EnvToggleKey, labelKey: EnvLabelKey): string {
@@ -372,6 +469,12 @@ export function mountTourAuthoringDock(
     root.querySelector('.tour-authoring-dock-close')?.addEventListener('click', () => {
       callbacks.onDiscard()
     })
+    root
+      .querySelector<HTMLInputElement>('.tour-authoring-dock-title-input')
+      ?.addEventListener('input', e => {
+        titleValue = (e.target as HTMLInputElement).value
+        scheduleTitleSave()
+      })
     root
       .querySelector<HTMLButtonElement>('[data-action="publish"]')
       ?.addEventListener('click', () => {
@@ -583,6 +686,11 @@ export function mountTourAuthoringDock(
       // typically calls dispose on Discard or navigation. We
       // fire-and-forget; a network failure here can't be
       // surfaced through the UI since we're tearing it down.
+      if (titleSaveTimer !== null) {
+        clearTimeout(titleSaveTimer)
+        titleSaveTimer = null
+        void persistTitle()
+      }
       void autosave.flush()
       root.remove()
     },
