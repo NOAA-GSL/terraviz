@@ -29,7 +29,7 @@ Reading the doc as a whole — not request-by-request — three
 themes dominate:
 
 1. **Catalog-first UX.** Adrian's "grid view", Hilary's
-   "catalog and sphere tab", and Adrian's `?catalogue=true`
+   "catalog and sphere tab", and Adrian's `?catalog=true`
    URL hint all describe the same thing: a mode where the
    *catalog* is the primary surface and the globe only
    appears once a dataset is selected. Today the browse UI
@@ -84,13 +84,12 @@ sequencing — especially for Beth's "all SOS datasets" request
 
 - Live catalog: `https://s3.dualstack.us-east-1.amazonaws.com/metadata.sosexplorer.gov/dataset.json` (the source `dataService.ts` fetches today).
 - Enriched metadata: [`public/assets/sos_dataset_metadata.json`](../public/assets/sos_dataset_metadata.json), 1.8 MB, merged client-side.
-- Authoritative catalog: <https://sos.noaa.gov/catalog/datasets/> (referenced; sandbox network policy blocked direct fetch — the local files are a workable proxy).
+- Authoritative catalog: <https://sos.noaa.gov/catalog/datasets/>.
 
 **Counts:**
 
 - Live catalog: **204 datasets, 176 visible, 28 hidden** (the SOSx subset TerraViz exposes today).
 - Enriched metadata: **520 datasets** total. `available_for` field marks **499 SOS** and **176 Explorer** (overlapping sets — 415 of the 520 are not in the live catalog at all).
-- Years covered: 2010–2025; ~149 of 520 added in 2010, tapering to ~10/yr in recent years.
 
 **Filter taxonomy (live catalog `tags` field — 11 distinct):**
 
