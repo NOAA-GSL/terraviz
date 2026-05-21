@@ -103,10 +103,10 @@ sequencing — especially for Beth's "all SOS datasets" request
 | Movies | 35 | Extras | 1 |
 | Space | 34 | | |
 
-This is the filter chip set Phase 4 should ship — it matches
-what the live catalog already labels datasets with. The
-single-count tags (Layers, Extras) are edge cases and can be
-de-emphasised or rolled into a default chip set.
+This is the *baseline* filter chip set Phase 4 should ship —
+it matches what the live catalog already labels datasets with.
+The single-count tags (Layers, Extras) are edge cases and can
+be de-emphasised or rolled into a default chip set.
 
 **Asset availability for SOS-only datasets:** every entry in
 the enriched file has a `movie_preview` URL; 501 of 520 also
@@ -115,7 +115,91 @@ therefore feasible without backend changes — the asset
 quality is lower than the SOSx subset's Vimeo HLS streams,
 which is the honest tradeoff to surface in the UI.
 
-### 1.5 Non-goals
+**What's missing.** The screenshot of the SOS catalog filter
+panel (shared in review) shows additional facets we do **not**
+have in either data source: **Theme** (separate from Keyword),
+**Year** (data-coverage range, 500–2100), and a four-filter
+**Next Generation Science Standards** bundle — Minimum Grade
+Level, Maximum Grade Level, Cross-cutting Concepts, and
+Disciplinary Core Ideas. None of these terms appear in
+`metadata.sosexplorer.gov/dataset.json` or
+`public/assets/sos_dataset_metadata.json`. Reaching parity
+requires importing additional metadata from the SOS catalog
+backend (likely a WordPress export, a direct database dump, or
+a scrape of the dataset detail pages — open question for the
+SOS team). §1.6 covers how this interacts with federation.
+
+The screenshot also confirms one design point: **the SOS
+catalog already has a "View My Playlist" button.** Adrian's
+playlist request (§8.1) is therefore not a net-new feature
+for SOS users — it's parity with existing functionality,
+which raises the bar slightly on what "good" looks like.
+
+### 1.6 Federation forward-compatibility for facets
+
+The user's question on review — "in a federated catalog
+environment how we might want to implement custom search
+facets" — is genuinely unanswered today. Capturing the
+tension here, with the design itself deferred to the
+federation-scoping doc (per `CLAUDE.md`'s direction that
+federation work follows
+[`docs/architecture/federation-scoping.md`](architecture/federation-scoping.md)).
+
+**What exists.**
+[`docs/CATALOG_DATA_MODEL.md`](CATALOG_DATA_MODEL.md) (and
+duplicated in `CATALOG_BACKEND_PLAN.md`) already defines a
+`dataset_categories(dataset_id, facet, value)` table — a
+flexible facet store where `facet` is free-text ("Theme",
+"Region", and by extension "NGSS.MinGrade", "NGSS.CCC", etc.).
+This is the right primitive. The data model is forward-compatible.
+
+**What doesn't exist.** There is no mechanism for a federated
+peer to **advertise** which facets it indexes, and no
+guarantee that two peers use the same facet vocabulary. If
+the SOS node exposes a `Theme` facet with one set of values,
+and a partner node exposes `Theme` with completely different
+values, the consumer UI has no way to know — chip filters
+would either become incoherent (mixed vocabularies) or get
+clamped to a hardcoded subset (defeating the federation
+goal).
+
+**Sketch for federation-scoping.md to absorb.** Three pieces
+needed:
+
+1. **Facet schema declaration.** Each peer's well-known
+   document (`/.well-known/terraviz.json`) gains a
+   `facet_schema` field — a list of `{ facet, label, type,
+   values? }` entries declaring which facets the peer
+   indexes. `type` distinguishes enumerated vocabularies
+   (controlled list — Theme, NGSS grade level) from
+   open-ended (free-text — keyword) from range (numeric or
+   year). `values?` is provided when `type` is enumerated.
+2. **Facet vocabulary alignment.** Reserve a well-known
+   namespace (`sos:*`, `ngss:*`, `terraviz:*`) for shared
+   vocabularies, with `local:*` for peer-specific extensions.
+   A consumer can render `sos:theme` and `ngss:min_grade`
+   filters confidently; `local:*` filters are surfaced only
+   when the user has explicitly subscribed to that peer.
+3. **Federated query degradation.** When a UI builds a query
+   that includes a facet some peers don't advertise, that
+   peer is queried without the filter (returning a superset).
+   Results are tagged with which facets matched so the UI can
+   indicate "results from peer X were not filtered by NGSS
+   grade level".
+
+**This plan's posture.** Phase 4 (§6.1) ships the **baseline**
+facets that work today — tags, format, date_added, plus the
+new SOS facets *once the SOS team provides the metadata*. The
+client predicate engine (`src/services/datasetFilter.ts`,
+new) is designed against a generic
+`Record<facetName, FacetPredicate>` shape so the federation
+extension lands without an API rewrite. The authoritative
+federation facet design — schema declaration, vocabulary
+alignment, query degradation — should be added to
+`docs/architecture/federation-scoping.md` §8 as a new resolved
+decision before Phase 4 federation work begins.
+
+### 1.7 Non-goals
 
 To keep the branch scoped, the following are explicitly **out**:
 
@@ -422,26 +506,73 @@ The infrastructure exists. The user-visible gap is:
 
 ### 6.1 Filter inventory
 
-The data audit in §1.4 identified the 11 tags the live SOS
-catalog already labels datasets with. That's the v1 filter
-set; no further inventory work is needed.
+Two tiers. **Baseline filters** work from data we already
+fetch. **SOS-parity filters** require metadata we don't have
+today — the SOS team would need to provide it.
+
+**Baseline (ships with Phase 4).**
 
 | Filter | Driving field | v1? | Effort | Notes |
 |---|---|---|---|---|
 | Category — multi-select chips | `tags` | **Yes** | Low | 11 chips: Water (80), People (63), Air (56), Land (39), Movies (35), Space (34), Real-Time (10), Tours (8), Snow and Ice (7), Layers (1), Extras (1). Upgrade today's single-select to AND-across-chips. |
+| Keyword | `enriched.keywords` | **Yes** | Low | Dropdown — 723 distinct values; expose as a searchable select to match the SOS UI's "Select a keyword". |
 | Format | `format` (video/mp4, image/jpg, tour/json…) | **Yes** | Low | Coarse buckets: Video, Image, Tour, Other. |
 | Date added | `enriched.date_added` (year) | **Yes** | Low | Year-range slider, 2010–current. |
 | Has closed captions | `closedCaptionLink` non-empty | **Yes** | Low | Boolean toggle — addresses Beth's CC request indirectly. |
 | Has tour | `runTourOnLoad` non-empty | **Yes** | Low | Boolean toggle — surfaces the existing 11 tour-equipped datasets. |
 | SOS source quality | `available_for` (`SOS` vs `Explorer`) | **Yes** | Low | Boolean toggle: "include lower-fidelity SOS-only datasets". Off by default. See §6.4. |
-| Time range (data coverage) | `startTime`, `endTime` | Stretch | Medium | Temporal coverage filter — only if the chip filters feel sparse. |
-| Developer / organisation | `enriched.dataset_developer.name` | Stretch | Medium | 78 distinct developers — likely too granular as chips; defer or expose as search prefix. |
-| Region / bounding box | `boundingBox` | **No** | High | Map picker; conflicts with catalog-mode hidden globe. Phase 6 or later. |
+| Data-coverage year range | `startTime`, `endTime` | **Yes** | Medium | Numeric year-range matching SOS's "Allowed years 500–2100". Span of `startTime`/`endTime` already supports it — verified to year 0 / 1500 / 1800 in the audit. |
 
-A region/bounding-box filter is the most user-visible win but
-needs the most UI work (a map picker that doesn't conflict
-with the catalog-mode hidden globe). Recommend deferring
-it to Phase 6 or later.
+**SOS-parity (blocked on additional metadata — see §1.6).**
+
+| Filter | Required new metadata | Notes |
+|---|---|---|
+| Theme | `theme` (controlled vocabulary) | Visible in the SOS UI as a separate dropdown from Keyword; vocabulary unknown until the SOS team shares it. |
+| NGSS — Minimum Grade Level | `ngss.min_grade` enum | K, 1, 2, … 12. |
+| NGSS — Maximum Grade Level | `ngss.max_grade` enum | Same vocabulary as min. |
+| NGSS — Cross-cutting Concepts (CCC) | `ngss.ccc[]` enum | NGSS-defined: Patterns, Cause and Effect, Scale Proportion and Quantity, Systems and System Models, Energy and Matter, Structure and Function, Stability and Change. |
+| NGSS — Disciplinary Core Ideas (DCI) | `ngss.dci[]` enum | NGSS DCI codes (PS1-x, LS2-x, ESS3-x, etc.). |
+
+NGSS metadata is **mandatory parity** for the SOS catalog
+audience (educators) but **not available** in either JSON
+source we currently load. Options:
+
+1. **Ask the SOS team** for a JSON export of the NGSS
+   annotations from their catalog backend — by far the
+   cleanest path. Once received, ship as static enrichment
+   alongside `sos_dataset_metadata.json`.
+2. **Scrape the SOS dataset detail pages.** Each public
+   dataset page on `sos.noaa.gov/catalog/datasets/<id>` likely
+   exposes the NGSS tags; a one-off scrape script could
+   populate a sidecar file. Brittle, but unblocks if option 1
+   stalls.
+3. **Hand-annotate the top N datasets.** Low quality, doesn't
+   scale, but worth considering for the 50 most-viewed
+   datasets if the other options are slow.
+
+Recommended path: pursue option 1 first; only fall back to
+option 2 if option 1 is materially slow.
+
+**Stretch / deferred.**
+
+| Filter | Driving field | Notes |
+|---|---|---|
+| Developer / organisation | `enriched.dataset_developer.name` | 78 distinct developers — likely too granular as chips; defer or expose as search prefix. |
+| Region / bounding box | `boundingBox` | Map picker; conflicts with catalog-mode hidden globe. Phase 6 or later. |
+
+A region/bounding-box filter is the most user-visible
+geographic win but needs the most UI work (a map picker that
+doesn't conflict with the catalog-mode hidden globe).
+Recommend deferring it to Phase 6 or later.
+
+**Implementation note — federation forward-compatibility.**
+The `datasetFilter.ts` predicate engine is designed against a
+generic `Record<facetName, FacetPredicate>` shape (§1.6).
+Baseline facets are hardcoded keys in v1; SOS-parity facets
+slot in by name once metadata lands; federated peer facets
+become a runtime-discovered set once the federation
+`facet_schema` declaration in §1.6 is specified and shipped.
+No predicate-engine rewrite required at any tier transition.
 
 ### 6.2 Search semantics
 
@@ -641,6 +772,16 @@ session." That maps to localStorage (not actual cookies —
 cookies are the wrong tool here; clarifying with Adrian is
 trivial).
 
+**Important context** (§1.4 data audit): the SOS catalog
+already exposes a "View My Playlist" button. This is not a
+net-new TerraViz feature — it's a parity feature. Worth
+asking Adrian whether SOS's existing playlist behaviour
+should be matched (button placement, interaction model,
+persistence semantics) or improved on. The design below is
+written from first principles; if SOS's existing playlist
+UX is the target, the design should be adjusted before
+build.
+
 **Data model.**
 
 ```ts
@@ -781,16 +922,11 @@ sequencing and avoid mid-phase rework.
    an opt-in entry, and make the SOS website link directly
    to `?catalog=true` for catalog visitors.
 
-2. **Filter inventory (Beth).** **Partially resolved by the
-   data audit (§1.4 / §6.1).** The 11 tags the live catalog
-   already uses (Water, People, Air, Land, Movies, Space,
-   Real-Time, Tours, Snow and Ice, Layers, Extras) form the
-   v1 chip set. Outstanding question: does Beth want any
-   *additional* filters beyond chip-tags + format + date-added
-   + boolean toggles (captions / tour / source quality)? The
-   live <https://sos.noaa.gov/catalog/datasets/> page is the
-   reference. Region/boundary picking is deferred to a later
-   phase per §9.2.
+2. **Filter inventory (Beth).** **Mostly resolved by the
+   data audit + SOS filter-panel screenshot (§1.4 / §6.1).**
+   Baseline filters ship Phase 4. The four-filter NGSS bundle
+   plus Theme are real SOS-parity items but require metadata
+   we don't have — see Open Question #7.
 
 3. **Frame/label bug datasets (Beth, Hilary).** Specific
    dataset IDs that exhibit the time/frame issue would let
@@ -814,6 +950,29 @@ sequencing and avoid mid-phase rework.
    directly, the contrast/saturation defaults are easier to
    tune to match.
 
+7. **NGSS / Theme metadata source (SOS team).** Where can we
+   get the NGSS annotations (min/max grade level, Cross-cutting
+   Concepts, Disciplinary Core Ideas) and Theme vocabulary
+   from the SOS catalog backend? §6.1 outlines three options
+   (JSON export, page scrape, hand-annotate top-N). Cleanest
+   path: a JSON export from the SOS catalog database. Without
+   this, Phase 4 ships baseline filters but not full SOS
+   parity.
+
+8. **Federation facet protocol (Eric / Zyra core).** §1.6
+   sketches three pieces — facet schema declaration in the
+   well-known doc, vocabulary namespacing (`sos:*`, `ngss:*`,
+   `local:*`), and federated query degradation. These belong
+   in
+   [`docs/architecture/federation-scoping.md`](architecture/federation-scoping.md)
+   §8 as a new resolved decision, not in this plan. Should
+   that decision be made now (so Phase 4 can build against a
+   stable contract) or deferred until the federation track
+   restarts? Recommendation: lock the decision in
+   federation-scoping.md now, even if the protocol itself
+   doesn't ship for another quarter — it's much cheaper than
+   retrofitting the predicate engine later.
+
 ---
 
 ## 11. Sequencing summary
@@ -823,19 +982,21 @@ sequencing and avoid mid-phase rework.
 | 1 | Catalog-first UX | 1–1.5 weeks | Open question #1 |
 | 2 | Info panel completeness | 3–5 days | none |
 | 3 | Playback fidelity | ~1 week | Open question #3 |
-| 4 | Filters & search + all-SOS widening | 1–2 weeks | none (closed by §1.4 audit) |
+| 4 | Filters & search + all-SOS widening | 1–2 weeks (baseline) | Open question #7 (NGSS metadata) for SOS-parity facets; baseline ships without it |
 | 5 | UI polish & shader | ~2 weeks | Open question #4, #6 |
 | 6 | Playlists + zip downloads | ~3–4 weeks | Open question #5 |
 | — | High-fidelity assets for SOS-only datasets | — | Federation track (`CATALOG_BACKEND_PLAN.md`) |
+| — | Federation facet protocol | — | Open question #8 → resolved decision in `federation-scoping.md` |
 
 Phases 1, 2, and 3 are the highest leverage and can land in
 roughly three weeks combined. They address every request from
 Beth and Hilary except the filters work, and they address
 Adrian's catalog-mode and fullscreen asks. Phase 4 then
-delivers both the filter surface and the "all SOS datasets"
-widening together (at preview quality, with the federation
-track owning the high-fidelity upgrade). Phases 5–6 layer on;
-each is independently shippable.
+delivers the baseline filter surface and the "all SOS
+datasets" widening together (at preview quality); SOS-parity
+filters (Theme + NGSS bundle) layer on top once Open Question
+#7 is answered. Phases 5–6 layer on; each is independently
+shippable.
 
 ---
 
