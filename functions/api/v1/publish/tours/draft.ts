@@ -6,8 +6,16 @@
  * by the publisher portal's "New tour" button: instead of
  * requiring the caller to first upload a tour file and then
  * POST to /tours with the ref, this endpoint does both in one
- * atomic call. Returns the new `tour` row so the dock can
- * navigate to `/?tourEdit=<id>` immediately.
+ * server request. The R2 write and the D1 insert happen
+ * sequentially against two different Cloudflare services, so
+ * the operation is not transactionally atomic across them —
+ * a failure mid-flow leaves either the row or the blob, but
+ * not both. The cleanup path is benign (the row's tour_json_ref
+ * still points at the would-be blob; the next PUT to
+ * /tours/{id}/json creates it on first save). Returns the new
+ * `tour` row so the dock can navigate to `/?tourEdit=<id>`
+ * immediately. Phase 3pt-review/A — Copilot
+ * discussion_r3284321902.
  *
  * Authorization: same as `POST /api/v1/publish/tours` — any
  * authenticated publisher (the middleware short-circuits

@@ -188,7 +188,7 @@ describe('mountTourAuthoringDock (tour/A)', () => {
       onDiscard: () => {},
     })
     const input = document.querySelector<HTMLInputElement>(
-      '#tour-authoring-rotation-input',
+      'input[aria-label="Globe rotation rate in degrees per second"]',
     )!
     input.value = '2.5'
     document
@@ -206,7 +206,7 @@ describe('mountTourAuthoringDock (tour/A)', () => {
       onDiscard: () => {},
     })
     const input = document.querySelector<HTMLInputElement>(
-      '#tour-authoring-rotation-input',
+      'input[aria-label="Globe rotation rate in degrees per second"]',
     )!
     input.value = ''
     document
@@ -223,7 +223,7 @@ describe('mountTourAuthoringDock (tour/A)', () => {
       onDiscard: () => {},
     })
     const input = document.querySelector<HTMLInputElement>(
-      '#tour-authoring-pause-input',
+      'input[aria-label="Pause duration in seconds"]',
     )!
     input.value = '3'
     document
@@ -240,7 +240,7 @@ describe('mountTourAuthoringDock (tour/A)', () => {
       onDiscard: () => {},
     })
     const input = document.querySelector<HTMLInputElement>(
-      '#tour-authoring-pause-input',
+      'input[aria-label="Pause duration in seconds"]',
     )!
     const btn = document.querySelector<HTMLButtonElement>(
       '[data-action="capture-pause-seconds"]',
@@ -395,14 +395,14 @@ describe('mountTourAuthoringDock (tour/A)', () => {
       })
       // Empty state → no dropdown.
       expect(
-        document.querySelector('#tour-authoring-unload-handle-select'),
+        document.querySelector('select[aria-label="Pick a loaded-dataset handle to unload"]'),
       ).toBeNull()
       // Capture a dataset → dropdown appears with one handle.
       document
         .querySelector<HTMLButtonElement>('[data-action="capture-dataset"]')!
         .click()
       const select = document.querySelector<HTMLSelectElement>(
-        '#tour-authoring-unload-handle-select',
+        'select[aria-label="Pick a loaded-dataset handle to unload"]',
       )!
       expect(select).toBeTruthy()
       const options = Array.from(select.options).map(o => o.value)
@@ -428,21 +428,6 @@ describe('mountTourAuthoringDock (tour/A)', () => {
         onDiscard: () => {},
       })
     }
-    function addThreeCaptures(): void {
-      // Three flyTo tasks at distinct positions so reordering is
-      // observable in the rendered labels.
-      const positions: [number, number][] = [[10, 20], [30, 40], [50, 60]]
-      for (const [lat, lng] of positions) {
-        document.querySelectorAll('.tour-authoring-dock').forEach(el => el.remove())
-        // Re-mount with the next position pre-loaded so the
-        // capture button picks it up.
-      }
-      // Simpler: just click camera 3 times against the same view; the
-      // task labels will be identical, but the count + index checks
-      // still work and the reorder behaviour is observable via
-      // expanded JSON.
-    }
-    void addThreeCaptures
 
     it('removes a task when the delete button is clicked', () => {
       dock()

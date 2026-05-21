@@ -52,7 +52,7 @@ describe('moveTask (tour/D)', () => {
     expect(after.tasks).toEqual([LOOP, FLY, PAUSE])
   })
 
-  it('moves later → earlier (drop the dragged ahead of the target)', () => {
+  it('moves earlier → later (drop the dragged behind the target)', () => {
     const s = appendTask(
       appendTask(appendTask(createEmptyState('new'), FLY), PAUSE),
       LOOP,

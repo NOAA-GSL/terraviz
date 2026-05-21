@@ -90,6 +90,10 @@ export function mountTourAuthoringDock(
   // Phase 3pt/E — autosave status surfaced in the dock header.
   let autosaveStatus: AutosaveStatus = 'idle'
   let autosaveError = ''
+  // Phase 3pt-review/A — per-mount input ids so duplicate-id
+  // label associations can't happen if a second dock ever
+  // coexists.
+  const inputIds = nextDockInputIds()
   const root = document.createElement('div')
   root.className = 'tour-authoring-dock'
   root.setAttribute('aria-label', t('tour.dock.aria'))
@@ -188,17 +192,17 @@ export function mountTourAuthoringDock(
         ${renderEnvRow('envShowWorldBorder', 'env.borders')}
       </div>
       <div class="tour-authoring-dock-group">
-        <label class="tour-authoring-dock-group-label" for="${ROTATION_INPUT_ID}">${escapeHtml(t('tour.dock.group.rotation'))}</label>
+        <label class="tour-authoring-dock-group-label" for="${inputIds.rotation}">${escapeHtml(t('tour.dock.group.rotation'))}</label>
         <div class="tour-authoring-dock-inputrow">
-          <input id="${ROTATION_INPUT_ID}" class="tour-authoring-input" type="number" step="0.1" min="-10" max="10"
+          <input id="${inputIds.rotation}" class="tour-authoring-input" type="number" step="0.1" min="-10" max="10"
                  value="1" aria-label="${escapeAttr(t('tour.dock.rotation.input.aria'))}">
           <button type="button" class="tour-authoring-chip" data-action="capture-rotation">${escapeHtml(t('tour.dock.rotation.add'))}</button>
         </div>
       </div>
       <div class="tour-authoring-dock-group">
-        <label class="tour-authoring-dock-group-label" for="${PAUSE_INPUT_ID}">${escapeHtml(t('tour.dock.group.flow'))}</label>
+        <label class="tour-authoring-dock-group-label" for="${inputIds.pause}">${escapeHtml(t('tour.dock.group.flow'))}</label>
         <div class="tour-authoring-dock-inputrow">
-          <input id="${PAUSE_INPUT_ID}" class="tour-authoring-input" type="number" step="0.5" min="0" max="600"
+          <input id="${inputIds.pause}" class="tour-authoring-input" type="number" step="0.5" min="0" max="600"
                  value="5" aria-label="${escapeAttr(t('tour.dock.pause.seconds.aria'))}">
           <button type="button" class="tour-authoring-chip" data-action="capture-pause-seconds">${escapeHtml(t('tour.dock.pause.seconds.add'))}</button>
         </div>
@@ -241,7 +245,7 @@ export function mountTourAuthoringDock(
     if (handles.length === 0) return ''
     return `
       <div class="tour-authoring-dock-inputrow">
-        <select class="tour-authoring-input" id="${UNLOAD_HANDLE_SELECT_ID}"
+        <select class="tour-authoring-input" id="${inputIds.unloadHandle}"
                 aria-label="${escapeAttr(t('tour.dock.unload.handle.aria'))}">
           ${handles.map(h => `<option value="${escapeAttr(h)}">${escapeHtml(h)}</option>`).join('')}
         </select>
@@ -322,7 +326,7 @@ export function mountTourAuthoringDock(
     root
       .querySelector<HTMLButtonElement>('[data-action="capture-rotation"]')
       ?.addEventListener('click', () => {
-        const input = root.querySelector<HTMLInputElement>(`#${ROTATION_INPUT_ID}`)
+        const input = root.querySelector<HTMLInputElement>(`#${inputIds.rotation}`)
         if (!input) return
         const value = parseFloat(input.value)
         // Defensive — `<input type=number>` returns '' for blank.
@@ -331,7 +335,7 @@ export function mountTourAuthoringDock(
     root
       .querySelector<HTMLButtonElement>('[data-action="capture-pause-seconds"]')
       ?.addEventListener('click', () => {
-        const input = root.querySelector<HTMLInputElement>(`#${PAUSE_INPUT_ID}`)
+        const input = root.querySelector<HTMLInputElement>(`#${inputIds.pause}`)
         if (!input) return
         const value = parseFloat(input.value)
         // Negative or zero pauses don't make sense — the runtime
@@ -363,7 +367,7 @@ export function mountTourAuthoringDock(
       .querySelector<HTMLButtonElement>('[data-action="capture-unload-handle"]')
       ?.addEventListener('click', () => {
         const select = root.querySelector<HTMLSelectElement>(
-          `#${UNLOAD_HANDLE_SELECT_ID}`,
+          `#${inputIds.unloadHandle}`,
         )
         if (!select || !select.value) return
         pushCaptured({ unloadDataset: select.value })
@@ -515,9 +519,25 @@ function autosaveStatusLabel(status: AutosaveStatus): string {
  *  even when multiple docks coexist (which the singleton guard in
  *  `index.ts` should prevent, but defending here keeps the page
  *  predictable if a test mounts more than one). */
-const ROTATION_INPUT_ID = 'tour-authoring-rotation-input'
-const PAUSE_INPUT_ID = 'tour-authoring-pause-input'
-const UNLOAD_HANDLE_SELECT_ID = 'tour-authoring-unload-handle-select'
+/** Per-mount counter — every dock instance gets unique input ids.
+ *  Constant ids would break `<label for="...">` association if
+ *  multiple docks ever coexist (tests, hot-reload, a lifecycle
+ *  bug). The singleton guard in `index.ts` shouldn't allow it,
+ *  but defending here keeps the page predictable. Phase 3pt-
+ *  review/A — Copilot discussion_r3284321812. */
+let dockInstanceCounter = 0
+function nextDockInputIds(): {
+  rotation: string
+  pause: string
+  unloadHandle: string
+} {
+  const n = ++dockInstanceCounter
+  return {
+    rotation: `tour-authoring-rotation-input-${n}`,
+    pause: `tour-authoring-pause-input-${n}`,
+    unloadHandle: `tour-authoring-unload-handle-select-${n}`,
+  }
+}
 
 /** Discriminating union of the env-toggle task keys the dock can
  *  emit. Phase 3pt/B; tour/C extends with more `envShow*` task
@@ -650,12 +670,23 @@ function collectDatasetHandles(tasks: TourTaskDef[]): string[] {
 /**
  * Phase 3pt/D — parse + validate text from the inline JSON
  * editor. Returns the parsed `TourTaskDef` on success, an
- * error string on failure. The shape check is intentionally
- * minimal: a `TourTaskDef` is any object with exactly one own
- * property whose key matches a known task name. Stricter
- * per-task validation lives in `tourEngine.ts` at run-time —
- * mirroring it here would couple the editor to the engine's
- * private validator surface.
+ * error string on failure.
+ *
+ * The shape check is intentionally minimal: a single-key
+ * object with arbitrary key + value. We do NOT validate the
+ * key against the known task-name allowlist here. Doing so
+ * would couple the editor to `TourTaskDef`'s discriminated-
+ * union surface, which churns as new task types land
+ * (tour/F's added five new keys; future commits will add
+ * more), and tourEngine.ts already logs + skips unknown task
+ * keys at run-time with a clear warning. The trade-off: a
+ * typo (e.g. `flytTo` instead of `flyTo`) round-trips through
+ * the editor unflagged and shows up as a silent no-op when
+ * the tour plays. Acceptable for v1; a future tour/?-letter
+ * commit can add a per-key warning by importing the canonical
+ * key list from a single source of truth once the task set
+ * stabilises. Phase 3pt-review/A — Copilot
+ * discussion_r3284321829.
  */
 function parseEditorJson(
   text: string,

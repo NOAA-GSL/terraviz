@@ -164,6 +164,65 @@ describe('createAutosaveManager (tour/E)', () => {
     expect(lastCall?.[1]).toContain('Server error')
   })
 
+  it('serializes saves: a debounce fire during an in-flight save is queued, not raced', async () => {
+    // Phase 3pt-review/A — Copilot discussion_r3284321754. Two
+    // saves arriving in close succession must reach the server
+    // in order. The first save is held by a manual gate so we
+    // can observe what happens when the second debounce fires
+    // mid-flight; the runner must queue rather than start a
+    // parallel doSave() that races the in-flight one.
+    let firstResolve: (() => void) | null = null
+    const callOrder: Array<{ id: string; tasks: number }> = []
+    const saveTourJson = vi.fn(async (id: string, file: { tourTasks: unknown[] }) => {
+      callOrder.push({ id, tasks: file.tourTasks.length })
+      if (firstResolve == null) {
+        // First call — pause until the test releases it.
+        await new Promise<void>(r => {
+          firstResolve = r
+        })
+      }
+      return { tour: { id, slug: 'x', title: 't', tour_json_ref: 'r2:...', updated_at: 't' } }
+    })
+    const sched = makeScheduler()
+    const mgr = createAutosaveManager(
+      'X',
+      { onStatusChange: () => {} },
+      {
+        debounceMs: 100,
+        api: { createDraftTour: vi.fn(), saveTourJson },
+        scheduler: { setTimeout: sched.setTimeout, clearTimeout: sched.clearTimeout },
+      },
+    )
+    // Save #1 with 1 task; save #2 with 3 tasks so the
+    // payloads are distinguishable by length.
+    mgr.requestSave({ tourTasks: [{ pauseSeconds: 1 }] })
+    sched.flushOne()
+    await Promise.resolve()
+    mgr.requestSave({
+      tourTasks: [
+        { pauseSeconds: 1 },
+        { pauseSeconds: 2 },
+        { pauseSeconds: 3 },
+      ],
+    })
+    sched.flushOne()
+    await Promise.resolve()
+    // Only save #1 has happened so far — save #2 is queued
+    // behind the in-flight one rather than racing it.
+    expect(callOrder).toHaveLength(1)
+    expect(callOrder[0].tasks).toBe(1)
+    // Release save #1; save #2 should fire next, with its full
+    // 3-task payload. The non-null assertion is safe — save #1
+    // has already started (callOrder length is 1) and its first
+    // statement assigned `firstResolve`.
+    ;(firstResolve as unknown as () => void)()
+    await Promise.resolve()
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(callOrder).toHaveLength(2)
+    expect(callOrder[1].tasks).toBe(3)
+  })
+
   it('flush() fires immediately bypassing the debounce', async () => {
     const saveTourJson = vi.fn(async () => ({ tour: { id: 'X', slug: 'x', title: 't', tour_json_ref: 'r2:...', updated_at: 't' } }))
     const sched = makeScheduler()

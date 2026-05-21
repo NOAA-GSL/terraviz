@@ -120,13 +120,40 @@ export function createAutosaveManager(
     if (pendingHandle !== null) sched.clearTimeout(pendingHandle)
     pendingHandle = sched.setTimeout(() => {
       pendingHandle = null
-      if (pendingPayload === null) return
-      const payload = pendingPayload
-      pendingPayload = null
-      inFlight = doSave(payload).finally(() => {
-        inFlight = null
-      })
+      ensureProcessing()
     }, debounceMs)
+  }
+
+  /**
+   * Phase 3pt-review/A — serialize saves via a recursive
+   * scheduler. Each `scheduleNext` call either fires the
+   * pending payload (chaining `.finally(scheduleNext)` so the
+   * next pending payload picks up automatically) or clears
+   * `inFlight` when the queue is empty.
+   *
+   * Concurrent callers (a fresh `requestSave` arriving during
+   * a save, or `flush()`) just bump `pendingPayload` and let
+   * the existing chain pick it up — `ensureProcessing` early-
+   * returns when a save is in flight.
+   *
+   * The alternative of chaining `.then`s onto the in-flight
+   * promise produced overlapping chains that raced for the
+   * same `pendingPayload` — Copilot discussion_r3284321754
+   * caught that case.
+   */
+  function ensureProcessing(): void {
+    if (inFlight) return
+    scheduleNext()
+  }
+
+  function scheduleNext(): void {
+    if (pendingPayload === null) {
+      inFlight = null
+      return
+    }
+    const payload = pendingPayload
+    pendingPayload = null
+    inFlight = doSave(payload).finally(scheduleNext)
   }
 
   return {
@@ -136,19 +163,17 @@ export function createAutosaveManager(
       scheduleFlush()
     },
     flush: async () => {
-      // Cancel any debounce and write immediately. If a save is
-      // already in flight, wait for it first so we don't fire
-      // two PUTs racing for the same row.
+      // Cancel any debounce and write immediately, while still
+      // honouring the one-save-at-a-time invariant via
+      // `ensureProcessing`. If a save is in flight, the loop
+      // will pick up any pendingPayload on its next iteration;
+      // we just wait for `inFlight` to clear.
       if (pendingHandle !== null) {
         sched.clearTimeout(pendingHandle)
         pendingHandle = null
       }
-      if (inFlight) await inFlight
-      if (pendingPayload !== null) {
-        const payload = pendingPayload
-        pendingPayload = null
-        await doSave(payload)
-      }
+      ensureProcessing()
+      while (inFlight) await inFlight
     },
   }
 }
