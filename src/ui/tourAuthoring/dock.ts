@@ -85,6 +85,13 @@ export function mountTourAuthoringDock(
   // Phase 3pt/D — index of the task currently expanded for inline
   // JSON edit; -1 when no row is being edited.
   let editingIndex = -1
+  // Phase 3pt-review/B — buffer the in-progress textarea contents
+  // so a re-render (e.g. autosave status flip) doesn't reset the
+  // editor to `JSON.stringify(task)` and eat the publisher's
+  // unsaved typing. Null when the buffer is empty; the current
+  // editing row writes into it on every `input`. Copilot
+  // discussion_r3284513411.
+  let editorBuffer: string | null = null
   // Drag source index — tracked across `dragstart`/`drop` events.
   let draggingIndex = -1
   // Phase 3pt/E — autosave status surfaced in the dock header.
@@ -138,17 +145,23 @@ export function mountTourAuthoringDock(
    * server-side errors via the publishStatus badge.
    */
   async function runPublish(): Promise<void> {
-    // Need a real id; can't publish a `new` sentinel.
+    // Need a real id; can't publish a `new` sentinel. Phase
+    // 3pt-review/B — Copilot discussion_r3284513397.
+    //
+    // `flush()` only drains existing `pendingPayload`; if the
+    // publisher clicked Publish before any capture, no
+    // `requestAutosave` has fired and the queue is empty.
+    // Without the explicit requestSave below, the tourId would
+    // stay `'new'` and publish would 404. Bumping the queue
+    // with the current state (typically the empty
+    // `{tourTasks: []}` seeded by `createEmptyState`)
+    // guarantees the autosave loop mints the draft + the
+    // empty file lands at the canonical R2 key before publish
+    // round-trips.
     if (autosave.getTourId() === 'new') {
-      // Trigger a flush which mints the draft + saves the
-      // current state. If the publisher just clicked Publish
-      // before any capture, the empty `{tourTasks: []}` lands
-      // first; publishing an empty tour is allowed (the row
-      // exists, the file is well-formed).
-      await autosave.flush()
-    } else {
-      await autosave.flush()
+      autosave.requestSave({ tourTasks: state.tasks })
     }
+    await autosave.flush()
     const id = autosave.getTourId()
     if (id === 'new') {
       // Flush didn't promote — autosave failed; surface that
@@ -205,13 +218,17 @@ export function mountTourAuthoringDock(
               role="status"
               aria-live="polite"
               title="${escapeAttr(autosaveError || autosaveStatusLabel(autosaveStatus))}">${escapeHtml(autosaveStatusLabel(autosaveStatus))}</span>
-        <button type="button" class="tour-authoring-dock-publish"
+        <button type="button" class="tour-authoring-dock-publish tour-authoring-dock-publish-${publishStatus}"
                 data-action="publish"
                 ${publishStatus === 'publishing' ? 'disabled' : ''}
+                title="${escapeAttr(publishError || t('tour.dock.publish.aria'))}"
                 aria-label="${escapeAttr(t('tour.dock.publish.aria'))}">${escapeHtml(publishButtonLabel(publishStatus))}</button>
         <button type="button" class="tour-authoring-dock-close"
                 aria-label="${escapeAttr(t('tour.dock.discard.aria'))}">×</button>
       </div>
+      ${publishStatus === 'error' && publishError
+        ? `<div class="tour-authoring-dock-publish-errormsg" role="alert">${escapeHtml(publishError)}</div>`
+        : ''}
       <div class="tour-authoring-dock-actions">
         <button type="button" class="tour-authoring-action" data-action="capture-camera">
           ${escapeHtml(t('tour.dock.action.captureCamera'))}
@@ -313,7 +330,13 @@ export function mountTourAuthoringDock(
    *  delegated on the `<ol>` to keep the per-row markup terse. */
   function renderTaskRow(task: TourTaskDef, i: number): string {
     const isEditing = editingIndex === i
-    const json = JSON.stringify(task, null, 2)
+    // Restore the in-progress buffer when re-rendering the row
+    // that's currently being edited, so a render fired by
+    // autosave-status changes doesn't blow away unsaved typing.
+    const json =
+      isEditing && editorBuffer !== null
+        ? editorBuffer
+        : JSON.stringify(task, null, 2)
     return `<li class="tour-authoring-task${isEditing ? ' tour-authoring-task-editing' : ''}"
                 draggable="true" data-task-index="${i}">
       <span class="tour-authoring-task-handle" aria-hidden="true">☰</span>
@@ -440,8 +463,10 @@ export function mountTourAuthoringDock(
           const idx = parseInt(btn.dataset.index ?? '', 10)
           if (Number.isInteger(idx)) {
             state = removeTaskAt(state, idx)
-            if (editingIndex === idx) editingIndex = -1
-            else if (editingIndex > idx) editingIndex -= 1
+            if (editingIndex === idx) {
+              editingIndex = -1
+              editorBuffer = null
+            } else if (editingIndex > idx) editingIndex -= 1
             requestAutosave()
             render()
           }
@@ -457,6 +482,7 @@ export function mountTourAuthoringDock(
           // again collapses the editor. Single-row-at-a-time
           // expansion keeps the UI obvious.
           editingIndex = editingIndex === idx ? -1 : idx
+          editorBuffer = null
           render()
         })
       })
@@ -464,7 +490,13 @@ export function mountTourAuthoringDock(
       .querySelector<HTMLButtonElement>('[data-action="cancel-edit"]')
       ?.addEventListener('click', () => {
         editingIndex = -1
+        editorBuffer = null
         render()
+      })
+    root
+      .querySelector<HTMLTextAreaElement>('.tour-authoring-task-editor-input')
+      ?.addEventListener('input', e => {
+        editorBuffer = (e.target as HTMLTextAreaElement).value
       })
     root
       .querySelector<HTMLButtonElement>('[data-action="save-edit"]')
@@ -480,6 +512,7 @@ export function mountTourAuthoringDock(
         if (parsed.ok) {
           state = updateTaskAt(state, idx, parsed.task)
           editingIndex = -1
+          editorBuffer = null
           requestAutosave()
           render()
         } else {
@@ -527,6 +560,7 @@ export function mountTourAuthoringDock(
             editingIndex = dropIndex
           } else if (editingIndex >= 0) {
             editingIndex = -1
+            editorBuffer = null
           }
           requestAutosave()
         }

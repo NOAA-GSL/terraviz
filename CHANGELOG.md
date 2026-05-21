@@ -137,9 +137,9 @@ in the same table shape `datasets.ts` uses; each row gets a
 **Delete** button with a `window.confirm` gate and inline
 error surfacing.
 
-**Reviewer iterations.** One Copilot review pass during the
-PR generated seven actionable comments; landed as
-`tour-review/A`. Notable hardening:
+**Reviewer iterations.** Two Copilot review passes during the
+PR landed as `tour-review/A` and `tour-review/B`. Notable
+hardening from pass A:
 
   - Autosave-race fix: pre-fix code fired `doSave()` from the
     debounced callback even when a previous save was still
@@ -157,6 +157,25 @@ PR generated seven actionable comments; landed as
     and D1 insert are sequential against two different
     Cloudflare services; the cleanup path on partial failure
     is documented.
+
+And from pass B:
+
+  - Empty-tour publish: clicking Publish on a fresh `'new'`
+    dock with no captures used to 404 because `flush()` had
+    nothing to drain and the tourId stayed `'new'`. `runPublish`
+    now seeds the autosave queue with the current (possibly
+    empty) state so the draft mints before publish round-trips.
+  - Publish errors surfaced inline: the `title` tooltip on the
+    button + a `role=alert` div under the header replace the
+    previous swallowed error.
+  - Inline JSON editor preserves in-progress text across
+    re-renders: the autosave-status flip used to rebuild the
+    textarea from `JSON.stringify(task)` and wipe unsaved
+    typing. The dock now buffers the textarea's `input` value
+    and restores it when the editing row re-renders.
+  - Pagination comment fix in `listToursForPublisher` — the
+    extra fetched row is used only to detect hasMore; the cursor
+    is the last *returned* row's id.
 
 **Not in this PR (deferred).**
 

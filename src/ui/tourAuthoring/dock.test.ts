@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mountTourAuthoringDock } from './dock'
+import * as tourApi from './api'
 import type { Dataset, MapViewContext } from '../../types'
 
 function makeDataset(overrides: Partial<Dataset> = {}): Dataset {
@@ -29,6 +30,9 @@ afterEach(() => {
   // Each test mounts the dock to body; tear them all down so the
   // next test starts from a clean DOM.
   document.querySelectorAll('.tour-authoring-dock').forEach(el => el.remove())
+  // tour-review/B publish-flow tests `vi.spyOn` the api module —
+  // restore so the next test sees the real exports.
+  vi.restoreAllMocks()
 })
 
 describe('mountTourAuthoringDock (tour/A)', () => {
@@ -594,6 +598,173 @@ describe('mountTourAuthoringDock (tour/A)', () => {
       ).map(el => el.textContent ?? '')
       // After moving index 0 → index 2: [Cam, Cam, Pause]
       expect(afterLabels[2]).toContain('Pause')
+    })
+  })
+
+  describe('tour-review/B follow-ups', () => {
+    it('preserves in-progress textarea contents across a re-render', () => {
+      mountTourAuthoringDock('new', {
+        getMapView: () => makeView(),
+        getCurrentDataset: () => null,
+        onDiscard: () => {},
+      })
+      // Capture a flyTo so there's something to edit, then open
+      // the inline editor on it.
+      document
+        .querySelector<HTMLButtonElement>('[data-action="capture-camera"]')!
+        .click()
+      document
+        .querySelector<HTMLButtonElement>('[data-action="edit-task"]')!
+        .click()
+      const editor = document.querySelector<HTMLTextAreaElement>(
+        '.tour-authoring-task-editor-input',
+      )!
+      const inProgress = '{\n  "pauseSeconds": 42\n}'
+      editor.value = inProgress
+      // Simulate the user typing — the dock listens on `input`
+      // and stashes the value in its buffer.
+      editor.dispatchEvent(new Event('input', { bubbles: true }))
+      // Trigger a re-render via an unrelated capture. Pre-fix,
+      // this rebuilt the textarea from `JSON.stringify(task)` and
+      // wiped the user's in-progress typing.
+      document
+        .querySelector<HTMLButtonElement>('[data-action="capture-reset-zoom"]')!
+        .click()
+      const afterEditor = document.querySelector<HTMLTextAreaElement>(
+        '.tour-authoring-task-editor-input',
+      )!
+      expect(afterEditor.value).toBe(inProgress)
+    })
+
+    it('clears the editor buffer on Cancel (next edit shows the persisted JSON)', () => {
+      mountTourAuthoringDock('new', {
+        getMapView: () => makeView(),
+        getCurrentDataset: () => null,
+        onDiscard: () => {},
+      })
+      document
+        .querySelector<HTMLButtonElement>('[data-action="capture-camera"]')!
+        .click()
+      document
+        .querySelector<HTMLButtonElement>('[data-action="edit-task"]')!
+        .click()
+      const editor = document.querySelector<HTMLTextAreaElement>(
+        '.tour-authoring-task-editor-input',
+      )!
+      editor.value = 'half-typed'
+      editor.dispatchEvent(new Event('input', { bubbles: true }))
+      document
+        .querySelector<HTMLButtonElement>('[data-action="cancel-edit"]')!
+        .click()
+      // Re-open the editor — should show the original JSON, not
+      // the cancelled buffer.
+      document
+        .querySelector<HTMLButtonElement>('[data-action="edit-task"]')!
+        .click()
+      const afterEditor = document.querySelector<HTMLTextAreaElement>(
+        '.tour-authoring-task-editor-input',
+      )!
+      expect(afterEditor.value).not.toBe('half-typed')
+      expect(afterEditor.value).toContain('"flyTo"')
+    })
+
+    it('surfaces a publish error inline + in the button title', async () => {
+      // Stub the api module so the publish round-trip returns a
+      // canned error and the autosave loop promotes the 'new'
+      // sentinel without hitting the network.
+      vi.spyOn(tourApi, 'createDraftTour').mockResolvedValue({
+        tour: {
+          id: '01HXAAAAAAAAAAAAAAAAAAAAAA',
+          slug: 's',
+          title: 't',
+          tour_json_ref: 'r',
+          updated_at: '2026-05-21T20:30:00.000Z',
+        },
+      })
+      vi.spyOn(tourApi, 'saveTourJson').mockResolvedValue({
+        tour: {
+          id: '01HXAAAAAAAAAAAAAAAAAAAAAA',
+          slug: 's',
+          title: 't',
+          tour_json_ref: 'r',
+          updated_at: '2026-05-21T20:30:00.000Z',
+        },
+      })
+      const publishSpy = vi
+        .spyOn(tourApi, 'publishTour')
+        .mockResolvedValue({ error: 'Server error (500)' })
+      mountTourAuthoringDock('new', {
+        getMapView: () => makeView(),
+        getCurrentDataset: () => null,
+        onDiscard: () => {},
+      })
+      // Capture something so autosave has a payload — not
+      // strictly required for the empty-tour path, but mirrors a
+      // realistic flow.
+      document
+        .querySelector<HTMLButtonElement>('[data-action="capture-camera"]')!
+        .click()
+      const publishBtn = document.querySelector<HTMLButtonElement>(
+        '[data-action="publish"]',
+      )!
+      publishBtn.click()
+      // Pump microtasks: requestSave → createDraftTour →
+      // saveTourJson → flush resolves → publishTour → render.
+      for (let i = 0; i < 10; i++) await Promise.resolve()
+      expect(publishSpy).toHaveBeenCalled()
+      const errorDiv = document.querySelector('.tour-authoring-dock-publish-errormsg')
+      expect(errorDiv?.textContent).toContain('Server error (500)')
+      // Title attribute on the button is the same string so the
+      // tooltip on hover matches.
+      const refreshedBtn = document.querySelector<HTMLButtonElement>(
+        '[data-action="publish"]',
+      )!
+      expect(refreshedBtn.getAttribute('title')).toContain('Server error (500)')
+    })
+
+    it('publishes an empty tour by promoting the new sentinel first', async () => {
+      vi.spyOn(tourApi, 'createDraftTour').mockResolvedValue({
+        tour: {
+          id: '01HXBBBBBBBBBBBBBBBBBBBBBB',
+          slug: 's',
+          title: 't',
+          tour_json_ref: 'r',
+          updated_at: '2026-05-21T20:30:00.000Z',
+        },
+      })
+      const saveSpy = vi.spyOn(tourApi, 'saveTourJson').mockResolvedValue({
+        tour: {
+          id: '01HXBBBBBBBBBBBBBBBBBBBBBB',
+          slug: 's',
+          title: 't',
+          tour_json_ref: 'r',
+          updated_at: '2026-05-21T20:30:00.000Z',
+        },
+      })
+      const publishSpy = vi.spyOn(tourApi, 'publishTour').mockResolvedValue({
+        tour: {
+          id: '01HXBBBBBBBBBBBBBBBBBBBBBB',
+          slug: 's',
+          title: 't',
+          tour_json_ref: 'r',
+          updated_at: '2026-05-21T20:30:00.000Z',
+        },
+        publish_id: '01HXPUB000000000000000PUB1',
+      })
+      mountTourAuthoringDock('new', {
+        getMapView: () => makeView(),
+        getCurrentDataset: () => null,
+        onDiscard: () => {},
+      })
+      // No captures — publish from a fresh dock with an empty
+      // task list. Pre-fix this 404'd because the autosave queue
+      // was empty so flush() never promoted 'new' to a ULID.
+      document
+        .querySelector<HTMLButtonElement>('[data-action="publish"]')!
+        .click()
+      for (let i = 0; i < 10; i++) await Promise.resolve()
+      expect(saveSpy).toHaveBeenCalled()
+      expect(publishSpy).toHaveBeenCalledWith('01HXBBBBBBBBBBBBBBBBBBBBBB')
     })
   })
 

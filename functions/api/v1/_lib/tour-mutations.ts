@@ -292,8 +292,11 @@ export async function listToursForPublisher(
   }
   let next_cursor: string | null = null
   if (rows.length > options.limit) {
-    // Slice off the sentinel row; its id becomes the next
-    // page's cursor.
+    // We fetched `limit + 1` rows. The extra row is only used to
+    // detect hasMore — we drop it and set the cursor to the id of
+    // the last *returned* row, which the next page's `cursor < ?`
+    // predicate will pick up from. Phase 3pt-review/B — Copilot
+    // discussion_r3284513457.
     next_cursor = rows[options.limit - 1]?.id ?? null
     rows = rows.slice(0, options.limit)
   }
