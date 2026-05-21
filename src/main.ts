@@ -64,6 +64,7 @@ import { flyToOnGlobe, isVrActive } from './services/vrSession'
 import type { VrDatasetTexture } from './services/vrScene'
 import { overlayOptionsFromDataset } from './services/datasetOverlayOptions'
 import { resolveFrameQuery } from './utils/frames'
+import { initTourAuthoring } from './ui/tourAuthoring'
 import { bootstrapI18n } from './i18n/bootstrap'
 
 // Phase 5: set a body class so CSS can target mobile-native adaptations
@@ -322,6 +323,11 @@ class InteractiveSphere {
 
       // Initialize digital docent chat (available on all views)
       this.initChat()
+
+      // Tour-authoring dock — mounts only when the URL carries
+      // `?tourEdit=<id>`. Phase 3pt/A. Idempotent; the dock owns
+      // its own DOM and dispose lifecycle.
+      this.initTourAuthoring()
 
       // Enter VR button — feature-gated internally; hides itself on
       // non-WebXR browsers and warm-loads Three.js in the background
@@ -1774,6 +1780,27 @@ class InteractiveSphere {
       getCurrentDataset: () => this.appState.currentDataset,
       announce: (msg) => this.announce(msg),
       onOpenBrowse: () => this.openBrowsePanel(),
+    })
+  }
+
+  /**
+   * Phase 3pt/A — mount the tour-authoring dock when the URL
+   * carries `?tourEdit=<id>` (or `=new` for a fresh draft).
+   * No-op on regular page loads. The dock reads from the primary
+   * renderer's view context to compose camera-step tasks; its
+   * "Discard" button strips the URL param and routes back to
+   * the publisher tour list.
+   */
+  private initTourAuthoring(): void {
+    initTourAuthoring({
+      getMapView: () => this.renderer?.getViewContext() ?? null,
+      onDiscard: () => {
+        // Clear the query string and go to the publisher portal's
+        // tour list. Using `location.assign` so the back-button
+        // history stays clean (a tour-edit URL bouncing in the
+        // history is more confusing than the simple linear path).
+        window.location.assign('/publish/tours')
+      },
     })
   }
 

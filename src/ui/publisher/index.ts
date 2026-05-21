@@ -27,6 +27,7 @@ import { renderDatasetsPage } from './pages/datasets'
 import { renderDatasetDetailPage } from './pages/dataset-detail'
 import { renderDatasetEditPage } from './pages/dataset-edit'
 import { renderDatasetNewPage } from './pages/dataset-new'
+import { renderToursPage } from './pages/tours'
 import { renderTopbar } from './components/topbar'
 import '../../styles/publisher.css'
 
@@ -184,7 +185,10 @@ function datasetEditPage(
 }
 
 function toursPage(mount: HTMLElement): RouteHandler {
-  return () => renderPlaceholder(mount, t('publisher.section.tours'), '3pe')
+  // Phase 3pt/A — replaces the earlier 3pe placeholder with the
+  // tour-creator landing page. Real tour list + autosave land in
+  // tour/E.
+  return () => renderToursPage(mount)
 }
 
 function importPage(mount: HTMLElement): RouteHandler {
