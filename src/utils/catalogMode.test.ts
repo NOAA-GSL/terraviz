@@ -73,4 +73,11 @@ describe('catalogMode · setCatalogMode', () => {
     setCatalogMode(false)
     expect(getCatalogMode()).toBe(false)
   })
+
+  it('does not create a history entry when the state is unchanged', () => {
+    setUrl('?catalog=true')
+    const beforeLength = window.history.length
+    setCatalogMode(true)
+    expect(window.history.length).toBe(beforeLength)
+  })
 })

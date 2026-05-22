@@ -55,7 +55,13 @@ import { showTourControls, hideTourControls, hideAllTourTextBoxes, hideAllTourIm
 import { initLegendForDataset, clearLegendCache, loadConfig } from './services/docentService'
 import { isMobile, IS_MOBILE_NATIVE, getCloudTextureUrl } from './utils/deviceCapability'
 import { initDeepLinks } from './services/deepLinkService'
-import { getCatalogMode } from './utils/catalogMode'
+import { getCatalogMode, setCatalogMode } from './utils/catalogMode'
+import {
+  hideCatalogTabs,
+  initCatalogTabs,
+  setActiveCatalogTab,
+  showCatalogTabs,
+} from './ui/catalogTabsUI'
 import {
   applyPosterDeepLinks,
   parseInitialLayout,
@@ -291,6 +297,16 @@ class InteractiveSphere {
         announce: (msg) => this.announce(msg),
         getCurrentDataset: () => this.appState.currentDataset ?? null,
       })
+      // Catalog ↔ sphere tab control — only becomes visible when
+      // `?catalog=true` is in the URL (see syncCatalogTabsForUrl
+      // below). The control is mounted unconditionally so the
+      // popstate handler can show/hide it without re-wiring on
+      // every history navigation.
+      initCatalogTabs({
+        onSelectCatalog: () => this.enterCatalogTab(),
+        onSelectSphere: () => this.enterSphereTab(),
+      })
+      this.wireCatalogModePopstate()
       // Apply persisted view prefs to the toolbar button state now
       // that the toolbar exists.
       syncToolsMenuState({
@@ -395,7 +411,12 @@ class InteractiveSphere {
         // into the remaining panels, and pulse the Browse button so
         // they notice where to click. In single-view mode we don't —
         // the URL-specified dataset is the only thing the user wanted.
-        if (this.viewports.getPanelCount() > 1) {
+        //
+        // Catalog mode (`?catalog=true&dataset=<id>`) gets the same
+        // treatment as multi-viewport: render the browse panel
+        // collapsed so the tab control's "back to catalog" affordance
+        // has something to expand. Plan §3.1 case 2.
+        if (this.viewports.getPanelCount() > 1 || catalogModeActive) {
           showBrowseUI(this.appState.datasets, {
             onSelectDataset: (id) => this.selectDatasetFromBrowse(id),
             announce: (msg) => this.announce(msg),
@@ -403,7 +424,11 @@ class InteractiveSphere {
             onOpenChat: (query) => this.openChatWithQuery(query),
           })
           collapseBrowseUI()
-          pulseBrowseButton()
+          if (!catalogModeActive) pulseBrowseButton()
+        }
+        if (catalogModeActive) {
+          showCatalogTabs()
+          setActiveCatalogTab('sphere')
         }
       } else if (catalogModeActive) {
         // Catalog-mode no-dataset boot: the browse panel is the
@@ -416,9 +441,10 @@ class InteractiveSphere {
         // `catalog-empty` is the CSS hook for "globe hidden,
         // browse full-surface"; it stays set until the first
         // dataset loads (cleared in `selectDatasetFromBrowse`).
-        // `catalog-mode` stays set as long as the URL carries
-        // `?catalog=true`, even after a dataset is loaded, so
-        // the catalog\u2194sphere tab control (\u00a73.2) can find it.
+        // `catalog-mode` is the sticky session marker \u2014 set once
+        // when the visitor entered via `?catalog=true` and never
+        // removed within the session so the catalog\u2194sphere tab
+        // control stays visible even after they flip to Sphere.
         document.body.classList.add('catalog-empty')
         this.setLoading(false)
         showBrowseUI(this.appState.datasets, {
@@ -430,6 +456,8 @@ class InteractiveSphere {
         // No collapse, no hide, no pulse \u2014 the browse panel is
         // the visible surface, not an overlay competing with the
         // globe for attention.
+        showCatalogTabs()
+        setActiveCatalogTab('catalog')
       } else {
         this.setLoadingStatus('Loading Earth textures\u2026', 20)
         const cloudUrl = CLOUD_TEXTURE_URL
@@ -1333,7 +1361,13 @@ class InteractiveSphere {
   }
 
   private dismissBrowseAfterLoad(): void {
-    if (this.viewports.getPanelCount() > 1) {
+    // Multi-viewport mode keeps the browse panel around so the
+    // visitor can load datasets into the remaining panels.
+    // Catalog mode (`?catalog=true`) keeps it around for the same
+    // reason — the catalog↔sphere tab control treats the
+    // collapsed browse panel as the "back to catalog" affordance.
+    // Single-viewport sphere mode hides the panel outright.
+    if (this.viewports.getPanelCount() > 1 || getCatalogMode()) {
       collapseBrowseUI()
     } else {
       hideBrowseUI()
@@ -1379,6 +1413,79 @@ class InteractiveSphere {
     if (wasCollapsed || wasHidden) {
       notifyBrowseOpened('tools')
     }
+  }
+
+  /**
+   * Catalog tab clicked. Re-add `?catalog=true` to the URL (if it
+   * was dropped by a previous Sphere click), expand the browse
+   * panel, and flip the tab to Catalog-active. Body class
+   * `catalog-mode` is sticky for the session — this handler just
+   * re-asserts it in case something else cleared it.
+   */
+  private enterCatalogTab(): void {
+    if (!getCatalogMode()) setCatalogMode(true)
+    document.body.classList.add('catalog-mode')
+    if (!this.appState.currentDataset) {
+      document.body.classList.add('catalog-empty')
+    }
+    this.openBrowsePanel()
+    setActiveCatalogTab('catalog')
+  }
+
+  /**
+   * Sphere tab clicked. Drop `?catalog=true` from the URL,
+   * collapse (or hide, when no dataset is loaded) the browse
+   * panel, and flip the tab to Sphere-active. The
+   * `catalog-mode` body class stays set so the tab control
+   * remains visible — Plan §3.2's "shared MapRenderer between
+   * tabs" pattern means we never tear catalog mode down within
+   * a session, only on a fresh page load.
+   */
+  private enterSphereTab(): void {
+    if (getCatalogMode()) setCatalogMode(false)
+    document.body.classList.remove('catalog-empty')
+    if (this.appState.currentDataset) {
+      collapseBrowseUI()
+    } else {
+      hideBrowseUI()
+    }
+    setActiveCatalogTab('sphere')
+  }
+
+  /**
+   * Wire a popstate handler so browser back/forward syncs the
+   * catalog-mode UI with whatever the new URL says. Dataset
+   * loads on popstate are out of scope (a pre-existing gap in
+   * the app, not specific to catalog mode); the visitor sees
+   * the URL flip and the browse-panel/tab visibility update but
+   * the loaded dataset doesn't change without a refresh.
+   */
+  private wireCatalogModePopstate(): void {
+    window.addEventListener('popstate', () => {
+      const onCatalog = getCatalogMode()
+      const datasetLoaded = this.appState.currentDataset !== null
+      if (onCatalog) {
+        document.body.classList.add('catalog-mode')
+        if (!datasetLoaded) document.body.classList.add('catalog-empty')
+        showCatalogTabs()
+        setActiveCatalogTab('catalog')
+        this.openBrowsePanel()
+      } else {
+        document.body.classList.remove('catalog-empty')
+        if (document.body.classList.contains('catalog-mode')) {
+          // Sticky body class means tabs stay visible — just flip
+          // active to Sphere.
+          setActiveCatalogTab('sphere')
+          if (datasetLoaded) {
+            collapseBrowseUI()
+          } else {
+            hideBrowseUI()
+          }
+        } else {
+          hideCatalogTabs()
+        }
+      }
+    })
   }
 
   /** Detect WebGL support. If unavailable, display troubleshooting instructions and return false. */
@@ -2591,10 +2698,12 @@ class InteractiveSphere {
     nextParams.set('dataset', id)
     window.history.pushState({}, '', `?${nextParams.toString()}`)
     // The globe is now the active surface — drop the
-    // `catalog-empty` flag so CSS reveals `#container`.
-    // `catalog-mode` stays set so the upcoming tab control can
-    // route back.
+    // `catalog-empty` flag so CSS reveals `#map-grid`. The
+    // `catalog-mode` body class stays (sticky session marker).
+    // Flip the tab control to Sphere since the globe is what the
+    // visitor is now looking at.
     document.body.classList.remove('catalog-empty')
+    if (getCatalogMode()) setActiveCatalogTab('sphere')
     await this.loadDataset(id, 'orbit')
     if (gen !== this.loadGeneration) return // a newer load superseded this one
     this.setLoading(false)

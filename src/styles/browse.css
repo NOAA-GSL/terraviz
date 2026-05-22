@@ -643,3 +643,80 @@ body.catalog-empty #map-controls {
         border-top: none;
     }
 }
+
+/* --- Catalog ↔ Sphere tab control (§3.2) --------------------------
+   A two-state segmented control that round-trips visitors between
+   the dataset browser and the loaded globe view. Only rendered
+   visible while in catalog mode (driven by JS via the `hidden`
+   class). The browse overlay's z-index is 500; the tabs sit above
+   it at 600 so the Catalog tab is reachable while the browse
+   panel is full-surface. */
+
+.catalog-tabs {
+    position: fixed;
+    top: 1rem;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 600;
+    display: inline-flex;
+    gap: 0;
+    padding: 0.25rem;
+    background: var(--glass-bg-light);
+    backdrop-filter: var(--glass-blur);
+    -webkit-backdrop-filter: var(--glass-blur);
+    border: 1px solid var(--white-o12);
+    border-radius: 999px;
+    pointer-events: auto;
+}
+
+.catalog-tabs.hidden {
+    display: none;
+}
+
+.catalog-tab {
+    appearance: none;
+    background: transparent;
+    border: none;
+    color: var(--color-text-secondary);
+    font-size: 0.8rem;
+    font-weight: 500;
+    letter-spacing: 0.03em;
+    padding: 0.4rem 1rem;
+    border-radius: 999px;
+    cursor: pointer;
+    min-height: 36px;
+    min-width: 80px;
+    transition: background 0.15s, color 0.15s;
+}
+
+.catalog-tab:hover,
+.catalog-tab:focus-visible {
+    color: var(--color-text);
+    background: var(--white-o08);
+    outline: none;
+}
+
+.catalog-tab.active {
+    background: var(--color-accent, var(--white-o15));
+    color: var(--color-bg, #0a0a0a);
+}
+
+.catalog-tab.active:hover,
+.catalog-tab.active:focus-visible {
+    background: var(--color-accent, var(--white-o15));
+    color: var(--color-bg, #0a0a0a);
+    filter: brightness(1.1);
+}
+
+/* Phone portrait: shrink the control so it doesn't dominate the
+   already-tight top bar. */
+@media (max-width: 600px) and (orientation: portrait) {
+    .catalog-tabs {
+        top: 0.5rem;
+    }
+    .catalog-tab {
+        font-size: 0.7rem;
+        padding: 0.35rem 0.75rem;
+        min-width: 64px;
+    }
+}

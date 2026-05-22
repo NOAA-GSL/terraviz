@@ -31,10 +31,13 @@ export function getCatalogMode(): boolean {
  * Update the URL's `catalog` flag without triggering a navigation.
  * Uses `pushState` so the back button returns the visitor to the
  * previous catalog state — matters when the catalog↔sphere tab
- * control (§3.2) lands on top of this.
+ * control (§3.2) routes between `?catalog=true&dataset=X` and
+ * `?dataset=X`. No-op when the URL already matches the target
+ * state, so repeated tab clicks don't pollute the history stack.
  */
 export function setCatalogMode(on: boolean): void {
   if (typeof window === 'undefined') return
+  if (getCatalogMode() === on) return
   const url = new URL(window.location.href)
   if (on) {
     url.searchParams.set('catalog', 'true')
