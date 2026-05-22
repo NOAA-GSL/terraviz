@@ -509,20 +509,53 @@ Two tiers. **Baseline filters** work from data we already
 fetch. **SOS-parity filters** require metadata we don't have
 today — the SOS team would need to provide it.
 
-**Baseline (ships with Phase 4).**
+**Surfacing.** Filters render as **typed groups** in the left
+rail — Category & content, Format & medium, Time, Quality &
+availability — not a flat tag cloud. This mirrors the GSL
+Depot Explorer pattern (Observation Type / Model / Domain /
+Phenomenon / Instrument / Project shown as distinct,
+color-coded facet sections) and matches the federation
+`facet_schema` shape sketched in §1.6. Each group also seeds
+one node cluster in the optional Graph view (§6.7); colour
+per group is single-sourced from
+[`tokens/global.json`](../tokens/global.json) so chips, graph
+nodes, and (later) federated peer facets all share one
+palette.
 
-| Filter | Driving field | v1? | Effort | Notes |
-|---|---|---|---|---|
-| Category — multi-select chips | `tags` | **Yes** | Low | 11 chips: Water (80), People (63), Air (56), Land (39), Movies (35), Space (34), Real-Time (10), Tours (8), Snow and Ice (7), Layers (1), Extras (1). Upgrade today's single-select to AND-across-chips. |
-| Keyword | `enriched.keywords` | **Yes** | Low | Dropdown — 723 distinct values; expose as a searchable select to match the SOS UI's "Select a keyword". |
-| Format | `format` (video/mp4, image/jpg, tour/json…) | **Yes** | Low | Coarse buckets: Video, Image, Tour, Other. |
-| Date added | `enriched.date_added` (year) | **Yes** | Low | Year-range slider, 2010–current. |
-| Has closed captions | `closedCaptionLink` non-empty | **Yes** | Low | Boolean toggle — addresses Beth's CC request indirectly. |
-| Has tour | `runTourOnLoad` non-empty | **Yes** | Low | Boolean toggle — surfaces the existing 11 tour-equipped datasets. |
-| SOS source quality | `available_for` (`SOS` vs `Explorer`) | **Yes** | Low | Boolean toggle: "include lower-fidelity SOS-only datasets". Off by default. See §6.4. |
-| Data-coverage year range | `startTime`, `endTime` | **Yes** | Medium | Numeric year-range matching SOS's "Allowed years 500–2100". Span of `startTime`/`endTime` already supports it — verified to year 0 / 1500 / 1800 in the audit. |
+**Baseline (ships with Phase 4).** All entries are v1; effort
+is Low unless flagged otherwise inline.
 
-**SOS-parity (blocked on additional metadata — see §1.6).**
+*Category & content.* Primary content axis.
+
+| Filter | Driving field | Notes |
+|---|---|---|
+| Category — multi-select chips | `tags` | 11 chips: Water (80), People (63), Air (56), Land (39), Movies (35), Space (34), Real-Time (10), Tours (8), Snow and Ice (7), Layers (1), Extras (1). Upgrade today's single-select to AND-across-chips. |
+| Keyword | `enriched.keywords` | Dropdown — 723 distinct values; expose as a searchable select to match the SOS UI's "Select a keyword". |
+
+*Format & medium.*
+
+| Filter | Driving field | Notes |
+|---|---|---|
+| Format | `format` (video/mp4, image/jpg, tour/json…) | Coarse buckets: Video, Image, Tour, Other. |
+
+*Time.*
+
+| Filter | Driving field | Notes |
+|---|---|---|
+| Date added | `enriched.date_added` (year) | Year-range slider, 2010–current. |
+| Data-coverage year range | `startTime`, `endTime` | Numeric year-range matching SOS's "Allowed years 500–2100". Span of `startTime`/`endTime` already supports it — verified to year 0 / 1500 / 1800 in the audit. **Medium effort** (range-slider UI). |
+
+*Quality & availability.*
+
+| Filter | Driving field | Notes |
+|---|---|---|
+| Has closed captions | `closedCaptionLink` non-empty | Boolean toggle — addresses Beth's CC request indirectly. |
+| Has tour | `runTourOnLoad` non-empty | Boolean toggle — surfaces the existing 11 tour-equipped datasets. |
+| SOS source quality | `available_for` (`SOS` vs `Explorer`) | Boolean toggle: "include lower-fidelity SOS-only datasets". Off by default. See §6.4. |
+
+**SOS-parity (blocked on additional metadata — see §1.6).** All
+land in a new *Education & curation* group once the SOS team
+provides the metadata.
 
 | Filter | Required new metadata | Notes |
 |---|---|---|
