@@ -185,7 +185,7 @@ needed:
    grade level".
 
 **This plan's posture.** Phase 4 (§6.1) ships the **baseline**
-facets that work today — tags, format, date_added, plus the
+facets that work today — tags, format, dateAdded, plus the
 new SOS facets *once the SOS team provides the metadata*. The
 client predicate engine (`src/services/datasetFilter.ts`,
 new) is designed against a generic
@@ -242,7 +242,8 @@ feasibility verdict and the phase it lands in.
 **Counts.** 15 feasible and in-plan; 2 partial (zip downloads,
 all SOS — preview-quality only until federation lands); 1
 duplicate of another (#17 = #7). That's 16 unique tracked
-items across 6 phases.
+items across 7 phases (Phase 7 — Engagement & continuity —
+adds work beyond the Google Doc requests).
 
 ---
 
@@ -550,7 +551,7 @@ is Low unless flagged otherwise inline.
 
 | Filter | Driving field | Notes |
 |---|---|---|
-| Date added | `enriched.date_added` (year) | Year-range slider, 2010–current. |
+| Date added | `enriched.dateAdded` (year) | Year-range slider, 2010–current. |
 | Data-coverage year range | `startTime`, `endTime` | Numeric year-range matching SOS's "Allowed years 500–2100". Span of `startTime`/`endTime` already supports it — verified to year 0 / 1500 / 1800 in the audit. **Medium effort** (range-slider UI). |
 
 *Quality & availability.*
@@ -597,7 +598,7 @@ option 2 if option 1 is materially slow.
 
 | Filter | Driving field | Notes |
 |---|---|---|
-| Developer / organisation | `enriched.dataset_developer.name` | 78 distinct developers — likely too granular as chips; defer or expose as search prefix. |
+| Developer / organisation | `enriched.datasetDeveloper.name` | 78 distinct developers — likely too granular as chips; defer or expose as search prefix. |
 
 The region / bounding-box filter has been promoted out of
 this list into a full **Map view** (§6.9) — same predicate
@@ -1655,7 +1656,9 @@ any of the four can ship out-of-order if priorities shift.
 ## 13. Cross-references
 
 - [`docs/CATALOG_BACKEND_PLAN.md`](CATALOG_BACKEND_PLAN.md)
-  — federation track that gates request #10.
+  — federation track that gates the **high-fidelity asset
+  upgrade** for request #10 (§10.1). Metadata-only widening
+  ships in Phase 4 §6.4 without it.
 - [`docs/CATALOG_IMAGE_SEQUENCE_PLAN.md`](CATALOG_IMAGE_SEQUENCE_PLAN.md)
   — Phase 3pg will surface per-frame metadata, enabling a
   cleaner fix for the frame/label bug (Phase 3 here).
