@@ -252,6 +252,8 @@
   "loading.progress.aria": "Loading progress",
   "loading.status.initializing": "Initializing…",
   "loading.subtitle": "Science On a Sphere",
+  "mapControls.fullscreen.enter": "Enter fullscreen",
+  "mapControls.fullscreen.exit": "Exit fullscreen",
   "orbit.debug.announce.collapsed": "Debug panel collapsed",
   "orbit.debug.announce.expanded": "Debug panel expanded",
   "orbit.debug.flight.toEarth": "Orbit flying to Earth",
