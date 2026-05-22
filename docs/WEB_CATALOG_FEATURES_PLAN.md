@@ -499,17 +499,19 @@ The infrastructure exists. The user-visible gap is:
 ## 6. Phase 4 — Filters & search
 
 **Theme.** Reach parity with the SOS catalog's filter surface,
-plus two optional view-modes — **Graph** (§6.7) for
-co-occurrence structure and **Timeline** (§6.8) for temporal
-coverage — neither of which the chip rail can answer.
+plus three optional view-modes — **Graph** (§6.7) for
+co-occurrence structure, **Timeline** (§6.8) for temporal
+coverage, and **Map** (§6.9) for geographic coverage. Cards =
+list, Graph = relational, Timeline = temporal, Map = spatial:
+four orthogonal axes through the same catalog.
 
-**Estimated size.** ~3 weeks. Splits into three coordinated
+**Estimated size.** ~3.5 weeks. Splits into four coordinated
 PRs — chip rail + predicate engine first (§6.1–§6.6), then
-Graph view (§6.7), then Timeline view (§6.8), since both
-view-modes consume the predicate engine. Graph and Timeline
-share a facet-group colour palette so they read as one visual
-system. Also delivers the "all SOS datasets" widening (#10) —
-see §6.4.
+Graph (§6.7), then Timeline (§6.8), then Map (§6.9), since
+each view-mode consumes the predicate engine. All four
+view-modes share one facet-group colour palette so they read
+as a single visual system. Also delivers the "all SOS
+datasets" widening (#10) — see §6.4.
 
 ### 6.1 Filter inventory
 
@@ -598,12 +600,13 @@ option 2 if option 1 is materially slow.
 | Filter | Driving field | Notes |
 |---|---|---|
 | Developer / organisation | `enriched.dataset_developer.name` | 78 distinct developers — likely too granular as chips; defer or expose as search prefix. |
-| Region / bounding box | `boundingBox` | Map picker; conflicts with catalog-mode hidden globe. Phase 6 or later. |
 
-A region/bounding-box filter is the most user-visible
-geographic win but needs the most UI work (a map picker that
-doesn't conflict with the catalog-mode hidden globe).
-Recommend deferring it to Phase 6 or later.
+The region / bounding-box filter has been promoted out of
+this list into a full **Map view** (§6.9) — same predicate
+engine, but a dedicated view-mode rather than a chip. The
+earlier worry about conflicting with catalog mode turned out
+to be moot: a 2D flat-projection map widget is a different
+surface from the globe.
 
 **Implementation note — federation forward-compatibility.**
 The `datasetFilter.ts` predicate engine is designed against a
@@ -943,6 +946,171 @@ just a representation of an existing one.
   — already covers this; both controls bind to the same
   reducer.
 
+### 6.9 Map view
+
+**Theme.** A fourth browse view-mode — alongside Cards, Graph
+(§6.7), and Timeline (§6.8) — that renders each dataset's
+geographic coverage as a bounding-box overlay on a flat
+world map. Inspired by the **GSL Depot Explorer "Map" tab**
+shared in review, where bounding boxes outline each
+dataset's spatial extent and clicking a region surfaces the
+datasets covering that point.
+
+**Why a fourth view.** Cards = list. Graph = relational.
+Timeline = temporal. Map = **spatial**. The four are
+orthogonal axes; together they form a complete browsing
+toolkit. The motivating context is forward-looking — most of
+today's SOSx catalog is global, but **non-global data is the
+trajectory**: the 415 SOS-only datasets in the audit
+(§1.4) include regional model outputs and case studies;
+federation (§9.1) brings in regional partner datasets
+(Arctic-focused peers, CIMSS, regional reanalyses); and the
+catalog backend plan reserves space for non-global formats.
+Shipping Map view now means the surface exists when the data
+arrives.
+
+**Estimated size.** ~3–5 days on top of Timeline. Same
+pattern as §6.7 / §6.8: opt-in view toggle, shares the
+predicate engine, lazy-loaded if it needs new bytes (it
+doesn't — see *Library choice*).
+
+**Data model.** One bounding-box overlay per dataset in the
+current filter result set:
+
+| Element | Source |
+|---|---|
+| Bounding box | `boundingBox` (`{ north, south, east, west }`) on `Dataset`. |
+| Fill colour | Inherits the primary facet group hue (§6.7 palette) — visual continuity with Graph and Timeline. |
+| Global flag | Derived: `north ≥ 89 && south ≤ -89 && east-west span ≥ 358`. Used to suppress global datasets by default (see *Scale management*). |
+| Label | Dataset title, anchored at the top-left of the bbox; truncated to first ~20 chars; full title on hover. |
+
+Datasets without a `boundingBox` (some legacy SOSx rows) are
+excluded from the Map view and surfaced with a small "N
+datasets without geographic coverage — switch to Cards to see
+them" footnote.
+
+**Interactions.**
+
+- **Click bbox** → open the info panel, same path the card
+  grid uses. Overlapping boxes resolve via a tooltip listing
+  all covering datasets — same pattern the GSL screenshot
+  shows (centred over Africa: *graphics / retro / hrrr_car /
+  hrrr_dev1_NA_3km / nbe / pub +4 more*).
+- **Hover bbox** → tooltip with title, exact bounds, and the
+  primary facet group.
+- **Draw a rectangle on the map** → filter to datasets whose
+  bbox **intersects** the drawn region. Routes through
+  `toggleFacet(state, 'geographicRegion', { north, south,
+  east, west })` so the predicate stays single-source.
+- **Pan / zoom the map** → no implicit filter (so the user
+  can survey overlapping coverage); the explicit-draw
+  affordance is what mutates state.
+- **"Include global datasets" toggle** in the view header,
+  off by default. See *Scale management*.
+
+**Scale management.** Most of today's catalog is global —
+naively rendering 200 full-extent rectangles all stacked on
+top of each other is uninformative noise. Three knobs:
+
+- **Hide-globals default.** The derived `global` flag (data
+  model above) suppresses pure-global datasets from the Map
+  view by default. Footer reads: "N global datasets hidden —
+  toggle to include." This keeps the v1 view useful even
+  before non-global data arrives in volume.
+- **Heat-map mode** for large overlapping sets. When more
+  than ~30 bboxes are visible after the global filter, swap
+  from outline rendering to a coverage-density heatmap;
+  click sampling still works.
+- **Clustering at low zoom.** At world-zoom levels, very
+  small bboxes (point observations, e.g. radar sites) cluster
+  into MapLibre-native marker clusters — same primitive
+  `mapRenderer.ts` already uses.
+
+**Library choice.** **Reuse the existing MapLibre GL JS
+mount at a flat (mercator) projection.** MapLibre is already
+in the bundle (~200 KB gzipped — the single biggest line
+item we ship today), `tilePreloader.ts` already populates
+GIBS tiles, and MapLibre supports
+`map.setProjection({ type: 'mercator' })` natively. The Map
+view becomes a second `MapRenderer` instance in mercator
+mode, hosted in a dedicated container in the browse surface
+— zero new library bytes, zero new tile-fetching code.
+
+This is a meaningful contrast with Graph and Timeline, which
+do add bytes (cytoscape ~70 KB, d3 ~30 KB respectively).
+The Map view is essentially free on the bundle side; it
+costs only the new module code.
+
+**Mobile.** A flat world map at a 6-inch portrait viewport
+*is* readable — unlike the Graph and Timeline rows, the Map
+view scales down gracefully and is arguably the most
+mobile-friendly of the four view-modes. Keep the view-mode
+toggle visible at mobile breakpoints; only the chip rail
+drawer collapses to a sheet, same as today's browse on
+mobile.
+
+**Files touched.**
+
+| File | Change |
+|---|---|
+| `src/ui/browseUI.ts` | Extend `viewMode` to `'cards' \| 'graph' \| 'timeline' \| 'map'`; toggle control adds a fourth segment. |
+| `src/ui/catalogMapUI.ts` | **New.** Mounts a second `MapRenderer` in mercator mode; owns bbox overlay rendering, draw/select interactions, the global-hide toggle. |
+| `src/services/catalogMap.ts` | **New.** Pure transform — `buildOverlays(datasets, filterState) → { bboxes, hiddenGlobalCount }`. Reuses `datasetFilter.ts` predicates. |
+| `src/services/datasetFilter.ts` | Add a `geographicRegion` predicate that tests bbox intersection. |
+| `src/services/mapRenderer.ts` | Accept a `projection: 'globe' \| 'mercator'` option in the constructor. Default stays `'globe'` so the existing main-globe behaviour is unchanged. |
+| `src/styles/browse.css` | Map container, bbox overlay, draw-rectangle cursor, hover tooltip. |
+| `src/types/index.ts` | Add `geographicRegion?: BoundingBox` to the predicate state type. |
+| `locales/en.json` | View-mode label (`browse.viewMode.map`), tooltip strings, global-hide toggle label, footnote text. |
+
+**Federation forward-compat.** The §1.6 `facet_schema`
+declaration should add `type: 'bbox'` alongside enumerated /
+open-ended / range. A federated peer can then advertise the
+geographic region(s) it indexes — an Arctic-focused peer
+declares its bbox coverage in `/.well-known/terraviz.json`,
+and the Map view can render peer-coverage outlines as a
+second overlay layer (lighter, dashed) so users see which
+regions each peer contributes to. This belongs in
+[`federation-scoping.md`](architecture/federation-scoping.md)
+§8 alongside the rest of the facet protocol decision.
+
+**Analytics.** Mirror Graph and Timeline:
+`catalog_view_mode_changed` covers the toggle.
+`catalog_map_region_drawn` (Tier B, throttled, bounds rounded
+to 3 decimals via the existing `src/analytics/camera.ts`
+helper) captures the draw-as-filter interaction —
+genuinely new state, worth measuring.
+
+**Risks.**
+
+- **Bbox quality.** `boundingBox` is populated by upstream
+  metadata; some rows are missing, some are sloppy ("global
+  but with a tight bounding box anyway"). The hide-globals
+  derivation tolerates the second case; the missing-bbox
+  footnote handles the first. A data-quality pass on the
+  enriched file may be worthwhile but isn't blocking.
+- **Antimeridian-crossing boxes.** A bbox that crosses 180°
+  longitude needs special handling (the GSL screenshot shows
+  one such overlay near the dateline). MapLibre supports
+  this natively when the polygon is encoded with longitudes
+  wrapped past ±180; document the convention in
+  `catalogMap.ts`.
+- **Selection of overlapping boxes.** The tooltip listing
+  matches the GSL pattern, but with 520 datasets potentially
+  in play the list can grow long. Cap at the top 8 by
+  facet-relevance and "+N more" the rest.
+- **Globe view conflict.** The catalog-first mode hides the
+  main globe. The Map view's mercator mount is a *separate*
+  MapRenderer in a *separate* container — there's no
+  conflict with the main globe, but worth a regression
+  check that switching between the Map view and the main
+  globe (e.g. via the catalog/sphere tab control from §3.2)
+  doesn't leak tile-fetch state or input handlers.
+- **Tile cost.** A second MapRenderer doubles tile fetches at
+  cold start (until both share the cache). The existing
+  `tilePreloader.ts` only seeds the globe instance today —
+  extend it to seed both projections, or accept the small
+  warm-up delay on first Map view open.
+
 ---
 
 ## 7. Phase 5 — UI polish & shader
@@ -1270,7 +1438,7 @@ sequencing and avoid mid-phase rework.
 | 1 | Catalog-first UX | 1–1.5 weeks | Open question #1 |
 | 2 | Info panel completeness | 3–5 days | none |
 | 3 | Playback fidelity | ~1 week | Open question #3 |
-| 4 | Filters & search + all-SOS widening + Graph + Timeline views | ~3 weeks (chip rail + predicate engine, then Graph §6.7, then Timeline §6.8) | Open question #7 (NGSS metadata) for SOS-parity facets; baseline + graph + timeline ship without it |
+| 4 | Filters & search + all-SOS widening + Graph + Timeline + Map views | ~3.5 weeks (chip rail + predicate engine, then Graph §6.7, then Timeline §6.8, then Map §6.9) | Open question #7 (NGSS metadata) for SOS-parity facets; all four view-modes ship without it |
 | 5 | UI polish & shader | ~2 weeks | Open question #4, #6 |
 | 6 | Playlists + zip downloads | ~3–4 weeks | Open question #5 |
 | — | High-fidelity assets for SOS-only datasets | — | Federation track (`CATALOG_BACKEND_PLAN.md`) |
