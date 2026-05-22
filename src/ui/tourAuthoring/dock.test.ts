@@ -1246,6 +1246,94 @@ describe('mountTourAuthoringDock (tour/A)', () => {
     })
   })
 
+  describe('tour-review/G — preview', () => {
+    it('renders a disabled preview button when no tasks are captured', () => {
+      mountTourAuthoringDock('new', {
+        getMapView: () => makeView(),
+        getCurrentDataset: () => null,
+        onDiscard: () => {},
+        onPreview: vi.fn(),
+      })
+      const btn = document.querySelector<HTMLButtonElement>(
+        '[data-action="preview"]',
+      )!
+      expect(btn).toBeTruthy()
+      expect(btn.disabled).toBe(true)
+      expect(btn.getAttribute('title')).toBe(
+        'Capture at least one step before previewing',
+      )
+    })
+
+    it('enables preview once a task is captured', () => {
+      mountTourAuthoringDock('new', {
+        getMapView: () => makeView(),
+        getCurrentDataset: () => null,
+        onDiscard: () => {},
+        onPreview: vi.fn(),
+      })
+      document
+        .querySelector<HTMLButtonElement>('[data-action="capture-camera"]')!
+        .click()
+      const btn = document.querySelector<HTMLButtonElement>(
+        '[data-action="preview"]',
+      )!
+      expect(btn.disabled).toBe(false)
+    })
+
+    it('fires onPreview with the in-memory TourFile on click', () => {
+      const onPreview = vi.fn()
+      mountTourAuthoringDock('new', {
+        getMapView: () => makeView({ center: { lat: 12, lng: 34 }, zoom: 3 }),
+        getCurrentDataset: () => null,
+        onDiscard: () => {},
+        onPreview,
+      })
+      document
+        .querySelector<HTMLButtonElement>('[data-action="capture-camera"]')!
+        .click()
+      document
+        .querySelector<HTMLButtonElement>('[data-action="preview"]')!
+        .click()
+      expect(onPreview).toHaveBeenCalledOnce()
+      const arg = onPreview.mock.calls[0]?.[0] as { tourTasks: unknown[] }
+      expect(arg.tourTasks).toHaveLength(1)
+      expect(arg.tourTasks[0]).toHaveProperty('flyTo')
+    })
+
+    it('no-ops the preview click when tasks are empty', () => {
+      const onPreview = vi.fn()
+      mountTourAuthoringDock('new', {
+        getMapView: () => makeView(),
+        getCurrentDataset: () => null,
+        onDiscard: () => {},
+        onPreview,
+      })
+      // Bypass the disabled attribute by dispatching click directly;
+      // a programmatic .click() ignores `disabled` in some envs.
+      document
+        .querySelector<HTMLButtonElement>('[data-action="preview"]')!
+        .click()
+      expect(onPreview).not.toHaveBeenCalled()
+    })
+
+    it('does not require onPreview — omitted callback is a no-op', () => {
+      mountTourAuthoringDock('new', {
+        getMapView: () => makeView(),
+        getCurrentDataset: () => null,
+        onDiscard: () => {},
+        // onPreview deliberately omitted — old hosts without
+        // preview wiring shouldn't crash.
+      })
+      document
+        .querySelector<HTMLButtonElement>('[data-action="capture-camera"]')!
+        .click()
+      // Should not throw.
+      document
+        .querySelector<HTMLButtonElement>('[data-action="preview"]')!
+        .click()
+    })
+  })
+
   it('captures altmi from zoom (higher zoom → lower altitude)', () => {
     // Inverse of `execFlyTo`'s zoom math in `tourEngine.ts`:
     //   altKm = (6371 × 2) / 2^zoom

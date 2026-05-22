@@ -253,14 +253,41 @@ session surfaced three layout issues:
 Tests cover the body-class toggle (mount / discard / teardown)
 and the browse-collapse behaviour.
 
-  - **Preview** ("Play from here") — would run `tourEngine`
-    against the current draft from any task index. Needs
-    callback-bag integration with the SPA's existing tour-
-    playback path; deferred to a follow-up branch.
+**tour-review/G — Preview (Play from start).** The original PR
+deferred preview because hooking it up needed callback-bag
+integration with the SPA's tour-playback path. Now wired:
+
+  - Blue "Preview" chip sits next to Publish in the dock header.
+    Disabled (with a friendly title) until at least one task is
+    captured.
+  - Clicking fires `callbacks.onPreview({ tourTasks: state.tasks })`
+    — the in-memory draft, never round-tripped through R2 or the
+    autosave loop.
+  - `main.ts` adds `playInlineTour(tourFile)`: wraps the TourFile
+    in an `application/json` Blob, mints an object URL, and
+    routes through the existing `startTour` path. The dock stays
+    mounted; the SPA's tour-player chrome handles Stop.
+  - The blob URL isn't revoked — the tour engine retains it as
+    its `tourBaseUrl` for relative-media-path resolution, and
+    revoking mid-playback would break the contract. The blob is
+    a tiny JSON string, so the memory cost is negligible for a
+    preview session.
+  - `onPreview` is optional on the callbacks bag — hosts that
+    don't wire it (tests, older code paths) get a no-op
+    button click rather than a crash.
+
+5 tests cover: disabled state with no tasks, enabled after a
+capture, the callback firing with the right TourFile, the
+no-tasks click no-op, and the missing-callback safe fall-back.
+
   - **Rich-UI captures**: overlay drag-to-place, click-on-
     globe placemark, audio/video file pickers, question form.
     The JSON editor (tour/D) is the universal escape hatch
     for these task types until typed mini-forms ship.
+  - **Play-from-task-index preview**: the shipped Preview button
+    plays from the start. A future enhancement could let the
+    publisher click a row in the task list to play from that
+    point — handy for long tours but a meaningful UX addition.
   - **Retract** a published tour from the dashboard — Delete
     works, but a soft-retract (sets a `retracted_at` column,
     leaves the row in place for federation peers to notice)

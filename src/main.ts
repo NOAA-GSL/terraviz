@@ -1802,7 +1802,27 @@ class InteractiveSphere {
         // history is more confusing than the simple linear path).
         window.location.assign('/publish/tours')
       },
+      onPreview: (tourFile) => {
+        void this.playInlineTour(tourFile)
+      },
     })
+  }
+
+  /**
+   * Phase 3pt-review/G — preview the in-memory tour draft.
+   * Wraps the TourFile in a blob URL and routes through the
+   * existing `startTour` path. The publisher's authoring dock
+   * stays mounted; the existing tour player chrome handles
+   * Stop. Blob URLs aren't revoked — they're tiny JSON blobs,
+   * and the engine retains the URL as its `tourBaseUrl` for
+   * relative-media-path resolution (draft tours shouldn't have
+   * relative paths in practice, but revoking mid-playback
+   * would break the contract).
+   */
+  async playInlineTour(tourFile: TourFile): Promise<void> {
+    const blob = new Blob([JSON.stringify(tourFile)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    await this.playTour(url)
   }
 
   /** Open the chat panel and optionally pre-fill the input with a query string. */

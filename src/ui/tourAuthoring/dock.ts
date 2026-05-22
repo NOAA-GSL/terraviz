@@ -27,6 +27,7 @@ import type {
   FlyToTaskParams,
   LoadDatasetTaskParams,
   MapViewContext,
+  TourFile,
   TourTaskDef,
 } from '../../types'
 import {
@@ -60,6 +61,13 @@ export interface TourAuthoringCallbacks {
   /** User wants out — host clears the URL param and routes to
    *  /publish/tours. */
   onDiscard: () => void
+  /** Phase 3pt-review/G — "Play from start" preview. The host
+   *  runs the TourEngine against the in-memory draft so the
+   *  publisher can see what they've built without publishing.
+   *  Optional so unit tests that don't exercise preview can
+   *  omit it. The dock fire-and-forgets; host owns playback
+   *  lifecycle (the existing tour player chrome handles Stop). */
+  onPreview?: (tourFile: TourFile) => void
 }
 
 export interface TourAuthoringHandle {
@@ -322,6 +330,11 @@ export function mountTourAuthoringDock(
               role="status"
               aria-live="polite"
               title="${escapeAttr(autosaveError || autosaveStatusLabel(autosaveStatus))}">${escapeHtml(autosaveStatusLabel(autosaveStatus))}</span>
+        <button type="button" class="tour-authoring-dock-preview"
+                data-action="preview"
+                ${state.tasks.length === 0 ? 'disabled' : ''}
+                title="${escapeAttr(state.tasks.length === 0 ? t('tour.dock.preview.empty.aria') : t('tour.dock.preview.aria'))}"
+                aria-label="${escapeAttr(t('tour.dock.preview.aria'))}">${escapeHtml(t('tour.dock.preview.label'))}</button>
         <button type="button" class="tour-authoring-dock-publish tour-authoring-dock-publish-${publishStatus}"
                 data-action="publish"
                 ${publishStatus === 'publishing' ? 'disabled' : ''}
@@ -551,6 +564,15 @@ export function mountTourAuthoringDock(
           visibilityValue = v
           scheduleMetadataSave()
         }
+      })
+    root
+      .querySelector<HTMLButtonElement>('[data-action="preview"]')
+      ?.addEventListener('click', () => {
+        if (state.tasks.length === 0) return
+        // Fire-and-forget — the host owns playback lifecycle.
+        // We send the current in-memory draft; preview doesn't
+        // touch R2 or the autosave loop.
+        callbacks.onPreview?.({ tourTasks: state.tasks })
       })
     root
       .querySelector<HTMLButtonElement>('[data-action="publish"]')

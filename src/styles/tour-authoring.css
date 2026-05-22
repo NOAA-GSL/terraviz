@@ -172,6 +172,29 @@
     color: #ff8a8a;
 }
 
+/* Phase 3pt-review/G — preview button in the dock header.
+   Blue chip to distinguish from the green Publish button. */
+.tour-authoring-dock-preview {
+    background: rgba(77, 166, 255, 0.18);
+    border: 1px solid rgba(77, 166, 255, 0.4);
+    color: #d6eaff;
+    border-radius: 0.35rem;
+    padding: 0.18rem 0.55rem;
+    font-size: 0.7rem;
+    cursor: pointer;
+    margin-inline-end: 0.35rem;
+}
+
+.tour-authoring-dock-preview:hover,
+.tour-authoring-dock-preview:focus-visible {
+    background: rgba(77, 166, 255, 0.32);
+}
+
+.tour-authoring-dock-preview:disabled {
+    cursor: not-allowed;
+    opacity: 0.45;
+}
+
 /* Phase 3pt/G — publish button in the dock header. */
 .tour-authoring-dock-publish {
     background: rgba(121, 201, 138, 0.18);
