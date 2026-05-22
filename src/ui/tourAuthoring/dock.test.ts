@@ -195,6 +195,7 @@ describe('mountTourAuthoringDock (tour/A)', () => {
       'input[aria-label="Globe rotation rate in degrees per second"]',
     )!
     input.value = '2.5'
+    input.dispatchEvent(new Event('input', { bubbles: true }))
     document
       .querySelector<HTMLButtonElement>('[data-action="capture-rotation"]')!
       .click()
@@ -213,6 +214,7 @@ describe('mountTourAuthoringDock (tour/A)', () => {
       'input[aria-label="Globe rotation rate in degrees per second"]',
     )!
     input.value = ''
+    input.dispatchEvent(new Event('input', { bubbles: true }))
     document
       .querySelector<HTMLButtonElement>('[data-action="capture-rotation"]')!
       .click()
@@ -230,6 +232,7 @@ describe('mountTourAuthoringDock (tour/A)', () => {
       'input[aria-label="Pause duration in seconds"]',
     )!
     input.value = '3'
+    input.dispatchEvent(new Event('input', { bubbles: true }))
     document
       .querySelector<HTMLButtonElement>('[data-action="capture-pause-seconds"]')!
       .click()
@@ -251,6 +254,7 @@ describe('mountTourAuthoringDock (tour/A)', () => {
     )!
     for (const value of ['', '0', '-1']) {
       input.value = value
+      input.dispatchEvent(new Event('input', { bubbles: true }))
       btn.click()
     }
     expect(document.querySelectorAll('.tour-authoring-task')).toHaveLength(0)
@@ -1156,6 +1160,52 @@ describe('mountTourAuthoringDock (tour/A)', () => {
           visibility: 'private',
         },
       )
+    })
+
+    it('preserves typed rotation + pause values across a re-render', () => {
+      mountTourAuthoringDock('new', {
+        getMapView: () => makeView(),
+        getCurrentDataset: () => null,
+        onDiscard: () => {},
+      })
+      const rotation = document.querySelector<HTMLInputElement>(
+        'input[aria-label="Globe rotation rate in degrees per second"]',
+      )!
+      const pause = document.querySelector<HTMLInputElement>(
+        'input[aria-label="Pause duration in seconds"]',
+      )!
+      rotation.value = '7.5'
+      rotation.dispatchEvent(new Event('input', { bubbles: true }))
+      pause.value = '42'
+      pause.dispatchEvent(new Event('input', { bubbles: true }))
+      // Trigger a re-render via an unrelated capture. Pre-fix,
+      // this rebuilt both inputs from the hard-coded `value="1"`
+      // / `value="5"` defaults and threw away the publisher's
+      // typed numbers.
+      document
+        .querySelector<HTMLButtonElement>('[data-action="capture-reset-zoom"]')!
+        .click()
+      const rotationAfter = document.querySelector<HTMLInputElement>(
+        'input[aria-label="Globe rotation rate in degrees per second"]',
+      )!
+      const pauseAfter = document.querySelector<HTMLInputElement>(
+        'input[aria-label="Pause duration in seconds"]',
+      )!
+      expect(rotationAfter.value).toBe('7.5')
+      expect(pauseAfter.value).toBe('42')
+      // Capture the values now to confirm the closure state is
+      // also live (not just the DOM).
+      document
+        .querySelector<HTMLButtonElement>('[data-action="capture-rotation"]')!
+        .click()
+      document
+        .querySelector<HTMLButtonElement>('[data-action="capture-pause-seconds"]')!
+        .click()
+      const labels = Array.from(
+        document.querySelectorAll('.tour-authoring-task-label'),
+      ).map(el => el.textContent ?? '')
+      expect(labels.some(l => l.includes('7.5'))).toBe(true)
+      expect(labels.some(l => l.includes('Pause 42'))).toBe(true)
     })
 
     it('ignores unknown visibility values from the select', async () => {

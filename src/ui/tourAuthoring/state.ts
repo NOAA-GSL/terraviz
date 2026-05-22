@@ -1,14 +1,15 @@
 /**
  * In-memory tour-authoring state — the dock reads / writes here as
- * the publisher captures tasks; the persistence layer (tour/E,
- * upcoming) flushes to R2 + the `tours` row.
+ * the publisher captures tasks; the autosave manager
+ * (`autosave.ts`) flushes to R2 + the `tours` row.
  *
- * Scope for tour/A: just the model + reducers. No autosave, no
- * backend round-trip. Closing the tab loses the state — same
- * fail-state every multi-step authoring tool ships before
- * autosave lands. The id is either a server-issued ULID (when the
- * dock opens against an existing tour) or the sentinel `'new'`
- * (fresh draft, no backend row yet).
+ * Only the model + reducers live here. The dock owns the
+ * orchestration (capture buttons, render loop) and the autosave
+ * manager owns the persistence loop; this module is deliberately
+ * narrow so the reducers can be tested in isolation. The id is
+ * either a server-issued ULID (when the dock opens against an
+ * existing tour) or the sentinel `'new'` (fresh draft, no
+ * backend row yet — promoted to a ULID after the first save).
  */
 
 import type { TourTaskDef } from '../../types'
@@ -16,8 +17,9 @@ import type { TourTaskDef } from '../../types'
 export interface TourAuthoringState {
   /** Server ULID for an existing tour, or `'new'` for a fresh draft. */
   tourId: string
-  /** Free-text title. Defaults to a placeholder; tour/E surfaces a
-   *  proper title field. */
+  /** Free-text title kept in sync with the dock's rename input.
+   *  The dock is the source of truth for the live value; this
+   *  field is here for parity with the persisted row shape. */
   title: string
   /** Ordered list of tour tasks captured so far. */
   tasks: TourTaskDef[]

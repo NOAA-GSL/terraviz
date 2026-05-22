@@ -116,6 +116,13 @@ export function mountTourAuthoringDock(
   let visibilityValue: 'public' | 'federated' | 'restricted' | 'private' = 'public'
   let metadataSaveError = ''
   let metadataSaveTimer: ReturnType<typeof setTimeout> | null = null
+  // Phase 3pt-review/E — capture-input values held in closure
+  // state so a re-render (autosave-status flip, capture appended
+  // elsewhere) doesn't wipe partial typing back to the default.
+  // Strings rather than numbers so an interim blank state during
+  // typing round-trips cleanly. Copilot discussion_r3285756544.
+  let rotationValue = '1'
+  let pauseValue = '5'
   // Phase 3pt-review/A — per-mount input ids so duplicate-id
   // label associations can't happen if a second dock ever
   // coexists.
@@ -389,7 +396,8 @@ export function mountTourAuthoringDock(
         <label class="tour-authoring-dock-group-label" for="${inputIds.rotation}">${escapeHtml(t('tour.dock.group.rotation'))}</label>
         <div class="tour-authoring-dock-inputrow">
           <input id="${inputIds.rotation}" class="tour-authoring-input" type="number" step="0.1" min="-10" max="10"
-                 value="1" aria-label="${escapeAttr(t('tour.dock.rotation.input.aria'))}">
+                 data-dock-field="rotation"
+                 value="${escapeAttr(rotationValue)}" aria-label="${escapeAttr(t('tour.dock.rotation.input.aria'))}">
           <button type="button" class="tour-authoring-chip" data-action="capture-rotation">${escapeHtml(t('tour.dock.rotation.add'))}</button>
         </div>
       </div>
@@ -397,7 +405,8 @@ export function mountTourAuthoringDock(
         <label class="tour-authoring-dock-group-label" for="${inputIds.pause}">${escapeHtml(t('tour.dock.group.flow'))}</label>
         <div class="tour-authoring-dock-inputrow">
           <input id="${inputIds.pause}" class="tour-authoring-input" type="number" step="0.5" min="0" max="600"
-                 value="5" aria-label="${escapeAttr(t('tour.dock.pause.seconds.aria'))}">
+                 data-dock-field="pause"
+                 value="${escapeAttr(pauseValue)}" aria-label="${escapeAttr(t('tour.dock.pause.seconds.aria'))}">
           <button type="button" class="tour-authoring-chip" data-action="capture-pause-seconds">${escapeHtml(t('tour.dock.pause.seconds.add'))}</button>
         </div>
         <div class="tour-authoring-dock-chiprow">
@@ -575,20 +584,26 @@ export function mountTourAuthoringDock(
         })
       })
     root
+      .querySelector<HTMLInputElement>(`#${inputIds.rotation}`)
+      ?.addEventListener('input', e => {
+        rotationValue = (e.target as HTMLInputElement).value
+      })
+    root
+      .querySelector<HTMLInputElement>(`#${inputIds.pause}`)
+      ?.addEventListener('input', e => {
+        pauseValue = (e.target as HTMLInputElement).value
+      })
+    root
       .querySelector<HTMLButtonElement>('[data-action="capture-rotation"]')
       ?.addEventListener('click', () => {
-        const input = root.querySelector<HTMLInputElement>(`#${inputIds.rotation}`)
-        if (!input) return
-        const value = parseFloat(input.value)
+        const value = parseFloat(rotationValue)
         // Defensive — `<input type=number>` returns '' for blank.
         if (Number.isFinite(value)) pushCaptured({ setGlobeRotationRate: value })
       })
     root
       .querySelector<HTMLButtonElement>('[data-action="capture-pause-seconds"]')
       ?.addEventListener('click', () => {
-        const input = root.querySelector<HTMLInputElement>(`#${inputIds.pause}`)
-        if (!input) return
-        const value = parseFloat(input.value)
+        const value = parseFloat(pauseValue)
         // Negative or zero pauses don't make sense — the runtime
         // would skip them, but keeping invalid tasks out of the
         // file keeps the post-3pt/D editor cleaner.
@@ -795,10 +810,6 @@ function publishButtonLabel(
   }
 }
 
-/** Unique input ids keep the `<label for="...">` association valid
- *  even when multiple docks coexist (which the singleton guard in
- *  `index.ts` should prevent, but defending here keeps the page
- *  predictable if a test mounts more than one). */
 /** Per-mount counter — every dock instance gets unique input ids.
  *  Constant ids would break `<label for="...">` association if
  *  multiple docks ever coexist (tests, hot-reload, a lifecycle

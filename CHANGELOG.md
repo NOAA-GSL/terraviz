@@ -209,7 +209,24 @@ stay deferred — they need their own backend routes (presign +
 complete; `GET /api/v1/tours` + FTS), tracked as follow-up
 issues so they don't bloat this PR further.
 
-**Not in this PR (deferred).**
+**tour-review/E — capture-input buffer + doc cleanups.** Third
+Copilot review pass surfaced three follow-ups:
+
+  - Capture inputs preserve typed values across re-renders:
+    pre-fix, the rotation-rate and pause-duration `<input>`
+    elements rendered with hard-coded `value="1"` / `value="5"`,
+    so any re-render (autosave-status flip, an unrelated capture
+    appended) reset the publisher's typed number back to the
+    default. Now `rotationValue` and `pauseValue` live in dock
+    closure state, get updated on the input event, and feed both
+    the render and the capture handlers — same pattern the
+    title/description/visibility metadata fields use.
+  - `state.ts` header docblock claimed "tour/A only" scope (no
+    autosave, no backend) — stale ever since tour/E shipped the
+    autosave manager. Reworded to describe current behaviour
+    (model + reducers, persistence delegated).
+  - Removed a duplicate doc block above `nextDockInputIds` — two
+    consecutive comments said the same thing.
 
   - **Preview** ("Play from here") — would run `tourEngine`
     against the current draft from any task index. Needs
