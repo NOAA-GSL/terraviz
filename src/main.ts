@@ -50,7 +50,7 @@ import {
 import {
   loadImageDataset, loadVideoDataset, displayDatasetInfo,
 } from './services/datasetLoader'
-import { TourEngine } from './services/tourEngine'
+import { TourEngine, type TourTelemetryMeta } from './services/tourEngine'
 import { showTourControls, hideTourControls, hideAllTourTextBoxes, hideAllTourImages, hideAllTourVideos, hideAllTourPopups, hideAllTourQuestions } from './ui/tourUI'
 import { initLegendForDataset, clearLegendCache, loadConfig } from './services/docentService'
 import { isMobile, IS_MOBILE_NATIVE, getCloudTextureUrl } from './utils/deviceCapability'
@@ -922,7 +922,7 @@ class InteractiveSphere {
     dataLink: string,
     gen: number,
     anchorSlot: number | null = null,
-    meta?: { tourId: string; tourTitle: string; source: 'browse' | 'orbit' | 'deeplink' },
+    meta?: TourTelemetryMeta,
   ): Promise<void> {
     // Stop any previous tour
     this.stopTour()
@@ -956,7 +956,7 @@ class InteractiveSphere {
     tourFile: TourFile,
     tourBaseUrl: string,
     anchorSlot: number | null = null,
-    meta?: { tourId: string; tourTitle: string; source: 'browse' | 'orbit' | 'deeplink' },
+    meta?: TourTelemetryMeta,
   ): void {
     this.tourEngine = new TourEngine(tourFile, {
       loadDataset: async (id, opts) => {
