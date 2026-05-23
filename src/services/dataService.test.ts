@@ -4,6 +4,7 @@ import {
   deriveAvailableFor,
   HIDDEN_TOUR_IDS,
   normaliseSourceFormat,
+  sosOnlyIdSlug,
   synthesizeSosOnlyDatasets,
 } from './dataService'
 import type { Dataset } from '../types'
@@ -284,14 +285,62 @@ describe('synthesizeSosOnlyDatasets', () => {
     expect(synthesised).toEqual([])
   })
 
-  it('assigns monotonically-increasing IDs', () => {
+  it('derives a stable title-slug ID (not iteration-order dependent)', () => {
     const entries = [
-      { title: 'A', available_for: ['SOS'], movie_preview: 'a' },
-      { title: 'B', available_for: ['SOS'], movie_preview: 'b' },
-      { title: 'C', available_for: ['SOS'], movie_preview: 'c' },
+      { title: 'Tsunami Wave Heights', available_for: ['SOS'], movie_preview: 'a' },
+      { title: 'Arctic Sea Ice 2020', available_for: ['SOS'], movie_preview: 'b' },
     ]
     const synthesised = synthesizeSosOnlyDatasets(entries, new Set(), lowerTitle)
-    expect(synthesised.map((d) => d.id)).toEqual(['SOS_ONLY_1', 'SOS_ONLY_2', 'SOS_ONLY_3'])
+    expect(synthesised.map((d) => d.id)).toEqual([
+      'SOS_ONLY_tsunami_wave_heights',
+      'SOS_ONLY_arctic_sea_ice_2020',
+    ])
+  })
+
+  it('keeps IDs stable when the enriched list is reordered', () => {
+    const entries = [
+      { title: 'Alpha', available_for: ['SOS'], movie_preview: 'a' },
+      { title: 'Beta', available_for: ['SOS'], movie_preview: 'b' },
+    ]
+    const a = synthesizeSosOnlyDatasets(entries, new Set(), lowerTitle)
+    const b = synthesizeSosOnlyDatasets([entries[1], entries[0]], new Set(), lowerTitle)
+    // Same titles → same IDs, regardless of input order.
+    const idsA = a.reduce<Record<string, string>>((acc, d) => ((acc[d.title] = d.id), acc), {})
+    const idsB = b.reduce<Record<string, string>>((acc, d) => ((acc[d.title] = d.id), acc), {})
+    expect(idsA).toEqual(idsB)
+  })
+
+  it('disambiguates collision-only slug pairs with a numeric suffix', () => {
+    // Two titles that slugify identically (special chars stripped).
+    const entries = [
+      { title: 'Foo Bar', available_for: ['SOS'], movie_preview: 'a' },
+      { title: 'Foo  Bar', available_for: ['SOS'], movie_preview: 'b' },
+    ]
+    // Force the title-key dedupe to NOT collide so both survive
+    // to ID assignment — title normaliser uses lowerTitle which
+    // collapses double-space differently than the slugifier.
+    const customNormalize = (t: string) => t  // keep both distinct
+    const synthesised = synthesizeSosOnlyDatasets(entries, new Set(), customNormalize)
+    expect(synthesised[0].id).toBe('SOS_ONLY_foo_bar')
+    expect(synthesised[1].id).toBe('SOS_ONLY_foo_bar_2')
+  })
+})
+
+describe('sosOnlyIdSlug', () => {
+  it('lowercases and replaces non-alphanumeric runs with underscores', () => {
+    expect(sosOnlyIdSlug('Sea Ice (Movie)')).toBe('sea_ice_movie')
+    expect(sosOnlyIdSlug('120 Years of Earthquakes: 1901–2020'))
+      .toBe('120_years_of_earthquakes_1901_2020')
+  })
+
+  it('trims edge underscores', () => {
+    expect(sosOnlyIdSlug('  hello  ')).toBe('hello')
+    expect(sosOnlyIdSlug('!!! Wow !!!')).toBe('wow')
+  })
+
+  it('caps length so deep-link URLs stay reasonable', () => {
+    const long = 'a'.repeat(200)
+    expect(sosOnlyIdSlug(long).length).toBeLessThanOrEqual(60)
   })
 
   it('returns synthesised rows tagged with weight 0', () => {

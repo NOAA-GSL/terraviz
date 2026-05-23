@@ -1467,10 +1467,22 @@ class InteractiveSphere {
       const datasetLoaded = this.appState.currentDataset !== null
       if (onCatalog) {
         document.body.classList.add('catalog-mode')
-        if (!datasetLoaded) document.body.classList.add('catalog-empty')
         showCatalogTabs()
-        setActiveCatalogTab('catalog')
-        this.openBrowsePanel()
+        if (datasetLoaded) {
+          // `?catalog=true&dataset=<id>` — case 2 from §3.1:
+          // globe visible, browse panel collapsed as the "back to
+          // catalog" affordance, Sphere tab active. Mirrors the
+          // boot-path branch that handles the same URL shape.
+          document.body.classList.remove('catalog-empty')
+          collapseBrowseUI()
+          setActiveCatalogTab('sphere')
+        } else {
+          // `?catalog=true` (no dataset) — case 1: browse panel
+          // full-surface, globe hidden, Catalog tab active.
+          document.body.classList.add('catalog-empty')
+          this.openBrowsePanel()
+          setActiveCatalogTab('catalog')
+        }
       } else {
         document.body.classList.remove('catalog-empty')
         if (document.body.classList.contains('catalog-mode')) {

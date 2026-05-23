@@ -9,7 +9,7 @@ import type { AppState, Dataset } from '../types'
 import { logger } from '../utils/logger'
 import { proxyCaptionUrl } from '../utils/captionProxy'
 import { t } from '../i18n'
-import { reportError } from '../analytics/errorCapture'
+import { reportError } from '../analytics'
 
 // --- Playback constants ---
 const LOOP_RESTART_DELAY_MS = 2000

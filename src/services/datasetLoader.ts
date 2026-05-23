@@ -373,7 +373,7 @@ function truncateDescription(text: string): string {
  */
 function renderCreditRow(label: string, value: string, affiliationUrl?: string): string {
   const valueHtml = affiliationUrl
-    ? `<a href="${escapeAttr(affiliationUrl)}" target="_blank" rel="noopener">${escapeHtml(value)}</a>`
+    ? `<a href="${escapeAttr(affiliationUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(value)}</a>`
     : escapeHtml(value)
   return `<div class="info-credit-row">`
     + `<dt class="info-credit-label">${escapeHtml(label)}</dt>`
@@ -555,7 +555,7 @@ export function displayDatasetInfo(
   if (dataset.thumbnailLink) {
     html += `<a href="${escapeAttr(dataset.thumbnailLink)}"`
       + ` download`
-      + ` target="_blank" rel="noopener"`
+      + ` target="_blank" rel="noopener noreferrer"`
       + ` class="info-thumbnail-download"`
       + ` aria-label="${tAttr('infoPanel.thumbnail.download')}">`
     html += `<img src="${escapeAttr(dataset.thumbnailLink)}"`
@@ -568,7 +568,7 @@ export function displayDatasetInfo(
   // --- External catalog link --------------------------------------
   if (e?.catalogUrl) {
     html += `<p class="info-section-label">${escapeHtml(t('infoPanel.section.links'))}</p>`
-    html += `<a href="${escapeAttr(e.catalogUrl)}" target="_blank" rel="noopener" class="info-catalog-link">${escapeHtml(t('infoPanel.catalogLink'))}</a>`
+    html += `<a href="${escapeAttr(e.catalogUrl)}" target="_blank" rel="noopener noreferrer" class="info-catalog-link">${escapeHtml(t('infoPanel.catalogLink'))}</a>`
   }
 
   infoBody.innerHTML = html

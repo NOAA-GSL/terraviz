@@ -151,7 +151,12 @@ export interface Dataset {
    *   the source of truth for the `dataLink`; enriched entry
    *   carries the rest.
    *
-   * Omitted on rows where the enriched lookup didn't match.
+   * Set by `DataService.enrichDataset` on every live-catalog row,
+   * defaulting to `'Explorer'` when no enriched match is found
+   * (live catalog is SOSx-subset by definition). Synthesised SOS-
+   * only rows set `'SOS'` themselves. The field is optional on the
+   * type so wire-shape consumers (`WireDataset`) can elide it; in
+   * the running app every row from `fetchDatasets()` has it set.
    */
   availableFor?: 'Explorer' | 'SOS' | 'Both'
 }

@@ -55,6 +55,30 @@ interface RawEnrichedEntry {
  *  real catalog row. */
 const SOS_ONLY_ID_PREFIX = 'SOS_ONLY_'
 
+/** Length cap on the slug component of a synthesised SOS-only ID.
+ *  Long titles get truncated to keep the deep-link URL short. The
+ *  underlying title remains unique so two truncated slugs would only
+ *  collide on the first 60 chars, which the title-key dedupe in
+ *  {@link synthesizeSosOnlyDatasets} would have already caught. */
+const SOS_ONLY_ID_SLUG_MAX = 60
+
+/**
+ * Derive a stable slug for a SOS-only dataset ID. Lowercases,
+ * replaces non-alphanumeric runs with `_`, trims edge underscores,
+ * caps length. The result is deterministic for a given input
+ * title — Phase 4 §6.4 deep links keyed off the synthesised ID
+ * stay stable across enriched-JSON reorderings or additions.
+ *
+ * Exported for tests.
+ */
+export function sosOnlyIdSlug(title: string): string {
+  return title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, SOS_ONLY_ID_SLUG_MAX)
+}
+
 /**
  * Derive the `availableFor` tag from an enriched entry's
  * `available_for` array. Returns `undefined` when the entry
@@ -111,7 +135,11 @@ export function synthesizeSosOnlyDatasets(
   normalizeTitle: (title: string) => string,
 ): Dataset[] {
   const synthesized: Dataset[] = []
-  let counter = 0
+  // Disambiguate the rare case where two distinct titles slugify
+  // to the same string (e.g. long titles that collide past the
+  // 60-char cap). The title-key dedupe above catches
+  // normalize-identical titles, but slugification is lossier.
+  const seenSlugs = new Map<string, number>()
 
   for (const entry of enrichedEntries) {
     if (!entry.title || !entry.movie_preview) continue
@@ -123,9 +151,17 @@ export function synthesizeSosOnlyDatasets(
     const titleKey = normalizeTitle(entry.title)
     if (existingTitleKeys.has(titleKey)) continue
 
-    counter += 1
+    // Stable, title-derived ID — Phase 4 §6.4 follow-up. Earlier
+    // version used an iteration-order counter, which meant adding
+    // a single new entry to the enriched file could shift every
+    // downstream ID and break shared `?dataset=SOS_ONLY_X` links.
+    const baseSlug = sosOnlyIdSlug(entry.title) || 'untitled'
+    const dupeCount = seenSlugs.get(baseSlug) ?? 0
+    seenSlugs.set(baseSlug, dupeCount + 1)
+    const slug = dupeCount === 0 ? baseSlug : `${baseSlug}_${dupeCount + 1}`
+
     const dataset: Dataset = {
-      id: `${SOS_ONLY_ID_PREFIX}${counter}`,
+      id: `${SOS_ONLY_ID_PREFIX}${slug}`,
       title: entry.title,
       format: 'video/mp4',
       dataLink: entry.movie_preview,
