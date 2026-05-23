@@ -1842,10 +1842,21 @@ class InteractiveSphere {
    * relative-media-path resolution. Phase 3pt-review/J —
    * follow-up after the published bundle hit the CSP bug in
    * the wild.
+   *
+   * Preview is deliberately NOT standalone: `endTour` calls
+   * `goHome()` for standalone tours, which would strip
+   * `?tourEdit=` from the URL and unmount the dock when a
+   * preview finishes naturally. Bumping `loadGeneration`
+   * matches the supersede-in-flight-loads behaviour from the
+   * old `playTour` (the previous call ran
+   * `++this.loadGeneration` before `startTour`; we replicate
+   * it here so a dataset load in flight when Preview fires
+   * can't land mid-tour and clobber state). Copilot
+   * discussion_r3293605064.
    */
   playInlineTour(tourFile: TourFile): void {
     this.stopTour()
-    this.tourIsStandalone = true
+    ++this.loadGeneration
     this.runTourFromFile(tourFile, window.location.href)
   }
 
