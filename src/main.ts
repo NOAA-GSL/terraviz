@@ -1856,6 +1856,14 @@ class InteractiveSphere {
    */
   playInlineTour(tourFile: TourFile): void {
     this.stopTour()
+    // Defensive — `stopTour` only clears `tourIsStandalone` when
+    // `this.tourEngine` is non-null. If a `playTour` is mid-fetch
+    // (engine not yet created), the flag from that call would
+    // leak into the preview and trip the goHome branch in
+    // `endTour`. The loadGeneration bump below supersedes the
+    // in-flight fetch, but we still need to clear the flag the
+    // bumped fetch already set. Copilot discussion_r3293611214.
+    this.tourIsStandalone = false
     ++this.loadGeneration
     this.runTourFromFile(tourFile, window.location.href)
   }
