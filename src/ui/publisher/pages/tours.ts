@@ -51,11 +51,13 @@ export async function renderToursPage(
   const result = await list({ limit: 50 })
   if ('error' in result) {
     // Phase 3pt-review/H — mirror the datasets / dataset-detail
-    // page pattern: a 401/403 session error means the publisher
-    // either needs the Access warmup redirect (handleSessionError
-    // returns 'redirecting' and walks them to the access bounce)
-    // or the explicit sign-in card ('show-error'). Other failures
-    // get the generic error shell. Copilot discussion_r3291171442.
+    // page pattern: a 401/403 session error either gets the
+    // Access warmup redirect (`handleSessionError` returns
+    // 'navigating' and we bail without re-rendering) or, when
+    // warmup has already been tried, the explicit sign-in card
+    // ('show-error'). Other failure kinds skip the helper and
+    // render the generic error shell. Copilot
+    // discussion_r3291171442 + r3291446477.
     if (result.kind === 'session') {
       if (handleSessionError({ navigate }) === 'navigating') return
       content.replaceChildren(buildErrorShell(result.error))

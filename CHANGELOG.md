@@ -318,6 +318,34 @@ consistency issues:
 3 new tests cover the validation rejection, the session
 delegation, and the `scope="col"` assertion.
 
+**tour-review/I — Copilot pass-5 (4 comments).** Smaller cleanup
+pass: one real leak + three doc fixes.
+
+  - `playInlineTour` blob URL leak. Each preview minted a fresh
+    object URL via `URL.createObjectURL` but never revoked it,
+    so repeated previews accumulated for the lifetime of the
+    tab. The URL is now tracked on the App and revoked from
+    both `stopTour` (user-initiated stop, abort during reload)
+    and `endTour` (natural finish), plus pre-emptively on
+    back-to-back previews so URLs don't stack.
+  - `tours.ts` comment said `handleSessionError` returns
+    `'redirecting'` but the actual return is
+    `'navigating' | 'show-error'` (which the code already
+    checked correctly). Comment reworded to match.
+  - `draft.ts` docblock had the partial-failure ordering
+    wrong: it described a "row inserted but blob write
+    failed" mid-flow case, but `createDraftTour` writes R2
+    first and then inserts D1. Rewritten to describe the
+    actual outcomes (R2-fail = no row; R2-ok-D1-fail = orphan
+    blob; R2-unbound-D1-ok = row-without-blob, recoverable on
+    next GET but not next PUT).
+  - `draft.test.ts` "still works when CATALOG_R2 is unbound"
+    case carried the same misleading "autosave PUT will
+    create the object on first save" comment. Updated to
+    note the unbound branch is only for unit tests / smoke
+    checks and that the follow-up autosave PUT will 503 until
+    R2 is wired.
+
   - **Rich-UI captures**: overlay drag-to-place, click-on-
     globe placemark, audio/video file pickers, question form.
     The JSON editor (tour/D) is the universal escape hatch

@@ -6,24 +6,27 @@
  * by the publisher portal's "New tour" button: instead of
  * requiring the caller to first upload a tour file and then
  * POST to /tours with the ref, this endpoint does both in one
- * server request. The R2 write and the D1 insert happen
- * sequentially against two different Cloudflare services, so
- * the operation is not transactionally atomic across them — a
- * failure mid-flow leaves either the row or the blob, but not
- * both. Partial-state recovery depends on which half landed:
+ * server request. `createDraftTour` writes the R2 blob first
+ * (when `CATALOG_R2` is bound) and only then inserts the D1
+ * row, so the operation is not transactionally atomic across
+ * the two Cloudflare services. The possible partial-state
+ * outcomes:
  *
- *   - Blob written but row insert failed: orphan blob; harmless
- *     (no row references it; eventual R2 lifecycle cleanup).
- *   - Row inserted but blob write failed: the row's
- *     `tour_json_ref` still points at the (missing) draft key;
- *     `GET /api/v1/publish/tours/{id}/json` recovers gracefully
- *     by treating the missing blob as an empty tour file
- *     (`readTourDraftJson` returns `{tourTasks:[]}`), and the
- *     next PUT to `/api/v1/publish/tours/{id}/json` writes the
- *     blob for real — provided `CATALOG_R2` is bound. With the
- *     binding missing, that PUT returns `503 binding_missing`,
- *     so production deploys must bind the bucket. Phase
- *     3pt-review/H — Copilot discussion_r3291171425.
+ *   - R2 write fails (blob missing, no D1 row): the request
+ *     surfaces the error; nothing to recover.
+ *   - R2 write succeeds, D1 insert fails: orphan blob with no
+ *     row pointing at it; harmless (eventual lifecycle cleanup).
+ *   - R2 binding absent + D1 insert succeeds: the row exists,
+ *     `tour_json_ref` points at a key with no object. `GET
+ *     /api/v1/publish/tours/{id}/json` recovers by treating
+ *     missing blob as an empty tour file (`readTourDraftJson`
+ *     returns `{tourTasks:[]}`). The follow-up `PUT
+ *     /api/v1/publish/tours/{id}/json` (autosave) returns
+ *     `503 binding_missing` until the binding is added, so
+ *     production deploys must bind the bucket. The unbound
+ *     branch exists only for unit tests / smoke checks. Phase
+ *     3pt-review/H/I — Copilot discussion_r3291171425 +
+ *     r3291446496.
  *
  * Returns the new `tour` row so the dock can navigate to
  * `/?tourEdit=<id>` immediately. Phase 3pt-review/A — Copilot

@@ -224,6 +224,11 @@ class InteractiveSphere {
   private loadGeneration = 0 // guards against concurrent dataset loads
   private tourEngine: TourEngine | null = null
   private tourIsStandalone = false // true when tour was loaded as a tour/json dataset (not runTourOnLoad)
+  /** Phase 3pt-review/I — blob URL currently driving a preview
+   *  tour. Tracked so `stopTour` / `endTour` can revoke it and
+   *  avoid the per-preview URL leak Copilot flagged in
+   *  discussion_r3291446451. Null when no preview is active. */
+  private previewBlobUrl: string | null = null
 
   /** Persisted view preferences: info panel + legend visibility. */
   private viewPrefs: ViewPreferences = loadViewPreferences()
@@ -994,6 +999,7 @@ class InteractiveSphere {
     this.cleanupTourOverlays()
     this.tourEngine = null
     this.tourIsStandalone = false
+    this.revokePreviewBlobUrl()
     this.announce('Tour ended')
 
     if (wasStandalone) {
@@ -1013,6 +1019,18 @@ class InteractiveSphere {
       this.tourIsStandalone = false
       this.cleanupTourOverlays()
       this.restorePostTourUI()
+    }
+    // Always revoke — `stopTour` is also the abort path during
+    // a reload, and an unrevoked blob URL outlives the engine.
+    this.revokePreviewBlobUrl()
+  }
+
+  /** Phase 3pt-review/I — release the preview blob URL minted by
+   *  `playInlineTour`. Safe to call when no preview is active. */
+  private revokePreviewBlobUrl(): void {
+    if (this.previewBlobUrl !== null) {
+      URL.revokeObjectURL(this.previewBlobUrl)
+      this.previewBlobUrl = null
     }
   }
 
@@ -1813,15 +1831,22 @@ class InteractiveSphere {
    * Wraps the TourFile in a blob URL and routes through the
    * existing `startTour` path. The publisher's authoring dock
    * stays mounted; the existing tour player chrome handles
-   * Stop. Blob URLs aren't revoked — they're tiny JSON blobs,
-   * and the engine retains the URL as its `tourBaseUrl` for
-   * relative-media-path resolution (draft tours shouldn't have
-   * relative paths in practice, but revoking mid-playback
-   * would break the contract).
+   * Stop. Phase 3pt-review/I — the blob URL is tracked on the
+   * App so `stopTour` / `endTour` can revoke it. Pre-fix the
+   * URL was leaked for the lifetime of the tab; repeated
+   * previews would accumulate (small JSON blobs, but the leak
+   * is real). Copilot discussion_r3291446451.
    */
   async playInlineTour(tourFile: TourFile): Promise<void> {
+    // Revoke any prior preview URL before minting the next so
+    // back-to-back previews don't stack.
+    if (this.previewBlobUrl !== null) {
+      URL.revokeObjectURL(this.previewBlobUrl)
+      this.previewBlobUrl = null
+    }
     const blob = new Blob([JSON.stringify(tourFile)], { type: 'application/json' })
     const url = URL.createObjectURL(blob)
+    this.previewBlobUrl = url
     await this.playTour(url)
   }
 

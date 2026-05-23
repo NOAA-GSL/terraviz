@@ -157,9 +157,12 @@ describe('POST /api/v1/publish/tours/draft (tour/E)', () => {
   })
 
   it('still works when CATALOG_R2 is unbound (skips the seed write)', async () => {
-    // Local-dev path: no R2 binding configured. The autosave PUT
-    // will create the object on first save, so dropping the seed
-    // is acceptable rather than failing the create.
+    // Unit-test / smoke-check path: no R2 binding configured.
+    // The draft create still mints the row so unrelated tests
+    // can exercise the rest of the flow; the follow-up
+    // `PUT /api/v1/publish/tours/{id}/json` autosave will
+    // fail with `503 binding_missing` until R2 is wired up.
+    // Phase 3pt-review/I — Copilot discussion_r3291446509.
     const { env, bucket } = setupEnv()
     delete (env as { CATALOG_R2?: unknown }).CATALOG_R2
     const res = await onRequestPost(ctx({ env }))
