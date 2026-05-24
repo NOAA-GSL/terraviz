@@ -106,6 +106,28 @@
       "$description": "Warning state"
     }
   },
+  "facet-color": {
+    "category-content": {
+      "$value": "#5cc8c8",
+      "$type": "color",
+      "$description": "Facet group hue — Category & content (tags, keywords). Used by chips, Graph view nodes, and (later) federated peer facets. Teal — distinct from the accent blue."
+    },
+    "format-medium": {
+      "$value": "#c486f7",
+      "$type": "color",
+      "$description": "Facet group hue — Format & medium (video/image/tour/other). Violet — distinct from accent and Category teal."
+    },
+    "time": {
+      "$value": "#f59f4a",
+      "$type": "color",
+      "$description": "Facet group hue — Time (date-added, data-coverage). Amber. No Graph node mapping today (range facets aren't nodes); reserved for chip + Timeline view continuity."
+    },
+    "quality-availability": {
+      "$value": "#6dc96d",
+      "$type": "color",
+      "$description": "Facet group hue — Quality & availability (captions, tour, includeSos). Green. No Graph node mapping today (boolean facets aren't nodes); reserved for chip + later view continuity."
+    }
+  },
   "glass": {
     "bg": {
       "$value": "rgba(13, 13, 18, 0.92)",
