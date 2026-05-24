@@ -571,8 +571,12 @@ export interface Tour {
   description: string | null
   /** Resolved HTTPS URL the tour engine fetches. May be null
    * when the server can't render an R2 URL (R2_PUBLIC_BASE
-   * unset); browse should show the card but the run button
-   * should refuse to launch. */
+   * unset on the deployment). The SPA's `dataService` filters
+   * unresolvable tours out of the browse list — a launchable
+   * card with no fetchable JSON is worse UX than no card. The
+   * field stays nullable here because it reflects the wire
+   * shape; consumers that synthesise a `Tour` from a known-
+   * usable source can assert non-null. */
   tourJsonUrl: string | null
   thumbnailUrl: string | null
   visibility: string

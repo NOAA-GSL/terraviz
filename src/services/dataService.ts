@@ -587,8 +587,30 @@ export class DataService {
         logger.warn('[DataService] /api/v1/tours: unexpected response shape')
         return []
       }
-      logger.info(`[DataService] Loaded ${body.tours.length} publisher tours`)
-      return body.tours.map(tourWireToDataset)
+      // Phase 3pt/G follow-up — drop tours the server couldn't
+      // resolve to an HTTPS URL (typically R2_PUBLIC_BASE unset
+      // on the deployment). Surfacing a card the user can't
+      // launch is worse UX than a missing card — the launch
+      // path would call `fetch('')` and confuse on the HTML
+      // response. Operators see the warning and can wire the
+      // bucket up.
+      const usable: WireTour[] = []
+      let droppedNullUrl = 0
+      for (const t of body.tours) {
+        if (!t.tour_json_url) {
+          droppedNullUrl++
+          continue
+        }
+        usable.push(t)
+      }
+      if (droppedNullUrl > 0) {
+        logger.warn(
+          `[DataService] Dropped ${droppedNullUrl} publisher tour(s) with no tour_json_url ` +
+            '(server could not resolve an HTTPS URL — check R2_PUBLIC_BASE).',
+        )
+      }
+      logger.info(`[DataService] Loaded ${usable.length} publisher tours`)
+      return usable.map(tourWireToDataset)
     } catch (error) {
       logger.warn('[DataService] /api/v1/tours fetch failed:', error)
       return []

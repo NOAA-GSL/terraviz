@@ -131,6 +131,55 @@ describe('DataService — node-mode', () => {
     expect(tour!.tags).toEqual(['Tours'])
   })
 
+  it('drops tours with null tour_json_url (server could not resolve R2)', async () => {
+    // R2_PUBLIC_BASE unset on the deployment → the server
+    // returns tour_json_url: null. A card pointing nowhere
+    // would `fetch('')` on launch and confuse on the HTML
+    // response. The dataService filters these out and warns;
+    // operators see the log and wire the bucket up.
+    vi.stubGlobal(
+      'fetch',
+      mockNodeCatalog(
+        [],
+        [
+          {
+            id: '01HXOK00000000000000000001',
+            slug: 'launchable',
+            title: 'Launchable',
+            description: null,
+            tour_json_url: 'https://r2.example.com/tours/ok/published/1.json',
+            thumbnail_url: null,
+            visibility: 'public',
+            schema_version: 1,
+            created_at: '2026-05-01T00:00:00.000Z',
+            updated_at: '2026-05-01T00:00:00.000Z',
+            published_at: '2026-05-01T00:00:00.000Z',
+            origin_node: 'NODE000',
+          },
+          {
+            id: '01HXBAD00000000000000000001',
+            slug: 'broken',
+            title: 'Broken — no R2 URL',
+            description: null,
+            tour_json_url: null,
+            thumbnail_url: null,
+            visibility: 'public',
+            schema_version: 1,
+            created_at: '2026-05-01T00:00:00.000Z',
+            updated_at: '2026-05-01T00:00:00.000Z',
+            published_at: '2026-05-01T00:00:00.000Z',
+            origin_node: 'NODE000',
+          },
+        ],
+      ),
+    )
+    const svc = new DataService()
+    const datasets = await svc.fetchDatasets()
+    const ids = datasets.map(d => d.id)
+    expect(ids).toContain('01HXOK00000000000000000001')
+    expect(ids).not.toContain('01HXBAD00000000000000000001')
+  })
+
   it('tolerates a tours-endpoint failure and still returns datasets', async () => {
     const fetchStub = vi.fn(async (input: RequestInfo | URL | string) => {
       const url = String(input)

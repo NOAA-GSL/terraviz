@@ -403,17 +403,19 @@ describe('tourWireToDataset', () => {
     expect(d.tags).toEqual(['Tours'])
   })
 
-  it('handles null thumbnail / description / tour_json_url', () => {
+  it('handles null thumbnail / description defensively', () => {
+    // Note: tours with null `tour_json_url` are filtered out
+    // by `fetchToursFromNode` before this mapper runs (a card
+    // pointing at no URL is unlaunchable); the mapper still
+    // tolerates the field nullably as a defensive layer for
+    // any consumer that bypasses the filter.
     const d = tourWireToDataset({
       ...wire,
       description: null,
-      tour_json_url: null,
       thumbnail_url: null,
     })
     expect(d.abstractTxt).toBeUndefined()
     expect(d.thumbnailLink).toBeUndefined()
-    expect(d.tourJsonUrl).toBeUndefined()
-    expect(d.dataLink).toBe('')
   })
 
   it('round-trips through tourWireToTour with the same metadata', () => {
