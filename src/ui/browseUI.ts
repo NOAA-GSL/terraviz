@@ -42,6 +42,7 @@ import {
   readFilterStateFromUrl,
 } from '../utils/catalogFilters'
 import type { CatalogGraphController } from './catalogGraphUI'
+import type { CatalogTimelineController } from './catalogTimelineUI'
 
 /** Tier B dwell handle for the browse overlay — non-null while the
  * overlay is visible. Started on showBrowseUI when the overlay
@@ -88,20 +89,21 @@ const VIEW_MODE_STORAGE_KEY = 'sos-browse-view-mode.v1'
 /**
  * Read the persisted view mode, falling back to `'cards'`. SSR-safe.
  *
- * Only `'graph'` is accepted from storage today — `'timeline'` and
- * `'map'` are reserved for §6.8/§6.9 but the UI doesn't render
- * those buttons yet, so a stale `'timeline'` entry from a future
- * build (or a manual localStorage edit) would leave both Cards
- * and Graph buttons with `aria-pressed="false"` and the user
- * stranded without an active state. Normalising unknown modes to
- * `'cards'` keeps the toggle's active state always meaningful.
- * When §6.8/§6.9 ship, extend the allowed list here.
+ * `'cards'`, `'graph'`, and `'timeline'` are accepted from storage.
+ * `'map'` is reserved for §6.9 but the UI doesn't render that
+ * button yet, so a stale `'map'` entry from a future build (or a
+ * manual localStorage edit) would leave every rendered button
+ * with `aria-pressed="false"` and the user stranded without an
+ * active state. Normalising unknown modes to `'cards'` keeps the
+ * toggle's active state always meaningful. When §6.9 ships,
+ * extend the allowed list here.
  */
 function loadViewMode(): ViewMode {
   if (typeof window === 'undefined') return 'cards'
   try {
     const raw = window.localStorage.getItem(VIEW_MODE_STORAGE_KEY)
     if (raw === 'graph') return 'graph'
+    if (raw === 'timeline') return 'timeline'
     return 'cards'
   } catch {
     return 'cards'
@@ -688,6 +690,11 @@ export function showBrowseUI(
   // controller itself handles re-renders on filter changes.
   let graphController: CatalogGraphController | null = null
   let graphLoadPromise: Promise<CatalogGraphController | null> | null = null
+  // Same shape for the Timeline (§6.8). Lazy-loaded on first toggle
+  // so the d3 chunk only ships when the user actually opens
+  // Timeline view; mirrors the graph controller's lifecycle.
+  let timelineController: CatalogTimelineController | null = null
+  let timelineLoadPromise: Promise<CatalogTimelineController | null> | null = null
   // The raw search-box string — both free text and any
   // `category:foo` / `format:bar` / `period:yearly` prefixes the
   // user has typed. `parseSearchQuery` splits it into the free-
@@ -1053,10 +1060,13 @@ export function showBrowseUI(
 
   const viewModeBar = document.getElementById('browse-view-mode')
   const graphContainer = document.getElementById('browse-graph')
+  const timelineContainer = document.getElementById('browse-timeline')
   const gridContainer = document.getElementById('browse-grid')
 
-  /** Render the segmented Cards/Graph control. Hidden entirely on
-   *  mobile so a phone never sees a graph option. */
+  /** Render the segmented Cards/Graph/Timeline control. Hidden
+   *  entirely on mobile so a phone never sees a graph or timeline
+   *  option (both views need horizontal space the mobile breakpoint
+   *  doesn't provide). */
   function renderViewModeBar(): void {
     if (!viewModeBar) return
     if (isNarrowViewport()) {
@@ -1067,9 +1077,10 @@ export function showBrowseUI(
     }
     viewModeBar.classList.remove('hidden')
     viewModeBar.removeAttribute('aria-hidden')
-    const options: Array<{ key: 'cards' | 'graph'; label: string; aria: string }> = [
+    const options: Array<{ key: 'cards' | 'graph' | 'timeline'; label: string; aria: string }> = [
       { key: 'cards', label: t('browse.viewMode.cards'), aria: t('browse.viewMode.cards.aria') },
       { key: 'graph', label: t('browse.viewMode.graph'), aria: t('browse.viewMode.graph.aria') },
+      { key: 'timeline', label: t('browse.viewMode.timeline'), aria: t('browse.viewMode.timeline.aria') },
     ]
     viewModeBar.innerHTML = options
       .map(o => {
@@ -1081,23 +1092,31 @@ export function showBrowseUI(
 
   /**
    * Apply the active view-mode to the DOM — show one container,
-   * hide the other. On first activation of Graph view this also
-   * lazy-imports `catalogGraphUI`, instantiates the controller,
-   * and asks it to render. Subsequent activations just show the
-   * existing canvas and ask the controller to refresh.
+   * hide the others. On first activation of Graph / Timeline view
+   * this also lazy-imports the corresponding module, instantiates
+   * the controller, and asks it to render. Subsequent activations
+   * just show the existing canvas and ask the controller to
+   * refresh.
    *
    * `mountIfNeeded` defaults to true so the boot path mounts the
-   * graph when `viewMode` restores from localStorage as `'graph'`.
+   * graph/timeline when `viewMode` restores from localStorage.
    * Filter-change paths can pass `false` to skip the dynamic
-   * import when the graph isn't visible.
+   * import when the off-screen view isn't visible.
    */
   async function applyViewMode(mountIfNeeded: boolean = true): Promise<void> {
-    if (!gridContainer || !graphContainer) return
+    if (!gridContainer || !graphContainer || !timelineContainer) return
+    const hideContainer = (el: HTMLElement): void => {
+      el.classList.add('hidden')
+      el.setAttribute('aria-hidden', 'true')
+    }
+    const showContainer = (el: HTMLElement): void => {
+      el.classList.remove('hidden')
+      el.removeAttribute('aria-hidden')
+    }
     if (viewMode === 'graph') {
-      gridContainer.classList.add('hidden')
-      gridContainer.setAttribute('aria-hidden', 'true')
-      graphContainer.classList.remove('hidden')
-      graphContainer.removeAttribute('aria-hidden')
+      hideContainer(gridContainer)
+      hideContainer(timelineContainer)
+      showContainer(graphContainer)
       if (mountIfNeeded) await ensureGraphMounted()
       const parsed = parseSearchQuery(searchQuery)
       const effectiveState = mergeFilterStates(filterState, parsed.prefixes)
@@ -1106,11 +1125,22 @@ export function showBrowseUI(
         filterState: effectiveState,
         searchQuery: parsed.freeText,
       })
+    } else if (viewMode === 'timeline') {
+      hideContainer(gridContainer)
+      hideContainer(graphContainer)
+      showContainer(timelineContainer)
+      if (mountIfNeeded) await ensureTimelineMounted()
+      const parsed = parseSearchQuery(searchQuery)
+      const effectiveState = mergeFilterStates(filterState, parsed.prefixes)
+      timelineController?.update({
+        datasets: allDatasets,
+        filterState: effectiveState,
+        searchQuery: parsed.freeText,
+      })
     } else {
-      graphContainer.classList.add('hidden')
-      graphContainer.setAttribute('aria-hidden', 'true')
-      gridContainer.classList.remove('hidden')
-      gridContainer.removeAttribute('aria-hidden')
+      hideContainer(graphContainer)
+      hideContainer(timelineContainer)
+      showContainer(gridContainer)
     }
   }
 
@@ -1236,11 +1266,65 @@ export function showBrowseUI(
     void result
   }
 
+  /**
+   * Lazy-import `catalogTimelineUI` on first activation. Mirrors
+   * `ensureGraphMounted` — same memoised in-flight handle pattern,
+   * same retry-on-error semantics. On import failure (network blip
+   * in production, bundle stripped in some federated build) the
+   * timeline container shows an inline error and the controller
+   * stays null so a subsequent toggle into Timeline can retry.
+   */
+  async function ensureTimelineMounted(): Promise<void> {
+    if (timelineController || !timelineContainer) return
+    if (timelineLoadPromise) {
+      await timelineLoadPromise
+      return
+    }
+    timelineContainer.innerHTML = `<div class="browse-timeline-status" role="status">${escapeHtml(t('browse.timeline.loading'))}</div>`
+    const loadPromise = import('./catalogTimelineUI')
+      .then(({ createCatalogTimeline }) => {
+        timelineContainer.innerHTML = ''
+        timelineController = createCatalogTimeline(timelineContainer, {
+          onBrushChange: (range) => {
+            // Brush gestures funnel through `setFacet` — same single
+            // mutation path the chip rail's range inputs use. The
+            // resulting `applyState` re-renders the chip rail (so
+            // the inputs follow the brush) AND the timeline (so the
+            // brush selection re-syncs from filterState — see the
+            // controller's `syncBrushFromFilterState`).
+            const next = range == null
+              ? setFacet(filterState, 'dataCoverageYear', undefined)
+              : setFacet(filterState, 'dataCoverageYear', {
+                  kind: 'range',
+                  min: range.min,
+                  max: range.max,
+                })
+            applyState(next, searchQuery)
+          },
+          onPreviewDataset: (datasetId: string) => {
+            previewDatasetInCards(datasetId)
+          },
+        })
+        return timelineController
+      })
+      .catch((err) => {
+        console.error('[browse] failed to load Timeline view', err)
+        timelineContainer.innerHTML = `<div class="browse-timeline-status browse-timeline-status-error" role="alert">${escapeHtml(t('browse.timeline.loadError'))}</div>`
+        return null
+      })
+    timelineLoadPromise = loadPromise
+    const result = await loadPromise
+    if (timelineLoadPromise === loadPromise) {
+      timelineLoadPromise = null
+    }
+    void result
+  }
+
   if (viewModeBar && !viewModeBar.dataset.wired) {
     viewModeBar.addEventListener('click', (e) => {
       const btn = (e.target as HTMLElement).closest('.browse-view-mode-btn') as HTMLElement | null
       if (!btn || !btn.dataset.viewMode) return
-      const next = btn.dataset.viewMode as 'cards' | 'graph'
+      const next = btn.dataset.viewMode as 'cards' | 'graph' | 'timeline'
       if (next === viewMode) return
       const previous = viewMode
       viewMode = next
@@ -1274,7 +1358,7 @@ export function showBrowseUI(
   if (narrowVpQueryTyped && !narrowVpQueryTyped.__terravizWired) {
     const onNarrowChange = (): void => {
       renderViewModeBar()
-      if (isNarrowViewport() && viewMode === 'graph') {
+      if (isNarrowViewport() && (viewMode === 'graph' || viewMode === 'timeline')) {
         viewMode = 'cards'
         saveViewMode(viewMode)
         void applyViewMode()
@@ -1354,15 +1438,24 @@ export function showBrowseUI(
     }
     renderRail()
     renderCards()
-    // Graph view re-renders only when it's the active surface — no
-    // sense paying cytoscape's layout cost for an off-screen canvas.
-    // The controller's update() uses cytoscape's incremental layout
-    // so node positions animate rather than re-seeding the
-    // simulation (the §6.7 "graph thrash" risk).
+    // Graph / Timeline re-render only when their canvas is the
+    // active surface — no sense paying d3 / cytoscape's layout
+    // cost for an off-screen canvas. Both controllers' `update()`
+    // is incremental: cytoscape preserves node positions across
+    // chip-toggle thrashes (the §6.7 "graph thrash" risk), and
+    // the timeline's d3 scale + brush sync is idempotent.
     if (viewMode === 'graph' && graphController) {
       const parsed = parseSearchQuery(searchQuery)
       const effectiveState = mergeFilterStates(filterState, parsed.prefixes)
       graphController.update({
+        datasets: allDatasets,
+        filterState: effectiveState,
+        searchQuery: parsed.freeText,
+      })
+    } else if (viewMode === 'timeline' && timelineController) {
+      const parsed = parseSearchQuery(searchQuery)
+      const effectiveState = mergeFilterStates(filterState, parsed.prefixes)
+      timelineController.update({
         datasets: allDatasets,
         filterState: effectiveState,
         searchQuery: parsed.freeText,

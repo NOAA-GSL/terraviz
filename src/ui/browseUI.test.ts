@@ -39,6 +39,23 @@ vi.mock('./catalogGraphUI', () => ({
   })),
 }))
 
+// Mock the Timeline view's lazy-loaded UI module (§6.8). Same shape
+// + reasoning as the graph mock above — d3-scale + d3-axis + d3-brush
+// don't need to actually mount for the boot / toggle / persistence /
+// analytics assertions in this suite. Stubbing keeps the dynamic
+// import synchronous and the chunk small under coverage.
+const timelineMockHandles = vi.hoisted(() => ({
+  update: vi.fn(),
+  destroy: vi.fn(),
+  createCatalogTimeline: vi.fn(),
+}))
+vi.mock('./catalogTimelineUI', () => ({
+  createCatalogTimeline: timelineMockHandles.createCatalogTimeline.mockImplementation(() => ({
+    update: timelineMockHandles.update,
+    destroy: timelineMockHandles.destroy,
+  })),
+}))
+
 // ---------------------------------------------------------------------------
 // escapeHtml / escapeAttr
 // ---------------------------------------------------------------------------
@@ -104,6 +121,7 @@ function setupBrowseDOM(): void {
       <div id="browse-count"></div>
       <div id="browse-grid"></div>
       <div id="browse-graph" class="hidden"></div>
+      <div id="browse-timeline" class="hidden"></div>
     </div>
   `
 }
@@ -1010,16 +1028,18 @@ describe('view-mode toggle', () => {
     window.history.replaceState(null, '', '/')
   })
 
-  it('renders Cards + Graph buttons when not mobile, with Cards active by default', () => {
+  it('renders Cards + Graph + Timeline buttons when not mobile, with Cards active by default', () => {
     setupBrowseDOM()
     showBrowseUI([makeDataset({ id: 'a', tags: ['Air'] })], makeCallbacks())
     const bar = document.getElementById('browse-view-mode')!
     const buttons = bar.querySelectorAll<HTMLButtonElement>('.browse-view-mode-btn')
-    expect(buttons).toHaveLength(2)
+    expect(buttons).toHaveLength(3)
     const cardsBtn = bar.querySelector('[data-view-mode="cards"]')!
     const graphBtn = bar.querySelector('[data-view-mode="graph"]')!
+    const timelineBtn = bar.querySelector('[data-view-mode="timeline"]')!
     expect(cardsBtn.getAttribute('aria-pressed')).toBe('true')
     expect(graphBtn.getAttribute('aria-pressed')).toBe('false')
+    expect(timelineBtn.getAttribute('aria-pressed')).toBe('false')
   })
 
   it('hides the view-mode toggle on mobile and falls back to Cards', () => {
@@ -1079,18 +1099,29 @@ describe('view-mode toggle', () => {
     expect(bar.querySelector('[data-view-mode="cards"]')!.getAttribute('aria-pressed')).toBe('false')
   })
 
-  it('normalises stale future view-modes (timeline/map) back to Cards', () => {
-    // §6.8 Timeline / §6.9 Map aren't shipped yet. A stale entry
-    // in localStorage (manual edit / future build / shared
-    // session) must not leave both buttons un-pressed and the
-    // user stranded without an active state. The full assertion
-    // chain: stored = `timeline`, but UI lands on Cards.
+  it('restores `timeline` from localStorage and marks Timeline button active', () => {
     setupBrowseDOM()
     localStorage.setItem(VIEW_MODE_KEY, 'timeline')
     showBrowseUI([makeDataset({ id: 'a', tags: ['Air'] })], makeCallbacks())
     const bar = document.getElementById('browse-view-mode')!
+    expect(bar.querySelector('[data-view-mode="timeline"]')!.getAttribute('aria-pressed')).toBe('true')
+    expect(bar.querySelector('[data-view-mode="cards"]')!.getAttribute('aria-pressed')).toBe('false')
+    expect(bar.querySelector('[data-view-mode="graph"]')!.getAttribute('aria-pressed')).toBe('false')
+  })
+
+  it('normalises stale future view-modes (map) back to Cards', () => {
+    // §6.9 Map isn't shipped yet. A stale entry in localStorage
+    // (manual edit / future build / shared session) must not leave
+    // every button un-pressed and the user stranded without an
+    // active state. The full assertion chain: stored = `map`, but
+    // UI lands on Cards.
+    setupBrowseDOM()
+    localStorage.setItem(VIEW_MODE_KEY, 'map')
+    showBrowseUI([makeDataset({ id: 'a', tags: ['Air'] })], makeCallbacks())
+    const bar = document.getElementById('browse-view-mode')!
     expect(bar.querySelector('[data-view-mode="cards"]')!.getAttribute('aria-pressed')).toBe('true')
     expect(bar.querySelector('[data-view-mode="graph"]')!.getAttribute('aria-pressed')).toBe('false')
+    expect(bar.querySelector('[data-view-mode="timeline"]')!.getAttribute('aria-pressed')).toBe('false')
   })
 
   it('persists the choice to localStorage on toggle', () => {
