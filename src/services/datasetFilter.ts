@@ -381,26 +381,6 @@ export function filterDatasets(
 // ---------------------------------------------------------------------------
 
 /**
- * Return a NEW filter state with `value` toggled on `facet`.
- * Behaviour depends on the facet's current predicate kind:
- *
- *  - Facet absent → add as a `multi-select` with one value
- *    (or, for inverse-default facets, as `{kind:'boolean', value:true}`
- *    when the toggle string is the empty string or `'on'`).
- *  - `multi-select` present, value missing → add the value.
- *  - `multi-select` present, value present → remove the value;
- *    if the result is empty, delete the facet entirely so the
- *    state stays minimal.
- *  - `boolean` present → delete the facet (toggling a checked
- *    boolean toggles it off).
- *
- * Range and bbox facets are not toggled by this helper — they
- * carry continuous state and are mutated directly by the
- * range-slider / brush / draw handler via {@link setFacet}.
- *
- * Pure — returns a new object; never mutates `state`.
- */
-/**
  * Return a NEW filter state with `value` toggled on a multi-
  * select `facet`. Behaviour depends on the facet's current
  * predicate kind:

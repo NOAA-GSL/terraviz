@@ -4,10 +4,22 @@
  * Phase 4 §6.3 of `docs/WEB_CATALOG_FEATURES_PLAN.md`. The chip
  * rail and search box write their state to the URL via
  * `history.replaceState` (not pushState — chip clicks shouldn't
- * clog history). The encoded form is the compact one from the
- * plan:
+ * clog history). The compact form from the plan is the
+ * human-readable contract:
  *
  *     ?catalog=true&q=ocean&cat=atmosphere,land&fmt=video
+ *
+ * On the wire `URLSearchParams.toString()` percent-encodes the
+ * commas (and spaces in `q=`) so the address bar actually shows
+ *
+ *     ?catalog=true&q=ocean&cat=atmosphere%2Cland&fmt=video
+ *
+ * The two forms are equivalent — `URLSearchParams` decodes
+ * `%2C` back to `,` on read, and a hand-typed comma URL round-
+ * trips through {@link decodeFilterState} the same as the
+ * percent-encoded form. Tests in this module assert the
+ * on-wire shape; the doc above reads the human form because
+ * that's the contract the plan documents.
  *
  * Encode/decode are pure functions and live alongside the
  * predicate engine that they serve. The side-effecting
