@@ -12,6 +12,33 @@ vi.mock('../services/dataService', () => ({
   }
 }))
 
+// Mock the Graph view's lazy-loaded UI module. `browseUI.ts` uses
+// `import('./catalogGraphUI')` on the first toggle into Graph view
+// (or boot path when localStorage has `viewMode='graph'`). The real
+// module pulls in cytoscape + cytoscape-cola, which under coverage
+// instrumentation timing on CI can leak past the test boundary and
+// cause flakiness in subsequent tests (the same shape as the
+// real-timer leak fixed in 350f05c). Stubbing the module keeps the
+// promise resolution synchronous and deterministic — tests that
+// verify aria-pressed / localStorage / analytics on the toggle
+// don't need (and shouldn't depend on) cytoscape actually loading.
+//
+// `graphMockHandles` is hoisted via `vi.hoisted` so it's defined
+// before the factory below runs (vi.mock hoists). Tests reach into
+// `graphMockHandles.update` to assert on calls. `update.mockClear()`
+// per test keeps assertions independent.
+const graphMockHandles = vi.hoisted(() => ({
+  update: vi.fn(),
+  destroy: vi.fn(),
+  createCatalogGraph: vi.fn(),
+}))
+vi.mock('./catalogGraphUI', () => ({
+  createCatalogGraph: graphMockHandles.createCatalogGraph.mockImplementation(() => ({
+    update: graphMockHandles.update,
+    destroy: graphMockHandles.destroy,
+  })),
+}))
+
 // ---------------------------------------------------------------------------
 // escapeHtml / escapeAttr
 // ---------------------------------------------------------------------------
@@ -71,10 +98,12 @@ function setupBrowseDOM(): void {
       <button id="browse-search-clear" class="hidden"></button>
       <div id="browse-filter-rail"></div>
       <div id="browse-toolbar">
+        <div id="browse-view-mode"></div>
         <div id="browse-sort"></div>
       </div>
       <div id="browse-count"></div>
       <div id="browse-grid"></div>
+      <div id="browse-graph" class="hidden"></div>
     </div>
   `
 }
@@ -935,5 +964,258 @@ describe('hideBrowseUI', () => {
   it('does not throw when overlay is missing', () => {
     document.body.innerHTML = ''
     expect(() => hideBrowseUI()).not.toThrow()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// View-mode toggle (Cards / Graph) — Phase 4 §6.7
+//
+// Covers persistence, mobile-hidden fallback, and the
+// `catalog_view_mode_changed` emit. Doesn't exercise the cytoscape
+// mount itself — that lives behind a lazy `import('./catalogGraphUI')`
+// and a real cytoscape instance needs a layout engine that
+// happy-dom can't run. We assert on the toggle's DOM contract +
+// telemetry, and trust the cytoscape side to be exercised in a
+// real browser smoke test.
+// ---------------------------------------------------------------------------
+describe('view-mode toggle', () => {
+  const VIEW_MODE_KEY = 'sos-browse-view-mode.v1'
+
+  beforeEach(async () => {
+    // Drain any in-flight async work from the previous test before
+    // we reset analytics state — `void applyViewMode()` in
+    // showBrowseUI fire-and-forgets a Promise chain that goes
+    // through the (mocked) `./catalogGraphUI` import when
+    // viewMode='graph'. Under coverage instrumentation on slower
+    // CI this chain can resolve INSIDE the next test's body and
+    // emit into the new analytics queue (same shape as the
+    // real-timer leak fix in 350f05c).
+    await new Promise<void>(resolve => setTimeout(resolve, 50))
+    localStorage.clear()
+    resetForTests()
+    setTier('research')
+    // Reset URL — the chip rail boots from `window.location.search`
+    // via `readFilterStateFromUrl()`, so a `?cat=…&q=…` written by
+    // an earlier test would silently filter our fixture datasets to
+    // empty here and the result_count_bucket assertion would see 0
+    // cards rather than 2.
+    window.history.replaceState(null, '', '/')
+  })
+
+  afterEach(async () => {
+    // Symmetric drain so the LAST view-mode test doesn't leak its
+    // async chain into whatever describe-block runs after this one.
+    await new Promise<void>(resolve => setTimeout(resolve, 50))
+    localStorage.clear()
+    window.history.replaceState(null, '', '/')
+  })
+
+  it('renders Cards + Graph buttons when not mobile, with Cards active by default', () => {
+    setupBrowseDOM()
+    showBrowseUI([makeDataset({ id: 'a', tags: ['Air'] })], makeCallbacks())
+    const bar = document.getElementById('browse-view-mode')!
+    const buttons = bar.querySelectorAll<HTMLButtonElement>('.browse-view-mode-btn')
+    expect(buttons).toHaveLength(2)
+    const cardsBtn = bar.querySelector('[data-view-mode="cards"]')!
+    const graphBtn = bar.querySelector('[data-view-mode="graph"]')!
+    expect(cardsBtn.getAttribute('aria-pressed')).toBe('true')
+    expect(graphBtn.getAttribute('aria-pressed')).toBe('false')
+  })
+
+  it('hides the view-mode toggle on mobile and falls back to Cards', () => {
+    setupBrowseDOM()
+    // Even with `graph` persisted, mobile must render only Cards.
+    localStorage.setItem(VIEW_MODE_KEY, 'graph')
+    showBrowseUI([makeDataset({ id: 'a', tags: ['Air'] })], makeCallbacks({ isMobile: true }))
+    const bar = document.getElementById('browse-view-mode')!
+    expect(bar.classList.contains('hidden')).toBe(true)
+    expect(bar.querySelectorAll('.browse-view-mode-btn')).toHaveLength(0)
+    // Grid remains the active surface; graph container stays hidden.
+    expect(document.getElementById('browse-grid')!.classList.contains('hidden')).toBe(false)
+    expect(document.getElementById('browse-graph')!.classList.contains('hidden')).toBe(true)
+  })
+
+  it('falls back to Cards when window.matchMedia reports a narrow viewport even if callbacks.isMobile=false', () => {
+    // Pre-fix, the gate was just `callbacks.isMobile` (a boot-time
+    // flag from main.ts), so a desktop user who resized the
+    // window narrower would leave the toggle visible AND the
+    // graph in JS state but the CSS would hide #browse-graph
+    // entirely — blank overlay. The fix unions matchMedia with
+    // callbacks.isMobile so the boot path picks the right surface.
+    setupBrowseDOM()
+    localStorage.setItem(VIEW_MODE_KEY, 'graph')
+    // Stub matchMedia BEFORE showBrowseUI so isNarrowViewport()
+    // picks it up at boot.
+    const originalMatchMedia = window.matchMedia
+    window.matchMedia = ((query: string) => ({
+      media: query,
+      matches: query.includes('max-width: 768px'),
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(() => false),
+    })) as unknown as typeof window.matchMedia
+    try {
+      showBrowseUI(
+        [makeDataset({ id: 'a', tags: ['Air'] })],
+        makeCallbacks({ isMobile: false }),
+      )
+      const bar = document.getElementById('browse-view-mode')!
+      expect(bar.classList.contains('hidden')).toBe(true)
+      expect(document.getElementById('browse-grid')!.classList.contains('hidden')).toBe(false)
+    } finally {
+      window.matchMedia = originalMatchMedia
+    }
+  })
+
+  it('restores `graph` from localStorage and marks Graph button active', () => {
+    setupBrowseDOM()
+    localStorage.setItem(VIEW_MODE_KEY, 'graph')
+    showBrowseUI([makeDataset({ id: 'a', tags: ['Air'] })], makeCallbacks())
+    const bar = document.getElementById('browse-view-mode')!
+    expect(bar.querySelector('[data-view-mode="graph"]')!.getAttribute('aria-pressed')).toBe('true')
+    expect(bar.querySelector('[data-view-mode="cards"]')!.getAttribute('aria-pressed')).toBe('false')
+  })
+
+  it('normalises stale future view-modes (timeline/map) back to Cards', () => {
+    // §6.8 Timeline / §6.9 Map aren't shipped yet. A stale entry
+    // in localStorage (manual edit / future build / shared
+    // session) must not leave both buttons un-pressed and the
+    // user stranded without an active state. The full assertion
+    // chain: stored = `timeline`, but UI lands on Cards.
+    setupBrowseDOM()
+    localStorage.setItem(VIEW_MODE_KEY, 'timeline')
+    showBrowseUI([makeDataset({ id: 'a', tags: ['Air'] })], makeCallbacks())
+    const bar = document.getElementById('browse-view-mode')!
+    expect(bar.querySelector('[data-view-mode="cards"]')!.getAttribute('aria-pressed')).toBe('true')
+    expect(bar.querySelector('[data-view-mode="graph"]')!.getAttribute('aria-pressed')).toBe('false')
+  })
+
+  it('persists the choice to localStorage on toggle', () => {
+    setupBrowseDOM()
+    showBrowseUI([makeDataset({ id: 'a', tags: ['Air'] })], makeCallbacks())
+    expect(localStorage.getItem(VIEW_MODE_KEY)).toBeNull()
+    const graphBtn = document.querySelector<HTMLElement>('[data-view-mode="graph"]')!
+    graphBtn.click()
+    expect(localStorage.getItem(VIEW_MODE_KEY)).toBe('graph')
+  })
+
+  it('updates aria-pressed when the user toggles', () => {
+    setupBrowseDOM()
+    showBrowseUI([makeDataset({ id: 'a', tags: ['Air'] })], makeCallbacks())
+    // The toggle's click handler rebuilds the bar's innerHTML
+    // via renderViewModeBar(), so the original button references
+    // become detached. Re-query after the click to read the live
+    // state.
+    document.querySelector<HTMLElement>('[data-view-mode="graph"]')!.click()
+    const cardsBtn = document.querySelector<HTMLElement>('[data-view-mode="cards"]')!
+    const graphBtn = document.querySelector<HTMLElement>('[data-view-mode="graph"]')!
+    expect(graphBtn.getAttribute('aria-pressed')).toBe('true')
+    expect(cardsBtn.getAttribute('aria-pressed')).toBe('false')
+  })
+
+  it('ignores a click on the already-active button (no duplicate emit, no churn)', () => {
+    setupBrowseDOM()
+    showBrowseUI([makeDataset({ id: 'a', tags: ['Air'] })], makeCallbacks())
+    const cardsBtn = document.querySelector<HTMLElement>('[data-view-mode="cards"]')!
+    cardsBtn.click()
+    // No catalog_view_mode_changed event should have fired because
+    // the user clicked the surface they were already on.
+    const events = __peek().filter(e => e.event_type === 'catalog_view_mode_changed')
+    expect(events).toHaveLength(0)
+  })
+
+  it('emits catalog_view_mode_changed on toggle with previous + destination + count bucket', () => {
+    setupBrowseDOM()
+    showBrowseUI(
+      [
+        makeDataset({ id: 'a', tags: ['Air'] }),
+        makeDataset({ id: 'b', tags: ['Water'] }),
+      ],
+      makeCallbacks(),
+    )
+    document.querySelector<HTMLElement>('[data-view-mode="graph"]')!.click()
+    const events = __peek().filter(e => e.event_type === 'catalog_view_mode_changed')
+    expect(events).toHaveLength(1)
+    const evt = events[0] as {
+      event_type: string
+      view_mode: string
+      from: string
+      result_count_bucket: string
+    }
+    expect(evt.view_mode).toBe('graph')
+    expect(evt.from).toBe('cards')
+    expect(evt.result_count_bucket).toBe('1-10') // 2 visible cards
+  })
+
+  it('refreshes the Graph view when a chip filter changes (PR #137 regression)', async () => {
+    // Regression for the stale-closure bug surfaced in PR #137
+    // review: chip rail's click listener captured the FIRST
+    // showBrowseUI call's `applyState`, but the catalog↔sphere
+    // tab handler in main.ts re-called showBrowseUI on every
+    // return-to-catalog. The fresh closure created a fresh cytoscape
+    // instance attached to the same `#browse-graph` container,
+    // implicitly orphaning the first closure's cy. The old
+    // applyState (still bound to the rail listener) then updated
+    // the orphaned cy — invisible to the user.
+    //
+    // The fix is in showBrowseUI's top: re-calls short-circuit
+    // before re-creating the closure, so the single live
+    // controller stays bound to the listener AND remains
+    // attached to the visible canvas.
+    setupBrowseDOM()
+    graphMockHandles.createCatalogGraph.mockClear()
+    graphMockHandles.update.mockClear()
+    localStorage.setItem(VIEW_MODE_KEY, 'graph')
+
+    // First showBrowseUI — graph view restored from localStorage.
+    showBrowseUI(
+      [
+        makeDataset({ id: 'a', tags: ['Air'] }),
+        makeDataset({ id: 'b', tags: ['Water'] }),
+      ],
+      makeCallbacks(),
+    )
+    await new Promise<void>(resolve => setTimeout(resolve, 10))
+    expect(graphMockHandles.createCatalogGraph).toHaveBeenCalledTimes(1)
+
+    // Simulate the catalog↔sphere tab path: re-call showBrowseUI.
+    // With the fix, this short-circuits — no second
+    // createCatalogGraph call. Without the fix, this would create
+    // a second controller and orphan the first.
+    showBrowseUI(
+      [
+        makeDataset({ id: 'a', tags: ['Air'] }),
+        makeDataset({ id: 'b', tags: ['Water'] }),
+      ],
+      makeCallbacks(),
+    )
+    await new Promise<void>(resolve => setTimeout(resolve, 10))
+    // CRITICAL: only ONE controller should ever have been created
+    // for this overlay. Two means we've orphaned the cytoscape
+    // instance attached to the canvas — pre-fix behavior that
+    // made chip clicks invisible.
+    expect(graphMockHandles.createCatalogGraph).toHaveBeenCalledTimes(1)
+
+    graphMockHandles.update.mockClear()
+
+    // Now click the Air chip. The handler funnels through the
+    // single live applyState and calls update on the single
+    // live controller.
+    const airChip = Array.from(document.querySelectorAll<HTMLElement>('.browse-chip'))
+      .find(el => el.textContent === 'Air')
+    expect(airChip).toBeDefined()
+    airChip!.click()
+
+    expect(graphMockHandles.update).toHaveBeenCalledTimes(1)
+    const lastCall = graphMockHandles.update.mock.calls[0][0] as {
+      filterState: Record<string, { kind: string; values?: readonly string[] }>
+    }
+    expect(lastCall.filterState.category).toEqual({
+      kind: 'multi-select',
+      values: ['Air'],
+    })
   })
 })

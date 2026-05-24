@@ -41,6 +41,7 @@ import {
   applyFilterStateToUrl,
   readFilterStateFromUrl,
 } from '../utils/catalogFilters'
+import type { CatalogGraphController } from './catalogGraphUI'
 
 /** Tier B dwell handle for the browse overlay — non-null while the
  * overlay is visible. Started on showBrowseUI when the overlay
@@ -70,6 +71,52 @@ const MAX_CARD_KEYWORDS = 12
 /** The fixed order of format buckets in the Format chip group. Other
  *  comes last because it's the catch-all. */
 const FORMAT_BUCKETS: readonly FormatBucket[] = ['video', 'image', 'tour', 'other']
+
+/**
+ * Catalog view-mode (Phase 4 §6.7+). Cards is the baseline grid;
+ * Graph is the §6.7 network view. The string union is intentionally
+ * forward-compat with §6.8 Timeline and §6.9 Map so the same toggle
+ * pattern extends without a type rewrite — those entries don't ship
+ * here, only `'cards'` and `'graph'` are rendered as buttons.
+ */
+type ViewMode = 'cards' | 'graph' | 'timeline' | 'map'
+
+/** localStorage key holding the user's selected view mode.
+ *  Versioned so a future schema change can ignore stale shapes. */
+const VIEW_MODE_STORAGE_KEY = 'sos-browse-view-mode.v1'
+
+/**
+ * Read the persisted view mode, falling back to `'cards'`. SSR-safe.
+ *
+ * Only `'graph'` is accepted from storage today — `'timeline'` and
+ * `'map'` are reserved for §6.8/§6.9 but the UI doesn't render
+ * those buttons yet, so a stale `'timeline'` entry from a future
+ * build (or a manual localStorage edit) would leave both Cards
+ * and Graph buttons with `aria-pressed="false"` and the user
+ * stranded without an active state. Normalising unknown modes to
+ * `'cards'` keeps the toggle's active state always meaningful.
+ * When §6.8/§6.9 ship, extend the allowed list here.
+ */
+function loadViewMode(): ViewMode {
+  if (typeof window === 'undefined') return 'cards'
+  try {
+    const raw = window.localStorage.getItem(VIEW_MODE_STORAGE_KEY)
+    if (raw === 'graph') return 'graph'
+    return 'cards'
+  } catch {
+    return 'cards'
+  }
+}
+
+/** Persist the view mode. Best-effort — silent on storage failure. */
+function saveViewMode(mode: ViewMode): void {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(VIEW_MODE_STORAGE_KEY, mode)
+  } catch {
+    /* ignore */
+  }
+}
 
 /**
  * Strip HTML tags from a rendered-markdown string via a detached
@@ -525,12 +572,36 @@ export function showBrowseUI(
   const overlay = document.getElementById('browse-overlay')
   if (!overlay) return
   const wasHidden = overlay.classList.contains('hidden')
+  const wasCollapsed = overlay.classList.contains('collapsed')
   overlay.classList.remove('hidden')
+  overlay.classList.remove('collapsed')
   document.body.classList.add('browse-open')
   closeDownloadPanel()
-  if (wasHidden) {
+  if (wasHidden || wasCollapsed) {
     notifyBrowseOpened(source)
   }
+
+  // Re-call short-circuit. The chip rail, search input, sort
+  // buttons and view-mode toggle wire their listeners once via
+  // `dataset.wired` checks — those listeners CAPTURE this
+  // function's closure-local `filterState`, `viewMode`,
+  // `graphController`, and `applyState`. A second showBrowseUI
+  // call (e.g. via main.ts's catalog↔sphere tab handler, which
+  // re-runs showBrowseUI after a Sphere round-trip) creates a
+  // fresh closure but the listeners stay bound to the original
+  // one, so chip clicks would call the OLD applyState — reading
+  // a stale `viewMode='cards'` and `graphController=null` even
+  // though the user has since toggled into Graph view. That
+  // exact bug surfaced in PR #137 review ("clicking a chip
+  // doesn't update the graph").
+  //
+  // The fix: subsequent calls only un-hide the overlay (above)
+  // and emit `browse_opened`; rendering and listener wiring are
+  // skipped. The original openBrowsePanel call site in main.ts
+  // already gated on `browseInitialized`, but other call sites
+  // (catalog-empty boot, catalog↔sphere tab) didn't. Centralising
+  // the gate here makes the invariant uniform regardless of caller.
+  if (overlay.dataset.browseInitialized === 'true') return
 
   // Wire the in-header help trigger once (idempotent)
   const helpBtn = document.getElementById('help-trigger-browse')
@@ -592,6 +663,31 @@ export function showBrowseUI(
 
   type SortKey = 'relevance' | 'newest' | 'az'
   let activeSort: SortKey = 'relevance'
+  // Live narrow-viewport check. Graph view is unusable below 768px
+  // (force-directed layout + pinch-zoom on a 6-inch screen), so the
+  // toggle hides and the view forces back to Cards. Earlier shape
+  // gated on `callbacks.isMobile` alone — a boot-time flag — which
+  // desynced from the rendered layout the moment the user resized
+  // across the breakpoint on desktop. matchMedia gives a live
+  // signal; we union it with `callbacks.isMobile` so the Tauri
+  // mobile shell (no DOM resize) still gets the right default.
+  const narrowVpQuery = typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+    ? window.matchMedia('(max-width: 768px)')
+    : null
+  const isNarrowViewport = (): boolean => {
+    if (narrowVpQuery?.matches) return true
+    return callbacks.isMobile
+  }
+  // View-mode (§6.7). Initial value falls back to Cards when the
+  // viewport is currently narrow so a `viewMode='graph'` left in
+  // localStorage from a desktop session doesn't boot into an
+  // unusable graph on a phone.
+  let viewMode: ViewMode = isNarrowViewport() ? 'cards' : loadViewMode()
+  // Lazy-mounted graph controller — populated on first toggle into
+  // Graph view. Module-loaded once per overlay instance; the
+  // controller itself handles re-renders on filter changes.
+  let graphController: CatalogGraphController | null = null
+  let graphLoadPromise: Promise<CatalogGraphController | null> | null = null
   // The raw search-box string — both free text and any
   // `category:foo` / `format:bar` / `period:yearly` prefixes the
   // user has typed. `parseSearchQuery` splits it into the free-
@@ -953,6 +1049,248 @@ export function showBrowseUI(
     }
   }
 
+  // ----- View-mode toggle (§6.7) — hidden on mobile -----
+
+  const viewModeBar = document.getElementById('browse-view-mode')
+  const graphContainer = document.getElementById('browse-graph')
+  const gridContainer = document.getElementById('browse-grid')
+
+  /** Render the segmented Cards/Graph control. Hidden entirely on
+   *  mobile so a phone never sees a graph option. */
+  function renderViewModeBar(): void {
+    if (!viewModeBar) return
+    if (isNarrowViewport()) {
+      viewModeBar.classList.add('hidden')
+      viewModeBar.setAttribute('aria-hidden', 'true')
+      viewModeBar.innerHTML = ''
+      return
+    }
+    viewModeBar.classList.remove('hidden')
+    viewModeBar.removeAttribute('aria-hidden')
+    const options: Array<{ key: 'cards' | 'graph'; label: string; aria: string }> = [
+      { key: 'cards', label: t('browse.viewMode.cards'), aria: t('browse.viewMode.cards.aria') },
+      { key: 'graph', label: t('browse.viewMode.graph'), aria: t('browse.viewMode.graph.aria') },
+    ]
+    viewModeBar.innerHTML = options
+      .map(o => {
+        const active = o.key === viewMode
+        return `<button type="button" class="browse-view-mode-btn${active ? ' active' : ''}" data-view-mode="${o.key}" aria-pressed="${active}" aria-label="${escapeAttr(o.aria)}">${escapeHtml(o.label)}</button>`
+      })
+      .join('')
+  }
+
+  /**
+   * Apply the active view-mode to the DOM — show one container,
+   * hide the other. On first activation of Graph view this also
+   * lazy-imports `catalogGraphUI`, instantiates the controller,
+   * and asks it to render. Subsequent activations just show the
+   * existing canvas and ask the controller to refresh.
+   *
+   * `mountIfNeeded` defaults to true so the boot path mounts the
+   * graph when `viewMode` restores from localStorage as `'graph'`.
+   * Filter-change paths can pass `false` to skip the dynamic
+   * import when the graph isn't visible.
+   */
+  async function applyViewMode(mountIfNeeded: boolean = true): Promise<void> {
+    if (!gridContainer || !graphContainer) return
+    if (viewMode === 'graph') {
+      gridContainer.classList.add('hidden')
+      gridContainer.setAttribute('aria-hidden', 'true')
+      graphContainer.classList.remove('hidden')
+      graphContainer.removeAttribute('aria-hidden')
+      if (mountIfNeeded) await ensureGraphMounted()
+      const parsed = parseSearchQuery(searchQuery)
+      const effectiveState = mergeFilterStates(filterState, parsed.prefixes)
+      graphController?.update({
+        datasets: allDatasets,
+        filterState: effectiveState,
+        searchQuery: parsed.freeText,
+      })
+    } else {
+      graphContainer.classList.add('hidden')
+      graphContainer.setAttribute('aria-hidden', 'true')
+      gridContainer.classList.remove('hidden')
+      gridContainer.removeAttribute('aria-hidden')
+    }
+  }
+
+  /**
+   * Surface a dataset's card with all its metadata expanded. Wired
+   * to the Graph view's dataset-node click (see `onPreviewDataset`
+   * in the `createCatalogGraph` call below) per PR #137 review
+   * feedback — directly loading on graph-node click skipped the
+   * description / source / time-range / keywords most users want
+   * to skim first.
+   *
+   * Switches the view to Cards (the card UI is the established
+   * metadata surface), waits for `applyViewMode` to make the grid
+   * visible, finds the matching `<div class="browse-card">` by
+   * data-id, expands it, scrolls it into view, and focuses it for
+   * keyboard users. From there the user clicks the existing Load
+   * button if they want — that still funnels through
+   * `callbacks.onSelectDataset`, same path the card grid has
+   * always used.
+   *
+   * No-ops if the dataset is missing from the filtered set (the
+   * card wouldn't be in the DOM anyway); the chip rail must be
+   * loose enough to surface it.
+   */
+  function previewDatasetInCards(datasetId: string): void {
+    if (viewMode !== 'cards') {
+      const previous = viewMode
+      viewMode = 'cards'
+      saveViewMode(viewMode)
+      renderViewModeBar()
+      // Emit the view-mode-change telemetry so the dashboard sees
+      // graph→cards preview pivots distinctly from explicit toggle
+      // clicks. Same shape as the user-clicked-the-toggle path.
+      const cardCount = document.querySelectorAll('#browse-grid .browse-card').length
+      emit({
+        event_type: 'catalog_view_mode_changed',
+        view_mode: viewMode,
+        from: previous,
+        result_count_bucket: bucketResultCount(cardCount),
+      })
+    }
+    void applyViewMode().then(() => expandCardById(datasetId))
+  }
+
+  /** Find a card by its dataset id, collapse any other expanded
+   *  card, expand the target, scroll it into view, and focus it.
+   *  Safe to call when the card isn't in the DOM (filtered out) —
+   *  silently no-ops.
+   *
+   *  Iterates `.browse-card` and matches on `dataset.id` rather
+   *  than using a CSS attribute selector, because dataset IDs can
+   *  contain characters that would need escaping inside `[data-id="..."]`
+   *  (ULIDs are safe but `legacyId` strings like `INTERNAL_SOS_768`
+   *  aren't always — defensive code paths in the codebase prefer
+   *  property reads). */
+  function expandCardById(datasetId: string): void {
+    const grid = document.getElementById('browse-grid')
+    if (!grid) return
+    let card: HTMLElement | null = null
+    const cards = grid.querySelectorAll<HTMLElement>('.browse-card')
+    for (const candidate of cards) {
+      if (candidate.dataset.id === datasetId) {
+        card = candidate
+        break
+      }
+    }
+    if (!card) return
+    grid.querySelectorAll<HTMLElement>('.browse-card.expanded').forEach(c => {
+      c.classList.remove('expanded')
+      c.setAttribute('aria-expanded', 'false')
+    })
+    card.classList.add('expanded')
+    card.setAttribute('aria-expanded', 'true')
+    card.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    card.focus()
+  }
+
+  /**
+   * Lazy-import `catalogGraphUI` on first activation. Mirrors the
+   * Three.js pattern in `vrSession.ts` — cytoscape is ~70 KB
+   * gzipped and only users who toggle into Graph view pay that
+   * cost. On import failure (network blip, bundle stripped) the
+   * graph container shows an inline error and the controller stays
+   * null so subsequent toggles can retry.
+   */
+  async function ensureGraphMounted(): Promise<void> {
+    if (graphController || !graphContainer) return
+    if (graphLoadPromise) {
+      await graphLoadPromise
+      return
+    }
+    graphContainer.innerHTML = `<div class="browse-graph-status" role="status">${escapeHtml(t('browse.graph.loading'))}</div>`
+    const loadPromise = import('./catalogGraphUI')
+      .then(({ createCatalogGraph }) => {
+        graphContainer.innerHTML = ''
+        graphController = createCatalogGraph(graphContainer, {
+          onToggleFacet: (facet, value) => {
+            applyState(toggleFacet(filterState, facet, value), searchQuery)
+          },
+          onPreviewDataset: (datasetId: string) => {
+            previewDatasetInCards(datasetId)
+          },
+        })
+        return graphController
+      })
+      .catch((err) => {
+        console.error('[browse] failed to load Graph view', err)
+        graphContainer.innerHTML = `<div class="browse-graph-status browse-graph-status-error" role="alert">${escapeHtml(t('browse.graph.loadError'))}</div>`
+        return null
+      })
+    graphLoadPromise = loadPromise
+    const result = await loadPromise
+    // Clear the in-flight handle once it settles so a failed import
+    // doesn't permanently block retry. The docstring above promises
+    // "subsequent toggles can retry"; without this clear, the
+    // memoised `null`-resolving promise would short-circuit forever.
+    // On success the early-return at the top of `ensureGraphMounted`
+    // (graphController is now set) prevents a duplicate import, so
+    // clearing the handle in both branches is safe.
+    if (graphLoadPromise === loadPromise) {
+      graphLoadPromise = null
+    }
+    void result
+  }
+
+  if (viewModeBar && !viewModeBar.dataset.wired) {
+    viewModeBar.addEventListener('click', (e) => {
+      const btn = (e.target as HTMLElement).closest('.browse-view-mode-btn') as HTMLElement | null
+      if (!btn || !btn.dataset.viewMode) return
+      const next = btn.dataset.viewMode as 'cards' | 'graph'
+      if (next === viewMode) return
+      const previous = viewMode
+      viewMode = next
+      saveViewMode(viewMode)
+      renderViewModeBar()
+      const cardCount = document.querySelectorAll('#browse-grid .browse-card').length
+      emit({
+        event_type: 'catalog_view_mode_changed',
+        view_mode: viewMode,
+        from: previous,
+        result_count_bucket: bucketResultCount(cardCount),
+      })
+      void applyViewMode()
+    })
+    viewModeBar.dataset.wired = 'true'
+  }
+
+  // Live viewport listener — when the user resizes across the 768px
+  // breakpoint, snap the view-mode state back to Cards if they were
+  // in Graph and the viewport is now narrow. Without this the
+  // overlay would show neither Cards (hidden by JS) nor Graph
+  // (the toggle is gone) — a blank surface. Also re-render the
+  // toggle bar so it appears / disappears symmetrically with the
+  // breakpoint.
+  // Type alias for the dedupe + legacy listener path.
+  type NarrowVpQuery = MediaQueryList & {
+    __terravizWired?: boolean
+    addListener?: (cb: () => void) => void
+  }
+  const narrowVpQueryTyped = narrowVpQuery as NarrowVpQuery | null
+  if (narrowVpQueryTyped && !narrowVpQueryTyped.__terravizWired) {
+    const onNarrowChange = (): void => {
+      renderViewModeBar()
+      if (isNarrowViewport() && viewMode === 'graph') {
+        viewMode = 'cards'
+        saveViewMode(viewMode)
+        void applyViewMode()
+      }
+    }
+    // Newer browsers use addEventListener; older Safari falls back
+    // to the deprecated addListener. The Tauri webview on iOS 14
+    // still needs the deprecated form.
+    if (typeof narrowVpQueryTyped.addEventListener === 'function') {
+      narrowVpQueryTyped.addEventListener('change', onNarrowChange)
+    } else if (typeof narrowVpQueryTyped.addListener === 'function') {
+      narrowVpQueryTyped.addListener(onNarrowChange)
+    }
+    narrowVpQueryTyped.__terravizWired = true
+  }
+
   // ----- Download buttons (unchanged from previous shape) -----
 
   const updateDownloadButtons = async () => {
@@ -1016,6 +1354,20 @@ export function showBrowseUI(
     }
     renderRail()
     renderCards()
+    // Graph view re-renders only when it's the active surface — no
+    // sense paying cytoscape's layout cost for an off-screen canvas.
+    // The controller's update() uses cytoscape's incremental layout
+    // so node positions animate rather than re-seeding the
+    // simulation (the §6.7 "graph thrash" risk).
+    if (viewMode === 'graph' && graphController) {
+      const parsed = parseSearchQuery(searchQuery)
+      const effectiveState = mergeFilterStates(filterState, parsed.prefixes)
+      graphController.update({
+        datasets: allDatasets,
+        filterState: effectiveState,
+        searchQuery: parsed.freeText,
+      })
+    }
     emitFilterChange(previous, next)
     // History.replaceState per §6.3 — chip clicks shouldn't clog
     // the back button, but a shared link should reproduce the
@@ -1236,6 +1588,13 @@ export function showBrowseUI(
   // Initial render
   renderRail()
   renderCards()
+  renderViewModeBar()
+  // Restore the persisted view mode — if Graph was the last
+  // surface the user had open, lazy-import on this boot path so
+  // the canvas is ready when they look at it. The grid is also
+  // hidden behind .hidden so we don't have a moment of layout
+  // flicker.
+  void applyViewMode()
   updateDownloadButtons()
 
   // Mark the overlay as initialized so subsequent show requests
