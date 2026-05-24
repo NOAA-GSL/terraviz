@@ -193,9 +193,10 @@ function decodePredicate(facet: string, raw: string): FacetPredicate | null {
     if ((min != null && !Number.isFinite(min)) || (max != null && !Number.isFinite(max))) return null
     return { kind: 'range', min, max }
   }
-  // Boolean facets — any non-empty value enables; the canonical
-  // form is `1`. Accept `true` defensively in case a caller types
-  // it manually.
+  // Boolean facets — strict allow-list of `1` (canonical) and
+  // `true` (defensive, for hand-typed URLs). Anything else
+  // (including `0`, `false`, `on`, `yes`) is dropped so a typo
+  // can't silently enable the toggle.
   if (facet === 'hasCaptions' || facet === 'hasTour' || facet === 'includeSos') {
     if (raw === '1' || raw.toLowerCase() === 'true') {
       return { kind: 'boolean', value: true }

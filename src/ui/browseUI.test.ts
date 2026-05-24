@@ -600,6 +600,81 @@ describe('showBrowseUI', () => {
     ).toBe('2')
   })
 
+  it('accordion toggle preserves partially-typed range input value (no rail re-render)', () => {
+    // Per Copilot pass-4 review on PR #135 — the earlier shape
+    // of the accordion handler called renderRail() which
+    // rebuilt innerHTML. A partially-typed range value (no
+    // change event yet) would have been thrown away when the
+    // user collapsed the Time section. The new in-place class
+    // toggle keeps the DOM input alive.
+    localStorage.removeItem('sos-browse-section-open.v1')
+    showBrowseUI([makeDataset({ tags: ['Air'] })], makeCallbacks())
+
+    // Open the Time section so the inputs are visible.
+    const timeHeader = document.querySelector(
+      '.browse-filter-section[data-group="time"] .browse-filter-section-header',
+    ) as HTMLElement
+    timeHeader.click()
+
+    const minInput = document.querySelector(
+      '#browse-range-dateAdded-min',
+    ) as HTMLInputElement
+    expect(minInput).not.toBeNull()
+    // Simulate a partial type without firing change (which would
+    // commit the value to filterState via setFacet).
+    minInput.value = '20'
+
+    // Collapse Time, then re-open it.
+    timeHeader.click()
+    expect(
+      document.querySelector('.browse-filter-section[data-group="time"]')!
+        .classList.contains('collapsed'),
+    ).toBe(true)
+    timeHeader.click()
+
+    // The same DOM input is still alive and still carries the
+    // partially-typed `20`.
+    const minInputAfter = document.querySelector(
+      '#browse-range-dateAdded-min',
+    ) as HTMLInputElement
+    expect(minInputAfter).toBe(minInput) // same DOM node
+    expect(minInputAfter.value).toBe('20')
+  })
+
+  it('browse_filter event surfaces the removed value when a multi-select last-chip toggles off', () => {
+    // Per Copilot pass-4 review on PR #135 — facetDiff used to
+    // return `${facet}:off` whenever a facet key disappeared,
+    // which lost the toggled chip's value for dashboards
+    // slicing on category:Water etc. Now multi-select removal
+    // of the last value reports the value (boolean toggle-off
+    // still reports `:off` since there's no value).
+    localStorage.clear()
+    resetForTests()
+    setTier('research')
+
+    const datasets = [
+      makeDataset({ id: 'a', title: 'A', tags: ['Air'] }),
+      makeDataset({ id: 'w', title: 'W', tags: ['Water'] }),
+    ]
+    showBrowseUI(datasets, makeCallbacks())
+
+    const findChip = (label: string) =>
+      Array.from(document.querySelectorAll('.browse-chip'))
+        .find(el => el.textContent === label) as HTMLElement
+
+    // Toggle Water on, then off — the off-toggle should report
+    // `category:Water`, not `category:off`.
+    findChip('Water').click()
+    findChip('Water').click()
+
+    const filterEvents = __peek().filter((e) => e.event_type === 'browse_filter')
+    // Most recent event should reflect the removal of Water.
+    expect(filterEvents.length).toBeGreaterThanOrEqual(2)
+    const removal = filterEvents[filterEvents.length - 1]
+    if (removal.event_type !== 'browse_filter') throw new Error('unreachable')
+    expect(removal.category).toBe('category:Water')
+  })
+
   it('clear-all button resets the filter state and surfaces only when something is active', () => {
     const datasets = [
       makeDataset({ id: 'a', title: 'A', tags: ['Air'] }),

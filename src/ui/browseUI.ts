@@ -28,7 +28,6 @@ import {
   BASELINE_RESOLVERS,
   PERIOD_RESOLVER,
   filterDatasets,
-  formatToBucket,
   mergeFilterStates,
   parseSearchQuery,
   setFacet,
@@ -671,10 +670,13 @@ export function showBrowseUI(
     const sections: string[] = []
 
     /** Wrap a section's body in the accordion shell — clickable
-     *  header + collapsible body. The body is rendered even when
-     *  collapsed so values stay in the DOM (input state survives
-     *  toggling the section closed and re-opening), and CSS
-     *  `display: none` hides them when `aria-expanded="false"`. */
+     *  header + collapsible body. The body markup is always
+     *  emitted; CSS `.collapsed .browse-filter-section-body
+     *  { display: none }` hides it when the section is closed.
+     *  The accordion-toggle handler flips the `collapsed` class
+     *  in place rather than calling `renderRail()` so DOM input
+     *  state (e.g. a partially-typed range-input value) survives
+     *  a collapse-and-reopen cycle. */
     const wrapSection = (
       key: SectionKey,
       title: string,
@@ -782,9 +784,20 @@ export function showBrowseUI(
         e.preventDefault()
         const key = sectionHeader.dataset.section as SectionKey | undefined
         if (!key) return
-        sectionOpen = { ...sectionOpen, [key]: !sectionOpen[key] }
+        const nextOpen = !sectionOpen[key]
+        sectionOpen = { ...sectionOpen, [key]: nextOpen }
         saveSectionOpenState(sectionOpen)
-        renderRail()
+        // Toggle the section's collapsed class + header state in
+        // place rather than re-rendering the rail. The earlier
+        // shape called renderRail() which rebuilt innerHTML on
+        // every toggle — that thrashes the DOM and would lose any
+        // partially-typed (uncommitted) range-input value if the
+        // user collapsed Time before the change event fired.
+        const section = sectionHeader.closest('.browse-filter-section') as HTMLElement | null
+        section?.classList.toggle('collapsed', !nextOpen)
+        sectionHeader.setAttribute('aria-expanded', String(nextOpen))
+        const indicator = sectionHeader.querySelector('.browse-filter-section-indicator')
+        if (indicator) indicator.textContent = nextOpen ? '▾' : '▸'
         return
       }
       const chip = target.closest('[data-facet]') as HTMLElement | null
@@ -1308,6 +1321,14 @@ function facetDiff(prev: FilterState, next: FilterState): string | null {
       if (b.kind === 'range') return `${facet}:range`
     }
     if (a != null && b == null) {
+      // Multi-select: removing the last value also deletes the
+      // facet entirely (toggleFacet contract). Surface the
+      // removed value so a category-slice dashboard still sees
+      // which chip was un-toggled. Reserve `:off` for boolean
+      // disappearance (where there's no value to surface).
+      if (a.kind === 'multi-select' && a.values.length === 1) {
+        return `${facet}:${a.values[0]}`
+      }
       return `${facet}:off`
     }
     if (a?.kind === 'multi-select' && b?.kind === 'multi-select') {
