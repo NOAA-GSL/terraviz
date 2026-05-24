@@ -182,9 +182,12 @@ export function createCatalogTimeline(
   axisWrap.setAttribute('role', 'group')
   axisWrap.setAttribute('aria-label', t('browse.timeline.brush.aria'))
 
+  // Pure layout wrapper — the `role="list"` lives on the inner
+  // rows SVG (where the `<g>` listitem children actually attach).
+  // Stacking another list role here would nest list semantics and
+  // confuse assistive tech.
   const rowsWrap = document.createElement('div')
   rowsWrap.className = 'browse-timeline-rows-wrap'
-  rowsWrap.setAttribute('role', 'list')
 
   const empty = document.createElement('div')
   empty.className = 'browse-timeline-empty hidden'
@@ -260,12 +263,24 @@ export function createCatalogTimeline(
         return
       }
       const [x0, x1] = event.selection as [number, number]
-      const minYear = Math.round(xScale.invert(x0))
-      const maxYear = Math.round(xScale.invert(x1))
-      // Guard against a zero-width brush (e.g. user clicks but
-      // doesn't drag) — d3 emits `end` with a tiny selection. Treat
-      // a degenerate brush as a clear so the user isn't trapped
-      // with a one-year-wide filter they didn't mean to set.
+      // A truly-degenerate pixel selection (user clicked the axis
+      // without dragging) emits `end` with `x0 ≈ x1`; treat that as
+      // a clear so the user isn't trapped with a filter they didn't
+      // mean to set. The threshold has to be smaller than one
+      // year's worth of pixels at typical chart widths so a
+      // deliberate single-year brush still survives — a few-pixel
+      // floor is enough.
+      if (Math.abs(x1 - x0) < 2) {
+        callbacks.onBrushChange(null)
+        return
+      }
+      // Use floor for min and ceil for max so a deliberate single-
+      // year drag (e.g. all within 2020) yields `{min: 2020, max:
+      // 2021}` — a representable inclusive range against the
+      // `dataCoverageYear` resolver — rather than collapsing to
+      // `maxYear === minYear` and clearing.
+      const minYear = Math.floor(xScale.invert(x0))
+      const maxYear = Math.ceil(xScale.invert(x1))
       if (maxYear <= minYear) {
         callbacks.onBrushChange(null)
         return
@@ -513,8 +528,16 @@ export function createCatalogTimeline(
   ): void {
     const predicate = filterState.dataCoverageYear
     if (predicate?.kind === 'range' && (predicate.min != null || predicate.max != null)) {
-      const min = predicate.min ?? domain.min
-      const max = predicate.max ?? domain.max
+      const rawMin = predicate.min ?? domain.min
+      const rawMax = predicate.max ?? domain.max
+      // Normalise inverted ranges (`min > max`, possible via a
+      // hand-edited URL or a malformed external write) so a swap
+      // doesn't reach `brush.move` with `x0 > x1` and confuse the
+      // d3 renderer. The resolver itself tolerates either order
+      // (it overlap-tests against the dataset interval), so a
+      // visible swap here matches the engine's lenient stance.
+      const min = Math.min(rawMin, rawMax)
+      const max = Math.max(rawMin, rawMax)
       // Clamp to the visible domain so a brush rendered with stale
       // bounds doesn't extend off the canvas.
       const x0 = xScale(Math.max(domain.min, min))
@@ -563,10 +586,25 @@ export function createCatalogTimeline(
   // resizes (e.g. user expanded the browse overlay) the scale
   // needs to follow. ResizeObserver fires asynchronously so this
   // doesn't fight an in-progress layout pass.
-  const resizeObserver = new ResizeObserver(() => {
-    if (lastInput) rebuild()
-  })
-  resizeObserver.observe(host)
+  //
+  // Feature-detect — the same guard pattern `chatUI.ts` and
+  // `playbackController.ts` use. Tauri's older iOS webviews and a
+  // handful of headless environments (some test harnesses) lack
+  // ResizeObserver entirely; we fall back to a window-level
+  // `resize` listener so the timeline still reflows on viewport
+  // change, just at a coarser granularity (no host-only resizes
+  // detected without an observer).
+  let resizeObserver: ResizeObserver | null = null
+  let resizeListener: (() => void) | null = null
+  if (typeof ResizeObserver !== 'undefined') {
+    resizeObserver = new ResizeObserver(() => {
+      if (lastInput) rebuild()
+    })
+    resizeObserver.observe(host)
+  } else if (typeof window !== 'undefined') {
+    resizeListener = () => { if (lastInput) rebuild() }
+    window.addEventListener('resize', resizeListener)
+  }
 
   return {
     update(input: CatalogTimelineUpdate) {
@@ -574,7 +612,10 @@ export function createCatalogTimeline(
       rebuild()
     },
     destroy() {
-      resizeObserver.disconnect()
+      resizeObserver?.disconnect()
+      if (resizeListener && typeof window !== 'undefined') {
+        window.removeEventListener('resize', resizeListener)
+      }
       host.innerHTML = ''
     },
   }

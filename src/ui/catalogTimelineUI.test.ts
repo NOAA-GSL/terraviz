@@ -150,16 +150,15 @@ describe('createCatalogTimeline', () => {
     controller.destroy()
   })
 
-  // Note on coverage: the brush gesture itself (d3-brush's pointer
-  // events) needs a real browser environment to fire — synthesising
-  // the full PointerEvent chain in happy-dom is brittle. We assert
-  // the analytics-emit shape indirectly by invoking the clear path
-  // (which exercises the same callback wiring without the d3
-  // gesture). The brush↔filterState round-trip is exercised end-
-  // to-end via the manual smoke checklist in the PR description.
-  it('emits catalog_timeline_brush_applied when the brush handler fires (skip - needs real browser)', () => {
-    // Placeholder — kept as a doc-string for the reviewer about why
-    // the brush emit isn't covered in this suite. See note above.
+  // The brush gesture itself (d3-brush's pointer-event chain) needs
+  // a real browser to fire — synthesising the full PointerEvent
+  // sequence under happy-dom is brittle. The clear-range path above
+  // exercises the same `onBrushChange` callback wiring without the
+  // gesture; the throttled analytics emit on a real brush release
+  // is covered end-to-end via the manual smoke checklist in the PR
+  // description. Marked `skip` so the suite doesn't claim coverage
+  // it doesn't actually run.
+  it.skip('emits catalog_timeline_brush_applied when the brush handler fires (needs real browser)', () => {
     expect(__peek()).toEqual([])
   })
 })

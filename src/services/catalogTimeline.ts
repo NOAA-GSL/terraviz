@@ -265,16 +265,13 @@ export function buildTimeline(
       endIso = undefined
     }
     // Defensive: a malformed `endTime` parsing to before `start`
-    // would draw a negative-width bar. Swap rather than throw —
-    // catalog data quality is variable and the user still benefits
-    // from seeing the row.
+    // would draw a negative-width bar. Clamp `end` up to `start`
+    // so the bar collapses to a point — catalog data quality is
+    // variable, and the user still benefits from seeing the row
+    // (the tooltip's original ISO strings still surface the raw
+    // values for diagnosis).
     if (end < start) {
-      const swap = end
       end = start
-      // We don't promote the ISO swap because the original strings
-      // are still useful for the tooltip ("startTime: X, endTime: Y")
-      // even when their parsed years invert.
-      void swap
     }
 
     rows.push({
