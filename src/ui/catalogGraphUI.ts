@@ -335,18 +335,24 @@ export function createCatalogGraph(
         // Add elements that weren't present before
         const additions = elements.filter(e => !existingIds.has(e.data.id as string))
         if (additions.length > 0) cy!.add(additions)
-        // Update counts / labels on existing nodes — datasetCount can
-        // shift when filters tighten without the node ID changing.
+        // Update data on existing nodes AND edges. datasetCount can
+        // shift when filters tighten without the node ID changing,
+        // and co-occurrence edge `weight` (which drives stroke width
+        // via mapData) shifts whenever Category↔Format intersections
+        // change. Without this loop existing edges would keep their
+        // previous weight after a filter change.
         for (const el of elements) {
           const id = el.data.id as string
-          if (existingIds.has(id) && el.group === 'nodes') {
-            const node = cy!.getElementById(id)
-            if (!node.empty()) {
-              for (const [key, value] of Object.entries(el.data)) {
-                if (key === 'id' || key === 'source' || key === 'target') continue
-                node.data(key, value)
-              }
-            }
+          if (!existingIds.has(id)) continue
+          if (el.group !== 'nodes' && el.group !== 'edges') continue
+          const existing = cy!.getElementById(id)
+          if (existing.empty()) continue
+          for (const [key, value] of Object.entries(el.data)) {
+            // `source` / `target` are immutable on cytoscape edges;
+            // edge IDs are deterministically derived from them so an
+            // ID-stable edge always has identical endpoints.
+            if (key === 'id' || key === 'source' || key === 'target') continue
+            existing.data(key, value)
           }
         }
       })
@@ -455,12 +461,19 @@ export function createCatalogGraph(
     if (kind === 'facet-value') {
       const top = topCoOccurrences(lastGraph, node.id(), 3)
       if (top.length > 0) {
-        const labels = top.map(t => {
-          const neighbour = lastGraph!.nodes.find(n => n.id === t.neighbourId)
-          return neighbour ? `${escapeHtml(neighbour.label)} (${t.weight})` : ''
+        // Pass the plain (non-HTML) neighbours string into t() so a
+        // translator can reorder the placeholder inside the message
+        // (e.g. RTL languages may want the count to lead). HTML
+        // escape the entire result once — neighbour labels are
+        // already plain strings, so a single escape pass is correct.
+        // Format-bucket values are localised via displayLabelFor()
+        // so the tooltip reads "Video (3)" rather than "video (3)".
+        const neighbours = top.map(entry => {
+          const neighbour = lastGraph!.nodes.find(n => n.id === entry.neighbourId)
+          return neighbour ? `${displayLabelFor(neighbour)} (${entry.weight})` : ''
         }).filter(Boolean).join(', ')
-        if (labels) {
-          body += `<br><span class="browse-graph-tooltip-cooc">${escapeHtml(t('browse.graph.tooltip.coOccurrence', { neighbours: '' }))}${labels}</span>`
+        if (neighbours) {
+          body += `<br><span class="browse-graph-tooltip-cooc">${escapeHtml(t('browse.graph.tooltip.coOccurrence', { neighbours }))}</span>`
         }
       }
     }
@@ -548,13 +561,38 @@ export function createCatalogGraph(
 // Graph → cytoscape element definition
 // ---------------------------------------------------------------------------
 
+/**
+ * Pick the user-facing label for a graph node. The pure transform
+ * in `catalogGraph.ts` emits the raw facet-value string (`'video'`,
+ * `'Water'`) because it's locale-independent; the UI is responsible
+ * for localising at render time.
+ *
+ * Only `format` bucket values have a localised vocabulary today
+ * (`browse.filter.format.video` / `.image` / `.tour` / `.other` —
+ * mirrors the chip rail's labels in `browseUI.ts`). Category tag
+ * values come from the SOS catalog's canonical taxonomy and are
+ * presented verbatim; keyword values are author-written and also
+ * locale-independent.
+ */
+function displayLabelFor(node: GraphNode): string {
+  if (node.kind === 'facet-value' && node.facet === 'format') {
+    switch (node.value) {
+      case 'video': return t('browse.filter.format.video')
+      case 'image': return t('browse.filter.format.image')
+      case 'tour': return t('browse.filter.format.tour')
+      case 'other': return t('browse.filter.format.other')
+    }
+  }
+  return node.label
+}
+
 function graphToCytoscape(graph: Graph): ElementDefinition[] {
   const elements: ElementDefinition[] = []
   for (const node of graph.nodes) {
     const base: Record<string, unknown> = {
       id: node.id,
       kind: node.kind,
-      label: node.label,
+      label: displayLabelFor(node),
       group: node.group,
       datasetCount: node.datasetCount,
     }

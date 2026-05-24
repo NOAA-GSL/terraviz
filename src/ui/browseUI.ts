@@ -1082,7 +1082,7 @@ export function showBrowseUI(
       return
     }
     graphContainer.innerHTML = `<div class="browse-graph-status" role="status">${escapeHtml(t('browse.graph.loading'))}</div>`
-    graphLoadPromise = import('./catalogGraphUI')
+    const loadPromise = import('./catalogGraphUI')
       .then(({ createCatalogGraph }) => {
         graphContainer.innerHTML = ''
         graphController = createCatalogGraph(graphContainer, {
@@ -1098,7 +1098,19 @@ export function showBrowseUI(
         graphContainer.innerHTML = `<div class="browse-graph-status browse-graph-status-error" role="alert">${escapeHtml(t('browse.graph.loadError'))}</div>`
         return null
       })
-    await graphLoadPromise
+    graphLoadPromise = loadPromise
+    const result = await loadPromise
+    // Clear the in-flight handle once it settles so a failed import
+    // doesn't permanently block retry. The docstring above promises
+    // "subsequent toggles can retry"; without this clear, the
+    // memoised `null`-resolving promise would short-circuit forever.
+    // On success the early-return at the top of `ensureGraphMounted`
+    // (graphController is now set) prevents a duplicate import, so
+    // clearing the handle in both branches is safe.
+    if (graphLoadPromise === loadPromise) {
+      graphLoadPromise = null
+    }
+    void result
   }
 
   if (viewModeBar && !viewModeBar.dataset.wired) {
