@@ -501,6 +501,55 @@ describe('showBrowseUI', () => {
     expect(stored.format).toBe(true)
   })
 
+  it('auto-expands the section matching a search-prefix at boot (?q=category:Water)', () => {
+    // Per Copilot pass-2 review on PR #135 — the auto-expand
+    // rule documented in the boot path claimed to consider
+    // both URL-decoded facets AND prefix tokens in the search
+    // query, but originally only saw the chip-state. A shared
+    // ?q=category:Water link should now open the Category
+    // section even though no chip is set.
+    localStorage.removeItem('sos-browse-section-open.v1')
+    window.history.replaceState(null, '', '/?q=category%3AWater')
+    showBrowseUI([makeDataset({ tags: ['Water'] })], makeCallbacks())
+
+    const category = document.querySelector('.browse-filter-section[data-group="category"]') as HTMLElement
+    expect(category.classList.contains('collapsed')).toBe(false)
+  })
+
+  it('unions chip + prefix-search values on the same facet (overlay does not override)', () => {
+    // Per Copilot pass-2 review on PR #135 — when a user has
+    // the Water chip active and types `category:Land` in the
+    // search box, the effective filter should match either
+    // Water OR Land (union), not just Land (override). The
+    // chip itself stays the visual source of truth and doesn't
+    // light up Land — but the filter behaves additively so the
+    // chip's selection isn't silently overridden.
+    const datasets = [
+      makeDataset({ id: 'a', title: 'Air row', tags: ['Air'] }),
+      makeDataset({ id: 'w', title: 'Water row', tags: ['Water'] }),
+      makeDataset({ id: 'l', title: 'Land row', tags: ['Land'] }),
+    ]
+    showBrowseUI(datasets, makeCallbacks())
+
+    const findChip = (label: string) =>
+      Array.from(document.querySelectorAll('.browse-chip'))
+        .find(el => el.textContent === label) as HTMLElement
+
+    findChip('Water').click()
+    const input = document.getElementById('browse-search') as HTMLInputElement
+    input.value = 'category:Land'
+    input.dispatchEvent(new Event('input'))
+
+    const titles = Array.from(document.querySelectorAll('.browse-card-title'))
+      .map(el => el.textContent)
+    expect(titles.sort()).toEqual(['Land row', 'Water row'])
+
+    // Chip rail still shows Water as the only active chip — the
+    // prefix doesn't light up Land.
+    expect(findChip('Water').getAttribute('aria-pressed')).toBe('true')
+    expect(findChip('Land').getAttribute('aria-pressed')).toBe('false')
+  })
+
   it('auto-expands a collapsed section when its facet has active filters', () => {
     // A shared URL deep-link that activates a hasCaptions chip
     // would otherwise hide the active chip behind the collapsed

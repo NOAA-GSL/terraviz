@@ -10,6 +10,7 @@ import {
   mergeFilterStates,
   parseSearchQuery,
   setFacet,
+  toggleBooleanFacet,
   toggleFacet,
   type FacetPredicate,
   type FilterState,
@@ -395,18 +396,28 @@ describe('toggleFacet', () => {
     expect('category' in next).toBe(false)
   })
 
-  it('creates a boolean predicate when toggling an empty or "on" value', () => {
-    expect(toggleFacet({}, 'hasCaptions', '')).toEqual({
-      hasCaptions: { kind: 'boolean', value: true },
+  it('treats "on" and empty-string as ordinary multi-select values (no boolean magic)', () => {
+    // Regression — earlier shape of toggleFacet treated
+    // value === '' and value === 'on' as a signal to create a
+    // boolean predicate. That collided with legitimate
+    // multi-select values (e.g. a keyword called "on"). Boolean
+    // facets now have a dedicated helper via toggleBooleanFacet.
+    expect(toggleFacet({}, 'keyword', 'on')).toEqual({
+      keyword: { kind: 'multi-select', values: ['on'] },
     })
-    expect(toggleFacet({}, 'includeSos', 'on')).toEqual({
-      includeSos: { kind: 'boolean', value: true },
+    expect(toggleFacet({}, 'keyword', '')).toEqual({
+      keyword: { kind: 'multi-select', values: [''] },
     })
   })
 
-  it('removes a boolean facet when toggled again', () => {
+  it('clears an existing boolean facet when toggleFacet is called on it', () => {
+    // The other half of the no-magic refactor: calling
+    // toggleFacet on a boolean facet drops it. Callers that
+    // want to flip a boolean use toggleBooleanFacet — splitting
+    // the operations means the value string can never collide
+    // with a control token.
     const state: FilterState = { hasCaptions: { kind: 'boolean', value: true } }
-    const next = toggleFacet(state, 'hasCaptions', '')
+    const next = toggleFacet(state, 'hasCaptions', 'anything')
     expect(next.hasCaptions).toBeUndefined()
   })
 
@@ -423,6 +434,39 @@ describe('toggleFacet', () => {
     }
     const next = toggleFacet(state, 'dateAdded', '2020')
     expect(next).toEqual(state)
+  })
+})
+
+describe('toggleBooleanFacet', () => {
+  it('adds a boolean predicate when the facet is absent', () => {
+    expect(toggleBooleanFacet({}, 'hasCaptions')).toEqual({
+      hasCaptions: { kind: 'boolean', value: true },
+    })
+  })
+
+  it('removes the facet when an existing boolean predicate is toggled', () => {
+    const state: FilterState = { hasCaptions: { kind: 'boolean', value: true } }
+    const next = toggleBooleanFacet(state, 'hasCaptions')
+    expect(next.hasCaptions).toBeUndefined()
+  })
+
+  it('replaces a non-boolean predicate with a boolean one', () => {
+    // Edge case — if a multi-select predicate somehow exists
+    // for a facet that's now treated as boolean, the toggle
+    // converts it. Should be rare in practice (a facet's kind
+    // is decided at resolver-registration time) but the
+    // semantics need to be defined for the helper to be safe
+    // to call indiscriminately.
+    const state: FilterState = { hasCaptions: { kind: 'multi-select', values: ['x'] } }
+    const next = toggleBooleanFacet(state, 'hasCaptions')
+    expect(next.hasCaptions).toEqual({ kind: 'boolean', value: true })
+  })
+
+  it('does not mutate the input state', () => {
+    const state: FilterState = { hasCaptions: { kind: 'boolean', value: true } }
+    const snapshot = JSON.parse(JSON.stringify(state))
+    toggleBooleanFacet(state, 'hasCaptions')
+    expect(state).toEqual(snapshot)
   })
 })
 
@@ -543,16 +587,63 @@ describe('PERIOD_RESOLVER', () => {
 })
 
 describe('mergeFilterStates', () => {
-  it('overlay wins per-facet', () => {
+  it('unions multi-select values when both states key the same facet', () => {
+    // Chip Water + prefix Land should match either, not just
+    // the overlay — otherwise the chip rail (which renders from
+    // `base` alone) would show Water as active while only Land
+    // filters, surprising the user.
     const base: FilterState = {
       category: { kind: 'multi-select', values: ['Water'] },
-      hasCaptions: { kind: 'boolean', value: true },
     }
     const overlay: FilterState = {
       category: { kind: 'multi-select', values: ['Land'] },
     }
     const merged = mergeFilterStates(base, overlay)
-    expect(merged.category).toEqual({ kind: 'multi-select', values: ['Land'] })
+    expect(merged.category).toEqual({
+      kind: 'multi-select',
+      values: ['Water', 'Land'],
+    })
+  })
+
+  it('de-duplicates when the same value appears in both states', () => {
+    const base: FilterState = {
+      category: { kind: 'multi-select', values: ['Water', 'Air'] },
+    }
+    const overlay: FilterState = {
+      category: { kind: 'multi-select', values: ['Air', 'Land'] },
+    }
+    const merged = mergeFilterStates(base, overlay)
+    expect(merged.category).toEqual({
+      kind: 'multi-select',
+      values: ['Water', 'Air', 'Land'],
+    })
+  })
+
+  it('overlay wins per-facet when the predicate kinds differ', () => {
+    // Prefix search only emits multi-select today, so a
+    // differing-kind merge isn't reachable through the production
+    // pipeline. Spec'd here so future predicate kinds we add to
+    // the prefix parser fall into the override branch by default
+    // rather than silently doing the wrong thing.
+    const base: FilterState = {
+      dateAdded: { kind: 'range', min: 2010, max: 2020 },
+    }
+    const overlay: FilterState = {
+      dateAdded: { kind: 'multi-select', values: ['x'] },
+    }
+    const merged = mergeFilterStates(base, overlay)
+    expect(merged.dateAdded).toEqual({ kind: 'multi-select', values: ['x'] })
+  })
+
+  it('passes through facets present only in base or overlay', () => {
+    const base: FilterState = {
+      category: { kind: 'multi-select', values: ['Water'] },
+    }
+    const overlay: FilterState = {
+      hasCaptions: { kind: 'boolean', value: true },
+    }
+    const merged = mergeFilterStates(base, overlay)
+    expect(merged.category).toEqual({ kind: 'multi-select', values: ['Water'] })
     expect(merged.hasCaptions).toEqual({ kind: 'boolean', value: true })
   })
 

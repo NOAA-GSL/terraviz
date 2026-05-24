@@ -400,20 +400,40 @@ export function filterDatasets(
  *
  * Pure — returns a new object; never mutates `state`.
  */
+/**
+ * Return a NEW filter state with `value` toggled on a multi-
+ * select `facet`. Behaviour depends on the facet's current
+ * predicate kind:
+ *
+ *  - Facet absent → add as a `multi-select` with one value.
+ *  - `multi-select` present, value missing → add the value.
+ *  - `multi-select` present, value present → remove the value;
+ *    if the result is empty, delete the facet entirely so the
+ *    state stays minimal.
+ *  - `boolean` present → delete the facet (treats `toggleFacet`
+ *    on a boolean as "clear"; callers that want to toggle a
+ *    boolean facet use {@link toggleBooleanFacet}).
+ *
+ * Range and bbox facets are not toggled by this helper — they
+ * carry continuous state and are mutated directly by the
+ * range-slider / brush / draw handler via {@link setFacet}.
+ *
+ * The earlier shape of this helper accepted `value === 'on'` or
+ * `value === ''` as a signal to create a boolean predicate. That
+ * was a footgun — a legitimate multi-select value of `'on'` (or
+ * a stray empty-string keyword) would silently become a boolean
+ * predicate that baseline resolvers then rejected. Boolean
+ * facets now have a dedicated helper so value strings never
+ * collide with control tokens.
+ *
+ * Pure — returns a new object; never mutates `state`.
+ */
 export function toggleFacet(state: FilterState, facet: string, value: string): FilterState {
   const current = state[facet]
   const next: Record<string, FacetPredicate | undefined> = { ...state }
 
   if (current == null) {
-    // Boolean facets surface as plain on/off; the empty value
-    // string ("turn this toggle on") and the literal "on"
-    // (the convention in the URL form) both create a boolean
-    // predicate. Otherwise this is a multi-select.
-    if (value === '' || value === 'on') {
-      next[facet] = { kind: 'boolean', value: true }
-    } else {
-      next[facet] = { kind: 'multi-select', values: [value] }
-    }
+    next[facet] = { kind: 'multi-select', values: [value] }
   } else if (current.kind === 'multi-select') {
     const has = current.values.includes(value)
     const updated = has
@@ -430,6 +450,26 @@ export function toggleFacet(state: FilterState, facet: string, value: string): F
     // Range / bbox — toggleFacet is not the right mutation path;
     // callers use setFacet. Leave state unchanged so the helper
     // is safe to call indiscriminately from generic UI handlers.
+  }
+  return next
+}
+
+/**
+ * Return a NEW filter state with the boolean facet at `facet`
+ * toggled on (if absent) or off (if present). The dedicated
+ * helper exists so callers don't have to encode boolean toggles
+ * as magic value strings through {@link toggleFacet} — that's
+ * how the older single-API shape produced the value-collision
+ * footgun documented on `toggleFacet`.
+ *
+ * Pure — returns a new object.
+ */
+export function toggleBooleanFacet(state: FilterState, facet: string): FilterState {
+  const next: Record<string, FacetPredicate | undefined> = { ...state }
+  if (state[facet]?.kind === 'boolean') {
+    delete next[facet]
+  } else {
+    next[facet] = { kind: 'boolean', value: true }
   }
   return next
 }
@@ -566,17 +606,45 @@ export const PERIOD_RESOLVER: FacetResolver = (predicate, dataset) => {
 }
 
 /**
- * Combine two filter states. Per-facet, the `overlay` value wins
- * outright — the search-prefix overlay should take precedence
- * over chip state on the same facet for the duration of the
- * search (Phase 4 §6.2 wording: prefix search drives the engine
- * for power users).
+ * Combine two filter states for the engine to consume. When the
+ * same facet is keyed in both:
+ *
+ *  - Both `multi-select` → union the values. A chip selecting
+ *    `category=Water` plus a prefix-search `category:Land`
+ *    matches *either*, not just the overlay — otherwise the UI
+ *    would show the chip as active while only the prefix's value
+ *    filters, surprising the user.
+ *  - Any other shape combination → overlay wins. Prefix search
+ *    only emits `multi-select` predicates today, so the override
+ *    path is the safe default for any future predicate kind we
+ *    add without thinking through the merge semantics.
  *
  * Used to layer `parseSearchQuery` output on top of the chip
- * rail's `FilterState` before passing to `filterDatasets`.
+ * rail's `FilterState` before passing to `filterDatasets`. The
+ * chip rail still renders from its own state alone (so a prefix
+ * doesn't visually light up chips — §6.2's parallel-input model);
+ * the union here only affects the effective filter.
  */
 export function mergeFilterStates(base: FilterState, overlay: FilterState): FilterState {
-  return { ...base, ...overlay }
+  const result: Record<string, FacetPredicate | undefined> = { ...base }
+  for (const [facet, predicate] of Object.entries(overlay)) {
+    if (predicate == null) continue
+    const existing = result[facet]
+    if (
+      existing != null &&
+      existing.kind === 'multi-select' &&
+      predicate.kind === 'multi-select'
+    ) {
+      const unioned = [...existing.values]
+      for (const v of predicate.values) {
+        if (!unioned.includes(v)) unioned.push(v)
+      }
+      result[facet] = { kind: 'multi-select', values: unioned }
+    } else {
+      result[facet] = predicate
+    }
+  }
+  return result
 }
 
 /**

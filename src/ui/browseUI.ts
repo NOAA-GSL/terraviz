@@ -32,6 +32,7 @@ import {
   mergeFilterStates,
   parseSearchQuery,
   setFacet,
+  toggleBooleanFacet,
   toggleFacet,
   type FacetPredicate,
   type FilterState,
@@ -631,10 +632,17 @@ export function showBrowseUI(
   // to save screen real estate; defaults open Category & content
   // and collapse the other three groups. Sections with active
   // facets auto-expand at boot so a shared URL or prefix-search
-  // never leaves filtered chips hidden.
+  // never leaves filtered state hidden. Auto-expand considers
+  // both URL-decoded facets AND any prefix tokens in the search
+  // query (e.g. `?q=category:Water` opens Category even though
+  // the chip state is empty), so the rule matches the comment.
+  const bootEffectiveState = mergeFilterStates(
+    filterState,
+    parseSearchQuery(searchQuery).prefixes,
+  )
   let sectionOpen: SectionOpenState = computeSectionOpenState(
     loadSectionOpenState(),
-    filterState,
+    bootEffectiveState,
   )
 
   // ----- Filter rail render -----
@@ -787,7 +795,7 @@ export function showBrowseUI(
       // input shouldn't toggle anything.
       if (chip.matches('input.browse-range-input')) return
       if (chip.dataset.toggle === 'boolean') {
-        applyState(toggleFacet(filterState, facet, ''), searchQuery)
+        applyState(toggleBooleanFacet(filterState, facet), searchQuery)
         return
       }
       const value = chip.dataset.value
