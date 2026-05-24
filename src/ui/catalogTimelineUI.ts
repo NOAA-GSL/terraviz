@@ -45,6 +45,7 @@ import {
 } from '../services/catalogTimeline'
 import { type FilterState } from '../services/datasetFilter'
 import type { Dataset } from '../types'
+import { emit } from '../analytics'
 import { escapeHtml, escapeAttr } from './domUtils'
 import { plural, t } from '../i18n'
 import { formatNumber } from '../i18n/format'
@@ -83,6 +84,13 @@ const ROW_COUNT_MEDIUM = 500
 const MIN_BAR_WIDTH_PX = 3
 /** Radius of the real-time trailing-edge marker dot, in pixels. */
 const REALTIME_MARKER_RADIUS_PX = 4
+
+/** Per-minute throttle budget for `catalog_timeline_brush_applied`.
+ *  Matches `camera_settled` and `catalog_graph_node_clicked` so an
+ *  aggressive scrubbing session can't flood the queue from this
+ *  surface either. */
+const BRUSH_EMIT_MAX_PER_MINUTE = 30
+const BRUSH_EMIT_WINDOW_MS = 60_000
 
 // ---------------------------------------------------------------------------
 // Public shape
@@ -223,6 +231,9 @@ export function createCatalogTimeline(
 
   // --- State carried across update() calls ---
   let lastInput: CatalogTimelineUpdate | null = null
+  // Rolling timestamps for the per-minute brush-emit throttle. Same
+  // shape as `camera.ts` and the graph view's node-click budget.
+  const brushEmits: number[] = []
   // Width of the axis SVG (excluding the gutter). Re-measured on
   // every update because the host can resize when the panel is
   // expanded / the viewport changes.
@@ -259,8 +270,29 @@ export function createCatalogTimeline(
         callbacks.onBrushChange(null)
         return
       }
+      emitBrushApplied(minYear, maxYear)
       callbacks.onBrushChange({ min: minYear, max: maxYear })
     })
+
+  /**
+   * Emit `catalog_timeline_brush_applied` if the per-minute throttle
+   * allows. Tier B (gated at the emitter level). Carries integer
+   * years only — the brush has no free-text payload. Throttling
+   * mirrors `camera.ts` so a rapid back-and-forth scrub
+   * sequence can't burn the session's analytics budget.
+   */
+  function emitBrushApplied(startYear: number, endYear: number): void {
+    const now = Date.now()
+    const cutoff = now - BRUSH_EMIT_WINDOW_MS
+    while (brushEmits.length > 0 && brushEmits[0] < cutoff) brushEmits.shift()
+    if (brushEmits.length >= BRUSH_EMIT_MAX_PER_MINUTE) return
+    brushEmits.push(now)
+    emit({
+      event_type: 'catalog_timeline_brush_applied',
+      start_year: startYear,
+      end_year: endYear,
+    })
+  }
 
   function rowHeightFor(rowCount: number): number {
     if (rowCount <= ROW_COUNT_COMFORTABLE) return ROW_HEIGHT_COMFORTABLE
