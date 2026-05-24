@@ -182,12 +182,109 @@
     background: var(--white-o08);
 }
 
-#browse-category-bar {
+/* Filter rail — typed-group chip layout (Phase 4 §6.1/§6.5). */
+#browse-filter-rail {
     display: flex;
-    gap: 0.4rem;
-    flex-wrap: wrap;
+    flex-direction: column;
+    gap: 0.5rem;
     flex-shrink: 0;
     padding-bottom: 0.75rem;
+}
+
+.browse-filter-section {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+}
+
+/* Accordion section header — clickable button that toggles the
+   body's visibility. Per-section open/collapsed state persists
+   in localStorage. Active facets render an inline badge so a
+   collapsed section still signals "you have filters set here". */
+.browse-filter-section-header {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    width: 100%;
+    padding: 0.25rem 0.1rem;
+    background: transparent;
+    border: none;
+    color: var(--color-text-muted);
+    font-family: inherit;
+    font-size: 0.6rem;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    text-align: start;
+    cursor: pointer;
+    border-radius: 0.25rem;
+}
+
+.browse-filter-section-header:hover {
+    color: var(--color-text);
+    background: var(--white-o05);
+}
+
+.browse-filter-section-header:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 1px;
+}
+
+.browse-filter-section-indicator {
+    display: inline-block;
+    width: 0.7rem;
+    font-size: 0.55rem;
+    text-align: center;
+    color: var(--color-text-muted);
+}
+
+.browse-filter-section-header:hover .browse-filter-section-indicator {
+    color: var(--color-text);
+}
+
+.browse-filter-section-title {
+    flex: 1;
+}
+
+.browse-filter-section-badge {
+    flex-shrink: 0;
+    min-width: 1.1rem;
+    padding: 0.05rem 0.4rem;
+    border-radius: 999px;
+    background: var(--color-accent-dark);
+    color: var(--color-text);
+    font-size: 0.55rem;
+    font-weight: 600;
+    letter-spacing: 0;
+    text-transform: none;
+    text-align: center;
+}
+
+.browse-filter-section-body {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.browse-filter-section.collapsed .browse-filter-section-body {
+    display: none;
+}
+
+.browse-filter-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.browse-filter-label {
+    font-size: 0.65rem;
+    color: var(--color-text-muted);
+}
+
+.browse-chip-row {
+    display: flex;
+    gap: 0.35rem;
+    flex-wrap: wrap;
 }
 
 .browse-chip {
@@ -215,39 +312,101 @@
     color: var(--color-text);
 }
 
-#browse-subcategory-bar {
+.browse-chip:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 1px;
+}
+
+/* Quality & availability toggle row — boolean chips share a
+   distinct accent treatment so users distinguish a "set this" chip
+   from a "add to the multi-select" chip. */
+.browse-toggle-row {
     display: flex;
-    gap: 0.35rem;
+    gap: 0.4rem;
     flex-wrap: wrap;
-    flex-shrink: 0;
-    padding-bottom: 0.75rem;
 }
-#browse-subcategory-bar:empty {
-    display: none;
-}
-.browse-subchip {
+
+.browse-toggle-chip {
     flex-shrink: 0;
-    padding: 0.25rem 0.6rem;
+    padding: 0.3rem 0.75rem;
     border-radius: 999px;
     border: 1px solid var(--accent-o20);
     background: var(--accent-o08);
     color: var(--color-accent-hover);
-    font-size: 0.65rem;
+    font-size: 0.7rem;
     cursor: pointer;
     transition: background 0.15s, color 0.15s, border-color 0.15s;
     white-space: nowrap;
     font-family: inherit;
 }
-.browse-subchip:hover {
+
+.browse-toggle-chip:hover {
     background: var(--accent-o18);
     color: var(--color-text);
 }
-.browse-subchip.active {
+
+.browse-toggle-chip.active {
     background: var(--accent-o30);
     border-color: var(--color-accent);
     color: var(--color-text);
 }
-.browse-subchip:focus-visible {
+
+.browse-toggle-chip:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 1px;
+}
+
+/* Range inputs — two-number low-fi UI in v1; dual-thumb slider
+   is a follow-up per §6.1 ("Medium effort"). */
+.browse-range-row {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+
+.browse-range-input {
+    width: 5.5rem;
+    padding: 0.25rem 0.5rem;
+    border-radius: 0.25rem;
+    border: 1px solid var(--white-o15);
+    background: var(--white-o05);
+    color: var(--color-text);
+    font-size: 0.75rem;
+    font-family: inherit;
+}
+
+.browse-range-input:focus {
+    outline: none;
+    border-color: var(--accent-o50);
+    background: var(--white-o08);
+}
+
+.browse-range-sep {
+    color: var(--color-text-muted);
+}
+
+.browse-filter-clear-wrap {
+    display: flex;
+    justify-content: flex-end;
+}
+
+.browse-filter-clear {
+    padding: 0.25rem 0.6rem;
+    border-radius: 0.25rem;
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--color-text-muted);
+    font-size: 0.65rem;
+    cursor: pointer;
+    font-family: inherit;
+}
+
+.browse-filter-clear:hover {
+    color: var(--color-text);
+    border-color: var(--white-o15);
+}
+
+.browse-filter-clear:focus-visible {
     outline: 2px solid var(--color-accent);
     outline-offset: 1px;
 }
@@ -611,6 +770,33 @@ body.catalog-empty #browse-overlay {
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
     border-inline-start: none;
+}
+
+/* Catalog mode at desktop widths — the overlay spans the whole
+   viewport so the filter rail's single-column stack leaves a lot
+   of unused space to the right of each section. Lay the typed-
+   group sections out as a 2-column grid so two collapsed-but-
+   shorter sections (Format, Quality) can sit beside taller ones
+   (Category's chip row, Time's range inputs) instead of stacking
+   awkwardly. Gated to `min-width: 769px` so the existing mobile
+   single-column + horizontal-scroll behaviour (accessibility.css
+   §.browse-chip-row) is preserved at narrow viewports. Outside
+   `body.catalog-empty` the overlay is the narrow side panel
+   where 2 columns wouldn't fit. */
+@media (min-width: 769px) {
+    body.catalog-empty #browse-filter-rail {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        column-gap: 1.5rem;
+        row-gap: 0.5rem;
+    }
+
+    /* The clear-all button sits below the four sections; span both
+       columns and right-align so it stays visually anchored to
+       the rail's trailing edge. */
+    body.catalog-empty .browse-filter-clear-wrap {
+        grid-column: 1 / -1;
+    }
 }
 
 /* The browse-overlay close button assumes there's a globe to fall

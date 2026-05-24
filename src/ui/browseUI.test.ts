@@ -67,11 +67,10 @@ function makeDataset(overrides: Partial<Dataset> = {}): Dataset {
 function setupBrowseDOM(): void {
   document.body.innerHTML = `
     <div id="browse-overlay" class="hidden">
-      <div id="browse-category-bar"></div>
-      <div id="browse-subcategory-bar"></div>
+      <input id="browse-search" type="text">
+      <button id="browse-search-clear" class="hidden"></button>
+      <div id="browse-filter-rail"></div>
       <div id="browse-toolbar">
-        <input id="browse-search" type="text">
-        <button id="browse-search-clear" class="hidden"></button>
         <div id="browse-sort"></div>
       </div>
       <div id="browse-count"></div>
@@ -95,6 +94,11 @@ function makeCallbacks(overrides: Partial<BrowseCallbacks> = {}): BrowseCallback
 describe('showBrowseUI', () => {
   beforeEach(() => {
     setupBrowseDOM()
+    // Reset URL between tests — the chip rail boots from
+    // window.location.search via readFilterStateFromUrl(), so a
+    // URL written by one test would leak chip / search state
+    // into the next.
+    window.history.replaceState(null, '', '/')
   })
 
   it('removes hidden class from overlay', () => {
@@ -127,19 +131,17 @@ describe('showBrowseUI', () => {
     // guards keep the wiring idempotent so each click fires
     // exactly one handler — and emits exactly one browse_filter
     // event — no matter how many times the panel has been re-shown.
+    //
+    // Phase 4 §6.5 — the chip rail is driven by the `tags` field
+    // rather than `enriched.categories`, so the test fixture
+    // tags the rows accordingly.
     localStorage.clear()
     resetForTests()
     setTier('research')
 
     const datasets = [
-      makeDataset({
-        id: 'a', title: 'A',
-        enriched: { categories: { 'Atmosphere': ['Temperature'] } },
-      }),
-      makeDataset({
-        id: 'b', title: 'B',
-        enriched: { categories: { 'Ocean': ['Currents'] } },
-      }),
+      makeDataset({ id: 'a', title: 'A', tags: ['Air'] }),
+      makeDataset({ id: 'b', title: 'B', tags: ['Water'] }),
     ]
 
     showBrowseUI(datasets, makeCallbacks())
@@ -148,9 +150,9 @@ describe('showBrowseUI', () => {
 
     // Click a category chip once — the click handler should fire
     // exactly once even though showBrowseUI ran three times.
-    const atmoChip = Array.from(document.querySelectorAll('.browse-chip'))
-      .find(el => el.textContent === 'Atmosphere') as HTMLElement
-    atmoChip.click()
+    const airChip = Array.from(document.querySelectorAll('.browse-chip'))
+      .find(el => el.textContent === 'Air') as HTMLElement
+    airChip.click()
 
     const filterEvents = __peek().filter((e) => e.event_type === 'browse_filter')
     expect(filterEvents).toHaveLength(1)
@@ -188,25 +190,28 @@ describe('showBrowseUI', () => {
     expect(card.getAttribute('aria-label')).toBe('Ocean Temp')
   })
 
-  it('renders category chips including "All"', () => {
+  it('renders multi-select category chips from the tags field (no "All" sentinel)', () => {
+    // Phase 4 §6.5 — the chip rail moved from single-select with
+    // an "All" sentinel (where empty selection meant "show
+    // everything") to multi-select where the same default is
+    // expressed by no chip being active. Chips are driven by the
+    // SOS `tags` taxonomy per §6.1, not by the hierarchical
+    // `enriched.categories` field.
     const datasets = [
-      makeDataset({
-        id: 'ds-1', title: 'A',
-        enriched: { categories: { 'Atmosphere': ['Temperature'] } },
-      }),
-      makeDataset({
-        id: 'ds-2', title: 'B',
-        enriched: { categories: { 'Ocean': ['Currents'] } },
-      }),
+      makeDataset({ id: 'ds-1', title: 'A', tags: ['Air'] }),
+      makeDataset({ id: 'ds-2', title: 'B', tags: ['Water'] }),
     ]
 
     showBrowseUI(datasets, makeCallbacks())
 
     const chips = document.querySelectorAll('.browse-chip')
     const labels = Array.from(chips).map(c => c.textContent)
-    expect(labels).toContain('All')
-    expect(labels).toContain('Atmosphere')
-    expect(labels).toContain('Ocean')
+    expect(labels).not.toContain('All')
+    expect(labels).toContain('Air')
+    expect(labels).toContain('Water')
+    // No chip is active in the default state.
+    const active = Array.from(chips).filter(c => c.classList.contains('active'))
+    expect(active).toHaveLength(0)
   })
 
   it('sorts datasets by weight then title in relevance mode', () => {
@@ -288,6 +293,411 @@ describe('showBrowseUI', () => {
 
     const searchEl = document.getElementById('browse-search') as HTMLInputElement
     expect(searchEl.placeholder).toBe('Search 3 datasets\u2026')
+  })
+
+  it('chip clicks accumulate into a multi-select facet (OR within the group)', () => {
+    // Phase 4 §6.5 — multi-select. Clicking Air then Water shows
+    // both Air-tagged AND Water-tagged datasets; clicking Air
+    // again removes only Air, leaving Water alone.
+    const datasets = [
+      makeDataset({ id: 'a', title: 'Air row', tags: ['Air'] }),
+      makeDataset({ id: 'w', title: 'Water row', tags: ['Water'] }),
+      makeDataset({ id: 'l', title: 'Land row', tags: ['Land'] }),
+    ]
+    showBrowseUI(datasets, makeCallbacks())
+
+    const findChip = (label: string) =>
+      Array.from(document.querySelectorAll('.browse-chip'))
+        .find(el => el.textContent === label) as HTMLElement
+
+    findChip('Air').click()
+    expect(findChip('Air').getAttribute('aria-pressed')).toBe('true')
+    let titles = Array.from(document.querySelectorAll('.browse-card-title'))
+      .map(el => el.textContent)
+    expect(titles).toEqual(['Air row'])
+
+    findChip('Water').click()
+    titles = Array.from(document.querySelectorAll('.browse-card-title'))
+      .map(el => el.textContent)
+    expect(titles.sort()).toEqual(['Air row', 'Water row'])
+
+    // Toggle Air off — should leave Water as the only chip and
+    // only Water-row in the results.
+    findChip('Air').click()
+    expect(findChip('Air').getAttribute('aria-pressed')).toBe('false')
+    expect(findChip('Water').getAttribute('aria-pressed')).toBe('true')
+    titles = Array.from(document.querySelectorAll('.browse-card-title'))
+      .map(el => el.textContent)
+    expect(titles).toEqual(['Water row'])
+  })
+
+  it('boolean toggle chip filters datasets without the matching field', () => {
+    // Has-captions toggle — should show only rows whose
+    // closedCaptionLink is non-empty.
+    const datasets = [
+      makeDataset({ id: 'cc', title: 'With captions', closedCaptionLink: 'https://x/cc.srt' }),
+      makeDataset({ id: 'no', title: 'No captions' }),
+    ]
+    showBrowseUI(datasets, makeCallbacks())
+
+    const toggle = document.querySelector('[data-facet="hasCaptions"]') as HTMLElement
+    expect(toggle).not.toBeNull()
+    toggle.click()
+
+    const titles = Array.from(document.querySelectorAll('.browse-card-title'))
+      .map(el => el.textContent)
+    expect(titles).toEqual(['With captions'])
+  })
+
+  it('SOS-only datasets are excluded by default and revealed by the include-SOS toggle', () => {
+    // Phase 4 §6.4 — SOS source quality toggle defaults off so
+    // today's surface doesn't grow without user consent. Flipping
+    // it reveals the synthesised preview-quality rows.
+    const datasets = [
+      makeDataset({ id: 'x', title: 'Explorer row', availableFor: 'Explorer' }),
+      makeDataset({ id: 's', title: 'SOS row', availableFor: 'SOS' }),
+    ]
+    showBrowseUI(datasets, makeCallbacks())
+
+    let titles = Array.from(document.querySelectorAll('.browse-card-title'))
+      .map(el => el.textContent)
+    expect(titles).toEqual(['Explorer row'])
+
+    const toggle = document.querySelector('[data-facet="includeSos"]') as HTMLElement
+    expect(toggle).not.toBeNull()
+    toggle.click()
+
+    titles = Array.from(document.querySelectorAll('.browse-card-title'))
+      .map(el => el.textContent)
+    expect(titles.sort()).toEqual(['Explorer row', 'SOS row'])
+  })
+
+  it('honours search-prefix syntax (category:Water hurricane)', () => {
+    // §6.2 — `category:Water` filters by tag without lighting up
+    // the Water chip (prefix is a parallel overlay, not a chip
+    // mutation), and the remaining "hurricane" word substring-
+    // matches the title/description.
+    const datasets = [
+      makeDataset({ id: 'wh', title: 'Hurricane in Water', tags: ['Water'] }),
+      makeDataset({ id: 'ah', title: 'Hurricane in Air', tags: ['Air'] }),
+      makeDataset({ id: 'w', title: 'Just Water', tags: ['Water'] }),
+    ]
+    showBrowseUI(datasets, makeCallbacks())
+
+    const input = document.getElementById('browse-search') as HTMLInputElement
+    input.value = 'category:Water hurricane'
+    input.dispatchEvent(new Event('input'))
+
+    const titles = Array.from(document.querySelectorAll('.browse-card-title'))
+      .map(el => el.textContent)
+    expect(titles).toEqual(['Hurricane in Water'])
+
+    // Chip state isn't mutated — Water chip stays inactive.
+    const water = Array.from(document.querySelectorAll('.browse-chip'))
+      .find(c => c.textContent === 'Water') as HTMLElement
+    expect(water.getAttribute('aria-pressed')).toBe('false')
+  })
+
+  it('honours period: prefix mapping (yearly → P1Y)', () => {
+    const datasets = [
+      makeDataset({ id: 'y', title: 'Yearly dataset', tags: ['Air'], period: 'P1Y' }),
+      makeDataset({ id: 'm', title: 'Monthly dataset', tags: ['Air'], period: 'P1M' }),
+    ]
+    showBrowseUI(datasets, makeCallbacks())
+
+    const input = document.getElementById('browse-search') as HTMLInputElement
+    input.value = 'period:yearly'
+    input.dispatchEvent(new Event('input'))
+
+    const titles = Array.from(document.querySelectorAll('.browse-card-title'))
+      .map(el => el.textContent)
+    expect(titles).toEqual(['Yearly dataset'])
+  })
+
+  it('persists chip + search state to the URL via history.replaceState', () => {
+    // Reset URL — the previous test in the file may have left
+    // params on it through happy-dom's persistent location.
+    window.history.replaceState(null, '', '/?catalog=true')
+    const datasets = [
+      makeDataset({ id: 'a', title: 'A', tags: ['Air'] }),
+      makeDataset({ id: 'w', title: 'W', tags: ['Water'] }),
+    ]
+    showBrowseUI(datasets, makeCallbacks())
+
+    const airChip = Array.from(document.querySelectorAll('.browse-chip'))
+      .find(el => el.textContent === 'Air') as HTMLElement
+    airChip.click()
+
+    // Verify the URL reflects the active chip + that unrelated
+    // params (catalog=true) survive.
+    expect(window.location.search).toContain('catalog=true')
+    expect(window.location.search).toContain('cat=Air')
+
+    // Type into the search box — URL also gets the `q=` param.
+    const input = document.getElementById('browse-search') as HTMLInputElement
+    input.value = 'storm'
+    input.dispatchEvent(new Event('input'))
+    expect(window.location.search).toContain('q=storm')
+  })
+
+  it('boots from URL — restores chip + search state on showBrowseUI', () => {
+    window.history.replaceState(null, '', '/?catalog=true&cat=Water&q=ocean')
+    const datasets = [
+      makeDataset({ id: 'a', title: 'Air row', tags: ['Air'] }),
+      makeDataset({ id: 'wo', title: 'Ocean Water', tags: ['Water'] }),
+      makeDataset({ id: 'w', title: 'Plain Water', tags: ['Water'] }),
+    ]
+    showBrowseUI(datasets, makeCallbacks())
+
+    // Search box value comes back from the URL.
+    const input = document.getElementById('browse-search') as HTMLInputElement
+    expect(input.value).toBe('ocean')
+
+    // Water chip is active, Air is not.
+    const water = Array.from(document.querySelectorAll('.browse-chip'))
+      .find(c => c.textContent === 'Water') as HTMLElement
+    expect(water.getAttribute('aria-pressed')).toBe('true')
+
+    // Visible cards reflect both the chip filter and the search.
+    const titles = Array.from(document.querySelectorAll('.browse-card-title'))
+      .map(el => el.textContent)
+    expect(titles).toEqual(['Ocean Water'])
+  })
+
+  it('renders typed-group sections as collapsible accordions with sane defaults', () => {
+    // Per the user's feedback in PR review — the filter rail was
+    // taking too much screen real estate. Each typed group is
+    // now an accordion: Category & content opens by default,
+    // others collapse to save vertical space, and each section's
+    // open/collapsed state persists across sessions.
+    localStorage.removeItem('sos-browse-section-open.v1')
+    showBrowseUI([makeDataset({ tags: ['Air'] })], makeCallbacks())
+
+    const sections = document.querySelectorAll('.browse-filter-section')
+    expect(sections.length).toBe(4)
+    const findSection = (group: string) =>
+      document.querySelector(`.browse-filter-section[data-group="${group}"]`) as HTMLElement
+
+    // Default: category open; format, time, quality collapsed.
+    expect(findSection('category').classList.contains('collapsed')).toBe(false)
+    expect(findSection('format').classList.contains('collapsed')).toBe(true)
+    expect(findSection('time').classList.contains('collapsed')).toBe(true)
+    expect(findSection('quality').classList.contains('collapsed')).toBe(true)
+
+    // Header click toggles the section open/closed and updates
+    // aria-expanded — the canonical accessibility signal.
+    const formatHeader = findSection('format').querySelector('.browse-filter-section-header') as HTMLElement
+    expect(formatHeader.getAttribute('aria-expanded')).toBe('false')
+    formatHeader.click()
+    expect(findSection('format').classList.contains('collapsed')).toBe(false)
+    expect(
+      (findSection('format').querySelector('.browse-filter-section-header') as HTMLElement)
+        .getAttribute('aria-expanded'),
+    ).toBe('true')
+
+    // Persistence — the next call to showBrowseUI reads the same
+    // localStorage and keeps Format open.
+    const stored = JSON.parse(localStorage.getItem('sos-browse-section-open.v1') ?? '{}')
+    expect(stored.format).toBe(true)
+  })
+
+  it('auto-expands the section matching a search-prefix at boot (?q=category:Water)', () => {
+    // Per Copilot pass-2 review on PR #135 — the auto-expand
+    // rule documented in the boot path claimed to consider
+    // both URL-decoded facets AND prefix tokens in the search
+    // query, but originally only saw the chip-state. A shared
+    // ?q=category:Water link should now open the Category
+    // section even though no chip is set.
+    localStorage.removeItem('sos-browse-section-open.v1')
+    window.history.replaceState(null, '', '/?q=category%3AWater')
+    showBrowseUI([makeDataset({ tags: ['Water'] })], makeCallbacks())
+
+    const category = document.querySelector('.browse-filter-section[data-group="category"]') as HTMLElement
+    expect(category.classList.contains('collapsed')).toBe(false)
+  })
+
+  it('unions chip + prefix-search values on the same facet (overlay does not override)', () => {
+    // Per Copilot pass-2 review on PR #135 — when a user has
+    // the Water chip active and types `category:Land` in the
+    // search box, the effective filter should match either
+    // Water OR Land (union), not just Land (override). The
+    // chip itself stays the visual source of truth and doesn't
+    // light up Land — but the filter behaves additively so the
+    // chip's selection isn't silently overridden.
+    const datasets = [
+      makeDataset({ id: 'a', title: 'Air row', tags: ['Air'] }),
+      makeDataset({ id: 'w', title: 'Water row', tags: ['Water'] }),
+      makeDataset({ id: 'l', title: 'Land row', tags: ['Land'] }),
+    ]
+    showBrowseUI(datasets, makeCallbacks())
+
+    const findChip = (label: string) =>
+      Array.from(document.querySelectorAll('.browse-chip'))
+        .find(el => el.textContent === label) as HTMLElement
+
+    findChip('Water').click()
+    const input = document.getElementById('browse-search') as HTMLInputElement
+    input.value = 'category:Land'
+    input.dispatchEvent(new Event('input'))
+
+    const titles = Array.from(document.querySelectorAll('.browse-card-title'))
+      .map(el => el.textContent)
+    expect(titles.sort()).toEqual(['Land row', 'Water row'])
+
+    // Chip rail still shows Water as the only active chip — the
+    // prefix doesn't light up Land.
+    expect(findChip('Water').getAttribute('aria-pressed')).toBe('true')
+    expect(findChip('Land').getAttribute('aria-pressed')).toBe('false')
+  })
+
+  it('auto-expands a collapsed section when its facet has active filters', () => {
+    // A shared URL deep-link that activates a hasCaptions chip
+    // would otherwise hide the active chip behind the collapsed
+    // Quality section — surprising on a shared link. The auto-
+    // expand rule forces the section open when its facet is
+    // active at boot.
+    localStorage.removeItem('sos-browse-section-open.v1')
+    window.history.replaceState(null, '', '/?cc=1')
+    showBrowseUI([makeDataset({ closedCaptionLink: 'https://x' })], makeCallbacks())
+
+    const quality = document.querySelector('.browse-filter-section[data-group="quality"]') as HTMLElement
+    expect(quality.classList.contains('collapsed')).toBe(false)
+  })
+
+  it('shows an active-filter badge in the section header when chips are set', () => {
+    // Even when a section is collapsed, the user needs to see
+    // "there's something filtered here". The badge surfaces the
+    // active count next to the title.
+    localStorage.removeItem('sos-browse-section-open.v1')
+    showBrowseUI(
+      [
+        makeDataset({ id: 'a', title: 'A', tags: ['Air'] }),
+        makeDataset({ id: 'w', title: 'W', tags: ['Water'] }),
+      ],
+      makeCallbacks(),
+    )
+
+    // Toggle Air on — the Category section now has 1 active chip.
+    const airChip = Array.from(document.querySelectorAll('.browse-chip'))
+      .find(el => el.textContent === 'Air') as HTMLElement
+    airChip.click()
+
+    const categoryHeader = document.querySelector(
+      '.browse-filter-section[data-group="category"] .browse-filter-section-header',
+    ) as HTMLElement
+    const badge = categoryHeader.querySelector('.browse-filter-section-badge')
+    expect(badge).not.toBeNull()
+    expect(badge!.textContent).toBe('1')
+
+    // Toggle Water on — badge updates to 2.
+    const waterChip = Array.from(document.querySelectorAll('.browse-chip'))
+      .find(el => el.textContent === 'Water') as HTMLElement
+    waterChip.click()
+    expect(
+      document.querySelector(
+        '.browse-filter-section[data-group="category"] .browse-filter-section-badge',
+      )!.textContent,
+    ).toBe('2')
+  })
+
+  it('accordion toggle preserves partially-typed range input value (no rail re-render)', () => {
+    // Per Copilot pass-4 review on PR #135 — the earlier shape
+    // of the accordion handler called renderRail() which
+    // rebuilt innerHTML. A partially-typed range value (no
+    // change event yet) would have been thrown away when the
+    // user collapsed the Time section. The new in-place class
+    // toggle keeps the DOM input alive.
+    localStorage.removeItem('sos-browse-section-open.v1')
+    showBrowseUI([makeDataset({ tags: ['Air'] })], makeCallbacks())
+
+    // Open the Time section so the inputs are visible.
+    const timeHeader = document.querySelector(
+      '.browse-filter-section[data-group="time"] .browse-filter-section-header',
+    ) as HTMLElement
+    timeHeader.click()
+
+    const minInput = document.querySelector(
+      '#browse-range-dateAdded-min',
+    ) as HTMLInputElement
+    expect(minInput).not.toBeNull()
+    // Simulate a partial type without firing change (which would
+    // commit the value to filterState via setFacet).
+    minInput.value = '20'
+
+    // Collapse Time, then re-open it.
+    timeHeader.click()
+    expect(
+      document.querySelector('.browse-filter-section[data-group="time"]')!
+        .classList.contains('collapsed'),
+    ).toBe(true)
+    timeHeader.click()
+
+    // The same DOM input is still alive and still carries the
+    // partially-typed `20`.
+    const minInputAfter = document.querySelector(
+      '#browse-range-dateAdded-min',
+    ) as HTMLInputElement
+    expect(minInputAfter).toBe(minInput) // same DOM node
+    expect(minInputAfter.value).toBe('20')
+  })
+
+  it('browse_filter event surfaces the removed value when a multi-select last-chip toggles off', () => {
+    // Per Copilot pass-4 review on PR #135 — facetDiff used to
+    // return `${facet}:off` whenever a facet key disappeared,
+    // which lost the toggled chip's value for dashboards
+    // slicing on category:Water etc. Now multi-select removal
+    // of the last value reports the value (boolean toggle-off
+    // still reports `:off` since there's no value).
+    localStorage.clear()
+    resetForTests()
+    setTier('research')
+
+    const datasets = [
+      makeDataset({ id: 'a', title: 'A', tags: ['Air'] }),
+      makeDataset({ id: 'w', title: 'W', tags: ['Water'] }),
+    ]
+    showBrowseUI(datasets, makeCallbacks())
+
+    const findChip = (label: string) =>
+      Array.from(document.querySelectorAll('.browse-chip'))
+        .find(el => el.textContent === label) as HTMLElement
+
+    // Toggle Water on, then off — the off-toggle should report
+    // `category:Water`, not `category:off`.
+    findChip('Water').click()
+    findChip('Water').click()
+
+    const filterEvents = __peek().filter((e) => e.event_type === 'browse_filter')
+    // Most recent event should reflect the removal of Water.
+    expect(filterEvents.length).toBeGreaterThanOrEqual(2)
+    const removal = filterEvents[filterEvents.length - 1]
+    if (removal.event_type !== 'browse_filter') throw new Error('unreachable')
+    expect(removal.category).toBe('category:Water')
+  })
+
+  it('clear-all button resets the filter state and surfaces only when something is active', () => {
+    const datasets = [
+      makeDataset({ id: 'a', title: 'A', tags: ['Air'] }),
+      makeDataset({ id: 'w', title: 'W', tags: ['Water'] }),
+    ]
+    showBrowseUI(datasets, makeCallbacks())
+
+    // Default: no clear-all visible.
+    expect(document.getElementById('browse-filter-clear')).toBeNull()
+
+    // Activate a filter — the clear button appears.
+    const airChip = Array.from(document.querySelectorAll('.browse-chip'))
+      .find(el => el.textContent === 'Air') as HTMLElement
+    airChip.click()
+    const clearBtn = document.getElementById('browse-filter-clear') as HTMLElement
+    expect(clearBtn).not.toBeNull()
+
+    clearBtn.click()
+    expect(document.getElementById('browse-filter-clear')).toBeNull()
+    // All chips inactive again.
+    const active = Array.from(document.querySelectorAll('.browse-chip'))
+      .filter(c => c.classList.contains('active'))
+    expect(active).toHaveLength(0)
   })
 
   it('renders the abstract markdown as HTML in the full description and as plain text in the short preview', () => {
@@ -412,8 +822,21 @@ async function flushMicrotasks(): Promise<void> {
 }
 
 describe('showBrowseUI — browse_search emit', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     setupBrowseDOM()
+    window.history.replaceState(null, '', '/')
+    // Drain any pending real-timer callbacks scheduled by an
+    // earlier test's search-input debounce. `scheduleSearchEmit`
+    // lives in a per-showBrowseUI closure, so a previous test's
+    // pending timer can't be cancelled from a new test's
+    // closure — but waiting past the 400 ms debounce window
+    // lets the callback fire (and its emit land BEFORE
+    // resetForTests clears the analytics queue below). Without
+    // this drain the stale emit lands inside this test's
+    // __peek() and breaks the "exactly 1 event" assertions.
+    // Surfaces only under coverage instrumentation timing in CI
+    // (commit 9516823 / PR #135).
+    await new Promise<void>(resolve => setTimeout(resolve, 500))
     localStorage.clear()
     resetForTests()
     setTier('research')
