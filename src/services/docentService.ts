@@ -1499,6 +1499,31 @@ export async function* processMessage(
         `[RELEVANT DATASETS for your query:\n${lines.join('\n')}\nRefer to these by exact title and copy the id field verbatim into <<LOAD:ID>> markers.]\n`
     }
 
+    // Phase 3pt/G follow-up — surface the available tours alongside
+    // the dataset pre-search. Tours aren't indexed by Vectorize
+    // (which backs `search_datasets` / `[RELEVANT DATASETS]`), so
+    // without a parallel injection the LLM only finds them via
+    // the last-ditch `search_catalog` fallback. The list is small
+    // in practice (a handful of sample tours + publisher dock
+    // entries per operator), so we include every visible tour
+    // every turn rather than filtering by query — token cost is
+    // ~40 tokens × N, and the LLM gets full visibility to decide
+    // when a guided experience is appropriate (cold start, "show
+    // me an overview", new visitor, etc.).
+    const tourEntries = datasets.filter(d => d.format === 'tour/json')
+    if (tourEntries.length > 0) {
+      const tourLines = tourEntries.map(t => {
+        const desc = t.abstractTxt
+          ? t.abstractTxt.length > 150
+            ? t.abstractTxt.slice(0, 150) + '…'
+            : t.abstractTxt
+          : ''
+        return `- ${t.id} | ${t.title} | ${desc}`
+      })
+      preSearchContext +=
+        `[AVAILABLE TOURS — guided experiences that walk the user through a topic with narration, camera movements, and dataset loads:\n${tourLines.join('\n')}\nRecommend a tour when the user seems new, asks for an overview, says they don't know where to start, or asks for a guided experience. Surface with the same <<LOAD:ID>> marker as a regular dataset — the SPA routes tour-format rows into the tour engine automatically.]\n`
+    }
+
     const userMessage: LLMMessage = visionActive
       ? { role: 'user', content: [
           { type: 'image_url' as const, image_url: { url: screenshotDataUrl! } },
