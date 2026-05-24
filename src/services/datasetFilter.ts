@@ -255,7 +255,6 @@ export const BASELINE_RESOLVERS: Readonly<Record<string, FacetResolver>> = {
   },
 
   /**
-  /**
    * Has tour — boolean toggle. Surfaces datasets whose `format` is
    * `tour/json`, i.e. publisher Tours and SOS tour files with a
    * curated task sequence (camera moves, narration, dataset

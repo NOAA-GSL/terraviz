@@ -59,9 +59,11 @@ import {
 // ---------------------------------------------------------------------------
 
 /**
- * Facet groups from §6.1 that own a colour token. Keyed by string
- * so federation peer facets (§1.4) can register additional groups
- * without a type change.
+ * Facet groups from §6.1 that own a colour token. The four-value
+ * union is closed today — federation peer facets (§1.4) would
+ * extend this union AND register a new `--facet-color-<group>`
+ * token in `tokens/global.json` in the same commit. Existing
+ * facets reuse one of the four groups via `FACET_TO_GROUP`.
  */
 export type FacetGroup =
   | 'category-content'
@@ -69,10 +71,21 @@ export type FacetGroup =
   | 'time'
   | 'quality-availability'
 
-/** Map from facet name → its display group. Single source of truth
- *  shared with `browseUI.ts`'s `SECTION_FACETS` constant; if a new
- *  baseline facet lands, add it here and in `SECTION_FACETS` in
- *  the same commit. */
+/**
+ * Map from facet name → its display group. Drives the colour
+ * token applied to facet-value and keyword nodes in the Graph
+ * view. Adding a new baseline facet means:
+ *
+ *  - add it here (so the Graph view knows which hue to use)
+ *  - add it to `SECTION_FACETS` in `browseUI.ts` (so it appears
+ *    under the right typed-group section in the chip rail)
+ *
+ * The two maps overlap on the multi-select / range / boolean
+ * facets that surface as chips. This map ALSO carries `keyword`
+ * — which `SECTION_FACETS` deliberately omits (keywords aren't a
+ * chip-rail group in v1; they appear only as graph nodes), so
+ * the two are related but not strictly identical.
+ */
 export const FACET_TO_GROUP: Readonly<Record<string, FacetGroup>> = {
   category: 'category-content',
   keyword: 'category-content',

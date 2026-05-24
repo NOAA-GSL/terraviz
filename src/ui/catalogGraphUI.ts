@@ -231,7 +231,7 @@ export function createCatalogGraph(
   host.innerHTML = ''
   host.classList.add('browse-graph-host')
 
-  // --- Toolbar (min-edge-weight slider + recenter button) ---
+  // --- Toolbar: Show formats checkbox, Recenter button, Legend ---
   // Legend swatches resolve their hue from inline `var(--facet-color-*)`
   // — the legend lives in regular DOM (not cytoscape's canvas) so
   // CSS variables work directly here.
@@ -317,6 +317,11 @@ export function createCatalogGraph(
       if (cy) {
         cy.elements().remove()
       }
+      // Hide the tooltip too — if a node was hovered just before
+      // the filter changed to an empty result, the tooltip would
+      // otherwise sit on top of the empty-state message with
+      // stale content from a node that no longer exists.
+      hideTooltip()
       canvas.setAttribute(
         'aria-label',
         t('browse.graph.region.aria', { count: 0, edgeCount: 0 }),
