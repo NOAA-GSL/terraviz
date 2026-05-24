@@ -6,6 +6,8 @@ import {
   normaliseSourceFormat,
   sosOnlyIdSlug,
   synthesizeSosOnlyDatasets,
+  tourWireToDataset,
+  tourWireToTour,
 } from './dataService'
 import type { Dataset } from '../types'
 
@@ -367,5 +369,60 @@ describe('HIDDEN_TOUR_IDS', () => {
 
   it('does not suppress the built-in Climate Connections tour', () => {
     expect(HIDDEN_TOUR_IDS.has('SAMPLE_TOUR')).toBe(false)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// tourWireToDataset / tourWireToTour — Phase 3pt/G follow-up
+// ---------------------------------------------------------------------------
+describe('tourWireToDataset', () => {
+  const wire = {
+    id: '01HXTOUR000000000000000000',
+    slug: 'hurricane-tour',
+    title: 'Hurricane Tour',
+    description: 'A guided look at hurricane formation.',
+    tour_json_url: 'https://r2.example.com/tours/01HX/published/01HY.json',
+    thumbnail_url: 'https://r2.example.com/tours/01HX/thumb.jpg',
+    visibility: 'public',
+    schema_version: 1,
+    created_at: '2026-05-01T00:00:00.000Z',
+    updated_at: '2026-05-01T00:00:00.000Z',
+    published_at: '2026-05-01T00:00:00.000Z',
+    origin_node: 'NODE000',
+  }
+
+  it('maps the wire shape to a tour/json-format Dataset', () => {
+    const d = tourWireToDataset(wire)
+    expect(d.id).toBe(wire.id)
+    expect(d.format).toBe('tour/json')
+    expect(d.title).toBe(wire.title)
+    expect(d.tourJsonUrl).toBe(wire.tour_json_url)
+    expect(d.dataLink).toBe(wire.tour_json_url)
+    expect(d.abstractTxt).toBe(wire.description)
+    expect(d.thumbnailLink).toBe(wire.thumbnail_url)
+    expect(d.tags).toEqual(['Tours'])
+  })
+
+  it('handles null thumbnail / description defensively', () => {
+    // Note: tours with null `tour_json_url` are filtered out
+    // by `fetchToursFromNode` before this mapper runs (a card
+    // pointing at no URL is unlaunchable); the mapper still
+    // tolerates the field nullably as a defensive layer for
+    // any consumer that bypasses the filter.
+    const d = tourWireToDataset({
+      ...wire,
+      description: null,
+      thumbnail_url: null,
+    })
+    expect(d.abstractTxt).toBeUndefined()
+    expect(d.thumbnailLink).toBeUndefined()
+  })
+
+  it('round-trips through tourWireToTour with the same metadata', () => {
+    const tour = tourWireToTour(wire)
+    expect(tour.id).toBe(wire.id)
+    expect(tour.title).toBe(wire.title)
+    expect(tour.tourJsonUrl).toBe(wire.tour_json_url)
+    expect(tour.publishedAt).toBe(wire.published_at)
   })
 })

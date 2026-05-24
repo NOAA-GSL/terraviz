@@ -3,7 +3,7 @@
  */
 
 import axios from 'axios'
-import type { Dataset, DatasetFormat, DatasetMetadata, EnrichedMetadata, TimeInfo } from '../types'
+import type { Dataset, DatasetFormat, DatasetMetadata, EnrichedMetadata, TimeInfo, Tour } from '../types'
 import { parseISO8601Duration } from '../utils/time'
 import { logger } from '../utils/logger'
 import { reportError } from '../analytics'
@@ -12,6 +12,7 @@ import { apiFetch, getCatalogSource } from './catalogSource'
 const METADATA_URL = 'https://s3.dualstack.us-east-1.amazonaws.com/metadata.sosexplorer.gov/dataset.json'
 const ENRICHED_METADATA_URL = '/assets/sos_dataset_metadata.json'
 const NODE_CATALOG_URL = '/api/v1/catalog'
+const NODE_TOURS_URL = '/api/v1/tours'
 
 /**
  * Tour datasets from the upstream SOS catalog that we suppress from the UI
@@ -316,6 +317,85 @@ function sampleTourBuiltins(): Dataset[] {
 }
 
 /**
+ * Phase 3pt/G follow-up — wire shape of the public tour
+ * discovery endpoint (`GET /api/v1/tours`). Mirrors the
+ * `Tour` UI type but uses snake_case (the server format) so
+ * the conversion lives in `tourWireToDataset` alongside
+ * `wireToDataset`.
+ */
+interface WireTour {
+  id: string
+  slug: string
+  title: string
+  description: string | null
+  tour_json_url: string | null
+  thumbnail_url: string | null
+  visibility: string
+  schema_version: number
+  created_at: string
+  updated_at: string
+  published_at: string
+  origin_node: string
+}
+
+/**
+ * Phase 3pt/G follow-up — convert a publisher-portal tour into
+ * the same Dataset shape `sampleTourBuiltins` produces, so the
+ * Browse UI's existing `format === 'tour/json'` card path
+ * surfaces them without per-surface changes. The `Tour`
+ * interface is the public type a future refactor can switch
+ * the UI over to once the card needs tour-specific affordances
+ * (e.g. a "Tour" badge that doesn't get folded into
+ * `tags: ['Tours']`).
+ */
+export function tourWireToDataset(t: WireTour): Dataset {
+  return {
+    id: t.id,
+    slug: t.slug,
+    title: t.title,
+    format: 'tour/json',
+    // `dataLink` is the legacy field; `tourJsonUrl` is the
+    // tour-engine-preferred field (see `loadDataset` in
+    // `datasetLoader.ts`). Set both to the same resolved URL.
+    dataLink: t.tour_json_url ?? '',
+    tourJsonUrl: t.tour_json_url ?? undefined,
+    organization: undefined,
+    abstractTxt: t.description ?? undefined,
+    thumbnailLink: t.thumbnail_url ?? undefined,
+    // Tag with 'Tours' so the existing browse filter chips include
+    // these alongside SOS sample tours.
+    tags: ['Tours'],
+    // Weight 0 so SOS sample tours (weight 49-50) sort above for
+    // now; once the publisher tour count grows we'll wire a
+    // weight column through the publisher dock.
+    weight: 0,
+    isHidden: false,
+  }
+}
+
+/**
+ * Phase 3pt/G follow-up — convert the same wire shape into the
+ * structured Tour type. Used by the docent and any future
+ * tour-specific UI that needs the unflattened metadata.
+ */
+export function tourWireToTour(t: WireTour): Tour {
+  return {
+    id: t.id,
+    slug: t.slug,
+    title: t.title,
+    description: t.description,
+    tourJsonUrl: t.tour_json_url,
+    thumbnailUrl: t.thumbnail_url,
+    visibility: t.visibility,
+    schemaVersion: t.schema_version,
+    createdAt: t.created_at,
+    updatedAt: t.updated_at,
+    publishedAt: t.published_at,
+    originNode: t.origin_node,
+  }
+}
+
+/**
  * Phase 1f/L — collapse the legacy SOS catalog's non-standard
  * JPEG MIME values to the standard `image/jpeg` at the
  * source-fetch boundary. The publisher API's validator already
@@ -455,13 +535,20 @@ export class DataService {
    */
   private async fetchDatasetsFromNode(): Promise<Dataset[]> {
     logger.info('[DataService] Fetching datasets from node catalog...')
-    const res = await apiFetch(NODE_CATALOG_URL, {
-      headers: { Accept: 'application/json' },
-    })
-    if (!res.ok) {
-      throw new Error(`Node catalog fetch failed: ${res.status} ${res.statusText}`)
+    // Fetch datasets + tours in parallel. Tours are a separate
+    // public endpoint (see `functions/api/v1/tours.ts`) — the
+    // catalog stays dataset-only by design so federation peers
+    // can mirror each surface independently. A tours fetch
+    // failure is non-fatal: browse should still render datasets
+    // even if the tours endpoint is down.
+    const [catalogRes, tourDatasets] = await Promise.all([
+      apiFetch(NODE_CATALOG_URL, { headers: { Accept: 'application/json' } }),
+      this.fetchToursFromNode(),
+    ])
+    if (!catalogRes.ok) {
+      throw new Error(`Node catalog fetch failed: ${catalogRes.status} ${catalogRes.statusText}`)
     }
-    const body = (await res.json()) as { datasets: WireDataset[] }
+    const body = (await catalogRes.json()) as { datasets: WireDataset[] }
     if (!body || !Array.isArray(body.datasets)) {
       throw new Error('Node catalog: unexpected response shape (missing datasets[]).')
     }
@@ -469,11 +556,65 @@ export class DataService {
     const fromNode: Dataset[] = body.datasets.map(wireToDataset)
 
     fromNode.push(...sampleTourBuiltins())
+    fromNode.push(...tourDatasets)
 
     return fromNode
       .map(normaliseSourceFormat)
       .filter(d => !d.isHidden && !HIDDEN_TOUR_IDS.has(d.id) && this.isSupportedDataset(d))
       .sort((a, b) => (b.weight || 0) - (a.weight || 0))
+  }
+
+  /**
+   * Phase 3pt/G follow-up — fetch the publisher-portal tours
+   * from `GET /api/v1/tours` and synthesise them as
+   * `format: 'tour/json'` datasets so the Browse UI's existing
+   * tour-card path surfaces them without a separate render
+   * pass. Returns an empty array on any fetch / parse / shape
+   * failure — tours are additive discovery, not a blocker for
+   * dataset browse.
+   */
+  private async fetchToursFromNode(): Promise<Dataset[]> {
+    try {
+      const res = await apiFetch(NODE_TOURS_URL, {
+        headers: { Accept: 'application/json' },
+      })
+      if (!res.ok) {
+        logger.warn(`[DataService] /api/v1/tours returned ${res.status} ${res.statusText}`)
+        return []
+      }
+      const body = (await res.json()) as { tours: WireTour[] }
+      if (!body || !Array.isArray(body.tours)) {
+        logger.warn('[DataService] /api/v1/tours: unexpected response shape')
+        return []
+      }
+      // Phase 3pt/G follow-up — drop tours the server couldn't
+      // resolve to an HTTPS URL (typically R2_PUBLIC_BASE unset
+      // on the deployment). Surfacing a card the user can't
+      // launch is worse UX than a missing card — the launch
+      // path would call `fetch('')` and confuse on the HTML
+      // response. Operators see the warning and can wire the
+      // bucket up.
+      const usable: WireTour[] = []
+      let droppedNullUrl = 0
+      for (const t of body.tours) {
+        if (!t.tour_json_url) {
+          droppedNullUrl++
+          continue
+        }
+        usable.push(t)
+      }
+      if (droppedNullUrl > 0) {
+        logger.warn(
+          `[DataService] Dropped ${droppedNullUrl} publisher tour(s) with no tour_json_url ` +
+            '(server could not resolve an HTTPS URL — check R2_PUBLIC_BASE).',
+        )
+      }
+      logger.info(`[DataService] Loaded ${usable.length} publisher tours`)
+      return usable.map(tourWireToDataset)
+    } catch (error) {
+      logger.warn('[DataService] /api/v1/tours fetch failed:', error)
+      return []
+    }
   }
 
   /**

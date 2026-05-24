@@ -218,7 +218,7 @@ CREATE TABLE tours (
   created_at         TEXT NOT NULL,
   updated_at         TEXT NOT NULL,
   published_at       TEXT,
-  publisher_id       TEXT,
+  publisher_id       TEXT, retracted_at TEXT,
   FOREIGN KEY (publisher_id) REFERENCES publishers(id)
 );
 
@@ -234,3 +234,4 @@ CREATE INDEX idx_datasets_updated_at ON datasets(updated_at);
 CREATE INDEX idx_datasets_visibility ON datasets(visibility, is_hidden, retracted_at);
 CREATE INDEX idx_featured_datasets_position ON featured_datasets(position);
 CREATE INDEX idx_renditions_dataset ON dataset_renditions(dataset_id);
+CREATE INDEX idx_tours_visibility ON tours(visibility, retracted_at, published_at);
