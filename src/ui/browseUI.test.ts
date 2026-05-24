@@ -22,10 +22,20 @@ vi.mock('../services/dataService', () => ({
 // promise resolution synchronous and deterministic — tests that
 // verify aria-pressed / localStorage / analytics on the toggle
 // don't need (and shouldn't depend on) cytoscape actually loading.
+//
+// `graphMockHandles` is hoisted via `vi.hoisted` so it's defined
+// before the factory below runs (vi.mock hoists). Tests reach into
+// `graphMockHandles.update` to assert on calls. `update.mockClear()`
+// per test keeps assertions independent.
+const graphMockHandles = vi.hoisted(() => ({
+  update: vi.fn(),
+  destroy: vi.fn(),
+  createCatalogGraph: vi.fn(),
+}))
 vi.mock('./catalogGraphUI', () => ({
-  createCatalogGraph: vi.fn(() => ({
-    update: vi.fn(),
-    destroy: vi.fn(),
+  createCatalogGraph: graphMockHandles.createCatalogGraph.mockImplementation(() => ({
+    update: graphMockHandles.update,
+    destroy: graphMockHandles.destroy,
   })),
 }))
 
@@ -1103,5 +1113,74 @@ describe('view-mode toggle', () => {
     expect(evt.view_mode).toBe('graph')
     expect(evt.from).toBe('cards')
     expect(evt.result_count_bucket).toBe('1-10') // 2 visible cards
+  })
+
+  it('refreshes the Graph view when a chip filter changes (PR #137 regression)', async () => {
+    // Regression for the stale-closure bug surfaced in PR #137
+    // review: chip rail's click listener captured the FIRST
+    // showBrowseUI call's `applyState`, but the catalog↔sphere
+    // tab handler in main.ts re-called showBrowseUI on every
+    // return-to-catalog. The fresh closure created a fresh cytoscape
+    // instance attached to the same `#browse-graph` container,
+    // implicitly orphaning the first closure's cy. The old
+    // applyState (still bound to the rail listener) then updated
+    // the orphaned cy — invisible to the user.
+    //
+    // The fix is in showBrowseUI's top: re-calls short-circuit
+    // before re-creating the closure, so the single live
+    // controller stays bound to the listener AND remains
+    // attached to the visible canvas.
+    setupBrowseDOM()
+    graphMockHandles.createCatalogGraph.mockClear()
+    graphMockHandles.update.mockClear()
+    localStorage.setItem(VIEW_MODE_KEY, 'graph')
+
+    // First showBrowseUI — graph view restored from localStorage.
+    showBrowseUI(
+      [
+        makeDataset({ id: 'a', tags: ['Air'] }),
+        makeDataset({ id: 'b', tags: ['Water'] }),
+      ],
+      makeCallbacks(),
+    )
+    await new Promise<void>(resolve => setTimeout(resolve, 10))
+    expect(graphMockHandles.createCatalogGraph).toHaveBeenCalledTimes(1)
+
+    // Simulate the catalog↔sphere tab path: re-call showBrowseUI.
+    // With the fix, this short-circuits — no second
+    // createCatalogGraph call. Without the fix, this would create
+    // a second controller and orphan the first.
+    showBrowseUI(
+      [
+        makeDataset({ id: 'a', tags: ['Air'] }),
+        makeDataset({ id: 'b', tags: ['Water'] }),
+      ],
+      makeCallbacks(),
+    )
+    await new Promise<void>(resolve => setTimeout(resolve, 10))
+    // CRITICAL: only ONE controller should ever have been created
+    // for this overlay. Two means we've orphaned the cytoscape
+    // instance attached to the canvas — pre-fix behavior that
+    // made chip clicks invisible.
+    expect(graphMockHandles.createCatalogGraph).toHaveBeenCalledTimes(1)
+
+    graphMockHandles.update.mockClear()
+
+    // Now click the Air chip. The handler funnels through the
+    // single live applyState and calls update on the single
+    // live controller.
+    const airChip = Array.from(document.querySelectorAll<HTMLElement>('.browse-chip'))
+      .find(el => el.textContent === 'Air')
+    expect(airChip).toBeDefined()
+    airChip!.click()
+
+    expect(graphMockHandles.update).toHaveBeenCalledTimes(1)
+    const lastCall = graphMockHandles.update.mock.calls[0][0] as {
+      filterState: Record<string, { kind: string; values?: readonly string[] }>
+    }
+    expect(lastCall.filterState.category).toEqual({
+      kind: 'multi-select',
+      values: ['Air'],
+    })
   })
 })

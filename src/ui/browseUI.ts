@@ -572,12 +572,36 @@ export function showBrowseUI(
   const overlay = document.getElementById('browse-overlay')
   if (!overlay) return
   const wasHidden = overlay.classList.contains('hidden')
+  const wasCollapsed = overlay.classList.contains('collapsed')
   overlay.classList.remove('hidden')
+  overlay.classList.remove('collapsed')
   document.body.classList.add('browse-open')
   closeDownloadPanel()
-  if (wasHidden) {
+  if (wasHidden || wasCollapsed) {
     notifyBrowseOpened(source)
   }
+
+  // Re-call short-circuit. The chip rail, search input, sort
+  // buttons and view-mode toggle wire their listeners once via
+  // `dataset.wired` checks — those listeners CAPTURE this
+  // function's closure-local `filterState`, `viewMode`,
+  // `graphController`, and `applyState`. A second showBrowseUI
+  // call (e.g. via main.ts's catalog↔sphere tab handler, which
+  // re-runs showBrowseUI after a Sphere round-trip) creates a
+  // fresh closure but the listeners stay bound to the original
+  // one, so chip clicks would call the OLD applyState — reading
+  // a stale `viewMode='cards'` and `graphController=null` even
+  // though the user has since toggled into Graph view. That
+  // exact bug surfaced in PR #137 review ("clicking a chip
+  // doesn't update the graph").
+  //
+  // The fix: subsequent calls only un-hide the overlay (above)
+  // and emit `browse_opened`; rendering and listener wiring are
+  // skipped. The original openBrowsePanel call site in main.ts
+  // already gated on `browseInitialized`, but other call sites
+  // (catalog-empty boot, catalog↔sphere tab) didn't. Centralising
+  // the gate here makes the invariant uniform regardless of caller.
+  if (overlay.dataset.browseInitialized === 'true') return
 
   // Wire the in-header help trigger once (idempotent)
   const helpBtn = document.getElementById('help-trigger-browse')
