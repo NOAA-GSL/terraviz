@@ -171,6 +171,39 @@ export interface BuildGraphOptions {
    * the encoding.
    */
   expandedKeywordParents?: ReadonlySet<string>
+  /**
+   * Auto-expand the top-N most-populated keywords under EVERY
+   * Category facet-value cluster, in addition to anything listed
+   * in `expandedKeywordParents`. Zero (the default) leaves
+   * keyword expansion entirely to explicit user gestures —
+   * matches the original §6.7 "collapse keywords by default"
+   * scale rule.
+   *
+   * Reflects the GSL Depot Explorer reference layout: each
+   * Category hub auto-radiates its top keywords so the user can
+   * skim co-occurrence structure without clicking into every
+   * cluster individually. Capped per-cluster (not globally) so
+   * a sparsely-populated Category still surfaces its top few
+   * keywords. Keywords whose normalised value matches the
+   * parent's tag are suppressed (the tag-fallback path in the
+   * keyword resolver duplicates the tag into the keyword set;
+   * we don't want "Water" radiating "Water" back to itself).
+   */
+  autoExpandKeywordsPerCluster?: number
+  /**
+   * Render Format-bucket facet-value nodes (video / image /
+   * tour / other) as first-class clusters with co-occurrence
+   * edges to Category. Default `false` — feedback during PR #137
+   * was that Format clutters the discovery view without adding
+   * a question the user is asking; the toggle is opt-in via a
+   * graph-toolbar checkbox.
+   *
+   * When `false`, Format is omitted entirely from the graph;
+   * the chip rail remains the surface for Format filtering.
+   * Co-occurrence edges (Category ↔ Format) follow the toggle —
+   * they're emitted only when Format nodes are too.
+   */
+  includeFormatNodes?: boolean
   /** Resolvers passed to `filterDatasets` — defaults to the §6.1
    *  baseline plus the search-only `period:` resolver, matching
    *  what `browseUI.ts` uses. */
@@ -242,6 +275,8 @@ export function buildGraph(
 ): Graph {
   const minEdgeWeight = Math.max(1, options.minEdgeWeight ?? 2)
   const expanded = options.expandedKeywordParents ?? EMPTY_SET
+  const autoExpandPerCluster = Math.max(0, options.autoExpandKeywordsPerCluster ?? 0)
+  const includeFormatNodes = options.includeFormatNodes ?? false
   const resolvers = options.resolvers ?? DEFAULT_RESOLVERS
 
   const parsed = parseSearchQuery(searchQuery)
@@ -367,26 +402,86 @@ export function buildGraph(
   }
 
   emitFacetValueNodes('category', categoryMembers, id => id.slice('facet:category:'.length))
-  emitFacetValueNodes('format', formatMembers, id => id.slice('facet:format:'.length))
+  if (includeFormatNodes) {
+    emitFacetValueNodes('format', formatMembers, id => id.slice('facet:format:'.length))
+  }
 
-  // 4. Keyword nodes — only when the caller has expanded their
-  //    parent facet-value. A keyword is surfaced when AT LEAST one
-  //    expanded parent has overlap with it (the keyword has at
-  //    least one dataset in common with the parent's membership).
-  if (expanded.size > 0) {
+  // 4. Resolve the full set of facet-value parents whose keywords
+  //    should surface. The union is:
+  //      a) explicit user-driven expansions (`expanded`), AND
+  //      b) auto-expansions: top-N keywords by intra-cluster
+  //         membership for EVERY Category facet-value, when
+  //         `autoExpandKeywordsPerCluster > 0`.
+  //
+  //    Auto-expansion is per-cluster (not global) so a small
+  //    Category still surfaces its few characteristic keywords.
+  //    Format clusters aren't auto-expanded — when Format nodes
+  //    are off (the default) they don't exist, and when they're
+  //    on the user typically wants to read Category↔Format edge
+  //    structure, not Format-keyword detail.
+  const effectivelyExpanded = new Set<string>(expanded)
+  const autoExpansionsPerParent = new Map<string, Set<string>>()
+  if (autoExpandPerCluster > 0) {
+    for (const [parentId, parentMembers] of categoryMembers) {
+      const parentTag = parentId.slice('facet:category:'.length).toLowerCase()
+      const scored: Array<{ keywordId: string; overlap: number; label: string }> = []
+      for (const [keywordId, kwMembers] of keywordMembers) {
+        // Suppress the tag-fallback echo — `keyword:water` next to
+        // `facet:category:Water` is redundant. The keyword resolver
+        // synthesises the tag into the keyword set when
+        // `enriched.keywords` is missing, so the dedupe lives here.
+        if (keywordId === `keyword:${parentTag}`) continue
+        let overlap = 0
+        const [small, large] = parentMembers.size <= kwMembers.size
+          ? [parentMembers, kwMembers]
+          : [kwMembers, parentMembers]
+        for (const id of small) if (large.has(id)) overlap++
+        if (overlap <= 0) continue
+        scored.push({
+          keywordId,
+          overlap,
+          label: keywordDisplay.get(keywordId) ?? keywordId,
+        })
+      }
+      scored.sort((a, b) => {
+        if (b.overlap !== a.overlap) return b.overlap - a.overlap
+        return a.label.localeCompare(b.label)
+      })
+      const top = new Set(
+        scored.slice(0, autoExpandPerCluster).map(s => s.keywordId),
+      )
+      autoExpansionsPerParent.set(parentId, top)
+      if (top.size > 0) effectivelyExpanded.add(parentId)
+    }
+  }
+
+  // 5. Keyword nodes — surfaced when at least one parent is
+  //    "effectively expanded" (explicit user expansion or
+  //    auto-expansion picked them as a top-N child). A keyword
+  //    only connects to the parents that actually selected it,
+  //    so auto-expansion doesn't accidentally pull every
+  //    keyword into every cluster.
+  if (effectivelyExpanded.size > 0) {
     const parentMembership = new Map<string, Set<string>>()
-    for (const parentId of expanded) {
+    for (const parentId of effectivelyExpanded) {
       const members = categoryMembers.get(parentId) ?? formatMembers.get(parentId)
       if (members) parentMembership.set(parentId, members)
     }
 
     for (const [keywordId, datasetIds] of keywordMembers) {
-      // Find every expanded parent whose membership intersects this
-      // keyword. A keyword shared across two expanded clusters
-      // connects to both — single global keyword node, multiple
-      // parent links.
+      // Find every parent whose membership intersects this keyword
+      // AND whose expansion picked it. Two qualification paths:
+      //   (a) parent is explicitly in `expanded` (user double-click)
+      //       → ANY overlapping keyword qualifies under it
+      //   (b) parent had auto-expansion run → only its top-N picks
+      //       qualify (avoids 723 keywords flooding the canvas)
+      // A keyword qualifying under both paths simply connects to
+      // both parents — same global node, multiple parent links.
       const matchingParents: Array<{ parentId: string; overlap: Set<string> }> = []
       for (const [parentId, parentMembers] of parentMembership) {
+        const autoPicks = autoExpansionsPerParent.get(parentId)
+        const isExplicitParent = expanded.has(parentId)
+        if (!isExplicitParent && (!autoPicks || !autoPicks.has(keywordId))) continue
         const overlap = new Set<string>()
         for (const id of datasetIds) {
           if (parentMembers.has(id)) overlap.add(id)
@@ -436,29 +531,33 @@ export function buildGraph(
     }
   }
 
-  // 5. Co-occurrence edges — Category ↔ Format only. Within-facet
+  // 6. Co-occurrence edges — Category ↔ Format only. Within-facet
   //    co-occurrence isn't emitted (every dataset has exactly one
   //    Format bucket, so within-Format co-occurrence is always 0;
   //    within-Category co-occurrence is dominated by trivially-
-  //    common combinations that crowd the layout).
-  for (const [catId, catMembers] of categoryMembers) {
-    for (const [fmtId, fmtMembers] of formatMembers) {
-      let overlap = 0
-      // Iterate the smaller set for a cheaper intersection.
-      const [small, large] = catMembers.size <= fmtMembers.size
-        ? [catMembers, fmtMembers]
-        : [fmtMembers, catMembers]
-      for (const id of small) {
-        if (large.has(id)) overlap++
+  //    common combinations that crowd the layout). Skipped
+  //    entirely when Format nodes aren't rendered — an edge to a
+  //    non-existent node would dangle.
+  if (includeFormatNodes) {
+    for (const [catId, catMembers] of categoryMembers) {
+      for (const [fmtId, fmtMembers] of formatMembers) {
+        let overlap = 0
+        // Iterate the smaller set for a cheaper intersection.
+        const [small, large] = catMembers.size <= fmtMembers.size
+          ? [catMembers, fmtMembers]
+          : [fmtMembers, catMembers]
+        for (const id of small) {
+          if (large.has(id)) overlap++
+        }
+        if (overlap < minEdgeWeight) continue
+        edges.push({
+          id: edgeId('co-occurrence', catId, fmtId),
+          kind: 'co-occurrence',
+          source: catId,
+          target: fmtId,
+          weight: overlap,
+        })
       }
-      if (overlap < minEdgeWeight) continue
-      edges.push({
-        id: edgeId('co-occurrence', catId, fmtId),
-        kind: 'co-occurrence',
-        source: catId,
-        target: fmtId,
-        weight: overlap,
-      })
     }
   }
 
