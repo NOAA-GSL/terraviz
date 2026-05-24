@@ -4,8 +4,10 @@
  * Phase 4 §6.7 of `docs/WEB_CATALOG_FEATURES_PLAN.md`. The pure
  * data transform lives in `src/services/catalogGraph.ts`; this
  * module owns the canvas, the cytoscape instance, the
- * interaction handlers, and the in-graph controls (min-edge-weight
- * slider, recenter button, expand/collapse keyword affordance).
+ * interaction handlers, and the in-graph controls — currently a
+ * "Show formats" checkbox, a "Recenter" button, and the colour
+ * legend. Keyword expand/collapse is gesture-driven (double-
+ * click on a facet-value node) with no separate button surface.
  *
  * Lazy-loaded — `browseUI.ts` imports `createCatalogGraph` only
  * when the user first toggles into Graph view, so the default

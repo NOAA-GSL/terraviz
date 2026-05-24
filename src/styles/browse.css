@@ -661,13 +661,17 @@
     color: var(--color-text-secondary);
 }
 
-/* Mobile: hide the view-mode toggle entirely. The JS also hides
-   it but the CSS guarantees the surface even before initialisation. */
+/* Mobile: hide the view-mode toggle entirely. The JS also handles
+   this via the matchMedia('(max-width: 768px)') listener in
+   browseUI.ts, but the CSS guarantees the toggle stays hidden
+   before initialisation finishes. We deliberately do NOT hide
+   #browse-graph here: the JS forces viewMode='cards' when the
+   viewport narrows, which sets the grid visible. A CSS rule that
+   hid the graph independently would race the JS and produce a
+   blank overlay when the user resized from desktop→narrow with
+   Graph view active. */
 @media (max-width: 768px) {
     #browse-view-mode {
-        display: none;
-    }
-    #browse-graph {
         display: none;
     }
 }

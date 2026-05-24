@@ -663,12 +663,26 @@ export function showBrowseUI(
 
   type SortKey = 'relevance' | 'newest' | 'az'
   let activeSort: SortKey = 'relevance'
-  // View-mode (§6.7). Hidden on mobile — a force-directed graph on
-  // a 6-inch viewport is unusable; the toggle simply never renders
-  // there and Cards remains the only view. Boot persists from
-  // localStorage; a stored `'graph'` on a phone gracefully falls
-  // back to Cards because the toggle won't surface to flip it.
-  let viewMode: ViewMode = callbacks.isMobile ? 'cards' : loadViewMode()
+  // Live narrow-viewport check. Graph view is unusable below 768px
+  // (force-directed layout + pinch-zoom on a 6-inch screen), so the
+  // toggle hides and the view forces back to Cards. Earlier shape
+  // gated on `callbacks.isMobile` alone — a boot-time flag — which
+  // desynced from the rendered layout the moment the user resized
+  // across the breakpoint on desktop. matchMedia gives a live
+  // signal; we union it with `callbacks.isMobile` so the Tauri
+  // mobile shell (no DOM resize) still gets the right default.
+  const narrowVpQuery = typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+    ? window.matchMedia('(max-width: 768px)')
+    : null
+  const isNarrowViewport = (): boolean => {
+    if (narrowVpQuery?.matches) return true
+    return callbacks.isMobile
+  }
+  // View-mode (§6.7). Initial value falls back to Cards when the
+  // viewport is currently narrow so a `viewMode='graph'` left in
+  // localStorage from a desktop session doesn't boot into an
+  // unusable graph on a phone.
+  let viewMode: ViewMode = isNarrowViewport() ? 'cards' : loadViewMode()
   // Lazy-mounted graph controller — populated on first toggle into
   // Graph view. Module-loaded once per overlay instance; the
   // controller itself handles re-renders on filter changes.
@@ -1045,7 +1059,7 @@ export function showBrowseUI(
    *  mobile so a phone never sees a graph option. */
   function renderViewModeBar(): void {
     if (!viewModeBar) return
-    if (callbacks.isMobile) {
+    if (isNarrowViewport()) {
       viewModeBar.classList.add('hidden')
       viewModeBar.setAttribute('aria-hidden', 'true')
       viewModeBar.innerHTML = ''
@@ -1242,6 +1256,39 @@ export function showBrowseUI(
       void applyViewMode()
     })
     viewModeBar.dataset.wired = 'true'
+  }
+
+  // Live viewport listener — when the user resizes across the 768px
+  // breakpoint, snap the view-mode state back to Cards if they were
+  // in Graph and the viewport is now narrow. Without this the
+  // overlay would show neither Cards (hidden by JS) nor Graph
+  // (the toggle is gone) — a blank surface. Also re-render the
+  // toggle bar so it appears / disappears symmetrically with the
+  // breakpoint.
+  // Type alias for the dedupe + legacy listener path.
+  type NarrowVpQuery = MediaQueryList & {
+    __terravizWired?: boolean
+    addListener?: (cb: () => void) => void
+  }
+  const narrowVpQueryTyped = narrowVpQuery as NarrowVpQuery | null
+  if (narrowVpQueryTyped && !narrowVpQueryTyped.__terravizWired) {
+    const onNarrowChange = (): void => {
+      renderViewModeBar()
+      if (isNarrowViewport() && viewMode === 'graph') {
+        viewMode = 'cards'
+        saveViewMode(viewMode)
+        void applyViewMode()
+      }
+    }
+    // Newer browsers use addEventListener; older Safari falls back
+    // to the deprecated addListener. The Tauri webview on iOS 14
+    // still needs the deprecated form.
+    if (typeof narrowVpQueryTyped.addEventListener === 'function') {
+      narrowVpQueryTyped.addEventListener('change', onNarrowChange)
+    } else if (typeof narrowVpQueryTyped.addListener === 'function') {
+      narrowVpQueryTyped.addListener(onNarrowChange)
+    }
+    narrowVpQueryTyped.__terravizWired = true
   }
 
   // ----- Download buttons (unchanged from previous shape) -----

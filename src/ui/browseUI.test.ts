@@ -1035,6 +1035,41 @@ describe('view-mode toggle', () => {
     expect(document.getElementById('browse-graph')!.classList.contains('hidden')).toBe(true)
   })
 
+  it('falls back to Cards when window.matchMedia reports a narrow viewport even if callbacks.isMobile=false', () => {
+    // Pre-fix, the gate was just `callbacks.isMobile` (a boot-time
+    // flag from main.ts), so a desktop user who resized the
+    // window narrower would leave the toggle visible AND the
+    // graph in JS state but the CSS would hide #browse-graph
+    // entirely — blank overlay. The fix unions matchMedia with
+    // callbacks.isMobile so the boot path picks the right surface.
+    setupBrowseDOM()
+    localStorage.setItem(VIEW_MODE_KEY, 'graph')
+    // Stub matchMedia BEFORE showBrowseUI so isNarrowViewport()
+    // picks it up at boot.
+    const originalMatchMedia = window.matchMedia
+    window.matchMedia = ((query: string) => ({
+      media: query,
+      matches: query.includes('max-width: 768px'),
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(() => false),
+    })) as unknown as typeof window.matchMedia
+    try {
+      showBrowseUI(
+        [makeDataset({ id: 'a', tags: ['Air'] })],
+        makeCallbacks({ isMobile: false }),
+      )
+      const bar = document.getElementById('browse-view-mode')!
+      expect(bar.classList.contains('hidden')).toBe(true)
+      expect(document.getElementById('browse-grid')!.classList.contains('hidden')).toBe(false)
+    } finally {
+      window.matchMedia = originalMatchMedia
+    }
+  })
+
   it('restores `graph` from localStorage and marks Graph button active', () => {
     setupBrowseDOM()
     localStorage.setItem(VIEW_MODE_KEY, 'graph')

@@ -124,9 +124,19 @@ export interface FacetValueNode extends GraphNodeBase {
 export interface KeywordNode extends GraphNodeBase {
   kind: 'keyword'
   value: string
-  /** Facet-value node ID this keyword was expanded under. Drives
-   *  the hub-and-spoke layout — keywords cluster radially around
-   *  their parent. */
+  /**
+   * Anchor facet-value node ID — the FIRST parent encountered
+   * when surfacing this keyword. Drives the keyword's display
+   * group (so it inherits the parent's hue) and gives the layout
+   * a hint about where to place the node.
+   *
+   * A keyword can be a member of MULTIPLE facet-value clusters
+   * (e.g. "hurricane" appears under both Water and Air). All
+   * such relationships are expressed as separate membership
+   * edges in `Graph.edges`; this field only records the anchor.
+   * Callers reasoning about "all parents of this keyword" must
+   * walk the edges, not read this property.
+   */
   parentFacetValueId: string
 }
 
