@@ -32,6 +32,7 @@ export interface TourRow {
   created_at: string
   updated_at: string
   published_at: string | null
+  retracted_at: string | null
   publisher_id: string | null
 }
 
@@ -386,17 +387,142 @@ export async function publishTour(
     httpMetadata: { contentType: 'application/json; charset=utf-8' },
   })
   const now = new Date().toISOString()
+  // Clear retracted_at so re-publishing a previously retracted
+  // tour lifts it back into the public list. The prior immutable
+  // R2 snapshot is left in place (federation peers may still
+  // resolve it) — `tour_json_ref` now points at the new snapshot.
   await env.CATALOG_DB!
     .prepare(
-      'UPDATE tours SET tour_json_ref = ?, published_at = ?, updated_at = ? WHERE id = ?',
+      'UPDATE tours SET tour_json_ref = ?, published_at = ?, retracted_at = NULL, updated_at = ? WHERE id = ?',
     )
     .bind(`r2:${publishedKey}`, now, now, id)
     .run()
+  await invalidateSnapshot(env)
   const updated = await env.CATALOG_DB!
     .prepare('SELECT * FROM tours WHERE id = ?')
     .bind(id)
     .first<TourRow>()
   return { ok: true, tour: updated!, publishId }
+}
+
+/**
+ * Phase 3pt/G follow-up — retract a published tour. Sets the
+ * `retracted_at` timestamp; leaves `published_at` and
+ * `tour_json_ref` alone so the row preserves the "was published"
+ * history and so a republish reuses the existing snapshot URL
+ * shape. The immutable published blob in R2 is left in place
+ * — federation peers may still hold the URL and a republish
+ * is a non-destructive lift back into the public list.
+ *
+ * Refuses to retract a row that is either:
+ *   - never published (`published_at IS NULL`) — nothing to take
+ *     down; the publisher wants `deleteTour` instead
+ *   - already retracted (`retracted_at IS NOT NULL`) — idempotent
+ *     no-op surfaced as 409 so the UI can show "already retracted"
+ *
+ * Snapshot invalidation runs unconditionally on success so the
+ * public catalog drops the row on the next read.
+ */
+export async function retractTour(
+  env: CatalogEnv,
+  publisher: PublisherRow,
+  id: string,
+): Promise<
+  | { ok: true; tour: TourRow }
+  | { ok: false; status: number; error: string; message: string }
+> {
+  const row = await getTourForPublisher(env.CATALOG_DB!, publisher, id)
+  if (!row) {
+    return { ok: false, status: 404, error: 'not_found', message: `Tour ${id} not found.` }
+  }
+  if (!row.published_at) {
+    return {
+      ok: false,
+      status: 409,
+      error: 'not_published',
+      message: `Tour ${id} has not been published.`,
+    }
+  }
+  if (row.retracted_at) {
+    return {
+      ok: false,
+      status: 409,
+      error: 'already_retracted',
+      message: `Tour ${id} is already retracted.`,
+    }
+  }
+  const now = new Date().toISOString()
+  await env.CATALOG_DB!
+    .prepare('UPDATE tours SET retracted_at = ?, updated_at = ? WHERE id = ?')
+    .bind(now, now, id)
+    .run()
+  await invalidateSnapshot(env)
+  const updated = await env.CATALOG_DB!
+    .prepare('SELECT * FROM tours WHERE id = ?')
+    .bind(id)
+    .first<TourRow>()
+  return { ok: true, tour: updated! }
+}
+
+/**
+ * Phase 3pt/G follow-up — list publicly discoverable tours for
+ * the catalog-style `GET /api/v1/tours` endpoint. Filters:
+ *   - `published_at IS NOT NULL AND retracted_at IS NULL` — only
+ *     live, non-retracted rows
+ *   - visibility honours the caller's auth tier:
+ *     * 'public' — anyone (anonymous + signed-in + federated)
+ *     * 'federated' — signed-in viewers or trusted federation peers
+ *     * 'restricted' — signed-in viewers only
+ *     * 'private' — never surfaced here (publisher-only via
+ *       /publish/tours)
+ *
+ * Cursor pagination matches `listToursForPublisher` — ULID
+ * lexicographic order over `id`, `id < ?` for next-page.
+ */
+export type TourViewerTier = 'anonymous' | 'signed_in' | 'federated'
+
+export interface ListPublicToursResult {
+  tours: TourRow[]
+  next_cursor: string | null
+}
+
+export async function listPublicTours(
+  env: CatalogEnv,
+  options: { limit: number; cursor?: string; viewer: TourViewerTier },
+): Promise<ListPublicToursResult> {
+  const db = env.CATALOG_DB!
+  // Build the visibility allowlist for this viewer tier.
+  // Anonymous: only 'public'. Signed-in: public + restricted +
+  // federated (a signed-in viewer can see everything except
+  // private rows, which never appear on this endpoint anyway).
+  // Federated peers (Phase 4) see public + federated.
+  const allowed: string[] =
+    options.viewer === 'anonymous'
+      ? ['public']
+      : options.viewer === 'federated'
+        ? ['public', 'federated']
+        : ['public', 'federated', 'restricted']
+  const placeholders = allowed.map(() => '?').join(', ')
+  const fetchLimit = options.limit + 1
+  const cursorBound = options.cursor && options.cursor.length > 0 ? options.cursor : null
+  const baseWhere = `visibility IN (${placeholders}) AND published_at IS NOT NULL AND retracted_at IS NULL`
+  const sql = cursorBound
+    ? `SELECT * FROM tours WHERE ${baseWhere} AND id < ? ORDER BY id DESC LIMIT ?`
+    : `SELECT * FROM tours WHERE ${baseWhere} ORDER BY id DESC LIMIT ?`
+  const binds = cursorBound
+    ? [...allowed, cursorBound, fetchLimit]
+    : [...allowed, fetchLimit]
+  let rows =
+    ((await db
+      .prepare(sql)
+      .bind(...binds)
+      .all<TourRow>()).results ?? []) as TourRow[]
+  let next_cursor: string | null = null
+  if (rows.length > options.limit) {
+    next_cursor = rows[options.limit - 1]?.id ?? null
+    rows = rows.slice(0, options.limit)
+  }
+  return { tours: rows, next_cursor }
 }
 
 /**
