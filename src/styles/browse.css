@@ -772,6 +772,33 @@ body.catalog-empty #browse-overlay {
     border-inline-start: none;
 }
 
+/* Catalog mode at desktop widths — the overlay spans the whole
+   viewport so the filter rail's single-column stack leaves a lot
+   of unused space to the right of each section. Lay the typed-
+   group sections out as a 2-column grid so two collapsed-but-
+   shorter sections (Format, Quality) can sit beside taller ones
+   (Category's chip row, Time's range inputs) instead of stacking
+   awkwardly. Gated to `min-width: 769px` so the existing mobile
+   single-column + horizontal-scroll behaviour (accessibility.css
+   §.browse-chip-row) is preserved at narrow viewports. Outside
+   `body.catalog-empty` the overlay is the narrow side panel
+   where 2 columns wouldn't fit. */
+@media (min-width: 769px) {
+    body.catalog-empty #browse-filter-rail {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        column-gap: 1.5rem;
+        row-gap: 0.5rem;
+    }
+
+    /* The clear-all button sits below the four sections; span both
+       columns and right-align so it stays visually anchored to
+       the rail's trailing edge. */
+    body.catalog-empty .browse-filter-clear-wrap {
+        grid-column: 1 / -1;
+    }
+}
+
 /* The browse-overlay close button assumes there's a globe to fall
    back to. In catalog-empty mode there isn't one, so hide it
    until §3.2 introduces the catalog↔sphere tab control. */
