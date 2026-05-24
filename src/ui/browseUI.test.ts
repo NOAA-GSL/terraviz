@@ -698,9 +698,21 @@ async function flushMicrotasks(): Promise<void> {
 }
 
 describe('showBrowseUI — browse_search emit', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     setupBrowseDOM()
     window.history.replaceState(null, '', '/')
+    // Drain any pending real-timer callbacks scheduled by an
+    // earlier test's search-input debounce. `scheduleSearchEmit`
+    // lives in a per-showBrowseUI closure, so a previous test's
+    // pending timer can't be cancelled from a new test's
+    // closure — but waiting past the 400 ms debounce window
+    // lets the callback fire (and its emit land BEFORE
+    // resetForTests clears the analytics queue below). Without
+    // this drain the stale emit lands inside this test's
+    // __peek() and breaks the "exactly 1 event" assertions.
+    // Surfaces only under coverage instrumentation timing in CI
+    // (commit 9516823 / PR #135).
+    await new Promise<void>(resolve => setTimeout(resolve, 500))
     localStorage.clear()
     resetForTests()
     setTier('research')
