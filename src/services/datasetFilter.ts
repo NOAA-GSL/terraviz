@@ -78,8 +78,28 @@ export type FacetResolver = (predicate: FacetPredicate, dataset: Dataset) => boo
  * toggle defaults off so today's 204-dataset browse surface
  * doesn't suddenly grow to 520 without consent (§6.4). Other
  * facets land here if they need the same polarity.
+ *
+ * Wired generically — {@link filterDatasets} reads from this map
+ * to enforce the exclusion when the corresponding facet is
+ * absent from `state`. Adding a new inverse-default facet means
+ * adding its name here AND its exclusion test to
+ * {@link INVERSE_DEFAULT_EXCLUSIONS}; the engine handles the
+ * rest.
  */
 export const INVERSE_DEFAULT_FACETS = new Set<string>(['includeSos'])
+
+/**
+ * Predicate that returns true when a dataset should be excluded
+ * under the inverse-default rule for a given facet (i.e. when
+ * the user has not opted in). The map is keyed by facet name and
+ * must stay in lockstep with {@link INVERSE_DEFAULT_FACETS}.
+ *
+ * `includeSos` excludes synthesised SOS-only rows so today's
+ * 204-dataset surface doesn't grow without consent (§6.4).
+ */
+export const INVERSE_DEFAULT_EXCLUSIONS: Readonly<Record<string, (dataset: Dataset) => boolean>> = {
+  includeSos: (dataset) => dataset.availableFor === 'SOS',
+}
 
 /**
  * Coarse format buckets surfaced as user-facing chips. The
@@ -318,12 +338,27 @@ export function filterDatasets(
   const activeEntries = Object.entries(state).filter(
     (entry): entry is [string, FacetPredicate] => entry[1] != null,
   )
-  const sosOptIn = state.includeSos != null
+  // Pre-compute which inverse-default facets are still in their
+  // "absent" state so the per-row loop can iterate a small array
+  // instead of re-checking presence for every row. Adding a new
+  // inverse-default facet automatically participates here via
+  // INVERSE_DEFAULT_FACETS + INVERSE_DEFAULT_EXCLUSIONS — no
+  // engine change required.
+  const inverseDefaultExclusions: Array<(d: Dataset) => boolean> = []
+  for (const facet of INVERSE_DEFAULT_FACETS) {
+    if (state[facet] != null) continue
+    const exclude = INVERSE_DEFAULT_EXCLUSIONS[facet]
+    if (exclude) inverseDefaultExclusions.push(exclude)
+  }
 
   const result: Dataset[] = []
   for (const dataset of datasets) {
     if (dataset.isHidden) continue
-    if (!sosOptIn && dataset.availableFor === 'SOS') continue
+    let excludedByInverseDefault = false
+    for (const exclude of inverseDefaultExclusions) {
+      if (exclude(dataset)) { excludedByInverseDefault = true; break }
+    }
+    if (excludedByInverseDefault) continue
     if (!matchesSearchQuery(dataset, query)) continue
 
     let satisfies = true

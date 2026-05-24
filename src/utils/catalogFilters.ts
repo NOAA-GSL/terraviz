@@ -75,8 +75,13 @@ const URL_KEY_TO_FACET: Readonly<Record<string, string>> = Object.fromEntries(
  *    get a param.
  *  - `range` → `min-max` (`da=2018-2024`). Half-open ranges
  *    encode as `2018-` or `-2024`. Both bounds absent → no param.
- *  - `bbox` → `n,s,e,w` four-tuple (`bb=10,-10,20,-20`). Forward-
- *    compat for the Map view (§6.9).
+ *
+ * The §6.9 Map view's `bbox` predicate isn't encoded yet — it
+ * lands alongside the `geographicRegion` facet in the Map view
+ * PR (new URL key + decoder added there). The engine's
+ * {@link FacetPredicate} union carries the `bbox` shape today
+ * so the type surface stays forward-compat without dead URL
+ * code in this module.
  *
  * Unknown facet keys (e.g. peer facets a future client knows
  * about but this one doesn't) are dropped on encode. Decode is
@@ -119,7 +124,10 @@ function encodePredicate(predicate: FacetPredicate): string | null {
       return `${min}-${max}`
     }
     case 'bbox':
-      return `${predicate.n},${predicate.s},${predicate.e},${predicate.w}`
+      // §6.9 Map view will register a `geographicRegion` URL key
+      // and wire encoding here. Until then the bbox predicate has
+      // no URL representation and is dropped on encode.
+      return null
   }
 }
 

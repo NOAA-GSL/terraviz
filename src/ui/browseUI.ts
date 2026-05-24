@@ -850,10 +850,11 @@ export function showBrowseUI(
   }
   if (searchInput) {
     if (searchQuery && !searchInput.value) {
-      // Restore the search box from URL on boot. Lowercasing
-      // happens on the way in via the URL decode; the input
-      // value uses the lowercased form so the user can edit
-      // from where they left off.
+      // Restore the search box from URL on boot. The URL decoder
+      // preserves the query's original case (see catalogFilters.ts)
+      // so a shared `?q=Hurricane` link survives the round-trip
+      // and a `category:Water` prefix still matches the canonical
+      // `Water` tag.
       searchInput.value = searchQuery
       updateSearchClear()
     }
