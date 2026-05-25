@@ -1133,6 +1133,15 @@ export function showBrowseUI(
       el.classList.remove('hidden')
       el.removeAttribute('aria-hidden')
     }
+    // Body-class hook for view-aware CSS — Graph and Timeline both
+    // benefit from a slimmer browse-header (less decorative chrome,
+    // more canvas) while Cards keeps the welcoming title + subtitle.
+    // Centralised here so every `applyViewMode` call stays in sync;
+    // hideBrowseUI / collapseBrowseUI clear the classes alongside
+    // `browse-open` so the body stays clean when the overlay closes.
+    document.body.classList.toggle('browse-view-graph', viewMode === 'graph')
+    document.body.classList.toggle('browse-view-timeline', viewMode === 'timeline')
+    document.body.classList.toggle('browse-view-cards', viewMode === 'cards')
     if (viewMode === 'graph') {
       hideContainer(gridContainer)
       hideContainer(timelineContainer)
@@ -1721,6 +1730,10 @@ export function hideBrowseUI(): void {
   const overlay = document.getElementById('browse-overlay')
   overlay?.classList.add('hidden')
   document.body.classList.remove('browse-open')
+  // View-aware classes get set by `applyViewMode`; clear them
+  // alongside `browse-open` so the body stays clean once the
+  // overlay closes.
+  document.body.classList.remove('browse-view-cards', 'browse-view-graph', 'browse-view-timeline')
   if (browseDwellHandle) {
     browseDwellHandle.stop()
     browseDwellHandle = null
@@ -1739,6 +1752,9 @@ export function collapseBrowseUI(): void {
   overlay.classList.remove('hidden')
   overlay.classList.add('collapsed')
   document.body.classList.remove('browse-open')
+  // Mirror hideBrowseUI: drop the view-aware classes so a collapsed
+  // overlay doesn't leak its last view-mode styling onto the body.
+  document.body.classList.remove('browse-view-cards', 'browse-view-graph', 'browse-view-timeline')
   if (browseDwellHandle) {
     browseDwellHandle.stop()
     browseDwellHandle = null

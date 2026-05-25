@@ -99,6 +99,26 @@
     letter-spacing: 0.05em;
 }
 
+/* View-aware chrome — Graph and Timeline want every vertical pixel
+   for their canvas. Hide the decorative subtitle and shrink the
+   title margin so the chip rail / canvas can claim the reclaimed
+   space (~50-80 px saved). The body class is set by
+   `applyViewMode` in `browseUI.ts`; Cards keeps the full welcome
+   chrome unchanged. */
+body.browse-view-graph #browse-header,
+body.browse-view-timeline #browse-header {
+    margin-bottom: 0.5rem;
+}
+body.browse-view-graph .browse-subtitle,
+body.browse-view-timeline .browse-subtitle {
+    display: none;
+}
+body.browse-view-graph .browse-title,
+body.browse-view-timeline .browse-title {
+    font-size: 1rem;
+    letter-spacing: 0.12em;
+}
+
 .browse-search-wrap {
     position: relative;
     flex-shrink: 0;
@@ -182,11 +202,19 @@
     background: var(--white-o08);
 }
 
-/* Filter rail — typed-group chip layout (Phase 4 §6.1/§6.5). */
+/* Filter rail — typed-group chip layout (Phase 4 §6.1/§6.5).
+   Grid-based so all four section headers can sit on one row when
+   collapsed (a ~50-80px vertical win over the previous flex
+   column where each header claimed a row of its own). An
+   expanded section spans every column so its chip body has full
+   width to render in; collapsed siblings tuck into the remaining
+   row above or below via auto-placement. The clear-all wrapper
+   also spans the full width so it doesn't get marooned in one
+   grid cell. */
 #browse-filter-rail {
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 0.35rem 0.75rem;
     flex-shrink: 0;
     padding-bottom: 0.75rem;
 }
@@ -195,6 +223,25 @@
     display: flex;
     flex-direction: column;
     gap: 0.35rem;
+    min-width: 0;
+}
+
+.browse-filter-section:not(.collapsed) {
+    grid-column: 1 / -1;
+}
+
+.browse-filter-clear-wrap {
+    grid-column: 1 / -1;
+}
+
+/* Below tablet width the four-column row stops fitting; collapse
+   back to a single column so each header gets its own row again.
+   The breakpoint sits a touch above the mobile gate (768 px) so
+   tablets in portrait still get the compact row. */
+@media (max-width: 600px) {
+    #browse-filter-rail {
+        grid-template-columns: 1fr;
+    }
 }
 
 /* Accordion section header — clickable button that toggles the
