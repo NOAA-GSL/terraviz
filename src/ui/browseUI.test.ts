@@ -115,10 +115,12 @@ function setupBrowseDOM(): void {
       <button id="browse-search-clear" class="hidden"></button>
       <div id="browse-filter-rail"></div>
       <div id="browse-toolbar">
+        <button id="browse-filters-btn" class="hidden" aria-expanded="false"><span class="browse-filters-btn-label">Filters</span><span class="browse-filters-btn-badge hidden">0</span></button>
+        <div id="browse-count"></div>
+        <div id="browse-active-filters" class="hidden"></div>
         <div id="browse-view-mode"></div>
         <div id="browse-sort"></div>
       </div>
-      <div id="browse-count"></div>
       <div id="browse-grid"></div>
       <div id="browse-graph" class="hidden"></div>
       <div id="browse-timeline" class="hidden"></div>
@@ -1300,5 +1302,138 @@ describe('view-mode toggle', () => {
       kind: 'multi-select',
       values: ['Air'],
     })
+  })
+})
+
+describe('active-filter chip strip + drawer (§6.8 follow-up)', () => {
+  beforeEach(async () => {
+    await new Promise<void>(resolve => setTimeout(resolve, 50))
+    localStorage.clear()
+    resetForTests()
+    setTier('research')
+    window.history.replaceState(null, '', '/')
+  })
+
+  afterEach(async () => {
+    await new Promise<void>(resolve => setTimeout(resolve, 50))
+    localStorage.clear()
+    window.history.replaceState(null, '', '/')
+  })
+
+  it('renders one chip per active multi-select value with a removal handler', () => {
+    setupBrowseDOM()
+    showBrowseUI(
+      [
+        makeDataset({ id: 'a', tags: ['Air'] }),
+        makeDataset({ id: 'b', tags: ['Water'] }),
+      ],
+      makeCallbacks(),
+    )
+    // Activate two Category chips via the rail. The rail re-renders
+    // its innerHTML on every applyState, so chip references must be
+    // re-queried between clicks (the old DOM node is detached and
+    // its click is a no-op against the delegated rail listener).
+    const findChip = (label: string): HTMLElement =>
+      Array.from(document.querySelectorAll<HTMLElement>('.browse-chip'))
+        .find(c => c.textContent === label)!
+    findChip('Air').click()
+    findChip('Water').click()
+
+    const strip = document.getElementById('browse-active-filters')!
+    const active = strip.querySelectorAll<HTMLElement>('.browse-active-filter-chip')
+    expect(active).toHaveLength(2)
+    // Strip carries Air + Water as separate removable chips.
+    const labels = Array.from(active).map(c => c.textContent?.replace('×', '').trim())
+    expect(labels).toContain('Air')
+    expect(labels).toContain('Water')
+  })
+
+  it('removes the predicate when an active-filter chip is clicked', () => {
+    setupBrowseDOM()
+    showBrowseUI([makeDataset({ id: 'a', tags: ['Air'] })], makeCallbacks())
+    const airChip = Array.from(document.querySelectorAll<HTMLElement>('.browse-chip'))
+      .find(c => c.textContent === 'Air')!
+    airChip.click()
+
+    const strip = document.getElementById('browse-active-filters')!
+    expect(strip.querySelectorAll('.browse-active-filter-chip')).toHaveLength(1)
+
+    // Click the active-filter chip → predicate cleared.
+    const removeChip = strip.querySelector<HTMLElement>('.browse-active-filter-chip')!
+    removeChip.click()
+    expect(strip.querySelectorAll('.browse-active-filter-chip')).toHaveLength(0)
+    // Underlying chip rail re-renders inactive.
+    const airChipAfter = Array.from(document.querySelectorAll<HTMLElement>('.browse-chip'))
+      .find(c => c.textContent === 'Air')!
+    expect(airChipAfter.getAttribute('aria-pressed')).toBe('false')
+  })
+
+  it('shows the Filters button active-count badge with the live filter total', () => {
+    setupBrowseDOM()
+    showBrowseUI(
+      [
+        makeDataset({ id: 'a', tags: ['Air'] }),
+        makeDataset({ id: 'b', tags: ['Water'] }),
+      ],
+      makeCallbacks(),
+    )
+    const badge = document.querySelector<HTMLElement>('.browse-filters-btn-badge')!
+    // No filters yet → badge hidden.
+    expect(badge.classList.contains('hidden')).toBe(true)
+
+    // Re-query the rail between clicks — the rail's innerHTML is
+    // rebuilt on every applyState, so the post-Air Water chip is a
+    // different DOM node than the pre-Air one.
+    const findChip = (label: string): HTMLElement =>
+      Array.from(document.querySelectorAll<HTMLElement>('.browse-chip'))
+        .find(c => c.textContent === label)!
+    findChip('Air').click()
+    findChip('Water').click()
+
+    expect(badge.classList.contains('hidden')).toBe(false)
+    expect(badge.textContent).toBe('2')
+  })
+
+  it('toggles `filter-drawer-open` on the overlay when Filters button is clicked', () => {
+    setupBrowseDOM()
+    showBrowseUI([makeDataset({ id: 'a', tags: ['Air'] })], makeCallbacks())
+    const overlay = document.getElementById('browse-overlay')!
+    const filtersBtn = document.getElementById('browse-filters-btn') as HTMLButtonElement
+    expect(overlay.classList.contains('filter-drawer-open')).toBe(false)
+    expect(filtersBtn.getAttribute('aria-expanded')).toBe('false')
+
+    filtersBtn.click()
+    expect(overlay.classList.contains('filter-drawer-open')).toBe(true)
+    expect(filtersBtn.getAttribute('aria-expanded')).toBe('true')
+
+    filtersBtn.click()
+    expect(overlay.classList.contains('filter-drawer-open')).toBe(false)
+    expect(filtersBtn.getAttribute('aria-expanded')).toBe('false')
+  })
+
+  it('closes the drawer on Escape', () => {
+    setupBrowseDOM()
+    showBrowseUI([makeDataset({ id: 'a', tags: ['Air'] })], makeCallbacks())
+    const overlay = document.getElementById('browse-overlay')!
+    const filtersBtn = document.getElementById('browse-filters-btn') as HTMLButtonElement
+    filtersBtn.click()
+    expect(overlay.classList.contains('filter-drawer-open')).toBe(true)
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    expect(overlay.classList.contains('filter-drawer-open')).toBe(false)
+  })
+
+  it('closes the drawer when view-mode switches back to Cards', () => {
+    setupBrowseDOM()
+    localStorage.setItem('sos-browse-view-mode.v1', 'graph')
+    showBrowseUI([makeDataset({ id: 'a', tags: ['Air'] })], makeCallbacks())
+    const overlay = document.getElementById('browse-overlay')!
+    const filtersBtn = document.getElementById('browse-filters-btn') as HTMLButtonElement
+    filtersBtn.click()
+    expect(overlay.classList.contains('filter-drawer-open')).toBe(true)
+
+    // Toggle back to Cards — drawer doesn't apply to Cards view.
+    document.querySelector<HTMLElement>('[data-view-mode="cards"]')!.click()
+    expect(overlay.classList.contains('filter-drawer-open')).toBe(false)
   })
 })

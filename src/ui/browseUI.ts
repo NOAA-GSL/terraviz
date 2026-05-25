@@ -1142,6 +1142,16 @@ export function showBrowseUI(
     document.body.classList.toggle('browse-view-graph', viewMode === 'graph')
     document.body.classList.toggle('browse-view-timeline', viewMode === 'timeline')
     document.body.classList.toggle('browse-view-cards', viewMode === 'cards')
+    // Drawer only applies to Graph + Timeline. Switching to Cards
+    // shows the inline rail unconditionally, so the drawer's open
+    // state would just be stale JS bookkeeping. Close it here so
+    // the `filter-drawer-open` class doesn't linger.
+    if (viewMode === 'cards' && overlay?.classList.contains('filter-drawer-open')) {
+      overlay.classList.remove('filter-drawer-open')
+      if (rail) rail.style.removeProperty('--browse-drawer-top')
+      const filtersBtnEl = document.getElementById('browse-filters-btn')
+      filtersBtnEl?.setAttribute('aria-expanded', 'false')
+    }
     if (viewMode === 'graph') {
       hideContainer(gridContainer)
       hideContainer(timelineContainer)
@@ -1371,6 +1381,143 @@ export function showBrowseUI(
     viewModeBar.dataset.wired = 'true'
   }
 
+  // ----- Filters drawer (small-screen, non-Cards views) -----
+
+  const filtersBtn = document.getElementById('browse-filters-btn') as HTMLButtonElement | null
+  const filtersBadge = filtersBtn?.querySelector('.browse-filters-btn-badge') as HTMLElement | null
+  const filtersLabel = filtersBtn?.querySelector('.browse-filters-btn-label') as HTMLElement | null
+  const activeFiltersHost = document.getElementById('browse-active-filters')
+
+  /**
+   * Render the Filters button's active-count badge AND the active-
+   * filter chip strip together. Both surfaces visualise the same
+   * underlying `filterState`, so a single function keeps them in
+   * lockstep. Called from `applyState` on every state change; the
+   * CSS handles which of them is actually visible (badge only when
+   * the drawer button is shown; chip strip only when the drawer
+   * is closed in drawer mode).
+   *
+   * Chips funnel removals through the same `toggleFacet` /
+   * `toggleBooleanFacet` / `setFacet` mutations the chip rail uses,
+   * so there's exactly one mutation path no matter where the user
+   * clicks.
+   */
+  function renderActiveFilters(): void {
+    const chips = collectActiveFilterChips(filterState)
+    if (filtersLabel) filtersLabel.textContent = t('browse.filters.toggle.label')
+    if (filtersBadge) {
+      if (chips.length === 0) {
+        filtersBadge.classList.add('hidden')
+        filtersBadge.textContent = ''
+      } else {
+        filtersBadge.classList.remove('hidden')
+        filtersBadge.textContent = formatNumber(chips.length)
+      }
+    }
+    if (!activeFiltersHost) return
+    if (chips.length === 0) {
+      activeFiltersHost.innerHTML = ''
+      activeFiltersHost.classList.add('empty')
+      return
+    }
+    activeFiltersHost.classList.remove('empty')
+    activeFiltersHost.innerHTML = chips
+      .map(chip => {
+        const ariaLabel = t('browse.activeFilters.remove.aria', { label: chip.label })
+        return `<button type="button" class="browse-active-filter-chip" data-facet="${escapeAttr(chip.facet)}" data-kind="${escapeAttr(chip.kind)}"${chip.value != null ? ` data-value="${escapeAttr(chip.value)}"` : ''} aria-label="${escapeAttr(ariaLabel)}">${escapeHtml(chip.label)}<span class="browse-active-filter-chip-x" aria-hidden="true">×</span></button>`
+      })
+      .join('')
+  }
+
+  // Delegated click handler on the active-filter strip — removes the
+  // facet predicate the clicked chip represents. Wired once per
+  // overlay instance; the strip's HTML is re-rendered freely.
+  if (activeFiltersHost && !activeFiltersHost.dataset.wired) {
+    activeFiltersHost.addEventListener('click', (e) => {
+      const btn = (e.target as HTMLElement).closest('.browse-active-filter-chip') as HTMLElement | null
+      if (!btn) return
+      const facet = btn.dataset.facet
+      const kind = btn.dataset.kind as 'multi-select' | 'boolean' | 'range' | undefined
+      if (!facet || !kind) return
+      if (kind === 'multi-select') {
+        const value = btn.dataset.value
+        if (value == null) return
+        applyState(toggleFacet(filterState, facet, value), searchQuery)
+      } else if (kind === 'boolean') {
+        applyState(toggleBooleanFacet(filterState, facet), searchQuery)
+      } else if (kind === 'range') {
+        applyState(setFacet(filterState, facet, undefined), searchQuery)
+      }
+    })
+    activeFiltersHost.dataset.wired = 'true'
+  }
+
+  // Filters button wiring — toggles `.filter-drawer-open` on the
+  // overlay; CSS controls the rail's positioning + visibility from
+  // there. Click-outside-to-close and Escape-to-close are wired
+  // once at the document level. The button's visibility itself is
+  // CSS-controlled (drawer mode only); the click handler is a no-op
+  // when the button isn't visible.
+  if (filtersBtn && !filtersBtn.dataset.wired) {
+    filtersBtn.addEventListener('click', (e) => {
+      e.stopPropagation()
+      toggleFilterDrawer()
+    })
+    filtersBtn.dataset.wired = 'true'
+  }
+
+  function isFilterDrawerOpen(): boolean {
+    return overlay?.classList.contains('filter-drawer-open') ?? false
+  }
+
+  function setFilterDrawerOpen(open: boolean): void {
+    if (!overlay) return
+    overlay.classList.toggle('filter-drawer-open', open)
+    if (filtersBtn) filtersBtn.setAttribute('aria-expanded', String(open))
+    // Anchor the drawer-positioned rail just below the toolbar.
+    // `offsetTop` is relative to the offset parent (#browse-inner,
+    // made `position: relative` in CSS); adding `offsetHeight` puts
+    // the drawer's leading edge a hair below the toolbar with a
+    // small visual gap. Recompute on each open so a re-layout (e.g.
+    // search-result count changed the count line height) doesn't
+    // leave the drawer floating in mid-air.
+    if (open && rail) {
+      const toolbar = document.getElementById('browse-toolbar')
+      if (toolbar) {
+        const top = toolbar.offsetTop + toolbar.offsetHeight + 8
+        rail.style.setProperty('--browse-drawer-top', `${top}px`)
+      }
+    } else if (rail) {
+      rail.style.removeProperty('--browse-drawer-top')
+    }
+  }
+
+  function toggleFilterDrawer(): void {
+    setFilterDrawerOpen(!isFilterDrawerOpen())
+  }
+
+  // Document-level dismissal — click outside the rail (or Escape)
+  // closes the drawer. Wired once on the overlay via a dataset
+  // flag so a second `showBrowseUI` call doesn't double up.
+  if (overlay && !overlay.dataset.drawerWired) {
+    document.addEventListener('click', (e) => {
+      if (!isFilterDrawerOpen()) return
+      const target = e.target as HTMLElement
+      // Ignore clicks inside the rail itself OR on the Filters
+      // button (its own handler manages the toggle).
+      if (rail?.contains(target)) return
+      if (filtersBtn?.contains(target)) return
+      setFilterDrawerOpen(false)
+    })
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && isFilterDrawerOpen()) {
+        setFilterDrawerOpen(false)
+        filtersBtn?.focus()
+      }
+    })
+    overlay.dataset.drawerWired = 'true'
+  }
+
   // Live viewport listener — when the user resizes across the 768px
   // breakpoint, snap the view-mode state back to Cards if they were
   // in Graph and the viewport is now narrow. Without this the
@@ -1466,6 +1613,7 @@ export function showBrowseUI(
       }
     }
     renderRail()
+    renderActiveFilters()
     renderCards()
     // Graph / Timeline re-render only when their canvas is the
     // active surface — no sense paying d3 / cytoscape's layout
@@ -1709,6 +1857,7 @@ export function showBrowseUI(
 
   // Initial render
   renderRail()
+  renderActiveFilters()
   renderCards()
   renderViewModeBar()
   // Restore the persisted view mode — if Graph was the last
@@ -1780,6 +1929,95 @@ function hasAnyActiveFilter(state: FilterState): boolean {
     if (value != null) return true
   }
   return false
+}
+
+/**
+ * One renderable entry in the active-filter chip strip. `facet` +
+ * `kind` (+ `value` for multi-select) carry the info the click
+ * handler needs to remove the predicate via the same mutation
+ * helpers the chip rail uses. `label` is the localised display
+ * string — every variant is built here so the active-filter strip
+ * never has to re-derive vocabulary.
+ */
+interface ActiveFilterChip {
+  facet: string
+  kind: 'multi-select' | 'boolean' | 'range'
+  value?: string
+  label: string
+}
+
+/**
+ * Friendly localised label for each boolean facet. Multi-select
+ * values render verbatim (Category tags + Format buckets — the
+ * format vocabulary is localised below). Range predicates use
+ * the dedicated `browse.activeFilters.range.*` keys.
+ */
+const BOOLEAN_FACET_LABEL: Readonly<Record<string, string>> = {
+  // Use lazy getters so the `t()` calls evaluate at chip-build
+  // time against the current locale, not at module-load time.
+}
+function booleanFacetLabel(facet: string): string {
+  switch (facet) {
+    case 'hasCaptions': return t('browse.filter.hasCaptions.label')
+    case 'hasTour': return t('browse.filter.hasTour.label')
+    case 'includeSos': return t('browse.filter.includeSos.label')
+    default: return facet
+  }
+  void BOOLEAN_FACET_LABEL
+}
+
+function formatBucketLabel(value: string): string {
+  switch (value) {
+    case 'video': return t('browse.filter.format.video')
+    case 'image': return t('browse.filter.format.image')
+    case 'tour': return t('browse.filter.format.tour')
+    case 'other': return t('browse.filter.format.other')
+    default: return value
+  }
+}
+
+function rangeFacetLabel(facet: string, predicate: FacetPredicate): string {
+  if (predicate.kind !== 'range') return facet
+  const start = predicate.min != null ? String(predicate.min) : '…'
+  const end = predicate.max != null ? String(predicate.max) : '…'
+  if (facet === 'dataCoverageYear') {
+    return t('browse.activeFilters.range.dataCoverage', { start, end })
+  }
+  if (facet === 'dateAdded') {
+    return t('browse.activeFilters.range.dateAdded', { start, end })
+  }
+  return `${facet} ${start}–${end}`
+}
+
+/**
+ * Walk `filterState` and emit one chip per active predicate
+ * (multi-select facets contribute one chip per value so the user
+ * can remove them individually — matching the chip-rail's per-
+ * value interaction model).
+ */
+function collectActiveFilterChips(state: FilterState): ActiveFilterChip[] {
+  const chips: ActiveFilterChip[] = []
+  for (const [facet, predicate] of Object.entries(state)) {
+    if (predicate == null) continue
+    if (predicate.kind === 'multi-select') {
+      for (const value of predicate.values) {
+        chips.push({
+          facet,
+          kind: 'multi-select',
+          value,
+          label: facet === 'format' ? formatBucketLabel(value) : value,
+        })
+      }
+    } else if (predicate.kind === 'boolean') {
+      chips.push({ facet, kind: 'boolean', label: booleanFacetLabel(facet) })
+    } else if (predicate.kind === 'range') {
+      const hasBound = predicate.min != null || predicate.max != null
+      if (!hasBound) continue
+      chips.push({ facet, kind: 'range', label: rangeFacetLabel(facet, predicate) })
+    }
+    // bbox — §6.9 Map view; no chip rendering until that ships.
+  }
+  return chips
 }
 
 /**

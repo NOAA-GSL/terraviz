@@ -74,6 +74,12 @@
     padding: 1.5rem 1.5rem 0;
     box-sizing: border-box;
     overflow: hidden;
+    /* `position: relative` so the filter-drawer rail (positioned
+       absolute when small-screen + non-Cards + open) anchors here
+       rather than escaping to the viewport. The drawer's `top` is
+       computed in JS from the toolbar's offsetTop+height — see
+       `setFilterDrawerOpen` in browseUI.ts. */
+    position: relative;
 }
 
 #browse-header {
@@ -471,6 +477,138 @@ body.browse-view-timeline .browse-title {
     color: var(--color-text-muted);
     letter-spacing: 0.05em;
     white-space: nowrap;
+}
+
+/* Filters drawer toggle — hidden by default; only the small-screen
+   non-Cards media query reveals it. The badge sits inside the
+   button so a glance shows the active-filter count even when the
+   rail itself is collapsed behind the drawer. */
+.browse-filters-btn {
+    display: none;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.25rem 0.55rem;
+    border-radius: 4px;
+    border: 1px solid var(--white-o15);
+    background: var(--color-surface-alt);
+    color: var(--color-text-secondary);
+    font-size: 0.6rem;
+    font-family: inherit;
+    letter-spacing: 0.05em;
+    cursor: pointer;
+    white-space: nowrap;
+}
+.browse-filters-btn:hover {
+    background: var(--white-o08);
+    color: var(--color-text);
+}
+.browse-filters-btn:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 1px;
+}
+#browse-overlay.filter-drawer-open .browse-filters-btn {
+    background: var(--accent-o15);
+    border-color: var(--accent-o40);
+    color: var(--color-accent);
+}
+.browse-filters-btn-badge {
+    display: inline-block;
+    min-width: 1.1rem;
+    padding: 0 0.3rem;
+    border-radius: 999px;
+    background: var(--color-accent);
+    color: var(--color-bg);
+    font-size: 0.55rem;
+    font-weight: 600;
+    line-height: 1.2;
+    text-align: center;
+}
+.browse-filters-btn-badge.hidden {
+    display: none;
+}
+
+/* Active-filter chip strip — hidden by default. CSS reveals it
+   when the drawer-mode media query AND the strip carries chips.
+   Each chip mirrors the chip-rail's `.browse-chip.active` look so
+   it visually reads as a removed filter (× hint at the trailing
+   edge). */
+#browse-active-filters {
+    display: none;
+    flex: 1;
+    min-width: 0;
+    gap: 0.3rem;
+    align-items: center;
+    overflow-x: auto;
+    scrollbar-width: thin;
+}
+.browse-active-filter-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    padding: 0.15rem 0.45rem;
+    border-radius: 999px;
+    border: 1px solid var(--accent-o40);
+    background: var(--accent-o15);
+    color: var(--color-accent);
+    font-size: 0.6rem;
+    font-family: inherit;
+    cursor: pointer;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+.browse-active-filter-chip:hover {
+    background: var(--accent-o30);
+}
+.browse-active-filter-chip:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 1px;
+}
+.browse-active-filter-chip-x {
+    color: var(--color-text-secondary);
+    font-size: 0.7rem;
+    line-height: 1;
+}
+
+/* ----- Drawer mode (small screens, Graph + Timeline only) -----
+   Below 1024px wide AND on a non-Cards view, the inline chip rail
+   is hidden behind a "Filters" button to reclaim vertical space
+   for the canvas. Active filters surface as removable chips in
+   the toolbar so the user still sees what's filtered. Cards keeps
+   the inline rail at every breakpoint — discovery via filter chips
+   is the Cards UX. */
+@media (max-width: 1024px) {
+    body.browse-view-graph .browse-filters-btn,
+    body.browse-view-timeline .browse-filters-btn {
+        display: inline-flex;
+    }
+    body.browse-view-graph #browse-active-filters:not(.empty),
+    body.browse-view-timeline #browse-active-filters:not(.empty) {
+        display: flex;
+    }
+    body.browse-view-graph #browse-filter-rail,
+    body.browse-view-timeline #browse-filter-rail {
+        display: none;
+    }
+    body.browse-view-graph #browse-overlay.filter-drawer-open #browse-filter-rail,
+    body.browse-view-timeline #browse-overlay.filter-drawer-open #browse-filter-rail {
+        display: grid;
+        position: absolute;
+        /* `--browse-drawer-top` is set inline by JS from the
+           toolbar's measured offset; fallback covers the rare
+           case where the measurement hasn't run yet. */
+        top: var(--browse-drawer-top, 9.5rem);
+        inset-inline: 1.5rem;
+        z-index: 50;
+        padding: 0.75rem;
+        background: var(--glass-bg);
+        border: 1px solid var(--white-o15);
+        border-radius: 8px;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+        backdrop-filter: blur(8px);
+        -webkit-backdrop-filter: blur(8px);
+        max-height: calc(100% - var(--browse-drawer-top, 9.5rem) - 1.5rem);
+        overflow-y: auto;
+    }
 }
 #browse-sort {
     display: flex;
