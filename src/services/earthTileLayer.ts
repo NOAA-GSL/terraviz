@@ -54,6 +54,11 @@ const ATMOSPHERE_STEPS = isMobile() ? ATMOSPHERE_STEPS_MOBILE : ATMOSPHERE_STEPS
 
 // --- Texture URLs ---
 const SPECULAR_MAP_URL = '/assets/Earth_Specular_2K.jpg'
+// §7.2 normal-map asset. Tangent-space encoding (R/G/B = X/Y/Z of
+// the surface normal in [0,255]), equirectangular projection. The
+// loader fails gracefully if the file is absent — the bump pass
+// won't render at all rather than producing a flat-shaded artifact.
+const NORMAL_MAP_URL = '/assets/earth_normal_2K.png'
 const CLOUD_TEXTURE_URL = getCloudTextureUrl()
 
 // --- Rendering constants (matched to earthMaterials.ts) ---
@@ -355,6 +360,91 @@ const colorCorrectFragSrc = `#version 300 es
     color = mix(vec3(luma), color, uSaturation);
 
     fragColor = vec4(clamp(color, 0.0, 1.0), 1.0);
+  }
+`
+
+// Pass 1.5: multiply blend — bump shading from a global normal map (§7.2).
+//
+// Runs after Pass 1 (night darken) but before Pass 2 (city lights),
+// so the bumps shade the diffuse Earth without muddying the city-
+// lights pass. Day-side only — gated by smoothstep on the un-
+// perturbed NdotL so the night side stays uniform and lights read
+// clean.
+//
+// The normal map is an equirectangular, tangent-space encoded image
+// (R/G/B = X/Y/Z of the local-space normal, [0, 255]). We
+// reconstruct the tangent-space normal, build a TBN matrix from the
+// sphere surface normal at the fragment, transform into world
+// space, and recompute NdotL with the perturbed normal. The output
+// is the RATIO between the new and old NdotL — under multiply
+// blend, a ratio >1 brightens the fragment (rough side toward sun)
+// and <1 darkens it (turned away). Mixed back to 1.0 by
+// uBumpStrength so the effect can be tuned via the ?tune=shader
+// page; 0.0 == no bumps, 1.0 == full normal-map shading.
+const bumpVertSrc = `#version 300 es
+  layout(location = 0) in vec3 aPosition;
+  layout(location = 1) in vec3 aNormal;
+  uniform mat4 uMatrix;
+  uniform float uRadiusScale;
+  out vec3 vNormal;
+
+  void main() {
+    vNormal = aNormal;
+    gl_Position = uMatrix * vec4(aPosition * uRadiusScale, 1.0);
+  }
+`
+
+const bumpFragSrc = `#version 300 es
+  precision highp float;
+  uniform vec3 uSunDir;
+  uniform sampler2D uNormalMap;
+  uniform float uStrength;
+  in vec3 vNormal;
+  out vec4 fragColor;
+
+  const float PI = 3.14159265358979;
+
+  void main() {
+    vec3 N = normalize(vNormal);
+
+    // Equirectangular UV from sphere normal. Matches the wrap mode
+    // used by every other Earth texture in this layer.
+    float lon = atan(N.x, N.z);
+    float lat = asin(clamp(N.y, -1.0, 1.0));
+    vec2 uv = vec2(lon / (2.0 * PI) + 0.5, lat / PI + 0.5);
+
+    // Tangent-space normal from the map. Decode from [0, 1] to
+    // [-1, 1]. Z is reconstructed to renormalise even when the
+    // texture stored a not-quite-unit vector.
+    vec3 tN = texture(uNormalMap, uv).rgb * 2.0 - 1.0;
+    tN = normalize(tN);
+
+    // Build TBN from the sphere surface normal. East tangent points
+    // along the local east direction; bitangent is north. This is
+    // the standard equirectangular TBN that any pre-computed Earth
+    // normal map is authored against.
+    vec3 T = normalize(vec3(N.z, 0.0, -N.x));
+    vec3 B = cross(N, T);
+    mat3 TBN = mat3(T, B, N);
+
+    vec3 perturbed = normalize(TBN * tN);
+
+    float ndotL_flat = max(0.0, dot(N, uSunDir));
+    float ndotL_pert = max(0.0, dot(perturbed, uSunDir));
+
+    // Day-side mask — night side returns to ratio 1.0 (no change)
+    // so the city-lights pass below sees clean diffuse.
+    float dayMask = smoothstep(0.0, 0.2, ndotL_flat);
+
+    // Ratio. Floor at 0.1 to avoid divide-by-near-zero near the
+    // terminator (where ndotL_flat trends to 0). Clamp the result
+    // so a single pixel can't push the framebuffer to extremes.
+    float ratio = ndotL_pert / max(ndotL_flat, 0.1);
+    float shading = mix(1.0, ratio, uStrength);
+    shading = mix(1.0, shading, dayMask);
+    shading = clamp(shading, 0.5, 1.5);
+
+    fragColor = vec4(vec3(shading), 1.0);
   }
 `
 
@@ -984,6 +1074,15 @@ interface ColorCorrectProgram {
   saturationLoc: WebGLUniformLocation | null
 }
 
+interface BumpProgram {
+  program: WebGLProgram
+  matrixLoc: WebGLUniformLocation | null
+  radiusScaleLoc: WebGLUniformLocation | null
+  sunDirLoc: WebGLUniformLocation | null
+  normalMapLoc: WebGLUniformLocation | null
+  strengthLoc: WebGLUniformLocation | null
+}
+
 interface LightsProgram extends DayNightProgram {
   blackMarbleLoc: WebGLUniformLocation | null
   viewportSizeLoc: WebGLUniformLocation | null
@@ -1096,6 +1195,9 @@ export function createEarthTileLayer(): EarthTileLayerControl {
   let clouds: CloudsProgram | null = null
   let atmosphere: AtmosphereProgram | null = null
   let colorCorrect: ColorCorrectProgram | null = null
+  let bump: BumpProgram | null = null
+  let bumpTex: WebGLTexture | null = null
+  let bumpTexReady = false
   let vao: WebGLVertexArrayObject | null = null
   let indexCount = 0
   let captureTex: WebGLTexture | null = null
@@ -1282,6 +1384,18 @@ export function createEarthTileLayer(): EarthTileLayerControl {
           viewportSizeLoc: gl2.getUniformLocation(colorCorrectProg, 'uViewportSize'),
           contrastLoc: gl2.getUniformLocation(colorCorrectProg, 'uContrast'),
           saturationLoc: gl2.getUniformLocation(colorCorrectProg, 'uSaturation'),
+        }
+      }
+
+      const bumpProg = compileProgram(gl2, bumpVertSrc, bumpFragSrc, 'bump')
+      if (bumpProg) {
+        bump = {
+          program: bumpProg,
+          matrixLoc: gl2.getUniformLocation(bumpProg, 'uMatrix'),
+          radiusScaleLoc: gl2.getUniformLocation(bumpProg, 'uRadiusScale'),
+          sunDirLoc: gl2.getUniformLocation(bumpProg, 'uSunDir'),
+          normalMapLoc: gl2.getUniformLocation(bumpProg, 'uNormalMap'),
+          strengthLoc: gl2.getUniformLocation(bumpProg, 'uStrength'),
         }
       }
 
@@ -1506,6 +1620,48 @@ export function createEarthTileLayer(): EarthTileLayerControl {
         ? requestIdleCallback(loadSpecularMap, { timeout: 1000 })
         : setTimeout(loadSpecularMap, 200)
 
+      // --- Load normal-map texture (§7.2) — graceful when missing ---
+      // The asset (`/assets/earth_normal_2K.png`) is sourced by an
+      // operator and uploaded to the repo; if it isn't present we
+      // skip the bump pass entirely rather than render a flat-shaded
+      // artifact. Same deferred-load pattern as the specular map
+      // above so the initial-tile-bandwidth budget isn't shared.
+      bumpTex = gl2.createTexture()
+      gl2.bindTexture(gl2.TEXTURE_2D, bumpTex)
+      // Flat-normal placeholder so a sampler bind before the load
+      // completes returns a well-defined value. Never actually
+      // sampled — the pass is gated on bumpTexReady.
+      gl2.texImage2D(gl2.TEXTURE_2D, 0, gl2.RGBA, 1, 1, 0, gl2.RGBA, gl2.UNSIGNED_BYTE,
+        new Uint8Array([128, 128, 255, 255]))
+
+      const loadNormalMap = () => {
+        if (disposed) return
+        const normalImg = new Image()
+        normalImg.crossOrigin = 'anonymous'
+        normalImg.onload = () => {
+          if (disposed) return
+          gl2.bindTexture(gl2.TEXTURE_2D, bumpTex)
+          gl2.texImage2D(gl2.TEXTURE_2D, 0, gl2.RGBA, gl2.RGBA, gl2.UNSIGNED_BYTE, normalImg)
+          gl2.generateMipmap(gl2.TEXTURE_2D)
+          gl2.texParameteri(gl2.TEXTURE_2D, gl2.TEXTURE_MIN_FILTER, gl2.LINEAR_MIPMAP_LINEAR)
+          gl2.texParameteri(gl2.TEXTURE_2D, gl2.TEXTURE_MAG_FILTER, gl2.LINEAR)
+          gl2.texParameteri(gl2.TEXTURE_2D, gl2.TEXTURE_WRAP_S, gl2.REPEAT)
+          gl2.texParameteri(gl2.TEXTURE_2D, gl2.TEXTURE_WRAP_T, gl2.CLAMP_TO_EDGE)
+          bumpTexReady = true
+          _map.triggerRepaint()
+          logger.info('[EarthTileLayer] Normal map loaded (%dx%d)', normalImg.width, normalImg.height)
+        }
+        normalImg.onerror = () => {
+          // Expected when the asset hasn't been provided yet. Logged
+          // at info-level since this is a known optional asset.
+          logger.info('[EarthTileLayer] Normal map not available; bump shading disabled')
+        }
+        normalImg.src = NORMAL_MAP_URL
+      }
+      typeof requestIdleCallback !== 'undefined'
+        ? requestIdleCallback(loadNormalMap, { timeout: 1500 })
+        : setTimeout(loadNormalMap, 400)
+
       logger.info('[EarthTileLayer] Day/night+clouds+specular layer initialized (%d triangles)', indexCount / 3)
     },
 
@@ -1640,6 +1796,27 @@ export function createEarthTileLayer(): EarthTileLayerControl {
       gl2.uniform1f(darken.radiusScaleLoc, terrainRadiusScale)
       gl2.uniform3f(darken.sunDirLoc, sunDir[0], sunDir[1], sunDir[2])
       gl2.drawElements(gl2.TRIANGLES, indexCount, gl2.UNSIGNED_SHORT, 0)
+
+      // --- Pass 1.5: Multiply blend — normal-map bump shading (§7.2) ---
+      // Day-side only; gated on the bumpStrength uniform AND the
+      // normal-map asset being present. Skipped when strength is
+      // effectively zero so a "no bump" tuner setting saves the
+      // draw call.
+      if (bump && bumpTexReady && shader.bumpStrength > 0.005) {
+        gl2.blendFunc(gl2.DST_COLOR, gl2.ZERO) // multiply
+
+        gl2.useProgram(bump.program)
+        gl2.uniformMatrix4fv(bump.matrixLoc, false, matrix)
+        gl2.uniform1f(bump.radiusScaleLoc, terrainRadiusScale)
+        gl2.uniform3f(bump.sunDirLoc, sunDir[0], sunDir[1], sunDir[2])
+        gl2.uniform1f(bump.strengthLoc, shader.bumpStrength)
+
+        gl2.activeTexture(gl2.TEXTURE0)
+        gl2.bindTexture(gl2.TEXTURE_2D, bumpTex)
+        gl2.uniform1i(bump.normalMapLoc, 0)
+
+        gl2.drawElements(gl2.TRIANGLES, indexCount, gl2.UNSIGNED_SHORT, 0)
+      }
 
       // --- Pass 2: Additive blend — overlay Black Marble city lights (screen-space) ---
       if (lights && captureTex && captureW > 0) {
@@ -1808,9 +1985,11 @@ export function createEarthTileLayer(): EarthTileLayerControl {
       if (clouds) gl2.deleteProgram(clouds.program)
       if (atmosphere) gl2.deleteProgram(atmosphere.program)
       if (colorCorrect) gl2.deleteProgram(colorCorrect.program)
+      if (bump) gl2.deleteProgram(bump.program)
       if (vao) gl2.deleteVertexArray(vao)
       if (captureTex) gl2.deleteTexture(captureTex)
       if (baseTex) gl2.deleteTexture(baseTex)
+      if (bumpTex) gl2.deleteTexture(bumpTex)
       if (specTex) gl2.deleteTexture(specTex)
       if (cloudTex) gl2.deleteTexture(cloudTex)
       if (datasetTex) gl2.deleteTexture(datasetTex)
