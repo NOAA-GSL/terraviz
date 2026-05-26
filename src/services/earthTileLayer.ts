@@ -301,6 +301,63 @@ function sunDirectionFromLatLng(latDeg: number, lngDeg: number): [number, number
 
 // --- Shader source ---
 
+// Pass 0: replace blend — contrast / saturation post-process (§7.2).
+//
+// Runs FIRST in the earth-tile-layer's render pipeline, before the
+// night-darkening / lights / specular / cloud / atmosphere passes.
+// Captures the existing framebuffer (NASA Blue Marble tiles as drawn
+// by MapLibre) to a screen-space texture, applies the contrast and
+// saturation uniforms, and writes the corrected colour back with a
+// `(ONE, ZERO)` blend — i.e. straight replace. Pass 1 onwards then
+// composites night, lights, glint, clouds, and atmosphere on top of
+// the corrected base. Sphere geometry is used so the colour
+// correction only touches Earth pixels — the skybox / space
+// background outside the sphere is untouched.
+//
+// Uniforms come from shaderSettingsService:
+//   - uContrast    — pivot-around-0.5 contrast (1.0 == identity)
+//   - uSaturation  — luminance-anchored saturation (1.0 == identity)
+// Setting both to 1.0 (the universal identity) leaves the
+// framebuffer byte-equivalent to the un-corrected baseline; the
+// shipped non-1 values bring the look closer to Adrian's Blue Marble
+// reference.
+const colorCorrectVertSrc = `#version 300 es
+  layout(location = 0) in vec3 aPosition;
+  uniform mat4 uMatrix;
+  uniform float uRadiusScale;
+
+  void main() {
+    gl_Position = uMatrix * vec4(aPosition * uRadiusScale, 1.0);
+  }
+`
+
+const colorCorrectFragSrc = `#version 300 es
+  precision highp float;
+  uniform sampler2D uFramebuffer;
+  uniform vec2 uViewportSize;
+  uniform float uContrast;
+  uniform float uSaturation;
+  out vec4 fragColor;
+
+  void main() {
+    vec2 screenUV = gl_FragCoord.xy / uViewportSize;
+    vec3 color = texture(uFramebuffer, screenUV).rgb;
+
+    // Contrast — push values away from / toward 0.5 grey. Identity
+    // at uContrast == 1.0.
+    color = (color - 0.5) * uContrast + 0.5;
+
+    // Saturation — mix between the luma (grayscale) and the original
+    // colour. Identity at uSaturation == 1.0.
+    // Rec. 709 luminance weights (same as the cloud-mask gating in
+    // the specular pass).
+    float luma = dot(color, vec3(0.299, 0.587, 0.114));
+    color = mix(vec3(luma), color, uSaturation);
+
+    fragColor = vec4(clamp(color, 0.0, 1.0), 1.0);
+  }
+`
+
 // Pass 1: multiply blend — darkens night side of existing tiles
 const darkenVertSrc = `#version 300 es
   layout(location = 0) in vec3 aPosition;
@@ -917,6 +974,16 @@ interface DayNightProgram {
   radiusScaleLoc: WebGLUniformLocation | null
 }
 
+interface ColorCorrectProgram {
+  program: WebGLProgram
+  matrixLoc: WebGLUniformLocation | null
+  radiusScaleLoc: WebGLUniformLocation | null
+  framebufferLoc: WebGLUniformLocation | null
+  viewportSizeLoc: WebGLUniformLocation | null
+  contrastLoc: WebGLUniformLocation | null
+  saturationLoc: WebGLUniformLocation | null
+}
+
 interface LightsProgram extends DayNightProgram {
   blackMarbleLoc: WebGLUniformLocation | null
   viewportSizeLoc: WebGLUniformLocation | null
@@ -1028,10 +1095,18 @@ export function createEarthTileLayer(): EarthTileLayerControl {
   let specular: SpecularProgram | null = null
   let clouds: CloudsProgram | null = null
   let atmosphere: AtmosphereProgram | null = null
+  let colorCorrect: ColorCorrectProgram | null = null
   let vao: WebGLVertexArrayObject | null = null
   let indexCount = 0
   let captureTex: WebGLTexture | null = null
   let captureW = 0, captureH = 0
+  // Separate framebuffer-capture texture for the §7.2 colour-correction
+  // pre-pass. Distinct from `captureTex` (Black Marble) — that one is
+  // populated by the standalone capture layer between Black Marble and
+  // Blue Marble, while this one is filled at the start of THIS layer's
+  // render() after Blue Marble has drawn.
+  let baseTex: WebGLTexture | null = null
+  let baseW = 0, baseH = 0
   let specTex: WebGLTexture | null = null
   let specTexReady = false
   let cloudTex: WebGLTexture | null = null
@@ -1192,6 +1267,24 @@ export function createEarthTileLayer(): EarthTileLayerControl {
       }
 
       // --- Compile all earth effect shader programs ---
+      const colorCorrectProg = compileProgram(
+        gl2,
+        colorCorrectVertSrc,
+        colorCorrectFragSrc,
+        'colorCorrect',
+      )
+      if (colorCorrectProg) {
+        colorCorrect = {
+          program: colorCorrectProg,
+          matrixLoc: gl2.getUniformLocation(colorCorrectProg, 'uMatrix'),
+          radiusScaleLoc: gl2.getUniformLocation(colorCorrectProg, 'uRadiusScale'),
+          framebufferLoc: gl2.getUniformLocation(colorCorrectProg, 'uFramebuffer'),
+          viewportSizeLoc: gl2.getUniformLocation(colorCorrectProg, 'uViewportSize'),
+          contrastLoc: gl2.getUniformLocation(colorCorrectProg, 'uContrast'),
+          saturationLoc: gl2.getUniformLocation(colorCorrectProg, 'uSaturation'),
+        }
+      }
+
       const darkenProg = compileProgram(gl2, darkenVertSrc, darkenFragSrc, 'darken')
       if (darkenProg) {
         darken = {
@@ -1324,6 +1417,24 @@ export function createEarthTileLayer(): EarthTileLayerControl {
       gl2.texParameteri(gl2.TEXTURE_2D, gl2.TEXTURE_WRAP_T, gl2.CLAMP_TO_EDGE)
       captureW = 0
       captureH = 0
+
+      // --- Initialize Blue-Marble base-colour capture (§7.2 colour correction) ---
+      // Filled at the start of every render() so the colour-correction
+      // pre-pass can sample the un-corrected base. Same shape as
+      // captureTex; resized on first use when the canvas dimensions
+      // are known. Starts as a 1×1 black placeholder so any pre-init
+      // sample returns a well-defined zero rather than reading
+      // uninitialised GPU memory.
+      baseTex = gl2.createTexture()
+      gl2.bindTexture(gl2.TEXTURE_2D, baseTex)
+      gl2.texImage2D(gl2.TEXTURE_2D, 0, gl2.RGBA, 1, 1, 0, gl2.RGBA, gl2.UNSIGNED_BYTE,
+        new Uint8Array([0, 0, 0, 255]))
+      gl2.texParameteri(gl2.TEXTURE_2D, gl2.TEXTURE_MIN_FILTER, gl2.LINEAR)
+      gl2.texParameteri(gl2.TEXTURE_2D, gl2.TEXTURE_MAG_FILTER, gl2.LINEAR)
+      gl2.texParameteri(gl2.TEXTURE_2D, gl2.TEXTURE_WRAP_S, gl2.CLAMP_TO_EDGE)
+      gl2.texParameteri(gl2.TEXTURE_2D, gl2.TEXTURE_WRAP_T, gl2.CLAMP_TO_EDGE)
+      baseW = 0
+      baseH = 0
 
       // --- Load cloud texture asynchronously ---
       cloudTex = gl2.createTexture()
@@ -1468,6 +1579,58 @@ export function createEarthTileLayer(): EarthTileLayerControl {
         return
       }
 
+      // Read the live shader settings snapshot once per frame so
+      // every pass below sees a consistent set of values even if a
+      // tuner-page slider drag fires mid-frame.
+      const shader = getShaderSettings()
+
+      // --- Pass 0: Replace blend — contrast / saturation pre-pass (§7.2) ---
+      // Skipped when both uniforms are identity (1.0) — saves the
+      // framebuffer copy + a draw call. The threshold is loose
+      // (±0.005) so floating-point drift through localStorage /
+      // round-trip doesn't accidentally re-enable the pass.
+      const ccEnabled = colorCorrect && baseTex && (
+        Math.abs(shader.contrast - 1.0) > 0.005 ||
+        Math.abs(shader.saturation - 1.0) > 0.005
+      )
+      if (ccEnabled && colorCorrect && baseTex) {
+        const canvas = mapRef?.getCanvas()
+        if (canvas) {
+          const w = canvas.width, h = canvas.height
+
+          // Copy the current framebuffer (Blue Marble + Black Marble
+          // city lights from MapLibre's tile rendering) into baseTex.
+          // High texture unit (TEXTURE6) so it doesn't collide with
+          // the Black-Marble capture (TEXTURE7) or the per-pass
+          // sampler bindings below.
+          gl2.activeTexture(gl2.TEXTURE6)
+          gl2.bindTexture(gl2.TEXTURE_2D, baseTex)
+          if (w !== baseW || h !== baseH) {
+            gl2.texImage2D(gl2.TEXTURE_2D, 0, gl2.RGBA, w, h, 0, gl2.RGBA, gl2.UNSIGNED_BYTE, null)
+            baseW = w
+            baseH = h
+          }
+          gl2.copyTexSubImage2D(gl2.TEXTURE_2D, 0, 0, 0, 0, 0, w, h)
+
+          // Replace blend — write the corrected colour straight
+          // back. The sphere geometry constrains the rewrite to
+          // Earth pixels; the skybox / space background outside the
+          // sphere is untouched (no fragments shaded there).
+          gl2.enable(gl2.BLEND)
+          gl2.blendFunc(gl2.ONE, gl2.ZERO)
+
+          gl2.useProgram(colorCorrect.program)
+          gl2.uniformMatrix4fv(colorCorrect.matrixLoc, false, matrix)
+          gl2.uniform1f(colorCorrect.radiusScaleLoc, terrainRadiusScale)
+          gl2.uniform2f(colorCorrect.viewportSizeLoc, w, h)
+          gl2.uniform1f(colorCorrect.contrastLoc, shader.contrast)
+          gl2.uniform1f(colorCorrect.saturationLoc, shader.saturation)
+          gl2.uniform1i(colorCorrect.framebufferLoc, 6)
+
+          gl2.drawElements(gl2.TRIANGLES, indexCount, gl2.UNSIGNED_SHORT, 0)
+        }
+      }
+
       // --- Pass 1: Multiply blend — darken night side ---
       gl2.enable(gl2.BLEND)
       gl2.blendFunc(gl2.DST_COLOR, gl2.ZERO) // result = src * dst
@@ -1526,11 +1689,10 @@ export function createEarthTileLayer(): EarthTileLayerControl {
         gl2.uniform3f(specular.viewDirLoc, viewDir[0], viewDir[1], viewDir[2])
         gl2.uniform1f(specular.shininessLoc, SPECULAR_SHININESS)
         // Strength is user-controllable via the Tools menu specular
-        // preset (None / Default / Comfortable, §7.2). The renderer
-        // reads the live snapshot each frame; subscribing to
-        // shader-settings changes calls triggerRepaint so a preset
-        // click flips the look without waiting for the next motion.
-        gl2.uniform1f(specular.strengthLoc, getShaderSettings().specularStrength)
+        // preset (None / Default / Comfortable, §7.2). The `shader`
+        // snapshot was taken once at the top of this render() so
+        // every pass sees a consistent set of values.
+        gl2.uniform1f(specular.strengthLoc, shader.specularStrength)
 
         gl2.activeTexture(gl2.TEXTURE0)
         gl2.bindTexture(gl2.TEXTURE_2D, specTex)
@@ -1645,8 +1807,10 @@ export function createEarthTileLayer(): EarthTileLayerControl {
       if (specular) gl2.deleteProgram(specular.program)
       if (clouds) gl2.deleteProgram(clouds.program)
       if (atmosphere) gl2.deleteProgram(atmosphere.program)
+      if (colorCorrect) gl2.deleteProgram(colorCorrect.program)
       if (vao) gl2.deleteVertexArray(vao)
       if (captureTex) gl2.deleteTexture(captureTex)
+      if (baseTex) gl2.deleteTexture(baseTex)
       if (specTex) gl2.deleteTexture(specTex)
       if (cloudTex) gl2.deleteTexture(cloudTex)
       if (datasetTex) gl2.deleteTexture(datasetTex)
