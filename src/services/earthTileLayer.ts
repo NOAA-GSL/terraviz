@@ -392,12 +392,15 @@ const colorCorrectFragSrc = `#version 300 es
 const bumpVertSrc = `#version 300 es
   layout(location = 0) in vec3 aPosition;
   layout(location = 1) in vec3 aNormal;
+  layout(location = 2) in vec2 aUV;
   uniform mat4 uMatrix;
   uniform float uRadiusScale;
   out vec3 vNormal;
+  out vec2 vUV;
 
   void main() {
     vNormal = aNormal;
+    vUV = aUV;
     gl_Position = uMatrix * vec4(aPosition * uRadiusScale, 1.0);
   }
 `
@@ -408,30 +411,34 @@ const bumpFragSrc = `#version 300 es
   uniform sampler2D uNormalMap;
   uniform float uStrength;
   in vec3 vNormal;
+  in vec2 vUV;
   out vec4 fragColor;
-
-  const float PI = 3.14159265358979;
 
   void main() {
     vec3 N = normalize(vNormal);
 
-    // Equirectangular UV from sphere normal. Matches the wrap mode
-    // used by every other Earth texture in this layer.
-    float lon = atan(N.x, N.z);
-    float lat = asin(clamp(N.y, -1.0, 1.0));
-    vec2 uv = vec2(lon / (2.0 * PI) + 0.5, lat / PI + 0.5);
+    // Use the sphere geometry's UV directly — it's already
+    // equirectangular with u=0 at the dateline and v=0 at the
+    // north pole, matching how every other texture in this layer
+    // (Blue Marble, specular, clouds) is sampled. A fragment-
+    // computed vec2(lon, lat) UV would invert V (image y=0 vs
+    // mathematical lat=+PI/2) and put the north-pole normals on
+    // the south-pole pixels.
+    vec2 uv = vUV;
 
     // Tangent-space normal from the map. Decode from [0, 1] to
-    // [-1, 1]. Z is reconstructed to renormalise even when the
+    // [-1, 1]. Z is reconstructed by re-normalising even when the
     // texture stored a not-quite-unit vector.
-    vec3 tN = texture(uNormalMap, uv).rgb * 2.0 - 1.0;
-    tN = normalize(tN);
+    vec3 tN = normalize(texture(uNormalMap, uv).rgb * 2.0 - 1.0);
 
-    // Build TBN from the sphere surface normal. East tangent points
-    // along the local east direction; bitangent is north. This is
-    // the standard equirectangular TBN that any pre-computed Earth
-    // normal map is authored against.
-    vec3 T = normalize(vec3(N.z, 0.0, -N.x));
+    // Build TBN from the sphere surface normal. T points east, B
+    // points north. At the poles, N is colinear with the world-up
+    // axis used to derive T, so we fall back to a perpendicular
+    // up-axis there. Without this guard the cross product
+    // collapses to (0, 0, 0) and the normalize blows the entire
+    // polar cap up into NaN-shaded garbage.
+    vec3 up = abs(N.y) > 0.999 ? vec3(0.0, 0.0, 1.0) : vec3(0.0, 1.0, 0.0);
+    vec3 T = normalize(cross(up, N));
     vec3 B = cross(N, T);
     mat3 TBN = mat3(T, B, N);
 
