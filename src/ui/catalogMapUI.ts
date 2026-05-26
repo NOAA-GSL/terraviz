@@ -567,11 +567,18 @@ export function createCatalogMap(
       callbacks.onRegionChange(null)
       return
     }
+    // Snapshot `drawStart` BEFORE cleanupDraw runs — cleanupDraw
+    // mutates the closure variable back to null, and the next line
+    // would otherwise pass null into `lngLatPairToBbox` (which would
+    // TypeError on `.lat` of null and silently swallow the rest of
+    // the handler, including the `onRegionChange` callback that
+    // commits the region). TypeScript's narrowing held at the
+    // top-of-function check, but the engine doesn't track mutations
+    // through cleanupDraw so the bug shipped past `tsc --noEmit`.
+    const start = drawStart
     const end = map.unproject([x, y])
     cleanupDraw()
-    const bounds = lngLatPairToBbox(drawStart, end)
-    drawStart = null
-    drawStartScreen = null
+    const bounds = lngLatPairToBbox(start, end)
     emitRegionDrawn(bounds)
     callbacks.onRegionChange(bounds)
     // Exit draw mode after a successful commit so the user can

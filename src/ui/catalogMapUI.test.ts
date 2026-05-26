@@ -18,6 +18,10 @@ const mapStub = vi.hoisted(() => {
   const layerHandlers: Record<string, Record<string, Array<(...args: unknown[]) => void>>> = {}
   const dispose = vi.fn()
   const setData = vi.fn()
+  // Stable canvas across calls within a single controller's lifetime
+  // so tests can grab a reference and synthesise mousedown events
+  // against it. Reset in beforeEach.
+  let canvasEl: HTMLDivElement | null = null
   const map = {
     on: vi.fn((event: string, arg2?: string | ((...a: unknown[]) => void), arg3?: (...a: unknown[]) => void) => {
       if (typeof arg2 === 'string' && typeof arg3 === 'function') {
@@ -31,10 +35,12 @@ const mapStub = vi.hoisted(() => {
     addLayer: vi.fn(),
     getSource: vi.fn(() => ({ setData })),
     getCanvas: vi.fn(() => {
-      // Return a minimal DOM element the draw-rectangle wiring can
-      // attach listeners to. happy-dom provides addEventListener +
-      // getBoundingClientRect.
-      return document.createElement('div')
+      // Memoised so the controller's `const mapCanvas = map.getCanvas()`
+      // returns the same element on every subsequent call (cursor
+      // style updates, getBoundingClientRect, etc.). Tests reach into
+      // mapStub.canvas() to dispatch events on this same instance.
+      if (!canvasEl) canvasEl = document.createElement('div')
+      return canvasEl
     }),
     unproject: vi.fn(([x, y]: [number, number]) => ({ lat: y, lng: x })),
     resize: vi.fn(),
@@ -43,7 +49,15 @@ const mapStub = vi.hoisted(() => {
     scrollZoom: { disable: vi.fn(), enable: vi.fn() },
     touchZoomRotate: { disable: vi.fn(), enable: vi.fn() },
   }
-  return { map, dispose, setData, handlers, layerHandlers }
+  return {
+    map,
+    dispose,
+    setData,
+    handlers,
+    layerHandlers,
+    canvas: () => canvasEl,
+    resetCanvas: () => { canvasEl = null },
+  }
 })
 
 vi.mock('../services/mapRenderer', () => ({
@@ -93,6 +107,7 @@ describe('createCatalogMap', () => {
     Object.keys(mapStub.handlers).forEach(k => delete mapStub.handlers[k])
     Object.keys(mapStub.layerHandlers).forEach(k => delete mapStub.layerHandlers[k])
     mapStub.setData.mockClear()
+    mapStub.resetCanvas()
   })
 
   it('mounts the host container with toolbar + canvas + tooltip + empty fallback', async () => {
@@ -308,16 +323,68 @@ describe('createCatalogMap', () => {
     controller.destroy()
   })
 
-  // The full draw-rectangle gesture (mousedown → mousemove → mouseup,
-  // with `unproject` mapping into geographic coords) is exercised
-  // end-to-end only with a real WebGL canvas — happy-dom plus the
-  // stubbed MapLibre instance can't synthesise the full event chain
-  // with believable pixel-to-LngLat values. The toggle assertions
-  // above cover the mode plumbing without the gesture; the
-  // `catalog_map_region_drawn` emit on a real draw is covered via
-  // the manual smoke checklist in the PR description. Marked `skip`
-  // so the suite doesn't claim coverage it doesn't actually run.
-  it.skip('emits catalog_map_region_drawn when the draw handler completes (needs real browser)', () => {
-    expect(__peek()).toEqual([])
+  it('commits the bbox + invokes onRegionChange after a mousedown→mousemove→mouseup drag', async () => {
+    // Regression test for the live-testing bug where the rectangle
+    // visually vanished on mouseup with no resulting region filter.
+    // Root cause: the mouseup handler called `cleanupDraw()` (which
+    // nulls `drawStart`) BEFORE passing `drawStart` into
+    // `lngLatPairToBbox`, throwing a TypeError on null.lat that
+    // silently swallowed the rest of the handler — including the
+    // `onRegionChange` callback that commits the predicate. The
+    // exception path also skipped the analytics emit and the
+    // setDrawMode(false) exit. TS narrowing held at the top-of-
+    // function check, so `tsc --noEmit` didn't catch it.
+    const { createCatalogMap } = await import('./catalogMapUI')
+    const host = document.getElementById('host')!
+    const onRegionChange = vi.fn()
+    const controller = createCatalogMap(host, {
+      onRegionChange,
+      onPreviewDataset: vi.fn(),
+    })
+    for (const h of mapStub.handlers.load ?? []) h()
+
+    // Enable draw mode via the toolbar button — same path the user
+    // takes; exercises the mode wiring end-to-end.
+    const drawBtn = host.querySelector<HTMLButtonElement>('.browse-map-draw-toggle')!
+    drawBtn.click()
+    expect(drawBtn.getAttribute('aria-pressed')).toBe('true')
+
+    const mapCanvas = mapStub.canvas()!
+    // happy-dom returns zeros for an unattached element's
+    // getBoundingClientRect, so clientX/Y are equivalent to
+    // canvas-local x/y for our purposes. The mock's `unproject`
+    // returns `{lat: y, lng: x}`, so a drag from (50, 20) to
+    // (120, 80) should commit bounds n=80, s=20, e=120, w=50.
+    mapCanvas.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, clientX: 50, clientY: 20 }))
+    window.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 120, clientY: 80 }))
+    window.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: 120, clientY: 80 }))
+
+    expect(onRegionChange).toHaveBeenCalledWith({ n: 80, s: 20, e: 120, w: 50 })
+    // Draw mode auto-exits after a successful commit so the user
+    // can resume panning without a second click.
+    expect(drawBtn.getAttribute('aria-pressed')).toBe('false')
+    controller.destroy()
+  })
+
+  it('clears the region on a degenerate (< 4 px) drag', async () => {
+    // The single-click-as-clear convention mirrors the Timeline
+    // brush — accidentally tapping the canvas while in Draw mode
+    // shouldn't commit a 0×0 bbox; it clears any active region
+    // instead.
+    const { createCatalogMap } = await import('./catalogMapUI')
+    const host = document.getElementById('host')!
+    const onRegionChange = vi.fn()
+    const controller = createCatalogMap(host, {
+      onRegionChange,
+      onPreviewDataset: vi.fn(),
+    })
+    for (const h of mapStub.handlers.load ?? []) h()
+    const drawBtn = host.querySelector<HTMLButtonElement>('.browse-map-draw-toggle')!
+    drawBtn.click()
+    const mapCanvas = mapStub.canvas()!
+    mapCanvas.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, clientX: 50, clientY: 50 }))
+    window.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: 51, clientY: 51 }))
+    expect(onRegionChange).toHaveBeenCalledWith(null)
+    controller.destroy()
   })
 })
