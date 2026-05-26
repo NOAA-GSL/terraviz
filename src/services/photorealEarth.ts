@@ -56,6 +56,10 @@ import {
   buildAtmosphereRaymarchGlsl,
 } from './atmosphereConstants'
 import { computeTransmittanceLut } from './atmosphereLut'
+import {
+  getShaderSettings,
+  onShaderSettingsChange,
+} from './shaderSettingsService'
 
 /** Default radius if `options.radius` is omitted — matches the VR view. */
 const DEFAULT_RADIUS = 0.5
@@ -392,6 +396,15 @@ export function createPhotorealEarth(
   // update that writes the current subsolar direction.
   const sunDirUniform = { value: new THREE_.Vector3(1, 0, 0) }
 
+  // ── §7.2 colour-correction uniforms ───────────────────────────────
+  // Mirror the two uniforms `earthTileLayer.ts` Pass 0 introduces on
+  // the 2D side. Identity at 1.0 / 1.0 collapses the shader patch to
+  // a pass-through so the pre-§7.2 look survives a default boot.
+  // Updated by a subscriber below whenever the user picks a Tools-
+  // menu preset or drags a tuner slider.
+  const contrastUniform = { value: getShaderSettings().contrast }
+  const saturationUniform = { value: getShaderSettings().saturation }
+
   // ── Phase 3h dataset-overlay uniforms ─────────────────────────────
   // Mirror the four uniforms `earthTileLayer.ts` introduced for 3e/B
   // on the 2D side, plus a base-diffuse slot the bbox path samples
@@ -459,6 +472,13 @@ export function createPhotorealEarth(
   // combination is what the shader patch uses for night-lights
   // gating; emissiveMap starts null and gets set once the lights
   // texture finishes loading.
+  // Initial specular tint multiplies the texture-based specular map.
+  // Wired below to shaderSettingsService so the Tools-menu specular
+  // preset + the dev tuner page can dial the ocean glint up and down
+  // — same uniform set the 2D MapLibre layer reads each frame
+  // (§7.2). 0xaaaaaa (== ~0.667) was the pre-§7.2 hard-coded value;
+  // the live value is set immediately after material construction
+  // below so VR boot picks up the persisted preset (Default 0.35).
   const material = new THREE_.MeshPhongMaterial({
     map: baseEarthTexture,
     specularMap: specularMapTexture,
@@ -484,6 +504,8 @@ export function createPhotorealEarth(
   //      same fast-path discipline 3e/B brought to the 2D side.
   material.onBeforeCompile = (shader) => {
     shader.uniforms.uSunDir = sunDirUniform
+    shader.uniforms.uContrast = contrastUniform
+    shader.uniforms.uSaturation = saturationUniform
     shader.uniforms.uOverlayHasBbox = overlayHasBboxUniform
     shader.uniforms.uOverlayBbox = overlayBboxUniform
     shader.uniforms.uOverlayLonOrigin = overlayLonOriginUniform
@@ -508,6 +530,8 @@ export function createPhotorealEarth(
       '#include <common>',
       `#include <common>
        varying float vNdotL;
+       uniform float uContrast;
+       uniform float uSaturation;
        uniform int uOverlayHasBbox;
        uniform vec4 uOverlayBbox;       // (n, s, w, e) degrees
        uniform float uOverlayLonOrigin; // degrees
@@ -587,7 +611,42 @@ export function createPhotorealEarth(
          totalEmissiveRadiance *= emissiveColor.rgb * nightFactor * ${NIGHT_LIGHT_STRENGTH.toFixed(2)};
        #endif`,
     )
+
+    // §7.2 colour correction — applied after <output_fragment> sets
+    // gl_FragColor but BEFORE tonemapping / colorspace_fragment so we
+    // operate in linear space, matching the 2D side's pre-tonemap
+    // composition order. Identity at 1.0/1.0 collapses both lines to
+    // pass-throughs; the shipped defaults are 1.10 / 1.20 to bring
+    // the Phong-lit Earth closer to the Blue Marble reference. The
+    // clamp guards against contrast pushing a value above 1.0 (HDR-
+    // ish), which would propagate through subsequent chunks oddly.
+    shader.fragmentShader = shader.fragmentShader.replace(
+      '#include <tonemapping_fragment>',
+      `gl_FragColor.rgb = (gl_FragColor.rgb - 0.5) * uContrast + 0.5;
+       float vrLuma = dot(gl_FragColor.rgb, vec3(0.299, 0.587, 0.114));
+       gl_FragColor.rgb = mix(vec3(vrLuma), gl_FragColor.rgb, uSaturation);
+       gl_FragColor.rgb = clamp(gl_FragColor.rgb, 0.0, 1.0);
+       #include <tonemapping_fragment>`,
+    )
   }
+
+  // Apply the persisted specular preset to the Phong material's
+  // specular tint and subscribe to future shader-settings changes
+  // (Tools-menu radio + tuner-page sliders). Multiplies the existing
+  // specular MAP, so the per-texel ocean / land masking stays —
+  // we're just scaling intensity. The full setSpecularFromSettings
+  // logic lives once here; an unsubscribe runs in dispose() below.
+  function setSpecularFromSettings() {
+    const s = getShaderSettings().specularStrength
+    material.specular.setRGB(s, s, s)
+  }
+  setSpecularFromSettings()
+
+  const unsubscribeShaderSettings = onShaderSettingsChange(() => {
+    setSpecularFromSettings()
+    contrastUniform.value = getShaderSettings().contrast
+    saturationUniform.value = getShaderSettings().saturation
+  })
 
   // 64×64 is plenty for a globe filling ~40° of the viewer's FOV.
   const geometry = new THREE_.SphereGeometry(radius, 64, 64)
@@ -1451,6 +1510,9 @@ export function createPhotorealEarth(
       // progressive diffuse/lights tiers) to drop their result on
       // the floor instead of attaching it to a torn-down scene.
       disposed = true
+      // Drop the shader-settings subscription so a Tools-menu click
+      // after a VR exit doesn't keep mutating a disposed material.
+      unsubscribeShaderSettings()
       // Drop all diffuse subscribers — no point firing them after
       // we're gone, and callers should re-subscribe on fresh handles.
       diffuseSubscribers.clear()
