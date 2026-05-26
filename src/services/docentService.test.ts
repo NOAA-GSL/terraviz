@@ -459,6 +459,133 @@ describe('processMessage — pre-search injection (1d/AC)', () => {
     expect(userMessageContent).not.toContain('[RELEVANT DATASETS')
   })
 
+  it('injects [AVAILABLE TOURS] when the catalog has tour-format rows', async () => {
+    // Phase 3pt/G follow-up — tours aren't indexed by Vectorize
+    // (which backs `search_datasets` / `[RELEVANT DATASETS]`), so
+    // a parallel client-side injection surfaces them every turn
+    // the LLM is engaged. Without this the LLM only finds tours
+    // via the `search_catalog` last-ditch fallback, which the
+    // system prompt explicitly de-prioritises.
+    const { streamChat } = await import('./llmProvider')
+    const mockedStream = vi.mocked(streamChat)
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async input => {
+      const url = typeof input === 'string' ? input : input.toString()
+      if (url.includes('/api/v1/search')) {
+        return new Response(JSON.stringify({ datasets: [] }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      }
+      return new Response('not found', { status: 404 })
+    })
+
+    let userMessageContent = ''
+    mockedStream.mockImplementation(async function* (msgs) {
+      const userMsg = msgs.find(m => m.role === 'user')
+      if (userMsg) {
+        userMessageContent =
+          typeof userMsg.content === 'string'
+            ? userMsg.content
+            : JSON.stringify(userMsg.content)
+      }
+      yield { type: 'delta' as const, text: 'Reply.' }
+      yield { type: 'done' as const }
+    })
+
+    const datasetsWithTour: Dataset[] = [
+      ...datasets,
+      {
+        id: '01HXPUBTOUR000000000000001',
+        title: 'Hurricane Tour',
+        format: 'tour/json',
+        dataLink: 'https://r2.example.com/tours/01HX/published/01HY.json',
+        tourJsonUrl: 'https://r2.example.com/tours/01HX/published/01HY.json',
+        abstractTxt: 'A guided look at hurricane formation.',
+        tags: ['Tours'],
+      },
+    ]
+
+    const config: DocentConfig = {
+      apiUrl: 'http://localhost:11434/v1',
+      apiKey: '',
+      model: 'test',
+      enabled: true,
+      readingLevel: 'general',
+      visionEnabled: false,
+    }
+
+    const chunks: DocentStreamChunk[] = []
+    for await (const chunk of processMessage(
+      'show me something interesting',
+      [],
+      datasetsWithTour,
+      null,
+      config,
+    )) {
+      chunks.push(chunk)
+    }
+
+    expect(userMessageContent).toContain('[AVAILABLE TOURS')
+    expect(userMessageContent).toContain('01HXPUBTOUR000000000000001')
+    expect(userMessageContent).toContain('Hurricane Tour')
+    expect(userMessageContent).toContain('A guided look at hurricane formation.')
+  })
+
+  it('omits [AVAILABLE TOURS] when there are no tour-format rows', async () => {
+    const { streamChat } = await import('./llmProvider')
+    const mockedStream = vi.mocked(streamChat)
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async input => {
+      const url = typeof input === 'string' ? input : input.toString()
+      if (url.includes('/api/v1/search')) {
+        return new Response(JSON.stringify({ datasets: [] }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      }
+      return new Response('not found', { status: 404 })
+    })
+
+    let userMessageContent = ''
+    mockedStream.mockImplementation(async function* (msgs) {
+      const userMsg = msgs.find(m => m.role === 'user')
+      if (userMsg) {
+        userMessageContent =
+          typeof userMsg.content === 'string'
+            ? userMsg.content
+            : JSON.stringify(userMsg.content)
+      }
+      yield { type: 'delta' as const, text: 'Reply.' }
+      yield { type: 'done' as const }
+    })
+
+    const datasetsNoTour = datasets.filter(d => d.format !== 'tour/json')
+    expect(datasetsNoTour.length).toBeGreaterThan(0) // sanity
+
+    const config: DocentConfig = {
+      apiUrl: 'http://localhost:11434/v1',
+      apiKey: '',
+      model: 'test',
+      enabled: true,
+      readingLevel: 'general',
+      visionEnabled: false,
+    }
+
+    const chunks: DocentStreamChunk[] = []
+    for await (const chunk of processMessage(
+      'show me something',
+      [],
+      datasetsNoTour,
+      null,
+      config,
+    )) {
+      chunks.push(chunk)
+    }
+
+    expect(userMessageContent).not.toContain('[AVAILABLE TOURS')
+  })
+
   it('1f/O — short-circuits to local engine when pre-search returns degraded', async () => {
     // The brief promised "the docent transparently routes through
     // the local-engine fallback" when search degrades. Pre-1f/O the
@@ -1678,6 +1805,84 @@ describe('validateAndCleanText — Phase 5 markers', () => {
     expect(cleanedText).not.toContain('FLY')
     expect(cleanedText).not.toContain('MARKER')
     expect(cleanedText).not.toContain('REGION')
+  })
+
+  describe('<<LOAD_FRAME:...>> markers (3pg/C)', () => {
+    const sequenceDataset = makeDataset({
+      id: 'SEQ_001',
+      title: 'Daily SST Anomaly',
+      slug: 'ssta',
+      startTime: '2026-05-16T00:00:00.000Z',
+      period: 'PT1H',
+      frames: {
+        count: 24,
+        urlTemplate: 'https://assets.test/uploads/SEQ_001/01HYUP/frames/{index}.png',
+      },
+    })
+
+    it('extracts a load-frame globe action for a sequence dataset with ISO query', () => {
+      const text = '<<LOAD_FRAME:SEQ_001:2026-05-16T03:00:00Z>>'
+      const { globeActions, cleanedText } = validateAndCleanText(text, [sequenceDataset])
+      const frameAction = globeActions.find(g => g.type === 'load-frame')
+      expect(frameAction).toBeDefined()
+      expect(frameAction).toMatchObject({
+        type: 'load-frame',
+        datasetId: 'SEQ_001',
+        datasetTitle: 'Daily SST Anomaly',
+        frameQuery: '2026-05-16T03:00:00Z',
+        displayName: 'ssta_20260516T030000Z.png',
+      })
+      expect(cleanedText).not.toContain('LOAD_FRAME')
+    })
+
+    it('extracts load-frame for `latest` / `index=N` / bare integer', () => {
+      const text =
+        '<<LOAD_FRAME:SEQ_001:latest>>\n<<LOAD_FRAME:SEQ_001:index=3>>\n<<LOAD_FRAME:SEQ_001:7>>'
+      const { globeActions } = validateAndCleanText(text, [sequenceDataset])
+      const frames = globeActions.filter(g => g.type === 'load-frame')
+      expect(frames).toHaveLength(3)
+    })
+
+    it('matches the dataset id case-insensitively and via legacyId', () => {
+      // Small LLMs occasionally lowercase ULIDs or echo the
+      // legacy SOS id instead of the canonical one. Phase 3pg/C
+      // review — Copilot discussion_r3277040995.
+      const legacyDataset = makeDataset({
+        ...sequenceDataset,
+        id: 'SEQ_002',
+        legacyId: 'INTERNAL_SOS_42',
+      })
+      const text =
+        '<<LOAD_FRAME:seq_002:first>>\n<<LOAD_FRAME:internal_sos_42:latest>>'
+      const { globeActions } = validateAndCleanText(text, [legacyDataset])
+      const frames = globeActions.filter(g => g.type === 'load-frame')
+      expect(frames).toHaveLength(2)
+      // Both should resolve to the same dataset.
+      for (const f of frames) {
+        if (f.type === 'load-frame') expect(f.datasetId).toBe('SEQ_002')
+      }
+    })
+
+    it('silently drops markers for unknown / non-sequence datasets', () => {
+      const text =
+        '<<LOAD_FRAME:UNKNOWN:latest>>\n<<LOAD_FRAME:TEST_001:latest>>'
+      const { globeActions, cleanedText } = validateAndCleanText(text, datasets)
+      expect(globeActions.filter(g => g.type === 'load-frame')).toHaveLength(0)
+      // Strip step removes the literal markers from display anyway.
+      expect(cleanedText).not.toContain('LOAD_FRAME')
+    })
+
+    it('drops the marker but leaves valid <<LOAD:ID>> markers intact when mixed', () => {
+      const text = 'Try this: <<LOAD:TEST_001>>\nOr just this frame: <<LOAD_FRAME:SEQ_001:first>>'
+      const { validIds, globeActions, cleanedText } = validateAndCleanText(text, [
+        ...datasets,
+        sequenceDataset,
+      ])
+      expect(validIds.has('TEST_001')).toBe(true)
+      expect(globeActions.some(g => g.type === 'load-frame')).toBe(true)
+      expect(cleanedText).toContain('<<LOAD:TEST_001>>')
+      expect(cleanedText).not.toContain('LOAD_FRAME')
+    })
   })
 })
 

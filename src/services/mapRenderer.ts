@@ -92,15 +92,29 @@ const GLYPHS_URL = 'https://tiles.openfreemap.org/fonts/{fontstack}/{range}.pbf'
 const TERRAIN_DEM_URL = 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png'
 
 /**
- * Globe style with NASA GIBS raster tiles and OpenFreeMap vector labels/boundaries.
- * Labels and boundaries are hidden by default and can be toggled.
+ * MapLibre projection used by the renderer. The main globe stays on
+ * `'globe'` (the default and historical behaviour); the catalog
+ * Map view (§6.9) opts into `'mercator'` for a flat world map. Both
+ * share the same GIBS raster sources so no new tile fetches are
+ * introduced when the second renderer mounts. */
+export type MapRendererProjection = 'globe' | 'mercator'
+
+/**
+ * Style factory. The base style is shared between the two projections;
+ * only the `projection.type` differs. Keeping a single factory avoids
+ * drift between the day/night layer ordering, the GIBS attribution,
+ * and the sky / light defaults across the two surfaces.
+ *
+ * @param projection — `'globe'` for the main 3D globe, `'mercator'`
+ *  for the §6.9 catalog Map view. Defaults to `'globe'` for
+ *  backwards-compatible call sites.
  */
-function createGlobeStyle(): StyleSpecification {
+function createGlobeStyle(projection: MapRendererProjection = 'globe'): StyleSpecification {
   const initSun = getSunPosition(new Date())
   return {
     version: 8,
     name: 'sos-globe',
-    projection: { type: 'globe' },
+    projection: { type: projection },
     glyphs: GLYPHS_URL,
     sources: {
       'blue-marble': {
@@ -316,6 +330,12 @@ export class MapRenderer implements GlobeRenderer {
   private map: MaplibreMap | null = null
   private container: HTMLElement | null = null
   private canvasId: string = 'globe-canvas'
+  /** Projection requested at init time. Stays `'globe'` for the
+   *  main app; the catalog Map view (§6.9) opts into `'mercator'`.
+   *  Reported via `getProjection()` so analytics / debug surfaces
+   *  can distinguish the two MapRenderer instances when both are
+   *  mounted in the same session. */
+  private projection: MapRendererProjection = 'globe'
   private autoRotateInterval: number | null = null
   private autoRotating = false
   private rotationRate = 1.0 // 1.0 = default (30° per 10s)
@@ -360,12 +380,17 @@ export class MapRenderer implements GlobeRenderer {
       canvasId?: string
       slotIndex?: number
       getLayerId?: () => string | null
+      /** MapLibre projection. Defaults to `'globe'` for the main
+       *  3D globe; the §6.9 catalog Map view passes `'mercator'`
+       *  for a flat world map. */
+      projection?: MapRendererProjection
     },
   ): void {
     this.container = container
     this.canvasId = options?.canvasId ?? 'globe-canvas'
     this.slotIndex = options?.slotIndex ?? 0
     this.getLayerId = options?.getLayerId ?? null
+    this.projection = options?.projection ?? 'globe'
 
     // Inject dark popup styles (idempotent — skips if already present)
     if (!document.getElementById('sos-popup-style')) {
@@ -393,7 +418,7 @@ export class MapRenderer implements GlobeRenderer {
 
     this.map = new maplibregl.Map({
       container,
-      style: createGlobeStyle(),
+      style: createGlobeStyle(this.projection),
       center: DEFAULT_CENTER,
       zoom: DEFAULT_ZOOM,
       minZoom: MIN_ZOOM,
@@ -431,7 +456,7 @@ export class MapRenderer implements GlobeRenderer {
       const center = this.map.getCenter()
       emitCameraSettled({
         slot_index: String(this.slotIndex),
-        projection: 'globe',
+        projection: this.projection,
         center_lat: center.lat,
         center_lon: center.lng,
         zoom: this.map.getZoom(),
@@ -489,11 +514,32 @@ export class MapRenderer implements GlobeRenderer {
     // (3d — renders after everything, uses depth test for stars behind globe).
     // Move label layers above the earth tile layer so they aren't darkened.
     this.map.on('load', () => {
-      logger.info('[MapRenderer] Map loaded with globe projection')
+      logger.info(`[MapRenderer] Map loaded with ${this.projection} projection`)
 
       // Collapse the compact attribution control so it doesn't cover the auto-rotate button
       const attrib = container.querySelector('.maplibregl-ctrl-attrib.maplibregl-compact')
       attrib?.classList.remove('maplibregl-compact-show')
+
+      // The earth tile layer (day/night sphere shader, atmospheric
+      // glow) and the skybox are 3D effects designed for globe
+      // projection — they paint a textured Earth sphere + a
+      // starfield over the basemap. In mercator they'd draw the
+      // sphere on top of the flat raster tiles and obliterate the
+      // basemap; the §6.9 catalog Map view explicitly wants the
+      // raw flat GIBS composite as its basemap. Skipping the
+      // custom layers entirely in mercator keeps the surface a
+      // clean Blue/Black Marble raster — which is what the Map
+      // view's bbox overlays need to read against.
+      if (this.projection === 'mercator') {
+        // Preload still runs so the GIBS HTTP cache warms for the
+        // main globe even when the Map view mounts first.
+        if (isMobile()) {
+          this.map!.once('idle', () => preloadLowZoomTiles())
+        } else {
+          preloadLowZoomTiles()
+        }
+        return
+      }
 
       this.earthLayer = createEarthTileLayer()
 
@@ -545,6 +591,19 @@ export class MapRenderer implements GlobeRenderer {
   /** Return the underlying MapLibre map instance. */
   getMap(): MaplibreMap | null {
     return this.map
+  }
+
+  /** Return the projection this renderer was initialised with.
+   *  Internal callers (the `moveend` → `emitCameraSettled` path
+   *  on this class) read it to stamp the projection on telemetry;
+   *  debug surfaces can also use it to distinguish the main globe
+   *  from the §6.9 catalog Map view's mercator instance when both
+   *  are mounted in the same session. The Map view's antimeridian
+   *  polygon construction reads `MapBboxOverlay.crossesAntimeridian`
+   *  on each bbox instead — the renderer-wide projection isn't
+   *  the right signal there. */
+  getProjection(): MapRendererProjection {
+    return this.projection
   }
 
   /**

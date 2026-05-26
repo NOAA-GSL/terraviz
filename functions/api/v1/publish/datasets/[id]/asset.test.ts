@@ -103,7 +103,7 @@ async function readJson<T>(res: Response): Promise<T> {
 }
 
 describe('POST /api/v1/publish/datasets/{id}/asset — happy paths', () => {
-  it('routes a video data upload to Stream and persists a pending row', async () => {
+  it('routes a video data upload to R2 at the dispatch-discoverable source key (3pd)', async () => {
     const { env, sqlite, datasetId } = setupEnv()
     const res = await assetInit(
       ctx({
@@ -118,34 +118,75 @@ describe('POST /api/v1/publish/datasets/{id}/asset — happy paths', () => {
       }),
     )
     expect(res.status).toBe(201)
-    expect(res.headers.get('location')).toMatch(
-      new RegExp(`^/api/v1/publish/datasets/${datasetId}/asset/`),
-    )
     const body = await readJson<{
       upload_id: string
       kind: string
       target: string
-      stream?: { upload_url: string; stream_uid: string }
-      r2?: unknown
+      stream?: unknown
+      r2?: { method: string; url: string; key: string; headers: Record<string, string> }
       expires_at: string
     }>(res)
-    expect(body.target).toBe('stream')
+    // Stream branch is gone — video data now goes to R2 at a
+    // predictable per-upload key the GHA transcode workflow can
+    // discover via the `repository_dispatch` payload. The
+    // upload_id is in the key (not just the dataset_id) so a
+    // re-upload before the first transcode finishes lands in a
+    // distinct slot rather than overwriting bytes the workflow
+    // is about to download. Fix for PR #112 Copilot #9.
+    expect(body.target).toBe('r2')
+    expect(body.stream).toBeUndefined()
+    expect(body.r2?.key).toBe(`uploads/${datasetId}/${body.upload_id}/source.mp4`)
+    expect(body.r2?.method).toBe('PUT')
     expect(body.kind).toBe('data')
-    expect(body.r2).toBeUndefined()
-    expect(body.stream?.upload_url).toContain('mock-stream.localhost')
-    expect(body.stream?.stream_uid).toMatch(/^[0-9a-f]{32}$/)
-    expect(typeof body.expires_at).toBe('string')
 
     const row = sqlite
       .prepare(`SELECT * FROM asset_uploads WHERE id = ?`)
       .get(body.upload_id) as Record<string, unknown> | undefined
-    expect(row).toBeTruthy()
-    expect(row?.dataset_id).toBe(datasetId)
-    expect(row?.publisher_id).toBe(STAFF.id)
-    expect(row?.status).toBe('pending')
-    expect(row?.target).toBe('stream')
-    expect((row?.target_ref as string).startsWith('stream:')).toBe(true)
-    expect(row?.claimed_digest).toBe(HAPPY_DIGEST)
+    expect(row?.target).toBe('r2')
+    expect((row?.target_ref as string)).toBe(
+      `r2:uploads/${datasetId}/${body.upload_id}/source.mp4`,
+    )
+  })
+
+  it('issues a longer presigned-PUT TTL for video sources than for aux assets', async () => {
+    // PR #112 followup — the default 15-min TTL would expire
+    // multi-GB MP4 uploads mid-transfer on a typical residential
+    // uplink. Video sources get R2_PUT_TTL_VIDEO_SECONDS (2 h);
+    // every other kind keeps R2_PUT_TTL_SECONDS (15 min).
+    const { env, datasetId } = setupEnv()
+    const videoRes = await assetInit(
+      ctx({
+        env,
+        datasetId,
+        body: {
+          kind: 'data',
+          mime: 'video/mp4',
+          size: 50 * 1024 * 1024,
+          content_digest: HAPPY_DIGEST,
+        },
+      }),
+    )
+    const videoBody = await readJson<{ expires_at: string }>(videoRes)
+    const thumbRes = await assetInit(
+      ctx({
+        env,
+        datasetId,
+        body: {
+          kind: 'thumbnail',
+          mime: 'image/png',
+          size: 1234,
+          content_digest: HAPPY_DIGEST,
+        },
+      }),
+    )
+    const thumbBody = await readJson<{ expires_at: string }>(thumbRes)
+
+    const videoExpiresAt = new Date(videoBody.expires_at).getTime()
+    const thumbExpiresAt = new Date(thumbBody.expires_at).getTime()
+    // Video TTL is meaningfully longer than thumb — at least
+    // an hour gap, ruling out any near-coincidence from
+    // request-clock skew during the test.
+    expect(videoExpiresAt - thumbExpiresAt).toBeGreaterThanOrEqual(60 * 60 * 1000)
   })
 
   it('routes a thumbnail to R2 with a content-addressed key', async () => {
@@ -325,24 +366,12 @@ describe('POST /api/v1/publish/datasets/{id}/asset — body validation', () => {
 })
 
 describe('POST /api/v1/publish/datasets/{id}/asset — config errors', () => {
-  it('returns 503 stream_unconfigured when video upload but no Stream config', async () => {
-    const { env, datasetId } = setupEnv({ MOCK_STREAM: undefined })
-    delete (env as Record<string, unknown>).MOCK_STREAM
-    const res = await assetInit(
-      ctx({
-        env,
-        datasetId,
-        body: {
-          kind: 'data',
-          mime: 'video/mp4',
-          size: 1000,
-          content_digest: HAPPY_DIGEST,
-        },
-      }),
-    )
-    expect(res.status).toBe(503)
-    expect((await readJson<{ error: string }>(res)).error).toBe('stream_unconfigured')
-  })
+  // Stream-routing tests removed in 3pd/A. Video data now goes
+  // through R2 like every other asset kind, so the
+  // `stream_unconfigured` / `stream_upstream_error` /
+  // `mock_stream_unsafe` branches are no longer reachable from
+  // `chooseTarget`. The R2 path's analogous tests below cover
+  // the surviving error envelopes.
 
   it('returns 503 r2_unconfigured when image upload but no R2 config', async () => {
     const { env, datasetId } = setupEnv({ MOCK_R2: undefined })
@@ -383,6 +412,67 @@ describe('POST /api/v1/publish/datasets/{id}/asset — config errors', () => {
     expect(body.errors[0]).toMatchObject({ field: 'mime', code: 'mime_format_mismatch' })
   })
 
+  it('returns 409 transcoding_in_progress when minting a video upload on a transcoding row', async () => {
+    // PR #112 followup — fail-fast guard so the publisher doesn't
+    // burn a 2-hour presigned URL + a multi-GB upload only to get
+    // 409d at /complete. The downstream guard in /complete still
+    // runs (defense in depth); this just stops a wasted upload
+    // at the mint step.
+    const { env, sqlite, datasetId } = setupEnv()
+    sqlite
+      .prepare(
+        `UPDATE datasets
+           SET transcoding = 1, active_transcode_upload_id = ?
+         WHERE id = ?`,
+      )
+      .run('UP-PRIOR-XXXXXXXXXXXXXXXX', datasetId)
+    const res = await assetInit(
+      ctx({
+        env,
+        datasetId,
+        body: {
+          kind: 'data',
+          mime: 'video/mp4',
+          size: 5_000_000_000, // 5 GB — the scenario this guard exists for
+          content_digest: HAPPY_DIGEST,
+        },
+      }),
+    )
+    expect(res.status).toBe(409)
+    const body = await readJson<{ error: string; message: string }>(res)
+    expect(body.error).toBe('transcoding_in_progress')
+    expect(body.message).toContain('UP-PRIOR-XXXXXXXXXXXXXXXX')
+  })
+
+  it('does NOT block an image upload while a video transcode is in flight', async () => {
+    // Scope check on the guard above: image / aux uploads run
+    // through their own (synchronous) finalize path and aren't
+    // affected by an in-flight video transcode. The publisher
+    // should still be able to update a thumbnail or legend
+    // while the video bundle finishes.
+    const { env, sqlite, datasetId } = setupEnv()
+    sqlite
+      .prepare(
+        `UPDATE datasets
+           SET transcoding = 1, active_transcode_upload_id = ?
+         WHERE id = ?`,
+      )
+      .run('UP-VIDEO-INFLIGHT-XXXXXXXX', datasetId)
+    const res = await assetInit(
+      ctx({
+        env,
+        datasetId,
+        body: {
+          kind: 'thumbnail',
+          mime: 'image/png',
+          size: 1234,
+          content_digest: HAPPY_DIGEST,
+        },
+      }),
+    )
+    expect(res.status).toBe(201)
+  })
+
   it('accepts application/json upload for a tour/json dataset', async () => {
     const { env, sqlite, datasetId } = setupEnv()
     sqlite
@@ -421,39 +511,9 @@ describe('POST /api/v1/publish/datasets/{id}/asset — config errors', () => {
     expect(res.status).toBe(201)
   })
 
-  it('returns 502 stream_upstream_error when Stream API errors out (configured)', async () => {
-    const { env, datasetId } = setupEnv({ MOCK_STREAM: undefined })
-    delete (env as Record<string, unknown>).MOCK_STREAM
-    Object.assign(env, {
-      STREAM_ACCOUNT_ID: 'acct',
-      STREAM_API_TOKEN: 'tok',
-    })
-    const fetchStub = (async () =>
-      new Response(JSON.stringify({ success: false, errors: [{ code: 1, message: 'quota' }] }), {
-        status: 429,
-        headers: { 'Content-Type': 'application/json' },
-      })) as unknown as typeof fetch
-    const originalFetch = globalThis.fetch
-    globalThis.fetch = fetchStub
-    try {
-      const res = await assetInit(
-        ctx({
-          env,
-          datasetId,
-          body: {
-            kind: 'data',
-            mime: 'video/mp4',
-            size: 1000,
-            content_digest: HAPPY_DIGEST,
-          },
-        }),
-      )
-      expect(res.status).toBe(502)
-      expect((await readJson<{ error: string }>(res)).error).toBe('stream_upstream_error')
-    } finally {
-      globalThis.fetch = originalFetch
-    }
-  })
+  // Stream upstream-error test removed in 3pd/A; same rationale as
+  // the deletions in §"config errors" above — the chooseTarget
+  // branch that reached Stream is gone.
 })
 
 describe('POST /api/v1/publish/datasets/{id}/asset — mock flag', () => {
@@ -476,24 +536,9 @@ describe('POST /api/v1/publish/datasets/{id}/asset — mock flag', () => {
     expect(body.mock).toBe(true)
   })
 
-  it('stamps mock=true on Stream uploads when MOCK_STREAM is set', async () => {
-    const { env, datasetId } = setupEnv()
-    const res = await assetInit(
-      ctx({
-        env,
-        datasetId,
-        body: {
-          kind: 'data',
-          mime: 'video/mp4',
-          size: 50_000,
-          content_digest: HAPPY_DIGEST,
-        },
-      }),
-    )
-    expect(res.status).toBe(201)
-    const body = await readJson<{ mock: boolean }>(res)
-    expect(body.mock).toBe(true)
-  })
+  // "Stamps mock=true on Stream uploads" deleted in 3pd/A — Stream
+  // is no longer a target. Video uploads now exercise the
+  // MOCK_R2-stamps-mock=true path covered above.
 
   it('refuses MOCK_R2=true on a non-loopback hostname', async () => {
     const { env, datasetId } = setupEnv()
@@ -528,67 +573,107 @@ describe('POST /api/v1/publish/datasets/{id}/asset — mock flag', () => {
     expect((await readJson<{ error: string }>(res)).error).toBe('mock_r2_unsafe')
   })
 
-  it('refuses MOCK_STREAM=true on a non-loopback hostname', async () => {
-    const { env, datasetId } = setupEnv()
-    const prodCtx = {
-      ...ctx({ env, datasetId, body: {} }),
-      request: new Request(
-        `https://terraviz.example.com/api/v1/publish/datasets/${datasetId}/asset`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            kind: 'data',
-            mime: 'video/mp4',
-            size: 50_000,
-            content_digest: HAPPY_DIGEST,
-          }),
-        },
-      ),
-    } as Parameters<typeof assetInit>[0]
-    const res = await assetInit(prodCtx)
-    expect(res.status).toBe(500)
-    expect((await readJson<{ error: string }>(res)).error).toBe('mock_stream_unsafe')
+  // "Refuses MOCK_STREAM=true on non-loopback" + "stamps mock=false
+  // when only one half of the pair is mocked" deleted in 3pd/A
+  // along with the rest of the Stream-routing test coverage.
+})
+
+describe('POST /api/v1/publish/datasets/{id}/asset — image-sequence (3pf)', () => {
+  function seqBody(
+    frameCount: number,
+    overrides: Partial<{ mime: string; source_filenames_digest: string }> = {},
+  ): Record<string, unknown> {
+    const frames = Array.from({ length: frameCount }, (_, i) => ({
+      filename: `frame_${String(i + 1).padStart(5, '0')}.png`,
+      digest: `sha256:${String(i).padStart(64, '0').slice(0, 64)}`,
+      size: 4_000_000,
+    }))
+    const size = frames.reduce((sum, f) => sum + f.size, 0)
+    return {
+      kind: 'data',
+      mime: overrides.mime ?? 'image/png',
+      frames,
+      size,
+      source_filenames_digest: overrides.source_filenames_digest ?? `sha256:${'f'.repeat(64)}`,
+    }
+  }
+
+  it('mints one presigned PUT per frame + one for the source-filenames blob', async () => {
+    const { env, datasetId, sqlite } = setupEnv()
+    const res = await assetInit(ctx({ env, body: seqBody(3), datasetId }))
+    expect(res.status).toBe(201)
+    const body = await readJson<{
+      upload_id: string
+      kind: 'data'
+      target: 'r2'
+      frames: Array<{ filename: string; index: number; key: string; url: string }>
+      source_filenames: { key: string }
+      mock: boolean
+    }>(res)
+    expect(body.target).toBe('r2')
+    expect(body.frames).toHaveLength(3)
+    // Indexes are zero-padded to 5 digits in the R2 key, matching
+    // the `%05d` glob ffmpeg's image-sequence input reads.
+    expect(body.frames[0].key).toMatch(/\/frames\/00000\.png$/)
+    expect(body.frames[1].key).toMatch(/\/frames\/00001\.png$/)
+    expect(body.frames[2].key).toMatch(/\/frames\/00002\.png$/)
+    // The source-filenames blob lives one level up from frames/.
+    expect(body.source_filenames.key).toMatch(/\/source_filenames\.json$/)
+    expect(body.source_filenames.key).not.toContain('/frames/')
+    // The asset_uploads row carries frame_count = N so /complete
+    // can branch its HEAD-all loop without re-parsing target_ref.
+    const row = sqlite
+      .prepare(`SELECT frame_count, mime, target_ref FROM asset_uploads WHERE id = ?`)
+      .get(body.upload_id) as {
+      frame_count: number | null
+      mime: string
+      target_ref: string
+    }
+    expect(row.frame_count).toBe(3)
+    expect(row.mime).toBe('image/png')
+    // target_ref is the prefix with a trailing slash so a future
+    // R2 list operation against it returns only the frames.
+    expect(row.target_ref).toMatch(/^r2:uploads\/[^/]+\/[^/]+\/frames\/$/)
   })
 
-  it('stamps mock=false when only one half of the pair is mocked', async () => {
-    // R2 mock, Stream not mocked — Stream upload reports mock=false.
-    const { env, datasetId } = setupEnv({ MOCK_STREAM: undefined })
-    delete (env as Record<string, unknown>).MOCK_STREAM
-    // Provide real-ish Stream credentials so the helper doesn't 503.
-    Object.assign(env, {
-      STREAM_ACCOUNT_ID: 'acct',
-      STREAM_API_TOKEN: 'tok',
-      STREAM_CUSTOMER_SUBDOMAIN: 'customer-real.cloudflarestream.com',
-    })
-    // Patch global fetch — mintDirectUploadUrl will reach for it.
-    const originalFetch = globalThis.fetch
-    globalThis.fetch = (async () =>
-      new Response(
-        JSON.stringify({
-          success: true,
-          result: { uploadURL: 'https://upload.cloudflarestream.com/abc', uid: 'abc' },
-        }),
-        { status: 200, headers: { 'Content-Type': 'application/json' } },
-      )) as unknown as typeof fetch
-    try {
-      const res = await assetInit(
-        ctx({
-          env,
-          datasetId,
-          body: {
-            kind: 'data',
-            mime: 'video/mp4',
-            size: 50_000,
-            content_digest: HAPPY_DIGEST,
-          },
-        }),
+  it('rejects with frames_require_video_format when the dataset format is not video/mp4', async () => {
+    const { env, datasetId, sqlite } = setupEnv()
+    sqlite.prepare(`UPDATE datasets SET format = 'image/png' WHERE id = ?`).run(datasetId)
+    const res = await assetInit(ctx({ env, body: seqBody(3), datasetId }))
+    expect(res.status).toBe(400)
+    const body = await readJson<{ errors: Array<{ code: string }> }>(res)
+    expect(body.errors[0].code).toBe('frames_require_video_format')
+  })
+
+  it('refuses to mint while the row is already transcoding', async () => {
+    const { env, datasetId, sqlite } = setupEnv()
+    sqlite
+      .prepare(
+        `UPDATE datasets SET transcoding = 1, active_transcode_upload_id = 'OTHER' WHERE id = ?`,
       )
-      expect(res.status).toBe(201)
-      const body = await readJson<{ mock: boolean }>(res)
-      expect(body.mock).toBe(false)
-    } finally {
-      globalThis.fetch = originalFetch
-    }
+      .run(datasetId)
+    const res = await assetInit(ctx({ env, body: seqBody(3), datasetId }))
+    expect(res.status).toBe(409)
+    expect((await readJson<{ error: string }>(res)).error).toBe('transcoding_in_progress')
+  })
+
+  it('rejects an invalid source_filenames_digest', async () => {
+    const { env, datasetId } = setupEnv()
+    const body = seqBody(3, { source_filenames_digest: 'not-a-digest' })
+    const res = await assetInit(ctx({ env, body, datasetId }))
+    expect(res.status).toBe(400)
+    const responseBody = await readJson<{ errors: Array<{ field: string; code: string }> }>(res)
+    expect(responseBody.errors[0].field).toBe('source_filenames_digest')
+  })
+
+  it('surfaces per-frame validation errors from validateImageSequenceInit', async () => {
+    const { env, datasetId } = setupEnv()
+    const body = seqBody(2)
+    // Mutate one frame's digest to break the per-frame format check.
+    ;(body.frames as Array<Record<string, unknown>>)[1].digest = 'sha256:not-hex'
+    const res = await assetInit(ctx({ env, body, datasetId }))
+    expect(res.status).toBe(400)
+    const responseBody = await readJson<{ errors: Array<{ field: string; code: string }> }>(res)
+    expect(responseBody.errors.some(e => e.field === 'frames[1].digest')).toBe(true)
   })
 })

@@ -14,6 +14,141 @@ and is lazy-loaded the same way Three.js is — the main bundle is
 unchanged for non-publisher visitors. Code lives under
 `src/ui/publisher/**`.
 
+## Phase 3 implementation conventions
+
+A short collection of decisions that apply across every page of
+the portal and are easiest to settle before the first piece of UI
+code lands. Each item closes a gap the per-feature sections below
+would otherwise leave implicit; each is inherited by every Phase 3
+sub-phase (see [`CATALOG_BACKEND_PLAN.md`](CATALOG_BACKEND_PLAN.md)
+§"Phase 3 — Publisher portal (staff)" → "Sub-phase execution
+plan").
+
+Phase 3 sub-phases are tagged `3pa`–`3pj` in commit prefixes,
+CHANGELOG entries, and the table referenced above. The
+`p`-qualified letters keep the portal work distinct from the
+unrelated R2 + HLS video-pipeline sub-phases that already claimed
+the bare `3a`–`3h` slots in `git log`. The original allocation
+(`3pa`–`3pg`) has shifted twice as scope landed: the `3pe` slot
+was originally penciled in for tour creator but the SPA-side
+`?preview=` consumer claimed it (shipped via PR #116); the `3pf`
+and `3pg` slots are now image-sequence upload (ingest + exposure
+respectively, see [`CATALOG_IMAGE_SEQUENCE_PLAN.md`](CATALOG_IMAGE_SEQUENCE_PLAN.md)),
+which pushes tour creator / bulk import / webhook fan-out down
+two more steps to `3ph` / `3pi` / `3pj`. Prep work that ships
+before the first sub-phase uses `3-pre/<letter>`. See the
+backend-plan section for the full explanation.
+
+### Lazy-load shape
+
+The portal mounts at `/publish` and loads via a single dynamic
+`import('./ui/publisher')` from `src/main.ts`, gated on
+`location.pathname.startsWith('/publish')`. This mirrors the
+lazy-import pattern `src/ui/vrButton.ts` uses to keep Three.js out
+of the main bundle: non-publisher visits never fetch the portal
+chunk, and the portal chunk lands as a single Vite-named entry
+(`assets/publisher-[hash].js`) for easy identification in
+`vite build --report` output.
+
+Routing inside the portal uses the History API directly — no
+framework. The handful of pages (`/publish/me`,
+`/publish/datasets`, `/publish/datasets/{id}`, `/publish/tours`,
+`/publish/import`) is small enough that a ~50-line router built
+on `history.pushState` + `popstate` is cheaper than pulling in a
+router library, and matches the "vanilla TS with a few focused
+libraries" stance documented in `CLAUDE.md` §"Codebase Overview".
+
+### i18n discipline
+
+Every user-facing string in `src/ui/publisher/**` flows through
+`t()` in [`../src/i18n/index.ts`](../src/i18n/index.ts) — the same
+hard rule the rest of the UI follows (see `CLAUDE.md`
+§"Localization"). Phase 3 will add ~100–150 new keys to
+`locales/en.json` under a `publisher.*` namespace. Keys that need
+translator context — interpolated field names in validation error
+messages, ARIA labels, the `<<LOAD:DATASET_ID>>`-equivalent
+marker syntax in tour previews — get a one-line entry in
+`locales/_explanations.json` in the same commit.
+
+`npm run check:i18n-strings` already covers `src/ui/`; the new
+publisher tree is picked up automatically. Translators see new
+keys through the existing Weblate workflow without any pipeline
+changes.
+
+### Markdown sanitization
+
+The abstract field accepts markdown but the rendered HTML reaches
+two surfaces — the portal preview and (eventually) the public
+dataset detail page — both of which are XSS-sensitive. Phase 3pc/A
+ships a single shared renderer in
+`src/services/markdownRenderer.ts`:
+
+1. Parse with `marked` (already a runtime dep — used today by
+   `scripts/build-privacy-page.ts` for the privacy-page build,
+   pulled into the SPA's lazy publisher chunk for this purpose).
+   The existing `renderMarkdownLite` in `src/ui/chatUI.ts` stays
+   as the chat-message renderer — it's deliberately scoped to
+   **bold**, lists, and links, which is insufficient for dataset
+   abstracts.
+2. Sanitize the result with `sanitizeMarkdownHtml` from
+   `src/ui/sanitizeHtml.ts` (the same in-house sanitizer the
+   help-guide uses, with a `MARKDOWN_TAGS` allowlist that's a
+   strict superset of the guide's: adds `h2`, `blockquote`,
+   `pre`, `hr` alongside the existing inline tags).
+   Reverse-tabnabbing defense (`target="_blank"` anchors get
+   `rel="noopener noreferrer"` injected) already lives in the
+   walker. No new runtime dep — DOMPurify was considered but
+   `sanitizeHtml.ts` already implements the allowlist-based
+   pattern we need.
+3. Both the live preview in the portal and the eventual public
+   detail page call `renderMarkdown(source)` from the same
+   module, so the publisher's preview is byte-for-byte what users
+   will see.
+
+`marked` is imported by the publisher chunk (lazy-loaded for
+non-publisher visits) and by the build-time privacy-page script;
+no other runtime additions. The threat-model section "XSS via
+publisher markdown" in
+[`CATALOG_BACKEND_PLAN.md`](CATALOG_BACKEND_PLAN.md) is the
+substrate; this section pins the implementation.
+
+### Portal analytics
+
+The portal emits the same shape of events the rest of the SPA
+emits (see [`ANALYTICS.md`](ANALYTICS.md) and
+[`ANALYTICS_CONTRIBUTING.md`](ANALYTICS_CONTRIBUTING.md)). Phase 3
+adds the following event types to `TelemetryEvent` in
+[`../src/types/index.ts`](../src/types/index.ts):
+
+| Event | Tier | Fields | Notes |
+|---|---|---|---|
+| `publisher_portal_loaded` | A | `route` (`me` \| `datasets` \| `tours` \| `import`) | One per portal-chunk load. |
+| `publisher_action` | A | `action` (`draft_saved` \| `published` \| `retracted` \| `preview_minted` \| `asset_uploaded` \| `bulk_imported`), `dataset_id` (hashed via `src/analytics/hash.ts`) | Server-side `audit_events` rows are the source of truth for *who* did *what*; this Tier-A event powers the operator dashboard without persisting publisher identity client-side. |
+| `publisher_validation_failed` | B | `field`, `code` | Research-tier so we can size which validators trip publishers most without storing the offending free-text values. |
+| `publisher_dwell` | B | `surface` (form section name), `duration_ms` | Existing multi-handle tracker in `src/analytics/dwell.ts`; standard ≤30/min throttle. |
+
+`TIER_B_EVENT_TYPES` in `src/types/index.ts` gains the two
+research-tier entries; no other change to the tier gate. Server-
+side stamping in `functions/api/ingest.ts` lists the new event
+types in `KNOWN_EVENT_TYPES`. Grafana gains a "Publisher activity"
+row on the existing `Terraviz — Product Health` dashboard in 3pa.
+
+### Cloudflare Access — browser policy
+
+Phase 1a wired Access to protect `/api/v1/publish/**` for the
+service-token / API flow. Phase 3pa extends the same Access
+application to cover the browser flow at `/publish/**` so the
+portal HTML and chunk respect the same auth boundary as the API.
+The policy is dashboard-managed (see
+[`CATALOG_BACKEND_PLAN.md`](CATALOG_BACKEND_PLAN.md) §"Constraints
+found during exploration" constraint 3); operator steps land in
+[`SELF_HOSTING.md`](SELF_HOSTING.md) during 3pa.
+
+Local dev continues to use `DEV_BYPASS_ACCESS=true` for the API;
+the portal reads the same bypass for the browser side so a
+publisher can iterate against `wrangler pages dev` without an
+Access session.
+
 ## Dataset entry page
 
 A single-form workflow with progressive disclosure. Required fields
@@ -100,6 +235,24 @@ Two cross-cutting policies sit on top of the per-field rules:
 
 ## Tour creator
 
+> **Status: capture + edit + persist shipped (Phase 3pt/A–G).**
+> The publisher portal's `/publish/tours` page lists existing
+> tours; the "New tour" button mints a draft and opens the
+> SPA in authoring mode (`/?tourEdit=<id>`). The floating dock
+> captures 18 task kinds across six groups (primary, layout,
+> environment, rotation, flow, player), supports drag-to-
+> reorder + click-to-edit + delete, and autosaves to R2 every
+> 30 s. The dock's **Publish** button snapshots the draft to
+> an immutable `tours/{id}/published/{publish_id}.json` key.
+>
+> Deferred: "Play from here" preview, rich-UI captures
+> (overlay drag-to-place, click-on-globe placemark, audio /
+> video file pickers, question form), and soft-retract for
+> published tours (Phase 4 federation gesture). The JSON
+> editor remains the universal escape hatch for any task
+> type the typed captures don't cover yet. Delete (hard) is
+> wired today — click × on a tour list row.
+
 This is the larger subproject. Goal: a publisher records a
 sequence of camera positions, dataset loads, overlay shows, and
 narration without writing JSON.
@@ -145,26 +298,134 @@ can refuse a tour newer than it understands.
 
 ## Asset uploader
 
-A reusable component used by both the dataset and tour forms:
+A reusable component used by both the dataset and tour forms.
+**Cloudflare Stream is no longer in the picture** — Phase 3 cut over
+to a pure R2 + GitHub Actions pipeline; the full design lives in
+[`CATALOG_ASSETS_PIPELINE.md`](CATALOG_ASSETS_PIPELINE.md) §"Video
+pipeline (R2 + GitHub Actions — current)".
 
-- Drag-drop or click-to-browse.
-- Detects MIME type, picks the right upload target (Stream vs. R2).
-- Shows progress, retries on transient failure, emits a
-  completion event with the final `data_ref`.
-- For video: polls Stream's transcode-status endpoint; only flips
-  to "ready" when HLS is playable.
-- For image: optional client-side downsample preview before upload
-  so a publisher knows roughly what the 2048-wide variant will
-  look like.
+> **Image-sequence input (Phase 3pf — shipped).** The uploader
+> grew a second tab — "Upload frames" alongside the original
+> "Upload MP4" — for video-format datasets. The frames tab
+> mounts a multi-file picker constrained to PNG / JPEG / WebP
+> (up to 10 000 per upload), runs SHA-256 over every frame
+> in-browser, mints presigned PUTs in one round trip, ships them
+> to R2 in a bounded-concurrency pool (5 parallel), and posts
+> `/complete` to fire a `kind: 'frames'` `repository_dispatch`.
+> The GHA runner branches on `kind` and runs ffmpeg against the
+> image-sequence input with the catalog-wide 30-fps invariant
+> (see
+> [`CATALOG_ASSETS_PIPELINE.md`](CATALOG_ASSETS_PIPELINE.md)
+> §"What ffmpeg actually produces" for the rationale). Frame
+> metadata (`frame_count`, `frame_extension`,
+> `frame_source_filenames_ref`) lands on the dataset row in 3pf
+> so the exposure half (Phase 3pg — `/frames` endpoints, Orbit
+> marker, search time-range filter) can ship without back-fill.
+> Tour creator / bulk import / webhook fan-out shift to
+> Phase 3ph / 3pi / 3pj. Design in
+> [`CATALOG_IMAGE_SEQUENCE_PLAN.md`](CATALOG_IMAGE_SEQUENCE_PLAN.md);
+> tracking issue
+> [zyra-project/terraviz#114](https://github.com/zyra-project/terraviz/issues/114).
+> Deferred polish (not in v1): thumbnail strip, manual-order
+> textarea for publishers whose filenames don't naturally sort,
+> display-naming preview panel showing what consumers will see
+> on the wire.
+
+Behavior:
+
+- Click-to-browse file input (no drag-drop wire-up shipped —
+  the input is a standard `<input type="file">`; adding HTML5
+  drag-drop listeners is a small follow-up tracked separately).
+- Detects MIME type and picks the right target — **everything goes
+  to R2**; the only thing the kind decides is what happens *after*
+  the PUT.
+- Shows progress (XHR upload events feed a `<progress>`) and emits
+  a completion event with the final `data_ref`. Surfaces stage-
+  specific errors (mint / upload / finalize) through an inline
+  status line + a `<details>` disclosure for the raw API code;
+  the publisher can retry by re-picking the file (no automatic
+  retry loop today — that's a follow-up).
+- **Image** (`image/png` / `image/jpeg` / `image/webp`): the
+  presigned PUT lands the image at
+  `r2:datasets/{id}/by-digest/sha256/{hex}/asset.{ext}`
+  (content-addressed within the dataset's prefix — the digest
+  in the path is the same value `content_digest` carries on
+  the dataset row, so re-uploading byte-identical bytes to
+  the same dataset lands the same R2 object instead of a
+  duplicate. Cross-dataset dedup is NOT what this layout
+  does — the dataset id is part of the key, so different
+  datasets carry independent copies of identical bytes).
+  The finalize step writes `data_ref` directly — no transcode.
+  (A client-side downsample preview before upload — so the
+  publisher sees roughly what the 2048-wide variant will look
+  like — was an early sketch but isn't in the shipped uploader;
+  candidate follow-up if publishers ask for it.)
+- **Video** (`video/mp4`): the presigned PUT lands the MP4 at
+  `r2:uploads/{id}/{upload_id}/source.mp4` (per-upload prefix
+  so a re-upload to a still-transcoding row doesn't overwrite
+  the source bytes the prior workflow may still be reading).
+  The finalize step fires a
+  GitHub `repository_dispatch` and stamps the row
+  `transcoding=true`. The form returns control to the publisher
+  immediately; the detail page polls every 5 s until `transcoding`
+  flips back to false and `data_ref` resolves to
+  `r2:videos/{id}/{upload_id}/master.m3u8` (versioned per upload
+  so a re-upload to a published row doesn't overwrite the
+  bundle the public manifest is still serving). Whole loop is
+  1–10 minutes depending on source length.
+
+### Sub-phase 3pd breakdown
+
+Same `3p<letter>` convention 3pa–3pc used. Each sub-commit ships
+something demoable on its own.
+
+| Sub-phase | Demoable result | Notes |
+|---|---|---|
+| **3pd/A** — Presigned PUT + finalize endpoints | `POST /api/v1/publish/datasets/{id}/asset` (mint presigned URL) and `POST /api/v1/publish/datasets/{id}/asset/{upload_id}/complete` (verify + dispatch). The complete handler also stamps `transcoding=1` on the row and fires the GitHub `repository_dispatch`. A separate `POST /api/v1/publish/datasets/{id}/transcode-complete` route is what the GHA workflow calls back to clear `transcoding` and set `data_ref` to the new HLS bundle. Migration 0011 adds the `transcoding` boolean; migration 0012 adds `active_transcode_upload_id` to bind a transcoding row to the specific upload that started it (the overlap-rejection guard and the stale-callback guard both key off this column). No portal UI yet. | Worker side complete; tested via `curl` + a manual repository_dispatch. |
+| **3pd/B** — GHA workflow | `.github/workflows/transcode-hls.yml` listens on `repository_dispatch: types: [transcode-hls]`, runs the existing `cli/lib/ffmpeg-hls.ts` + `cli/lib/r2-upload.ts` via `cli/transcode-from-dispatch.ts`, then POSTs `/transcode-complete` on the publisher API with the workflow's Access service-token headers. | Reuses the proven Phase 3 transcoder code path. New GHA repo secrets: `R2_S3_ENDPOINT`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `TERRAVIZ_SERVER`, `CF_ACCESS_CLIENT_ID`, `CF_ACCESS_CLIENT_SECRET`. New Pages bindings: `GITHUB_OWNER`, `GITHUB_REPO`, `GITHUB_DISPATCH_TOKEN`. |
+| **3pd/C** — Portal uploader | Click-to-browse file picker in the dataset form, mounted alongside the 3pc/F-fix2 manual `data_ref` input. XHR upload-progress events drive an inline `<progress>` bar; stage-specific errors (mint / upload / finalize) surface in a status line + a `<details>` disclosure. Failed uploads keep the file picker enabled so the publisher can retry by re-picking the file. No transparent retry — every failure surfaces in the status line and the publisher has to re-pick the file to retry. | The manual ref input stays so legacy `vimeo:` / `url:` references can still be set without re-uploading bytes. Same FormState slot, two parallel input surfaces. |
+| **3pd/D** — Transcoding status | Static "Transcoding…" badge on the detail page when `transcoding=true`. Detail-page polling every 5 s, stops when `transcoding=false`. (Elapsed-time display is a candidate follow-up, not currently shipped.) | Stops automatically when the row reaches a terminal state. Reuses the existing detail-page render loop. |
+| **3pd/E** — Preview button | "Preview" button on the detail page mints a token via `POST .../preview`. The modal initially surfaced the backend's anonymous-read URL (`/api/v1/datasets/{id}/preview/{token}`), which returns the dataset's metadata as JSON; the SPA-side `/?preview=<token>&dataset=<id>` consumer that renders the globe with full playback context lands in **Phase 3pe** below, at which point the modal swaps to the SPA URL. | Closes the read → upload → preview → publish loop for the publisher portal. |
+| **3pd/F** — CHANGELOG + SELF_HOSTING walkthrough | Operator-facing summary of the new bindings, the GHA secrets, and the migration order. | Same pattern 3pc/G followed. |
+
+### Sub-phase 3pe breakdown
+
+The follow-up that closes the 3pd preview loop. Phase 3pd shipped
+the mint button + a modal copying the backend's anonymous-read
+JSON URL; 3pe lands the SPA receiver so that URL renders the
+draft as a live globe, then swaps the modal to surface the SPA
+URL instead.
+
+| Sub-phase | Demoable result | Notes |
+|---|---|---|
+| **3pe/A** — Preview manifest endpoint | `GET /api/v1/datasets/{id}/preview/{token}/manifest` — token-gated sibling of the public manifest endpoint. Same auth envelope as the metadata route (`invalid_token`, `token_id_mismatch`, `preview_unconfigured`). Skips the public route's `published_at IS NOT NULL` filter so drafts are actually playable. Cache-Control `private, no-store` since drafts mutate during the publish loop. | Reuses `resolveManifest` from the public module so wire shape stays identical across the two paths. |
+| **3pe/B** — Preview metadata wire shape | Anonymous preview endpoint (`[token].ts`) switches from `{ dataset: DatasetRow }` (raw D1 columns) to `{ dataset: WireDataset }` via `serializeDataset`, with `dataLink` rewritten to the 3pe/A manifest sibling. The SPA's existing `hlsService` / `loadImageDataset` paths then consume a draft unchanged. | Drops the curl-debugging convenience of `data_ref` on the wire — operators who want it can hit `/api/v1/publish/datasets/{id}` from inside Access. |
+| **3pe/C** — SPA receiver | `main.ts` boot flow detects `?preview=<token>&dataset=<id>` before the regular `?dataset=` branch, fetches the wire row via `dataService.fetchPreviewDataset`, injects via `dataService.injectDataset`, then delegates to `loadDataset(id, 'url')`. Typed `PreviewFetchError` codes drive a specific error overlay (`invalid_token`, `not_found`, …). `isManifestUrl` regex extended to match the preview sibling so no preview-mode logic leaks into the loader. | `appState.datasets` stays as the public catalog snapshot — the browse panel still shows what a logged-out visitor sees; only the active globe carries the draft. |
+| **3pe/D** — Portal modal surfaces SPA URL | `dispatchPreview` in `dataset-detail.ts` builds `/?preview=<token>&dataset=<id>` from the response token + the page's `id` param, passes that to `openPreviewModal` instead of the backend's `result.data.url`. Body copy in `publisher.datasetDetail.preview.body` updated to drop the "ships in a follow-up phase" qualifier. | Backend's `url` field still returned unchanged — `curl`-driven reviewers can still poke the metadata route directly. |
 
 ## Preview pipeline
 
 Drafts are unlisted but loadable by id with a short-lived signed
 token issued by `POST /api/v1/publish/datasets/{id}/preview`. The
-token allows exactly one dataset (or one tour) and expires in 30
-minutes. The frontend reads it from a `?preview=...` query param,
-calls `/api/v1/publish/datasets/{id}` (rather than the public route)
-to fetch the draft, and renders normally.
+token allows exactly one dataset (or one tour) and defaults to
+15 minutes (max 24h via the `ttl_seconds` request field). The
+SPA reads the token from a `?preview=...` query param paired
+with `?dataset=...`, calls the anonymous-read
+`/api/v1/datasets/{id}/preview/{token}` (3pe/B) to fetch the
+wire-shape draft, injects it into the dataService cache, and
+runs the regular loader path. Video / image playback follows
+`dataLink`, which the preview endpoint rewrites to the
+token-gated manifest sibling
+(`/api/v1/datasets/{id}/preview/{token}/manifest`, 3pe/A) so
+unpublished bytes resolve under the same token.
+
+> Earlier drafts of this section described the SPA hitting the
+> publisher endpoint (`/api/v1/publish/datasets/{id}`) with the
+> Access cookie. That design never shipped — it doesn't work for
+> reviewers who don't have an Access account on the operator's
+> deployment. The anonymous-read + HMAC-token shape lets any
+> reviewer the publisher shares a link with load the draft for
+> the token's TTL, with no auth setup on the reviewer's side.
 
 ## Authoring CLI
 
@@ -222,10 +483,11 @@ format:      video/mp4
 visibility:  public
 
 asset:
-  # Local file (Phase 1b uploads to Stream / R2 automatically)…
+  # Local file (uploads to R2 + triggers the HLS transcode)…
   file:       ./renders/sst-anomaly-2026-04.mp4
-  # …or an existing data_ref the catalog should point at:
-  # ref:      stream:abc123def456
+  # …or an existing data_ref the catalog should point at
+  # (per-upload path: r2:videos/{dataset_id}/{upload_id}/master.m3u8):
+  # ref:      r2:videos/01HX.../01YH.../master.m3u8
 
 categories:  [Ocean, Climate]
 keywords:    [sst, anomaly, monthly]
@@ -676,6 +938,24 @@ visible in the codebase today, the candidates are:
   pipeline. Doubles as a federation explorer when the graph
   spans peers. Phase 4 — design lives in its own plan once the
   sphere-thumbnail asset is in place.
+- **True WYSIWYG abstract editor.** 3pc/C1 ships a markdown
+  textarea + GitHub-style syntax-insertion toolbar + Edit /
+  Preview toggle (`src/ui/publisher/components/markdown-toolbar.ts`).
+  That gets a non-technical publisher 80 % of the way without
+  bringing in a heavyweight editor. If publisher feedback says
+  the remaining 20 % is critical — i.e. publishers find the
+  markdown syntax visible in the textarea actively confusing —
+  the upgrade path is to mount Lexical (Meta's open-source
+  editor, ~60-80 KB gzipped) with its markdown-serialization
+  extension over the same textarea. The wire format stays
+  markdown so the CLI YAML workflow and federation peers are
+  unaffected; the editor is purely an in-portal authoring
+  affordance. Pre-conditions before committing: (a) measured
+  publisher feedback that the toolbar isn't enough, (b) a
+  short bundle-size budget review against the lazy publisher
+  chunk, (c) paste-handling and accessibility audit on the
+  Lexical default extensions. Lives outside any specific phase
+  — pick it up whenever the toolbar's ceiling is hit.
 
 (The CLI for non-portal authoring is now a first-class Phase 1a
 feature — see "Authoring CLI" earlier in this document, not a

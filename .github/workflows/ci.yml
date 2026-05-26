@@ -1,14 +1,28 @@
 name: CI
 
 on:
+  # `push` only on main so the production deploy fires on merge.
+  # Branch CI + preview deploys come from the `pull_request` trigger
+  # below, so a single push to a branch with an open PR no longer
+  # races a duplicate deploy against Cloudflare Pages (the previous
+  # `branches: ['**']` shape ran the whole pipeline twice and
+  # produced sporadic "must be valid UTF-8" errors when the two
+  # deploys hit the same project + commit-hash simultaneously).
   push:
-    branches: ['**']
+    branches: [main]
   pull_request:
     branches: [main]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
+
+# Default to read-only on the GITHUB_TOKEN; the deploy job uses
+# Cloudflare API credentials (not GITHUB_TOKEN), so no write scopes
+# are required. CodeQL flags workflows without an explicit
+# `permissions:` block as a hardening miss.
+permissions:
+  contents: read
 
 jobs:
   type-check:

@@ -41,13 +41,24 @@
 
 import type { CatalogEnv } from '../../../_lib/env'
 import type { PublisherData } from '../../_middleware'
+import type { DatasetRow } from '../../../_lib/catalog-store'
+import type { PublisherRow } from '../../../_lib/publisher-store'
 import { getDatasetForPublisher } from '../../../_lib/dataset-mutations'
-import { isConfigurationError } from '../../../_lib/errors'
+import { isConfigurationError, safeErrorReason } from '../../../_lib/errors'
 import { isLoopbackHost } from '../../../_lib/loopback'
 import {
+  FRAME_OPERATION_CONCURRENCY,
+  runBoundedPool,
+} from '../../../_lib/bounded-pool'
+import {
   buildAssetKey,
+  buildFrameKey,
+  buildFrameSequencePrefix,
+  buildFrameSourceFilenamesKey,
+  buildVideoSourceKey,
   presignPut,
   R2_PUT_TTL_SECONDS,
+  R2_PUT_TTL_VIDEO_SECONDS,
   type AssetKind,
 } from '../../../_lib/r2-store'
 import {
@@ -58,6 +69,7 @@ import {
   extForMime,
   insertAssetUpload,
   validateAssetInit,
+  validateImageSequenceInit,
 } from '../../../_lib/asset-uploads'
 import { newUlid } from '../../../_lib/ulid'
 
@@ -77,13 +89,30 @@ function pickId(context: Parameters<PagesFunction<CatalogEnv, 'id'>>[0]): string
 }
 
 /**
- * Decide which backend an `(kind, mime)` pair lands in. Video data
- * goes to Stream so we get transcoding + ABR for free; everything
- * else goes to R2 under a content-addressed key.
+ * Decide which backend an `(kind, mime)` pair lands in. Phase 3pd
+ * collapsed the two-backend split: Cloudflare Stream is gone, R2
+ * is the only target. Video data still gets a special key layout
+ * (see `buildVideoSourceKey` in `r2-store.ts`) so the GHA transcode
+ * workflow can find the source at a predictable path, but the
+ * upload mechanism is the same presigned PUT.
+ *
+ * The function signature still returns the union type so
+ * downstream code paths can be torn out incrementally — the Stream
+ * branch in `complete.ts` and `stream-store.ts` is now dead code
+ * waiting for a follow-up cleanup PR.
  */
-function chooseTarget(kind: AssetKind, mime: string): 'r2' | 'stream' {
-  if (kind === 'data' && mime === 'video/mp4') return 'stream'
+function chooseTarget(_kind: AssetKind, _mime: string): 'r2' | 'stream' {
   return 'r2'
+}
+
+/**
+ * Should this `(kind, mime)` upload land at the video-source key
+ * for the GHA transcode workflow to pick up, or at a regular
+ * content-addressed asset key? Video data is the one case that
+ * goes through the async transcode pipeline.
+ */
+function isVideoSourceUpload(kind: AssetKind, mime: string): boolean {
+  return kind === 'data' && mime === 'video/mp4'
 }
 
 /**
@@ -93,7 +122,7 @@ function chooseTarget(kind: AssetKind, mime: string): 'r2' | 'stream' {
  * `tour/json`; the upload's actual HTTP content-type is
  * `application/json`.
  */
-function mimeMatchesFormat(mime: string, format: string): boolean {
+export function mimeMatchesFormat(mime: string, format: string): boolean {
   if (mime === format) return true
   if (format === 'tour/json' && mime === 'application/json') return true
   return false
@@ -115,6 +144,20 @@ export const onRequestPost: PagesFunction<CatalogEnv, 'id'> = async context => {
   }
   if (typeof body !== 'object' || body === null || Array.isArray(body)) {
     return jsonError(400, 'invalid_body', 'Request body must be an object.')
+  }
+
+  // Discriminator: an image-sequence upload arrives as the same
+  // /asset endpoint but with a `frames` array in the body. Route
+  // the request through a different validator + key-minting flow.
+  // The MP4 / single-image path is everything below this block.
+  if (Array.isArray((body as Record<string, unknown>).frames)) {
+    return handleImageSequenceInit(
+      context,
+      id,
+      publisher,
+      existing,
+      body as Record<string, unknown>,
+    )
   }
 
   const validated = validateAssetInit(body as Record<string, unknown>)
@@ -145,6 +188,31 @@ export const onRequestPost: PagesFunction<CatalogEnv, 'id'> = async context => {
         ],
       }),
       { status: 400, headers: { 'Content-Type': CONTENT_TYPE } },
+    )
+  }
+
+  // Refuse to mint a fresh video-source upload while the row is
+  // already transcoding. The overlap-guard in
+  // /asset/{upload_id}/complete would 409 the same case later,
+  // but a 2-hour presigned PUT URL paired with the 10 GB
+  // MAX_BYTES_DATA cap means a publisher (or stale edit-page
+  // tab) could waste a multi-GB upload before learning the row
+  // is locked. Failing fast at mint time saves the bandwidth.
+  // PR #112 followup — asset.ts:pre-mint-transcoding-check.
+  //
+  // Scope is video-only — image and aux uploads don't go through
+  // the transcoding lifecycle, so a parallel image upload during
+  // a video transcode is harmless.
+  if (isVideoSourceUpload(kind, mime) && existing.transcoding) {
+    return jsonError(
+      409,
+      'transcoding_in_progress',
+      `Dataset ${id} is already transcoding ` +
+        (existing.active_transcode_upload_id
+          ? `upload ${existing.active_transcode_upload_id}`
+          : `(no active upload binding — corrupted state, contact an operator)`) +
+        `. Wait for the workflow to finish (the "Transcoding…" badge on the detail ` +
+        `page will clear when it does) before starting a new upload.`,
     )
   }
 
@@ -209,10 +277,32 @@ export const onRequestPost: PagesFunction<CatalogEnv, 'id'> = async context => {
         mock,
       }
     } else {
+      // Video data uploads land at the predictable
+      // `uploads/{dataset_id}/{upload_id}/source.mp4` key so the
+      // GHA transcode workflow can find them via the
+      // `client_payload.source_key` passed in the
+      // repository_dispatch fired at /complete time. Per-upload
+      // prefix keeps a re-upload to a still-transcoding row from
+      // overwriting the source bytes the prior workflow may still
+      // be reading. Every other asset kind keeps the content-
+      // addressed `datasets/{id}/by-digest/...` scheme that lets
+      // revisions land at a new path without invalidating any
+      // existing cache.
       const ext = extForMime(mime)
       const hex = content_digest.slice('sha256:'.length)
-      const key = buildAssetKey(id, kind, hex, ext)
-      const presigned = await presignPut(context.env, key, { contentType: mime })
+      const isVideo = isVideoSourceUpload(kind, mime)
+      const key = isVideo
+        ? buildVideoSourceKey(id, uploadId)
+        : buildAssetKey(id, kind, hex, ext)
+      // Video sources get the extended TTL — `R2_PUT_TTL_SECONDS`
+      // (15 min) is fine for image / aux uploads but too short
+      // for the 10 GB MAX_BYTES_DATA ceiling on residential
+      // uplinks. PR #112 followup — the prior default expired
+      // multi-GB uploads mid-transfer.
+      const presigned = await presignPut(context.env, key, {
+        contentType: mime,
+        ttlSeconds: isVideo ? R2_PUT_TTL_VIDEO_SECONDS : undefined,
+      })
       const targetRef = `r2:${key}`
       await insertAssetUpload(context.env.CATALOG_DB!, {
         id: uploadId,
@@ -241,15 +331,18 @@ export const onRequestPost: PagesFunction<CatalogEnv, 'id'> = async context => {
       }
     }
   } catch (err) {
-    const reason = err instanceof Error ? err.message : String(err)
     // Distinguish missing-credentials (operator must fix the deploy)
     // from upstream-service failures (transient, may succeed on retry).
+    // `safeErrorReason` preserves our typed-error messages but redacts
+    // arbitrary thrown values to a generic fallback so internal paths
+    // / SDK stack content can't leak — CodeQL "Information exposure
+    // through a stack trace" guard.
     if (isConfigurationError(err)) {
       const code = target === 'stream' ? 'stream_unconfigured' : 'r2_unconfigured'
-      return jsonError(503, code, reason)
+      return jsonError(503, code, safeErrorReason(err, 'Upload backend is not configured.'))
     }
     const code = target === 'stream' ? 'stream_upstream_error' : 'r2_upstream_error'
-    return jsonError(502, code, reason)
+    return jsonError(502, code, safeErrorReason(err, 'Upload backend returned an error.'))
   }
 
   return new Response(JSON.stringify(response), {
@@ -279,8 +372,269 @@ interface AssetInitResponse {
   mock: boolean
 }
 
+interface ImageSequenceInitFrameResponse {
+  filename: string
+  /** Zero-padded position in the encode order (matches the
+   *  five-digit format `buildFrameKey` writes into the R2 key). */
+  index: number
+  method: 'PUT'
+  url: string
+  headers: Record<string, string>
+  /** R2 key the presigned URL writes to —
+   *  `uploads/{dataset_id}/{upload_id}/frames/{NNNNN}.{ext}`. */
+  key: string
+}
+
+interface ImageSequenceInitResponse {
+  upload_id: string
+  kind: 'data'
+  target: 'r2'
+  /** Per-frame presigned PUTs, one per entry in the request's
+   *  `frames` array, in the same order the publisher supplied. */
+  frames: ImageSequenceInitFrameResponse[]
+  /** Presigned PUT for the source-filenames JSON blob the
+   *  publisher's client builds from the original filenames + the
+   *  per-frame indexes. The blob is fetched by the GHA runner
+   *  alongside the frames; its hash is what gets carried through
+   *  `source_digest` on the dispatch payload. */
+  source_filenames: {
+    method: 'PUT'
+    url: string
+    headers: Record<string, string>
+    key: string
+  }
+  expires_at: string
+  mock: boolean
+}
+
+/**
+ * Phase 3pf image-sequence upload init. Validates the body's
+ * `frames` array, checks the row's format / overlap guards, then
+ * mints one presigned PUT per frame + one for the source-filenames
+ * JSON blob. Persists a single `asset_uploads` row with
+ * `frame_count = N` so /complete can branch its HEAD-all loop.
+ *
+ * The per-frame R2 keys come from `buildFrameKey` —
+ * `uploads/{dataset_id}/{upload_id}/frames/{NNNNN}.{ext}` —
+ * with `extension` derived from the validated mime via
+ * `extForMime`. The asset_uploads row's `target_ref` stores the
+ * prefix (with trailing slash) since there's no single canonical
+ * key for the upload; /complete reconstructs the per-frame keys
+ * from `frame_count` + `mime`.
+ *
+ * Format constraint: image-sequence uploads only target video
+ * datasets (`format = 'video/mp4'`). The runner's output is
+ * always an HLS bundle regardless of source kind; a publisher
+ * who wants to publish individual images uses the existing
+ * single-file path.
+ */
+async function handleImageSequenceInit(
+  context: Parameters<PagesFunction<CatalogEnv, 'id'>>[0],
+  id: string,
+  publisher: PublisherRow,
+  existing: DatasetRow,
+  body: Record<string, unknown>,
+): Promise<Response> {
+  const validated = validateImageSequenceInit(body)
+  if (!validated.ok) {
+    return new Response(JSON.stringify({ errors: validated.errors }), {
+      status: 400,
+      headers: { 'Content-Type': CONTENT_TYPE },
+    })
+  }
+  const { mime, extension, frames, totalSize, sourceFilenamesDigest } = validated.value
+
+  // Image-sequence sources always encode to a video HLS bundle —
+  // the dataset row's `format` therefore has to be `video/mp4`.
+  // A publisher who wants to publish a single image uses the
+  // single-file branch above; a publisher who wants to publish a
+  // tour uses the manual `data_ref` field. The error envelope
+  // mirrors `mime_format_mismatch` from the single-file path so
+  // the client renders one code path for both shapes.
+  //
+  // Status is 400 here (mint-time "body rejected against current
+  // state") and 409 at the matching check in /complete (apply-time
+  // "dataset state changed between mint and complete"). The two
+  // status codes are deliberately different — they describe
+  // semantically different scenarios — but the `code` + `field`
+  // are shared so a client that switches on `code` handles both
+  // uniformly. Phase 3pf-review/E — Copilot discussion_r3263124301.
+  if (existing.format !== 'video/mp4') {
+    return new Response(
+      JSON.stringify({
+        errors: [
+          {
+            field: 'format',
+            code: 'frames_require_video_format',
+            message:
+              `Image-sequence uploads target a video dataset (format=video/mp4), ` +
+              `but dataset ${id} has format "${existing.format}". Change the dataset's ` +
+              `format to video/mp4 before uploading frames.`,
+          },
+        ],
+      }),
+      { status: 400, headers: { 'Content-Type': CONTENT_TYPE } },
+    )
+  }
+
+  // Same transcoding-overlap guard the MP4 path uses. A row
+  // mid-transcode would otherwise consume a multi-GB frame batch
+  // before /complete refuses it.
+  if (existing.transcoding) {
+    return jsonError(
+      409,
+      'transcoding_in_progress',
+      `Dataset ${id} is already transcoding ` +
+        (existing.active_transcode_upload_id
+          ? `upload ${existing.active_transcode_upload_id}`
+          : `(no active upload binding — corrupted state, contact an operator)`) +
+        `. Wait for the workflow to finish (the "Transcoding…" badge on the detail ` +
+        `page will clear when it does) before starting a new upload.`,
+    )
+  }
+
+  const uploadId = newUlid()
+  const now = new Date().toISOString()
+  const mock = context.env.MOCK_R2 === 'true'
+
+  // Mock-mode loopback refusal (defense in depth) — same as the
+  // single-file branch.
+  if (mock) {
+    const url = new URL(context.request.url)
+    if (!isLoopbackHost(url.hostname)) {
+      return jsonError(
+        500,
+        'mock_r2_unsafe',
+        `MOCK_R2=true refuses to honor a non-loopback hostname (got "${url.hostname}").`,
+      )
+    }
+  }
+
+  let frameMints: ImageSequenceInitFrameResponse[]
+  let sourceFilenamesMint: ImageSequenceInitResponse['source_filenames']
+  try {
+    // Per-frame mints — bounded-concurrency via `runBoundedPool`
+    // rather than `Promise.all`. Each `presignPut` is a SigV4
+    // HMAC computation; at the 10 000-frame cap, 10 001
+    // concurrent presigns would burst the Workers CPU-time
+    // budget on a single invocation. 16 parallel workers keeps
+    // the SigV4 burst bounded while still being faster than
+    // strict sequential. Phase 3pf-review/G — Copilot
+    // discussion_r3263466400. Mock-mode `presignPut` is just
+    // string construction so the budget concern doesn't apply
+    // there, but the same code path works.
+    const framePresignJobs = frames.map((f, index) => async () => {
+      const key = buildFrameKey(id, uploadId, index, extension)
+      const presigned = await presignPut(context.env, key, {
+        contentType: mime,
+        // Video-tier TTL covers multi-GB sequence uploads on a
+        // residential uplink; the typical 240-frame 4K PNG batch
+        // is ~7 GB but the publisher hashes + PUTs frames serially
+        // (bounded concurrency), so the practical upload time
+        // tracks the MP4 path.
+        ttlSeconds: R2_PUT_TTL_VIDEO_SECONDS,
+      })
+      return { presigned, frame: f, index }
+    })
+    const framePresigns = await runBoundedPool(framePresignJobs, FRAME_OPERATION_CONCURRENCY)
+    frameMints = framePresigns.map(({ presigned, frame, index }) => ({
+      filename: frame.filename,
+      index,
+      method: presigned.method,
+      url: presigned.url,
+      headers: presigned.headers,
+      key: presigned.key,
+    }))
+    // Source-filenames blob — short-TTL because the publisher
+    // builds + PUTs it in seconds, not minutes.
+    const fnKey = buildFrameSourceFilenamesKey(id, uploadId)
+    const fnPresigned = await presignPut(context.env, fnKey, {
+      contentType: 'application/json',
+    })
+    sourceFilenamesMint = {
+      method: fnPresigned.method,
+      url: fnPresigned.url,
+      headers: fnPresigned.headers,
+      key: fnPresigned.key,
+    }
+  } catch (err) {
+    if (isConfigurationError(err)) {
+      return jsonError(503, 'r2_unconfigured', safeErrorReason(err, 'R2 binding is not configured.'))
+    }
+    return jsonError(502, 'r2_upstream_error', safeErrorReason(err, 'R2 returned an error.'))
+  }
+
+  // Single asset_uploads row covers the whole sequence. The
+  // claimed_digest column carries the SHA-256 of the canonical
+  // source-filenames JSON (computed client-side from the per-frame
+  // digest list); the GHA runner re-verifies that digest before
+  // running ffmpeg, so a tampered manifest fails the workflow
+  // rather than the publisher API.
+  //
+  // **Digest trust model.** The publisher's client computes
+  // `sourceFilenamesDigest` BEFORE PUTing the actual blob — there is
+  // no enforcement here that the bytes which subsequently land at
+  // the source-filenames presigned URL hash to the declared value.
+  // A buggy or hostile client could PUT bytes that don't match;
+  // `verifySourceFilenamesBlob` in `cli/transcode-from-dispatch.ts`
+  // catches the mismatch by re-hashing the blob inside the GHA
+  // runner before encoding (same bargain the MP4 path makes with
+  // the source MP4's claimed digest). This is intentional — the
+  // alternative (Worker-side re-hash) wouldn't help because the
+  // PUT goes directly to R2 and the Worker never sees the bytes
+  // anyway. The indirection (publisher hashes JSON → PUTs JSON →
+  // runner re-hashes JSON) is what makes the trust boundary work.
+  //
+  // We trust the parent body's claimed total `size` was already
+  // cross-checked against the sum of `frames[*].size` by the
+  // validator, so `declared_size` is the validated `totalSize`.
+  //
+  // `target_ref` holds the prefix (with trailing slash) so a
+  // future inspection of the row points at the directory the
+  // frames live under. /complete reconstructs the per-frame keys
+  // from `dataset_id + upload_id + frame_count + extension`.
+  const targetRef = `r2:${buildFrameSequencePrefix(id, uploadId)}`
+  await insertAssetUpload(context.env.CATALOG_DB!, {
+    id: uploadId,
+    dataset_id: id,
+    publisher_id: publisher.id,
+    kind: 'data',
+    target: 'r2',
+    target_ref: targetRef,
+    mime,
+    declared_size: totalSize,
+    claimed_digest: sourceFilenamesDigest,
+    created_at: now,
+    frame_count: frames.length,
+  })
+
+  const response: ImageSequenceInitResponse = {
+    upload_id: uploadId,
+    kind: 'data',
+    target: 'r2',
+    frames: frameMints,
+    source_filenames: sourceFilenamesMint,
+    // `validateImageSequenceInit` rejects empty `frames` arrays
+    // before we reach here, so the frame-tier video TTL applies
+    // unconditionally — every presigned PUT in the response uses
+    // the same expiry.
+    expires_at: new Date(Date.now() + R2_PUT_TTL_VIDEO_SECONDS * 1000).toISOString(),
+    mock,
+  }
+
+  return new Response(JSON.stringify(response), {
+    status: 201,
+    headers: {
+      'Content-Type': CONTENT_TYPE,
+      'Cache-Control': 'private, no-store',
+      Location: `/api/v1/publish/datasets/${id}/asset/${uploadId}`,
+    },
+  })
+}
+
 /** Re-export for symmetry with the rest of the routes — keeps import sites tidy. */
 export const TTLS = {
   R2_PUT_TTL_SECONDS,
+  R2_PUT_TTL_VIDEO_SECONDS,
   STREAM_DIRECT_UPLOAD_TTL_SECONDS,
 }

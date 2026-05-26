@@ -7,7 +7,9 @@
 import type { HLSService } from '../services/hlsService'
 import type { AppState, Dataset } from '../types'
 import { logger } from '../utils/logger'
+import { proxyCaptionUrl } from '../utils/captionProxy'
 import { t } from '../i18n'
+import { reportError } from '../analytics'
 
 // --- Playback constants ---
 const LOOP_RESTART_DELAY_MS = 2000
@@ -238,9 +240,7 @@ export async function loadCaptions(
   state: PlaybackState,
 ): Promise<void> {
   try {
-    const fetchUrl = captionUrl.includes('sos.noaa.gov')
-      ? `https://video-proxy.zyra-project.org/captions?url=${encodeURIComponent(captionUrl)}`
-      : captionUrl
+    const fetchUrl = proxyCaptionUrl(captionUrl)
 
     const response = await fetch(fetchUrl)
     if (!response.ok) throw new Error(`HTTP ${response.status}`)
@@ -282,7 +282,14 @@ export async function loadCaptions(
 
     logger.info(`[App] Loaded ${cues.length} caption cues`)
   } catch (error) {
+    // Surface the failure to telemetry (Tier A) so we can measure
+    // how often the Vimeo caption proxy fails — silent today, was
+    // indistinguishable from "this dataset has no captions". The
+    // info panel's "Captions available" badge remains visible on
+    // failure so the user still knows captions exist for this row.
+    // See `docs/WEB_CATALOG_FEATURES_PLAN.md` §5.2.
     logger.warn('[App] Failed to load captions:', error)
+    reportError('caption', error)
   }
 }
 

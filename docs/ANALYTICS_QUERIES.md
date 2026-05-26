@@ -221,6 +221,82 @@ the four server-stamped blobs. Order is alphabetical by field name
 | `blob6` | — | `result_count_bucket` |
 | `double1` | `client_offset_ms` | `client_offset_ms` |
 
+### `catalog_view_mode_changed` (Tier A)
+
+Fires every time the user toggles between Cards / Graph / (later)
+Timeline / Map. `from` carries the previous view-mode so a dashboard
+can read pivot direction (Cards → Graph vs. Graph → Cards) without
+window-functioning over a series.
+
+Positional layout — blobs are sorted alphabetically by field name
+(see `toDataPoint` in `functions/api/ingest.ts`).
+
+| Position | Field |
+|---|---|
+| `blob5` | `from` (`cards` / `graph` / `timeline` / `map`) |
+| `blob6` | `result_count_bucket` |
+| `blob7` | `view_mode` (the destination mode) |
+| `double1` | `client_offset_ms` |
+
+### `catalog_graph_node_clicked` (Tier B)
+
+Fires on Graph view node clicks (Phase 4 §6.7). Throttled to ≤30/min
+per session (same budget pattern as `camera_settled`). `value_hash` is
+the SHA-256 12-hex of the lowercased node value — counts unique
+distinct clicks without exposing the value itself, mirroring
+`browse_search.query_hash`.
+
+Positional layout — alphabetical.
+
+| Position | Field |
+|---|---|
+| `blob5` | `facet` (facet name for facet-value nodes; `'keyword'` for keyword nodes; `''` for dataset nodes) |
+| `blob6` | `node_kind` (`facet-value` / `keyword` / `dataset`) |
+| `blob7` | `value_hash` |
+| `double1` | `client_offset_ms` |
+
+### `catalog_timeline_brush_applied` (Tier B)
+
+Fires on Timeline view brush gestures (Phase 4 §6.8). The user has
+dragged on the time axis to commit a `dataCoverageYear` range
+filter. Throttled to ≤30/min per session (same budget shape as
+`camera_settled` and `catalog_graph_node_clicked`). Payload is
+integer years only — the brush carries no free-text, so no hash
+field is needed.
+
+Positional layout — fields sorted alphabetically (per `toDataPoint`):
+all three are numeric, so they fill `double1` / `double2` / `double3`
+in alphabetical order of the field name.
+
+| Position | Field |
+|---|---|
+| `double1` | `client_offset_ms` |
+| `double2` | `end_year` |
+| `double3` | `start_year` |
+
+### `catalog_map_region_drawn` (Tier B)
+
+Fires on Map view draw-rectangle gestures (Phase 4 §6.9). The user
+has dragged a rectangle on the mercator canvas to commit a
+`geographicRegion` bbox filter. Throttled to ≤30/min per session
+(same budget shape as `camera_settled`,
+`catalog_graph_node_clicked`, and `catalog_timeline_brush_applied`).
+Bounds round to 3 decimals (~111 m at the equator) — same precision
+`camera.ts` uses for lat/lon. Payload is numeric only — the gesture
+carries no free-text, so no hash field is needed.
+
+Positional layout — fields sorted alphabetically (per `toDataPoint`):
+all five are numeric, so they fill `double1` … `double5` in
+alphabetical order of the field name.
+
+| Position | Field |
+|---|---|
+| `double1` | `client_offset_ms` |
+| `double2` | `east` |
+| `double3` | `north` |
+| `double4` | `south` |
+| `double5` | `west` |
+
 ### `tour_started` (Tier A)
 
 | Position | Field |

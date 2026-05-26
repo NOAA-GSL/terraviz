@@ -69,11 +69,271 @@ export type AssetKind =
   | 'caption'
   | 'sphere_thumbnail'
 
-/** Default presigned-PUT TTL — matches the publisher portal upload window. */
+/** Default presigned-PUT TTL — matches the publisher portal
+ *  upload window for image / aux uploads (≤ ~256 MB, finish in
+ *  seconds to a few minutes on a typical residential uplink). */
 export const R2_PUT_TTL_SECONDS = 15 * 60
+
+/** Extended presigned-PUT TTL for video sources. Source MP4s
+ *  can be up to `MAX_BYTES_DATA` (10 GB); on a typical
+ *  residential uplink (~25 Mbps) a 10 GB upload takes ~55
+ *  minutes, plus headroom for slower links + retries. Two hours
+ *  matches R2's maximum presigned-URL TTL (S3 v4 signatures cap
+ *  at one week, but R2's binding wraps a shorter ceiling) and
+ *  is what the asset-uploader budgets for. PR #112 followup —
+ *  asset.ts:presigned-TTL (the prior 15-min default expired
+ *  multi-GB uploads mid-transfer on slower links). */
+export const R2_PUT_TTL_VIDEO_SECONDS = 2 * 60 * 60
 
 /** Mock-mode host. Tests assert URLs against this constant. */
 export const MOCK_R2_HOST = 'https://mock-r2.localhost'
+
+/**
+ * R2 key prefix the GHA transcode workflow watches for source
+ * MP4 uploads (Phase 3pd). Lives outside the content-addressed
+ * `datasets/{id}/by-digest/...` scheme because the workflow
+ * doesn't know the digest in advance — only the dataset id and
+ * upload id, both of which travel through the
+ * `repository_dispatch` payload (see
+ * `TranscodeDispatchPayload` in `github-dispatch.ts`). Scoping
+ * by upload_id (not just dataset_id) means a re-upload to a
+ * row that's already published lands at a fresh prefix instead
+ * of overwriting the source bytes the prior workflow may still
+ * be reading. See `buildVideoSourceKey` below for the full
+ * `uploads/{dataset_id}/{upload_id}/source.mp4` shape.
+ */
+export const VIDEO_SOURCE_KEY_PREFIX = 'uploads'
+
+/**
+ * Throw if `value` isn't a Crockford-ULID-shaped string (26 base32
+ * chars from the `0-9A-HJKMNP-TV-Z` alphabet). The dataset_id /
+ * upload_id arguments to every key-building helper are
+ * canonically ULIDs minted by `newUlid()`; rejecting any other
+ * shape fails fast on a misrouted call rather than letting an
+ * arbitrary string land in an R2 key path. `label` is the
+ * argument name surfaced in the error so a stack trace points
+ * at the offending parameter.
+ */
+const ULID_PATTERN = /^[0-9A-HJKMNP-TV-Z]{26}$/
+function assertUlid(label: string, value: string): void {
+  if (!ULID_PATTERN.test(value)) {
+    throw new Error(
+      `${label} must be a ULID (26 base32 chars), got "${value}"`,
+    )
+  }
+}
+
+/**
+ * Build the R2 key for a video source upload that's destined for
+ * transcoding. `r2:uploads/{dataset_id}/{upload_id}/source.mp4`.
+ * Used only for `kind='data'` + `mime='video/mp4'` uploads in
+ * Phase 3pd; every other asset kind uses the content-addressed
+ * `buildAssetKey` helper above.
+ *
+ * Scoping by upload_id (not just dataset_id) avoids the race
+ * Copilot #9 flagged: a publisher re-uploading the same dataset
+ * before the first transcode completes would otherwise overwrite
+ * the source MP4 the workflow is about to download, leaving the
+ * first upload stuck with a digest mismatch. The asset_uploads
+ * row's ULID is the natural version slot — each mint gets a
+ * fresh upload_id and a fresh source key.
+ */
+export function buildVideoSourceKey(datasetId: string, uploadId: string): string {
+  assertUlid('buildVideoSourceKey: datasetId', datasetId)
+  assertUlid('buildVideoSourceKey: uploadId', uploadId)
+  return `${VIDEO_SOURCE_KEY_PREFIX}/${datasetId}/${uploadId}/source.mp4`
+}
+
+/**
+ * Does an R2 key look like a video-source upload destined for the
+ * transcode workflow? The /complete handler uses this to branch
+ * between "write data_ref and finish" and "fire dispatch + stamp
+ * transcoding=1". Matches the
+ * `uploads/{dataset_id}/{upload_id}/source.mp4` shape exactly —
+ * both ids must be ULIDs, the filename must be source.mp4, and
+ * there must be nothing else between. PR #112 Copilot
+ * 3pd-followup — the prior prefix-and-suffix-only check would
+ * accept any `uploads/<anything>/source.mp4`, including the
+ * obsolete one-level layout (`uploads/{dataset_id}/source.mp4`)
+ * that pre-3pd-review3/A wrote, plus arbitrary deeper paths a
+ * malformed asset_uploads row could surface.
+ */
+const VIDEO_SOURCE_KEY_PATTERN = new RegExp(
+  `^${VIDEO_SOURCE_KEY_PREFIX}/[0-9A-HJKMNP-TV-Z]{26}/[0-9A-HJKMNP-TV-Z]{26}/source\\.mp4$`,
+)
+
+export function isVideoSourceKey(key: string): boolean {
+  return VIDEO_SOURCE_KEY_PATTERN.test(key)
+}
+
+/**
+ * Build the R2 key for a single frame in an image-sequence source
+ * upload (Phase 3pf). Frames land at
+ * `uploads/{dataset_id}/{upload_id}/frames/{NNNNN}.{ext}` —
+ * five-digit zero-padded index so lexicographic key order matches
+ * encode order, and so ffmpeg's `-i frames/%05d.{ext}` input glob
+ * picks them up without further re-numbering.
+ *
+ * The five-digit format hard-bounds the per-upload frame count to
+ * 99 999 frames; the `validateImageSequenceInit` validator caps at
+ * 10 000 (see `asset-uploads.ts`), so there's ten-times headroom
+ * before the index format itself becomes a constraint. If a future
+ * publisher-API change ever raises the cap above 99 999, widening
+ * here is mechanical — but the `validateImageSequenceInit` cap
+ * keeps the in-browser hash budget and the JSON response size
+ * bounded long before the key format runs out of digits, so this
+ * is a sanity invariant not a tunable.
+ *
+ * Per-upload prefix (the `{upload_id}` segment) is what protects
+ * an already-published row from re-upload races: a fresh upload
+ * lands at a fresh prefix, and the existing transcoded bundle keeps
+ * serving until /transcode-complete swaps `data_ref` atomically.
+ * Same property the MP4 path uses; the `frames/` subdirectory keeps
+ * source frames separable from any future per-upload auxiliary
+ * asset that might live alongside.
+ */
+export const FRAME_KEY_INDEX_DIGITS = 5
+
+export function buildFrameKey(
+  datasetId: string,
+  uploadId: string,
+  index: number,
+  ext: string,
+): string {
+  assertUlid('buildFrameKey: datasetId', datasetId)
+  assertUlid('buildFrameKey: uploadId', uploadId)
+  if (!Number.isInteger(index) || index < 0 || index > 99999) {
+    throw new Error(
+      `buildFrameKey: index must be an integer in [0, 99999], got ${index}`,
+    )
+  }
+  if (!/^[a-z0-9]+$/.test(ext)) {
+    throw new Error(
+      `buildFrameKey: ext must be a lowercase-alphanumeric extension, got "${ext}"`,
+    )
+  }
+  const padded = String(index).padStart(FRAME_KEY_INDEX_DIGITS, '0')
+  return `${VIDEO_SOURCE_KEY_PREFIX}/${datasetId}/${uploadId}/frames/${padded}.${ext}`
+}
+
+/**
+ * Does an R2 key look like a per-frame upload for an image-sequence
+ * source? Matches the shape `buildFrameKey` produces:
+ * `uploads/{ULID}/{ULID}/frames/{NNNNN}.{ext}` — both ids must be
+ * ULIDs, the directory must be exactly `frames`, the filename must
+ * be five base-10 digits + a lowercase-alphanumeric extension.
+ *
+ * Used by /asset/{upload_id}/complete to refuse HEAD-checking a key
+ * whose shape doesn't match either the MP4 source layout (which has
+ * its own predicate `isVideoSourceKey`) or this one. A malformed
+ * `target_ref` on an asset_uploads row therefore fails fast at
+ * /complete time rather than producing an opaque "404 from HEAD"
+ * later.
+ */
+const FRAME_KEY_PATTERN = new RegExp(
+  `^${VIDEO_SOURCE_KEY_PREFIX}/[0-9A-HJKMNP-TV-Z]{26}/[0-9A-HJKMNP-TV-Z]{26}/frames/\\d{${FRAME_KEY_INDEX_DIGITS}}\\.[a-z0-9]+$`,
+)
+
+export function isFrameKey(key: string): boolean {
+  return FRAME_KEY_PATTERN.test(key)
+}
+
+/** R2 key prefix that holds all frames for one image-sequence upload.
+ *  `uploads/{datasetId}/{uploadId}/frames/`. The trailing slash is
+ *  intentional — passing this prefix to an R2 `list` operation
+ *  returns exactly the per-frame objects without picking up the
+ *  sibling `source_filenames.json` blob. */
+export function buildFrameSequencePrefix(datasetId: string, uploadId: string): string {
+  assertUlid('buildFrameSequencePrefix: datasetId', datasetId)
+  assertUlid('buildFrameSequencePrefix: uploadId', uploadId)
+  return `${VIDEO_SOURCE_KEY_PREFIX}/${datasetId}/${uploadId}/frames/`
+}
+
+/**
+ * Does an R2 key match the shape `buildFrameSequencePrefix` produces?
+ * `uploads/{ULID}/{ULID}/frames/` — both ids must be ULIDs, the
+ * trailing `/frames/` literal must be present.
+ *
+ * Used by /transcode-complete to recognise an image-sequence upload
+ * the same way `isVideoSourceKey` recognises an MP4 source. The
+ * asset_uploads row's `target_ref` for a frames upload holds this
+ * prefix (init code sets `r2:${buildFrameSequencePrefix(...)}`), so
+ * the completion handler can branch on key shape rather than having
+ * a separate endpoint for the two paths.
+ */
+const FRAME_SEQUENCE_PREFIX_PATTERN = new RegExp(
+  `^${VIDEO_SOURCE_KEY_PREFIX}/[0-9A-HJKMNP-TV-Z]{26}/[0-9A-HJKMNP-TV-Z]{26}/frames/$`,
+)
+
+export function isFrameSequencePrefix(key: string): boolean {
+  return FRAME_SEQUENCE_PREFIX_PATTERN.test(key)
+}
+
+/**
+ * R2 key for the auxiliary JSON blob that records the publisher's
+ * original per-frame filenames in encode order:
+ * `uploads/{dataset_id}/{upload_id}/source_filenames.json`. Lives
+ * alongside the frames (not inside `frames/`) so a list against
+ * `buildFrameSequencePrefix` enumerates only the frames themselves.
+ *
+ * The blob carries an array shaped `[{ index, filename, digest }, ...]`
+ * with one entry per frame in encode order. `index` is the
+ * zero-based position and matches the encoded `frames/{NNNNN}` key;
+ * `filename` preserves the publisher's on-disk name; `digest` is
+ * the `sha256:<hex>` of the frame bytes PUT to R2, used by the
+ * transcode runner to verify each frame against what the publisher
+ * signed off on (see `cli/transcode-from-dispatch.ts`).
+ *
+ * The frames-as-data exposure work (Phase 3pg) surfaces `filename`
+ * on `/frames` responses so consumers that need to map back to the
+ * publisher's on-disk convention (downstream pipelines, federated
+ * mirrors) can do so. Display naming in the UI uses a derived
+ * `{slug}_{timestamp|index}.{ext}` form instead — see
+ * `CATALOG_IMAGE_SEQUENCE_PLAN.md` §"Frames as data" for the
+ * rationale.
+ */
+export function buildFrameSourceFilenamesKey(datasetId: string, uploadId: string): string {
+  assertUlid('buildFrameSourceFilenamesKey: datasetId', datasetId)
+  assertUlid('buildFrameSourceFilenamesKey: uploadId', uploadId)
+  return `${VIDEO_SOURCE_KEY_PREFIX}/${datasetId}/${uploadId}/source_filenames.json`
+}
+
+/**
+ * R2 key prefix for transcoded HLS bundles, scoped per
+ * dataset + upload (Phase 3pd review fix #2 / #15). The
+ * upload-scoping is what lets a re-upload to an already-
+ * published row land its new bundle at a fresh prefix
+ * without overwriting the bytes a public client is mid-
+ * playback against. The `/transcode-complete` route swaps
+ * `data_ref` atomically once the workflow finishes writing
+ * the new bundle; the old bundle continues to serve until
+ * the swap.
+ */
+export const VIDEO_BUNDLE_KEY_PREFIX = 'videos'
+
+/**
+ * Build the R2 key for the master playlist of a transcoded HLS
+ * bundle: `videos/{datasetId}/{uploadId}/master.m3u8`. The
+ * workflow uploads its bundle under
+ * `videos/{datasetId}/{uploadId}/` and the publisher API stores
+ * the master path as `data_ref`. Versioning per upload_id (the
+ * asset_uploads row ULID) means concurrent transcodes against
+ * the same dataset land in distinct prefixes; the
+ * `/transcode-complete` route picks the right one by looking up
+ * the upload row.
+ */
+export function buildVideoBundleMasterKey(datasetId: string, uploadId: string): string {
+  assertUlid('buildVideoBundleMasterKey: datasetId', datasetId)
+  assertUlid('buildVideoBundleMasterKey: uploadId', uploadId)
+  return `${VIDEO_BUNDLE_KEY_PREFIX}/${datasetId}/${uploadId}/master.m3u8`
+}
+
+/** Same as `buildVideoBundleMasterKey` but returns the directory
+ *  prefix (no `/master.m3u8` tail). Used by the workflow runner
+ *  to scope its `uploadHlsBundle` call to a per-upload prefix. */
+export function buildVideoBundlePrefix(datasetId: string, uploadId: string): string {
+  return `${VIDEO_BUNDLE_KEY_PREFIX}/${datasetId}/${uploadId}`
+}
 
 /**
  * Build a content-addressed R2 key per `CATALOG_ASSETS_PIPELINE.md`
@@ -252,6 +512,40 @@ export async function verifyContentDigest(
     return { ok: false, reason: 'mismatch', actual, claimed: claimedDigest }
   }
   return { ok: true, digest: actual, size: buffer.byteLength }
+}
+
+/**
+ * Existence-only verification: HEAD the R2 object, return its
+ * recorded size, but **don't read the body**. Used by the
+ * video-source /complete path where the source MP4 can be up to
+ * 10 GB — pulling it through `arrayBuffer()` would blow past the
+ * Workers 128 MB memory cap. The transcode runner re-hashes the
+ * source via Node's streaming `crypto.createHash` before kicking
+ * off ffmpeg, so a tampered upload still surfaces as the
+ * runner's exit-code-2 + stuck `transcoding=1` rather than
+ * silently encoding bad bytes.
+ *
+ * Returns:
+ *   - `{ ok: true, size }` when the object exists. Size is the
+ *     bytes R2 has recorded for it (operator can sanity-check
+ *     against the publisher's `declared_size`).
+ *   - `{ ok: false, reason: 'missing' }` if not present.
+ *   - `{ ok: false, reason: 'binding_missing' }` if CATALOG_R2
+ *     isn't wired.
+ */
+export type ExistenceVerification =
+  | { ok: true; size: number }
+  | { ok: false; reason: 'missing' }
+  | { ok: false; reason: 'binding_missing' }
+
+export async function verifyObjectExists(
+  env: R2Env,
+  key: string,
+): Promise<ExistenceVerification> {
+  if (!env.CATALOG_R2) return { ok: false, reason: 'binding_missing' }
+  const head = await env.CATALOG_R2.head(key)
+  if (!head) return { ok: false, reason: 'missing' }
+  return { ok: true, size: head.size }
 }
 
 function parseSha256Claim(claim: string): string | null {

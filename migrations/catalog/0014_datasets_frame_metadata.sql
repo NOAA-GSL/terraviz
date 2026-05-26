@@ -1,0 +1,58 @@
+-- 0014_datasets_frame_metadata.sql — Phase 3pf — image-sequence
+-- frame metadata on the `datasets` row.
+--
+-- Companion to migration 0013. While 0013 records the per-upload
+-- frame count on `asset_uploads` (which the publisher API's
+-- /complete handler reads to branch its HEAD-all loop and pick
+-- the right dispatch payload shape), the dataset row needs its
+-- own frame-metadata columns so the manifest serializer can
+-- surface them without joining to `asset_uploads` on every read.
+-- See `docs/CATALOG_IMAGE_SEQUENCE_PLAN.md` §"Frames as data" for
+-- the consumer-facing payoff.
+--
+-- Three columns, all NULL on non-sequence rows:
+--
+--   - `frame_count INTEGER` — number of source frames in the
+--     dataset's most recent transcode. Mirrors
+--     asset_uploads.frame_count but at the dataset granularity:
+--     populated by /complete when it stamps the row, NEVER
+--     updated by /transcode-complete (the runner's bundle bytes
+--     don't change the frame count). Stays through a re-upload
+--     as long as the new upload is also a sequence; gets cleared
+--     to NULL if a publisher re-uploads as an MP4 instead.
+--
+--   - `frame_extension TEXT` — `png` / `jpg` / `webp` (matching
+--     the `extForMime` convention; jpg not jpeg). Lets the wire
+--     manifest's `urlTemplate` field embed the right file
+--     extension without joining to asset_uploads. Populated by
+--     /complete; cleared on MP4 re-upload like `frame_count`.
+--
+--   - `frame_source_filenames_ref TEXT` — R2 key of an auxiliary
+--     JSON blob listing the original publisher-provided filenames
+--     in encode order (e.g. `frame_001.png`, `frame_002.png`, ...).
+--     The frames-as-data API (3pg) surfaces them as
+--     `originalFilename` on /frames responses for tooling that
+--     needs to map back to the publisher's on-disk convention
+--     (downstream pipelines, federated mirrors). The blob lives
+--     at `uploads/{dataset_id}/{upload_id}/source_filenames.json`
+--     alongside the source frames; the upload's presigned-PUT
+--     mint returns a separate URL for it.
+--
+-- Lifecycle: all three start NULL, set together by /complete on
+-- a successful image-sequence upload, cleared together if a
+-- subsequent MP4 upload completes on the same row. The columns
+-- are not part of any UNIQUE / FOREIGN KEY constraint and don't
+-- need indices — they're read with the row, never filtered on.
+-- (A later "give me all sequence datasets in time range X"
+-- query, Phase 3pg, runs against `start_time` + `frame_count`
+-- range arithmetic, not a frame_count IS NOT NULL filter; the
+-- existing `datasets_pub_idx` covers it.)
+--
+-- Co-locating all three column additions in one migration (and
+-- splitting from 0013's asset_uploads change) keeps the schema
+-- diff readable while still presenting a single coherent
+-- "image-sequence schema landed in 0013 + 0014" pair to operators.
+
+ALTER TABLE datasets ADD COLUMN frame_count INTEGER;
+ALTER TABLE datasets ADD COLUMN frame_extension TEXT;
+ALTER TABLE datasets ADD COLUMN frame_source_filenames_ref TEXT;

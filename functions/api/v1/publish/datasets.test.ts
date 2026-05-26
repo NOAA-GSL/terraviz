@@ -184,8 +184,34 @@ describe('GET / PUT /api/v1/publish/datasets/{id}', () => {
     const { env, id } = await seedOne()
     const res = await datasetGet(ctxWithPublisher<'id'>({ env, params: { id } }))
     expect(res.status).toBe(200)
-    const body = await readJson<{ dataset: { id: string; title: string } }>(res)
+    const body = await readJson<{
+      dataset: { id: string; title: string }
+      keywords: string[]
+      tags: string[]
+    }>(res)
     expect(body.dataset.id).toBe(id)
+    expect(body.keywords).toEqual([])
+    expect(body.tags).toEqual([])
+  })
+
+  it('GET includes keywords + tags when present', async () => {
+    const { env, id } = await seedOne()
+    // Patch the row to attach decorations, mirroring how the form posts
+    // them on save. The edit page prefills its chip inputs from these
+    // arrays so the round-trip needs to survive the GET.
+    await datasetPut(
+      ctxWithPublisher<'id'>({
+        env,
+        method: 'PUT',
+        body: { keywords: ['sst', 'anomaly'], tags: ['demo'] },
+        params: { id },
+      }),
+    )
+    const res = await datasetGet(ctxWithPublisher<'id'>({ env, params: { id } }))
+    expect(res.status).toBe(200)
+    const body = await readJson<{ keywords: string[]; tags: string[] }>(res)
+    expect(body.keywords.sort()).toEqual(['anomaly', 'sst'])
+    expect(body.tags).toEqual(['demo'])
   })
 
   it('GET 404 for an unknown id', async () => {
@@ -266,6 +292,44 @@ describe('POST /api/v1/publish/datasets/{id}/publish', () => {
     const body = await readJson<{ error: string; message: string }>(res)
     expect(body.error).toBe('not_found')
     expect(body.message).toMatch(/not found/i)
+  })
+
+  it('returns 409 transcoding_in_progress when the row is still transcoding', async () => {
+    // The detail-page UI disables Publish while transcoding,
+    // but the server gate is what makes it actually enforceable —
+    // a direct API POST or CLI call could otherwise publish a row
+    // mid-transcode and the workflow's later PATCH would
+    // overwrite the still-good `data_ref` with the half-baked
+    // new one. Phase 3pd review fix #1.
+    const { env } = await seedReady()
+    const body = await readJson<{ dataset: { id: string } }>(
+      await onRequestPost(
+        ctxWithPublisher({
+          env,
+          method: 'POST',
+          body: {
+            title: 'Mid-transcode',
+            format: 'video/mp4',
+            data_ref: 'r2:videos/old/master.m3u8',
+            license_spdx: 'CC-BY-4.0',
+          },
+        }),
+      ),
+    )
+    // Stamp the row directly to transcoding=1; this models the
+    // state /asset/complete left it in after firing the dispatch.
+    ;(
+      env.CATALOG_DB as unknown as { prepare: (q: string) => { bind: (...a: unknown[]) => { run: () => void } } }
+    )
+      .prepare('UPDATE datasets SET transcoding = 1 WHERE id = ?')
+      .bind(body.dataset.id)
+      .run()
+    const res = await datasetPublish(
+      ctxWithPublisher<'id'>({ env, method: 'POST', params: { id: body.dataset.id } }),
+    )
+    expect(res.status).toBe(409)
+    const errBody = await readJson<{ errors: Array<{ code: string }> }>(res)
+    expect(errBody.errors[0].code).toBe('transcoding_in_progress')
   })
 })
 
@@ -396,6 +460,129 @@ describe('POST /api/v1/publish/datasets/{id}/retract', () => {
     const body = await readJson<{ error: string; message: string }>(res)
     expect(body.error).toBe('not_found')
     expect(body.message).toMatch(/not found/i)
+  })
+})
+
+describe('audit_events writes', () => {
+  interface AuditRow {
+    actor_kind: string
+    actor_id: string
+    action: string
+    subject_kind: string
+    subject_id: string
+    metadata_json: string | null
+  }
+  function readAudit(
+    sqlite: ReturnType<typeof setupEnv>['sqlite'],
+    subjectId: string,
+  ): AuditRow[] {
+    return sqlite
+      .prepare(
+        `SELECT actor_kind, actor_id, action, subject_kind, subject_id, metadata_json
+           FROM audit_events WHERE subject_id = ? ORDER BY id`,
+      )
+      .all(subjectId) as AuditRow[]
+  }
+
+  it('records dataset.create on POST', async () => {
+    const { env, sqlite } = setupEnv()
+    const res = await onRequestPost(
+      ctxWithPublisher({
+        env,
+        method: 'POST',
+        body: { title: 'Audited', format: 'video/mp4' },
+      }),
+    )
+    const id = (await readJson<{ dataset: { id: string } }>(res)).dataset.id
+    const rows = readAudit(sqlite, id)
+    expect(rows).toHaveLength(1)
+    expect(rows[0].actor_kind).toBe('publisher')
+    expect(rows[0].actor_id).toBe(STAFF.id)
+    expect(rows[0].action).toBe('dataset.create')
+    expect(rows[0].subject_kind).toBe('dataset')
+    expect(JSON.parse(rows[0].metadata_json ?? '{}')).toMatchObject({
+      slug: 'audited',
+      format: 'video/mp4',
+    })
+  })
+
+  it('records dataset.update on PUT with the touched fields', async () => {
+    const { env, sqlite } = setupEnv()
+    const created = await onRequestPost(
+      ctxWithPublisher({
+        env,
+        method: 'POST',
+        body: { title: 'Pre-edit', format: 'video/mp4' },
+      }),
+    )
+    const id = (await readJson<{ dataset: { id: string } }>(created)).dataset.id
+    await datasetPut(
+      ctxWithPublisher<'id'>({
+        env,
+        method: 'PUT',
+        body: { title: 'Renamed', abstract: 'new copy' },
+        params: { id },
+      }),
+    )
+    const rows = readAudit(sqlite, id)
+    const updateRows = rows.filter(r => r.action === 'dataset.update')
+    expect(updateRows).toHaveLength(1)
+    expect(JSON.parse(updateRows[0].metadata_json ?? '{}')).toEqual({
+      fields: ['abstract', 'title'],
+    })
+  })
+
+  it('records dataset.publish on the publish route', async () => {
+    const { env, sqlite } = setupEnv()
+    const created = await onRequestPost(
+      ctxWithPublisher({
+        env,
+        method: 'POST',
+        body: {
+          title: 'Audit publish',
+          format: 'video/mp4',
+          data_ref: 'vimeo:1',
+          license_spdx: 'CC-BY-4.0',
+        },
+      }),
+    )
+    const id = (await readJson<{ dataset: { id: string } }>(created)).dataset.id
+    await datasetPublish(ctxWithPublisher<'id'>({ env, method: 'POST', params: { id } }))
+    const rows = readAudit(sqlite, id).filter(r => r.action === 'dataset.publish')
+    expect(rows).toHaveLength(1)
+    expect(rows[0].actor_id).toBe(STAFF.id)
+  })
+
+  it('records dataset.retract on the retract route', async () => {
+    const { env, sqlite } = setupEnv()
+    const created = await onRequestPost(
+      ctxWithPublisher({
+        env,
+        method: 'POST',
+        body: { title: 'Audit retract', format: 'video/mp4' },
+      }),
+    )
+    const id = (await readJson<{ dataset: { id: string } }>(created)).dataset.id
+    await datasetRetract(ctxWithPublisher<'id'>({ env, method: 'POST', params: { id } }))
+    const rows = readAudit(sqlite, id).filter(r => r.action === 'dataset.retract')
+    expect(rows).toHaveLength(1)
+    expect(rows[0].actor_id).toBe(STAFF.id)
+  })
+
+  it('does not record an audit row when create fails validation', async () => {
+    const { env, sqlite } = setupEnv()
+    const res = await onRequestPost(
+      ctxWithPublisher({
+        env,
+        method: 'POST',
+        body: { title: '', format: 'video/mp4' },
+      }),
+    )
+    expect(res.status).toBe(400)
+    const rowCount = (
+      sqlite.prepare('SELECT COUNT(*) AS c FROM audit_events').get() as { c: number }
+    ).c
+    expect(rowCount).toBe(0)
   })
 })
 

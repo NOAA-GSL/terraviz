@@ -16,3 +16,16 @@ interface ImportMetaEnv {
 interface ImportMeta {
   readonly env: ImportMetaEnv
 }
+
+/** Minimal type shim for `cytoscape-cola`. The package ships no
+ *  TypeScript types and DefinitelyTyped has no `@types/cytoscape-cola`.
+ *  The default export is a cytoscape extension registrar — call
+ *  `cytoscape.use(cola)` once before instantiating to register the
+ *  `'cola'` layout name. Layout options are then passed via the
+ *  cytoscape layout config; cytoscape's own types treat layout
+ *  options as `any`, so no further shape is needed here. */
+declare module 'cytoscape-cola' {
+  import type cytoscape from 'cytoscape'
+  const cola: cytoscape.Ext
+  export default cola
+}

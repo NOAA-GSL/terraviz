@@ -53,6 +53,28 @@ export interface CatalogEnv {
    */
   ACCESS_AUD?: string
   /**
+   * Comma-separated list of email domains (e.g.
+   * `noaa.gov,zyra-project.org`) whose verified Access user logins
+   * auto-promote to `role='staff', is_admin=1, status='active'` on
+   * JIT provisioning. Empty / unset means the default
+   * community/pending classification applies — appropriate for
+   * multi-org deploys (Phase 6) where strangers signing in via
+   * SSO must wait for explicit approval.
+   *
+   * For Phase 3 single-org deploys (one organisation's Access
+   * application gating one Terraviz instance), setting this to
+   * the operator's email domain is the right default — the
+   * operator IS the publisher, and pending-by-default would lock
+   * them out of their own deploy.
+   *
+   * Domain matching is case-insensitive and exact: `noaa.gov`
+   * matches `alice@noaa.gov` but not `alice@example.noaa.gov`
+   * (subdomains require their own entry). Service-token identities
+   * are unaffected; they continue to provision as
+   * `role='service', is_admin=0, status='active'`.
+   */
+  TRUSTED_PUBLISHER_DOMAINS?: string
+  /**
    * `"true"` skips Access verification in local dev and JIT-provisions
    * a staff publisher keyed off `DEV_PUBLISHER_EMAIL`. The middleware
    * refuses to honour this flag against a non-loopback hostname so a
@@ -205,4 +227,35 @@ export interface CatalogEnv {
    * `MOCK_VECTORIZE=true` for the full mocked docent path.
    */
   MOCK_AI?: string
+  /**
+   * GitHub repository owner that hosts the transcode workflow
+   * (e.g. `zyra-project`). Used by the video-upload /complete
+   * handler (Phase 3pd) to fire a `repository_dispatch` after the
+   * source MP4 lands in R2. Local dev with `MOCK_GITHUB_DISPATCH=true`
+   * does not need it.
+   */
+  GITHUB_OWNER?: string
+  /**
+   * GitHub repository name (e.g. `terraviz`). Paired with
+   * `GITHUB_OWNER` to build the dispatch URL. Same mock-mode
+   * exemption applies.
+   */
+  GITHUB_REPO?: string
+  /**
+   * Personal Access Token (or GitHub App installation token) with
+   * `repo` scope on `{GITHUB_OWNER}/{GITHUB_REPO}` — needed for the
+   * `POST /repos/.../dispatches` REST call. Wrangler secret in
+   * production; the token never leaves the Worker (the GHA runner
+   * uses its own checkout-only `GITHUB_TOKEN`, which is a different
+   * credential).
+   */
+  GITHUB_DISPATCH_TOKEN?: string
+  /**
+   * `"true"` makes the github-dispatch helper short-circuit without
+   * contacting api.github.com. The /complete handler still stamps
+   * the dataset row `transcoding = 1` so the portal can exercise
+   * the polling surface end-to-end against a deploy without a real
+   * GHA workflow wired up. Refused on non-loopback hostnames.
+   */
+  MOCK_GITHUB_DISPATCH?: string
 }

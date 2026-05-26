@@ -1,6 +1,17 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { dataService, HIDDEN_TOUR_IDS, normaliseSourceFormat } from './dataService'
+import {
+  dataService,
+  deriveAvailableFor,
+  HIDDEN_TOUR_IDS,
+  normaliseSourceFormat,
+  sosOnlyIdSlug,
+  synthesizeSosOnlyDatasets,
+  tourWireToDataset,
+  tourWireToTour,
+} from './dataService'
 import type { Dataset } from '../types'
+
+const lowerTitle = (t: string): string => t.toLowerCase().trim()
 
 // Helper to build a minimal Dataset
 function makeDataset(overrides: Partial<Dataset> = {}): Dataset {
@@ -188,6 +199,163 @@ describe('DataService.getDatasetById', () => {
 })
 
 // ---------------------------------------------------------------------------
+// Phase 4 §6.4 — SOS-only data widening
+// ---------------------------------------------------------------------------
+
+describe('deriveAvailableFor', () => {
+  it('returns undefined for missing or empty arrays', () => {
+    expect(deriveAvailableFor(undefined)).toBeUndefined()
+    expect(deriveAvailableFor([])).toBeUndefined()
+  })
+
+  it('maps ["SOS"] only to "SOS"', () => {
+    expect(deriveAvailableFor(['SOS'])).toBe('SOS')
+  })
+
+  it('maps ["Explorer"] only to "Explorer"', () => {
+    expect(deriveAvailableFor(['Explorer'])).toBe('Explorer')
+  })
+
+  it('maps both surfaces to "Both"', () => {
+    expect(deriveAvailableFor(['SOS', 'Explorer'])).toBe('Both')
+    expect(deriveAvailableFor(['Explorer', 'SOS'])).toBe('Both')
+  })
+
+  it('ignores unrecognised values when neither flag is present', () => {
+    expect(deriveAvailableFor(['Mars'])).toBeUndefined()
+  })
+})
+
+describe('synthesizeSosOnlyDatasets', () => {
+  it('synthesises a Dataset for an SOS-only entry with movie_preview', () => {
+    const synthesised = synthesizeSosOnlyDatasets(
+      [
+        {
+          title: 'Tsunami Wave Heights',
+          description: 'A reconstruction of tsunami wave heights.',
+          available_for: ['SOS'],
+          movie_preview: 'https://sos.noaa.gov/videos/tsunami.mov',
+          thumbnail_image: 'https://sos.noaa.gov/thumb/tsunami.jpg',
+          dataset_developer: { name: 'NOAA NCEI' },
+          keywords: ['tsunami', 'ocean'],
+          url: 'https://sos.noaa.gov/catalog/tsunami',
+        },
+      ],
+      new Set(),
+      lowerTitle,
+    )
+    expect(synthesised).toHaveLength(1)
+    const ds = synthesised[0]
+    expect(ds.id).toMatch(/^SOS_ONLY_/)
+    expect(ds.title).toBe('Tsunami Wave Heights')
+    expect(ds.format).toBe('video/mp4')
+    expect(ds.dataLink).toBe('https://sos.noaa.gov/videos/tsunami.mov')
+    expect(ds.thumbnailLink).toBe('https://sos.noaa.gov/thumb/tsunami.jpg')
+    expect(ds.abstractTxt).toBe('A reconstruction of tsunami wave heights.')
+    expect(ds.organization).toBe('NOAA NCEI')
+    expect(ds.tags).toEqual(['tsunami', 'ocean'])
+    expect(ds.websiteLink).toBe('https://sos.noaa.gov/catalog/tsunami')
+    expect(ds.availableFor).toBe('SOS')
+  })
+
+  it('skips entries that lack a movie_preview URL', () => {
+    expect(
+      synthesizeSosOnlyDatasets(
+        [{ title: 'No Preview', available_for: ['SOS'] }],
+        new Set(),
+        lowerTitle,
+      ),
+    ).toEqual([])
+  })
+
+  it('skips entries marked "Explorer" or "Both" (already in live catalog)', () => {
+    const entries = [
+      { title: 'Explorer Only', available_for: ['Explorer'], movie_preview: 'x' },
+      { title: 'Both', available_for: ['SOS', 'Explorer'], movie_preview: 'x' },
+      { title: 'SOS Only', available_for: ['SOS'], movie_preview: 'x' },
+    ]
+    const synthesised = synthesizeSosOnlyDatasets(entries, new Set(), lowerTitle)
+    expect(synthesised.map((d) => d.title)).toEqual(['SOS Only'])
+  })
+
+  it('de-dupes against the existing live-catalog title keys', () => {
+    const synthesised = synthesizeSosOnlyDatasets(
+      [{ title: 'Sea Ice', available_for: ['SOS'], movie_preview: 'x' }],
+      new Set([lowerTitle('Sea Ice')]),
+      lowerTitle,
+    )
+    expect(synthesised).toEqual([])
+  })
+
+  it('derives a stable title-slug ID (not iteration-order dependent)', () => {
+    const entries = [
+      { title: 'Tsunami Wave Heights', available_for: ['SOS'], movie_preview: 'a' },
+      { title: 'Arctic Sea Ice 2020', available_for: ['SOS'], movie_preview: 'b' },
+    ]
+    const synthesised = synthesizeSosOnlyDatasets(entries, new Set(), lowerTitle)
+    expect(synthesised.map((d) => d.id)).toEqual([
+      'SOS_ONLY_tsunami_wave_heights',
+      'SOS_ONLY_arctic_sea_ice_2020',
+    ])
+  })
+
+  it('keeps IDs stable when the enriched list is reordered', () => {
+    const entries = [
+      { title: 'Alpha', available_for: ['SOS'], movie_preview: 'a' },
+      { title: 'Beta', available_for: ['SOS'], movie_preview: 'b' },
+    ]
+    const a = synthesizeSosOnlyDatasets(entries, new Set(), lowerTitle)
+    const b = synthesizeSosOnlyDatasets([entries[1], entries[0]], new Set(), lowerTitle)
+    // Same titles → same IDs, regardless of input order.
+    const idsA = a.reduce<Record<string, string>>((acc, d) => ((acc[d.title] = d.id), acc), {})
+    const idsB = b.reduce<Record<string, string>>((acc, d) => ((acc[d.title] = d.id), acc), {})
+    expect(idsA).toEqual(idsB)
+  })
+
+  it('disambiguates collision-only slug pairs with a numeric suffix', () => {
+    // Two titles that slugify identically (special chars stripped).
+    const entries = [
+      { title: 'Foo Bar', available_for: ['SOS'], movie_preview: 'a' },
+      { title: 'Foo  Bar', available_for: ['SOS'], movie_preview: 'b' },
+    ]
+    // Force the title-key dedupe to NOT collide so both survive
+    // to ID assignment — title normaliser uses lowerTitle which
+    // collapses double-space differently than the slugifier.
+    const customNormalize = (t: string) => t  // keep both distinct
+    const synthesised = synthesizeSosOnlyDatasets(entries, new Set(), customNormalize)
+    expect(synthesised[0].id).toBe('SOS_ONLY_foo_bar')
+    expect(synthesised[1].id).toBe('SOS_ONLY_foo_bar_2')
+  })
+})
+
+describe('sosOnlyIdSlug', () => {
+  it('lowercases and replaces non-alphanumeric runs with underscores', () => {
+    expect(sosOnlyIdSlug('Sea Ice (Movie)')).toBe('sea_ice_movie')
+    expect(sosOnlyIdSlug('120 Years of Earthquakes: 1901–2020'))
+      .toBe('120_years_of_earthquakes_1901_2020')
+  })
+
+  it('trims edge underscores', () => {
+    expect(sosOnlyIdSlug('  hello  ')).toBe('hello')
+    expect(sosOnlyIdSlug('!!! Wow !!!')).toBe('wow')
+  })
+
+  it('caps length so deep-link URLs stay reasonable', () => {
+    const long = 'a'.repeat(200)
+    expect(sosOnlyIdSlug(long).length).toBeLessThanOrEqual(60)
+  })
+
+  it('returns synthesised rows tagged with weight 0', () => {
+    const synthesised = synthesizeSosOnlyDatasets(
+      [{ title: 'A', available_for: ['SOS'], movie_preview: 'a' }],
+      new Set(),
+      lowerTitle,
+    )
+    expect(synthesised[0].weight).toBe(0)
+  })
+})
+
+// ---------------------------------------------------------------------------
 // HIDDEN_TOUR_IDS — client-side denylist for unsupported SOS tours
 // ---------------------------------------------------------------------------
 describe('HIDDEN_TOUR_IDS', () => {
@@ -201,5 +369,60 @@ describe('HIDDEN_TOUR_IDS', () => {
 
   it('does not suppress the built-in Climate Connections tour', () => {
     expect(HIDDEN_TOUR_IDS.has('SAMPLE_TOUR')).toBe(false)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// tourWireToDataset / tourWireToTour — Phase 3pt/G follow-up
+// ---------------------------------------------------------------------------
+describe('tourWireToDataset', () => {
+  const wire = {
+    id: '01HXTOUR000000000000000000',
+    slug: 'hurricane-tour',
+    title: 'Hurricane Tour',
+    description: 'A guided look at hurricane formation.',
+    tour_json_url: 'https://r2.example.com/tours/01HX/published/01HY.json',
+    thumbnail_url: 'https://r2.example.com/tours/01HX/thumb.jpg',
+    visibility: 'public',
+    schema_version: 1,
+    created_at: '2026-05-01T00:00:00.000Z',
+    updated_at: '2026-05-01T00:00:00.000Z',
+    published_at: '2026-05-01T00:00:00.000Z',
+    origin_node: 'NODE000',
+  }
+
+  it('maps the wire shape to a tour/json-format Dataset', () => {
+    const d = tourWireToDataset(wire)
+    expect(d.id).toBe(wire.id)
+    expect(d.format).toBe('tour/json')
+    expect(d.title).toBe(wire.title)
+    expect(d.tourJsonUrl).toBe(wire.tour_json_url)
+    expect(d.dataLink).toBe(wire.tour_json_url)
+    expect(d.abstractTxt).toBe(wire.description)
+    expect(d.thumbnailLink).toBe(wire.thumbnail_url)
+    expect(d.tags).toEqual(['Tours'])
+  })
+
+  it('handles null thumbnail / description defensively', () => {
+    // Note: tours with null `tour_json_url` are filtered out
+    // by `fetchToursFromNode` before this mapper runs (a card
+    // pointing at no URL is unlaunchable); the mapper still
+    // tolerates the field nullably as a defensive layer for
+    // any consumer that bypasses the filter.
+    const d = tourWireToDataset({
+      ...wire,
+      description: null,
+      thumbnail_url: null,
+    })
+    expect(d.abstractTxt).toBeUndefined()
+    expect(d.thumbnailLink).toBeUndefined()
+  })
+
+  it('round-trips through tourWireToTour with the same metadata', () => {
+    const tour = tourWireToTour(wire)
+    expect(tour.id).toBe(wire.id)
+    expect(tour.title).toBe(wire.title)
+    expect(tour.tourJsonUrl).toBe(wire.tour_json_url)
+    expect(tour.publishedAt).toBe(wire.published_at)
   })
 })

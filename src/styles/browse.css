@@ -71,9 +71,20 @@
     flex-direction: column;
     height: 100%;
     width: 100%;
-    padding: 1.5rem 1.5rem 0;
+    /* Padded on all four sides so every view-mode (Cards / Graph
+       / Timeline / Map) gets the same breathing room above the
+       browser's bottom edge. Previously the bottom-padding was
+       only set inside `#browse-grid`, which left Graph / Timeline
+       / Map canvases running flush to the viewport edge. */
+    padding: 1.5rem;
     box-sizing: border-box;
     overflow: hidden;
+    /* `position: relative` so the filter-drawer rail (positioned
+       absolute when small-screen + non-Cards + open) anchors here
+       rather than escaping to the viewport. The drawer's `top` is
+       computed in JS from the toolbar's offsetTop+height — see
+       `setFilterDrawerOpen` in browseUI.ts. */
+    position: relative;
 }
 
 #browse-header {
@@ -97,6 +108,29 @@
     margin-top: 0.2rem;
     opacity: 0.8;
     letter-spacing: 0.05em;
+}
+
+/* View-aware chrome — Graph and Timeline want every vertical pixel
+   for their canvas. Hide the decorative subtitle and shrink the
+   title margin so the chip rail / canvas can claim the reclaimed
+   space (~50-80 px saved). The body class is set by
+   `applyViewMode` in `browseUI.ts`; Cards keeps the full welcome
+   chrome unchanged. */
+body.browse-view-graph #browse-header,
+body.browse-view-timeline #browse-header,
+body.browse-view-map #browse-header {
+    margin-bottom: 0.5rem;
+}
+body.browse-view-graph .browse-subtitle,
+body.browse-view-timeline .browse-subtitle,
+body.browse-view-map .browse-subtitle {
+    display: none;
+}
+body.browse-view-graph .browse-title,
+body.browse-view-timeline .browse-title,
+body.browse-view-map .browse-title {
+    font-size: 1rem;
+    letter-spacing: 0.12em;
 }
 
 .browse-search-wrap {
@@ -182,12 +216,136 @@
     background: var(--white-o08);
 }
 
-#browse-category-bar {
-    display: flex;
-    gap: 0.4rem;
-    flex-wrap: wrap;
+/* Filter rail — typed-group chip layout (Phase 4 §6.1/§6.5).
+   Grid-based so all four section headers can sit on one row when
+   collapsed (a ~50-80px vertical win over the previous flex
+   column where each header claimed a row of its own). An
+   expanded section spans every column so its chip body has full
+   width to render in; collapsed siblings tuck into the remaining
+   row above or below via auto-placement. The clear-all wrapper
+   also spans the full width so it doesn't get marooned in one
+   grid cell. */
+#browse-filter-rail {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 0.35rem 0.75rem;
     flex-shrink: 0;
     padding-bottom: 0.75rem;
+}
+
+.browse-filter-section {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    min-width: 0;
+}
+
+.browse-filter-section:not(.collapsed) {
+    grid-column: 1 / -1;
+}
+
+.browse-filter-clear-wrap {
+    grid-column: 1 / -1;
+}
+
+/* Below tablet width the four-column row stops fitting; collapse
+   back to a single column so each header gets its own row again.
+   The breakpoint sits a touch above the mobile gate (768 px) so
+   tablets in portrait still get the compact row. */
+@media (max-width: 600px) {
+    #browse-filter-rail {
+        grid-template-columns: 1fr;
+    }
+}
+
+/* Accordion section header — clickable button that toggles the
+   body's visibility. Per-section open/collapsed state persists
+   in localStorage. Active facets render an inline badge so a
+   collapsed section still signals "you have filters set here". */
+.browse-filter-section-header {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    width: 100%;
+    padding: 0.25rem 0.1rem;
+    background: transparent;
+    border: none;
+    color: var(--color-text-muted);
+    font-family: inherit;
+    font-size: 0.6rem;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    text-align: start;
+    cursor: pointer;
+    border-radius: 0.25rem;
+}
+
+.browse-filter-section-header:hover {
+    color: var(--color-text);
+    background: var(--white-o05);
+}
+
+.browse-filter-section-header:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 1px;
+}
+
+.browse-filter-section-indicator {
+    display: inline-block;
+    width: 0.7rem;
+    font-size: 0.55rem;
+    text-align: center;
+    color: var(--color-text-muted);
+}
+
+.browse-filter-section-header:hover .browse-filter-section-indicator {
+    color: var(--color-text);
+}
+
+.browse-filter-section-title {
+    flex: 1;
+}
+
+.browse-filter-section-badge {
+    flex-shrink: 0;
+    min-width: 1.1rem;
+    padding: 0.05rem 0.4rem;
+    border-radius: 999px;
+    background: var(--color-accent-dark);
+    color: var(--color-text);
+    font-size: 0.55rem;
+    font-weight: 600;
+    letter-spacing: 0;
+    text-transform: none;
+    text-align: center;
+}
+
+.browse-filter-section-body {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.browse-filter-section.collapsed .browse-filter-section-body {
+    display: none;
+}
+
+.browse-filter-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.browse-filter-label {
+    font-size: 0.65rem;
+    color: var(--color-text-muted);
+}
+
+.browse-chip-row {
+    display: flex;
+    gap: 0.35rem;
+    flex-wrap: wrap;
 }
 
 .browse-chip {
@@ -215,39 +373,101 @@
     color: var(--color-text);
 }
 
-#browse-subcategory-bar {
+.browse-chip:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 1px;
+}
+
+/* Quality & availability toggle row — boolean chips share a
+   distinct accent treatment so users distinguish a "set this" chip
+   from a "add to the multi-select" chip. */
+.browse-toggle-row {
     display: flex;
-    gap: 0.35rem;
+    gap: 0.4rem;
     flex-wrap: wrap;
-    flex-shrink: 0;
-    padding-bottom: 0.75rem;
 }
-#browse-subcategory-bar:empty {
-    display: none;
-}
-.browse-subchip {
+
+.browse-toggle-chip {
     flex-shrink: 0;
-    padding: 0.25rem 0.6rem;
+    padding: 0.3rem 0.75rem;
     border-radius: 999px;
     border: 1px solid var(--accent-o20);
     background: var(--accent-o08);
     color: var(--color-accent-hover);
-    font-size: 0.65rem;
+    font-size: 0.7rem;
     cursor: pointer;
     transition: background 0.15s, color 0.15s, border-color 0.15s;
     white-space: nowrap;
     font-family: inherit;
 }
-.browse-subchip:hover {
+
+.browse-toggle-chip:hover {
     background: var(--accent-o18);
     color: var(--color-text);
 }
-.browse-subchip.active {
+
+.browse-toggle-chip.active {
     background: var(--accent-o30);
     border-color: var(--color-accent);
     color: var(--color-text);
 }
-.browse-subchip:focus-visible {
+
+.browse-toggle-chip:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 1px;
+}
+
+/* Range inputs — two-number low-fi UI in v1; dual-thumb slider
+   is a follow-up per §6.1 ("Medium effort"). */
+.browse-range-row {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+
+.browse-range-input {
+    width: 5.5rem;
+    padding: 0.25rem 0.5rem;
+    border-radius: 0.25rem;
+    border: 1px solid var(--white-o15);
+    background: var(--white-o05);
+    color: var(--color-text);
+    font-size: 0.75rem;
+    font-family: inherit;
+}
+
+.browse-range-input:focus {
+    outline: none;
+    border-color: var(--accent-o50);
+    background: var(--white-o08);
+}
+
+.browse-range-sep {
+    color: var(--color-text-muted);
+}
+
+.browse-filter-clear-wrap {
+    display: flex;
+    justify-content: flex-end;
+}
+
+.browse-filter-clear {
+    padding: 0.25rem 0.6rem;
+    border-radius: 0.25rem;
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--color-text-muted);
+    font-size: 0.65rem;
+    cursor: pointer;
+    font-family: inherit;
+}
+
+.browse-filter-clear:hover {
+    color: var(--color-text);
+    border-color: var(--white-o15);
+}
+
+.browse-filter-clear:focus-visible {
     outline: 2px solid var(--color-accent);
     outline-offset: 1px;
 }
@@ -265,6 +485,142 @@
     color: var(--color-text-muted);
     letter-spacing: 0.05em;
     white-space: nowrap;
+}
+
+/* Filters drawer toggle — hidden by default; only the small-screen
+   non-Cards media query reveals it. The badge sits inside the
+   button so a glance shows the active-filter count even when the
+   rail itself is collapsed behind the drawer. */
+.browse-filters-btn {
+    display: none;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.25rem 0.55rem;
+    border-radius: 4px;
+    border: 1px solid var(--white-o15);
+    background: var(--color-surface-alt);
+    color: var(--color-text-secondary);
+    font-size: 0.6rem;
+    font-family: inherit;
+    letter-spacing: 0.05em;
+    cursor: pointer;
+    white-space: nowrap;
+}
+.browse-filters-btn:hover {
+    background: var(--white-o08);
+    color: var(--color-text);
+}
+.browse-filters-btn:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 1px;
+}
+#browse-overlay.filter-drawer-open .browse-filters-btn {
+    background: var(--accent-o15);
+    border-color: var(--accent-o40);
+    color: var(--color-accent);
+}
+.browse-filters-btn-badge {
+    display: inline-block;
+    min-width: 1.1rem;
+    padding: 0 0.3rem;
+    border-radius: 999px;
+    background: var(--color-accent);
+    color: var(--color-bg);
+    font-size: 0.55rem;
+    font-weight: 600;
+    line-height: 1.2;
+    text-align: center;
+}
+.browse-filters-btn-badge.hidden {
+    display: none;
+}
+
+/* Active-filter chip strip — hidden by default. CSS reveals it
+   when the drawer-mode media query AND the strip carries chips.
+   Each chip mirrors the chip-rail's `.browse-chip.active` look so
+   it visually reads as a removed filter (× hint at the trailing
+   edge). */
+#browse-active-filters {
+    display: none;
+    flex: 1;
+    min-width: 0;
+    gap: 0.3rem;
+    align-items: center;
+    overflow-x: auto;
+    scrollbar-width: thin;
+}
+.browse-active-filter-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    padding: 0.15rem 0.45rem;
+    border-radius: 999px;
+    border: 1px solid var(--accent-o40);
+    background: var(--accent-o15);
+    color: var(--color-accent);
+    font-size: 0.6rem;
+    font-family: inherit;
+    cursor: pointer;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+.browse-active-filter-chip:hover {
+    background: var(--accent-o30);
+}
+.browse-active-filter-chip:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 1px;
+}
+.browse-active-filter-chip-x {
+    color: var(--color-text-secondary);
+    font-size: 0.7rem;
+    line-height: 1;
+}
+
+/* ----- Drawer mode (small screens, Graph + Timeline only) -----
+   Below 1024px wide AND on a non-Cards view, the inline chip rail
+   is hidden behind a "Filters" button to reclaim vertical space
+   for the canvas. Active filters surface as removable chips in
+   the toolbar so the user still sees what's filtered. Cards keeps
+   the inline rail at every breakpoint — discovery via filter chips
+   is the Cards UX. */
+@media (max-width: 1024px) {
+    body.browse-view-graph .browse-filters-btn,
+    body.browse-view-timeline .browse-filters-btn,
+    body.browse-view-map .browse-filters-btn {
+        display: inline-flex;
+    }
+    body.browse-view-graph #browse-active-filters:not(.empty),
+    body.browse-view-timeline #browse-active-filters:not(.empty),
+    body.browse-view-map #browse-active-filters:not(.empty) {
+        display: flex;
+    }
+    body.browse-view-graph #browse-filter-rail,
+    body.browse-view-timeline #browse-filter-rail,
+    body.browse-view-map #browse-filter-rail {
+        display: none;
+    }
+    body.browse-view-graph #browse-overlay.filter-drawer-open #browse-filter-rail,
+    body.browse-view-timeline #browse-overlay.filter-drawer-open #browse-filter-rail,
+    body.browse-view-map #browse-overlay.filter-drawer-open #browse-filter-rail {
+        display: grid;
+        position: absolute;
+        /* `--browse-drawer-top` is set inline by JS from the
+           toolbar's measured offset; fallback covers the rare
+           case where the measurement hasn't run yet. */
+        top: var(--browse-drawer-top, 9.5rem);
+        inset-inline: 1.5rem;
+        z-index: 50;
+        padding: 0.75rem;
+        background: var(--glass-bg);
+        border: 1px solid var(--white-o15);
+        border-radius: 8px;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+        backdrop-filter: blur(8px);
+        -webkit-backdrop-filter: blur(8px);
+        max-height: calc(100% - var(--browse-drawer-top, 9.5rem) - 1.5rem);
+        overflow-y: auto;
+    }
 }
 #browse-sort {
     display: flex;
@@ -302,9 +658,703 @@
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(var(--component-browse-grid-col-min), 1fr));
     gap: var(--component-browse-grid-gap);
-    padding-bottom: 1.5rem;
+    /* Bottom breathing room comes from `#browse-inner`'s
+       all-around padding — no extra padding-bottom here, which
+       would otherwise double up on the inner's bottom padding
+       when scrolled to the last card. */
     align-content: start;
 }
+#browse-grid.hidden {
+    display: none;
+}
+
+/* View-mode toggle (Cards vs Graph) — Phase 4 §6.7. Segmented
+   control rendered inside #browse-toolbar between the count and
+   the sort buttons. Hidden entirely on mobile because Graph view
+   isn't available below 768px. */
+#browse-view-mode {
+    display: flex;
+    gap: 0.2rem;
+}
+#browse-view-mode.hidden {
+    display: none;
+}
+.browse-view-mode-btn {
+    padding: 0.2rem 0.55rem;
+    border-radius: 4px;
+    border: 1px solid var(--white-o10);
+    background: var(--color-surface-alt);
+    color: var(--color-text-dim);
+    font-size: 0.6rem;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+    white-space: nowrap;
+    font-family: inherit;
+}
+.browse-view-mode-btn:hover {
+    background: var(--white-o08);
+    color: #ccc;
+}
+.browse-view-mode-btn.active {
+    background: var(--accent-o15);
+    border-color: var(--accent-o40);
+    color: var(--color-accent);
+}
+.browse-view-mode-btn:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 1px;
+}
+
+/* Graph view container — Phase 4 §6.7. Sized to fill the same
+   space the card grid uses; cytoscape mounts its canvas inside
+   `.browse-graph-canvas`. Hidden when Cards view is active. */
+#browse-graph {
+    flex: 1;
+    min-height: 0;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+}
+#browse-graph.hidden {
+    display: none;
+}
+.browse-graph-host {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    position: relative;
+}
+.browse-graph-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.4rem 0.6rem;
+    background: var(--color-surface-alt);
+    border: 1px solid var(--white-o08);
+    border-radius: 6px;
+    font-size: 0.65rem;
+    color: var(--color-text-dim);
+    flex-wrap: wrap;
+}
+.browse-graph-show-format {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    cursor: pointer;
+    user-select: none;
+}
+.browse-graph-show-format-input {
+    accent-color: var(--color-accent);
+    margin: 0;
+}
+
+/* Format legend swatch is dimmed when the toggle is off — same
+   visual treatment the keyword swatch uses for "available, not
+   currently rendered". */
+.browse-graph-legend-dot-format-toggle {
+    opacity: 0.35;
+}
+.browse-graph-host-show-format .browse-graph-legend-dot-format-toggle {
+    opacity: 1;
+}
+
+.browse-graph-recenter {
+    padding: 0.2rem 0.55rem;
+    border-radius: 4px;
+    border: 1px solid var(--white-o10);
+    background: var(--color-surface-alt);
+    color: var(--color-text-secondary);
+    font-size: 0.6rem;
+    cursor: pointer;
+    font-family: inherit;
+}
+.browse-graph-recenter:hover {
+    background: var(--white-o08);
+    color: var(--color-text);
+}
+.browse-graph-recenter:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 1px;
+}
+.browse-graph-legend {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    margin-inline-start: auto;
+    font-size: 0.6rem;
+    color: var(--color-text-muted);
+}
+.browse-graph-legend-dot {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    margin-inline-end: 0.15rem;
+}
+.browse-graph-legend-dot-category {
+    background: var(--facet-color-category-content);
+}
+.browse-graph-legend-dot-format {
+    background: var(--facet-color-format-medium);
+}
+.browse-graph-legend-dot-keyword {
+    background: var(--facet-color-category-content);
+    opacity: 0.6;
+    border-radius: 2px;
+}
+.browse-graph-legend-dot-dataset {
+    background: var(--color-text-faint);
+}
+.browse-graph-canvas {
+    flex: 1;
+    min-height: 320px;
+    background: var(--color-surface-alt);
+    border: 1px solid var(--white-o08);
+    border-radius: 6px;
+    overflow: hidden;
+}
+.browse-graph-canvas.hidden {
+    display: none;
+}
+.browse-graph-status {
+    padding: 1.5rem;
+    text-align: center;
+    color: var(--color-text-muted);
+    font-size: 0.75rem;
+}
+.browse-graph-status-error {
+    color: var(--color-error);
+}
+.browse-graph-empty {
+    padding: 1.5rem;
+    text-align: center;
+    color: var(--color-text-muted);
+    font-size: 0.75rem;
+}
+.browse-graph-empty.hidden {
+    display: none;
+}
+.browse-graph-tooltip {
+    position: absolute;
+    pointer-events: none;
+    background: var(--glass-bg);
+    border: 1px solid var(--white-o15);
+    border-radius: 4px;
+    padding: 0.4rem 0.6rem;
+    color: var(--color-text);
+    font-size: 0.65rem;
+    line-height: 1.4;
+    max-width: 240px;
+    z-index: 10;
+    backdrop-filter: blur(var(--glass-blur));
+    -webkit-backdrop-filter: blur(var(--glass-blur));
+}
+.browse-graph-tooltip.hidden {
+    display: none;
+}
+.browse-graph-tooltip-count {
+    color: var(--color-text-muted);
+}
+.browse-graph-tooltip-cooc {
+    color: var(--color-text-secondary);
+}
+
+/* Timeline view container — Phase 4 §6.8. Sized to fill the same
+   space the card grid uses; d3-axis + d3-brush + SVG rows mount
+   inside. Hidden when another view-mode is active. The time axis
+   reads left → right even in RTL locales (calendar time is a
+   universal left-to-right convention; flipping it would surprise
+   the reader who expects past on the left). */
+#browse-timeline {
+    flex: 1;
+    min-height: 0;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+}
+#browse-timeline.hidden {
+    display: none;
+}
+.browse-timeline-host {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+.browse-timeline-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.4rem 0.6rem;
+    background: var(--color-surface-alt);
+    border: 1px solid var(--white-o08);
+    border-radius: 6px;
+    font-size: 0.65rem;
+    color: var(--color-text-dim);
+    flex-wrap: wrap;
+}
+.browse-timeline-legend {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.6rem;
+    color: var(--color-text-muted);
+}
+.browse-timeline-legend-dot {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    margin-inline-end: 0.15rem;
+}
+.browse-timeline-legend-dot-coverage {
+    background: var(--facet-color-category-content);
+}
+.browse-timeline-legend-dot-realtime {
+    background: var(--color-success);
+}
+.browse-timeline-brush-summary {
+    margin-inline-start: auto;
+    font-size: 0.6rem;
+    color: var(--color-text-secondary);
+    font-variant-numeric: tabular-nums;
+}
+.browse-timeline-brush-clear {
+    padding: 0.2rem 0.55rem;
+    border-radius: 4px;
+    border: 1px solid var(--white-o10);
+    background: var(--color-surface-alt);
+    color: var(--color-text-secondary);
+    font-size: 0.6rem;
+    cursor: pointer;
+    font-family: inherit;
+}
+.browse-timeline-brush-clear.hidden {
+    display: none;
+}
+.browse-timeline-brush-clear:hover {
+    background: var(--white-o08);
+    color: var(--color-text);
+}
+.browse-timeline-brush-clear:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 1px;
+}
+.browse-timeline-chart {
+    flex: 1;
+    min-height: 320px;
+    background: var(--color-surface-alt);
+    border: 1px solid var(--white-o08);
+    border-radius: 6px;
+    overflow: auto;
+    position: relative;
+}
+.browse-timeline-chart.hidden {
+    display: none;
+}
+.browse-timeline-axis {
+    position: sticky;
+    inset-block-start: 0;
+    background: var(--color-bg);
+    z-index: 2;
+    border-block-end: 1px solid var(--white-o08);
+}
+.browse-timeline-axis-svg {
+    display: block;
+}
+.browse-timeline-axis-ticks text {
+    fill: var(--color-text-muted);
+    font-size: 10px;
+    font-variant-numeric: tabular-nums;
+}
+.browse-timeline-axis-ticks .domain,
+.browse-timeline-axis-ticks line {
+    stroke: var(--white-o15);
+}
+/* Brush band — the d3-brush `.overlay` rect is the interactive
+   surface. We give it a low-opacity amber fill and a dashed
+   inset border so the band reads as a distinct interactive zone
+   (PR #138 review: users didn't realise it was draggable). The
+   hint label inside the band — "↔ Drag to filter by year" —
+   reinforces the affordance and fades out once a selection
+   exists. Hover state nudges the fill a touch brighter for
+   feedback. */
+.browse-timeline-brush .overlay {
+    fill: var(--facet-color-time);
+    fill-opacity: 0.06;
+    stroke: var(--facet-color-time);
+    stroke-opacity: 0.35;
+    stroke-width: 1;
+    stroke-dasharray: 3 3;
+    cursor: crosshair;
+    transition: fill-opacity 0.15s, stroke-opacity 0.15s;
+}
+.browse-timeline-brush:hover .overlay {
+    fill-opacity: 0.12;
+    stroke-opacity: 0.55;
+}
+.browse-timeline-axis-svg.browse-timeline-has-brush .browse-timeline-brush .overlay {
+    /* Selection rect is the affordance from now on — quiet the
+       overlay's outline so the selection reads clearly. */
+    fill-opacity: 0;
+    stroke-opacity: 0;
+}
+.browse-timeline-brush-hint {
+    fill: var(--facet-color-time);
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 0.04em;
+    opacity: 0.7;
+    pointer-events: none;
+    transition: opacity 0.15s;
+}
+.browse-timeline-axis-svg.browse-timeline-has-brush .browse-timeline-brush-hint {
+    opacity: 0;
+}
+/* Brush selection — uses the time-facet amber so the brush reads
+   as a Time-group affordance, matching the chip-rail's typed-group
+   colour scheme. */
+.browse-timeline-brush .selection {
+    fill: var(--facet-color-time);
+    fill-opacity: 0.25;
+    stroke: var(--facet-color-time);
+    stroke-width: 1;
+}
+.browse-timeline-brush .handle {
+    fill: var(--facet-color-time);
+    fill-opacity: 0.7;
+}
+.browse-timeline-now-marker {
+    stroke: var(--color-text-muted);
+    stroke-width: 1;
+    stroke-dasharray: 2 2;
+    opacity: 0.6;
+}
+.browse-timeline-rows-wrap {
+    /* Sits below the sticky axis inside the scrollable chart. */
+}
+.browse-timeline-rows-svg {
+    display: block;
+}
+.browse-timeline-row {
+    cursor: pointer;
+}
+.browse-timeline-row:hover .browse-timeline-bar {
+    fill-opacity: 1;
+}
+.browse-timeline-row:focus-visible {
+    outline: none;
+}
+.browse-timeline-row:focus-visible .browse-timeline-bar {
+    stroke: var(--color-accent);
+    stroke-width: 1.5;
+}
+.browse-timeline-row-label {
+    fill: var(--color-text-secondary);
+    font-size: 11px;
+    pointer-events: none;
+}
+.browse-timeline-row:hover .browse-timeline-row-label {
+    fill: var(--color-text);
+}
+.browse-timeline-bar {
+    fill: var(--facet-color-category-content);
+    fill-opacity: 0.75;
+    rx: 2;
+}
+.browse-timeline-bar[data-group="format-medium"] {
+    fill: var(--facet-color-format-medium);
+}
+.browse-timeline-bar[data-group="time"] {
+    fill: var(--facet-color-time);
+}
+.browse-timeline-bar[data-group="quality-availability"] {
+    fill: var(--facet-color-quality-availability);
+}
+.browse-timeline-realtime-marker {
+    fill: var(--color-success);
+    stroke: var(--color-bg);
+    stroke-width: 1;
+}
+.browse-timeline-empty {
+    padding: 1.5rem;
+    text-align: center;
+    color: var(--color-text-muted);
+    font-size: 0.75rem;
+}
+.browse-timeline-empty.hidden {
+    display: none;
+}
+.browse-timeline-footnote {
+    padding: 0.5rem 0.7rem;
+    color: var(--color-text-muted);
+    font-size: 0.65rem;
+    font-style: italic;
+    border-block-start: 1px solid var(--white-o08);
+}
+.browse-timeline-footnote.hidden {
+    display: none;
+}
+
+/* ----- Map view (Phase 4 §6.9) -----
+   Sized to fill the same space the card grid uses; a second
+   MapRenderer instance (mercator projection) mounts inside
+   `.browse-map-canvas`. Hidden when another view-mode is active.
+   The mercator axis reads east-to-right and west-to-left regardless
+   of locale — geographic orientation is a universal convention, the
+   same deliberate exception the Timeline axis makes for calendar
+   time. */
+#browse-map {
+    flex: 1;
+    min-height: 0;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+}
+#browse-map.hidden {
+    display: none;
+}
+.browse-map-host {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    position: relative;
+}
+.browse-map-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.4rem 0.6rem;
+    background: var(--color-surface-alt);
+    border: 1px solid var(--white-o08);
+    border-radius: 6px;
+    font-size: 0.65rem;
+    color: var(--color-text-dim);
+    flex-wrap: wrap;
+}
+.browse-map-legend {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.6rem;
+    color: var(--color-text-muted);
+}
+.browse-map-legend-dot {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    margin-inline-end: 0.15rem;
+}
+.browse-map-legend-dot-coverage {
+    background: var(--facet-color-category-content);
+}
+.browse-map-legend-dot-realtime {
+    background: var(--color-success);
+}
+.browse-map-include-global {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    cursor: pointer;
+    user-select: none;
+    color: var(--color-text-secondary);
+}
+.browse-map-include-global-input {
+    accent-color: var(--color-accent);
+    margin: 0;
+}
+.browse-map-draw-toggle {
+    padding: 0.2rem 0.55rem;
+    border-radius: 4px;
+    border: 1px solid var(--white-o10);
+    background: var(--color-surface-alt);
+    color: var(--color-text-secondary);
+    font-size: 0.6rem;
+    cursor: pointer;
+    font-family: inherit;
+    margin-inline-start: auto;
+}
+.browse-map-draw-toggle:hover {
+    background: var(--white-o08);
+    color: var(--color-text);
+}
+.browse-map-draw-toggle.active {
+    background: var(--accent-o15);
+    border-color: var(--accent-o40);
+    color: var(--color-accent);
+}
+.browse-map-draw-toggle:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 1px;
+}
+.browse-map-clear-region {
+    padding: 0.2rem 0.55rem;
+    border-radius: 4px;
+    border: 1px solid var(--white-o10);
+    background: var(--color-surface-alt);
+    color: var(--color-text-secondary);
+    font-size: 0.6rem;
+    cursor: pointer;
+    font-family: inherit;
+}
+.browse-map-clear-region.hidden {
+    display: none;
+}
+.browse-map-clear-region:hover {
+    background: var(--white-o08);
+    color: var(--color-text);
+}
+.browse-map-clear-region:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 1px;
+}
+/* Explanation banner — surfaces above the canvas when every
+   visible bbox is global, so the user reads "this view shows
+   worldwide datasets" instead of mistaking a near-uniform
+   coverage wash for a render bug. Sits between the toolbar and
+   the canvas, intentionally subtle (no border) so it doesn't
+   compete with the data. */
+.browse-map-banner {
+    padding: 0.5rem 0.7rem;
+    color: var(--color-text-secondary);
+    font-size: 0.65rem;
+    line-height: 1.45;
+    background: var(--accent-o15);
+    border-inline-start: 2px solid var(--color-accent);
+    border-radius: 4px;
+    flex-shrink: 0;
+}
+.browse-map-banner.hidden {
+    display: none;
+}
+
+.browse-map-canvas {
+    flex: 1;
+    min-height: 320px;
+    background: var(--color-surface-alt);
+    border: 1px solid var(--white-o08);
+    border-radius: 6px;
+    overflow: hidden;
+    position: relative;
+}
+.browse-map-canvas.hidden {
+    display: none;
+}
+/* Draw mode — crosshair cursor cue + a thin amber outline on the
+   canvas frame so the user can see they're in a different mode.
+   Same amber as the Timeline brush band, so the Time-vs-Region
+   draw affordances share a visual language. */
+.browse-map-canvas.browse-map-canvas-draw {
+    box-shadow: inset 0 0 0 1px var(--facet-color-time, #f59f4a);
+}
+.browse-map-canvas.browse-map-canvas-draw canvas {
+    cursor: crosshair;
+}
+/* The in-progress draw rectangle — absolute-positioned overlay
+   drawn on top of MapLibre's canvas while the user drags in
+   Draw region mode (the toolbar toggle gates the gesture;
+   there's no Shift modifier today). Pointer-events: none so the
+   mouse events still reach the canvas. */
+.browse-map-draw-box {
+    position: absolute;
+    background: rgba(245, 159, 74, 0.18);
+    border: 1px dashed var(--facet-color-time, #f59f4a);
+    pointer-events: none;
+    z-index: 5;
+}
+.browse-map-status {
+    padding: 1.5rem;
+    text-align: center;
+    color: var(--color-text-muted);
+    font-size: 0.75rem;
+}
+.browse-map-status-error {
+    color: var(--color-error);
+}
+.browse-map-empty {
+    padding: 1.5rem;
+    text-align: center;
+    color: var(--color-text-muted);
+    font-size: 0.75rem;
+}
+.browse-map-empty.hidden {
+    display: none;
+}
+.browse-map-footnote {
+    padding: 0.5rem 0.7rem;
+    color: var(--color-text-muted);
+    font-size: 0.65rem;
+    font-style: italic;
+    border-block-start: 1px solid var(--white-o08);
+}
+.browse-map-footnote.hidden {
+    display: none;
+}
+.browse-map-tooltip {
+    position: absolute;
+    pointer-events: none;
+    background: var(--glass-bg);
+    border: 1px solid var(--white-o15);
+    border-radius: 4px;
+    padding: 0.4rem 0.6rem;
+    color: var(--color-text);
+    font-size: 0.65rem;
+    line-height: 1.4;
+    max-width: 260px;
+    z-index: 10;
+    backdrop-filter: blur(var(--glass-blur));
+    -webkit-backdrop-filter: blur(var(--glass-blur));
+}
+.browse-map-tooltip.hidden {
+    display: none;
+}
+.browse-map-tooltip-row {
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+    padding-block: 0.15rem;
+}
+.browse-map-tooltip-row + .browse-map-tooltip-row {
+    border-block-start: 1px solid var(--white-o08);
+    margin-block-start: 0.15rem;
+    padding-block-start: 0.3rem;
+}
+.browse-map-tooltip-title {
+    color: var(--color-text);
+    font-weight: 500;
+}
+.browse-map-tooltip-bounds {
+    color: var(--color-text-muted);
+    font-size: 0.6rem;
+    font-variant-numeric: tabular-nums;
+}
+.browse-map-tooltip-realtime {
+    color: var(--color-success);
+    font-size: 0.6rem;
+}
+.browse-map-tooltip-more {
+    margin-block-start: 0.25rem;
+    color: var(--color-text-muted);
+    font-style: italic;
+}
+
+/* Mobile: keep the view-mode toggle visible because Map view is
+   available at every breakpoint per §6.9. The JS narrows the bar
+   to a Cards + Map two-button layout on portrait phones (Graph +
+   Timeline would crowd the canvas and don't get rendered as
+   buttons). We deliberately do NOT hide #browse-graph /
+   #browse-timeline / #browse-map here: the JS forces
+   viewMode='cards' when the viewport narrows for Graph and
+   Timeline, which sets the grid visible. A CSS rule that hid the
+   alternative views independently would race the JS and produce
+   a blank overlay when the user resized from desktop→narrow with
+   Graph or Timeline active. */
 
 .browse-card {
     background: var(--color-surface-alt);
@@ -400,6 +1450,64 @@
 
 .browse-card-meta strong {
     color: #aaa;
+}
+
+/* Phase 3pg/D — frame-timeline scrubber on image-sequence rows. */
+.browse-card-scrubber {
+    margin-block: 0.4rem 0.3rem;
+    font-size: 0.6rem;
+    color: var(--color-text-muted);
+}
+
+.browse-card-scrubber-pure {
+    font-size: 0.65rem;
+}
+
+.browse-card-scrubber-label {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-block-end: 0.18rem;
+}
+
+.browse-card-scrubber-count {
+    color: #aaa;
+    font-weight: 600;
+}
+
+.browse-card-scrubber-now {
+    font-style: italic;
+    opacity: 0.85;
+}
+
+.browse-card-scrubber-track {
+    display: block;
+    inline-size: 100%;
+    block-size: 0.5rem;
+    overflow: visible;
+}
+
+.browse-card-scrubber-bar {
+    fill: rgba(255, 255, 255, 0.12);
+}
+
+.browse-card-scrubber-dot {
+    fill: #4da6ff;
+}
+
+/* When the "now" position is clamped (before or after the series),
+ * fade the dot so the user sees the marker is not within the
+ * meaningful timeline. */
+.browse-card-scrubber-dot-outside {
+    fill: rgba(77, 166, 255, 0.45);
+}
+
+.browse-card-scrubber-ends {
+    display: flex;
+    justify-content: space-between;
+    margin-block-start: 0.18rem;
+    font-size: 0.55rem;
+    opacity: 0.7;
 }
 
 .browse-card-keywords {
@@ -523,5 +1631,193 @@
     #browse-grid {
         max-height: calc(70vh - 10rem);
         overflow-y: auto;
+    }
+}
+
+/* --- Catalog mode (`?catalog=true`) ---------------------------
+   Phase 1 §3.1 of `docs/WEB_CATALOG_FEATURES_PLAN.md`.
+
+   `body.catalog-mode` is set whenever the URL carries
+   `?catalog=true`. `body.catalog-empty` is the stricter state:
+   catalog mode AND no dataset has been loaded yet. In the empty
+   state the browse panel becomes the entire surface and the
+   globe canvas is hidden (`visibility: hidden`, not `display:
+   none`, so the GL context stays alive and a subsequent dataset
+   load doesn't pay a re-init cost).
+
+   Selecting a dataset clears `catalog-empty` — the globe takes
+   over — but `catalog-mode` stays set so the upcoming catalog↔
+   sphere tab control (§3.2) can route back. */
+
+body.catalog-empty #map-grid {
+    visibility: hidden;
+}
+
+body.catalog-empty #browse-overlay {
+    inset-inline-start: 0;
+    inset-inline-end: 0;
+    width: 100%;
+    background: var(--color-bg, #0a0a0a);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    border-inline-start: none;
+}
+
+/* Catalog mode at desktop widths — the overlay spans the whole
+   viewport so the filter rail's single-column stack leaves a lot
+   of unused space to the right of each section. Lay the typed-
+   group sections out as a 2-column grid so two collapsed-but-
+   shorter sections (Format, Quality) can sit beside taller ones
+   (Category's chip row, Time's range inputs) instead of stacking
+   awkwardly. Gated to `min-width: 769px` so the existing mobile
+   single-column + horizontal-scroll behaviour (accessibility.css
+   §.browse-chip-row) is preserved at narrow viewports. Outside
+   `body.catalog-empty` the overlay is the narrow side panel
+   where 2 columns wouldn't fit. */
+@media (min-width: 769px) {
+    body.catalog-empty #browse-filter-rail {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        column-gap: 1.5rem;
+        row-gap: 0.5rem;
+    }
+
+    /* The clear-all button sits below the four sections; span both
+       columns and right-align so it stays visually anchored to
+       the rail's trailing edge. */
+    body.catalog-empty .browse-filter-clear-wrap {
+        grid-column: 1 / -1;
+    }
+}
+
+/* The browse-overlay close button assumes there's a globe to fall
+   back to. In catalog-empty mode there isn't one, so hide it
+   until §3.2 introduces the catalog↔sphere tab control. */
+body.catalog-empty #browse-close {
+    display: none;
+}
+
+/* The floating top-left "browse datasets" button (#home-btn) and
+   the tools menu (#map-controls) are positioned over the globe.
+   With the globe hidden they're orphaned chrome — suppress them
+   in catalog-empty until the tab control re-introduces a deliberate
+   path back to the globe. */
+body.catalog-empty #home-btn,
+body.catalog-empty #map-controls {
+    display: none;
+}
+
+/* Phone portrait: the existing bottom-sheet rule for #browse-overlay
+   pins it to the bottom edge — override back to a full-viewport
+   surface when we're the only thing on screen. */
+@media (max-width: 600px) and (orientation: portrait) {
+    body.catalog-empty #browse-overlay {
+        top: 0 !important;
+        bottom: 0;
+        height: 100vh;
+        max-height: 100vh;
+        border-radius: 0;
+        border-top: none;
+    }
+
+    /* The bottom-sheet variant caps the grid at `70vh - 10rem` so
+       it doesn't overflow the sheet's max-height. In catalog-empty
+       the overlay covers the full viewport, so the grid should
+       fill the remaining space below the header / search / chips
+       / toolbar — `max-height: none` lets flex distribute it. */
+    body.catalog-empty #browse-grid {
+        max-height: none;
+    }
+
+    /* Drop the large TERRAVIZ title in catalog-empty mode — on a
+       narrow viewport it competes with the centered catalog↔
+       sphere tabs and the right-side help button for the top
+       row. The page URL + browser tab title already identify the
+       app; the `.browse-subtitle` ("Browse environmental
+       datasets…") stays as the framing line. */
+    body.catalog-empty #browse-header .browse-title {
+        display: none;
+    }
+    body.catalog-empty #browse-header {
+        /* Push the subtitle (and everything below) clear of the
+           fixed-position catalog tabs at top: 0.5rem. */
+        padding-top: 2.5rem;
+    }
+}
+
+/* --- Catalog ↔ Sphere tab control (§3.2) --------------------------
+   A two-state segmented control that round-trips visitors between
+   the dataset browser and the loaded globe view. Only rendered
+   visible while in catalog mode (driven by JS via the `hidden`
+   class). The browse overlay's z-index is 500; the tabs sit above
+   it at 600 so the Catalog tab is reachable while the browse
+   panel is full-surface. */
+
+.catalog-tabs {
+    position: fixed;
+    top: 1rem;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 600;
+    display: inline-flex;
+    gap: 0;
+    padding: 0.25rem;
+    background: var(--glass-bg-light);
+    backdrop-filter: var(--glass-blur);
+    -webkit-backdrop-filter: var(--glass-blur);
+    border: 1px solid var(--white-o12);
+    border-radius: 999px;
+    pointer-events: auto;
+}
+
+.catalog-tabs.hidden {
+    display: none;
+}
+
+.catalog-tab {
+    appearance: none;
+    background: transparent;
+    border: none;
+    color: var(--color-text-secondary);
+    font-size: 0.8rem;
+    font-weight: 500;
+    letter-spacing: 0.03em;
+    padding: 0.4rem 1rem;
+    border-radius: 999px;
+    cursor: pointer;
+    min-height: 36px;
+    min-width: 80px;
+    transition: background 0.15s, color 0.15s;
+}
+
+.catalog-tab:hover,
+.catalog-tab:focus-visible {
+    color: var(--color-text);
+    background: var(--white-o08);
+    outline: none;
+}
+
+.catalog-tab.active {
+    background: var(--color-accent, var(--white-o15));
+    color: var(--color-bg, #0a0a0a);
+}
+
+.catalog-tab.active:hover,
+.catalog-tab.active:focus-visible {
+    background: var(--color-accent, var(--white-o15));
+    color: var(--color-bg, #0a0a0a);
+    filter: brightness(1.1);
+}
+
+/* Phone portrait: shrink the control so it doesn't dominate the
+   already-tight top bar. */
+@media (max-width: 600px) and (orientation: portrait) {
+    .catalog-tabs {
+        top: 0.5rem;
+    }
+    .catalog-tab {
+        font-size: 0.7rem;
+        padding: 0.35rem 0.75rem;
+        min-width: 64px;
     }
 }

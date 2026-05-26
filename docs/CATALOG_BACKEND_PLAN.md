@@ -1985,9 +1985,12 @@ frontend renders. The current app already renders some HTML in
 tour `popupHTML` and `addPlacemark` — the plan widens the input
 surface.
 
-**Mitigations:** `abstract` is rendered as Markdown through a
-sanitizer (DOMPurify or equivalent) with a small allowlist
-(headings, paragraphs, links, code, images). `popupHTML` /
+**Mitigations:** `abstract` is rendered as Markdown through the
+in-house `sanitizeMarkdownHtml` allowlist sanitizer in
+[`src/ui/sanitizeHtml.ts`](../src/ui/sanitizeHtml.ts) — a small
+strict allowlist (headings, paragraphs, links, code, images; no
+tables, no inline event handlers, only `https:` / `mailto:` /
+same-origin `<a href>`). Shipped in 3pc/A. `popupHTML` /
 `tourOverlayHTML` go through the same sanitizer. Raw HTML upload
 in tours is forbidden in Phase 1 — only the sanitised path. Phase
 3+ may add a `trusted: true` flag on staff-published tours that
@@ -2831,6 +2834,44 @@ exposed.
 **Exit criteria:** a staff user can publish a new dataset and a
 new tour end-to-end through the browser without touching the CLI
 or D1 / R2 manually.
+
+#### Sub-phase execution plan
+
+Phase 3 ships as seven letter-suffixed sub-phases mirroring the
+Phase 1 cadence and the existing `catalog(<phase>/<letter>):`
+commit convention. Each sub-phase ships as its own PR, is
+independently demoable, and leaves the deploy in a working state,
+so we can pause cleanly between any of them if Phase 4 federation
+pulls priority. The cross-cutting conventions each sub-phase
+inherits (lazy-load shape, i18n, markdown sanitization, portal
+analytics, Access browser policy) are pinned in
+[`CATALOG_PUBLISHING_TOOLS.md`](CATALOG_PUBLISHING_TOOLS.md) §"Phase 3
+implementation conventions".
+
+**Why the `3p<letter>` tag rather than bare `3a`–`3g`.** The
+unrelated R2 + HLS video-pipeline work (originally Phase 2's
+Stream attempt, abandoned and re-implemented on R2) claimed the
+bare letter slots `3a`–`3h` in the CHANGELOG and `git log` before
+this phase started. Reusing those letters for portal sub-phases
+would conflate two unrelated bodies of work in tooling that
+matches on the commit-prefix substring. Tagging the portal
+sub-phases `3p<letter>` keeps the BACKEND_PLAN's "Phase 3"
+designation intact while making every prefix collision-free at
+grep time. The prep work that ships before the first sub-phase
+uses `3-pre/<letter>`.
+
+| Sub-phase | Scope | Why this boundary |
+|---|---|---|
+| **3pa — Portal shell + Access browser flow** | Lazy-loaded `src/ui/publisher/` chunk, route shell, `/publish/me` page, top nav, i18n key skeleton, portal analytics baseline (`publisher_portal_loaded`, `publisher_action`), Cloudflare Access policy steps added to `docs/SELF_HOSTING.md`. | Smallest demoable slice. Validates routing, auth, chunking, and i18n discipline before any form work lands. |
+| **3pb — Dataset list + detail (read-only)** | Drafts / published / retracted tabs against `GET /api/v1/publish/datasets`, per-dataset detail view, per-dataset audit history panel (consumes `GET .../audit`). | Tests the API surface in production without write risk. Surfaces any missing filters or response fields cheaply. |
+| **3pc — Dataset entry form (metadata)** | Create / edit form wired to every validator from [`CATALOG_PUBLISHING_TOOLS.md`](CATALOG_PUBLISHING_TOOLS.md) §"Validation rules", abstract markdown preview through the shared `marked` → `sanitizeMarkdownHtml` renderer (the in-house allowlist sanitizer in [`src/ui/sanitizeHtml.ts`](../src/ui/sanitizeHtml.ts) — no DOMPurify dependency), save draft. No asset upload yet. | Closes the threat-model XSS gap (see §"Threat model" → "XSS via publisher markdown") with a concrete sanitizer choice and exercises the validator contract end-to-end. |
+| **3pd — Asset uploader + transcode pipeline** | Reusable uploader component. **Images:** R2 presigned PUT, immediate `data_ref` write, digest verification. **Videos:** R2 presigned PUT of the source MP4 to `uploads/{dataset_id}/{upload_id}/source.mp4` (per-upload prefix so a re-upload to a transcoding row doesn't overwrite the bytes the prior workflow may still be reading), then a `repository_dispatch` to the GitHub Actions workflow that runs ffmpeg against the existing 4K / 1080p / 720p 2:1 spherical ladder (proven in [`cli/migrate-r2-hls.ts`](../cli/migrate-r2-hls.ts)), writes the HLS bundle to a versioned `videos/{dataset_id}/{upload_id}/` prefix in R2, and POSTs `/api/v1/publish/datasets/{id}/transcode-complete` on the publisher API. The route constructs `data_ref` server-side as `r2:videos/{id}/{upload_id}/master.m3u8` and clears `transcoding`. The portal polls status via a "Transcoding…" badge until the row is playable. "Preview" button mints a token via `POST .../preview`; the SPA-side `/?preview=<token>&dataset=<id>` consumer that renders the draft on the globe ships in **3pe** below. | Heaviest single piece. Two upload paths, an external async pipeline, a status surface, and the preview hook. The Stream → R2-only shift means we own the transcoder (GHA + ffmpeg) — same code path the Phase 3 CLI migration already uses. |
+| **3pe — SPA `?preview=` consumer + manifest sibling** | New `GET /api/v1/datasets/{id}/preview/{token}/manifest` endpoint that skips the public route's `published_at IS NOT NULL` filter (still token-gated). Preview metadata endpoint flipped to wire shape (`{ dataset: WireDataset }` via `serializeDataset`) with `dataLink` rewritten to the new manifest sibling. `main.ts` detects `?preview=<token>&dataset=<id>` on boot, fetches the wire row, injects into `dataService`, then calls `loadDataset(id, 'url')`. Portal preview modal swaps the surfaced URL from the anonymous-read JSON endpoint to the SPA route. | Finishes the read → upload → preview → publish loop the 3pd table row promised. Slot was originally penciled in for tour creator; that work shifts to 3pg and so on. |
+| **3pf — Image-sequence upload ingest** | Extends the 3pd asset uploader to accept a stack of individual frames (PNG / JPEG / WebP) as the source for a video dataset. Tabbed picker on the dataset edit page, multi-frame manifest in the `POST /asset` body, parallel-bounded XHR upload of each frame's bytes, `POST /complete` HEAD-checks every frame key, fires a `kind: 'frames'` variant of the existing transcode dispatch. The GHA runner branches on the dispatch payload, downloads the frames, and invokes ffmpeg's image-sequence input mode against the same 4K / 1080p / 720p HLS ladder the MP4 path produces — normalised to 30 fps via `-r 30` so the tour engine's playback-rate math (which hard-codes 30 fps as the assumed source rate) keeps working. Frame metadata (`frame_count`, `frame_extension`, `frame_source_filenames_ref`) lands on the datasets row so the exposure half (3pg below) doesn't need a back-fill. Full design in [`CATALOG_IMAGE_SEQUENCE_PLAN.md`](CATALOG_IMAGE_SEQUENCE_PLAN.md). | Reuses every concurrency-safety property the MP4 path already has: per-upload R2 prefix, `active_transcode_upload_id` binding, `/transcode-complete` callback. Tour-engine compatibility ride-along: the same commit that adds `-r 30` to the image-sequence ffmpeg invocation also adds it to the MP4 path, closing a latent bug where non-30-fps MP4 sources broke the tour-engine `frameRate` task. |
+| **3pg — Image-sequence frames-as-data exposure** | The frames uploaded in 3pf are already permanent in R2 (per-upload-prefix versioning); 3pg exposes them through the public API. Adds a `frames` envelope to `serializeDataset` (count + `urlTemplate`), `GET /api/v1/datasets/{id}/frames` (paginated list + `?at=ISO` + time-range filter), `GET /api/v1/datasets/{id}/frames/{index}` (302 to per-frame R2 URL, signed for restricted rows), Orbit `<<LOAD_FRAME:...>>` marker + `load_frame` function tool, search `?time_range=ISO/ISO` filter, browse-UI date scrubber, `terraviz frames list / get` CLI commands. Schema work in 3pf captures everything 3pg reads — no back-fill. | Ships after 3pf bakes for a release cycle so real publisher upload traffic can inform any 3pg design adjustments. Frames as first-class data unlocks Orbit's "show me May 16" tool call and the federation feed's time-window consumer. |
+| **3ph — Tour creator (capture mode)** | Floating dock on SPA chrome capturing `flyTo` / `loadDataset` / `unloadDataset` / `setEnvView` / `addPlacemark` / pause-question, drag-reorder, "play from here", 30-second auto-save to `drafts/{publisher}/{tour_id}/tour.json`. | Largest subproject in [`CATALOG_PUBLISHING_TOOLS.md`](CATALOG_PUBLISHING_TOOLS.md) §"Tour creator"; needs its own sub-phase. |
+| **3pi — Bulk import UI** | Drag-drop CSV/JSON, reuses the CLI's `import-snapshot` validator and pump, surfaces per-row errors inline. | Mostly UI — the importer pipeline already shipped in Phase 1d. |
+| **3pj — Webhook fan-out scaffolding + verify-deploy** | Queue infrastructure in place for Phase 4 (no peers wired), `terraviz verify-deploy` extended to probe `/publish` HTML routes, self-hosting walkthrough finalized. | Sets up Phase 4 without committing to federation; closes the operator-facing gaps Phase 1f flagged for the publisher API. |
 
 ### Phase 4 — Federation
 

@@ -16,6 +16,1495 @@ referenced in [`README.md`](README.md).
 
 ---
 
+## Phase 3pt-fix — Tour preview CSP fix
+
+**Branch:** `claude/tour-preview-blob-fix`
+
+Post-merge bug from Phase 3pt. The Preview button (tour-review/G)
+created a `blob:` URL from the in-memory TourFile and routed it
+through the existing fetch-based `startTour` path. Firefox + the
+deployed `connect-src` CSP refused the round-trip:
+
+    Security Error: Content at https://… may not load data from
+    blob:https://…
+
+The fetch was pure overhead — the TourFile was already in memory.
+Extracted `runTourFromFile(tourFile, tourBaseUrl, …)` from
+`startTour` and had `playInlineTour` call it directly with
+`window.location.href` as the base URL. Draft tours don't carry
+relative media paths in practice, so the synthetic base is safe.
+Side-effects:
+
+  - `playInlineTour` is now synchronous (no fetch to await).
+  - The `previewBlobUrl` field + `revokePreviewBlobUrl` helper
+    from tour-review/I are gone — there's no URL to leak.
+  - `startTour` (used by `playTour` / runTourOnLoad / chained
+    tours from the docent) still fetches because it gets a real
+    URL and needs `resp.url` for relative-path resolution.
+
+## Phase 3pt — Publisher tour creator
+
+**Branch:** `claude/publisher-tour-creator`
+**Commits:** tour/A through tour/G.
+
+Replaces the `/publish/tours` placeholder with a working tour
+authoring flow. Publisher clicks **New tour** in the
+dashboard, lands on the SPA in tour-authoring mode, captures
+camera positions / dataset loads / overlays / timing through
+a floating dock, edits via drag-reorder + click-to-edit, and
+the draft autosaves to R2 + the `tours` row. Publishing
+snapshots the draft to an immutable
+`tours/{id}/published/{publish_id}.json` key and flips the
+row's `published_at`.
+
+The backend + types + engine for tours were already in place
+from Phase 1a–1b — the gap was purely the publisher UI; this
+phase fills it.
+
+**tour/A — Authoring dock + camera capture + tour list shell.**
+New `src/ui/tourAuthoring/` module: `state.ts` (in-memory
+state + reducers), `dock.ts` (floating dock UI), `index.ts`
+(`?tourEdit=` URL-param detection + idempotent
+mount/dispose). `main.ts` boot flow gains
+`initTourAuthoring()`; the dock attaches top-right when the
+URL signals authoring mode. First working capture:
+`+ Add camera step` reads the primary renderer's view
+context, inverts `tourEngine.execFlyTo`'s zoom math to
+produce an SOS-conformant `altmi`, and appends a `flyTo`
+task. `/publish/tours` page replaces the 3pe placeholder.
+
+**tour/B — Dataset / layout / environment / rotation
+captures.** `+ Add current dataset` records a `loadDataset`
+task for the primary panel's current dataset. **Layout**
+chips (1 / 2 / 4 globes) → `setEnvView`. **Environment**
+rows for day/night, clouds, stars, borders, each with on /
+off chips → matching `envShow*` tasks. **Rotation rate**
+(deg/sec) input + chip → `setGlobeRotationRate`.
+
+**tour/C — Flow control + envShowEarth.** `+ Pause`
+(seconds input), `+ Pause for input`, `+ Loop to start`,
+`+ Unload all datasets` — the SOS-tour task set most
+narratives reach for. Fifth env-toggle row (**Earth:
+on / off**) covers `envShowEarth` for tours that hide the
+planet entirely.
+
+**tour/D — Task editor: drag-reorder, delete, click-to-edit
+JSON.** Each task row gains a drag handle (☰), edit (✎),
+and delete (×) control. HTML5 drag-and-drop reorders.
+Click ✎ expands an inline JSON textarea with Save / Cancel
+— a universal escape hatch for any task type (per-task-type
+typed mini-forms are a polish follow-up). `parseEditorJson`
+intentionally validates only the single-key-object shape;
+per-task-key validation is the engine's job at run-time,
+keeping the editor decoupled from `TourTaskDef`'s churning
+discriminated-union surface.
+
+**tour/E — Backend persistence + autosave + reopen.** Three
+new endpoints:
+
+  - `POST /api/v1/publish/tours/draft` — mints a fresh draft
+    row + writes an empty `{"tourTasks":[]}` blob at
+    `tours/{id}/draft.json` in R2. Bypasses the standard
+    `tour_json_ref` validator (which requires a non-empty
+    ref) by computing the ref server-side from the new ULID.
+  - `PUT /api/v1/publish/tours/{id}/json` — overwrite the
+    draft blob. Validates body has a `tourTasks` array;
+    per-task strict validation stays with the engine.
+  - `GET /api/v1/publish/tours/{id}/json` — read the draft
+    blob for re-opening. Cold start (row but no blob)
+    degrades to an empty TourFile.
+
+Client-side: `src/ui/tourAuthoring/autosave.ts` is a
+debounced (30 s) autosave with a recursive `scheduleNext`
+chain that serializes saves (one in flight at a time, latest
+pending payload wins). Status flips `idle → saving → saved`
+(or `error`); the dock surfaces it next to the title.
+Promotes `'new'` → real ULID after the first POST /draft and
+rewrites the URL via `history.replaceState` so a reload
+reopens the same draft.
+
+**tour/F — Tilt / reset / player / unload-by-handle
+captures.** Five additional simple captures that close the
+gap to the SOS-tour task set most publishers reach for in
+practice: `tiltRotateCamera` from current pitch + bearing,
+`resetCameraZoomOut` / `resetCameraAndZoomOut`,
+`enableTourPlayer` / `tourPlayerWindow` on/off toggles, and
+`unloadDataset` by handle. `loadDataset` captures now
+auto-assign sequential `dataset1` / `dataset2` / … handles
+so `unloadDataset` has something concrete to reference.
+Total captured-task types: 18.
+
+**tour/G — Publish flow + real tour list + delete.** Three
+more backend endpoints:
+
+  - `GET /api/v1/publish/tours` — list the publisher's tours
+    with cursor pagination (ULID `id < ?` for stable order
+    against fresh inserts).
+  - `POST /api/v1/publish/tours/{id}/publish` — snapshot the
+    draft to immutable
+    `tours/{id}/published/{publish_id}.json`, flip
+    `tour_json_ref` to that path, stamp `published_at`. Old
+    published bundles aren't deleted — federation subscribers
+    may still hold the prior ref; immutability keeps those
+    references valid.
+  - `DELETE /api/v1/publish/tours/{id}` — hard-delete the row
+    + best-effort drop the draft R2 blob. Published immutable
+    snapshots are left in place (same federation-safety
+    rationale). Phase 4's soft-retract gesture supersedes
+    this for published tours when it lands.
+
+The dock gains a green **Publish** button in the header
+that flushes the autosave queue first (so the snapshot
+matches the publisher's latest capture), then POSTs
+/publish. Status flows through `idle → publishing →
+published` (or `error`). The `/publish/tours` page is
+rewritten to fetch via `GET /publish/tours` and render rows
+in the same table shape `datasets.ts` uses; each row gets a
+**Delete** button with a `window.confirm` gate and inline
+error surfacing.
+
+**Reviewer iterations.** Two Copilot review passes during the
+PR landed as `tour-review/A` and `tour-review/B`. Notable
+hardening from pass A:
+
+  - Autosave-race fix: pre-fix code fired `doSave()` from the
+    debounced callback even when a previous save was still
+    in-flight, racing two PUTs that could land out of order.
+    Replaced with a recursive `scheduleNext` chain + a
+    serialization regression test.
+  - Per-mount input ids: constant `tour-authoring-…-input`
+    strings would break `<label for="…">` association if a
+    second dock ever coexisted; counter-suffix per mount
+    keeps each instance's labels well-formed.
+  - Editor-validation comment updated to match actual
+    behaviour (single-key-shape check; per-key validation
+    delegated to the engine).
+  - `draft.ts` "atomic call" claim reworded — the R2 write
+    and D1 insert are sequential against two different
+    Cloudflare services; the cleanup path on partial failure
+    is documented.
+
+And from pass B:
+
+  - Empty-tour publish: clicking Publish on a fresh `'new'`
+    dock with no captures used to 404 because `flush()` had
+    nothing to drain and the tourId stayed `'new'`. `runPublish`
+    now seeds the autosave queue with the current (possibly
+    empty) state so the draft mints before publish round-trips.
+  - Publish errors surfaced inline: the `title` tooltip on the
+    button + a `role=alert` div under the header replace the
+    previous swallowed error.
+  - Inline JSON editor preserves in-progress text across
+    re-renders: the autosave-status flip used to rebuild the
+    textarea from `JSON.stringify(task)` and wipe unsaved
+    typing. The dock now buffers the textarea's `input` value
+    and restores it when the editing row re-renders.
+  - Pagination comment fix in `listToursForPublisher` — the
+    extra fetched row is used only to detect hasMore; the cursor
+    is the last *returned* row's id.
+
+**tour-review/C — rename UI.** The 28-file PR shipped tours
+that auto-named themselves `Untitled tour XXXXXX` with no way to
+rename short of `curl`. The dock header now carries a free-text
+title input alongside the autosave badge: typing fires a
+debounced (800 ms) PUT to `/api/v1/publish/tours/{id}` with
+`{ title }`. For a fresh `'new'` tour the title save waits for
+the autosave manager to mint the row, then PUTs onto the
+resolved id. Server-side `validateTitle` (≥3 chars, ≤200 chars,
+no control characters) is mirrored client-side so obviously-
+invalid input doesn't waste a round-trip; anything else gets
+the server's message in an inline `role=alert` div under the
+header. Re-renders during typing preserve caret position + focus
+via the same `activeElement` + `selectionStart/End` round-trip
+that browsers use for form-restore.
+
+**tour-review/D — description + visibility.** The `tours` D1 row
+already carries `description` and `visibility` columns from
+Phase 1a but the dock surfaced neither. Two new fields land under
+the header: a description textarea (≤8000 chars, matching
+`validateOptionalString`'s server cap) and a visibility select
+(public / federated / restricted / private). Editing any of
+title / description / visibility fires the same debounced
+metadata-save loop — the PUT body bundles all three so the
+server-side `validateTitle` requirement is satisfied even when
+only the description changed. Focus restoration now keys off
+`data-dock-field` rather than the title-input-specific selector,
+so the caret stays put across re-renders in any of the three
+fields. Thumbnail upload and a public tour-discovery endpoint
+stay deferred — they need their own backend routes (presign +
+complete; `GET /api/v1/tours` + FTS), tracked as follow-up
+issues so they don't bloat this PR further.
+
+**tour-review/E — capture-input buffer + doc cleanups.** Third
+Copilot review pass surfaced three follow-ups:
+
+  - Capture inputs preserve typed values across re-renders:
+    pre-fix, the rotation-rate and pause-duration `<input>`
+    elements rendered with hard-coded `value="1"` / `value="5"`,
+    so any re-render (autosave-status flip, an unrelated capture
+    appended) reset the publisher's typed number back to the
+    default. Now `rotationValue` and `pauseValue` live in dock
+    closure state, get updated on the input event, and feed both
+    the render and the capture handlers — same pattern the
+    title/description/visibility metadata fields use.
+  - `state.ts` header docblock claimed "tour/A only" scope (no
+    autosave, no backend) — stale ever since tour/E shipped the
+    autosave manager. Reworded to describe current behaviour
+    (model + reducers, persistence delegated).
+  - Removed a duplicate doc block above `nextDockInputIds` — two
+    consecutive comments said the same thing.
+
+**tour-review/F — dock layout pass.** First publisher dogfood
+session surfaced three layout issues:
+
+  - **Title input was almost invisible.** It shared the header
+    row with the heading + autosave badge + Publish + close — at
+    18rem dock width there wasn't enough horizontal space. Moved
+    the input out of the header into the metadata block at full
+    width, with a larger font matching its role as the primary
+    label for the tour.
+  - **Help button overlapped the dock.** `#help-trigger` is
+    z-index 600 top-right; the dock is z-index 50 same corner.
+    Added a `body.tour-authoring-open` class that hides
+    `#help-trigger` (same pattern `body.browse-open` already
+    uses). The body class flips on mount + clears on discard /
+    teardown.
+  - **Browse overlay obscured the dock at boot.** When the URL
+    carries `?tourEdit=` the SPA still auto-opens browse because
+    no dataset is loaded. `initTourAuthoring` now calls
+    `collapseBrowseUI()` so the dock is visible immediately; the
+    overlay stays in the DOM so the publisher can re-open it to
+    grab a dataset for a `loadDataset` capture.
+
+Tests cover the body-class toggle (mount / discard / teardown)
+and the browse-collapse behaviour.
+
+**tour-review/G — Preview (Play from start).** The original PR
+deferred preview because hooking it up needed callback-bag
+integration with the SPA's tour-playback path. Now wired:
+
+  - Blue "Preview" chip sits next to Publish in the dock header.
+    Disabled (with a friendly title) until at least one task is
+    captured.
+  - Clicking fires `callbacks.onPreview({ tourTasks: state.tasks })`
+    — the in-memory draft, never round-tripped through R2 or the
+    autosave loop.
+  - `main.ts` adds `playInlineTour(tourFile)`: wraps the TourFile
+    in an `application/json` Blob, mints an object URL, and
+    routes through the existing `startTour` path. The dock stays
+    mounted; the SPA's tour-player chrome handles Stop.
+  - The blob URL isn't revoked — the tour engine retains it as
+    its `tourBaseUrl` for relative-media-path resolution, and
+    revoking mid-playback would break the contract. The blob is
+    a tiny JSON string, so the memory cost is negligible for a
+    preview session.
+  - `onPreview` is optional on the callbacks bag — hosts that
+    don't wire it (tests, older code paths) get a no-op
+    button click rather than a crash.
+
+5 tests cover: disabled state with no tasks, enabled after a
+capture, the callback firing with the right TourFile, the
+no-tasks click no-op, and the missing-callback safe fall-back.
+
+**tour-review/H — Copilot pass-4 (5 comments).** Fifth review
+pass surfaced one real validation hole plus four doc /
+consistency issues:
+
+  - `createDraftTour` accepted any caller-supplied `title`
+    override without the same `validateTitle` rules
+    `createTour` / `updateTour` apply. A draft created with
+    `{ title: "ab" }` or a 250-char string would land a row
+    the rename PUT couldn't recover. Now mirrors the rule
+    (≥3 chars after trim, ≤200 chars, no control chars) and
+    returns a 400 validation envelope on failure. Return type
+    widened from `TourCreateResult` to `TourMutationOutcome`;
+    `draft.ts` POST handler now branches on `result.ok` and
+    propagates errors via the standard publisher envelope.
+  - Corrected the misleading comment in `createDraftTour`
+    about R2-binding fallback: pre-fix it claimed "the autosave
+    PUT will create the object on first save" with no binding,
+    but `writeTourDraftJson` returns `503 binding_missing`
+    when `CATALOG_R2` is unbound. The unbound branch exists
+    only for unit tests / smoke checks; production must bind.
+  - Same fix in the `draft.ts` docblock — clarified the actual
+    partial-state recovery paths (orphan blob = harmless;
+    row-without-blob = `readTourDraftJson` treats missing blob
+    as empty tour, autosave PUT writes for real iff R2 bound).
+  - `renderToursPage` now delegates `kind: 'session'` failures
+    to the shared `handleSessionError` helper (auto-warmup
+    redirect on fresh tabs, explicit sign-in card on retry)
+    and calls `clearWarmupFlag()` on the first successful list
+    — same pattern `datasets.ts` uses. Pre-fix an expired
+    session on `/publish/tours` showed a confusing inline
+    "Session expired" message instead of the helpful redirect.
+  - `<th>` elements in the tours table now carry `scope="col"`
+    for screen-reader column-header announcement, matching the
+    datasets table.
+
+3 new tests cover the validation rejection, the session
+delegation, and the `scope="col"` assertion.
+
+**tour-review/I — Copilot pass-5 (4 comments).** Smaller cleanup
+pass: one real leak + three doc fixes.
+
+  - `playInlineTour` blob URL leak. Each preview minted a fresh
+    object URL via `URL.createObjectURL` but never revoked it,
+    so repeated previews accumulated for the lifetime of the
+    tab. The URL is now tracked on the App and revoked from
+    both `stopTour` (user-initiated stop, abort during reload)
+    and `endTour` (natural finish), plus pre-emptively on
+    back-to-back previews so URLs don't stack.
+  - `tours.ts` comment said `handleSessionError` returns
+    `'redirecting'` but the actual return is
+    `'navigating' | 'show-error'` (which the code already
+    checked correctly). Comment reworded to match.
+  - `draft.ts` docblock had the partial-failure ordering
+    wrong: it described a "row inserted but blob write
+    failed" mid-flow case, but `createDraftTour` writes R2
+    first and then inserts D1. Rewritten to describe the
+    actual outcomes (R2-fail = no row; R2-ok-D1-fail = orphan
+    blob; R2-unbound-D1-ok = row-without-blob, recoverable on
+    next GET but not next PUT).
+  - `draft.test.ts` "still works when CATALOG_R2 is unbound"
+    case carried the same misleading "autosave PUT will
+    create the object on first save" comment. Updated to
+    note the unbound branch is only for unit tests / smoke
+    checks and that the follow-up autosave PUT will 503 until
+    R2 is wired.
+
+  - **Rich-UI captures**: overlay drag-to-place, click-on-
+    globe placemark, audio/video file pickers, question form.
+    The JSON editor (tour/D) is the universal escape hatch
+    for these task types until typed mini-forms ship.
+  - **Play-from-task-index preview**: the shipped Preview button
+    plays from the start. A future enhancement could let the
+    publisher click a row in the task list to play from that
+    point — handy for long tours but a meaningful UX addition.
+  - **Retract** a published tour from the dashboard — Delete
+    works, but a soft-retract (sets a `retracted_at` column,
+    leaves the row in place for federation peers to notice)
+    is the right Phase 4 gesture. Requires a tours-schema
+    migration first.
+
+---
+
+## Phase 3pg — Image-sequence frames exposure
+
+**Branch:** `claude/catalog-3pg-frames-exposure`
+**Commits:** 3pg/A through 3pg/F.
+
+Promotes the image-sequence frame metadata Phase 3pf ingest
+landed (`frame_count`, `frame_extension`,
+`frame_source_filenames_ref` on every sequence row) into
+first-class catalog surfaces. Where 3pf gave publishers a way
+to upload frames and consumers an HLS playback, 3pg lets the
+SPA, the docent, federated peers, and the `terraviz` CLI
+address individual frames by index or by time. The schema
+work shipped in 3pf so 3pg is back-fill-free — every sequence
+row captured during 3pf already carries everything the new
+consumers need.
+
+**3pg/A — `WireDataset.frames` manifest envelope.** The
+serializer (`functions/api/v1/_lib/dataset-serializer.ts`)
+emits a new `frames` field on sequence rows: `count`,
+`urlTemplate` (with a literal `{index}` token consumers
+substitute with the zero-padded 5-digit frame number), and
+optional `framesDigest` (SHA-256 of the canonical source-
+filenames blob — the same hash the publisher signed off on
+during ingest). `buildFramesUrlTemplate` in
+`r2-public-url.ts` preserves the `{index}` braces through
+URL encoding via a sentinel-and-swap so consumers can do
+`template.replace('{index}', padded)` without URL-decoding.
+Backwards-compat: older clients ignore the new field.
+
+**3pg/B — `/frames` + `/frames/{index}` endpoints.** Three
+public routes under `/api/v1/datasets/{id}/`:
+
+- `GET /frames` — paginated frame list with
+  `{index, displayName, originalFilename, timestamp,
+  contentDigest, url}` per row. `?limit=N` (default 100,
+  max 1000), `?cursor=N` pagination; `?at=ISO` returns the
+  single closest frame; `?from=ISO&to=ISO` filters by an
+  inclusive time window. Display names follow
+  `{slug}_{YYYYMMDDTHHMMSSZ}.{ext}` for time-series rows and
+  `{slug}_frame_{NNNNN}.{ext}` for pure-sequence rows.
+- `GET /frames/{frameIndex}` — 302 to the per-frame R2 URL.
+  Accepts padded or unpadded indexes (strict `/^\d+$/`).
+  RFC 9530 `Content-Digest` header set from the manifest.
+- `HEAD /frames/{frameIndex}` — body-less, returns
+  `Content-Digest` + `Content-Type` + `X-Frame-Url`.
+
+New `functions/api/v1/_lib/iso-duration.ts` parses the
+catalog's `period` column shapes; new
+`frames-manifest.ts` reads the canonical source-filenames
+JSON blob, renders display names, and provides the
+index↔timestamp arithmetic that powers `?at` / `?from` /
+`?to`. Visibility honors the same public-only filter as
+`/datasets/{id}`; restricted-row presigning is a follow-up.
+
+**3pg/C — Orbit `<<LOAD_FRAME:...>>` marker + `load_frame`
+tool.** Two wire formats accepted (both yield the same
+`load-frame` chat action): inline
+`<<LOAD_FRAME:DATASET_ID:query>>` markers (where query is
+an ISO timestamp, `index=N`, a bare integer, or `latest` /
+`first`) and a function-calling `load_frame(dataset_id,
+dataset_title, query)` tool. `validateAndCleanText`
+extracts the marker against the dataset's `frames` envelope
+and resolves via the shared `resolveFrameQuery` helper
+(`src/utils/frames.ts`); the chat UI renders the action as
+a button labelled with the derived display name. Click
+routes through a new `ChatCallbacks.onLoadFrame(id,
+frameQuery)` callback into `loadFrameFromChat` in
+`main.ts`, which builds a synthetic single-frame `Dataset`
+(MIME derived from the URL extension — `png` / `jpg` /
+`webp`) and routes through the existing `loadImageDataset`
+pipeline with a new `directImageUrl` loader option that
+bypasses the legacy `_4096` / `_2048` / `_1024` resolution-
+suffix probing. The chat parser is case-insensitive on the
+id and supports a `legacyId` fallback for LLMs that echo
+the legacy SOS ids. LLM discoverability: search results
+(`SearchDatasetsHit`, `CatalogSearchResult`) carry an
+optional `frames` indicator (`count` + `startTime` +
+`period`) so the model can decide whether `load_frame`
+makes sense for a given row. Frame-load buttons no longer
+fall back to `onLoadDataset` when the host hasn't wired the
+callback — the surprising "load the whole sequence on
+click" behaviour is replaced with a quiet no-op matching
+the doc comment.
+
+**3pg/D — Time-range search filter + browse date scrubber.**
+The public search endpoint accepts `?time_range=ISO/ISO`.
+A new `rowOverlapsTimeRange(row, fromMs, toMs)` predicate
+filters hits whose `[start_time, start_time + period ×
+frame_count)` window (sequence rows) or `[start_time,
+end_time]` window (legacy rows) doesn't overlap the
+requested interval. The filter is applied post-hydration so
+the Vectorize / D1 work is unchanged when the filter isn't
+supplied. `time_range` participates in the KV cache key via
+the parsed `[fromMs, toMs]` tuple so trivial timestamp
+variants collapse cleanly. Browse cards on sequence rows
+render a thin SVG timeline with frame count, first / last
+timestamps, and a "closest to now" marker that fades when
+"now" falls outside the series. Click-to-load on the
+scrubber is a follow-up.
+
+**3pg/E — `terraviz frames list / get` CLI commands.**
+`terraviz frames list <id> [--limit=N] [--cursor=X]
+[--at=ISO] [--from=ISO --to=ISO]` streams the
+`/frames` JSON response; pipe through `jq -r
+'.frames[].url' | xargs -n1 curl -O` for a bulk fetch.
+`terraviz frames get <id> <index>` prints the per-frame R2
+URL on stdout (the RFC 9530 Content-Digest goes to stderr,
+informational only) so `xargs curl -O` works for one-shot
+fetches. Index validation mirrors the server's strict
+`/^\d+$/`; `--from` / `--to` must be paired. Hits the
+public endpoints — auth headers attach when configured but
+are not required for public sequence rows.
+
+**3pg/F — Operator docs.** This entry, plus a new
+`CATALOG_DATA_MODEL.md` block on the three frame columns
+and a new `CATALOG_FEDERATION_PROTOCOL.md` section
+("Image-sequence frames across peers") describing how
+federated subscribers see and consume the frame surface.
+
+**Reviewer iterations.** Three Copilot review passes
+generated 14 actionable comments across the lifetime of
+the PR; each landed as a `3pg-review/<letter>:` commit
+(see the PR for the full pass-by-pass triage). Notable
+hardening:
+
+- `?from`/`?to` windows that fall entirely outside a
+  parseable time series now return 200 with `frames: []`
+  instead of 400 `not_a_time_series`.
+- `r2_unconfigured` (deployment) is now distinct from
+  `invalid_frame_metadata` (row data corruption) so an
+  operator chasing the error code knows where to look.
+- `frameIndex` parsing is strict base-10 digits — rejects
+  `3e2` / `0x10` / `3.0` / leading sign / whitespace.
+- `<<LOAD_FRAME:DATASET_ID:query>>` marker matches the id
+  case-insensitively and via `legacyId`.
+- `frame_count <= 0` (corrupt row, partial ingest) fails
+  closed in `resolveFrameQuery` rather than emitting an
+  invalid `frames/-0001.png` URL.
+- The streaming chat clean-up strips `<<LOAD_FRAME:...>>`
+  markers from the transcript so they don't flicker
+  before the action button renders.
+- Frame loads now mirror the normal dataset-load
+  teardown (cloud overlay + day/night + sun lighting all
+  hidden before the frame texture lands).
+
+**Not in this PR (follow-ups).**
+- Restricted-visibility frames (presigned-prefix path).
+- Click-to-load on the browse scrubber dot.
+- `[RELEVANT DATASETS]` pre-search injection block
+  surfacing the `frames` indicator (today only
+  `search_datasets` / `search_catalog` hits carry it).
+
+---
+
+## Phase 3pf — Image-sequence upload ingest
+
+**Branch:** `claude/image-sequence-upload`
+**Commits:** 3pf-pre through 3pf/E.
+
+Extends the 3pd asset uploader to accept a stack of individual
+frames (PNG / JPEG / WebP) as the source for a video dataset.
+Many catalog datasets originate as numbered frames — model output
+dumps, hourly observation pipelines, rendered animations from
+external tools — and stitching them into an MP4 with local
+ffmpeg before upload was an afternoon's work. The catalog already
+runs ffmpeg in GitHub Actions for every video upload; ffmpeg's
+image-sequence input mode is a one-flag change. 3pf threads that
+through the publisher API, the GHA runner, and the portal UI so
+the publisher's interaction is just "drag the directory into the
+uploader."
+
+Same per-upload R2 prefix versioning, `active_transcode_upload_id`
+binding, and `/transcode-complete` callback as the MP4 path —
+every concurrency-safety property the MP4 flow has comes along for
+free. Frame metadata (`frame_count`, `frame_extension`,
+`frame_source_filenames_ref`) lands on the dataset row in this
+phase so the exposure half (Phase 3pg — `/frames` endpoints,
+Orbit `<<LOAD_FRAME:...>>` marker, search time-range filter,
+browse date scrubber) can ship without a back-fill.
+
+Full design: [`docs/CATALOG_IMAGE_SEQUENCE_PLAN.md`](docs/CATALOG_IMAGE_SEQUENCE_PLAN.md).
+Tracking issue: [zyra-project/terraviz#114](https://github.com/zyra-project/terraviz/issues/114).
+
+**3pf-pre — Doc prep.** Letter renumbering across the canonical
+plan + the image-sequence design doc: 3pe was taken by the SPA
+preview consumer, so image-sequence ingest claims 3pf and
+exposure claims 3pg; tour creator / bulk import / webhook fan-out
+shift to 3ph / 3pi / 3pj. Same commit adopts four design
+decisions before code lands: 30-fps output normalisation (incl.
+the ride-along MP4-path fix below), 10 000 frame cap, per-frame
+mime + `frames` array as the request discriminator (not a
+non-standard `image-sequence/*` MIME family), and the
+publisher-facing "Frame rate" picker dropped in favour of a
+single 30-fps invariant.
+
+**3pf/A — Migrations + helpers.** Migration 0013 adds
+`frame_count INTEGER` to `asset_uploads`. Migration 0014 adds
+`frame_count`, `frame_extension`, `frame_source_filenames_ref` to
+`datasets`. New `validateImageSequenceInit` in
+`functions/api/v1/_lib/asset-uploads.ts` enforces the cap, mime
+allowlist, per-frame digest format, unique filenames, no mixed
+mimes, and the declared-size-equals-sum cross-check. New R2 key
+helpers `buildFrameKey` (5-digit zero-padded indexes →
+`uploads/{ds}/{up}/frames/{NNNNN}.{ext}`), `isFrameKey`,
+`buildFrameSequencePrefix`, `buildFrameSourceFilenamesKey` in
+`r2-store.ts`. 41 new unit tests.
+
+**3pf/B — Route handler branches.** `POST /api/v1/publish/
+datasets/{id}/asset` discriminates on the presence of a `frames`
+array in the body. The image-sequence branch enforces
+`dataset.format === 'video/mp4'`, runs the validator, mints N
+presigned PUTs + one for the source-filenames blob, and inserts
+a single `asset_uploads` row with `frame_count = N`.
+`POST .../asset/{upload_id}/complete` branches on
+`upload.frame_count` after the status checks: HEADs every frame
+key + the source-filenames blob, stamps the dataset row via the
+new `stampTranscodingForFrameSource` (sister to
+`stampTranscodingForVideoSource`, also writes the three frame
+metadata columns), and dispatches with the new
+`kind: 'frames'` payload shape. `TranscodeDispatchPayload`
+becomes a discriminated union; `TranscodingStampSnapshot` carries
+the three new columns so the dispatch-failure revert restores
+them losslessly. 10 new wire-level tests.
+
+**3pf/C — GHA runner branch + 30-fps normalisation.** The
+`cli/transcode-from-dispatch.ts` script learns
+`--source-kind={video,frames}` (default `video` so legacy
+dispatches keep working unchanged). On the frames path the
+runner downloads N frames in a bounded-concurrency pool, verifies
+the source-filenames JSON blob's hash against the dispatch
+payload's `source_digest`, and invokes ffmpeg's image-sequence
+input mode (`-framerate 30 -i frames/%05d.{ext}`) against the
+same HLS ladder the MP4 path produces. Same commit adds
+`-r:v:N 30` to every rendition in `cli/lib/ffmpeg-hls.ts:buildFfmpegArgs`,
+which normalises the encode to 30 fps for **both** source kinds —
+closes a pre-existing latent bug where a non-30-fps MP4 source
+(e.g. 60 fps from some animation tools) broke the tour engine's
+`frameRate` task. The tour engine hard-codes 30 fps as the
+assumed source rate when computing playback-rate, so this
+invariant now holds by construction rather than by source-file
+discipline. New exit code 6 = frame-fetch or source-filenames
+digest mismatch. The workflow YAML
+(`.github/workflows/transcode-hls.yml`) validates `kind` and
+branches its argv accordingly.
+
+**3pf/D — Portal multi-file uploader.** The asset uploader on the
+dataset edit form (already extant from 3pd for single-file
+uploads) gains a tab strip when `format === 'video/mp4'`:
+"Upload MP4" / "Upload frames". The frames tab mounts an
+`<input type="file" multiple>` constrained to PNG / JPEG / WebP.
+After picking, the publisher sees a frame count + total size
+summary and a single "Upload N frame(s)" button; clicking it
+drives the pipeline: chunked SHA-256 of each frame, canonical
+source-filenames JSON build + its own SHA-256, `POST /asset` with
+the manifest, parallel-bounded PUT (5 concurrent) of every frame +
+the source-filenames blob, `POST /complete`. Status line shows
+"Hashing 47/240…" / "Uploading 47/240…" — aggregate counter, not
+per-frame bars. Pre-network gates fail fast on empty / oversize /
+mixed-mime / unsupported-mime selections. Outcome is always
+`{ mode: 'transcoding' }`; the detail page's existing 5 s polling
+loop picks up the workflow's `/transcode-complete` callback.
+
+Deferred to follow-up (called out in the design doc): thumbnail
+strip, manual-order textarea, display-naming preview panel.
+
+**Operator notes.**
+
+- **No new bindings, no new secrets, no manual D1 setup.** Same
+  Pages bindings the 3pd transcode pipeline uses (`GITHUB_OWNER`,
+  `GITHUB_REPO`, `GITHUB_DISPATCH_TOKEN`, the R2 set); same GHA
+  secrets the runner needs (`R2_S3_ENDPOINT`,
+  `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `TERRAVIZ_SERVER`,
+  `CF_ACCESS_CLIENT_ID`, `CF_ACCESS_CLIENT_SECRET`). The same R2
+  bucket CORS policy + WAF skip rules from §8e of the
+  self-hosting walkthrough cover the image-sequence path because
+  the upload PUTs land at the same hostname and the
+  `/transcode-complete` callback fires through the same Access
+  service-token path.
+- **Migrations 0013 + 0014 apply automatically** the next time
+  the operator runs `npx wrangler d1 migrations apply CATALOG_DB
+  --remote` (see §8b.5 of the self-hosting walkthrough). Both
+  add columns whose NULL defaults are correct on every existing
+  row — no data backfill is required.
+- **MP4 transcode behaviour change.** The `-r:v:N 30` flag on
+  the MP4 path is a behaviour change: a publisher's previously-
+  acceptable 60 fps source will now be re-encoded at 30 fps.
+  This is intentional (the tour engine's playback-rate math
+  depends on it) and the loss of source fps is bounded — only
+  ~30 of the ~136 SOS catalog rows have audio, none of them are
+  hand-crafted animation, and existing published rows are
+  unaffected because the bundle they served is still in R2.
+  Operators who specifically want to preserve >30 fps source
+  fps should not adopt 3pf without first revising the tour
+  engine's `frameRate` task to read the encoded fps from the
+  manifest.
+- **Frame count cap of 10 000.** Covers ~5.5 minutes of 30 fps
+  content or ~1.1 years of hourly timeseries data. The
+  in-browser SHA-256 hash budget at the cap is ~100 s on a
+  typical laptop; the `POST /asset` response of 10 000
+  presigned URLs is ~10 MB JSON. Both bounded.
+
+---
+
+## Phase 3pe — SPA-side `?preview=` consumer
+
+**Branch:** `claude/review-publisher-dashboard-M6Lry`
+**Commits:** 3pe/A through 3pe/E.
+
+Closes the preview loop opened in 3pd/E. The publisher portal
+already minted a 15-minute HMAC token + the modal copy promised
+"a visual SPA preview … ships in a follow-up phase". This phase
+ships that consumer.
+
+**3pe/A — Token-gated preview manifest endpoint.**
+`GET /api/v1/datasets/{id}/preview/{token}/manifest` — sibling of
+the public manifest endpoint, skips the
+`published_at IS NOT NULL` filter so a draft is actually playable
+under a valid token. Same auth envelope as the metadata-only
+preview route (`invalid_token`, `token_id_mismatch`,
+`preview_unconfigured`). Cache-Control: `private, no-store`
+since drafts mutate during the publish loop.
+
+**3pe/B — Preview metadata returns wire shape.** The anonymous
+preview metadata endpoint
+(`/api/v1/datasets/{id}/preview/{token}`) used to return the raw
+`DatasetRow` shape — useful for a `curl`-wielding reviewer but
+not consumable by the SPA which expects the
+`{ dataset: WireDataset }` shape `/api/v1/catalog` emits. Swap to
+the serialized form via `serializeDataset`, with one
+preview-specific tweak: rewrite `dataLink` from the public
+manifest URL to the 3pe/A sibling. The SPA's existing
+`hlsService` / image-loader paths then consume the draft
+unchanged.
+
+**3pe/C — SPA receiver.** `main.ts` boot flow detects
+`?preview=<token>&dataset=<id>` *before* the regular `?dataset=`
+path, fetches the wire-shape preview row, injects it into
+`dataService` cache, and delegates to `loadDataset(id, 'url')`.
+On failure a typed `PreviewFetchError` carries the server's
+`error` code so the boot-time error overlay can render a
+specific message. `appState.datasets` stays as the public
+catalog snapshot — only the active globe carries the draft.
+`isManifestUrl` regex extended to recognise the preview sibling
+so no preview-mode awareness leaks into the dataset loader.
+
+**3pe/D — Portal modal surfaces SPA URL.** The dataset-detail
+modal swaps the copied URL from the backend's anonymous-read
+JSON endpoint to the SPA-route
+`/?preview=<token>&dataset=<id>`. The reviewer pastes the link
+into a browser and lands on a live globe rendering of the draft.
+Modal body copy updated to match.
+
+**Operator notes.** No new bindings, no new secrets, no
+migrations. `PREVIEW_SIGNING_KEY` (set in 1b) gates both preview
+endpoints. The wire-shape change on the metadata endpoint
+removes a debugging convenience (`curl | jq .dataset.data_ref`
+no longer surfaces the raw D1 column) — operators who want that
+shape can still hit
+`/api/v1/publish/datasets/{id}` from inside Access.
+
+---
+
+## Phase 3pd — Asset uploader + transcode pipeline (R2 + GHA)
+
+**Branch:** `claude/catalog-publisher-portal-phase-3pd` (PR #112)
+**Commits:** 3pd-pre through 3pd/F.
+
+Fourth sub-phase of the publisher portal. 3pc made datasets editable;
+3pd makes their **assets** uploadable. The Phase 1b asset_uploads
+pipeline existed already but routed video data through Cloudflare
+Stream. Live testing exposed Stream's standard-plan 1080p ceiling
+(insufficient for 4K spherical content), and Phase 3 shipped a
+CLI-driven R2 + ffmpeg replacement (`cli/migrate-r2-hls.ts`). 3pd
+exposes the same pipeline through the portal: a publisher uploads
+an MP4 in the browser, a GitHub Actions workflow runs ffmpeg
+against the 4K / 1080p / 720p 2:1 spherical ladder, writes the
+HLS bundle to a versioned R2 path
+(`r2:videos/{dataset_id}/{upload_id}/master.m3u8`), and POSTs the
+new `/api/v1/publish/datasets/{id}/transcode-complete` route on
+the publisher API to flip `data_ref` and clear `transcoding`.
+The per-upload-id segment is what keeps a re-upload to an
+already-published row from clobbering the bundle the public
+manifest is mid-playback against.
+
+**3pd-pre — Doc refresh.** Banner at the top of
+`CATALOG_ASSETS_PIPELINE.md` flagging Stream removal. Rewrites
+§"Video pipeline" around the R2 + GHA reality — the actual ladder
+(4096×2048 / 2160×1080 / 1440×720 at H.264 main, AAC 192kbps,
+6-second VOD segments), the upload → presigned PUT →
+repository_dispatch → workflow → row-PATCH sequence, the cost
+model, and the rationale for GHA over Workers+WASM. `stream:`
+data_ref prefix marked Deprecated. `CATALOG_PUBLISHING_TOOLS.md`
+gains the 3pd sub-phase breakdown table; `CATALOG_BACKEND_PLAN.md`
+3pd row rewritten.
+
+**3pd/A — Server-side wiring + migrations 0011 and 0012.** The
+substantial "already-shipped infrastructure now points at R2"
+sub-phase. **Both migrations are required** for the pipeline —
+0011 introduces the transcoding flag, 0012 introduces the
+per-upload binding the overlap and stale-callback guards key
+off. Apply them in order before deploying the publisher API.
+
+- Migration 0011 adds `transcoding INTEGER` to `datasets`. Starts
+  NULL, flipped to 1 while a transcode is in flight, cleared
+  back to NULL by the workflow's PATCH.
+- Migration 0012 adds `active_transcode_upload_id TEXT` to
+  `datasets`. Set in lockstep with `transcoding=1` by the
+  `/asset/.../complete` stamp; cleared in lockstep by
+  `/transcode-complete` (or `revertTranscodingStamp` on
+  dispatch failure). The `/asset/.../complete` overlap check
+  and the `/transcode-complete` stale-callback check both
+  refuse to apply when this column doesn't match the caller's
+  `upload_id`, so a concurrent re-upload or a workflow run
+  dispatched against a stale binding fails closed with a
+  clear 409 instead of clobbering in-flight state.
+- `chooseTarget()` in `asset.ts` collapses to "always R2." The
+  Stream branch is now dead code waiting for a follow-up cleanup
+  PR; the type union stays `'r2' | 'stream'` so the deletion can
+  land incrementally.
+- `r2-store.ts` gains `buildVideoSourceKey(datasetId, uploadId)` →
+  `uploads/{dataset_id}/{upload_id}/source.mp4`. Per-upload
+  prefix so a re-upload to a row that's already transcoding
+  doesn't overwrite the source bytes the prior workflow may
+  still be reading. The GHA workflow finds the bytes via the
+  `client_payload.source_key` carried in the dispatch. Every
+  other asset kind keeps the content-addressed
+  `datasets/{id}/by-digest/sha256/{hex}/...` scheme.
+- New `_lib/github-dispatch.ts` POSTs to
+  `https://api.github.com/repos/{owner}/{repo}/dispatches` with
+  `event_type: 'transcode-hls'` + a typed `client_payload`.
+  Mock mode (`MOCK_GITHUB_DISPATCH=true`) for local dev, refused
+  on non-loopback hosts. Errors map to the same typed
+  `ConfigurationError` / `UpstreamError` classes the rest of
+  the storage helpers use.
+- `complete.ts` branches on `isVideoSourceKey()` after digest
+  verification. Video-source uploads fire the dispatch, stamp
+  `transcoding=1`, and mark the asset_upload completed.
+  `data_ref` handling is **conditional**: cleared to empty
+  string on draft rows (no public consumer to break), preserved
+  verbatim on published rows so the public manifest endpoint
+  keeps serving the prior HLS bundle while the new one
+  transcodes. The eventual `/transcode-complete` callback
+  atomically swaps `data_ref` to the new master.m3u8.
+  Non-video uploads keep the existing `applyAssetAndMarkCompleted`
+  path. On dispatch failure the dataset row is reverted via
+  `revertTranscodingStamp` (no-op if a concurrent upload has
+  already taken over the binding) and the upload stays
+  `pending` so the publisher can retry after the operator
+  fixes config.
+- Four new env vars in `CatalogEnv`: `GITHUB_OWNER`,
+  `GITHUB_REPO`, `GITHUB_DISPATCH_TOKEN` (production wiring for
+  the GHA dispatch), plus `MOCK_GITHUB_DISPATCH` (the dev/test
+  short-circuit). `MOCK_R2` and `MOCK_STREAM` already existed
+  pre-3pd and stay unchanged — they're listed in
+  `CatalogEnv` for completeness, but operators don't add them
+  for this phase.
+
+**3pd/A-fix — `POST /api/v1/publish/datasets/{id}/transcode-complete`.**
+The endpoint the workflow POSTs back through to clear
+`transcoding=1` and set `data_ref`. Restricted to `role='service'`
++ admin staff because the column is server-managed.
+Belt-and-suspenders `source_digest` re-verify so a misrouted
+workflow can't PATCH the wrong row. `dataset.update` audit_event
+stamped with `metadata.reason = 'transcode_complete'`.
+
+**3pd/B — GitHub Actions workflow + transcode runner.**
+`.github/workflows/transcode-hls.yml` listens on
+`repository_dispatch: types: [transcode-hls]` and invokes
+`cli/transcode-from-dispatch.ts` — a single-dataset sibling of
+`cli/migrate-r2-hls.ts`. The runner downloads the source MP4
+from R2 (S3 API), re-verifies the digest, runs `encodeHls`
+against the same `DEFAULT_RENDITIONS` ladder, calls
+`uploadHlsBundle`, then POSTs the transcode-complete endpoint
+with the Access service-token headers. Stage-specific exit codes
+(1 arg / 2 download / 3 encode / 4 upload / 5 PATCH) so an
+operator skimming the GHA UI sees which stage broke without
+digging into the log. Per-dataset concurrency cap (the
+`transcoding_in_progress` guard chain — pre-mint check in
+/asset, JS overlap check + atomic SQL stamp in /complete,
+active-upload-id binding in /transcode-complete) so a publisher
+re-uploading the same video twice doesn't dispatch two
+overlapping workflows. Each upload still gets its own R2
+prefix (`videos/{dataset_id}/{upload_id}/`), so the encodes
+themselves wouldn't actually race for object keys — the cap
+prevents the duplicate work, the stale /transcode-complete
+callback that follows it, and the wasted compute.
+
+**3pd/C — Portal asset uploader.** New
+`components/asset-uploader.ts` mounts alongside the 3pc/F-fix2
+manual data_ref text input (in edit mode) so editors can still
+swap to legacy `vimeo:` / `url:` references without re-uploading
+bytes. Three-stage flow:
+
+1. Hash the file with a chunked SHA-256 from `@noble/hashes`
+   (3pd-review2/C — Web Crypto's `crypto.subtle.digest` has no
+   streaming API, so 4K MP4 uploads would otherwise blow the
+   browser tab's memory cap on `file.arrayBuffer()`).
+2. POST `/asset` to mint a presigned R2 PUT URL.
+3. XHR PUT to R2 (XHR not fetch — fetch doesn't surface request-
+   body upload progress).
+4. POST `/complete` to verify the digest server-side.
+
+The component surfaces a status line + `<progress>` bar at every
+step. Image uploads write `data_ref` synchronously and return
+`{ mode: 'direct', dataRef }` to the parent. Video uploads stamp
+`transcoding=1` and return `{ mode: 'transcoding' }` — the
+detail page picks up from there (3pd/D). Mock mode bypasses the
+XHR PUT (the `mock-r2.localhost` mint URL isn't reachable) and
+trusts the publisher's claimed digest server-side.
+
+In create mode the manual text input stays as a fallback for
+`vimeo:` / external URLs where no upload is needed — the dataset
+id doesn't exist yet, and `/asset` is scoped per-dataset.
+
+**3pd/D — Transcoding badge + 5-second polling.** Detail page
+gains a "Transcoding…" badge inline next to the lifecycle badge
+whenever `transcoding=1`. Yellow tone with a subtle pulse
+animation. Publish button is disabled while transcoding (with
+a tooltip explaining why) — the publish-readiness validator
+would reject anyway since data_ref is empty.
+
+The polling loop:
+
+- `paint()` is the single source of truth: every render starts
+  (or restarts) the poll loop if `transcoding=1` and stops it
+  otherwise.
+- `WeakMap<HTMLElement, AbortController>` keeps the binding
+  alive only while the mount is reachable, so a route change
+  naturally drops the prior loop.
+- Default cadence 5 s; overridable via `transcodePollIntervalMs`
+  for tests.
+- Transient errors don't tear down the page — they pause the
+  poll for one cycle. Session errors hand to the shared
+  `handleSessionError`.
+
+**3pd/E — Preview button + share-link modal.** The
+POST `.../preview` endpoint has shipped since Phase 1b but no
+portal surface called it. 3pd/E wires a Preview button next to
+Edit on the detail page that mints the 15-minute token and
+surfaces the resulting URL in a lightweight modal — the
+backend's anonymous-read URL
+(`/api/v1/datasets/{id}/preview/{token}`), which returns the
+dataset's metadata as JSON (`{ dataset: row }`). The publisher
+can copy the link to share a draft for review without
+publishing; reviewers with API access can fetch the metadata
+directly. Note that the link is the metadata primitive, not a
+visual preview — see the SPA consumer follow-up below.
+
+Hidden while transcoding (data_ref is empty, nothing to
+preview yet). The richer SPA-side `/?preview=<token>&dataset=<id>`
+consumer (full globe context + playback controls) is a Phase
+3pe deliverable; 3pd/E proves out the token-mint half + gives
+the publisher a working metadata URL today.
+
+**3pd/F — Operator-facing docs.** This CHANGELOG entry + the
+SELF_HOSTING walkthrough for the new GHA secrets the workflow
+needs (`GITHUB_DISPATCH_TOKEN` on Pages,
+`R2_S3_ENDPOINT` / `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` /
+`CF_ACCESS_CLIENT_ID` / `CF_ACCESS_CLIENT_SECRET` /
+`TERRAVIZ_SERVER` as GitHub Actions repo secrets).
+
+---
+
+## Phase 3pc — Dataset create / edit / publish / retract
+
+**Branch:** `claude/catalog-publisher-portal-phase-3` (same PR
+that landed Phase 3-pre, 3pa, and 3pb)
+**Commits:** 3pc/A through 3pc/F.
+
+Third code sub-phase of the publisher portal. Where 3pb made the
+catalog browsable, 3pc makes it editable: a staff or community
+publisher can now create a new dataset, fill in the recommended
+metadata, save as a draft, preview the row before flipping it
+public, and publish or retract it — all without leaving the
+browser. The CLI keeps working unchanged; the portal is an
+alternative surface on the same write API.
+
+**3pc/A — Shared markdown renderer.** Lifts the `marked` + custom
+HTML sanitizer into `src/services/markdownRenderer.ts` so the
+abstract preview (3pc/C1) and the read-only detail page share a
+single pipeline. The sanitizer's tag allowlist
+(`MARKDOWN_TAGS` in `src/ui/sanitizeHtml.ts`) is conservative —
+headings, paragraphs, lists, emphasis, code, blockquotes, links,
+horizontal rules. Anything else, including raw HTML attributes
+the publisher could try to smuggle through, is stripped.
+
+**3pc/B — `/publish/datasets/new` create form.** New page with
+the required-field core (title, slug, format, visibility) and a
+discriminated `PublisherSendResult<T>` on the API helper so the
+page can render per-field validation errors without spelunking
+response bodies. Auto-derives the slug from the title; locks the
+auto-derive once the publisher edits the slug manually so a
+later title change doesn't clobber their choice. POST success
+SPA-navigates to the new row's detail page.
+
+3pc/B caught two server-side gaps along the way:
+
+- **3pc/B-fix** improves the portal's error card to expose
+  status + body in a `<details>` disclosure, so a 500 reads as
+  a debuggable surface instead of a generic "server error."
+- **3pc/B-fix2** wraps the publish middleware in a try/catch
+  returning `{error: 'unhandled_exception', message}` instead
+  of letting a thrown exception bubble up as a Cloudflare
+  Error 1101 (which strips any structured response).
+- **3pc/B-fix3** then drops the stack trace from the wrapped
+  response (CodeQL flagged stack-trace exposure); the trace
+  still lands in `wrangler tail` via `console.error`.
+
+**3pc/C1 — Abstract + live markdown preview.** A textarea with
+the shared renderer powering a live preview pane. Reuses the
+3pc/A pipeline so the same allowlist applies whether the
+publisher is reading a draft they typed five seconds ago or a
+production row that originated in the SOS importer.
+**3pc/C1-tools** adds a GitHub-style toolbar over the textarea
+(9 buttons — heading, bold, italic, code, link, list, quote,
+hr, image alt). A future round-it-out captured in
+`docs/CATALOG_PUBLISHING_TOOLS.md` will swap this for a Lexical
+WYSIWYG.
+
+**3pc/C2 — Organization + licensing fields.** Adds the
+organization input, the SPDX license dropdown (with free-form
+`license_url` and `license_statement` for non-SPDX terms),
+attribution text, rights holder, DOI, and a citation block.
+
+**3pc/C3a — Time range card.** `start_time` / `end_time` /
+`period` with split Date + Time inputs side-by-side
+(**3pc/C3a-fix** — the native `datetime-local` widget was
+hiding the time portion on Firefox until the user clicked it).
+`dateTimeToIso(date, time)` composes the two inputs into a
+canonical ISO 8601 UTC string the server can store as-is.
+
+**3pc/C3b — Categorization.** Reusable chip input component
+(`components/chip-input.ts`) backing keyword + tag entry. Each
+chip lives as a separate row in `dataset_keywords` /
+`dataset_tags`; the chip-input's pure `appendChip` /
+`removeChipAt` transforms are decoupled from the DOM render so
+the same logic powers tests and the live form.
+
+**3pc/D/A — Extract shared form into a component.** Moves the
+~1200-line form machinery from `pages/dataset-new.ts` into
+`components/dataset-form.ts` exporting
+`renderDatasetForm(content, { mode: 'create' | 'edit', initial?,
+initialKeywords?, initialTags? })`. `pages/dataset-new.ts`
+becomes a ~25-line wrapper that calls the shared form in
+`'create'` mode. Submit logic branches on mode for POST vs PUT,
+endpoint, and post-save redirect target.
+
+**3pc/D/B — Detail endpoint returns decorations.** The detail
+GET now includes `keywords: string[]` and `tags: string[]`
+alongside the dataset row, so the upcoming edit page can prefill
+its chip inputs from the existing decoration rows. The
+read-only detail page renders the two arrays as chips in a new
+"Keywords & tags" card; the card hides itself when both arrays
+are empty so unannotated drafts don't grow a stub.
+
+**3pc/D/C — Edit page + route wiring.** New
+`/publish/datasets/:id/edit` route: fetches the row +
+decorations, hands the prefilled state to `renderDatasetForm`
+with `mode: 'edit'`. The detail page grows an Edit button in
+its title row — plain left-click is intercepted for SPA
+navigation, modifier-clicks fall through so a cmd-click still
+opens the edit form in a new tab.
+
+**3pc/E — `audit_events` writes.** The `audit_events` table has
+existed since 0005_publishers_audit but until now nothing was
+writing into it for the publisher API. New `audit-store.ts`
+helper wires into the four mutation routes
+(`dataset.create` / `dataset.update` / `dataset.publish` /
+`dataset.retract`) and records an append-only row per
+privileged write. The helper is best-effort: a failed insert
+logs via `console.error` (surfaces in `wrangler tail`) and
+returns null but never throws, so a transient audit-table
+hiccup can't reject a write that has already committed.
+
+Action metadata is intentionally small:
+
+- `dataset.create` → `{ slug, format, visibility }`
+- `dataset.update` → `{ fields: [...sorted touched keys] }` —
+  names only, not values; the row's own column history is the
+  source of truth for what changed to what.
+- `dataset.publish` / `dataset.retract` → `{ slug }`
+
+**3pc/F — Publish + retract on the detail page.** Lifecycle-aware
+action button next to Edit: Draft / Retracted → "Publish",
+Published → "Retract". Every click runs through `window.confirm`
+first; on confirm we POST to the existing /publish or /retract
+route, then re-fetch the row so the displayed badge and
+decorations match what the server now reports. The action
+endpoints already do the heavy lifting from 3pc/E (audit row,
+snapshot invalidate, embed enqueue); the portal just surfaces
+the result.
+
+Error handling tracks the established detail-page error model:
+401 → shared session redirect; 400 validation → re-fetch + an
+inline banner above the abstract (the badge stays consistent
+with the server's view so a failed publish doesn't accidentally
+appear to have succeeded); network / not_found → re-fetch +
+inline banner, falling back to the static error card if even
+the refetch fails.
+
+---
+
+## Phase 3pb — Read-only dataset list + detail
+
+**Branch:** `claude/catalog-publisher-portal-phase-3` (same PR
+that landed Phase 3-pre and 3pa)
+**Commits:** 3pb/A through 3pb/D.
+
+Second code sub-phase of the publisher portal. After 3pb, a
+staff publisher can browse every dataset visible to them
+(drafts, published, retracted) and drill into a single
+dataset's full read-only detail view without leaving the
+portal. No write surfaces yet — that's 3pc onward — but every
+catalog row's data is now reachable through the browser instead
+of only via the CLI.
+
+**3pb/A — Extract publisher API client + session-error
+helper.** Hoists the fetch + retry + opaqueredirect-recovery
+logic that originated in /publish/me into a new
+`src/ui/publisher/api.ts`. Exposes three things every portal
+page now consumes:
+
+- `publisherGet<T>(path, options)` — `redirect: 'manual'` fetch
+  with the 100 ms retry-on-opaqueredirect from 3pa/L. Returns a
+  discriminated result (`ok` | `session` | `server` | `network`
+  — `not_found` added later in 3pb/C).
+- `handleSessionError({ navigate? })` — page-level recovery:
+  auto-navigates through the redirect-back endpoint on the
+  fresh path, or returns `'show-error'` when the sessionStorage
+  warmup flag is already set (genuine auth gap).
+- `buildSignInUrl()` — same URL the manual Sign in button uses,
+  so fallback and auto-recovery stay in lockstep.
+
+The sessionStorage key migrates from `publisher_me_warmup_attempted`
+to `publisher_warmup_attempted` — page-agnostic now that the
+warmup is portal-wide. `pages/me.ts` shrinks from ~140 lines of
+inlined auth machinery to a short pattern-match on the helper's
+result.
+
+**3pb/B — `/publish/datasets` list page with lifecycle tabs +
+Load more.** Replaces the placeholder at /publish/datasets
+with the read-only list:
+
+- Three tabs (Drafts / Published / Retracted) backed by the
+  `?status=` query param so the active filter is bookmarkable
+  and shareable.
+- `<table>` layout for density. Columns: Title (linked to the
+  detail page) | Slug (monospace) | Format (monospace) |
+  Updated (localized) | Status badge.
+- "Load more" button paginates via the server's
+  `next_cursor: string | null`. Appends rows in place; button
+  hidden when no further pages; disabled "Loading…" state
+  prevents double-click duplicate fetches.
+- Empty states are tab-specific. Drafts empty mentions the
+  CLI and references the 3pc sub-phase tag.
+- Tab clicks call `router.navigate()` for SPA-style transitions;
+  cmd/ctrl/middle-click falls through so power users can open
+  a tab's URL in a new browser tab.
+
+`src/ui/publisher/types.ts` declares the wire shape the portal
+consumes (`PublisherDataset`, `ListDatasetsResponse`,
+`lifecycleOf()` helper) — a narrow subset of the server's
+`DatasetRow`, kept here rather than imported from
+`functions/api/v1/_lib/catalog-store.ts` so the portal chunk
+doesn't drag in server-tree dependencies.
+
+22 new `publisher.datasets.*` i18n keys (columns, tabs, empty
+states, count plural, status badges, Load more).
+
+**3pb/C — `/publish/datasets/:id` read-only detail page.**
+Replaces the placeholder at /publish/datasets/:id with a dense
+admin view of the dataset row, grouped into four glass-surface
+section cards plus a header:
+
+- Back arrow link → /publish/datasets.
+- Header: title (h1) + lifecycle status badge + slug (mono).
+- Abstract card (rendered as plain text via `textContent` —
+  the markdown sanitizer lands in 3pc).
+- Identity card: ULID (mono), legacy SOS ID (mono), format,
+  visibility, organization, publisher ULID.
+- Lifecycle card: created/updated/published/retracted
+  timestamps plus the dataset's own start_time / end_time /
+  period.
+- Assets card: data_ref, thumbnail/legend/caption refs,
+  website link, run_tour_on_load.
+- Licensing & attribution card: SPDX, license URL, statement,
+  attribution text, rights holder, DOI, citation.
+
+`renderFieldsCard` filters out null/empty values so empty
+sections don't render empty card chrome.
+
+404 handling: the API returns 404 for both missing rows and
+rows the caller can't see (to avoid leaking other publishers'
+draft IDs). The shared API helper's result type grew a new
+`'not_found'` kind separate from `'server'`. The not-found
+card has no Refresh button — the back link to the list is the
+right recovery action. `me.ts` and `datasets.ts` collapse
+`not_found` to `server` since neither route should ever 404 in
+practice, but the union exhaustion forces an explicit decision.
+
+35 new `publisher.datasetDetail.*` i18n keys.
+
+**3pb/D — This file.**
+
+### Operator-visible changes
+
+- **New Pages routes:** /publish/datasets (with `?status=`
+  filter and cursor pagination) and /publish/datasets/:id
+  (read-only detail). The /publish/tours and /publish/import
+  placeholders are unchanged — they ship in 3pe and 3pf
+  respectively.
+- **No new analytics events** in 3pb. The existing
+  `publisher_portal_loaded` event fires for `route: 'datasets'`
+  (via the routeForPath mapping from 3pa/E) on both the list
+  and the detail page.
+- **No new env vars or bindings.** 3pb reads from API endpoints
+  Phase 1a already ships.
+
+### What this sub-phase deliberately does not do
+
+- **Write surfaces.** Drafts / publishes / retractions land in
+  3pc (entry form) and 3pd (asset uploader). 3pb is strictly a
+  reader.
+- **Audit history panel.** The plan listed an audit panel for
+  3pb, but the publisher API doesn't write to `audit_events`
+  yet (the table exists since Phase 1a migration 0005, but no
+  publish/retract handler records to it). Spinning up the
+  panel against an empty table isn't useful; an audit-writes
+  sub-phase (likely 3pb/audit or rolled into 3pc) precedes the
+  panel.
+- **Edit-from-detail.** Detail page renders every field but
+  none are editable. 3pc adds the form.
+
+### Sub-phase status
+
+- 3pa — Portal shell + Access browser flow. ✓ Shipped.
+- **3pb — Dataset list + detail (read-only).** ✓ Shipped.
+- 3pc — Dataset entry form (metadata). Next.
+- 3pd – 3pg — Future.
+
+---
+
+## Phase 3pa — Publisher portal shell + Access browser flow
+
+**Branch:** `claude/catalog-publisher-portal-phase-3` (same PR
+that landed Phase 3-pre)
+**Commits:** 3pa/A through 3pa/H, plus a one-line 3pa/A-fix
+addendum picked up against the live Pages preview.
+
+First code sub-phase of the publisher portal. After 3pa, a staff
+publisher visiting `/publish/me` on a deployed instance lands on
+a glass-surface profile card showing their identity from the
+already-shipped publisher API; the portal's lazy chunk, History
+API router, top nav, i18n key skeleton, analytics events,
+Grafana panel row, and Cloudflare Access walkthrough are all in
+place. No write surface yet — that's 3pc onward — but every
+foundation downstream sub-phases depend on now ships.
+
+**3pa/A — Portal lazy chunk + History API router.** New module
+tree under `src/ui/publisher/**`. The chunk loads via a single
+dynamic `import('./ui/publisher')` from `src/main.ts`, gated on
+`location.pathname.startsWith('/publish')`; non-publisher visits
+never fetch the portal bytes. The router is a ~100-line History
+API wrapper with one `:id` placeholder, popstate re-dispatch,
+and an idempotent stop, matching the "vanilla TS with a few
+focused libraries" stance documented in `CLAUDE.md`. Every route
+mounts a placeholder page showing its section name and the
+sub-phase letter that will replace it. 13 router tests cover
+pattern matching, dispatch, navigate(), and popstate handling.
+
+**3pa/A-fix — Hide the SPA loading splash on portal boot.**
+Reported visually against the Pages preview: `/publish` showed
+the SPA's rotating-globe loading screen instead of the
+placeholder because the splash is `position: fixed; z-index:
+1000; opacity: 1` and only fades out on the SPA's own boot path.
+The portal route gate `return`s before that fades. One-line fix
+in `ensureMount()` to hide the splash explicitly, mirrored in
+`teardownPublisherPortal()` for test parity.
+
+**3pa/B — i18n keys + safe DOM construction.** Replaces the
+i18n-exempt scaffolding strings with `t()` calls under a new
+`publisher.*` namespace (8 keys for placeholder + section
+labels). Each key gets a translator-context entry in
+`locales/_explanations.json`. While replacing the template-
+literal `innerHTML`, also switches `renderPlaceholder` to
+`createElement` + `textContent` + `replaceChildren` so the
+`:id` URL segment cannot inject HTML by construction.
+
+**3pa/C — /publish/me page with real profile data.** Replaces
+the Profile placeholder with a glass-surface card that fetches
+`GET /api/v1/publish/me` and renders email, role (with an Admin
+badge when `is_admin` is true), affiliation (or "Not set"),
+status (Active / Pending approval / Suspended, colour-coded via
+a `data-status` attribute), and a localized "Member since" date.
+Loading / error states (network / 401 session expired / 5xx /
+JSON-parse failure) all share the same card chrome; a Refresh
+button on every error state reloads the page so Cloudflare
+Access can re-issue an identity token mid-session.
+`renderMePage(mount, fetchFn?)` injects fetch for test
+cleanliness — 11 tests with no `globalThis.fetch` stubbing. 20
+new i18n keys under `publisher.me.*`.
+
+**3pa/D — Glass-surface top bar with section nav.** Persistent
+`position: sticky` topbar above every portal page with four
+tabs (Profile / Datasets / Tours / Import) and a back arrow to
+the SPA. Active-state tracking is decoupled from the router
+via a new `publisher:routechange` CustomEvent — the router
+fires it after every dispatch, the topbar listens and updates
+its own DOM, neither holds a reference to the other. Sub-paths
+count as active for the parent tab (so `/publish/datasets/abc`
+keeps the Datasets tab highlighted). Plain left-clicks
+short-circuit to `router.navigate()`; modified clicks
+(cmd/ctrl/shift/middle) fall through so power users can open
+sections in a new tab. 10 topbar tests + 6 new
+`publisher.nav.*` i18n keys.
+
+**3pa/E — Publisher portal analytics events.** Three new
+`TelemetryEvent` types in `src/types/index.ts`:
+`PublisherPortalLoadedEvent` (Tier A, fields: `route`),
+`PublisherActionEvent` (Tier A, fields: `action`, hashed
+`dataset_id`), and `PublisherValidationFailedEvent` (Tier B,
+fields: `field`, `code`). Only `publisher_portal_loaded` is
+emitted by 3pa code — fires once at portal boot with the
+landing route. The other two are defined now so the emit-call
+shapes are locked before 3pc / 3pd / 3pf call them. The three
+new event-type strings land in `functions/api/ingest.ts` →
+`KNOWN_EVENT_TYPES`. 13 new tests (route-mapping + emit-on-boot
+across multiple paths + idempotency).
+
+**3pa/F — Grafana "Publisher portal" row.** Three new panels
+(ids 20–22) on the existing `Terraviz — Product Health`
+dashboard at y=58: a daily-by-route timeseries, a total stat,
+and a per-route table. Every panel pins
+`blob1 = 'publisher_portal_loaded'` and uses `blob5 AS route`
+(`PublisherPortalLoadedEvent`'s only own string field sorts to
+the first user-blob slot). Dashboard version 9 → 10 so
+operators re-import on upgrade and pick up the new row;
+`product-health.test.ts` gains four new structural assertions
+to keep the contract honest.
+
+**3pa/G — SELF_HOSTING.md Access walkthrough for /publish/**.
+New 8f subsection covering the second Cloudflare Access
+application that gates the *browser* surface at `/publish/**`
+(distinct from the existing 8a-8d setup for the API at
+`/api/v1/publish/**`). Documents the path-mode subtlety
+(`/publish` + `/publish/*` as two destinations), the
+recommended 24-hour session, and the explicit safety note that
+the in-between state (browser path reachable, API still 401s)
+is safe — the API middleware is the load-bearing boundary, the
+Access app is belt-and-suspenders.
+
+**3pa/H — This file.**
+
+### Operator-visible changes
+
+- **New Pages route:** `/publish/me` (and `/publish/datasets`,
+  `/publish/tours`, `/publish/import`, plus `/publish/datasets/:id`).
+  All five render through the lazy portal chunk; only
+  `/publish/me` exposes data today. The others render
+  placeholders showing which sub-phase brings them online.
+- **New analytics events:** `publisher_portal_loaded` (Tier A,
+  emitted from 3pa onward); `publisher_action` and
+  `publisher_validation_failed` (Tier A + B, types defined,
+  emits land in 3pc–3pf).
+- **New Grafana row:** Import `grafana/dashboards/product-health.json`
+  version 10 to pick up the publisher row.
+- **New Cloudflare Access application (optional):** see
+  `docs/SELF_HOSTING.md` §8g. The portal works without it
+  (the API is still gated), but operators wanting belt-and-
+  suspenders should add the second Access app.
+
+### What this sub-phase deliberately does not do
+
+- **Write surfaces.** No edit form, no asset upload, no
+  publish/retract from the browser. Those land in 3pc onward.
+- **Tour creator.** 3pe.
+- **Bulk import UI.** 3pf.
+- **Webhook fan-out scaffolding.** 3pg.
+- **Federation peer admin.** Phase 4.
+- **OIDC / community publishers.** Phase 6.
+
+### Sub-phase status
+
+- **3pa — Portal shell + Access browser flow.** ✓ Shipped.
+- **3pb — Dataset list + detail (read-only).** Next.
+- 3pc – 3pg — Future.
+
+---
+
+## Phase 3-pre — Publisher portal prep
+
+**Branch:** `claude/catalog-publisher-portal-phase-3`
+**Commits:** 3-pre/A through 3-pre/C — three doc-only changes.
+
+Sets the table for the BACKEND_PLAN's Phase 3 (publisher portal,
+staff) without touching source code. The backend has been ready
+since Phase 1f shipped — the publisher API at
+`functions/api/v1/publish/**` exposes the full metadata + asset
++ tour + featured surface, the CLI binary at `cli/terraviz.ts`
+drives it from a YAML, and the asset pipeline (R2 + HLS, R2
+auxiliary assets, R2 tour.json) is live. What hasn't existed is
+the browser-side portal under `src/ui/publisher/**`. This phase
+prep closes the planning gaps before code starts.
+
+**Why a prep phase at all.** Phase 3 in the backend plan is a
+six-bullet list. Splitting it into shippable sub-phases up
+front, and pinning the cross-cutting conventions (lazy-load
+shape, i18n discipline, markdown sanitization, portal analytics,
+Access browser policy) before the first form lands matches the
+`CLAUDE.md` §"Working in this repo" "design firms up before
+code" discipline and keeps each sub-phase PR bounded.
+
+**3-pre/A — Sub-phase breakdown + portal conventions.**
+`docs/CATALOG_BACKEND_PLAN.md` §Phase 3 gains a "Sub-phase
+execution plan" table splitting the scope into seven
+letter-suffixed sub-phases (3pa portal shell + Access browser
+flow, 3pb read-only list + detail, 3pc dataset entry form, 3pd
+asset uploader + preview pipeline, 3pe tour creator, 3pf bulk
+import, 3pg webhook scaffolding + verify-deploy). Each
+sub-phase ships as its own PR, is independently demoable, and
+leaves the deploy in a working state so Phase 4 federation can
+pull priority cleanly at any boundary.
+
+`docs/CATALOG_PUBLISHING_TOOLS.md` gains a "Phase 3
+implementation conventions" section covering the five gaps the
+per-feature sections leave implicit:
+
+- **Lazy-load shape** — single `import('./ui/publisher')` from
+  `src/main.ts` gated on a `/publish` path prefix, History API
+  routing, no framework. Mirrors the
+  `src/ui/vrButton.ts` → `import('three')` pattern that already
+  keeps Three.js out of the main bundle.
+- **i18n discipline** — every string in `src/ui/publisher/**`
+  flows through `t()`, ~100–150 new keys under a `publisher.*`
+  namespace, picked up by the existing `check:i18n-strings`
+  lint that already runs in the type-check chain.
+- **Markdown sanitization** — `marked` (already a build-time dep
+  used by `scripts/build-privacy-page.ts`) promoted to runtime
+  at ~30 KB gzipped, plus a new `DOMPurify` runtime dep at ~25
+  KB gzipped, with a strict tag/attr allow-list. Shared
+  renderer at `src/services/markdownRenderer.ts` used by both
+  the portal preview and the eventual public detail page so
+  preview is byte-for-byte the public render. Both deps load
+  through the lazy portal chunk; non-publisher visits pay
+  nothing.
+- **Portal analytics** — four new events
+  (`publisher_portal_loaded`, `publisher_action` in Tier A;
+  `publisher_validation_failed`, `publisher_dwell` in Tier B)
+  matching the existing `ANALYTICS.md` shape. Server-side
+  `audit_events` rows stay the source of truth for who-did-what;
+  the Tier-A events power the operator dashboard without
+  persisting publisher identity client-side. Grafana gains a
+  "Publisher activity" row in 3pa.
+- **Cloudflare Access browser policy** — extends the Phase 1a
+  service-token application to cover `/publish/**` HTML in 3pa.
+  `DEV_BYPASS_ACCESS=true` continues to work for local dev on
+  the browser side.
+
+The threat-model section "XSS via publisher markdown" in the
+backend plan is the substrate; the new sanitizer subsection pins
+the implementation.
+
+**3-pre/B — Retag sub-phases as 3pa–3pg.** The original 3-pre/A
+labelling used bare `3a`–`3g` sub-phase letters, which collide
+with the merged R2 + HLS video-pipeline work that already
+claimed `catalog(3a/...)` through `catalog(3h/...)` in the
+CHANGELOG and `git log`. Tooling and humans both grep on the
+commit-prefix substring, so reusing the bare letters would
+conflate two unrelated bodies of work. 3-pre/B retags the portal
+sub-phases as `3pa`–`3pg` in both docs and adds a short note in
+each explaining why the `p` qualifier exists. The BACKEND_PLAN's
+"Phase 3 — Publisher portal" designation stays intact at the
+semantic level; only commit and CHANGELOG prefixes carry the
+qualifier.
+
+**3-pre/C — This file.**
+
+### Operator-visible changes
+
+None. Doc-only. No new env vars, no new bindings, no new
+migrations.
+
+### What this phase deliberately does not do
+
+- **Ship any source code under `src/ui/publisher/**`.** That
+  starts with 3pa.
+- **Wire the Cloudflare Access browser policy.** The policy is
+  dashboard-managed (see BACKEND_PLAN §"Constraints found during
+  exploration" constraint 3); operator steps land in
+  `docs/SELF_HOSTING.md` during 3pa.
+- **Add the new dependencies (`marked` runtime, `DOMPurify`) to
+  `package.json`.** They land with the renderer in 3pc.
+- **Touch the federation phase plan.** Phase 4 is unchanged and
+  unblocked by Phase 3.
+
+### Sub-phase roadmap
+
+The seven sub-phases ship in order. Pausing between any pair is
+deliberately cheap:
+
+| Sub-phase | Topic | Demoable result |
+|---|---|---|
+| 3pa | Portal shell + Access browser flow | `/publish/me` renders behind Access |
+| 3pb | Dataset list + detail (read-only) | Browse drafts/published from the portal |
+| 3pc | Dataset entry form (metadata) | Create + edit drafts without asset upload |
+| 3pd | Asset uploader + preview pipeline | Upload a video or image and preview it on the live globe |
+| 3pe | Tour creator (capture mode) | Author and play back a tour without writing JSON |
+| 3pf | Bulk import UI | Drop a CSV and watch rows materialise |
+| 3pg | Webhook fan-out + verify-deploy | Phase 4 federation hook ready; smoke-test green |
+
+Exit criteria for Phase 3 as a whole match the existing backend
+plan: a staff user can publish a new dataset and a new tour
+end-to-end through the browser without touching the CLI or D1 /
+R2 manually.
+
+---
+
 ## Phase 3c — Tour JSON migration
 
 **Branch:** `claude/tour-migration-phase-3c`
@@ -164,6 +1653,111 @@ used; same `R2_PUBLIC_BASE` custom domain.
     showLegend / worldBorders). Wiring them up is a separate
     SPA feature; this phase just makes sure the bytes migrate
     cleanly when they're referenced.
+
+---
+
+## Phase 3h — VR / Three.js parity for bbox projection
+
+**Branch:** `claude/vr-bbox-non-earth-phase-3h`
+**Commits:** 3h/A through 3h/C.
+
+Phase 3e (below) shipped bbox projection and dateline-centered
+rendering on the 2D `earthTileLayer.ts` WebGL custom layer, but
+the immersive VR / AR view goes through a different code path —
+`photorealEarth.ts` builds its own `THREE.MeshPhongMaterial` with
+a day/night shader patch, atmosphere shells, sun sprite, clouds,
+and progressive 2K → 4K → 8K diffuse tiers. Pre-3h, a regional
+dataset loaded in VR stretched equirectangularly across the full
+sphere; dateline-centered datasets wrapped with the prime
+meridian in the wrong place. Phase 3h ports the 3e shader work
+into the VR Phong material so the immersive view matches the 2D
+behaviour on the primary globe.
+
+**3h/A — Plumb `DatasetOverlayOptions` into `VrDatasetTexture`.**
+The texture spec the VR session polls from the host gains an
+optional `options` field carrying the same Phase 3d metadata the
+2D renderer consumes. `main.ts`'s `getPanelTexture` populates it
+from the loaded dataset via the existing
+`overlayOptionsFromDataset` helper, so the VR side reuses the
+2D's SOS-convention Earth-alias logic and "all defaults →
+undefined" fast path. Pure plumbing; no rendering change yet.
+
+**3h/B — Bbox / lonOrigin / flipY shader.** `onBeforeCompile`
+on the Phong material gains a `<map_fragment>` replacement that
+mirrors `earthTileLayer.ts`'s `datasetFragSrc` — same lat/lon
+derivation, same antimeridian-crossing-bbox handling, same
+`fract()` U-wrap for the lonOrigin path. Five new uniforms
+(`uOverlayHasBbox`, `uOverlayBbox`, `uOverlayLonOrigin`,
+`uOverlayFlipY`, `uOverlayHasBase`) plus a second sampler
+(`uOverlayBaseMap`) for the "outside the bbox shows Earth"
+case — needed because in VR there isn't a separate MapLibre
+blue-marble layer underneath, so the shader has to sample two
+textures and choose.
+
+**Rule table (matches Phase 3e/C on the 2D side):**
+
+| Case | Inside bbox | Outside bbox |
+|---|---|---|
+| Earth + no bbox     | dataset (full sphere) | n/a |
+| Earth + bbox        | dataset | `uOverlayBaseMap` (progressive diffuse tier) |
+| non-Earth + bbox    | dataset | `discard` |
+| non-Earth + no bbox | dataset (full sphere) | n/a |
+
+With every overlay uniform at its default the math collapses to
+a pass-through and the shader output is bit-identical to the
+pre-3h sample, so the planet-mode photoreal Earth and any legacy
+global dataset render unchanged.
+
+A small `applyOverlayOptions(options)` helper centralises the
+uniform writes so the change-detect no-op path can re-apply the
+uniforms if a dataset is re-loaded with new metadata (a tour
+task patching a row mid-session, for example). The
+`uOverlayBaseMap` binding tracks the progressive diffuse-tier
+upgrade callback so the bbox+Earth view sharpens 2K → 4K → 8K
+alongside planet mode.
+
+**3h/C — This CHANGELOG entry.**
+
+**Operator notes.**
+
+- No new env vars, no new bindings, no schema changes —
+  builds entirely on the 3d wire surface, same as the 2D 3e/3f
+  port.
+- After deploy, smoke-check on a WebXR device (Quest 2/3/Pro):
+  - `INTERNAL_HRRR_SMOKE_SEPTEMBER_2017_VIDEO` — regional CONUS
+    bbox, should render only over CONUS in immersive mode, with
+    the Earth diffuse filling the rest of the globe (no longer
+    stretched across the full sphere).
+  - Any dateline-centered ocean dataset — Pacific should be the
+    visible center, same as 2D.
+  - A non-Earth row (e.g. `INTERNAL_SOS_215_ONLINE` Venus,
+    `INTERNAL_SOS_220_ONLINE` Moon) — should still wrap the full
+    sphere as before; the non-Earth + bbox combination doesn't
+    appear in the catalog today but the `discard`-outside path
+    is wired for when it does.
+  - Any legacy global Earth dataset — should look bit-identical
+    to pre-3h immersive view.
+- WebGL output is browser/headset confirmed; unit tests cover
+  plumbing via the existing `datasetOverlayOptions.test.ts`
+  suite (14 tests, unchanged).
+
+**Non-goals (deferred / out-of-scope).**
+
+- **Secondary globe parity** (Phase 2.5 multi-panel layouts).
+  Secondaries use a basic `MeshPhongMaterial` without the
+  day/night shader patch; bbox treatment would mean duplicating
+  the shader injection or extracting a shared builder. The
+  primary-globe parity that ships here covers the common case
+  (a regional dataset in slot 0); slot ≥ 1 with a regional
+  dataset still stretches as today. Tracked separately as
+  follow-up if a real layout combination needs it.
+- **Per-body surface textures** — Phase 3g (issue #109). When
+  3g lands, non-Earth + bbox should reveal that body's surface
+  outside the bbox instead of `discard`-ing — the
+  `uOverlayHasBase` + `uOverlayBaseMap` plumbing already added
+  here is the hook.
+- **Camera fly-to-bbox on dataset entry into VR** — same
+  posture as the 2D non-goal in 3e.
 
 ---
 

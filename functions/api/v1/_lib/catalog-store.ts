@@ -101,6 +101,62 @@ export interface DatasetRow {
    * Zero rows use this in the current SOS snapshot; persisted for
    * future publishers whose imagery uses inverted Y conventions. */
   is_flipped_in_y: number | null
+  /** Boolean (0/1) flag set by the video-upload /complete handler
+   * when a `source.mp4` lands in R2 and a GHA transcode dispatch
+   * fires (Phase 3pd). The workflow clears the flag and writes
+   * `data_ref = r2:videos/{id}/{upload_id}/master.m3u8` (per-
+   * upload-versioned so a re-upload doesn't clobber a still-
+   * playing bundle) when the HLS bundle is ready. The portal
+   * renders a "Transcoding…" badge and gates the publish button
+   * while this is set. NULL on every other row. Migration 0011. */
+  transcoding: number | null
+  /** ULID of the asset_uploads row whose GHA workflow currently
+   * owns the row's transcoding stamp. Set in lockstep with
+   * `transcoding=1` by the /asset/.../complete handler; verified
+   * by /transcode-complete before applying the workflow's callback
+   * so two overlapping uploads can't race their PATCHes against
+   * each other (see migration 0012). NULL when `transcoding` is
+   * NULL. Migration 0012. */
+  active_transcode_upload_id: string | null
+  /** Number of source frames for an image-sequence-source video
+   *  dataset (Phase 3pf). NULL for MP4-source video, image, and
+   *  tour rows. Populated by /complete when stamping
+   *  `transcoding=1`; the manifest serializer reads it to surface
+   *  the frames-as-data envelope in Phase 3pg. Migration 0014. */
+  frame_count: number | null
+  /** File extension on each per-frame R2 key — `png` / `jpg` /
+   *  `webp` matching the `extForMime` convention. Paired with
+   *  `frame_count`; populated by /complete and read by the
+   *  manifest serializer to build the `urlTemplate`. NULL on
+   *  non-sequence rows. Migration 0014. */
+  frame_extension: string | null
+  /** R2 key of the auxiliary JSON blob recording the publisher's
+   *  original frame filenames in encode order. Surfaced by the
+   *  frames-as-data API (Phase 3pg) as `originalFilename` on
+   *  /frames responses for tooling that needs to map back to the
+   *  publisher's on-disk convention. NULL on non-sequence rows.
+   *  Migration 0014. */
+  frame_source_filenames_ref: string | null
+  /** SHA-256 of the asset's *delivered bytes*. Carried for
+   * single-blob assets (R2 images, captions, legends) where one
+   * hash describes the whole object. Always NULL for HLS bundles:
+   * those are many segment files plus variant manifests, and the
+   * pipeline tracks per-segment integrity via the master manifest
+   * rather than a single bundle-wide hash. `clearTranscoding`
+   * (`asset-uploads.ts`) explicitly NULLs this column when a
+   * video transcode lands, atomically with the `data_ref` swap
+   * (PR #112 followup — 3pd-followup/Z). Also NULL when the row
+   * predates Phase 1b content-digest verification or when the
+   * pipeline trusts an upstream-provided source digest instead.
+   * Phase 1b. */
+  content_digest: string | null
+  /** SHA-256 of the publisher's *source upload* (the MP4 they
+   * dropped into the portal uploader, before any transcoding).
+   * Set at /asset/{upload_id}/complete time and round-trips into
+   * the GHA workflow's repository_dispatch payload so the runner
+   * can re-verify before encoding. NULL on rows that never went
+   * through the source-upload flow. */
+  source_digest: string | null
 }
 
 export interface DecorationRows {
@@ -158,7 +214,31 @@ export async function listPublicDatasets(
   options: { since?: string } = {},
 ): Promise<DatasetRow[]> {
   const { since } = options
-  const where = ['visibility = ?', 'is_hidden = 0', 'retracted_at IS NULL']
+  // The four conditions together define "this row is something
+  // the public SPA / federation should see":
+  //   - visibility = 'public': not federated-only or private
+  //   - is_hidden = 0: operator hasn't suppressed it
+  //   - retracted_at IS NULL: not retracted post-publish
+  //   - published_at IS NOT NULL: actually published, not a draft
+  // The fourth condition is what was missing — the schema's
+  // `visibility` column defaults to 'public', so a draft created
+  // with no explicit visibility setting still has visibility='public'
+  // and would leak into the public catalog until publish/retract.
+  // Both the public snapshot endpoint (`/api/v1/catalog`) and
+  // the federation feed (Phase 4) key off this function, so the
+  // fix is applied here once. The publisher portal's drafts tab
+  // is a separate path: it queries the publisher-scoped
+  // `listDatasetsForPublisher` in `dataset-mutations.ts`, which
+  // has its own visibility model (drafts + published owned by
+  // the caller). Found during a production smoke test where a
+  // draft "Test 1" appeared alongside published datasets in the
+  // SPA's browse panel.
+  const where = [
+    'visibility = ?',
+    'is_hidden = 0',
+    'retracted_at IS NULL',
+    'published_at IS NOT NULL',
+  ]
   const binds: unknown[] = ['public']
   if (since) {
     where.push('updated_at > ?')
@@ -184,6 +264,7 @@ export async function getPublicDataset(
       `SELECT * FROM datasets
        WHERE id = ? AND visibility = 'public'
          AND is_hidden = 0 AND retracted_at IS NULL
+         AND published_at IS NOT NULL
        LIMIT 1`,
     )
     .bind(id)

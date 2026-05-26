@@ -42,6 +42,12 @@ export interface Dataset {
    * post-cutover ULID-keyed rows.
    */
   legacyId?: string
+  /**
+   * URL-safe slug (`sea-ice-extent`, `ssta`) — drives display naming
+   * for the Phase 3pg image-sequence frame buttons. The catalog
+   * always sets a slug; older SOS-source rows may omit it.
+   */
+  slug?: string
   title: string
   format: DatasetFormat
   dataLink: string
@@ -86,15 +92,23 @@ export interface Dataset {
 
   /** Geographic bounding box (NSWE in degrees) for the dataset's
    * spatial extent. Phase 3d promoted from `bounding_variables`
-   * JSON to typed columns. Omitted when the catalog row's bbox
-   * columns aren't populated — NOT a signal of "regional vs
-   * global" extent. A row with all four corners set to
-   * `{n:90, s:-90, w:-180, e:180}` is still emitted (~26 of the
-   * 27 populated SOS rows do exactly that). The SPA's Phase 3e
-   * regional-projection feature can short-circuit at render
-   * time when it sees a worldwide box; otherwise it wraps the
-   * dataset texture to the named region rather than stretching
-   * it across the entire globe. */
+   * JSON to typed columns.
+   *
+   * **Defaults to worldwide at the SPA layer** when the wire
+   * shape carries no bbox (see `wireToDataset` /
+   * `synthesizeSosOnlyDatasets` in `dataService.ts`). Wire-side
+   * the field is still optional — D1's `bbox_*` columns are
+   * NULL for the majority of rows today — but every Dataset
+   * record handed to UI code carries a populated bbox so the
+   * Phase 4 §6.9 Map view can show every dataset's spatial
+   * extent without a "missing" branch. Publishers should set
+   * a regional bbox when applicable; the default acknowledges
+   * that the SOS catalog is overwhelmingly global today.
+   *
+   * A worldwide box (`{n:90, s:-90, w:-180, e:180}`) is the
+   * "global" sentinel the Map view's hide-globals toggle keys
+   * off; the SPA's regional-projection feature also
+   * short-circuits at render time when it sees worldwide. */
   boundingBox?: { n: number; s: number; w: number; e: number }
 
   /** Celestial body the dataset visualises. Omitted == Earth.
@@ -117,6 +131,58 @@ export interface Dataset {
 
   // Enriched metadata (from sos_dataset_metadata.json cross-reference)
   enriched?: EnrichedMetadata
+
+  /**
+   * Image-sequence frame envelope — set only for rows that were
+   * transcoded from a frames upload (Phase 3pg/A). Carries the
+   * frame count, a per-frame URL template (`{index}` is the token
+   * consumers substitute with the zero-padded 5-digit frame
+   * number), and the publisher-signed `framesDigest` of the
+   * canonical source-filenames blob. Older clients ignore this
+   * field; sequence rows still play as a regular HLS video via
+   * `dataLink`.
+   */
+  frames?: DatasetFrames
+
+  /**
+   * Which SOS catalog surface(s) this dataset is published on.
+   * Sourced from the enriched metadata's `available_for` array.
+   * Phase 4 §6.4 from `docs/WEB_CATALOG_FEATURES_PLAN.md`.
+   *
+   * - `'Explorer'` — only in the SOSx subset (the live-catalog
+   *   datasets TerraViz has always rendered).
+   * - `'SOS'` — only in the broader SOS catalog. Synthesised by
+   *   `dataService` from the enriched metadata file when there's
+   *   no live-catalog entry to pair with; plays back at
+   *   `movie_preview` quality rather than the SOSx Vimeo HLS.
+   * - `'Both'` — listed on both surfaces. Live-catalog entry is
+   *   the source of truth for the `dataLink`; enriched entry
+   *   carries the rest.
+   *
+   * Set by `DataService.enrichDataset` on every live-catalog row,
+   * defaulting to `'Explorer'` when no enriched match is found
+   * (live catalog is SOSx-subset by definition). Synthesised SOS-
+   * only rows set `'SOS'` themselves. The field is optional on the
+   * type so wire-shape consumers (`WireDataset`) can elide it; in
+   * the running app every row from `fetchDatasets()` has it set.
+   */
+  availableFor?: 'Explorer' | 'SOS' | 'Both'
+}
+
+/**
+ * Image-sequence frame envelope on `Dataset` (Phase 3pg/A). Mirrors
+ * `WireDatasetFrames` from `functions/api/v1/_lib/dataset-serializer.ts`.
+ * Consumers compute frame N's timestamp as
+ * `startTime + period × index` for time-series rows, and render
+ * display names as `{slug}_{YYYYMMDDTHHMMSSZ}.{ext}` (time-series)
+ * or `{slug}_frame_{NNNNN}.{ext}` (pure-sequence) — same
+ * convention the `/api/v1/datasets/{id}/frames` endpoint
+ * server-renders for `displayName`.
+ */
+export interface DatasetFrames {
+  count: number
+  urlTemplate: string
+  framesDigest?: string
 }
 
 /** Probing metadata recovered from the SOS snapshot. Pixel
@@ -333,6 +399,26 @@ export type ChatAction =
   | { type: 'add-marker'; lat: number; lng: number; label?: string }
   | { type: 'toggle-labels'; visible: boolean }
   | { type: 'highlight-region'; geojson: GeoJSON.GeoJSON; label?: string }
+  /**
+   * Load a single frame from a Phase 3pg image-sequence dataset.
+   * `frameQuery` is the verbatim payload from the LLM's
+   * `<<LOAD_FRAME:DATASET_ID:query>>` marker — one of:
+   *   - an ISO 8601 timestamp like `2026-05-16T12:00:00Z`,
+   *   - `index=N` (zero-based, where N is in [0, frame_count)),
+   *   - `latest` / `first` (resolved by the client against the
+   *     dataset's `frame_count`).
+   * `displayName` is the chat-UI-ready button label, derived using
+   * the dataset's `slug` + the resolved frame timestamp / index.
+   * Servers/clients render it consistently per the `/frames`
+   * endpoint convention; clients can also compute it locally.
+   */
+  | {
+      type: 'load-frame'
+      datasetId: string
+      datasetTitle: string
+      frameQuery: string
+      displayName: string
+    }
 
 /**
  * Snapshot of the LLM context used to generate an AI response.
@@ -472,6 +558,42 @@ export interface QAEntry {
 export type QAIndex = Record<string, QAEntry[]>
 
 // --- Tour types ---
+
+/**
+ * A tour from the public discovery surface
+ * (`GET /api/v1/tours`). Distinct from `Dataset` because tours
+ * have less metadata (no temporal range, no organization, no
+ * bounding box) and they launch into a different code path
+ * (`tourEngine`) than dataset cards do.
+ *
+ * The Phase 1a workaround surfaced legacy SOS tours as datasets
+ * with `format: 'tour/json'`. New-style tours (from the
+ * publisher dock) flow through this type instead — the SPA
+ * normalises both into the same browse card list at render
+ * time.
+ */
+export interface Tour {
+  id: string
+  slug: string
+  title: string
+  description: string | null
+  /** Resolved HTTPS URL the tour engine fetches. May be null
+   * when the server can't render an R2 URL (R2_PUBLIC_BASE
+   * unset on the deployment). The SPA's `dataService` filters
+   * unresolvable tours out of the browse list — a launchable
+   * card with no fetchable JSON is worse UX than no card. The
+   * field stays nullable here because it reflects the wire
+   * shape; consumers that synthesise a `Tour` from a known-
+   * usable source can assert non-null. */
+  tourJsonUrl: string | null
+  thumbnailUrl: string | null
+  visibility: string
+  schemaVersion: number
+  createdAt: string
+  updatedAt: string
+  publishedAt: string
+  originNode: string
+}
 
 /** Raw tour JSON file structure */
 export interface TourFile {
@@ -798,9 +920,13 @@ export const TIER_B_EVENT_TYPES = [
   'orbit_load_followed',
   'orbit_correction',
   'browse_search',
+  'catalog_graph_node_clicked',
+  'catalog_timeline_brush_applied',
+  'catalog_map_region_drawn',
   'vr_interaction',
   'error_detail',
   'tour_question_answered',
+  'publisher_validation_failed',
 ] as const
 export type TierBEventType = (typeof TIER_B_EVENT_TYPES)[number]
 
@@ -838,7 +964,7 @@ export type VrMode = 'ar' | 'vr'
 export type VrExitReason = 'user' | 'error' | 'session_lost'
 export type VrGesture = 'drag' | 'pinch' | 'thumbstick_zoom' | 'flick_spin' | 'hud_tap'
 export type ErrorCategory =
-  | 'tile' | 'hls' | 'llm' | 'download' | 'vr' | 'tour'
+  | 'tile' | 'hls' | 'llm' | 'download' | 'vr' | 'tour' | 'caption'
   | 'uncaught' | 'console' | 'native_panic'
 export type ErrorSource =
   | 'caught' | 'window_error' | 'unhandledrejection'
@@ -987,6 +1113,24 @@ export interface BrowseOpenedEvent extends TelemetryEventBase {
 export interface BrowseFilterEvent extends TelemetryEventBase {
   event_type: 'browse_filter'
   category: string
+  result_count_bucket: '0' | '1-10' | '11-50' | '50+'
+}
+
+/**
+ * Catalog view-mode toggle (Phase 4 §6.7+). Fires when the user
+ * switches the browse overlay between the card grid, the network
+ * graph, the upcoming Timeline view (§6.8), and the upcoming Map
+ * view (§6.9). Tier A — the choice is a pure UI preference and
+ * carries no free-text payload. `from` records what the user just
+ * came from so the dashboard can read both stickiness and
+ * direction of pivots.
+ */
+export interface CatalogViewModeChangedEvent extends TelemetryEventBase {
+  event_type: 'catalog_view_mode_changed'
+  view_mode: 'cards' | 'graph' | 'timeline' | 'map'
+  from: 'cards' | 'graph' | 'timeline' | 'map'
+  /** Bucketed dataset count visible at the moment of toggle — useful
+   *  for "did the user pivot to Graph because Cards was overwhelming?". */
   result_count_bucket: '0' | '1-10' | '11-50' | '50+'
 }
 
@@ -1350,6 +1494,58 @@ export interface MigrationR2ToursEvent extends TelemetryEventBase {
   outcome: MigrationR2ToursOutcome
 }
 
+/**
+ * Publisher portal mounted at a route. One emit per portal-chunk
+ * load — the publisher visits `/publish/*`, the lazy chunk
+ * resolves, the router dispatches its first route, this fires.
+ * Subsequent in-portal navigation is *not* counted as another
+ * portal load (that's what `publisher_action` and the `dwell`
+ * tracker on portal surfaces are for).
+ *
+ * Operator-facing metric: how often does anyone actually use the
+ * portal? Useful for the "is this surface worth more
+ * investment?" question once Phase 3 has shipped.
+ */
+export interface PublisherPortalLoadedEvent extends TelemetryEventBase {
+  event_type: 'publisher_portal_loaded'
+  /** Which section the publisher landed on. `unknown` covers
+   * routes the publisher portal doesn't define (typo'd URLs,
+   * stale bookmarks); the router's notFound handler still emits
+   * this event because the visit counts toward portal usage. */
+  route: 'me' | 'datasets' | 'tours' | 'import' | 'unknown'
+}
+
+/**
+ * A publisher-initiated write action completed. The
+ * server-side `audit_events` row remains the source of truth for
+ * who-did-what-when; this Tier-A event powers the operator
+ * dashboard ("how many drafts saved today?") without persisting
+ * publisher identity client-side. The `dataset_id` is hashed via
+ * `src/analytics/hash.ts` so the dashboard can count unique
+ * datasets without storing their identifiers in Analytics
+ * Engine.
+ *
+ * Most action kinds (`draft_saved`, `published`, `retracted`,
+ * `preview_minted`, `asset_uploaded`, `bulk_imported`) land in
+ * later sub-phases — 3pc through 3pf. The type is defined now so
+ * the emit-call signature is locked before downstream code
+ * starts calling it.
+ */
+export interface PublisherActionEvent extends TelemetryEventBase {
+  event_type: 'publisher_action'
+  action:
+    | 'draft_saved'
+    | 'published'
+    | 'retracted'
+    | 'preview_minted'
+    | 'asset_uploaded'
+    | 'bulk_imported'
+  /** 12-hex SHA-256 of the dataset ULID (via `analytics/hash.ts`),
+   * or `''` for actions where no specific dataset applies
+   * (`bulk_imported` operates on many rows at once). */
+  dataset_id: string
+}
+
 // --- Tier B events ---
 
 export interface DwellEvent extends TelemetryEventBase {
@@ -1434,6 +1630,86 @@ export interface BrowseSearchEvent extends TelemetryEventBase {
   query_length: number
 }
 
+/**
+ * Catalog Graph view node interaction (Phase 4 §6.7). Fires when
+ * the user clicks a node in the Graph view. Tier B — node values
+ * (Category names, keyword values, dataset IDs) are free-text by
+ * the privacy posture's definition, so `value_hash` carries a
+ * SHA-256 prefix rather than the value itself. Throttled to
+ * ≤30/min via the same rolling-window pattern as `camera_settled`
+ * so an aggressive panning session can't flood the queue.
+ *
+ * `node_kind` and `facet` are low-cardinality enums (3 × ~10
+ * facets) so they're safe to emit verbatim — they tell the
+ * dashboard "user clicked a Category facet-value node" without
+ * revealing which one.
+ */
+export interface CatalogGraphNodeClickedEvent extends TelemetryEventBase {
+  event_type: 'catalog_graph_node_clicked'
+  node_kind: 'facet-value' | 'keyword' | 'dataset'
+  /** Facet name for facet-value nodes; `'keyword'` for keyword
+   *  nodes; `''` for dataset nodes. */
+  facet: string
+  /** First 12 hex of SHA-256 of the lowercased value (facet value /
+   *  keyword / dataset id). Privacy-friendly count of distinct
+   *  clicks without exposing the value itself. */
+  value_hash: string
+}
+
+/**
+ * Catalog Timeline view brush gesture (Phase 4 §6.8). Fires when
+ * the user commits a brush selection on the time axis, which
+ * writes a `dataCoverageYear` range predicate via the same
+ * `setFacet` mutation path the chip rail's range inputs use.
+ * Tier B because — like Graph node clicks — it captures a
+ * filter-shaping signal that's deeper than the chip rail's
+ * coarse "user filtered" event, and the dashboard's question
+ * here is investigative ("which date ranges do users actually
+ * brush?") rather than operator-critical.
+ *
+ * Throttled to ≤30 / minute per session by the rolling-window
+ * pattern in `src/analytics/camera.ts`, same shared budget as
+ * `catalog_graph_node_clicked`. Payload is integers only — the
+ * brush carries no free text, so no `*_hash` field is needed.
+ */
+export interface CatalogTimelineBrushAppliedEvent extends TelemetryEventBase {
+  event_type: 'catalog_timeline_brush_applied'
+  /** Inclusive start year of the brushed range. */
+  start_year: number
+  /** Inclusive end year of the brushed range. */
+  end_year: number
+}
+
+/**
+ * Catalog Map view draw-rectangle gesture (Phase 4 §6.9). Fires
+ * when the user commits a region selection on the mercator map,
+ * which writes a `geographicRegion` bbox predicate via the same
+ * `setFacet` mutation path the chip rail's range inputs and the
+ * Timeline brush both use. Tier B because — like the Graph node
+ * click and the Timeline brush — it captures a filter-shaping
+ * signal deeper than the chip rail's coarse "user filtered" event,
+ * and the dashboard's question here is investigative ("which
+ * regions do users actually draw?") rather than operator-critical.
+ *
+ * Throttled to ≤30 / minute per session by the rolling-window
+ * pattern in `src/analytics/camera.ts`, same shared budget as
+ * `catalog_graph_node_clicked` and `catalog_timeline_brush_applied`.
+ * Bounds round to 3 decimals (~111 m at the equator) — same
+ * precision `camera.ts` uses for lat/lon — so the analytics
+ * surface never leaks high-resolution drag positions.
+ */
+export interface CatalogMapRegionDrawnEvent extends TelemetryEventBase {
+  event_type: 'catalog_map_region_drawn'
+  /** Northernmost latitude of the drawn region, in degrees. */
+  north: number
+  /** Southernmost latitude of the drawn region, in degrees. */
+  south: number
+  /** Easternmost longitude of the drawn region, in degrees. */
+  east: number
+  /** Westernmost longitude of the drawn region, in degrees. */
+  west: number
+}
+
 export interface VrInteractionEvent extends TelemetryEventBase {
   event_type: 'vr_interaction'
   gesture: VrGesture
@@ -1451,6 +1727,29 @@ export interface ErrorDetailEvent extends TelemetryEventBase {
    * numbers. Max 10 frames. */
   frames_json: string
   count_in_batch: number
+}
+
+/**
+ * A publisher hit a server-side validation error on a write
+ * attempt. Tier B because the dashboard's question is "which
+ * validators trip publishers most often?" — that's an investigative
+ * signal, not an operator-critical one, and the free-text values
+ * we'd want to inspect (slug, title, abstract) cannot ship to AE
+ * under our privacy invariants.
+ *
+ * Wire-up lands in 3pc when the entry form first hits the
+ * server-side validators. The type is defined here so the emit
+ * shape is locked in advance.
+ */
+export interface PublisherValidationFailedEvent extends TelemetryEventBase {
+  event_type: 'publisher_validation_failed'
+  /** Dot-path of the field that failed (e.g., `slug`,
+   * `developers.0.affiliation_url`). Server returns this in its
+   * `{errors: [{field, code, message}]}` envelope. */
+  field: string
+  /** Machine-readable error code (e.g., `slug_too_short`,
+   * `mime_not_allowed`). Server returns this; no free text. */
+  code: string
 }
 
 /** The full discriminated event union. Add new events here, add them
@@ -1471,6 +1770,7 @@ export type TelemetryEvent =
   | SettingsChangedEvent
   | BrowseOpenedEvent
   | BrowseFilterEvent
+  | CatalogViewModeChangedEvent
   | TourStartedEvent
   | TourTaskFiredEvent
   | TourPausedEvent
@@ -1485,13 +1785,19 @@ export type TelemetryEvent =
   | MigrationR2HlsEvent
   | MigrationR2AssetsEvent
   | MigrationR2ToursEvent
+  | PublisherPortalLoadedEvent
+  | PublisherActionEvent
   // Tier B
   | DwellEvent
+  | PublisherValidationFailedEvent
   | OrbitInteractionEvent
   | OrbitTurnEvent
   | OrbitToolCallEvent
   | OrbitLoadFollowedEvent
   | OrbitCorrectionEvent
   | BrowseSearchEvent
+  | CatalogGraphNodeClickedEvent
+  | CatalogTimelineBrushAppliedEvent
+  | CatalogMapRegionDrawnEvent
   | VrInteractionEvent
   | ErrorDetailEvent
