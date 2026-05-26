@@ -157,8 +157,10 @@ export function setUiScale(raw: number): number {
 
 /**
  * Map a numeric scale to the closest matching preset, or `null` if
- * the value sits outside the preset range. Used by the radio to
- * highlight which preset is currently active after `initUiScale()`.
+ * the value sits outside the preset range. Used where we need to
+ * know whether the active scale IS one of the named presets
+ * (telemetry, programmatic logic) — UI highlighting should use
+ * {@link nearestPreset} so one radio is always selected.
  * A small tolerance (±0.01) tolerates floating-point round-trips.
  */
 export function matchPreset(value: number): UiScalePreset | null {
@@ -168,6 +170,31 @@ export function matchPreset(value: number): UiScalePreset | null {
     if (Math.abs(value - target) < 0.01) return name
   }
   return null
+}
+
+/**
+ * Map any scale value to the preset whose target it sits closest
+ * to. Always returns a preset — even a freeform value (e.g. a
+ * forker shipping `VITE_DEFAULT_UI_SCALE=1.25`, or a localStorage
+ * entry hand-edited mid-session) gets a meaningful radio
+ * highlight rather than a radiogroup with no selection. Ties
+ * resolve to the first preset declared in {@link UI_SCALE_PRESETS}
+ * (deterministic, but the bands are wide enough that real-world
+ * inputs never land exactly on a midpoint).
+ */
+export function nearestPreset(value: number): UiScalePreset {
+  let best: UiScalePreset = 'default'
+  let bestDistance = Infinity
+  for (const [name, target] of Object.entries(UI_SCALE_PRESETS) as Array<
+    [UiScalePreset, number]
+  >) {
+    const distance = Math.abs(value - target)
+    if (distance < bestDistance) {
+      best = name
+      bestDistance = distance
+    }
+  }
+  return best
 }
 
 /** Test-only: localStorage key, exported so tests can clear it. */

@@ -729,9 +729,10 @@ describe('Tools menu UI-size radio', () => {
     expect(def.classList.contains('active')).toBe(true)
     expect(compact.classList.contains('active')).toBe(false)
     expect(comfy.classList.contains('active')).toBe(false)
-    // role="radio" + aria-checked match the active class.
-    expect(def.getAttribute('aria-checked')).toBe('true')
-    expect(compact.getAttribute('aria-checked')).toBe('false')
+    // aria-pressed mirrors the active class — same pattern as the
+    // sibling layout-picker.
+    expect(def.getAttribute('aria-pressed')).toBe('true')
+    expect(compact.getAttribute('aria-pressed')).toBe('false')
   })
 
   it('writes localStorage + :root + flips active when a preset is clicked', () => {
@@ -742,10 +743,10 @@ describe('Tools menu UI-size radio', () => {
     comfy.click()
 
     expect(comfy.classList.contains('active')).toBe(true)
-    expect(comfy.getAttribute('aria-checked')).toBe('true')
+    expect(comfy.getAttribute('aria-pressed')).toBe('true')
     const def = document.getElementById('tools-menu-uiscale-default')!
     expect(def.classList.contains('active')).toBe(false)
-    expect(def.getAttribute('aria-checked')).toBe('false')
+    expect(def.getAttribute('aria-pressed')).toBe('false')
     expect(localStorage.getItem('sos-ui-scale.v1')).toBe('1.5')
     expect(document.documentElement.style.getPropertyValue('--ui-scale')).toBe('1.5')
   })
@@ -758,6 +759,24 @@ describe('Tools menu UI-size radio', () => {
     const compact = document.getElementById('tools-menu-uiscale-compact')!
     expect(compact.classList.contains('active')).toBe(true)
     expect(document.getElementById('tools-menu-uiscale-default')!.classList.contains('active')).toBe(false)
+  })
+
+  it('falls back to the nearest preset for non-preset persisted values', () => {
+    // A forker shipping VITE_DEFAULT_UI_SCALE=0.9, or a localStorage
+    // entry hand-edited mid-session, sits between Compact and
+    // Default. The radiogroup must never paint with zero
+    // selections — nearestPreset() picks Compact (0.9 is closer
+    // to 0.85 than to 1.0).
+    localStorage.setItem('sos-ui-scale.v1', '0.9')
+    const vm = makeViewports(1)
+    initToolsMenu(vm as any)
+
+    const compact = document.getElementById('tools-menu-uiscale-compact')!
+    const def = document.getElementById('tools-menu-uiscale-default')!
+    const comfy = document.getElementById('tools-menu-uiscale-comfortable')!
+    expect(compact.classList.contains('active')).toBe(true)
+    expect(def.classList.contains('active')).toBe(false)
+    expect(comfy.classList.contains('active')).toBe(false)
   })
 
   it('announces and emits settings_changed when a preset is picked', async () => {

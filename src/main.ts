@@ -75,6 +75,18 @@ import { initTourAuthoring } from './ui/tourAuthoring'
 import { bootstrapI18n } from './i18n/bootstrap'
 import { initUiScale } from './services/uiScaleService'
 
+// Apply the persisted UI-scale to `:root` at module-evaluation
+// time — before DOMContentLoaded, before any UI renders, before
+// the loading screen's first paint cycle completes. Waiting for
+// the DOMContentLoaded handler would let the loading screen
+// paint once at `--ui-scale: 1` and then snap to the user's
+// preset, producing a visible flash on every reload for visitors
+// who pick a non-default size. Module-eval is the earliest hook
+// the bundle gives us short of an inline <script> in <head>.
+// SSR-safe (the service no-ops when `document` is undefined).
+// See docs/WEB_CATALOG_FEATURES_PLAN.md §7.1.
+initUiScale()
+
 // Phase 5: set a body class so CSS can target mobile-native adaptations
 // (larger touch targets, bottom sheets, etc.) without JS per-component.
 if (IS_MOBILE_NATIVE) {
@@ -3022,12 +3034,6 @@ async function checkForUpdates(): Promise<void> {
 
 // Initialize app on DOM ready
 document.addEventListener('DOMContentLoaded', async () => {
-  // Apply the persisted UI-scale to `:root` before any CSS-driven
-  // layout settles, so the user's choice (or the build-time env
-  // override) is the first paint rather than a flicker from 1.0 →
-  // 1.5. See docs/WEB_CATALOG_FEATURES_PLAN.md §7.1.
-  initUiScale()
-
   // Resolve user locale and apply data-i18n attributes before any
   // UI module renders. English is bundled inline; non-English
   // locales lazy-load here. See docs/I18N_PLAN.md.

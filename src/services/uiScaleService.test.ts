@@ -4,6 +4,7 @@ import {
   initUiScale,
   loadUiScale,
   matchPreset,
+  nearestPreset,
   resolveUiScale,
   sanitizeUiScale,
   setUiScale,
@@ -180,5 +181,34 @@ describe('matchPreset', () => {
   it('returns null for off-preset values', () => {
     expect(matchPreset(1.25)).toBeNull()
     expect(matchPreset(2)).toBeNull()
+  })
+})
+
+describe('nearestPreset', () => {
+  it('returns the exact preset for preset values', () => {
+    expect(nearestPreset(1.5)).toBe('comfortable')
+    expect(nearestPreset(1)).toBe('default')
+    expect(nearestPreset(0.85)).toBe('compact')
+  })
+
+  it('rounds freeform values to the closest preset', () => {
+    // 0.9 sits between Compact (0.85) and Default (1.0) — closer
+    // to Compact by 0.05 vs 0.10, so the highlight lands there.
+    expect(nearestPreset(0.9)).toBe('compact')
+    // 1.25 sits between Default (1.0) and Comfortable (1.5) —
+    // closer to Comfortable by 0.25 vs 0.25... actually equidistant.
+    // Falls to whichever is iterated first; we just assert it's
+    // *one of them* so the test isn't brittle to iteration order.
+    expect(['default', 'comfortable']).toContain(nearestPreset(1.25))
+    expect(nearestPreset(1.4)).toBe('comfortable')
+  })
+
+  it('never returns null — out-of-band values still map to a preset', () => {
+    // A forker hand-editing localStorage to something silly still
+    // gets a meaningful radio highlight rather than an
+    // unselected radiogroup. (sanitizeUiScale rejects these at the
+    // load layer, but matchPreset / nearestPreset are pure-value.)
+    expect(nearestPreset(5)).toBe('comfortable')
+    expect(nearestPreset(0)).toBe('compact')
   })
 })
