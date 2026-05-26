@@ -274,6 +274,29 @@ in alphabetical order of the field name.
 | `double2` | `end_year` |
 | `double3` | `start_year` |
 
+### `catalog_map_region_drawn` (Tier B)
+
+Fires on Map view draw-rectangle gestures (Phase 4 §6.9). The user
+has dragged a rectangle on the mercator canvas to commit a
+`geographicRegion` bbox filter. Throttled to ≤30/min per session
+(same budget shape as `camera_settled`,
+`catalog_graph_node_clicked`, and `catalog_timeline_brush_applied`).
+Bounds round to 3 decimals (~111 m at the equator) — same precision
+`camera.ts` uses for lat/lon. Payload is numeric only — the gesture
+carries no free-text, so no hash field is needed.
+
+Positional layout — fields sorted alphabetically (per `toDataPoint`):
+all five are numeric, so they fill `double1` … `double5` in
+alphabetical order of the field name.
+
+| Position | Field |
+|---|---|
+| `double1` | `client_offset_ms` |
+| `double2` | `east` |
+| `double3` | `north` |
+| `double4` | `south` |
+| `double5` | `west` |
+
 ### `tour_started` (Tier A)
 
 | Position | Field |

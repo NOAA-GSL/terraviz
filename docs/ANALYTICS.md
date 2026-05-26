@@ -128,6 +128,7 @@ must be corrected.
 | `browse_search` | **B** | `src/ui/browseUI.ts` (debounced + hashed) |
 | `catalog_graph_node_clicked` | **B** | `src/ui/catalogGraphUI.ts` (per-minute throttled + hashed values) |
 | `catalog_timeline_brush_applied` | **B** | `src/ui/catalogTimelineUI.ts` (per-minute throttled, numeric-only payload) |
+| `catalog_map_region_drawn` | **B** | `src/ui/catalogMapUI.ts` (per-minute throttled, numeric-only payload, 3-decimal rounded bounds) |
 | `vr_interaction` | **B** | `src/services/vrInteraction.ts` (per-gesture, throttled) |
 | `error_detail` | **B** | `src/analytics/errorCapture.ts` (adds sanitized stack) |
 | `tour_question_answered` | **B** | `src/services/tourEngine.ts` |

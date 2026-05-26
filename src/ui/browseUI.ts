@@ -43,6 +43,7 @@ import {
 } from '../utils/catalogFilters'
 import type { CatalogGraphController } from './catalogGraphUI'
 import type { CatalogTimelineController } from './catalogTimelineUI'
+import type { CatalogMapController } from './catalogMapUI'
 
 /** Tier B dwell handle for the browse overlay — non-null while the
  * overlay is visible. Started on showBrowseUI when the overlay
@@ -74,11 +75,10 @@ const MAX_CARD_KEYWORDS = 12
 const FORMAT_BUCKETS: readonly FormatBucket[] = ['video', 'image', 'tour', 'other']
 
 /**
- * Catalog view-mode (Phase 4 §6.7+). Cards is the baseline grid;
- * Graph is the §6.7 network view. The string union is intentionally
- * forward-compat with §6.8 Timeline and §6.9 Map so the same toggle
- * pattern extends without a type rewrite — those entries don't ship
- * here, only `'cards'` and `'graph'` are rendered as buttons.
+ * Catalog view-mode (Phase 4 §6.7+). Cards is the baseline grid,
+ * Graph is the §6.7 network view, Timeline is the §6.8 horizontal
+ * coverage view, Map is the §6.9 bounding-box-on-mercator view. All
+ * four are rendered as buttons in the segmented control.
  */
 type ViewMode = 'cards' | 'graph' | 'timeline' | 'map'
 
@@ -89,14 +89,9 @@ const VIEW_MODE_STORAGE_KEY = 'sos-browse-view-mode.v1'
 /**
  * Read the persisted view mode, falling back to `'cards'`. SSR-safe.
  *
- * `'cards'`, `'graph'`, and `'timeline'` are accepted from storage.
- * `'map'` is reserved for §6.9 but the UI doesn't render that
- * button yet, so a stale `'map'` entry from a future build (or a
- * manual localStorage edit) would leave every rendered button
- * with `aria-pressed="false"` and the user stranded without an
- * active state. Normalising unknown modes to `'cards'` keeps the
- * toggle's active state always meaningful. When §6.9 ships,
- * extend the allowed list here.
+ * All four view-modes — `'cards'`, `'graph'`, `'timeline'`, `'map'`
+ * — are accepted from storage. Unknown modes normalise to `'cards'`
+ * so the toggle's active state is always meaningful.
  */
 function loadViewMode(): ViewMode {
   if (typeof window === 'undefined') return 'cards'
@@ -104,6 +99,7 @@ function loadViewMode(): ViewMode {
     const raw = window.localStorage.getItem(VIEW_MODE_STORAGE_KEY)
     if (raw === 'graph') return 'graph'
     if (raw === 'timeline') return 'timeline'
+    if (raw === 'map') return 'map'
     return 'cards'
   } catch {
     return 'cards'
@@ -700,11 +696,20 @@ export function showBrowseUI(
     }
     return false
   }
-  // View-mode (§6.7). Initial value falls back to Cards when the
-  // viewport is currently narrow so a `viewMode='graph'` left in
-  // localStorage from a desktop session doesn't boot into an
-  // unusable graph on a phone.
-  let viewMode: ViewMode = isNarrowViewport() ? 'cards' : loadViewMode()
+  // View-mode (§6.7+). Initial value falls back to Cards when the
+  // viewport is currently narrow so a `viewMode='graph'` or
+  // `'timeline'` left in localStorage from a desktop session doesn't
+  // boot into an unusable canvas on a phone. Map view stays
+  // available at every breakpoint per §6.9 — so a phone user who
+  // last left Map view stays in Map on next launch.
+  function bootViewMode(): ViewMode {
+    const persisted = loadViewMode()
+    if (isNarrowViewport() && (persisted === 'graph' || persisted === 'timeline')) {
+      return 'cards'
+    }
+    return persisted
+  }
+  let viewMode: ViewMode = bootViewMode()
   // Lazy-mounted graph controller — populated on first toggle into
   // Graph view. Module-loaded once per overlay instance; the
   // controller itself handles re-renders on filter changes.
@@ -715,6 +720,14 @@ export function showBrowseUI(
   // Timeline view; mirrors the graph controller's lifecycle.
   let timelineController: CatalogTimelineController | null = null
   let timelineLoadPromise: Promise<CatalogTimelineController | null> | null = null
+  // Same shape for the Map view (§6.9). Lazy-loaded on first toggle
+  // so the second MapRenderer instance only mounts when the user
+  // opens Map view; mirrors the graph + timeline controllers'
+  // lifecycle. MapLibre itself is already in the bundle (the main
+  // globe uses it), so the lazy mount only avoids the second
+  // instance's tile-fetch warm-up cost.
+  let mapController: CatalogMapController | null = null
+  let mapLoadPromise: Promise<CatalogMapController | null> | null = null
   // The raw search-box string — both free text and any
   // `category:foo` / `format:bar` / `period:yearly` prefixes the
   // user has typed. `parseSearchQuery` splits it into the free-
@@ -1081,27 +1094,34 @@ export function showBrowseUI(
   const viewModeBar = document.getElementById('browse-view-mode')
   const graphContainer = document.getElementById('browse-graph')
   const timelineContainer = document.getElementById('browse-timeline')
+  const mapContainer = document.getElementById('browse-map')
   const gridContainer = document.getElementById('browse-grid')
 
-  /** Render the segmented Cards/Graph/Timeline control. Hidden
-   *  entirely on mobile so a phone never sees a graph or timeline
-   *  option (both views need horizontal space the mobile breakpoint
-   *  doesn't provide). */
+  /** Render the segmented Cards/Graph/Timeline/Map control. The
+   *  Cards / Graph / Timeline buttons hide on narrow portrait
+   *  phones (Graph + Timeline both need horizontal room the gate
+   *  doesn't provide). Map stays available at every breakpoint —
+   *  per §6.9 it's "the most mobile-friendly of the four
+   *  view-modes" — but is rendered alongside Cards so the user can
+   *  still reach the grid. The narrow-viewport branch therefore
+   *  renders a two-button (Cards + Map) bar rather than going
+   *  silent. */
   function renderViewModeBar(): void {
     if (!viewModeBar) return
-    if (isNarrowViewport()) {
-      viewModeBar.classList.add('hidden')
-      viewModeBar.setAttribute('aria-hidden', 'true')
-      viewModeBar.innerHTML = ''
-      return
-    }
+    const narrow = isNarrowViewport()
     viewModeBar.classList.remove('hidden')
     viewModeBar.removeAttribute('aria-hidden')
-    const options: Array<{ key: 'cards' | 'graph' | 'timeline'; label: string; aria: string }> = [
-      { key: 'cards', label: t('browse.viewMode.cards'), aria: t('browse.viewMode.cards.aria') },
-      { key: 'graph', label: t('browse.viewMode.graph'), aria: t('browse.viewMode.graph.aria') },
-      { key: 'timeline', label: t('browse.viewMode.timeline'), aria: t('browse.viewMode.timeline.aria') },
-    ]
+    const options: Array<{ key: 'cards' | 'graph' | 'timeline' | 'map'; label: string; aria: string }> = narrow
+      ? [
+          { key: 'cards', label: t('browse.viewMode.cards'), aria: t('browse.viewMode.cards.aria') },
+          { key: 'map', label: t('browse.viewMode.map'), aria: t('browse.viewMode.map.aria') },
+        ]
+      : [
+          { key: 'cards', label: t('browse.viewMode.cards'), aria: t('browse.viewMode.cards.aria') },
+          { key: 'graph', label: t('browse.viewMode.graph'), aria: t('browse.viewMode.graph.aria') },
+          { key: 'timeline', label: t('browse.viewMode.timeline'), aria: t('browse.viewMode.timeline.aria') },
+          { key: 'map', label: t('browse.viewMode.map'), aria: t('browse.viewMode.map.aria') },
+        ]
     viewModeBar.innerHTML = options
       .map(o => {
         const active = o.key === viewMode
@@ -1133,16 +1153,18 @@ export function showBrowseUI(
       el.classList.remove('hidden')
       el.removeAttribute('aria-hidden')
     }
-    // Body-class hook for view-aware CSS — Graph and Timeline both
-    // benefit from a slimmer browse-header (less decorative chrome,
-    // more canvas) while Cards keeps the welcoming title + subtitle.
-    // Centralised here so every `applyViewMode` call stays in sync;
-    // hideBrowseUI / collapseBrowseUI clear the classes alongside
-    // `browse-open` so the body stays clean when the overlay closes.
+    // Body-class hook for view-aware CSS — Graph, Timeline, and
+    // Map all benefit from a slimmer browse-header (less decorative
+    // chrome, more canvas) while Cards keeps the welcoming title +
+    // subtitle. Centralised here so every `applyViewMode` call stays
+    // in sync; hideBrowseUI / collapseBrowseUI clear the classes
+    // alongside `browse-open` so the body stays clean when the
+    // overlay closes.
     document.body.classList.toggle('browse-view-graph', viewMode === 'graph')
     document.body.classList.toggle('browse-view-timeline', viewMode === 'timeline')
+    document.body.classList.toggle('browse-view-map', viewMode === 'map')
     document.body.classList.toggle('browse-view-cards', viewMode === 'cards')
-    // Drawer only applies to Graph + Timeline. Switching to Cards
+    // Drawer only applies to non-Cards views. Switching to Cards
     // shows the inline rail unconditionally, so the drawer's open
     // state would just be stale JS bookkeeping. Close it here so
     // the `filter-drawer-open` class doesn't linger.
@@ -1155,6 +1177,7 @@ export function showBrowseUI(
     if (viewMode === 'graph') {
       hideContainer(gridContainer)
       hideContainer(timelineContainer)
+      if (mapContainer) hideContainer(mapContainer)
       showContainer(graphContainer)
       if (mountIfNeeded) await ensureGraphMounted()
       const parsed = parseSearchQuery(searchQuery)
@@ -1167,6 +1190,7 @@ export function showBrowseUI(
     } else if (viewMode === 'timeline') {
       hideContainer(gridContainer)
       hideContainer(graphContainer)
+      if (mapContainer) hideContainer(mapContainer)
       showContainer(timelineContainer)
       if (mountIfNeeded) await ensureTimelineMounted()
       const parsed = parseSearchQuery(searchQuery)
@@ -1176,9 +1200,23 @@ export function showBrowseUI(
         filterState: effectiveState,
         searchQuery: parsed.freeText,
       })
+    } else if (viewMode === 'map' && mapContainer) {
+      hideContainer(gridContainer)
+      hideContainer(graphContainer)
+      hideContainer(timelineContainer)
+      showContainer(mapContainer)
+      if (mountIfNeeded) await ensureMapMounted()
+      const parsed = parseSearchQuery(searchQuery)
+      const effectiveState = mergeFilterStates(filterState, parsed.prefixes)
+      mapController?.update({
+        datasets: allDatasets,
+        filterState: effectiveState,
+        searchQuery: parsed.freeText,
+      })
     } else {
       hideContainer(graphContainer)
       hideContainer(timelineContainer)
+      if (mapContainer) hideContainer(mapContainer)
       showContainer(gridContainer)
     }
   }
@@ -1359,11 +1397,67 @@ export function showBrowseUI(
     void result
   }
 
+  /**
+   * Lazy-import `catalogMapUI` on first activation. Mirrors
+   * `ensureGraphMounted` / `ensureTimelineMounted` — same memoised
+   * in-flight handle pattern, same retry-on-error semantics.
+   * MapLibre is already in the bundle (the main globe imports it
+   * eagerly) so the chunk cost here is the new module code only;
+   * the lazy mount mostly avoids paying the second MapRenderer
+   * instance's GIBS-tile warm-up until the user actually opens
+   * Map view.
+   */
+  async function ensureMapMounted(): Promise<void> {
+    if (mapController || !mapContainer) return
+    if (mapLoadPromise) {
+      await mapLoadPromise
+      return
+    }
+    mapContainer.innerHTML = `<div class="browse-map-status" role="status">${escapeHtml(t('browse.map.loading'))}</div>`
+    const loadPromise = import('./catalogMapUI')
+      .then(({ createCatalogMap }) => {
+        mapContainer.innerHTML = ''
+        mapController = createCatalogMap(mapContainer, {
+          onRegionChange: (bounds) => {
+            // Draw gestures funnel through `setFacet` —
+            // same single mutation path the chip rail's range
+            // inputs and the Timeline brush both use. Clearing
+            // passes undefined.
+            const next = bounds == null
+              ? setFacet(filterState, 'geographicRegion', undefined)
+              : setFacet(filterState, 'geographicRegion', {
+                  kind: 'bbox',
+                  n: bounds.n,
+                  s: bounds.s,
+                  e: bounds.e,
+                  w: bounds.w,
+                })
+            applyState(next, searchQuery)
+          },
+          onPreviewDataset: (datasetId: string) => {
+            previewDatasetInCards(datasetId)
+          },
+        })
+        return mapController
+      })
+      .catch((err) => {
+        console.error('[browse] failed to load Map view', err)
+        mapContainer.innerHTML = `<div class="browse-map-status browse-map-status-error" role="alert">${escapeHtml(t('browse.map.loadError'))}</div>`
+        return null
+      })
+    mapLoadPromise = loadPromise
+    const result = await loadPromise
+    if (mapLoadPromise === loadPromise) {
+      mapLoadPromise = null
+    }
+    void result
+  }
+
   if (viewModeBar && !viewModeBar.dataset.wired) {
     viewModeBar.addEventListener('click', (e) => {
       const btn = (e.target as HTMLElement).closest('.browse-view-mode-btn') as HTMLElement | null
       if (!btn || !btn.dataset.viewMode) return
-      const next = btn.dataset.viewMode as 'cards' | 'graph' | 'timeline'
+      const next = btn.dataset.viewMode as ViewMode
       if (next === viewMode) return
       const previous = viewMode
       viewMode = next
@@ -1437,7 +1531,7 @@ export function showBrowseUI(
       const btn = (e.target as HTMLElement).closest('.browse-active-filter-chip') as HTMLElement | null
       if (!btn) return
       const facet = btn.dataset.facet
-      const kind = btn.dataset.kind as 'multi-select' | 'boolean' | 'range' | undefined
+      const kind = btn.dataset.kind as 'multi-select' | 'boolean' | 'range' | 'bbox' | undefined
       if (!facet || !kind) return
       if (kind === 'multi-select') {
         const value = btn.dataset.value
@@ -1445,7 +1539,10 @@ export function showBrowseUI(
         applyState(toggleFacet(filterState, facet, value), searchQuery)
       } else if (kind === 'boolean') {
         applyState(toggleBooleanFacet(filterState, facet), searchQuery)
-      } else if (kind === 'range') {
+      } else if (kind === 'range' || kind === 'bbox') {
+        // Range + bbox both clear via `setFacet(..., undefined)`.
+        // The Map view's draw gesture and the chip rail's range
+        // inputs both write via setFacet; clearing matches.
         applyState(setFacet(filterState, facet, undefined), searchQuery)
       }
     })
@@ -1534,6 +1631,9 @@ export function showBrowseUI(
   if (narrowVpQueryTyped && !narrowVpQueryTyped.__terravizWired) {
     const onNarrowChange = (): void => {
       renderViewModeBar()
+      // Map view stays available at all breakpoints per §6.9 ("the
+      // most mobile-friendly of the four view-modes") — only Graph
+      // and Timeline snap back to Cards on narrow viewports.
       if (isNarrowViewport() && (viewMode === 'graph' || viewMode === 'timeline')) {
         viewMode = 'cards'
         saveViewMode(viewMode)
@@ -1882,7 +1982,7 @@ export function hideBrowseUI(): void {
   // View-aware classes get set by `applyViewMode`; clear them
   // alongside `browse-open` so the body stays clean once the
   // overlay closes.
-  document.body.classList.remove('browse-view-cards', 'browse-view-graph', 'browse-view-timeline')
+  document.body.classList.remove('browse-view-cards', 'browse-view-graph', 'browse-view-timeline', 'browse-view-map')
   if (browseDwellHandle) {
     browseDwellHandle.stop()
     browseDwellHandle = null
@@ -1903,7 +2003,7 @@ export function collapseBrowseUI(): void {
   document.body.classList.remove('browse-open')
   // Mirror hideBrowseUI: drop the view-aware classes so a collapsed
   // overlay doesn't leak its last view-mode styling onto the body.
-  document.body.classList.remove('browse-view-cards', 'browse-view-graph', 'browse-view-timeline')
+  document.body.classList.remove('browse-view-cards', 'browse-view-graph', 'browse-view-timeline', 'browse-view-map')
   if (browseDwellHandle) {
     browseDwellHandle.stop()
     browseDwellHandle = null
@@ -1941,7 +2041,7 @@ function hasAnyActiveFilter(state: FilterState): boolean {
  */
 interface ActiveFilterChip {
   facet: string
-  kind: 'multi-select' | 'boolean' | 'range'
+  kind: 'multi-select' | 'boolean' | 'range' | 'bbox'
   value?: string
   label: string
 }
@@ -1984,6 +2084,25 @@ function rangeFacetLabel(facet: string, predicate: FacetPredicate): string {
 }
 
 /**
+ * Format a bbox predicate for the active-filter chip strip — the
+ * only surface that renders the §6.9 geographicRegion predicate's
+ * label today. Latitudes use N/S suffixes, longitudes E/W. Single
+ * decimal of precision is enough for the chip; the underlying
+ * predicate retains 3-decimal precision via the URL round-trip.
+ */
+function bboxFacetLabel(facet: string, predicate: FacetPredicate): string {
+  if (predicate.kind !== 'bbox') return facet
+  const latLabel = (v: number): string => `${Math.abs(v).toFixed(1)}°${v >= 0 ? 'N' : 'S'}`
+  const lonLabel = (v: number): string => `${Math.abs(v).toFixed(1)}°${v >= 0 ? 'E' : 'W'}`
+  const ns = `${latLabel(predicate.s)}–${latLabel(predicate.n)}`
+  const ew = `${lonLabel(predicate.w)}–${lonLabel(predicate.e)}`
+  if (facet === 'geographicRegion') {
+    return t('browse.activeFilters.bbox.region', { ns, ew })
+  }
+  return `${facet} ${ns}, ${ew}`
+}
+
+/**
  * Walk `filterState` and emit one chip per active predicate
  * (multi-select facets contribute one chip per value so the user
  * can remove them individually — matching the chip-rail's per-
@@ -2008,8 +2127,12 @@ function collectActiveFilterChips(state: FilterState): ActiveFilterChip[] {
       const hasBound = predicate.min != null || predicate.max != null
       if (!hasBound) continue
       chips.push({ facet, kind: 'range', label: rangeFacetLabel(facet, predicate) })
+    } else if (predicate.kind === 'bbox') {
+      // §6.9 Map view writes `geographicRegion` via setFacet. The
+      // chip removes itself by clearing the predicate, same path
+      // a range chip uses.
+      chips.push({ facet, kind: 'bbox', label: bboxFacetLabel(facet, predicate) })
     }
-    // bbox — §6.9 Map view; no chip rendering until that ships.
   }
   return chips
 }

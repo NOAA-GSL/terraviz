@@ -112,15 +112,18 @@
    `applyViewMode` in `browseUI.ts`; Cards keeps the full welcome
    chrome unchanged. */
 body.browse-view-graph #browse-header,
-body.browse-view-timeline #browse-header {
+body.browse-view-timeline #browse-header,
+body.browse-view-map #browse-header {
     margin-bottom: 0.5rem;
 }
 body.browse-view-graph .browse-subtitle,
-body.browse-view-timeline .browse-subtitle {
+body.browse-view-timeline .browse-subtitle,
+body.browse-view-map .browse-subtitle {
     display: none;
 }
 body.browse-view-graph .browse-title,
-body.browse-view-timeline .browse-title {
+body.browse-view-timeline .browse-title,
+body.browse-view-map .browse-title {
     font-size: 1rem;
     letter-spacing: 0.12em;
 }
@@ -578,19 +581,23 @@ body.browse-view-timeline .browse-title {
    is the Cards UX. */
 @media (max-width: 1024px) {
     body.browse-view-graph .browse-filters-btn,
-    body.browse-view-timeline .browse-filters-btn {
+    body.browse-view-timeline .browse-filters-btn,
+    body.browse-view-map .browse-filters-btn {
         display: inline-flex;
     }
     body.browse-view-graph #browse-active-filters:not(.empty),
-    body.browse-view-timeline #browse-active-filters:not(.empty) {
+    body.browse-view-timeline #browse-active-filters:not(.empty),
+    body.browse-view-map #browse-active-filters:not(.empty) {
         display: flex;
     }
     body.browse-view-graph #browse-filter-rail,
-    body.browse-view-timeline #browse-filter-rail {
+    body.browse-view-timeline #browse-filter-rail,
+    body.browse-view-map #browse-filter-rail {
         display: none;
     }
     body.browse-view-graph #browse-overlay.filter-drawer-open #browse-filter-rail,
-    body.browse-view-timeline #browse-overlay.filter-drawer-open #browse-filter-rail {
+    body.browse-view-timeline #browse-overlay.filter-drawer-open #browse-filter-rail,
+    body.browse-view-map #browse-overlay.filter-drawer-open #browse-filter-rail {
         display: grid;
         position: absolute;
         /* `--browse-drawer-top` is set inline by JS from the
@@ -1084,20 +1091,241 @@ body.browse-view-timeline .browse-title {
     display: none;
 }
 
-/* Mobile: hide the view-mode toggle entirely. The JS also handles
-   this via the matchMedia('(max-width: 768px)') listener in
-   browseUI.ts, but the CSS guarantees the toggle stays hidden
-   before initialisation finishes. We deliberately do NOT hide
-   #browse-graph / #browse-timeline here: the JS forces
-   viewMode='cards' when the viewport narrows, which sets the grid
-   visible. A CSS rule that hid the alternative views independently
-   would race the JS and produce a blank overlay when the user
-   resized from desktop→narrow with Graph or Timeline active. */
-@media (max-width: 768px) {
-    #browse-view-mode {
-        display: none;
-    }
+/* ----- Map view (Phase 4 §6.9) -----
+   Sized to fill the same space the card grid uses; a second
+   MapRenderer instance (mercator projection) mounts inside
+   `.browse-map-canvas`. Hidden when another view-mode is active.
+   The mercator axis reads east-to-right and west-to-left regardless
+   of locale — geographic orientation is a universal convention, the
+   same deliberate exception the Timeline axis makes for calendar
+   time. */
+#browse-map {
+    flex: 1;
+    min-height: 0;
+    position: relative;
+    display: flex;
+    flex-direction: column;
 }
+#browse-map.hidden {
+    display: none;
+}
+.browse-map-host {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    position: relative;
+}
+.browse-map-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.4rem 0.6rem;
+    background: var(--color-surface-alt);
+    border: 1px solid var(--white-o08);
+    border-radius: 6px;
+    font-size: 0.65rem;
+    color: var(--color-text-dim);
+    flex-wrap: wrap;
+}
+.browse-map-legend {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.6rem;
+    color: var(--color-text-muted);
+}
+.browse-map-legend-dot {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    margin-inline-end: 0.15rem;
+}
+.browse-map-legend-dot-coverage {
+    background: var(--facet-color-category-content);
+}
+.browse-map-legend-dot-realtime {
+    background: var(--color-success);
+}
+.browse-map-include-global {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    cursor: pointer;
+    user-select: none;
+    color: var(--color-text-secondary);
+}
+.browse-map-include-global-input {
+    accent-color: var(--color-accent);
+    margin: 0;
+}
+.browse-map-draw-toggle {
+    padding: 0.2rem 0.55rem;
+    border-radius: 4px;
+    border: 1px solid var(--white-o10);
+    background: var(--color-surface-alt);
+    color: var(--color-text-secondary);
+    font-size: 0.6rem;
+    cursor: pointer;
+    font-family: inherit;
+    margin-inline-start: auto;
+}
+.browse-map-draw-toggle:hover {
+    background: var(--white-o08);
+    color: var(--color-text);
+}
+.browse-map-draw-toggle.active {
+    background: var(--accent-o15);
+    border-color: var(--accent-o40);
+    color: var(--color-accent);
+}
+.browse-map-draw-toggle:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 1px;
+}
+.browse-map-clear-region {
+    padding: 0.2rem 0.55rem;
+    border-radius: 4px;
+    border: 1px solid var(--white-o10);
+    background: var(--color-surface-alt);
+    color: var(--color-text-secondary);
+    font-size: 0.6rem;
+    cursor: pointer;
+    font-family: inherit;
+}
+.browse-map-clear-region.hidden {
+    display: none;
+}
+.browse-map-clear-region:hover {
+    background: var(--white-o08);
+    color: var(--color-text);
+}
+.browse-map-clear-region:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 1px;
+}
+.browse-map-canvas {
+    flex: 1;
+    min-height: 320px;
+    background: var(--color-surface-alt);
+    border: 1px solid var(--white-o08);
+    border-radius: 6px;
+    overflow: hidden;
+    position: relative;
+}
+.browse-map-canvas.hidden {
+    display: none;
+}
+/* Draw mode — crosshair cursor cue + a thin amber outline on the
+   canvas frame so the user can see they're in a different mode.
+   Same amber as the Timeline brush band, so the Time-vs-Region
+   draw affordances share a visual language. */
+.browse-map-canvas.browse-map-canvas-draw {
+    box-shadow: inset 0 0 0 1px var(--facet-color-time, #f59f4a);
+}
+.browse-map-canvas.browse-map-canvas-draw canvas {
+    cursor: crosshair;
+}
+/* The in-progress draw rectangle — absolute-positioned overlay
+   drawn on top of MapLibre's canvas during a Shift+drag (or in
+   draw mode). Pointer-events: none so the mouse events still
+   reach the canvas. */
+.browse-map-draw-box {
+    position: absolute;
+    background: rgba(245, 159, 74, 0.18);
+    border: 1px dashed var(--facet-color-time, #f59f4a);
+    pointer-events: none;
+    z-index: 5;
+}
+.browse-map-status {
+    padding: 1.5rem;
+    text-align: center;
+    color: var(--color-text-muted);
+    font-size: 0.75rem;
+}
+.browse-map-status-error {
+    color: var(--color-error);
+}
+.browse-map-empty {
+    padding: 1.5rem;
+    text-align: center;
+    color: var(--color-text-muted);
+    font-size: 0.75rem;
+}
+.browse-map-empty.hidden {
+    display: none;
+}
+.browse-map-footnote {
+    padding: 0.5rem 0.7rem;
+    color: var(--color-text-muted);
+    font-size: 0.65rem;
+    font-style: italic;
+    border-block-start: 1px solid var(--white-o08);
+}
+.browse-map-footnote.hidden {
+    display: none;
+}
+.browse-map-tooltip {
+    position: absolute;
+    pointer-events: none;
+    background: var(--glass-bg);
+    border: 1px solid var(--white-o15);
+    border-radius: 4px;
+    padding: 0.4rem 0.6rem;
+    color: var(--color-text);
+    font-size: 0.65rem;
+    line-height: 1.4;
+    max-width: 260px;
+    z-index: 10;
+    backdrop-filter: blur(var(--glass-blur));
+    -webkit-backdrop-filter: blur(var(--glass-blur));
+}
+.browse-map-tooltip.hidden {
+    display: none;
+}
+.browse-map-tooltip-row {
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+    padding-block: 0.15rem;
+}
+.browse-map-tooltip-row + .browse-map-tooltip-row {
+    border-block-start: 1px solid var(--white-o08);
+    margin-block-start: 0.15rem;
+    padding-block-start: 0.3rem;
+}
+.browse-map-tooltip-title {
+    color: var(--color-text);
+    font-weight: 500;
+}
+.browse-map-tooltip-bounds {
+    color: var(--color-text-muted);
+    font-size: 0.6rem;
+    font-variant-numeric: tabular-nums;
+}
+.browse-map-tooltip-realtime {
+    color: var(--color-success);
+    font-size: 0.6rem;
+}
+.browse-map-tooltip-more {
+    margin-block-start: 0.25rem;
+    color: var(--color-text-muted);
+    font-style: italic;
+}
+
+/* Mobile: keep the view-mode toggle visible because Map view is
+   available at every breakpoint per §6.9. The JS narrows the bar
+   to a Cards + Map two-button layout on portrait phones (Graph +
+   Timeline would crowd the canvas and don't get rendered as
+   buttons). We deliberately do NOT hide #browse-graph /
+   #browse-timeline / #browse-map here: the JS forces
+   viewMode='cards' when the viewport narrows for Graph and
+   Timeline, which sets the grid visible. A CSS rule that hid the
+   alternative views independently would race the JS and produce
+   a blank overlay when the user resized from desktop→narrow with
+   Graph or Timeline active. */
 
 .browse-card {
     background: var(--color-surface-alt);

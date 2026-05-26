@@ -56,6 +56,24 @@ vi.mock('./catalogTimelineUI', () => ({
   })),
 }))
 
+// Mock the Map view's lazy-loaded UI module (§6.9). Same shape +
+// reasoning as the graph/timeline mocks above — the second
+// MapRenderer instance pulls in MapLibre's full canvas wiring and
+// the GIBS tile fetches don't run under jsdom anyway. Stubbing
+// keeps the dynamic import synchronous and the chunk small under
+// coverage.
+const mapMockHandles = vi.hoisted(() => ({
+  update: vi.fn(),
+  destroy: vi.fn(),
+  createCatalogMap: vi.fn(),
+}))
+vi.mock('./catalogMapUI', () => ({
+  createCatalogMap: mapMockHandles.createCatalogMap.mockImplementation(() => ({
+    update: mapMockHandles.update,
+    destroy: mapMockHandles.destroy,
+  })),
+}))
+
 // ---------------------------------------------------------------------------
 // escapeHtml / escapeAttr
 // ---------------------------------------------------------------------------
@@ -124,6 +142,7 @@ function setupBrowseDOM(): void {
       <div id="browse-grid"></div>
       <div id="browse-graph" class="hidden"></div>
       <div id="browse-timeline" class="hidden"></div>
+      <div id="browse-map" class="hidden"></div>
     </div>
   `
 }
@@ -1030,27 +1049,28 @@ describe('view-mode toggle', () => {
     window.history.replaceState(null, '', '/')
   })
 
-  it('renders Cards + Graph + Timeline buttons when not mobile, with Cards active by default', () => {
+  it('renders Cards + Graph + Timeline + Map buttons when not mobile, with Cards active by default', () => {
     setupBrowseDOM()
     showBrowseUI([makeDataset({ id: 'a', tags: ['Air'] })], makeCallbacks())
     const bar = document.getElementById('browse-view-mode')!
     const buttons = bar.querySelectorAll<HTMLButtonElement>('.browse-view-mode-btn')
-    expect(buttons).toHaveLength(3)
+    expect(buttons).toHaveLength(4)
     const cardsBtn = bar.querySelector('[data-view-mode="cards"]')!
     const graphBtn = bar.querySelector('[data-view-mode="graph"]')!
     const timelineBtn = bar.querySelector('[data-view-mode="timeline"]')!
+    const mapBtn = bar.querySelector('[data-view-mode="map"]')!
     expect(cardsBtn.getAttribute('aria-pressed')).toBe('true')
     expect(graphBtn.getAttribute('aria-pressed')).toBe('false')
     expect(timelineBtn.getAttribute('aria-pressed')).toBe('false')
+    expect(mapBtn.getAttribute('aria-pressed')).toBe('false')
   })
 
-  it('hides the view-mode toggle on portrait mobile and falls back to Cards', () => {
+  it('narrows the toolbar to Cards + Map on portrait mobile and falls back to Cards when Graph/Timeline was persisted', () => {
     setupBrowseDOM()
-    // Even with `graph` persisted, portrait mobile must render only
-    // Cards. Stub matchMedia so the gate's orientation half also
-    // matches (`isMobile=true` alone no longer suffices since the
-    // PR #138 landscape parity change — Tauri/mobile in landscape
-    // is allowed; only portrait gates back).
+    // Even with `graph` persisted, portrait mobile must drop Graph
+    // and Timeline buttons (they need horizontal room). Map stays
+    // available per §6.9. The boot path falls back to Cards because
+    // the persisted Graph isn't reachable on narrow.
     localStorage.setItem(VIEW_MODE_KEY, 'graph')
     const originalMatchMedia = window.matchMedia
     window.matchMedia = ((query: string) => ({
@@ -1066,9 +1086,15 @@ describe('view-mode toggle', () => {
     try {
       showBrowseUI([makeDataset({ id: 'a', tags: ['Air'] })], makeCallbacks({ isMobile: true }))
       const bar = document.getElementById('browse-view-mode')!
-      expect(bar.classList.contains('hidden')).toBe(true)
-      expect(bar.querySelectorAll('.browse-view-mode-btn')).toHaveLength(0)
-      // Grid remains the active surface; graph container stays hidden.
+      // Bar stays visible — Map is reachable at every breakpoint.
+      expect(bar.classList.contains('hidden')).toBe(false)
+      const buttons = bar.querySelectorAll('.browse-view-mode-btn')
+      expect(buttons).toHaveLength(2)
+      expect(bar.querySelector('[data-view-mode="cards"]')).toBeTruthy()
+      expect(bar.querySelector('[data-view-mode="map"]')).toBeTruthy()
+      expect(bar.querySelector('[data-view-mode="graph"]')).toBeNull()
+      expect(bar.querySelector('[data-view-mode="timeline"]')).toBeNull()
+      // Grid remains the active surface; graph + timeline containers stay hidden.
       expect(document.getElementById('browse-grid')!.classList.contains('hidden')).toBe(false)
       expect(document.getElementById('browse-graph')!.classList.contains('hidden')).toBe(true)
     } finally {
@@ -1076,12 +1102,11 @@ describe('view-mode toggle', () => {
     }
   })
 
-  it('shows the view-mode toggle on landscape mobile so Graph + Timeline are reachable', () => {
+  it('shows all four buttons on landscape mobile so Graph + Timeline + Map are reachable', () => {
     // PR #138 review follow-up: landscape feature parity. A phone in
     // landscape (e.g. 667×375 iPhone SE) clears the portrait-only
     // gate so a user testing from their phone can still toggle into
-    // Graph and Timeline. Vertical space is tight but the surfaces
-    // are usable for smoke testing — explicit goal of the change.
+    // Graph and Timeline. §6.9 adds Map alongside.
     setupBrowseDOM()
     localStorage.setItem(VIEW_MODE_KEY, 'graph')
     const originalMatchMedia = window.matchMedia
@@ -1101,21 +1126,23 @@ describe('view-mode toggle', () => {
       showBrowseUI([makeDataset({ id: 'a', tags: ['Air'] })], makeCallbacks({ isMobile: true }))
       const bar = document.getElementById('browse-view-mode')!
       expect(bar.classList.contains('hidden')).toBe(false)
-      // All three buttons render and Graph is active (restored from storage).
-      expect(bar.querySelectorAll('.browse-view-mode-btn')).toHaveLength(3)
+      // All four buttons render and Graph is active (restored from storage).
+      expect(bar.querySelectorAll('.browse-view-mode-btn')).toHaveLength(4)
       expect(bar.querySelector('[data-view-mode="graph"]')!.getAttribute('aria-pressed')).toBe('true')
+      expect(bar.querySelector('[data-view-mode="map"]')).toBeTruthy()
     } finally {
       window.matchMedia = originalMatchMedia
     }
   })
 
-  it('falls back to Cards when window.matchMedia reports a narrow viewport even if callbacks.isMobile=false', () => {
+  it('drops Graph and Timeline buttons when window.matchMedia reports a narrow viewport, keeps Cards + Map', () => {
     // Pre-fix, the gate was just `callbacks.isMobile` (a boot-time
     // flag from main.ts), so a desktop user who resized the
     // window narrower would leave the toggle visible AND the
     // graph in JS state but the CSS would hide #browse-graph
     // entirely — blank overlay. The fix unions matchMedia with
     // callbacks.isMobile so the boot path picks the right surface.
+    // §6.9 keeps Map reachable on narrow.
     setupBrowseDOM()
     localStorage.setItem(VIEW_MODE_KEY, 'graph')
     // Stub matchMedia BEFORE showBrowseUI so isNarrowViewport()
@@ -1137,7 +1164,11 @@ describe('view-mode toggle', () => {
         makeCallbacks({ isMobile: false }),
       )
       const bar = document.getElementById('browse-view-mode')!
-      expect(bar.classList.contains('hidden')).toBe(true)
+      // Bar visible; only Cards + Map render. Graph persisted in
+      // localStorage but boot falls back to Cards.
+      expect(bar.classList.contains('hidden')).toBe(false)
+      expect(bar.querySelectorAll('.browse-view-mode-btn')).toHaveLength(2)
+      expect(bar.querySelector('[data-view-mode="map"]')).toBeTruthy()
       expect(document.getElementById('browse-grid')!.classList.contains('hidden')).toBe(false)
     } finally {
       window.matchMedia = originalMatchMedia
@@ -1163,19 +1194,32 @@ describe('view-mode toggle', () => {
     expect(bar.querySelector('[data-view-mode="graph"]')!.getAttribute('aria-pressed')).toBe('false')
   })
 
-  it('normalises stale future view-modes (map) back to Cards', () => {
-    // §6.9 Map isn't shipped yet. A stale entry in localStorage
-    // (manual edit / future build / shared session) must not leave
-    // every button un-pressed and the user stranded without an
-    // active state. The full assertion chain: stored = `map`, but
-    // UI lands on Cards.
+  it('restores `map` from localStorage and marks Map button active', () => {
+    // §6.9 — Map is now a first-class view-mode (last of the
+    // four). A persisted `map` no longer normalises to Cards.
     setupBrowseDOM()
     localStorage.setItem(VIEW_MODE_KEY, 'map')
+    showBrowseUI([makeDataset({ id: 'a', tags: ['Air'] })], makeCallbacks())
+    const bar = document.getElementById('browse-view-mode')!
+    expect(bar.querySelector('[data-view-mode="map"]')!.getAttribute('aria-pressed')).toBe('true')
+    expect(bar.querySelector('[data-view-mode="cards"]')!.getAttribute('aria-pressed')).toBe('false')
+    expect(bar.querySelector('[data-view-mode="graph"]')!.getAttribute('aria-pressed')).toBe('false')
+    expect(bar.querySelector('[data-view-mode="timeline"]')!.getAttribute('aria-pressed')).toBe('false')
+  })
+
+  it('normalises stale future view-modes (e.g. heat-map) back to Cards', () => {
+    // A truly-unknown mode in localStorage (manual edit / future
+    // schema) must not leave every button un-pressed and the user
+    // stranded without an active state. The full assertion chain:
+    // stored = `heat-map`, but UI lands on Cards.
+    setupBrowseDOM()
+    localStorage.setItem(VIEW_MODE_KEY, 'heat-map')
     showBrowseUI([makeDataset({ id: 'a', tags: ['Air'] })], makeCallbacks())
     const bar = document.getElementById('browse-view-mode')!
     expect(bar.querySelector('[data-view-mode="cards"]')!.getAttribute('aria-pressed')).toBe('true')
     expect(bar.querySelector('[data-view-mode="graph"]')!.getAttribute('aria-pressed')).toBe('false')
     expect(bar.querySelector('[data-view-mode="timeline"]')!.getAttribute('aria-pressed')).toBe('false')
+    expect(bar.querySelector('[data-view-mode="map"]')!.getAttribute('aria-pressed')).toBe('false')
   })
 
   it('persists the choice to localStorage on toggle', () => {

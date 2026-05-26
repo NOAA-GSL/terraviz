@@ -914,6 +914,7 @@ export const TIER_B_EVENT_TYPES = [
   'browse_search',
   'catalog_graph_node_clicked',
   'catalog_timeline_brush_applied',
+  'catalog_map_region_drawn',
   'vr_interaction',
   'error_detail',
   'tour_question_answered',
@@ -1671,6 +1672,36 @@ export interface CatalogTimelineBrushAppliedEvent extends TelemetryEventBase {
   end_year: number
 }
 
+/**
+ * Catalog Map view draw-rectangle gesture (Phase 4 §6.9). Fires
+ * when the user commits a region selection on the mercator map,
+ * which writes a `geographicRegion` bbox predicate via the same
+ * `setFacet` mutation path the chip rail's range inputs and the
+ * Timeline brush both use. Tier B because — like the Graph node
+ * click and the Timeline brush — it captures a filter-shaping
+ * signal deeper than the chip rail's coarse "user filtered" event,
+ * and the dashboard's question here is investigative ("which
+ * regions do users actually draw?") rather than operator-critical.
+ *
+ * Throttled to ≤30 / minute per session by the rolling-window
+ * pattern in `src/analytics/camera.ts`, same shared budget as
+ * `catalog_graph_node_clicked` and `catalog_timeline_brush_applied`.
+ * Bounds round to 3 decimals (~111 m at the equator) — same
+ * precision `camera.ts` uses for lat/lon — so the analytics
+ * surface never leaks high-resolution drag positions.
+ */
+export interface CatalogMapRegionDrawnEvent extends TelemetryEventBase {
+  event_type: 'catalog_map_region_drawn'
+  /** Northernmost latitude of the drawn region, in degrees. */
+  north: number
+  /** Southernmost latitude of the drawn region, in degrees. */
+  south: number
+  /** Easternmost longitude of the drawn region, in degrees. */
+  east: number
+  /** Westernmost longitude of the drawn region, in degrees. */
+  west: number
+}
+
 export interface VrInteractionEvent extends TelemetryEventBase {
   event_type: 'vr_interaction'
   gesture: VrGesture
@@ -1759,5 +1790,6 @@ export type TelemetryEvent =
   | BrowseSearchEvent
   | CatalogGraphNodeClickedEvent
   | CatalogTimelineBrushAppliedEvent
+  | CatalogMapRegionDrawnEvent
   | VrInteractionEvent
   | ErrorDetailEvent
