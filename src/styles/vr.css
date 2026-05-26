@@ -99,7 +99,7 @@ body.browse-open #vr-enter-btn {
     pointer-events: auto;
     box-shadow: 0 8px 28px rgba(0, 0, 0, 0.5);
     /* Tap targets need to clear ~44 px to be reliable on touch. */
-    min-width: calc(44px * var(--ui-scale));
+    min-width: max(44px, calc(44px * var(--ui-scale)));
 }
 
 .vr-zoom-overlay-label {

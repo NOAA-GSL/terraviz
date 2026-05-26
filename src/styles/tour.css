@@ -90,8 +90,8 @@
 /* ── Tour question buttons ────────────────────────────────────────── */
 
 .tour-question-btn {
-    min-width: calc(44px * var(--ui-scale));
-    min-height: calc(44px * var(--ui-scale));
+    min-width: max(44px, calc(44px * var(--ui-scale)));
+    min-height: max(44px, calc(44px * var(--ui-scale)));
     padding: calc(0.5rem * var(--ui-scale)) calc(1rem * var(--ui-scale));
     font-size: calc(1rem * var(--ui-scale));
     font-weight: 600;
@@ -141,8 +141,8 @@
 
 @media (max-width: 768px) {
     #tour-controls .transport-btn {
-        min-width: calc(40px * var(--ui-scale));
-        min-height: calc(40px * var(--ui-scale));
+        min-width: max(40px, calc(40px * var(--ui-scale)));
+        min-height: max(40px, calc(40px * var(--ui-scale)));
     }
 }
 

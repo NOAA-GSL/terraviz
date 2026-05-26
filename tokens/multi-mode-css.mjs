@@ -67,40 +67,66 @@ function getModeValue(token, mode) {
 }
 
 /**
+ * The standard touch-target sizes (Apple HIG / WCAG). Tokens whose
+ * value is one of these get a `max(BASE, calc(BASE * scale))`
+ * wrapper instead of plain `calc(...)` so Compact (0.85) can't
+ * shrink them below the accessibility minimum. Comfortable (1.5)
+ * still grows them.
+ */
+const TOUCH_TARGET_PX = new Set([40, 44, 48]);
+
+function isTouchTargetValue(value) {
+  const match = String(value).trim().match(/^(\d+(?:\.\d+)?)px$/);
+  if (!match) return false;
+  return TOUCH_TARGET_PX.has(Number(match[1]));
+}
+
+/**
  * Wrap every Nrem / Npx number in a token value with
  * `calc(... * var(--ui-scale))` so every dimension token honours
  * the user-controlled UI-scale knob (§7.1). Numbers equal to zero
  * are skipped (0 * anything = 0). Decorative 1px / 2px hairlines
  * have no token-level escape today; if one is added later, opt it
  * out of this wrap explicitly.
+ *
+ * When `floor === true`, the wrap becomes `max(BASE, calc(BASE *
+ * scale))` so the value cannot drop below the base — used for
+ * touch-target tokens so Compact users still meet the 44 / 48 px
+ * tap-target minimums.
  */
-function wrapDimensionsWithUiScale(value) {
+function wrapDimensionsWithUiScale(value, floor = false) {
   return String(value).replace(
     /(?<![\w.-])(-?\d+(?:\.\d+)?)(rem|px)\b/g,
     (match, num, unit) => {
       const n = Number(num);
       if (!Number.isFinite(n) || n === 0) return match;
-      return `calc(${num}${unit} * var(--ui-scale))`;
+      const scaled = `calc(${num}${unit} * var(--ui-scale))`;
+      if (floor) return `max(${num}${unit}, ${scaled})`;
+      return scaled;
     },
   );
 }
 
 /**
- * Format a CSS value. Three special cases:
+ * Format a CSS value. Special cases:
  *   - `--glass-blur` wraps the px value inside a blur() function
  *     filter, since the CSS custom property is consumed as the
  *     argument to backdrop-filter / filter.
  *   - `--ui-scale` is the scale knob itself; it must not wrap its
  *     own value (would self-reference) and stays unitless.
+ *   - Touch-target tokens (names prefixed `--touch-`, or values
+ *     equal to one of the WCAG touch sizes) get the floored
+ *     wrapper so the accessibility minimum survives Compact.
  *   - Every other token routes rem/px values through the
- *     UI-scale calc wrapper above so var(--component-foo) sites
- *     scale automatically.
+ *     UI-scale calc wrapper so var(--component-foo) sites scale
+ *     automatically.
  */
 function formatCSSValue(name, value) {
   if (name === '--ui-scale') {
     return value;
   }
-  const scaled = wrapDimensionsWithUiScale(value);
+  const floor = name.startsWith('--touch-') || isTouchTargetValue(value);
+  const scaled = wrapDimensionsWithUiScale(value, floor);
   if (name === '--glass-blur') {
     return `blur(${scaled})`;
   }

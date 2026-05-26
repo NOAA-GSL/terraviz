@@ -27,8 +27,8 @@
     padding: calc(0.5rem * var(--ui-scale)) calc(1.5rem * var(--ui-scale));
     cursor: pointer;
     font-size: calc(0.9rem * var(--ui-scale));
-    min-height: calc(44px * var(--ui-scale));
-    min-width: calc(44px * var(--ui-scale));
+    min-height: max(44px, calc(44px * var(--ui-scale)));
+    min-width: max(44px, calc(44px * var(--ui-scale)));
 }
 
 #error-dismiss:hover {

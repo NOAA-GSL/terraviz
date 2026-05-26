@@ -445,7 +445,7 @@ body.orbit-body {
         max-width: none;
     }
     .orbit-back {
-        min-height: calc(44px * var(--ui-scale));
+        min-height: max(44px, calc(44px * var(--ui-scale)));
         font-size: calc(0.85rem * var(--ui-scale));
     }
 }

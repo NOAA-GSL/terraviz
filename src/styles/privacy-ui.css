@@ -350,8 +350,8 @@
     position: fixed;
     top: calc(calc(0.5rem * var(--ui-scale)) + var(--safe-top));
     inset-inline-start: calc(calc(0.5rem * var(--ui-scale)) + var(--safe-left));
-    width: calc(44px * var(--ui-scale));
-    height: calc(44px * var(--ui-scale));
+    width: max(44px, calc(44px * var(--ui-scale)));
+    height: max(44px, calc(44px * var(--ui-scale)));
     padding: 0;
     border-radius: 50%;
     background: var(--glass-bg);

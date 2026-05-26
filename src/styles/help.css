@@ -361,8 +361,8 @@ body.tour-authoring-open #help-trigger {
 @media (max-width: 768px) {
     #help-trigger {
         padding: 0;
-        width: calc(48px * var(--ui-scale));
-        height: calc(48px * var(--ui-scale));
+        width: max(48px, calc(48px * var(--ui-scale)));
+        height: max(48px, calc(48px * var(--ui-scale)));
         border-radius: 50%;
         justify-content: center;
     }
@@ -370,14 +370,14 @@ body.tour-authoring-open #help-trigger {
         display: none;
     }
     #help-trigger-browse {
-        width: calc(40px * var(--ui-scale));
-        height: calc(40px * var(--ui-scale));
+        width: max(40px, calc(40px * var(--ui-scale)));
+        height: max(40px, calc(40px * var(--ui-scale)));
         font-size: calc(1rem * var(--ui-scale));
     }
     #browse-close {
         inset-inline-end: calc(3rem * var(--ui-scale));
-        width: calc(40px * var(--ui-scale));
-        height: calc(40px * var(--ui-scale));
+        width: max(40px, calc(40px * var(--ui-scale)));
+        height: max(40px, calc(40px * var(--ui-scale)));
         font-size: calc(1rem * var(--ui-scale));
     }
     /* Tablet: revert the desktop centered-modal and anchor
@@ -398,7 +398,7 @@ body.tour-authoring-open #help-trigger {
     #help-feedback-form textarea,
     #help-feedback-form input[type="text"],
     .help-btn-primary {
-        min-height: calc(44px * var(--ui-scale));
+        min-height: max(44px, calc(44px * var(--ui-scale)));
     }
     /* Clear the 48px circular help trigger */
     #time-label {
@@ -411,8 +411,8 @@ body.tour-authoring-open #help-trigger {
     #help-trigger {
         top: calc(0.5rem * var(--ui-scale));
         inset-inline-end: calc(0.5rem * var(--ui-scale));
-        width: calc(40px * var(--ui-scale));
-        height: calc(40px * var(--ui-scale));
+        width: max(40px, calc(40px * var(--ui-scale)));
+        height: max(40px, calc(40px * var(--ui-scale)));
     }
     /* Clear the 40px help trigger at 0.5rem inset */
     #time-label {

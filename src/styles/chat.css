@@ -684,8 +684,8 @@
         display: none;
     }
     .browse-chat-btn {
-        width: calc(40px * var(--ui-scale));
-        height: calc(40px * var(--ui-scale));
+        width: max(40px, calc(40px * var(--ui-scale)));
+        height: max(40px, calc(40px * var(--ui-scale)));
         font-size: calc(1.1rem * var(--ui-scale));
         inset-inline-end: calc(-3.25rem * var(--ui-scale));
     }
