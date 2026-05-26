@@ -75,6 +75,7 @@ import { initTourAuthoring } from './ui/tourAuthoring'
 import { bootstrapI18n } from './i18n/bootstrap'
 import { initUiScale } from './services/uiScaleService'
 import { initShaderSettings } from './services/shaderSettingsService'
+import { maybeInitShaderTuner } from './ui/shaderTunerUI'
 
 // Apply the persisted UI-scale to `:root` at module-evaluation
 // time — before DOMContentLoaded, before any UI renders, before
@@ -94,6 +95,11 @@ initUiScale()
 // read getShaderSettings() per-frame, so this just primes the
 // snapshot.
 initShaderSettings()
+
+// Mount the §7.2 shader-tuner panel — no-op unless the URL carries
+// `?tune=shader`. Dev surface for picking the shipped SHADER_DEFAULTS
+// values; never reaches end-users via the Tools menu.
+maybeInitShaderTuner()
 
 // Phase 5: set a body class so CSS can target mobile-native adaptations
 // (larger touch targets, bottom sheets, etc.) without JS per-component.
