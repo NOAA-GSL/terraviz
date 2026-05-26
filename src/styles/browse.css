@@ -1229,9 +1229,10 @@ body.browse-view-map .browse-title {
     cursor: crosshair;
 }
 /* The in-progress draw rectangle — absolute-positioned overlay
-   drawn on top of MapLibre's canvas during a Shift+drag (or in
-   draw mode). Pointer-events: none so the mouse events still
-   reach the canvas. */
+   drawn on top of MapLibre's canvas while the user drags in
+   Draw region mode (the toolbar toggle gates the gesture;
+   there's no Shift modifier today). Pointer-events: none so the
+   mouse events still reach the canvas. */
 .browse-map-draw-box {
     position: absolute;
     background: rgba(245, 159, 74, 0.18);

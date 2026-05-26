@@ -230,7 +230,13 @@ export function createCatalogMap(
 
   host.appendChild(toolbar)
   host.appendChild(canvas)
-  host.appendChild(tooltip)
+  // Tooltip is appended INSIDE the canvas wrapper so its
+  // `position: absolute` coordinates resolve against the canvas
+  // origin — the renderTooltipAt() positioner uses MapLibre's
+  // `e.point` which is canvas-relative pixels. Appending as a
+  // sibling of canvas would offset the tooltip by the toolbar
+  // height and the row gap.
+  canvas.appendChild(tooltip)
   host.appendChild(empty)
   host.appendChild(footnote)
 
@@ -267,11 +273,17 @@ export function createCatalogMap(
   // / `rebuild` / event handlers defined further down.
   const map = initialMap
 
-  // Disable MapLibre's box-zoom — we repurpose Shift+drag for the
-  // draw-rectangle gesture. The draw mode also disables drag-pan
-  // when active (toggled via `setDrawMode`). Double-click resets
-  // the renderer's default behaviour (reset to default view); we
-  // leave that intact for the Map view.
+  // Disable MapLibre's box-zoom — Shift+drag would otherwise
+  // zoom into a screen rectangle, which would collide with any
+  // future "Shift+drag to draw a region" affordance and is also
+  // disorienting at the Map view's wide-zoom-out home position.
+  // Today the draw-rectangle gesture is reached via the explicit
+  // "Draw region" mode toggle in the toolbar (Shift modifier
+  // intentionally NOT wired — the plan picked an explicit mode
+  // for discoverability over a hidden modifier). `setDrawMode`
+  // additionally disables drag-pan + scroll-zoom while the mode
+  // is active so the drag is unambiguous. Double-click resets
+  // the camera; we leave that intact.
   map.boxZoom.disable()
 
   // --- State carried across update() calls ---
@@ -650,8 +662,16 @@ export function createCatalogMap(
       source?.setData({ type: 'FeatureCollection', features: [] })
       return
     }
+    const wasHidden = empty.classList.contains('hidden') === false
     empty.classList.add('hidden')
     canvas.classList.remove('hidden')
+    // Canvas was `display: none` in the empty branch — MapLibre's
+    // WebGL canvas dimensions are stale after a visibility flip
+    // (the host's ResizeObserver doesn't fire for a child's
+    // visibility change), so the next render would draw at the
+    // pre-hide size. `map.resize()` re-syncs the canvas to its
+    // container before the source.setData below triggers a frame.
+    if (wasHidden) map.resize()
 
     const features = result.bboxes.map(bboxToPolygon)
     const source = map.getSource(BBOX_SOURCE_ID) as GeoJSONSource | undefined

@@ -572,10 +572,15 @@ export class MapRenderer implements GlobeRenderer {
     return this.map
   }
 
-  /** Return the projection this renderer was initialised with. The
-   *  catalog Map view (§6.9) reads this so its bbox overlay layer
-   *  can adjust polygon-construction behaviour around the
-   *  antimeridian. */
+  /** Return the projection this renderer was initialised with.
+   *  Internal callers (the `moveend` → `emitCameraSettled` path
+   *  on this class) read it to stamp the projection on telemetry;
+   *  debug surfaces can also use it to distinguish the main globe
+   *  from the §6.9 catalog Map view's mercator instance when both
+   *  are mounted in the same session. The Map view's antimeridian
+   *  polygon construction reads `MapBboxOverlay.crossesAntimeridian`
+   *  on each bbox instead — the renderer-wide projection isn't
+   *  the right signal there. */
   getProjection(): MapRendererProjection {
     return this.projection
   }
