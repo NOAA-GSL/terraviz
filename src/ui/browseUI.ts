@@ -1715,12 +1715,14 @@ export function showBrowseUI(
     renderRail()
     renderActiveFilters()
     renderCards()
-    // Graph / Timeline re-render only when their canvas is the
-    // active surface — no sense paying d3 / cytoscape's layout
-    // cost for an off-screen canvas. Both controllers' `update()`
-    // is incremental: cytoscape preserves node positions across
-    // chip-toggle thrashes (the §6.7 "graph thrash" risk), and
-    // the timeline's d3 scale + brush sync is idempotent.
+    // Graph / Timeline / Map re-render only when their canvas is
+    // the active surface — no sense paying the layout cost for an
+    // off-screen canvas. All three controllers' `update()` is
+    // incremental: cytoscape preserves node positions across chip-
+    // toggle thrashes (the §6.7 "graph thrash" risk), the timeline's
+    // d3 scale + brush sync is idempotent, and the map view's
+    // bbox-overlay layer swaps its GeoJSON source data in place
+    // without re-mounting MapLibre.
     if (viewMode === 'graph' && graphController) {
       const parsed = parseSearchQuery(searchQuery)
       const effectiveState = mergeFilterStates(filterState, parsed.prefixes)
@@ -1733,6 +1735,14 @@ export function showBrowseUI(
       const parsed = parseSearchQuery(searchQuery)
       const effectiveState = mergeFilterStates(filterState, parsed.prefixes)
       timelineController.update({
+        datasets: allDatasets,
+        filterState: effectiveState,
+        searchQuery: parsed.freeText,
+      })
+    } else if (viewMode === 'map' && mapController) {
+      const parsed = parseSearchQuery(searchQuery)
+      const effectiveState = mergeFilterStates(filterState, parsed.prefixes)
+      mapController.update({
         datasets: allDatasets,
         filterState: effectiveState,
         searchQuery: parsed.freeText,
