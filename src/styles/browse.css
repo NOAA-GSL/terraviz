@@ -71,7 +71,12 @@
     flex-direction: column;
     height: 100%;
     width: 100%;
-    padding: 1.5rem 1.5rem 0;
+    /* Padded on all four sides so every view-mode (Cards / Graph
+       / Timeline / Map) gets the same breathing room above the
+       browser's bottom edge. Previously the bottom-padding was
+       only set inside `#browse-grid`, which left Graph / Timeline
+       / Map canvases running flush to the viewport edge. */
+    padding: 1.5rem;
     box-sizing: border-box;
     overflow: hidden;
     /* `position: relative` so the filter-drawer rail (positioned
@@ -653,7 +658,10 @@ body.browse-view-map .browse-title {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(var(--component-browse-grid-col-min), 1fr));
     gap: var(--component-browse-grid-gap);
-    padding-bottom: 1.5rem;
+    /* Bottom breathing room comes from `#browse-inner`'s
+       all-around padding — no extra padding-bottom here, which
+       would otherwise double up on the inner's bottom padding
+       when scrolled to the last card. */
     align-content: start;
 }
 #browse-grid.hidden {
