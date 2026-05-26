@@ -42,6 +42,13 @@ import { openPrivacyUI } from './privacyUI'
 import { emit } from '../analytics'
 import { setBordersVisible } from '../utils/viewPreferences'
 import {
+  loadUiScale,
+  matchPreset,
+  setUiScale,
+  UI_SCALE_PRESETS,
+  type UiScalePreset,
+} from '../services/uiScaleService'
+import {
   getLocale,
   NATIVE_NAMES,
   PICKER_LOCALES,
@@ -170,6 +177,12 @@ export function initToolsMenu(
   const { onSetLayout, onOpenBrowse, onOpenOrbitSettings, onToggleDatasetInfo, onToggleLegend, onOpenCredits, announce } = callbacks
   const currentLayout = viewports.getLayout()
 
+  // Resolve the current UI scale (precedence: localStorage → env →
+  // 1.0) so the radio's initial checked state matches what's
+  // already applied to :root. initUiScale() ran in main.ts; we only
+  // read the current value here.
+  const currentUiScalePreset = matchPreset(loadUiScale())
+
   const activeLocale = getLocale()
   // Only show locales that have crossed the picker-visibility
   // coverage gate (PICKER_LOCALES, gated at ≥80% by the codegen).
@@ -240,6 +253,14 @@ export function initToolsMenu(
           <span class="tools-menu-item-check" aria-hidden="true"></span>
           <span class="tools-menu-item-label">${tHtml('tools.toggles.legend')}</span>
         </button>
+      </section>
+      <section class="tools-menu-section" aria-label="${tAttr('tools.uiScale.section.aria')}">
+        <h4 class="tools-menu-section-title">${tHtml('tools.uiScale.section')}</h4>
+        <div class="tools-menu-uiscale-row" role="radiogroup" aria-label="${tAttr('tools.uiScale.aria')}">
+          <button type="button" class="tools-menu-uiscale-btn${currentUiScalePreset === 'compact' ? ' active' : ''}" id="tools-menu-uiscale-compact" role="radio" aria-checked="${currentUiScalePreset === 'compact'}" data-uiscale="compact">${tHtml('tools.uiScale.compact')}</button>
+          <button type="button" class="tools-menu-uiscale-btn${currentUiScalePreset === 'default' ? ' active' : ''}" id="tools-menu-uiscale-default" role="radio" aria-checked="${currentUiScalePreset === 'default'}" data-uiscale="default">${tHtml('tools.uiScale.default')}</button>
+          <button type="button" class="tools-menu-uiscale-btn${currentUiScalePreset === 'comfortable' ? ' active' : ''}" id="tools-menu-uiscale-comfortable" role="radio" aria-checked="${currentUiScalePreset === 'comfortable'}" data-uiscale="comfortable">${tHtml('tools.uiScale.comfortable')}</button>
+        </div>
       </section>
       <section class="tools-menu-section" aria-label="${tAttr('tools.section.language.aria')}">
         <h4 class="tools-menu-section-title">${tHtml('tools.section.language')}</h4>
@@ -402,6 +423,28 @@ export function initToolsMenu(
     saveLocalePref(next)
     window.location.reload()
   })
+
+  // --- UI-size radio (§7.1) ---
+  // Three discrete presets — Compact / Default / Comfortable. The
+  // service writes to :root + localStorage; we only mirror the
+  // active class so the radio's visual state stays in sync.
+  const uiScaleButtons: Array<{ btn: HTMLButtonElement; preset: UiScalePreset }> = []
+  for (const preset of Object.keys(UI_SCALE_PRESETS) as UiScalePreset[]) {
+    const btn = document.getElementById(`tools-menu-uiscale-${preset}`) as HTMLButtonElement | null
+    if (btn) uiScaleButtons.push({ btn, preset })
+  }
+  for (const { btn, preset } of uiScaleButtons) {
+    btn.addEventListener('click', () => {
+      setUiScale(UI_SCALE_PRESETS[preset])
+      for (const other of uiScaleButtons) {
+        const active = other.preset === preset
+        other.btn.classList.toggle('active', active)
+        other.btn.setAttribute('aria-checked', String(active))
+      }
+      emitSetting('ui_scale', preset)
+      announce?.(t('tools.uiScale.announce', { label: t(`tools.uiScale.${preset}`) }))
+    })
+  }
 
   labelsBtn.addEventListener('click', () => {
     // Target state is derived from the button class, not from any

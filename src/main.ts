@@ -73,6 +73,7 @@ import { overlayOptionsFromDataset } from './services/datasetOverlayOptions'
 import { resolveFrameQuery } from './utils/frames'
 import { initTourAuthoring } from './ui/tourAuthoring'
 import { bootstrapI18n } from './i18n/bootstrap'
+import { initUiScale } from './services/uiScaleService'
 
 // Phase 5: set a body class so CSS can target mobile-native adaptations
 // (larger touch targets, bottom sheets, etc.) without JS per-component.
@@ -3021,6 +3022,12 @@ async function checkForUpdates(): Promise<void> {
 
 // Initialize app on DOM ready
 document.addEventListener('DOMContentLoaded', async () => {
+  // Apply the persisted UI-scale to `:root` before any CSS-driven
+  // layout settles, so the user's choice (or the build-time env
+  // override) is the first paint rather than a flicker from 1.0 →
+  // 1.5. See docs/WEB_CATALOG_FEATURES_PLAN.md §7.1.
+  initUiScale()
+
   // Resolve user locale and apply data-i18n attributes before any
   // UI module renders. English is bundled inline; non-English
   // locales lazy-load here. See docs/I18N_PLAN.md.

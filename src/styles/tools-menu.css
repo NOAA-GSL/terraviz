@@ -272,6 +272,46 @@
     color: var(--color-text);
 }
 
+/* UI-size preset row — sibling shape to the layout-picker row.
+   Three buttons, Compact / Default / Comfortable, wired to
+   uiScaleService. The buttons themselves are aria-radio inside
+   a radiogroup so screen readers narrate them as a one-of-three
+   choice. */
+.tools-menu-uiscale-row {
+    display: flex;
+    gap: calc(0.25rem * var(--ui-scale));
+}
+.tools-menu-uiscale-btn {
+    flex: 1;
+    min-width: 0;
+    min-height: var(--component-tools-menu-layout-btn-min-height);
+    padding: calc(0.35rem * var(--ui-scale)) calc(0.5rem * var(--ui-scale));
+    font: inherit;
+    font-size: calc(0.72rem * var(--ui-scale));
+    color: #ccc;
+    background: var(--color-surface-alt);
+    border: 1px solid var(--white-o10);
+    border-radius: var(--component-tools-menu-layout-btn-radius);
+    cursor: pointer;
+    transition: background 0.12s, color 0.12s, border-color 0.12s;
+    line-height: 1;
+    white-space: nowrap;
+}
+.tools-menu-uiscale-btn:hover {
+    background: var(--white-o10);
+    color: var(--color-text);
+    border-color: var(--accent-o40);
+}
+.tools-menu-uiscale-btn.active {
+    color: var(--color-accent);
+    border-color: var(--color-accent);
+    background: var(--accent-o12);
+}
+.tools-menu-uiscale-btn:focus-visible {
+    outline: 2px solid var(--accent-o70);
+    outline-offset: 2px;
+}
+
 .tools-menu-layout-row {
     display: flex;
     gap: calc(0.25rem * var(--ui-scale));
