@@ -23,6 +23,10 @@
 import type { CustomLayerInterface } from 'maplibre-gl'
 import type { Map as MaplibreMap } from 'maplibre-gl'
 import { getSunPosition } from '../utils/time'
+import {
+  getShaderSettings,
+  onShaderSettingsChange,
+} from './shaderSettingsService'
 import { logger } from '../utils/logger'
 import { getCloudTextureUrl, isMobile } from '../utils/deviceCapability'
 import { reportError } from '../analytics'
@@ -60,7 +64,12 @@ const CLOUD_OPACITY = 0.65
 const CLOUD_ALPHA_GAMMA = 1.8
 const CLOUD_NIGHT_DARKENING = 0.08
 const SPECULAR_SHININESS = 40.0
-const SPECULAR_STRENGTH = 0.6
+// Specular strength moved to shaderSettingsService (§7.2) — the
+// shipped default lives in SHADER_DEFAULTS there, and the live
+// value flows through Tools → Display preset clicks + the
+// `?tune=shader` slider page. Pre-§7.2 value was 0.60 (kept as
+// the Tools-menu "Comfortable" preset, slightly reduced to 0.55
+// per Adrian's "reduce specular" ask).
 const STAR_BRIGHTNESS = 0.2
 /**
  * Multiplier on the raymarched scattering colour before additive
@@ -1052,6 +1061,11 @@ export function createEarthTileLayer(): EarthTileLayerControl {
   let glRef: WebGL2RenderingContext | null = null
   let mapRef: MaplibreMap | null = null
 
+  // Unsubscribe handle for shader-settings change events (§7.2).
+  // Returned by onShaderSettingsChange in onAdd; called in onRemove
+  // to drop the listener when the layer detaches.
+  let unsubscribeShaderSettings: (() => void) | null = null
+
   // Sun direction — updated each frame from real time, or set externally
   let sunDir: [number, number, number] = [1, 0, 0]
   let sunOverride: { lat: number; lng: number } | null = null
@@ -1086,6 +1100,15 @@ export function createEarthTileLayer(): EarthTileLayerControl {
       // camera rotation automatically so no per-frame updates needed.
       const initSun = getSunPosition(new Date())
       syncAtmosphereLight(_map, initSun.lat, initSun.lng)
+
+      // Subscribe to shader-settings changes (§7.2) so a Tools-menu
+      // specular preset click — or a tuner-page slider drag — re-
+      // renders the globe without waiting for the next camera motion.
+      // The render() function reads the live snapshot each frame, so
+      // we don't need to push uniform values here; just trigger paint.
+      unsubscribeShaderSettings = onShaderSettingsChange(() => {
+        _map.triggerRepaint()
+      })
 
       const gl2 = gl as WebGL2RenderingContext
       glRef = gl2
@@ -1502,7 +1525,12 @@ export function createEarthTileLayer(): EarthTileLayerControl {
         gl2.uniform3f(specular.sunDirLoc, sunDir[0], sunDir[1], sunDir[2])
         gl2.uniform3f(specular.viewDirLoc, viewDir[0], viewDir[1], viewDir[2])
         gl2.uniform1f(specular.shininessLoc, SPECULAR_SHININESS)
-        gl2.uniform1f(specular.strengthLoc, SPECULAR_STRENGTH)
+        // Strength is user-controllable via the Tools menu specular
+        // preset (None / Default / Comfortable, §7.2). The renderer
+        // reads the live snapshot each frame; subscribing to
+        // shader-settings changes calls triggerRepaint so a preset
+        // click flips the look without waiting for the next motion.
+        gl2.uniform1f(specular.strengthLoc, getShaderSettings().specularStrength)
 
         gl2.activeTexture(gl2.TEXTURE0)
         gl2.bindTexture(gl2.TEXTURE_2D, specTex)
@@ -1608,6 +1636,8 @@ export function createEarthTileLayer(): EarthTileLayerControl {
 
     onRemove(_map: MaplibreMap, gl: WebGL2RenderingContext | WebGLRenderingContext) {
       disposed = true
+      unsubscribeShaderSettings?.()
+      unsubscribeShaderSettings = null
       const gl2 = gl as WebGL2RenderingContext
       if (dataset) gl2.deleteProgram(dataset.program)
       if (darken) gl2.deleteProgram(darken.program)
