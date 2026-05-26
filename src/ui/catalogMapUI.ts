@@ -35,16 +35,14 @@
  * the reader.
  */
 
-import maplibregl from 'maplibre-gl'
 import type { LngLat, MapMouseEvent, GeoJSONSource } from 'maplibre-gl'
 
 import {
   buildMap,
-  crossesAntimeridian,
   type CatalogMap,
   type MapBboxOverlay,
 } from '../services/catalogMap'
-import { setFacet, type FilterState } from '../services/datasetFilter'
+import { type FilterState } from '../services/datasetFilter'
 import type { Dataset } from '../types'
 import { emit } from '../analytics'
 import { round } from '../analytics/camera'
@@ -208,9 +206,14 @@ export function createCatalogMap(
 
   // Canvas — MapLibre mounts inside this div. The dedicated wrapper
   // lets us position the tooltip relatively without fighting
-  // MapLibre's own DOM tree.
+  // MapLibre's own DOM tree. `role="region"` + a live aria-label
+  // updated from the rendered count (in `rebuild`) gives screen
+  // readers context for the interactive map surface — same shape
+  // catalogGraphUI uses for the graph canvas.
   const canvas = document.createElement('div')
   canvas.className = 'browse-map-canvas'
+  canvas.setAttribute('role', 'region')
+  canvas.setAttribute('aria-label', t('browse.map.region.aria', { count: 0 }))
 
   const tooltip = document.createElement('div')
   tooltip.className = 'browse-map-tooltip hidden'
@@ -329,8 +332,9 @@ export function createCatalogMap(
         'line-opacity': 0.85,
       },
     })
-    // Real-time accent — amber border on the subset of bboxes
-    // tagged real-time, mirroring the Timeline trailing-edge dot.
+    // Real-time accent — green border on the subset of bboxes
+    // tagged real-time, mirroring the Timeline trailing-edge dot
+    // (which uses `--color-success` for the same reason).
     map.addLayer({
       id: BBOX_REALTIME_LAYER_ID,
       type: 'line',
@@ -565,6 +569,16 @@ export function createCatalogMap(
     )
     lastRendered = result
 
+    // Refresh the canvas's aria-label with the live overlay count
+    // so screen readers hear the result-set size on every rebuild.
+    // Uses `bboxes.length` (the visible count on the canvas) rather
+    // than `filteredDatasetCount` (which counts hidden globals +
+    // undated rows the user can't actually see).
+    canvas.setAttribute(
+      'aria-label',
+      t('browse.map.region.aria', { count: formatNumber(result.bboxes.length) }),
+    )
+
     // --- Empty state handling ---
     if (result.bboxes.length === 0) {
       empty.classList.remove('hidden')
@@ -672,25 +686,30 @@ export function createCatalogMap(
 /**
  * Convert two corner LngLat values from a draw drag into the
  * canonical NSEW bbox shape the `geographicRegion` predicate
- * carries. Latitudes order naturally (max → n, min → s); longitudes
- * preserve the user's drag direction so a Pacific-spanning drag
- * (start west of the dateline, drag east through it) encodes as
- * `w > e` and the resolver / UI treat it as antimeridian-crossing.
+ * carries.
  *
- * Exported only via test surface; not consumed externally.
+ * Both axes are normalised so the resulting bbox never wraps:
+ * `n ≥ s` and `w ≤ e` always hold, regardless of drag direction.
+ * `map.unproject` returns longitudes in the canonical -180..180
+ * range, so a Pacific-spanning drag whose visual path crosses the
+ * dateline will still land in this function as two longitudes in
+ * the same -180..180 range — which can only produce a
+ * non-wrapping bbox.
+ *
+ * v1 limitation: drawing an antimeridian-crossing predicate
+ * (`w > e`) from the canvas is not supported. The resolver in
+ * `datasetFilter.ts` handles `w > e` correctly for dataset
+ * bboxes that are already encoded that way in the catalog, but
+ * the draw surface produces only normalised bboxes today. A
+ * Pacific-region filter is reachable via the URL form
+ * (`?gr=n,s,e,w` with `w > e`) or, future-work, via a dedicated
+ * draw mode that interprets a drag that exits the right edge of
+ * the canvas as antimeridian-crossing.
  */
 function lngLatPairToBbox(a: LngLat, b: LngLat): { n: number; s: number; e: number; w: number } {
   return {
     n: Math.max(a.lat, b.lat),
     s: Math.min(a.lat, b.lat),
-    // Longitude: take the user's drag direction — left-to-right
-    // drag is `w → e`, right-to-left becomes `w > e` (we still
-    // encode it left-to-right by swapping). We deliberately do
-    // NOT auto-wrap a drag that exceeds 180° because the user's
-    // intent in that case is ambiguous. Most users drag inside a
-    // single hemisphere; the antimeridian case is the responsibility
-    // of a deliberate "Pacific" drag that the resolver handles via
-    // its `w > e` detection.
     w: Math.min(a.lng, b.lng),
     e: Math.max(a.lng, b.lng),
   }

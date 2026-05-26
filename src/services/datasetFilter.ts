@@ -302,13 +302,15 @@ export const BASELINE_RESOLVERS: Readonly<Record<string, FacetResolver>> = {
    *
    * Antimeridian handling: longitudes that cross the dateline are
    * encoded as `w > e` (e.g. `{w: 170, e: -170}` meaning "wrap east
-   * through 180° to -170°"). The resolver normalises both sides to
-   * a positive 0..360 form so the overlap test works on the
-   * wrapped span. A predicate that doesn't cross the dateline
-   * matches a dataset whose bbox does iff either segment of the
-   * wrapped dataset bbox overlaps the predicate — checked by
-   * splitting the wrapped dataset bbox at 180° and overlap-testing
-   * each half.
+   * through 180° to -170°"). The resolver splits any wrapped bbox
+   * into two non-wrapping segments at ±180° — a wrapped bbox
+   * `[170, -170]` becomes `[170, 180]` and `[-180, -170]`. It
+   * then overlap-tests every pair of (dataset-segment,
+   * predicate-segment); the dataset matches iff at least one pair
+   * overlaps. This works symmetrically for both axes — wrapped
+   * predicate × non-wrapped dataset, non-wrapped predicate ×
+   * wrapped dataset, and wrapped × wrapped all fall out of the
+   * same loop.
    */
   geographicRegion: (predicate, dataset) => {
     if (predicate.kind !== 'bbox') return false
