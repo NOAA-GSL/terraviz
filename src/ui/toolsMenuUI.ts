@@ -260,7 +260,7 @@ export function initToolsMenu(
       </section>
       <section class="tools-menu-section" aria-label="${tAttr('tools.uiScale.section.aria')}">
         <h4 class="tools-menu-section-title">${tHtml('tools.uiScale.section')}</h4>
-        <div class="tools-menu-uiscale-row" role="radiogroup" aria-label="${tAttr('tools.uiScale.aria')}">
+        <div class="tools-menu-uiscale-row" role="group" aria-label="${tAttr('tools.uiScale.aria')}">
           <button type="button" class="tools-menu-uiscale-btn${currentUiScalePreset === 'compact' ? ' active' : ''}" id="tools-menu-uiscale-compact" aria-pressed="${currentUiScalePreset === 'compact'}" data-uiscale="compact">${tHtml('tools.uiScale.compact')}</button>
           <button type="button" class="tools-menu-uiscale-btn${currentUiScalePreset === 'default' ? ' active' : ''}" id="tools-menu-uiscale-default" aria-pressed="${currentUiScalePreset === 'default'}" data-uiscale="default">${tHtml('tools.uiScale.default')}</button>
           <button type="button" class="tools-menu-uiscale-btn${currentUiScalePreset === 'comfortable' ? ' active' : ''}" id="tools-menu-uiscale-comfortable" aria-pressed="${currentUiScalePreset === 'comfortable'}" data-uiscale="comfortable">${tHtml('tools.uiScale.comfortable')}</button>

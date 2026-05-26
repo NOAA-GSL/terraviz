@@ -274,9 +274,11 @@
 
 /* UI-size preset row — sibling shape to the layout-picker row.
    Three buttons, Compact / Default / Comfortable, wired to
-   uiScaleService. The buttons themselves are aria-radio inside
-   a radiogroup so screen readers narrate them as a one-of-three
-   choice. */
+   uiScaleService. ARIA: this is a segmented toggle-button group
+   (role="group" + aria-pressed on each button) rather than a
+   true radiogroup — same pattern as catalogTabsUI. Mutual
+   exclusion is enforced by the click handler, not by the radio
+   role. */
 .tools-menu-uiscale-row {
     display: flex;
     gap: calc(0.25rem * var(--ui-scale));
