@@ -963,6 +963,8 @@ export type TourOutcome = 'completed' | 'abandoned' | 'error'
 export type VrMode = 'ar' | 'vr'
 export type VrExitReason = 'user' | 'error' | 'session_lost'
 export type VrGesture = 'drag' | 'pinch' | 'thumbstick_zoom' | 'flick_spin' | 'hud_tap'
+/** Specular-strength presets surfaced in Tools → Display (§7.2). */
+export type SpecularPreset = 'none' | 'default' | 'comfortable'
 export type ErrorCategory =
   | 'tile' | 'hls' | 'llm' | 'download' | 'vr' | 'tour' | 'caption'
   | 'uncaught' | 'console' | 'native_panic'
