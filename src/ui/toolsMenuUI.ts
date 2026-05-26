@@ -49,6 +49,13 @@ import {
   type UiScalePreset,
 } from '../services/uiScaleService'
 import {
+  getShaderSettings,
+  matchSpecularPreset,
+  setSpecularPreset,
+  SPECULAR_PRESETS,
+  type SpecularPreset,
+} from '../services/shaderSettingsService'
+import {
   getLocale,
   NATIVE_NAMES,
   PICKER_LOCALES,
@@ -187,6 +194,14 @@ export function initToolsMenu(
   // unselected button group is confusing UX.
   const currentUiScalePreset = nearestPreset(loadUiScale())
 
+  // Resolve the current specular preset (§7.2). matchSpecularPreset
+  // returns null when the live value is between presets — the
+  // ?tune=shader page can write any value — so we fall back to
+  // 'default' for the highlight rather than leaving the radio
+  // unselected. Same UX reasoning as the UI-scale row above.
+  const currentSpecular = matchSpecularPreset(getShaderSettings().specularStrength)
+    ?? 'default'
+
   const activeLocale = getLocale()
   // Only show locales that have crossed the picker-visibility
   // coverage gate (PICKER_LOCALES, gated at ≥80% by the codegen).
@@ -264,6 +279,14 @@ export function initToolsMenu(
           <button type="button" class="tools-menu-uiscale-btn${currentUiScalePreset === 'compact' ? ' active' : ''}" id="tools-menu-uiscale-compact" aria-pressed="${currentUiScalePreset === 'compact'}" data-uiscale="compact">${tHtml('tools.uiScale.compact')}</button>
           <button type="button" class="tools-menu-uiscale-btn${currentUiScalePreset === 'default' ? ' active' : ''}" id="tools-menu-uiscale-default" aria-pressed="${currentUiScalePreset === 'default'}" data-uiscale="default">${tHtml('tools.uiScale.default')}</button>
           <button type="button" class="tools-menu-uiscale-btn${currentUiScalePreset === 'comfortable' ? ' active' : ''}" id="tools-menu-uiscale-comfortable" aria-pressed="${currentUiScalePreset === 'comfortable'}" data-uiscale="comfortable">${tHtml('tools.uiScale.comfortable')}</button>
+        </div>
+      </section>
+      <section class="tools-menu-section" aria-label="${tAttr('tools.specular.section.aria')}">
+        <h4 class="tools-menu-section-title">${tHtml('tools.specular.section')}</h4>
+        <div class="tools-menu-uiscale-row" role="group" aria-label="${tAttr('tools.specular.aria')}">
+          <button type="button" class="tools-menu-uiscale-btn${currentSpecular === 'none' ? ' active' : ''}" id="tools-menu-specular-none" aria-pressed="${currentSpecular === 'none'}" data-specular="none">${tHtml('tools.specular.none')}</button>
+          <button type="button" class="tools-menu-uiscale-btn${currentSpecular === 'default' ? ' active' : ''}" id="tools-menu-specular-default" aria-pressed="${currentSpecular === 'default'}" data-specular="default">${tHtml('tools.specular.default')}</button>
+          <button type="button" class="tools-menu-uiscale-btn${currentSpecular === 'comfortable' ? ' active' : ''}" id="tools-menu-specular-comfortable" aria-pressed="${currentSpecular === 'comfortable'}" data-specular="comfortable">${tHtml('tools.specular.comfortable')}</button>
         </div>
       </section>
       <section class="tools-menu-section" aria-label="${tAttr('tools.section.language.aria')}">
@@ -447,6 +470,30 @@ export function initToolsMenu(
       }
       emitSetting('ui_scale', preset)
       announce?.(t('tools.uiScale.announce', { label: t(`tools.uiScale.${preset}`) }))
+    })
+  }
+
+  // --- Specular preset radio (§7.2) ---
+  // Three discrete presets — None / Default / Comfortable mirror the
+  // plan-fixed names. The service writes the value into the shader-
+  // settings snapshot + localStorage and fires a change event that
+  // the earth-tile layer subscribes to via triggerRepaint, so the
+  // glint updates on the next frame without waiting for camera motion.
+  const specularButtons: Array<{ btn: HTMLButtonElement; preset: SpecularPreset }> = []
+  for (const preset of Object.keys(SPECULAR_PRESETS) as SpecularPreset[]) {
+    const btn = document.getElementById(`tools-menu-specular-${preset}`) as HTMLButtonElement | null
+    if (btn) specularButtons.push({ btn, preset })
+  }
+  for (const { btn, preset } of specularButtons) {
+    btn.addEventListener('click', () => {
+      setSpecularPreset(preset)
+      for (const other of specularButtons) {
+        const active = other.preset === preset
+        other.btn.classList.toggle('active', active)
+        other.btn.setAttribute('aria-pressed', String(active))
+      }
+      emitSetting('specular', preset)
+      announce?.(t('tools.specular.announce', { label: t(`tools.specular.${preset}`) }))
     })
   }
 
