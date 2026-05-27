@@ -1,0 +1,593 @@
+/**
+ * Playlist UI — manager panel + the small "Add to playlist"
+ * popover surfaced from browse cards and the dataset info panel.
+ *
+ * Two surfaces live in this module:
+ *
+ *  1. The playlist manager — a floating panel listing every saved
+ *     playlist. From here the user creates / renames / deletes a
+ *     playlist, drags entries to reorder, edits per-entry duration,
+ *     plays a playlist, and exports / imports JSON. Mirrors the
+ *     shape of `downloadUI.ts` — same close-on-outside-click, same
+ *     panel host idiom — so the UX is consistent.
+ *
+ *  2. The "Add to playlist" popover — a tiny floating list anchored
+ *     under whichever button triggered it (browse card or info-
+ *     panel "Add to playlist…" button). Lists existing playlists +
+ *     a "New playlist…" option at the bottom.
+ *
+ * Both surfaces re-render on every `onPlaylistsChange` notification
+ * so a write from one path (e.g. add-to-playlist from a browse card
+ * while the manager is open) flows through to the other.
+ *
+ * Persistence-warning banner is shown at the top of the manager
+ * panel — playlists are localStorage only and survive clear-site-
+ * data only via the JSON export. The plan calls this out as a
+ * known mitigation, not a fix; the banner makes it visible to
+ * users.
+ */
+
+import {
+  addToPlaylist,
+  createPlaylist,
+  DEFAULT_ENTRY_DURATION_SEC,
+  deletePlaylist,
+  effectiveDuration,
+  exportPlaylistsJson,
+  importPlaylists,
+  IMPORT_MAX_BYTES,
+  loadPlaylists,
+  onPlaylistsChange,
+  removeFromPlaylist,
+  renamePlaylist,
+  reorderPlaylist,
+  setEntryDuration,
+  type Playlist,
+} from '../services/playlistService'
+import {
+  getActive as getActivePlayback,
+  onPlaybackChange,
+  play as playPlaylist,
+  stop as stopPlaylistPlayback,
+} from '../services/playlistPlayback'
+import { dataService } from '../services/dataService'
+import { logger } from '../utils/logger'
+import { plural, t, tAttr, tHtml } from '../i18n'
+import { escapeAttr, escapeHtml } from './domUtils'
+
+/** Callbacks the playlist UI fires out into the rest of the app. */
+export interface PlaylistUICallbacks {
+  /** Announce a status message via the global aria-live region. */
+  announce?: (message: string) => void
+}
+
+let callbacks: PlaylistUICallbacks = {}
+let managerOpen = false
+let popoverAnchor: HTMLElement | null = null
+let unsubPlaylists: (() => void) | null = null
+let unsubPlayback: (() => void) | null = null
+
+/** Mount the playlist manager panel + global listeners. Idempotent. */
+export function initPlaylistUI(cb: PlaylistUICallbacks = {}): void {
+  callbacks = cb
+  ensureManagerHost()
+
+  // Re-render the manager + popover on any playlist mutation. Both
+  // can be open at once (rare but plausible: tap "Add to playlist"
+  // on a browse card while the manager is open) so both re-render.
+  unsubPlaylists?.()
+  unsubPlaylists = onPlaylistsChange(() => {
+    if (managerOpen) renderManager()
+    if (popoverAnchor) renderAddPopover(popoverAnchor)
+  })
+
+  // Re-render the manager when playback state changes (the Play
+  // button on each row needs to flip to "Stop" while that playlist
+  // is the active one).
+  unsubPlayback?.()
+  unsubPlayback = onPlaybackChange(() => {
+    if (managerOpen) renderManager()
+  })
+
+  // Outside-click closes the manager. Wired once.
+  if (!document.body.dataset.playlistUiListenersWired) {
+    document.body.dataset.playlistUiListenersWired = 'true'
+    document.addEventListener('click', handleDocumentClick)
+    document.addEventListener('keydown', handleDocumentKeydown)
+  }
+}
+
+/** Tear down listeners. Called by tests. */
+export function destroyPlaylistUI(): void {
+  unsubPlaylists?.()
+  unsubPlaylists = null
+  unsubPlayback?.()
+  unsubPlayback = null
+  closeAddPopover()
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Manager panel
+// ─────────────────────────────────────────────────────────────────────
+
+/** Open the playlist manager. Lazy-mounts on first call. */
+export function openPlaylistManager(): void {
+  ensureManagerHost()
+  managerOpen = true
+  const panel = document.getElementById('playlist-manager')
+  panel?.classList.remove('hidden')
+  renderManager()
+  // Focus the close button so keyboard users have a sensible anchor.
+  const closeBtn = document.getElementById('playlist-manager-close') as HTMLButtonElement | null
+  closeBtn?.focus()
+}
+
+/** Close the playlist manager if open. */
+export function closePlaylistManager(): void {
+  if (!managerOpen) return
+  managerOpen = false
+  document.getElementById('playlist-manager')?.classList.add('hidden')
+}
+
+/** Whether the manager is currently visible — used by tests. */
+export function isPlaylistManagerOpen(): boolean {
+  return managerOpen
+}
+
+function ensureManagerHost(): void {
+  if (document.getElementById('playlist-manager')) return
+  const host = document.createElement('div')
+  host.id = 'playlist-manager'
+  host.className = 'hidden'
+  host.setAttribute('role', 'dialog')
+  host.setAttribute('aria-modal', 'false')
+  host.setAttribute('aria-label', t('playlist.manager.title'))
+  document.body.appendChild(host)
+}
+
+function renderManager(): void {
+  const panel = document.getElementById('playlist-manager')
+  if (!panel) return
+  const playlists = loadPlaylists()
+  const activePlayback = getActivePlayback()
+
+  let html = `
+    <div class="pl-mgr-header">
+      <span class="pl-mgr-title">${tHtml('playlist.manager.title')}</span>
+      <button type="button" class="pl-mgr-close" id="playlist-manager-close"
+        aria-label="${tAttr('playlist.manager.close.aria')}">&#x2715;</button>
+    </div>
+    <p class="pl-mgr-warning">${tHtml('playlist.persistence.warning')}</p>
+    <div class="pl-mgr-actions">
+      <button type="button" class="pl-mgr-btn" id="playlist-manager-new"
+        aria-label="${tAttr('playlist.new.button.aria')}">${tHtml('playlist.new.button')}</button>
+      <button type="button" class="pl-mgr-btn pl-mgr-btn-secondary" id="playlist-manager-export"
+        ${playlists.length === 0 ? 'disabled' : ''}>${tHtml('playlist.export.label')}</button>
+      <button type="button" class="pl-mgr-btn pl-mgr-btn-secondary" id="playlist-manager-import"
+        >${tHtml('playlist.import.label')}</button>
+      <input type="file" id="playlist-manager-import-input" accept="application/json,.json" hidden>
+    </div>
+  `
+
+  if (playlists.length === 0) {
+    html += `<div class="pl-mgr-empty">${tHtml('playlist.empty.message')}</div>`
+  } else {
+    html += `<ul class="pl-mgr-list" role="list">`
+    for (const p of playlists) {
+      const isActive = activePlayback?.playlist.id === p.id
+      html += renderPlaylistRow(p, isActive)
+    }
+    html += `</ul>`
+  }
+
+  panel.innerHTML = html
+
+  wireManagerEvents(panel, activePlayback?.playlist.id ?? null)
+}
+
+function renderPlaylistRow(playlist: Playlist, isActive: boolean): string {
+  const count = playlist.datasets.length
+  const countLabel = plural(count,
+    { one: 'browse.count.one', other: 'browse.count.other' },
+    { count })
+  const playButton = isActive
+    ? `<button type="button" class="pl-mgr-row-play active" data-id="${escapeAttr(playlist.id)}"
+        aria-label="${escapeAttr(t('playlist.stop.aria', { name: playlist.name }))}"
+        >&#x25A0;</button>`
+    : `<button type="button" class="pl-mgr-row-play" data-id="${escapeAttr(playlist.id)}"
+        aria-label="${escapeAttr(t('playlist.play.aria', { name: playlist.name }))}"
+        ${count === 0 ? 'disabled' : ''}>&#x25B6;</button>`
+
+  let entriesHtml = ''
+  if (count === 0) {
+    entriesHtml = `<li class="pl-mgr-entry-empty">${tHtml('playlist.entry.empty')}</li>`
+  } else {
+    for (let i = 0; i < playlist.datasets.length; i++) {
+      const entry = playlist.datasets[i]
+      const dataset = dataService.getDatasetById(entry.datasetId)
+      const title = dataset?.title ?? t('playlist.unknownDataset')
+      const duration = entry.durationSec ?? ''
+      entriesHtml += `
+        <li class="pl-mgr-entry" data-id="${escapeAttr(playlist.id)}" data-index="${i}">
+          <span class="pl-mgr-entry-title">${escapeHtml(title)}</span>
+          <input type="number" min="1" step="1" class="pl-mgr-entry-duration"
+            value="${escapeAttr(String(duration))}"
+            placeholder="${escapeAttr(String(DEFAULT_ENTRY_DURATION_SEC))}"
+            aria-label="${tAttr('playlist.duration.label')}"
+            data-id="${escapeAttr(playlist.id)}" data-index="${i}">
+          <button type="button" class="pl-mgr-entry-move pl-mgr-entry-move-up"
+            data-id="${escapeAttr(playlist.id)}" data-index="${i}"
+            aria-label="${escapeAttr(t('playlist.entry.moveUp.aria', { title }))}"
+            ${i === 0 ? 'disabled' : ''}>&#x25B2;</button>
+          <button type="button" class="pl-mgr-entry-move pl-mgr-entry-move-down"
+            data-id="${escapeAttr(playlist.id)}" data-index="${i}"
+            aria-label="${escapeAttr(t('playlist.entry.moveDown.aria', { title }))}"
+            ${i === playlist.datasets.length - 1 ? 'disabled' : ''}>&#x25BC;</button>
+          <button type="button" class="pl-mgr-entry-remove"
+            data-id="${escapeAttr(playlist.id)}" data-index="${i}"
+            aria-label="${escapeAttr(t('playlist.entry.remove.aria', { title }))}"
+            >&#x2715;</button>
+        </li>`
+    }
+  }
+
+  return `
+    <li class="pl-mgr-row${isActive ? ' active' : ''}" data-id="${escapeAttr(playlist.id)}">
+      <div class="pl-mgr-row-header">
+        ${playButton}
+        <button type="button" class="pl-mgr-row-name" data-id="${escapeAttr(playlist.id)}"
+          aria-label="${escapeAttr(t('playlist.rename.aria', { name: playlist.name }))}"
+          >${escapeHtml(playlist.name)}</button>
+        <span class="pl-mgr-row-count">${escapeHtml(countLabel)}</span>
+        <button type="button" class="pl-mgr-row-delete" data-id="${escapeAttr(playlist.id)}"
+          aria-label="${escapeAttr(t('playlist.delete.aria', { name: playlist.name }))}"
+          >&#x1F5D1;&#xFE0E;</button>
+      </div>
+      <ul class="pl-mgr-entries" role="list">${entriesHtml}</ul>
+    </li>`
+}
+
+function wireManagerEvents(panel: HTMLElement, activePlaylistId: string | null): void {
+  panel.querySelector<HTMLButtonElement>('#playlist-manager-close')
+    ?.addEventListener('click', () => closePlaylistManager())
+
+  panel.querySelector<HTMLButtonElement>('#playlist-manager-new')?.addEventListener('click', () => {
+    const name = window.prompt(t('playlist.create.prompt'), t('playlist.create.defaultName'))
+    if (name == null) return
+    const trimmed = name.trim()
+    if (trimmed.length === 0) return
+    createPlaylist(trimmed)
+  })
+
+  panel.querySelector<HTMLButtonElement>('#playlist-manager-export')?.addEventListener('click', () => {
+    triggerExport()
+  })
+
+  panel.querySelector<HTMLButtonElement>('#playlist-manager-import')?.addEventListener('click', () => {
+    const fileInput = panel.querySelector<HTMLInputElement>('#playlist-manager-import-input')
+    fileInput?.click()
+  })
+  panel.querySelector<HTMLInputElement>('#playlist-manager-import-input')?.addEventListener('change', (ev) => {
+    const input = ev.target as HTMLInputElement
+    const file = input.files?.[0]
+    if (file) void handleImportFile(file)
+    // Clear value so re-selecting the same file fires the change event.
+    input.value = ''
+  })
+
+  // Per-row actions
+  panel.querySelectorAll<HTMLButtonElement>('.pl-mgr-row-play').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const id = btn.dataset.id
+      if (!id) return
+      if (activePlaylistId === id) {
+        stopPlaylistPlayback()
+        callbacks.announce?.(t('playlist.stop.announce', { name: btn.getAttribute('aria-label') ?? '' }))
+      } else {
+        const target = loadPlaylists().find((p) => p.id === id)
+        if (target) playPlaylist(target)
+      }
+    })
+  })
+
+  panel.querySelectorAll<HTMLButtonElement>('.pl-mgr-row-name').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const id = btn.dataset.id
+      if (!id) return
+      const current = loadPlaylists().find((p) => p.id === id)
+      if (!current) return
+      const next = window.prompt(t('playlist.rename.prompt'), current.name)
+      if (next == null) return
+      const trimmed = next.trim()
+      if (trimmed.length === 0) return
+      renamePlaylist(id, trimmed)
+    })
+  })
+
+  panel.querySelectorAll<HTMLButtonElement>('.pl-mgr-row-delete').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const id = btn.dataset.id
+      if (!id) return
+      const target = loadPlaylists().find((p) => p.id === id)
+      if (!target) return
+      const confirmed = window.confirm(t('playlist.delete.confirm', { name: target.name }))
+      if (!confirmed) return
+      if (activePlaylistId === id) stopPlaylistPlayback()
+      deletePlaylist(id)
+    })
+  })
+
+  // Per-entry actions
+  panel.querySelectorAll<HTMLInputElement>('.pl-mgr-entry-duration').forEach((input) => {
+    input.addEventListener('change', () => {
+      const id = input.dataset.id
+      const indexStr = input.dataset.index
+      if (!id || indexStr == null) return
+      const index = Number(indexStr)
+      const raw = input.value.trim()
+      if (raw === '') {
+        setEntryDuration(id, index, undefined)
+        return
+      }
+      const parsed = Number(raw)
+      if (!Number.isFinite(parsed) || parsed <= 0) {
+        // Reject — re-render to revert the input.
+        renderManager()
+        return
+      }
+      setEntryDuration(id, index, Math.floor(parsed))
+    })
+  })
+
+  panel.querySelectorAll<HTMLButtonElement>('.pl-mgr-entry-move-up').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const id = btn.dataset.id
+      const indexStr = btn.dataset.index
+      if (!id || indexStr == null) return
+      const index = Number(indexStr)
+      reorderPlaylist(id, index, index - 1)
+    })
+  })
+  panel.querySelectorAll<HTMLButtonElement>('.pl-mgr-entry-move-down').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const id = btn.dataset.id
+      const indexStr = btn.dataset.index
+      if (!id || indexStr == null) return
+      const index = Number(indexStr)
+      reorderPlaylist(id, index, index + 1)
+    })
+  })
+  panel.querySelectorAll<HTMLButtonElement>('.pl-mgr-entry-remove').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const id = btn.dataset.id
+      const indexStr = btn.dataset.index
+      if (!id || indexStr == null) return
+      removeFromPlaylist(id, Number(indexStr))
+    })
+  })
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Export / Import
+// ─────────────────────────────────────────────────────────────────────
+
+function triggerExport(): void {
+  const json = exportPlaylistsJson()
+  const blob = new Blob([json], { type: 'application/json' })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = t('playlist.export.filename')
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+  // Browsers eventually GC the object URL but explicit release is
+  // cheaper and avoids holding the blob beyond the moment the
+  // download triggers.
+  URL.revokeObjectURL(url)
+}
+
+/** Process an uploaded JSON file. Exported for tests so they can
+ *  drive the import path without the synthetic file-input change
+ *  event the harness can't fire cleanly. */
+export async function handleImportFile(file: File): Promise<void> {
+  if (file.size > IMPORT_MAX_BYTES) {
+    callbacks.announce?.(t('playlist.import.error.tooBig'))
+    window.alert(t('playlist.import.error.tooBig'))
+    return
+  }
+  let text: string
+  try {
+    text = await file.text()
+  } catch (err) {
+    logger.warn('[playlist] Failed to read import file:', err)
+    return
+  }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(text)
+  } catch {
+    callbacks.announce?.(t('playlist.import.error.invalidJson'))
+    window.alert(t('playlist.import.error.invalidJson'))
+    return
+  }
+  const result = importPlaylists(parsed, { merge: true })
+  if (result.imported === 0) {
+    callbacks.announce?.(t('playlist.import.error.noPlaylists'))
+    window.alert(t('playlist.import.error.noPlaylists'))
+    return
+  }
+  const msg = plural(result.imported,
+    { one: 'playlist.import.success.one', other: 'playlist.import.success.other' },
+    { count: result.imported })
+  callbacks.announce?.(msg)
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Add-to-playlist popover
+// ─────────────────────────────────────────────────────────────────────
+
+/**
+ * Open the "Add to playlist" quick-pick popover anchored under the
+ * given trigger element. Re-rendering an already-open popover (e.g.
+ * a playlist gets created while it's open) is handled by
+ * `onPlaylistsChange`.
+ */
+export function openAddToPlaylistPopover(datasetId: string, anchor: HTMLElement): void {
+  if (!datasetId) return
+  popoverAnchor = anchor
+  ensurePopoverHost()
+  renderAddPopover(anchor)
+}
+
+/** Close the add-to-playlist popover. Idempotent. */
+export function closeAddPopover(): void {
+  popoverAnchor = null
+  const host = document.getElementById('playlist-add-popover')
+  if (host) host.classList.add('hidden')
+}
+
+function ensurePopoverHost(): void {
+  if (document.getElementById('playlist-add-popover')) return
+  const host = document.createElement('div')
+  host.id = 'playlist-add-popover'
+  host.className = 'hidden'
+  host.setAttribute('role', 'dialog')
+  host.setAttribute('aria-modal', 'false')
+  host.setAttribute('aria-label', t('playlist.add.popover.title'))
+  document.body.appendChild(host)
+}
+
+function renderAddPopover(anchor: HTMLElement): void {
+  const host = document.getElementById('playlist-add-popover')
+  if (!host) return
+  const datasetId = anchor.dataset.datasetId
+  if (!datasetId) {
+    closeAddPopover()
+    return
+  }
+  const playlists = loadPlaylists()
+
+  let html = `
+    <div class="pl-add-header">
+      <span class="pl-add-title">${tHtml('playlist.add.popover.title')}</span>
+      <button type="button" class="pl-add-close" id="playlist-add-close"
+        aria-label="${tAttr('playlist.add.popover.close.aria')}">&#x2715;</button>
+    </div>
+    <ul class="pl-add-list" role="list">`
+  if (playlists.length === 0) {
+    html += `<li class="pl-add-empty">${tHtml('playlist.add.popover.empty')}</li>`
+  } else {
+    for (const p of playlists) {
+      const alreadyIn = p.datasets.some((e) => e.datasetId === datasetId)
+      html += `
+        <li>
+          <button type="button" class="pl-add-option" data-id="${escapeAttr(p.id)}"
+            data-already-in="${alreadyIn ? '1' : '0'}">
+            <span class="pl-add-option-name">${escapeHtml(p.name)}</span>
+            ${alreadyIn ? `<span class="pl-add-option-check" aria-hidden="true">&#x2713;</span>` : ''}
+          </button>
+        </li>`
+    }
+  }
+  html += `
+    </ul>
+    <button type="button" class="pl-add-new" id="playlist-add-new">${tHtml('playlist.add.popover.newOption')}</button>`
+
+  host.innerHTML = html
+  host.classList.remove('hidden')
+
+  // Position the popover under the anchor. `getBoundingClientRect`
+  // is relative to the viewport, and the popover is `position:
+  // fixed`, so we can use those coordinates directly.
+  const rect = anchor.getBoundingClientRect()
+  host.style.top = `${Math.round(rect.bottom + 6)}px`
+  // Use logical inline-axis positioning so RTL flips correctly. We
+  // align the popover's start edge to the anchor's start edge.
+  // `inset-inline-start` doesn't accept a numeric pixel value in
+  // every browser path for fixed-position elements; using `left`
+  // here is fine because the popover sits inside the document flow
+  // and `dir=rtl` flips the visual anchor automatically through
+  // the body-level dir attribute.
+  host.style.insetInlineStart = `${Math.round(rect.left)}px`
+
+  host.querySelector<HTMLButtonElement>('#playlist-add-close')
+    ?.addEventListener('click', () => closeAddPopover())
+
+  host.querySelector<HTMLButtonElement>('#playlist-add-new')?.addEventListener('click', () => {
+    const name = window.prompt(t('playlist.create.prompt'), t('playlist.create.defaultName'))
+    if (name == null) return
+    const trimmed = name.trim()
+    if (trimmed.length === 0) return
+    const newPlaylist = createPlaylist(trimmed)
+    addToPlaylist(newPlaylist.id, datasetId)
+    const dataset = dataService.getDatasetById(datasetId)
+    callbacks.announce?.(t('playlist.added.announce', {
+      title: dataset?.title ?? datasetId,
+      playlist: newPlaylist.name,
+    }))
+    closeAddPopover()
+  })
+
+  host.querySelectorAll<HTMLButtonElement>('.pl-add-option').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const id = btn.dataset.id
+      if (!id) return
+      const target = loadPlaylists().find((p) => p.id === id)
+      if (!target) return
+      const dataset = dataService.getDatasetById(datasetId)
+      if (btn.dataset.alreadyIn === '1') {
+        callbacks.announce?.(t('playlist.alreadyIn.announce', {
+          title: dataset?.title ?? datasetId,
+          playlist: target.name,
+        }))
+        closeAddPopover()
+        return
+      }
+      addToPlaylist(id, datasetId)
+      callbacks.announce?.(t('playlist.added.announce', {
+        title: dataset?.title ?? datasetId,
+        playlist: target.name,
+      }))
+      closeAddPopover()
+    })
+  })
+}
+
+function handleDocumentClick(ev: MouseEvent): void {
+  const target = ev.target as Node | null
+  if (!target) return
+
+  // Add popover outside-click closes (but not when clicking the
+  // anchor that opened it — the caller's own click handler should
+  // close it on a second click if it wants).
+  if (popoverAnchor) {
+    const popover = document.getElementById('playlist-add-popover')
+    if (popover && !popover.contains(target) && !popoverAnchor.contains(target)) {
+      closeAddPopover()
+    }
+  }
+
+  // Manager panel outside-click closes — but never close because of
+  // a click landing inside the tools menu (the menu's "Playlists"
+  // entry is the most common way to open the manager, and the
+  // tools menu fires its outside-click handler on the same event).
+  if (managerOpen) {
+    const panel = document.getElementById('playlist-manager')
+    const toolsMenu = document.getElementById('map-controls')
+    if (panel && !panel.contains(target) && !toolsMenu?.contains(target)) {
+      closePlaylistManager()
+    }
+  }
+}
+
+function handleDocumentKeydown(ev: KeyboardEvent): void {
+  if (ev.key !== 'Escape') return
+  if (popoverAnchor) {
+    closeAddPopover()
+    return
+  }
+  if (managerOpen) {
+    closePlaylistManager()
+  }
+}
