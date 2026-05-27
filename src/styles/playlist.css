@@ -218,13 +218,24 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: calc(20px * var(--ui-scale));
     height: calc(20px * var(--ui-scale));
+    padding-inline: calc(0.3rem * var(--ui-scale));
     border-radius: calc(3px * var(--ui-scale));
     color: var(--color-text-faint);
+    border: 1px solid var(--white-o08);
     cursor: pointer;
-    font-size: calc(0.7rem * var(--ui-scale));
+    font-size: calc(0.55rem * var(--ui-scale));
     line-height: 1;
+    gap: calc(0.2rem * var(--ui-scale));
+}
+.pl-mgr-row-loop > span:first-of-type,
+.pl-mgr-entry-pause > span:first-of-type {
+    font-size: calc(0.7rem * var(--ui-scale));
+}
+.pl-mgr-toggle-label {
+    font-size: calc(0.55rem * var(--ui-scale));
+    line-height: 1;
+    letter-spacing: 0.01em;
 }
 .pl-mgr-row-loop:hover,
 .pl-mgr-entry-pause:hover {
@@ -250,6 +261,51 @@
 .pl-mgr-entry-pause:has(.pl-mgr-entry-pause-input:focus-visible) {
     outline: 2px solid var(--color-accent, #4a8);
     outline-offset: 1px;
+}
+
+/* --- "Click to continue" floating prompt --- */
+#playlist-continue-prompt {
+    position: fixed;
+    bottom: calc(6.5rem * var(--ui-scale));
+    inset-inline-start: 50%;
+    transform: translateX(-50%);
+    display: inline-flex;
+    align-items: center;
+    gap: calc(0.45rem * var(--ui-scale));
+    padding: calc(0.55rem * var(--ui-scale)) calc(0.95rem * var(--ui-scale));
+    background: var(--color-accent, #4a8);
+    color: #fff;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: calc(999px * var(--ui-scale));
+    font-size: calc(0.8rem * var(--ui-scale));
+    font-weight: 600;
+    cursor: pointer;
+    z-index: 60;
+    pointer-events: auto;
+    box-shadow: 0 calc(4px * var(--ui-scale)) calc(20px * var(--ui-scale)) rgba(0, 0, 0, 0.4);
+    animation: pl-continue-pulse 2s ease-in-out infinite;
+}
+#playlist-continue-prompt.hidden { display: none; }
+#playlist-continue-prompt:hover {
+    filter: brightness(1.15);
+}
+:root[dir="rtl"] #playlist-continue-prompt {
+    transform: translateX(50%);
+}
+.pl-continue-icon {
+    font-size: calc(1rem * var(--ui-scale));
+    line-height: 1;
+}
+.pl-continue-label {
+    line-height: 1;
+}
+@keyframes pl-continue-pulse {
+    0%, 100% { box-shadow: 0 calc(4px * var(--ui-scale)) calc(20px * var(--ui-scale)) rgba(0, 0, 0, 0.4); }
+    50%      { box-shadow: 0 calc(4px * var(--ui-scale)) calc(20px * var(--ui-scale)) rgba(0, 0, 0, 0.4),
+                           0 0 0 calc(8px * var(--ui-scale)) rgba(100, 200, 100, 0.18); }
+}
+@media (prefers-reduced-motion: reduce) {
+    #playlist-continue-prompt { animation: none; }
 }
 
 /* --- Add-to-playlist popover --- */

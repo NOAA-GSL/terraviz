@@ -170,6 +170,38 @@ describe('add-to-playlist popover', () => {
   })
 })
 
+describe('"click to continue" prompt', () => {
+  it('shows when the active entry has pauseForInput', async () => {
+    const { initPlaylistPlayback, play, resetPlaylistPlaybackForTests } =
+      await import('../services/playlistPlayback')
+    resetPlaylistPlaybackForTests()
+    initPlaylistPlayback({
+      loadDataset: async () => {},
+      hasTourOnLoad: () => false,
+    })
+    const p = createPlaylist('with pause')
+    addToPlaylist(p.id, 'DATASET_A')
+    // Re-fetch so we get the just-mutated playlist.
+    const playlist = loadPlaylists().find((x) => x.id === p.id)!
+    playlist.datasets[0].pauseForInput = true
+    play(playlist)
+    // The prompt is mounted by initPlaylistUI and toggled via the
+    // onPlaybackChange listener — give the microtask queue a beat
+    // so the listener has fired.
+    await Promise.resolve()
+    const host = document.getElementById('playlist-continue-prompt')
+    expect(host).not.toBeNull()
+    expect(host?.classList.contains('hidden')).toBe(false)
+    resetPlaylistPlaybackForTests()
+  })
+
+  it('stays hidden when no playlist is playing', () => {
+    const host = document.getElementById('playlist-continue-prompt')
+    expect(host).not.toBeNull()
+    expect(host?.classList.contains('hidden')).toBe(true)
+  })
+})
+
 describe('handleImportFile', () => {
   it('imports a valid JSON file with playlists', async () => {
     const json = JSON.stringify([

@@ -50,6 +50,7 @@ import {
   getActive as getActivePlayback,
   onPlaybackChange,
   play as playPlaylist,
+  skipNext as skipNextPlaylistEntry,
   stop as stopPlaylistPlayback,
 } from '../services/playlistPlayback'
 import { dataService } from '../services/dataService'
@@ -92,11 +93,16 @@ export function initPlaylistUI(cb: PlaylistUICallbacks = {}): void {
 
   // Re-render the manager when playback state changes (the Play
   // button on each row needs to flip to "Stop" while that playlist
-  // is the active one).
+  // is the active one). Also drive the floating Continue prompt
+  // off the same channel — it's visible exactly when the active
+  // entry is paused waiting for user input.
   unsubPlayback?.()
   unsubPlayback = onPlaybackChange(() => {
     if (managerOpen) renderManager()
+    syncContinuePrompt()
   })
+  ensureContinuePromptHost()
+  syncContinuePrompt()
 
   // Outside-click closes the manager. Wired once.
   if (!document.body.dataset.playlistUiListenersWired) {
@@ -141,6 +147,40 @@ export function closePlaylistManager(): void {
 /** Whether the manager is currently visible — used by tests. */
 export function isPlaylistManagerOpen(): boolean {
   return managerOpen
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// "Click to continue" floating prompt
+// ─────────────────────────────────────────────────────────────────────
+
+/** Build the floating Continue prompt host (idempotent). The
+ *  element stays in the DOM after first mount and toggles its
+ *  hidden class via `syncContinuePrompt`. */
+function ensureContinuePromptHost(): void {
+  if (document.getElementById('playlist-continue-prompt')) return
+  const host = document.createElement('button')
+  host.id = 'playlist-continue-prompt'
+  host.type = 'button'
+  host.className = 'hidden'
+  host.setAttribute('aria-label', t('playlist.continue.aria'))
+  host.innerHTML = `
+    <span class="pl-continue-icon" aria-hidden="true">&#x25B6;&#xFE0E;</span>
+    <span class="pl-continue-label">${escapeHtml(t('playlist.continue.label'))}</span>`
+  host.addEventListener('click', () => {
+    skipNextPlaylistEntry()
+  })
+  document.body.appendChild(host)
+}
+
+/** Show or hide the Continue prompt based on the active entry's
+ *  `pauseForInput` flag. Called whenever playback state changes. */
+function syncContinuePrompt(): void {
+  const host = document.getElementById('playlist-continue-prompt')
+  if (!host) return
+  const state = getActivePlayback()
+  const entry = state ? state.playlist.datasets[state.index] : null
+  const visible = !!(state && entry?.pauseForInput && !state.paused)
+  host.classList.toggle('hidden', !visible)
 }
 
 function ensureManagerHost(): void {
@@ -232,6 +272,7 @@ function renderPlaylistRow(playlist: Playlist, isActive: boolean): string {
               aria-label="${escapeAttr(t('playlist.entry.pauseForInput.aria', { title }))}"
               ${pauseChecked}>
             <span aria-hidden="true">&#x23F8;&#xFE0E;</span>
+            <span class="pl-mgr-toggle-label">${tHtml('playlist.entry.pauseForInput.label')}</span>
           </label>
           <button type="button" class="pl-mgr-entry-move pl-mgr-entry-move-up"
             data-id="${escapeAttr(playlist.id)}" data-index="${i}"
@@ -264,6 +305,7 @@ function renderPlaylistRow(playlist: Playlist, isActive: boolean): string {
             aria-label="${escapeAttr(t('playlist.loop.aria', { name: playlist.name }))}"
             ${loopChecked}>
           <span aria-hidden="true">&#x21BB;</span>
+          <span class="pl-mgr-toggle-label">${tHtml('playlist.loop.label')}</span>
         </label>
         <button type="button" class="pl-mgr-row-delete" data-id="${escapeAttr(playlist.id)}"
           aria-label="${escapeAttr(t('playlist.delete.aria', { name: playlist.name }))}"

@@ -405,6 +405,8 @@
   "playlist.alreadyIn.announce": "{title} is already in {playlist}",
   "playlist.button.aria": "Open playlist manager",
   "playlist.button.title": "Playlists",
+  "playlist.continue.aria": "Continue playlist",
+  "playlist.continue.label": "Click to continue",
   "playlist.create.defaultName": "My playlist",
   "playlist.create.prompt": "Name your new playlist:",
   "playlist.delete.aria": "Delete playlist {name}",
