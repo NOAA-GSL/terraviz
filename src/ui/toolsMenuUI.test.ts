@@ -802,3 +802,118 @@ describe('Tools menu UI-size radio', () => {
     expect(last.value_class).toBe('compact')
   })
 })
+
+// ---------------------------------------------------------------------------
+// Specular preset radio (§7.2)
+//
+// Three buttons (None / Default / Comfortable) wired to
+// shaderSettingsService. The service mutates the live shader-settings
+// snapshot + localStorage and fires a change event; the UI only
+// mirrors active state across the three buttons.
+// ---------------------------------------------------------------------------
+
+describe('Tools menu specular preset radio', () => {
+  beforeEach(async () => {
+    localStorage.clear()
+    const { resetShaderSettingsForTests } = await import('../services/shaderSettingsService')
+    resetShaderSettingsForTests()
+  })
+
+  afterEach(async () => {
+    localStorage.clear()
+    const { resetShaderSettingsForTests } = await import('../services/shaderSettingsService')
+    resetShaderSettingsForTests()
+  })
+
+  it('renders the three specular preset buttons', () => {
+    const vm = makeViewports(1)
+    initToolsMenu(vm as any)
+
+    const none = document.getElementById('tools-menu-specular-none')!
+    const def = document.getElementById('tools-menu-specular-default')!
+    const comfy = document.getElementById('tools-menu-specular-comfortable')!
+    expect(none).toBeTruthy()
+    expect(def).toBeTruthy()
+    expect(comfy).toBeTruthy()
+    // Default is the shipped SHADER_DEFAULTS value, so it's active
+    // on a fresh boot.
+    expect(def.classList.contains('active')).toBe(true)
+    expect(def.getAttribute('aria-pressed')).toBe('true')
+    expect(none.classList.contains('active')).toBe(false)
+    expect(comfy.classList.contains('active')).toBe(false)
+  })
+
+  it('writes the service value + localStorage + flips active when a preset is clicked', async () => {
+    const { getShaderSettings, SHADER_SPECULAR_STORAGE_KEY, SPECULAR_PRESETS } = await import('../services/shaderSettingsService')
+    const vm = makeViewports(1)
+    initToolsMenu(vm as any)
+
+    const none = document.getElementById('tools-menu-specular-none') as HTMLButtonElement
+    none.click()
+
+    expect(none.classList.contains('active')).toBe(true)
+    expect(none.getAttribute('aria-pressed')).toBe('true')
+    const def = document.getElementById('tools-menu-specular-default')!
+    expect(def.classList.contains('active')).toBe(false)
+    expect(def.getAttribute('aria-pressed')).toBe('false')
+    expect(getShaderSettings().specularStrength).toBe(SPECULAR_PRESETS.none)
+    expect(localStorage.getItem(SHADER_SPECULAR_STORAGE_KEY)).toBe('none')
+  })
+
+  it('reflects a persisted comfortable preset at boot', async () => {
+    const { SHADER_SPECULAR_STORAGE_KEY } = await import('../services/shaderSettingsService')
+    localStorage.setItem(SHADER_SPECULAR_STORAGE_KEY, 'comfortable')
+    // Re-init the service so the persisted value lands in the live
+    // snapshot before the Tools menu reads it.
+    const { initShaderSettings } = await import('../services/shaderSettingsService')
+    initShaderSettings()
+
+    const vm = makeViewports(1)
+    initToolsMenu(vm as any)
+
+    const comfy = document.getElementById('tools-menu-specular-comfortable')!
+    expect(comfy.classList.contains('active')).toBe(true)
+    expect(comfy.getAttribute('aria-pressed')).toBe('true')
+    expect(document.getElementById('tools-menu-specular-default')!.classList.contains('active')).toBe(false)
+  })
+
+  it('falls back to default for non-preset live values (post-tuner)', async () => {
+    const { setTunerValue } = await import('../services/shaderSettingsService')
+    // The ?tune=shader page can write any value; matchSpecularPreset
+    // returns null for those. The Tools menu must still highlight a
+    // button (UX: an unselected radiogroup is confusing), and we
+    // chose 'default' as the fallback in the render path.
+    setTunerValue('specularStrength', 0.42)
+
+    const vm = makeViewports(1)
+    initToolsMenu(vm as any)
+
+    const def = document.getElementById('tools-menu-specular-default')!
+    expect(def.classList.contains('active')).toBe(true)
+    expect(document.getElementById('tools-menu-specular-none')!.classList.contains('active')).toBe(false)
+    expect(document.getElementById('tools-menu-specular-comfortable')!.classList.contains('active')).toBe(false)
+  })
+
+  it('announces and emits settings_changed when a preset is picked', async () => {
+    const emitterMod = await import('../analytics/emitter')
+    const { setTier } = await import('../analytics/config')
+    emitterMod.resetForTests()
+    setTier('essential')
+
+    const announce = vi.fn()
+    const vm = makeViewports(1)
+    initToolsMenu(vm as any, { getCurrentDataset: () => null, announce })
+
+    const comfy = document.getElementById('tools-menu-specular-comfortable') as HTMLButtonElement
+    comfy.click()
+
+    expect(announce).toHaveBeenCalledWith('Sun glint: Comfortable')
+
+    const events = emitterMod.__peek()
+    const settings = events.filter((e) => e.event_type === 'settings_changed' && e.key === 'specular')
+    expect(settings.length).toBe(1)
+    const last = settings[0]
+    if (last.event_type !== 'settings_changed') throw new Error('unreachable')
+    expect(last.value_class).toBe('comfortable')
+  })
+})
