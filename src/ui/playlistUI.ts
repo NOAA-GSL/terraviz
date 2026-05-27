@@ -506,19 +506,45 @@ function renderAddPopover(anchor: HTMLElement, datasetId: string): void {
   host.innerHTML = html
   host.classList.remove('hidden')
 
-  // Position the popover under the anchor. `getBoundingClientRect`
-  // is relative to the viewport, and the popover is `position:
-  // fixed`, so we can use those coordinates directly.
+  // Position the popover so it stays inside the viewport. Anchors
+  // near the right edge of the screen (common — the browse panel
+  // is right-anchored, so its "+" buttons sit close to the edge)
+  // would otherwise push the popover off-screen. We measure the
+  // popover after it's been made visible, then clamp.
+  const margin = 8
   const rect = anchor.getBoundingClientRect()
-  host.style.top = `${Math.round(rect.bottom + 6)}px`
-  // Use logical inline-axis positioning so RTL flips correctly. We
-  // align the popover's start edge to the anchor's start edge.
-  // `inset-inline-start` doesn't accept a numeric pixel value in
-  // every browser path for fixed-position elements; using `left`
-  // here is fine because the popover sits inside the document flow
-  // and `dir=rtl` flips the visual anchor automatically through
-  // the body-level dir attribute.
-  host.style.insetInlineStart = `${Math.round(rect.left)}px`
+  const popoverRect = host.getBoundingClientRect()
+  const vw = window.innerWidth
+  const vh = window.innerHeight
+
+  // Vertical: prefer below the anchor; flip above when there isn't
+  // room and the anchor is below the vertical midpoint.
+  let top = rect.bottom + 6
+  if (top + popoverRect.height > vh - margin) {
+    const above = rect.top - popoverRect.height - 6
+    top = above >= margin ? above : Math.max(margin, vh - popoverRect.height - margin)
+  }
+
+  // Horizontal: align the start edge to the anchor, then clamp so
+  // the trailing edge stays inside the viewport. Visual-axis (not
+  // logical-axis) coordinates here — `inset-inline-start` is what
+  // we want in LTR but in RTL the popover should still hug the
+  // anchor's start edge, which means measuring from the right.
+  const isRtl = document.documentElement.dir === 'rtl'
+  if (isRtl) {
+    let right = vw - rect.right
+    const maxRight = vw - popoverRect.width - margin
+    right = Math.max(margin, Math.min(right, maxRight))
+    host.style.insetInlineStart = ''
+    host.style.right = `${Math.round(right)}px`
+  } else {
+    let left = rect.left
+    const maxLeft = vw - popoverRect.width - margin
+    left = Math.max(margin, Math.min(left, maxLeft))
+    host.style.right = ''
+    host.style.insetInlineStart = `${Math.round(left)}px`
+  }
+  host.style.top = `${Math.round(top)}px`
 
   host.querySelector<HTMLButtonElement>('#playlist-add-close')
     ?.addEventListener('click', () => closeAddPopover())

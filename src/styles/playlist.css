@@ -21,7 +21,11 @@
     border: 1px solid var(--white-o08);
     border-radius: calc(10px * var(--ui-scale));
     padding: calc(0.75rem * var(--ui-scale));
-    z-index: 70;
+    /* Browse overlay sits at 500 and the catalog tabs strip at 600;
+     * the manager needs to render above both so it can be opened
+     * while the browse panel is visible. Below the error banner's
+     * 9000 so a hard error still wins. */
+    z-index: 1000;
     pointer-events: auto;
     color: #ddd;
     font-size: calc(0.7rem * var(--ui-scale));
@@ -220,7 +224,10 @@
     border: 1px solid var(--white-o08);
     border-radius: calc(8px * var(--ui-scale));
     padding: calc(0.4rem * var(--ui-scale));
-    z-index: 80;
+    /* Above the manager (1000) and the browse-overlay (500) so the
+     * popover can be triggered from a browse card without rendering
+     * behind the panel. */
+    z-index: 1100;
     pointer-events: auto;
     color: #ddd;
     font-size: calc(0.65rem * var(--ui-scale));
