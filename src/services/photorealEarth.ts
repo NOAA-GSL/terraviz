@@ -617,17 +617,33 @@ export function createPhotorealEarth(
          // semantics match the 2D earthTileLayer's Pass 0, which
          // operates on the Blue Marble framebuffer BEFORE any
          // night-darken / lights / specular / cloud / atmosphere
-         // composition. Putting it at <tonemapping_fragment> instead
-         // (the previous draft) was applying contrast/sat to the
-         // FINAL composed colour including the specular hotspot,
-         // which oversaturated highlights and pushed mid-tones (the
-         // green Amazon, the brown Andes) into perceived-wrong
-         // territory — Brazil read as red, the rainforest as sky-
-         // blue, none of which matched the 2D look.
-         sampledDiffuseColor.rgb = (sampledDiffuseColor.rgb - 0.5) * uContrast + 0.5;
-         float vrLuma = dot(sampledDiffuseColor.rgb, vec3(0.299, 0.587, 0.114));
-         sampledDiffuseColor.rgb = mix(vec3(vrLuma), sampledDiffuseColor.rgb, uSaturation);
-         sampledDiffuseColor.rgb = clamp(sampledDiffuseColor.rgb, 0.0, 1.0);
+         // composition.
+         //
+         // Critical: applied in sRGB PERCEPTUAL space, not linear.
+         // Three.js samples the diffuse texture with the
+         // SRGBColorSpace transform, so sampledDiffuseColor.rgb at
+         // this point is already linear (Three.js gamma-decoded it
+         // for the lighting pipeline). The 2D Pass 0 reads the
+         // MapLibre framebuffer
+         // which is in sRGB display space (no gamma decode), so
+         // its "contrast around 0.5" treats 0.5 as the perceptual
+         // midpoint. Applying the same maths in linear space would
+         // treat typical earth-brown (sRGB ~0.4 → linear ~0.13) as
+         // much-darker-than-midtone and aggressively crush it at
+         // any contrast > 1, which is exactly what produced the
+         // "sky takes over" symptom — the surface darkened, the
+         // atmosphere shell (unaffected) dominated relatively.
+         // Encode to sRGB, do the maths, decode back to linear.
+         // Approximate gamma 2.2 — the piecewise sRGB transfer
+         // curve is a few %-points more accurate but adds branches
+         // to a hot path; the 2.2 approximation is good enough for
+         // a perceptual-contrast knob.
+         vec3 perceptual = pow(sampledDiffuseColor.rgb, vec3(1.0 / 2.2));
+         perceptual = (perceptual - 0.5) * uContrast + 0.5;
+         float vrLuma = dot(perceptual, vec3(0.299, 0.587, 0.114));
+         perceptual = mix(vec3(vrLuma), perceptual, uSaturation);
+         perceptual = clamp(perceptual, 0.0, 1.0);
+         sampledDiffuseColor.rgb = pow(perceptual, vec3(2.2));
          diffuseColor *= sampledDiffuseColor;
        #endif`,
     )
