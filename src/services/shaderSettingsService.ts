@@ -50,14 +50,17 @@ export const SPECULAR_PRESETS: Record<SpecularPreset, number> = {
  *  - contrast 1.10 — slight S-curve to deepen ocean blues
  *  - saturation 1.20 — push the Blue Marble greens/blues a touch
  *  - specular 0.35 — Adrian's "reduce specular" ask, was 0.60
- *  - bump 0.85 — normal-map intensity; subtle but visible
- *  - night 1.00 — reserved for future night-side scalar
+ *  - bump 0.17 — normal-map intensity. The first-pass guess at
+ *    0.85 was wildly overbaked given the 8192 asset's bake depth
+ *    (every minor topographic ripple shaded as a Grand-Canyon-
+ *    sized escarpment). 0.17 keeps mountain ranges visible
+ *    without the whole continent reading as scratched.
  */
 export const SHADER_DEFAULTS = {
   contrast: 1.10,
   saturation: 1.20,
   specularStrength: SPECULAR_PRESETS.default,
-  bumpStrength: 0.85,
+  bumpStrength: 0.17,
 } as const
 
 /** Hard-clamp band for any incoming value. */
