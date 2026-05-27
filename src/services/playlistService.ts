@@ -60,8 +60,13 @@ export const PLAYLIST_NAME_MAX_LEN = 120
 export interface PlaylistEntry {
   datasetId: string
   /** Display duration in seconds. Omit to fall back to
-   *  `DEFAULT_ENTRY_DURATION_SEC`. */
+   *  `DEFAULT_ENTRY_DURATION_SEC`. Ignored when `pauseForInput`
+   *  is true — the entry then waits for an explicit skip. */
   durationSec?: number
+  /** When true, the playlist pins this entry until the user clicks
+   *  the transport's "next in playlist" button. Mirrors the tour
+   *  engine's `pauseForInput` semantics for playlists. */
+  pauseForInput?: boolean
 }
 
 /** A user-curated sequence of datasets. */
@@ -71,6 +76,9 @@ export interface Playlist {
   /** ISO-8601 timestamp set on first create. Not updated on edit. */
   createdAt: string
   datasets: PlaylistEntry[]
+  /** When true, end-of-list wraps back to index 0 instead of
+   *  stopping. Manual skip-next at the last entry also wraps. */
+  loop?: boolean
 }
 
 /** Event dispatched on every successful mutation. */
@@ -107,10 +115,13 @@ function sanitizePlaylist(raw: unknown): Playlist | null {
     if (typeof it.durationSec === 'number' && Number.isFinite(it.durationSec) && it.durationSec > 0) {
       entry.durationSec = it.durationSec
     }
+    if (it.pauseForInput === true) entry.pauseForInput = true
     datasets.push(entry)
   }
 
-  return { id, name, createdAt, datasets }
+  const out: Playlist = { id, name, createdAt, datasets }
+  if (r.loop === true) out.loop = true
+  return out
 }
 
 /** Read raw localStorage and coerce to an array of valid Playlists. */
@@ -297,6 +308,38 @@ export function setEntryDuration(id: string, index: number, durationSec: number 
  */
 export function effectiveDuration(entry: PlaylistEntry): number {
   return entry.durationSec ?? DEFAULT_ENTRY_DURATION_SEC
+}
+
+/**
+ * Toggle the per-entry pause-for-input flag. When true the playlist
+ * pins this entry until the user clicks the transport's
+ * skip-next button.
+ */
+export function setEntryPauseForInput(id: string, index: number, value: boolean): void {
+  const list = ensureLoaded()
+  const target = list.find((p) => p.id === id)
+  if (!target) return
+  if (index < 0 || index >= target.datasets.length) return
+  if (value) {
+    target.datasets[index].pauseForInput = true
+  } else {
+    delete target.datasets[index].pauseForInput
+  }
+  persist()
+}
+
+/** Toggle the playlist-level loop flag. When true, end-of-list
+ *  wraps back to index 0 instead of stopping. */
+export function setPlaylistLoop(id: string, value: boolean): void {
+  const list = ensureLoaded()
+  const target = list.find((p) => p.id === id)
+  if (!target) return
+  if (value) {
+    target.loop = true
+  } else {
+    delete target.loop
+  }
+  persist()
 }
 
 /**

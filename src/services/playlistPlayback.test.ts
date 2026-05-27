@@ -282,6 +282,99 @@ describe('tour deferral', () => {
   })
 })
 
+describe('pauseForInput', () => {
+  function makePlaylistWithPause(): Playlist {
+    return {
+      id: 'pl-test',
+      name: 'test',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      datasets: [
+        { datasetId: 'A', durationSec: 5 },
+        { datasetId: 'B', durationSec: 5, pauseForInput: true },
+        { datasetId: 'C', durationSec: 5 },
+      ],
+    }
+  }
+
+  it('pins the entry indefinitely; only skipNext advances', async () => {
+    const h = setupHarness()
+    play(makePlaylistWithPause())
+    await vi.waitFor(() => expect(h.loadDataset).toHaveBeenCalledWith('A'))
+    // First entry auto-advances after 5 s as usual.
+    await vi.advanceTimersByTimeAsync(5_000)
+    await vi.waitFor(() => expect(h.loadDataset).toHaveBeenCalledWith('B'))
+    // B has pauseForInput — even after 60 s we stay put.
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(h.loadDataset).toHaveBeenCalledTimes(2)
+    expect(getActive()?.index).toBe(1)
+    // skipNext is the only way out.
+    skipNext()
+    await vi.waitFor(() => expect(h.loadDataset).toHaveBeenCalledWith('C'))
+    expect(getActive()?.index).toBe(2)
+  })
+
+  it('resume does not arm a timer if the current entry is pauseForInput', async () => {
+    const h = setupHarness()
+    play(makePlaylistWithPause())
+    await vi.advanceTimersByTimeAsync(5_000)
+    await vi.waitFor(() => expect(h.loadDataset).toHaveBeenCalledWith('B'))
+    pause()
+    resume()
+    // No timer should arm — wait far past 5 s, still on B.
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(getActive()?.index).toBe(1)
+  })
+})
+
+describe('loop', () => {
+  it('wraps back to index 0 on natural end-of-list advance', async () => {
+    const h = setupHarness()
+    const playlist: Playlist = {
+      id: 'pl-loop',
+      name: 'looping',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      loop: true,
+      datasets: [
+        { datasetId: 'A', durationSec: 5 },
+        { datasetId: 'B', durationSec: 5 },
+      ],
+    }
+    play(playlist)
+    await vi.waitFor(() => expect(h.loadDataset).toHaveBeenCalledWith('A'))
+    await vi.advanceTimersByTimeAsync(5_000)
+    await vi.waitFor(() => expect(h.loadDataset).toHaveBeenCalledWith('B'))
+    // End of list → loop back to A instead of stopping.
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(getActive()?.index).toBe(0)
+    expect(h.loadDataset).toHaveBeenNthCalledWith(3, 'A')
+  })
+
+  it('wraps on manual skipNext from the last entry', async () => {
+    const h = setupHarness()
+    const playlist: Playlist = {
+      id: 'pl-loop',
+      name: 'looping',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      loop: true,
+      datasets: [{ datasetId: 'A' }, { datasetId: 'B' }],
+    }
+    play(playlist)
+    await vi.waitFor(() => expect(h.loadDataset).toHaveBeenCalledWith('A'))
+    skipNext()
+    await vi.waitFor(() => expect(h.loadDataset).toHaveBeenCalledWith('B'))
+    skipNext() // last → wrap to A
+    expect(getActive()?.index).toBe(0)
+  })
+
+  it('still stops at end-of-list when loop is false', async () => {
+    const h = setupHarness()
+    play(makePlaylist([['A', 5]]))
+    await vi.waitFor(() => expect(h.loadDataset).toHaveBeenCalledWith('A'))
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(getActive()).toBeNull()
+  })
+})
+
 describe('onPlaybackChange', () => {
   it('fires on play / skip / stop', async () => {
     const h = setupHarness()

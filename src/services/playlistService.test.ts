@@ -19,6 +19,8 @@ import {
   resetPlaylistsForTests,
   savePlaylist,
   setEntryDuration,
+  setEntryPauseForInput,
+  setPlaylistLoop,
   type Playlist,
 } from './playlistService'
 
@@ -260,6 +262,61 @@ describe('setEntryDuration + effectiveDuration', () => {
 
   it('returns the override when set', () => {
     expect(effectiveDuration({ datasetId: 'A', durationSec: 90 })).toBe(90)
+  })
+})
+
+describe('setEntryPauseForInput', () => {
+  it('sets the flag when true is passed', () => {
+    const p = createPlaylist('a')
+    addToPlaylist(p.id, 'A')
+    setEntryPauseForInput(p.id, 0, true)
+    expect(getPlaylist(p.id)?.datasets[0].pauseForInput).toBe(true)
+  })
+
+  it('removes the flag when false is passed', () => {
+    const p = createPlaylist('a')
+    addToPlaylist(p.id, 'A')
+    setEntryPauseForInput(p.id, 0, true)
+    setEntryPauseForInput(p.id, 0, false)
+    expect(getPlaylist(p.id)?.datasets[0].pauseForInput).toBeUndefined()
+  })
+
+  it('no-ops for out-of-range index or unknown playlist', () => {
+    const p = createPlaylist('a')
+    addToPlaylist(p.id, 'A')
+    setEntryPauseForInput(p.id, 99, true)
+    setEntryPauseForInput('pl-missing', 0, true)
+    expect(getPlaylist(p.id)?.datasets[0].pauseForInput).toBeUndefined()
+  })
+
+  it('roundtrips through localStorage', () => {
+    const p = createPlaylist('a')
+    addToPlaylist(p.id, 'A')
+    setEntryPauseForInput(p.id, 0, true)
+    resetPlaylistsForTests()
+    expect(loadPlaylists()[0].datasets[0].pauseForInput).toBe(true)
+  })
+})
+
+describe('setPlaylistLoop', () => {
+  it('sets and clears the loop flag', () => {
+    const p = createPlaylist('a')
+    setPlaylistLoop(p.id, true)
+    expect(getPlaylist(p.id)?.loop).toBe(true)
+    setPlaylistLoop(p.id, false)
+    expect(getPlaylist(p.id)?.loop).toBeUndefined()
+  })
+
+  it('no-ops for unknown playlist', () => {
+    setPlaylistLoop('pl-missing', true)
+    expect(loadPlaylists()).toEqual([])
+  })
+
+  it('roundtrips through localStorage', () => {
+    const p = createPlaylist('a')
+    setPlaylistLoop(p.id, true)
+    resetPlaylistsForTests()
+    expect(loadPlaylists()[0].loop).toBe(true)
   })
 })
 

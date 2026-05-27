@@ -212,6 +212,46 @@
     list-style: none;
 }
 
+.pl-mgr-row-loop,
+.pl-mgr-entry-pause {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: calc(20px * var(--ui-scale));
+    height: calc(20px * var(--ui-scale));
+    border-radius: calc(3px * var(--ui-scale));
+    color: var(--color-text-faint);
+    cursor: pointer;
+    font-size: calc(0.7rem * var(--ui-scale));
+    line-height: 1;
+}
+.pl-mgr-row-loop:hover,
+.pl-mgr-entry-pause:hover {
+    color: #fff;
+    background: var(--white-o05);
+}
+.pl-mgr-row-loop-input,
+.pl-mgr-entry-pause-input {
+    /* Hide the native checkbox — the visible state lives in the
+     * parent label's background / glyph color (see :has below). */
+    position: absolute;
+    opacity: 0;
+    pointer-events: none;
+    width: 1px;
+    height: 1px;
+}
+.pl-mgr-row-loop:has(.pl-mgr-row-loop-input:checked),
+.pl-mgr-entry-pause:has(.pl-mgr-entry-pause-input:checked) {
+    color: var(--color-accent, #4a8);
+    background: rgba(100, 200, 100, 0.12);
+}
+.pl-mgr-row-loop:has(.pl-mgr-row-loop-input:focus-visible),
+.pl-mgr-entry-pause:has(.pl-mgr-entry-pause-input:focus-visible) {
+    outline: 2px solid var(--color-accent, #4a8);
+    outline-offset: 1px;
+}
+
 /* --- Add-to-playlist popover --- */
 #playlist-add-popover {
     position: fixed;

@@ -42,6 +42,8 @@ import {
   renamePlaylist,
   reorderPlaylist,
   setEntryDuration,
+  setEntryPauseForInput,
+  setPlaylistLoop,
   type Playlist,
 } from '../services/playlistService'
 import {
@@ -214,6 +216,7 @@ function renderPlaylistRow(playlist: Playlist, isActive: boolean): string {
       const dataset = dataService.getDatasetById(entry.datasetId)
       const title = dataset?.title ?? t('playlist.unknownDataset')
       const duration = entry.durationSec ?? ''
+      const pauseChecked = entry.pauseForInput ? 'checked' : ''
       entriesHtml += `
         <li class="pl-mgr-entry" data-id="${escapeAttr(playlist.id)}" data-index="${i}">
           <span class="pl-mgr-entry-title">${escapeHtml(title)}</span>
@@ -221,7 +224,15 @@ function renderPlaylistRow(playlist: Playlist, isActive: boolean): string {
             value="${escapeAttr(String(duration))}"
             placeholder="${escapeAttr(String(DEFAULT_ENTRY_DURATION_SEC))}"
             aria-label="${tAttr('playlist.duration.label')}"
+            ${entry.pauseForInput ? 'disabled' : ''}
             data-id="${escapeAttr(playlist.id)}" data-index="${i}">
+          <label class="pl-mgr-entry-pause" title="${escapeAttr(t('playlist.entry.pauseForInput.label'))}">
+            <input type="checkbox" class="pl-mgr-entry-pause-input"
+              data-id="${escapeAttr(playlist.id)}" data-index="${i}"
+              aria-label="${escapeAttr(t('playlist.entry.pauseForInput.aria', { title }))}"
+              ${pauseChecked}>
+            <span aria-hidden="true">&#x23F8;&#xFE0E;</span>
+          </label>
           <button type="button" class="pl-mgr-entry-move pl-mgr-entry-move-up"
             data-id="${escapeAttr(playlist.id)}" data-index="${i}"
             aria-label="${escapeAttr(t('playlist.entry.moveUp.aria', { title }))}"
@@ -238,6 +249,7 @@ function renderPlaylistRow(playlist: Playlist, isActive: boolean): string {
     }
   }
 
+  const loopChecked = playlist.loop ? 'checked' : ''
   return `
     <li class="pl-mgr-row${isActive ? ' active' : ''}" data-id="${escapeAttr(playlist.id)}">
       <div class="pl-mgr-row-header">
@@ -246,6 +258,13 @@ function renderPlaylistRow(playlist: Playlist, isActive: boolean): string {
           aria-label="${escapeAttr(t('playlist.rename.aria', { name: playlist.name }))}"
           >${escapeHtml(playlist.name)}</button>
         <span class="pl-mgr-row-count">${escapeHtml(countLabel)}</span>
+        <label class="pl-mgr-row-loop" title="${escapeAttr(t('playlist.loop.label'))}">
+          <input type="checkbox" class="pl-mgr-row-loop-input"
+            data-id="${escapeAttr(playlist.id)}"
+            aria-label="${escapeAttr(t('playlist.loop.aria', { name: playlist.name }))}"
+            ${loopChecked}>
+          <span aria-hidden="true">&#x21BB;</span>
+        </label>
         <button type="button" class="pl-mgr-row-delete" data-id="${escapeAttr(playlist.id)}"
           aria-label="${escapeAttr(t('playlist.delete.aria', { name: playlist.name }))}"
           >&#x1F5D1;&#xFE0E;</button>
@@ -344,6 +363,23 @@ function wireManagerEvents(panel: HTMLElement, activePlaylistId: string | null):
         return
       }
       setEntryDuration(id, index, Math.floor(parsed))
+    })
+  })
+
+  panel.querySelectorAll<HTMLInputElement>('.pl-mgr-row-loop-input').forEach((input) => {
+    input.addEventListener('change', () => {
+      const id = input.dataset.id
+      if (!id) return
+      setPlaylistLoop(id, input.checked)
+    })
+  })
+
+  panel.querySelectorAll<HTMLInputElement>('.pl-mgr-entry-pause-input').forEach((input) => {
+    input.addEventListener('change', () => {
+      const id = input.dataset.id
+      const indexStr = input.dataset.index
+      if (!id || indexStr == null) return
+      setEntryPauseForInput(id, Number(indexStr), input.checked)
     })
   })
 

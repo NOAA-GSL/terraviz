@@ -136,7 +136,8 @@ export function pause(): void {
 export function resume(): void {
   if (!active || !active.paused) return
   active.paused = false
-  if (!active.waitingForTour) {
+  const currentEntry = active.playlist.datasets[active.index]
+  if (!active.waitingForTour && !currentEntry?.pauseForInput) {
     armTimer(remainingMs ?? currentDurationMs())
   }
   remainingMs = null
@@ -146,10 +147,14 @@ export function resume(): void {
 /** Advance to the next entry. Stops at end-of-list. */
 export function skipNext(): void {
   if (!active) return
-  const next = active.index + 1
+  let next = active.index + 1
   if (next >= active.playlist.datasets.length) {
-    stop()
-    return
+    if (active.playlist.loop) {
+      next = 0
+    } else {
+      stop()
+      return
+    }
   }
   active.index = next
   active.waitingForTour = false
@@ -291,6 +296,11 @@ async function loadCurrentEntry(): Promise<void> {
   // letting a long tour push the advance later, per the plan's
   // "waits for it to finish before advancing."
   timerExpiredDuringTour = false
+  // pauseForInput overrides the timer entirely — the entry is
+  // pinned until the user clicks "next in playlist." Tour-end is
+  // still meaningful (it'll clear waitingForTour) but doesn't
+  // advance on its own.
+  if (entry.pauseForInput) return
   if (snapshot.paused) {
     remainingMs = currentDurationMs()
     return
