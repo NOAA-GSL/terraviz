@@ -19,6 +19,7 @@ import { updatePlayButton, loadCaptions } from '../ui/playbackController'
 import { startDwell, type DwellHandle } from '../analytics'
 import { recommendRelated, normalizeTitle as normalizeRelatedTitle } from './relatedDatasets'
 import { openAddToPlaylistPopover } from '../ui/playlistUI'
+import { openDownloadDialog } from '../ui/downloadDialogUI'
 import { t, tAttr } from '../i18n'
 
 /** Tier B dwell handle for the info panel — non-null while the
@@ -476,6 +477,18 @@ export function displayDatasetInfo(
     + escapeHtml(t('playlist.action.addToPlaylist'))
     + `</button>`
 
+  // "Download as .zip" affordance — §8.2. Web-only; desktop offline
+  // cache is the established path there. Same data-attribute idiom
+  // the playlist button uses so a future refactor can lift the row
+  // into a shared component.
+  if (!IS_TAURI) {
+    html += `<button type="button" class="add-to-playlist-btn info-zip-download"`
+      + ` data-dataset-id="${escapeAttr(dataset.id)}"`
+      + ` aria-label="${escapeAttr(t('zip.action.zipDownload.aria', { title: dataset.title }))}">`
+      + escapeHtml(t('zip.action.zipDownload'))
+      + `</button>`
+  }
+
   // Description with show-more/show-less. The collapsed form is the
   // same 600-char snippet the panel has rendered for years; the
   // expanded form is the full text, scrollable inside the panel
@@ -594,6 +607,18 @@ export function displayDatasetInfo(
       ev.stopPropagation()
       const id = addBtn.dataset.datasetId
       if (id) openAddToPlaylistPopover(id, addBtn)
+    })
+  }
+
+  // Wire the info-panel zip-download button (web only) to open the
+  // §8.2 download dialog. The dialog itself is opener-anchored so
+  // re-clicking the button doesn't accidentally re-close.
+  const zipBtn = infoBody.querySelector<HTMLButtonElement>('.info-zip-download')
+  if (zipBtn) {
+    zipBtn.addEventListener('click', (ev) => {
+      ev.stopPropagation()
+      const id = zipBtn.dataset.datasetId
+      if (id) void openDownloadDialog(id, zipBtn)
     })
   }
 

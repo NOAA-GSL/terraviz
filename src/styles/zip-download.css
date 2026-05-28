@@ -211,3 +211,33 @@
         width: auto;
     }
 }
+
+/* --- Browse card zip button (web only) ---
+ * Mirrors the desktop .browse-card-download chrome but in a neutral
+ * tone — the desktop download button is success-green because
+ * post-cache it gates re-use; the zip flow is a one-shot save and
+ * doesn't carry that state. */
+.browse-card-zip {
+    flex-shrink: 0;
+    padding: calc(0.2rem * var(--ui-scale)) calc(0.45rem * var(--ui-scale)) !important;
+    font-size: calc(0.6rem * var(--ui-scale)) !important;
+    border-radius: calc(4px * var(--ui-scale));
+    line-height: 1;
+    background: var(--white-o05);
+    color: #ccc;
+    border: 1px solid var(--white-o08);
+    cursor: pointer;
+    transition: background 0.15s;
+}
+.browse-card-zip:hover {
+    background: var(--white-o08);
+    color: #fff;
+}
+
+/* --- Info panel zip button ---
+ * Re-uses the playlist add-to-playlist chrome via the .add-to-
+ * playlist-btn class; this rule layers a subtle separator so the
+ * two buttons read as siblings rather than one wide block. */
+.info-zip-download {
+    margin-block-start: calc(0.35rem * var(--ui-scale));
+}

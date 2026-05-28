@@ -17,6 +17,7 @@ import {
   isDownloading, formatBytes,
 } from '../services/downloadService'
 import { closeDownloadPanel } from './downloadUI'
+import { openDownloadDialog } from './downloadDialogUI'
 import { toggleHelp } from './helpUI'
 import { openAddToPlaylistPopover } from './playlistUI'
 import { escapeHtml, escapeAttr } from './domUtils'
@@ -1883,6 +1884,15 @@ export function showBrowseUI(
         ? `<button class="browse-card-download" data-id="${escapeAttr(d.id)}" aria-label="${escapeAttr(t('browse.download.aria', { title: d.title }))}" title="${escapeAttr(t('browse.download.title'))}">&#8615;</button>`
         : ''
 
+      // Web-only zip-download affordance. Desktop already has the
+      // offline-cache button above; the zip flow is for users who
+      // can't or don't want to install the desktop app.
+      const zipBtn = !isDownloadAvailable()
+        ? `<button class="browse-card-zip" data-id="${escapeAttr(d.id)}"`
+          + ` aria-label="${escapeAttr(t('zip.action.zipDownload.aria', { title: d.title }))}"`
+          + ` title="${escapeAttr(t('zip.action.zipDownload.title'))}">&#x1F4E6;</button>`
+        : ''
+
       // "+" glyph reads as "add" without needing an icon font; the
       // aria-label carries the dataset title for screen readers.
       const playlistAddBtn = `<button class="add-to-playlist-btn browse-card-add-to-playlist"`
@@ -1898,6 +1908,7 @@ export function showBrowseUI(
               <span class="browse-card-title">${escapeHtml(d.title)}</span>
               ${playlistAddBtn}
               ${downloadBtn}
+              ${zipBtn}
               <button class="browse-card-load" data-id="${escapeAttr(d.id)}" aria-label="${escapeAttr(t('browse.card.load.aria', { title: d.title }))}">${escapeHtml(t('browse.card.load'))}</button>
             </div>
             ${catsHtml}${shortDescHtml}
@@ -1942,6 +1953,13 @@ export function showBrowseUI(
           e.stopPropagation()
           const id = addBtn.dataset.datasetId
           if (id) openAddToPlaylistPopover(id, addBtn)
+          return
+        }
+        const zipBtnEl = (e.target as HTMLElement).closest('.browse-card-zip') as HTMLButtonElement | null
+        if (zipBtnEl) {
+          e.stopPropagation()
+          const id = zipBtnEl.dataset.id
+          if (id) void openDownloadDialog(id, zipBtnEl)
           return
         }
         if ((e.target as HTMLElement).closest('a')) return
