@@ -26,15 +26,16 @@ const IS_TAURI = !!(window as any).__TAURI__
 
 const VIDEO_PROXY_BASE = 'https://video-proxy.zyra-project.org/video'
 
-// Hostnames whose URLs we trust as "publisher original" (R2 public
-// origins for the catalog backend). Kept narrow on purpose — a URL
-// served from any other host falls back to `external` rather than
-// being mislabelled as a publisher source. Subdomains match by suffix.
+// Hostnames whose URLs we trust as "publisher original" — the
+// Cloudflare Pages origin and any zyra-project.org subdomain we
+// operate (R2 public buckets, image transformations served from
+// the main origin, etc.). Subdomains match by suffix. A URL
+// served from any other host falls back to `external` rather
+// than being mislabelled as a publisher source.
 const PUBLISHER_HOSTS = [
-  'r2.terraviz.zyra-project.org',
-  'assets.terraviz.zyra-project.org',
-  // Cloudflare's default *.r2.dev origin for public buckets, used as
-  // a fallback before a custom domain is bound.
+  'zyra-project.org',
+  // Cloudflare's default *.r2.dev origin for public buckets, used
+  // as a fallback before a custom domain is bound.
   'r2.dev',
 ]
 

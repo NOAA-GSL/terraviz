@@ -403,6 +403,27 @@ describe('classifySourceOfTruth', () => {
     ).toBe('publisher')
   })
 
+  it('classifies the bare Pages origin (terraviz.zyra-project.org) as publisher', () => {
+    // Regression: the Pages origin serves R2 image transformations
+    // via /cdn-cgi/image/ — it's a publisher-source URL, not the
+    // generic "external" bucket. Pinning explicitly so the dialog's
+    // source-of-truth note doesn't regress to "hosted externally"
+    // for the most common image path in production.
+    expect(
+      classifySourceOfTruth('https://terraviz.zyra-project.org/cdn-cgi/image/width=4096/datasets/foo/image.png'),
+    ).toBe('publisher')
+  })
+
+  it('classifies an arbitrary *.zyra-project.org subdomain as publisher', () => {
+    // Project-controlled subdomains (image-resize, frames, etc.) all
+    // count as publisher source for source-of-truth purposes; we
+    // operate them, so users see the canonical "from the publisher
+    // upload" note rather than the generic external one.
+    expect(
+      classifySourceOfTruth('https://frames.terraviz.zyra-project.org/datasets/DS01/frame_00000.png'),
+    ).toBe('publisher')
+  })
+
   it('classifies a Cloudflare default *.r2.dev origin as publisher', () => {
     expect(
       classifySourceOfTruth('https://terraviz-assets.r2.dev/videos/DS01/source.mp4'),

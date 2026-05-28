@@ -152,6 +152,8 @@ describe('estimateZipSize', () => {
   })
 
   it('returns 0 for assets whose HEAD fails or returns no content-length', async () => {
+    // Both the HEAD and the Range-GET fallback need to fail (no
+    // Content-Length, no Content-Range) for the size to land at 0.
     const fetchImpl = vi.fn(async () =>
       new Response(null, { status: 200 }),
     ) as unknown as typeof globalThis.fetch
@@ -160,6 +162,73 @@ describe('estimateZipSize', () => {
       { fetchImpl },
     )
     expect(result.bytes).toBe(0)
+  })
+
+  it('falls back to a Range-GET when HEAD returns no Content-Length', async () => {
+    // Mirrors Cloudflare Images' /cdn-cgi/image/ behaviour: HEAD
+    // returns 200 OK without Content-Length (the resized image
+    // isn't generated for HEAD), so the probe falls through to a
+    // `Range: bytes=0-0` GET and reads the size from Content-Range.
+    let call = 0
+    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      call++
+      if (init?.method === 'HEAD') {
+        return new Response(null, { status: 200 })
+      }
+      // The Range-GET. Server responds 206 with Content-Range.
+      const range = (init?.headers as Record<string, string> | undefined)?.Range
+      expect(range).toBe('bytes=0-0')
+      return new Response(new ArrayBuffer(1), {
+        status: 206,
+        headers: { 'content-range': 'bytes 0-0/12345' },
+      })
+    }) as unknown as typeof globalThis.fetch
+    const result = await estimateZipSize(
+      [makeAsset({ sizeBytes: undefined })],
+      { fetchImpl },
+    )
+    expect(call).toBe(2)
+    expect(result.bytes).toBe(12345)
+  })
+
+  it('also falls back to Range-GET when HEAD itself rejects with an error', async () => {
+    // Some origins reject HEAD method outright (405 Method Not
+    // Allowed, or a CORS-driven TypeError). The Range-GET path
+    // still kicks in.
+    let saw: 'HEAD' | 'GET' | null = null
+    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === 'HEAD') {
+        throw new TypeError('CORS preflight failed')
+      }
+      saw = 'GET'
+      return new Response(new ArrayBuffer(1), {
+        status: 206,
+        headers: { 'content-range': 'bytes 0-0/9000' },
+      })
+    }) as unknown as typeof globalThis.fetch
+    const result = await estimateZipSize(
+      [makeAsset({ sizeBytes: undefined })],
+      { fetchImpl },
+    )
+    expect(saw).toBe('GET')
+    expect(result.bytes).toBe(9000)
+  })
+
+  it('trusts Content-Length on a 200 OK fallback (server ignored the Range header)', async () => {
+    // Small files where the server returns the whole body even on
+    // a Range request: Content-Length is the actual file size.
+    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === 'HEAD') return new Response(null, { status: 200 })
+      return new Response(new ArrayBuffer(800), {
+        status: 200,
+        headers: { 'content-length': '800' },
+      })
+    }) as unknown as typeof globalThis.fetch
+    const result = await estimateZipSize(
+      [makeAsset({ sizeBytes: undefined })],
+      { fetchImpl },
+    )
+    expect(result.bytes).toBe(800)
   })
 
   it('samples frame sizes above the threshold rather than HEADing every one', async () => {

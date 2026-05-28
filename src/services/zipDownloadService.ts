@@ -228,10 +228,25 @@ export async function estimateZipSize(
 }
 
 /**
- * HEAD-probe a single asset and return its size in bytes, or 0 on
- * any error. The 0 sentinel matters: it's what `estimateZipSize`
- * sums into the running total, and what the dialog renders as
- * "unknown" rather than NaN.
+ * Probe a single asset for its byte size, returning 0 on any error.
+ * The 0 sentinel matters: it's what `estimateZipSize` sums into the
+ * running total, and what the dialog renders as "unknown" rather
+ * than NaN.
+ *
+ * Two-step strategy:
+ *  1. HEAD the URL. Servers that include Content-Length on HEAD are
+ *     the happy path.
+ *  2. If HEAD returned 2xx without a Content-Length, fall back to a
+ *     `Range: bytes=0-0` GET and parse the `Content-Range` response
+ *     header (format: `bytes 0-0/<total>`). This catches origins
+ *     that elide Content-Length on HEAD because computing it would
+ *     require actually generating the resource — Cloudflare Images'
+ *     `/cdn-cgi/image/` transformation pipeline does this. The
+ *     Range GET only pulls one byte, so it's still cheap.
+ *
+ * Both Content-Length and Content-Range are normally CORS-safelisted
+ * for our own origins; for third-party origins that don't expose
+ * either, the probe returns 0 and the dialog renders "size unknown".
  */
 async function headSize(
   asset: ResolvedAsset,
@@ -241,9 +256,44 @@ async function headSize(
   if (asset.sizeBytes !== undefined) return asset.sizeBytes
   try {
     const res = await fetchImpl(asset.url, { method: 'HEAD', signal })
-    if (!res.ok) return 0
+    if (res.ok) {
+      const len = res.headers.get('content-length')
+      if (len) {
+        const n = Number(len)
+        if (Number.isFinite(n) && n > 0) return n
+      }
+    }
+  } catch {
+    // Fall through to the Range-GET fallback rather than giving up
+    // — some origins reject HEAD outright but accept Range GETs.
+  }
+  try {
+    const res = await fetchImpl(asset.url, {
+      method: 'GET',
+      headers: { Range: 'bytes=0-0' },
+      signal,
+    })
+    if (!res.ok && res.status !== 206) return 0
+    // Range responses carry `Content-Range: bytes 0-0/<total>`; pull
+    // the total. If the server ignored the Range header and returned
+    // the whole body (200 OK), fall back to Content-Length.
+    const range = res.headers.get('content-range')
+    if (range) {
+      const match = range.match(/\/(\d+)\s*$/)
+      if (match) {
+        const n = Number(match[1])
+        if (Number.isFinite(n) && n > 0) return n
+      }
+    }
     const len = res.headers.get('content-length')
-    return len ? Math.max(0, Number(len)) : 0
+    if (len) {
+      const n = Number(len)
+      // A 200 OK with the full body: Content-Length is the answer.
+      // A 206 with Content-Length: 1 from the Range GET is useless;
+      // only trust the value when we got a 200.
+      if (Number.isFinite(n) && n > 0 && res.status === 200) return n
+    }
+    return 0
   } catch {
     return 0
   }
