@@ -82,10 +82,21 @@ let lastClickStartedInOpener = false
  *  immediately re-close.*/
 let openerElement: HTMLElement | null = null
 
-/** Tear down listeners + state. Called by tests. */
+/** Tear down listeners + state. Called by tests.
+ *
+ *  Symmetric with initDownloadDialogUI: removes the three document-
+ *  level listeners and clears the wiring sentinel together. Previous
+ *  shape only deleted the sentinel, which let a subsequent init
+ *  re-attach a second copy of each listener (test runs would
+ *  accumulate handlers across describe-block boundaries). */
 export function destroyDownloadDialogUI(): void {
   closeDownloadDialog()
-  delete document.body.dataset.zipDownloadDialogWired
+  if (document.body.dataset.zipDownloadDialogWired) {
+    document.removeEventListener('click', captureClickOrigin, true)
+    document.removeEventListener('click', handleDocumentClick)
+    document.removeEventListener('keydown', handleDocumentKeydown)
+    delete document.body.dataset.zipDownloadDialogWired
+  }
 }
 
 /** True iff the dialog is mounted and visible. */
@@ -280,16 +291,31 @@ function renderAssetCheckbox(kind: AssetKind, label: string, bytes: number | und
   </label>`
 }
 
+/** Sum of HEAD-probed bytes for assets the user currently has
+ *  checked. The estimate-time `estimatedBytes` is the total over
+ *  every resolved asset; the cap check + the displayed total both
+ *  want the selection-aware figure so that unchecking heavy assets
+ *  drops the size below the cap and re-enables Start. */
+function selectedEstimateBytes(): number {
+  let total = 0
+  for (const a of resolvedAssets) {
+    if (!selectedKinds.has(a.kind)) continue
+    total += perAssetBytes.get(a.filename) ?? 0
+  }
+  return total
+}
+
 function renderSizeRow(): string {
   if (estimatedBytes < 0) {
     return `<div class="zip-dl-size">${tHtml('zip.size.estimating')}</div>`
   }
-  if (estimatedBytes === 0) {
+  const selected = selectedEstimateBytes()
+  if (selected === 0) {
     return `<div class="zip-dl-size">${tHtml('zip.size.unknown')}</div>`
   }
-  const overCap = estimatedBytes > ZIP_HARD_CAP_BYTES
-  const overWarn = estimatedBytes > ZIP_WARNING_BYTES
-  const sizeFmt = formatBytes(estimatedBytes)
+  const overCap = selected > ZIP_HARD_CAP_BYTES
+  const overWarn = selected > ZIP_WARNING_BYTES
+  const sizeFmt = formatBytes(selected)
   const approx = estimateSampled ? t('zip.size.approxPrefix') + ' ' : ''
   let html = `<div class="zip-dl-size ${overCap ? 'over-cap' : overWarn ? 'over-warn' : ''}">`
   html += escapeHtml(t('zip.size.total', { size: approx + sizeFmt }))
@@ -311,7 +337,7 @@ function renderActionRow(): string {
   const disabled =
     resolvedAssets.length === 0 ||
     estimatedBytes < 0 ||
-    estimatedBytes > ZIP_HARD_CAP_BYTES ||
+    selectedEstimateBytes() > ZIP_HARD_CAP_BYTES ||
     !hasAnySelection()
   return `<div class="zip-dl-actions">
     <button type="button" class="zip-dl-btn-primary" id="zip-dl-start"

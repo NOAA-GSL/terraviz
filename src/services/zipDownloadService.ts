@@ -352,6 +352,18 @@ export async function buildZip(
   let bytesWritten = 0
   let assetsDone = 0
 
+  // "Primary-equivalent" — the asset role that, if absent, means the
+  // archive is meaningless. The `primary` kind is the default, but
+  // frame-mode datasets replace the rendered primary with their
+  // per-frame entries (see `listDownloadableAssets`), so for those
+  // the frame bundle takes the role. We compute this once over the
+  // user's selection so the per-asset error branch can treat the
+  // right kind as fatal.
+  const hasPrimary = selected.some(a => a.kind === 'primary')
+  const primaryEquivalentKinds = new Set<AssetKind>(
+    hasPrimary ? ['primary'] : ['frame'],
+  )
+
   // Phase 1: fetch each asset in series — sequential download keeps
   // peak memory bounded (a single asset's bytes live in memory before
   // being handed to JSZip). Parallel fetches would multiply peak
@@ -366,27 +378,24 @@ export async function buildZip(
       currentFile: asset.filename,
     })
 
+    // The try/catch wraps ONLY the network step. The mid-download
+    // cap check and zip.file call live outside it so a cap throw
+    // escapes the loop entirely rather than being swallowed by the
+    // catch's "treat non-primary failure as recorded warning" path.
+    let buf: ArrayBuffer | null = null
     try {
       const res = await fetchImpl(asset.url, { signal })
       if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`)
-      const buf = await res.arrayBuffer()
-      zip.file(asset.filename, buf)
-      bytesWritten += buf.byteLength
-      manifestEntries.push({
-        kind: asset.kind,
-        filename: asset.filename,
-        url: asset.url,
-        sourceOfTruth: asset.sourceOfTruth,
-        bytes: buf.byteLength,
-      })
+      buf = await res.arrayBuffer()
     } catch (err) {
       if ((err as { name?: string }).name === 'AbortError') throw err
       const reason = err instanceof Error ? err.message : String(err)
       logger.warn(`[zip] Failed to fetch ${asset.filename}:`, reason)
-      if (asset.kind === 'primary') {
-        // The user came here to download the data. Without it the
-        // archive is meaningless — surface the failure rather than
-        // producing a manifest-only zip.
+      if (primaryEquivalentKinds.has(asset.kind)) {
+        // The user came here to download the data. Without the
+        // primary (or, for frame-mode datasets, the frame bundle)
+        // the archive is meaningless — surface the failure rather
+        // than producing a manifest-only zip.
         throw new Error(
           `Failed to download the primary asset (${asset.filename}): ${reason}`,
         )
@@ -399,8 +408,49 @@ export async function buildZip(
         sourceOfTruth: asset.sourceOfTruth,
         error: reason,
       })
+      assetsDone++
+      continue
     }
+
+    // Mid-download cap enforcement. The preflight `estimateZipSize`
+    // is best-effort — CORS can hide `Content-Length`, the frame-
+    // sample average can underestimate a heavy-tailed sequence,
+    // and some origins ignore HEAD entirely. Without a running-
+    // total check the dialog can authorise a download whose true
+    // size exceeds `ZIP_HARD_CAP_BYTES`, defeating the safety net
+    // the cap exists for. Throw before the asset lands in the
+    // archive so we don't OOM the tab on the *next* fetch either.
+    if (bytesWritten + buf.byteLength > ZIP_HARD_CAP_BYTES) {
+      throw new Error(
+        `Zip would exceed the ${formatCapForError(ZIP_HARD_CAP_BYTES)} cap ` +
+        `after adding ${asset.filename}. The size estimate was too low ` +
+        `(some origins don't expose Content-Length). Uncheck some assets ` +
+        `and try again.`,
+      )
+    }
+    zip.file(asset.filename, buf)
+    bytesWritten += buf.byteLength
+    manifestEntries.push({
+      kind: asset.kind,
+      filename: asset.filename,
+      url: asset.url,
+      sourceOfTruth: asset.sourceOfTruth,
+      bytes: buf.byteLength,
+    })
     assetsDone++
+  }
+
+  // Safety net: if the fetch loop completed but zero asset bytes
+  // made it into the archive, refuse to produce a manifest-only
+  // zip. This catches the case where every selected asset's kind
+  // happens to be non-primary-equivalent (none of the per-asset
+  // throws fire) but they all failed — frame-mode dataset whose
+  // every frame 404s, or a selection consisting only of auxiliary
+  // assets where every one failed.
+  if (bytesWritten === 0) {
+    throw new Error(
+      'Zip would contain no data — every selected asset failed to download.',
+    )
   }
 
   // Manifest — describes the archive's contents, the source-of-
@@ -422,6 +472,15 @@ export async function buildZip(
   const blob = await zip.generateAsync(
     { type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 1 } },
     metadata => {
+      // Check the abort signal inside the packaging callback so a
+      // cancel landing after all fetches finished still stops the
+      // download before saveBlobAsDownload triggers. JSZip itself
+      // doesn't expose a cancellation API; throwing from this
+      // callback rejects the generateAsync promise, which we
+      // re-throw as an AbortError below.
+      if (signal?.aborted) {
+        throw new DOMException('Zip download aborted by user', 'AbortError')
+      }
       // JSZip's `metadata.percent` is the zip-generate phase (0-100);
       // map it onto the tail of the overall progress bar.
       const generateFraction = metadata.percent / 100
@@ -435,6 +494,16 @@ export async function buildZip(
     },
   )
 
+  // Final abort check before handing the blob back. The packaging
+  // callback runs on every "current file" tick but the generate
+  // can finish between ticks (small archives complete in one
+  // call), so a cancel arriving in that window otherwise sneaks
+  // past — the caller would saveBlobAsDownload after the user
+  // already hit Cancel.
+  if (signal?.aborted) {
+    throw new DOMException('Zip download aborted by user', 'AbortError')
+  }
+
   onProgress({ fraction: 1, phase: 'done' })
 
   return {
@@ -443,6 +512,14 @@ export async function buildZip(
     bytesWritten,
     failures,
   }
+}
+
+/** GiB-rounded string for the in-error cap label so the message is
+ *  readable without depending on formatBytes (which lives in a
+ *  sibling module and would cycle the import graph). */
+function formatCapForError(bytes: number): string {
+  const gib = bytes / (1024 * 1024 * 1024)
+  return `${gib.toFixed(1)} GiB`
 }
 
 /** Build the human-readable "notes" array for `manifest.json` based

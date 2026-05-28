@@ -428,6 +428,151 @@ describe('buildZip — empty selection', () => {
   })
 })
 
+describe('buildZip — mid-download cap enforcement', () => {
+  // The cap check reads `buf.byteLength` off the awaited arrayBuffer
+  // — it doesn't actually walk the bytes. We fake the byteLength so
+  // the test runner doesn't have to allocate 1.5+ GiB of memory.
+  // Real-world Response.arrayBuffer() returns an actual buffer
+  // whose byteLength matches the bytes; the buildZip code path
+  // treats byteLength as opaque, so the fake is faithful to
+  // production behaviour without the allocation.
+  function fakeFetchOfSize(byteLength: number): typeof globalThis.fetch {
+    return vi.fn(async () => ({
+      ok: true,
+      statusText: 'OK',
+      arrayBuffer: async () => ({ byteLength } as unknown as ArrayBuffer),
+    })) as unknown as typeof globalThis.fetch
+  }
+
+  it('throws when the first asset alone would exceed the hard cap', async () => {
+    // The check fires before zip.file() is called, so no partial
+    // archive bytes accumulate. Using a fake 2-GiB-byteLength
+    // buffer instead of allocating 2 GiB in the test runner.
+    const fetchImpl = fakeFetchOfSize(2 * 1024 * 1024 * 1024)
+    await expect(
+      buildZip(makeDataset(), [makeAsset({ kind: 'primary', filename: 'huge.bin' })], { fetchImpl }),
+    ).rejects.toThrow(/cap/)
+  })
+
+  it('throws when cumulative bytesWritten would exceed the cap on a later asset', async () => {
+    // First asset is ~1.4 GiB (under the 1.5 GiB cap on its own);
+    // second is 0.5 GiB so the cumulative trips the check. Pins
+    // the running-total semantics of the in-loop guard.
+    let call = 0
+    const fetchImpl = vi.fn(async () => {
+      call++
+      const size = call === 1 ? 1.4 * 1024 * 1024 * 1024 : 0.5 * 1024 * 1024 * 1024
+      // The first asset DOES enter the archive (1.4 GiB is under
+      // the cap), so we need a real buffer for the JSZip.file()
+      // call. Make it tiny but lie about the byteLength via
+      // Object.defineProperty so the cap check reads the inflated
+      // value and the JSZip call doesn't allocate gigabytes.
+      const buf = new ArrayBuffer(0)
+      Object.defineProperty(buf, 'byteLength', { value: size })
+      return {
+        ok: true,
+        statusText: 'OK',
+        arrayBuffer: async () => buf,
+      } as Response
+    }) as unknown as typeof globalThis.fetch
+    await expect(
+      buildZip(
+        makeDataset(),
+        [
+          makeAsset({ kind: 'primary', filename: 'a.bin' }),
+          makeAsset({ kind: 'legend', filename: 'b.bin' }),
+        ],
+        { fetchImpl },
+      ),
+    ).rejects.toThrow(/cap/)
+    expect(call).toBe(2)
+  })
+})
+
+describe('buildZip — packaging-phase cancel', () => {
+  it('throws AbortError if the signal is aborted before generateAsync runs', async () => {
+    // Mirrors a user clicking Cancel after every fetch completed but
+    // before JSZip starts packaging. Pre-abort the signal, expect
+    // the throw to land at the post-fetch / pre-generate check.
+    const ctrl = new AbortController()
+    const fetchImpl = vi.fn(async () => {
+      // Abort right before returning, so the next loop iteration's
+      // signal check catches it. We only have one asset, so the
+      // post-loop check is what fires.
+      ctrl.abort()
+      return new Response(new ArrayBuffer(4), { status: 200 })
+    }) as unknown as typeof globalThis.fetch
+    await expect(
+      buildZip(makeDataset(), [makeAsset()], { fetchImpl, signal: ctrl.signal }),
+    ).rejects.toMatchObject({ name: 'AbortError' })
+  })
+
+  it('throws AbortError if the signal is aborted during generateAsync', async () => {
+    // generateAsync calls the onUpdate callback per chunk; the
+    // abort check inside that callback rejects the generate
+    // promise. Manufacture the race by aborting from a sibling
+    // microtask once the fetches complete.
+    const ctrl = new AbortController()
+    const fetchImpl = mockFetchSequence([
+      new Response(new ArrayBuffer(128), { status: 200 }),
+    ])
+    const buildPromise = buildZip(
+      makeDataset(),
+      [makeAsset({ filename: 'big.bin' })],
+      {
+        fetchImpl,
+        signal: ctrl.signal,
+        onProgress: (p) => {
+          if (p.phase === 'packaging') ctrl.abort()
+        },
+      },
+    )
+    // Either the post-loop check, an in-callback throw, or the
+    // post-generate check fires — all surface AbortError.
+    await expect(buildPromise).rejects.toMatchObject({ name: 'AbortError' })
+  })
+})
+
+describe('buildZip — primary-equivalent kind for frame datasets', () => {
+  it('throws when every frame fails on a frames-only selection (no rendered primary)', async () => {
+    // Frame-mode datasets that opt out of the rendered primary
+    // (listDownloadableAssets({ includeFrames: true })) consist of
+    // frame + auxiliary assets only. Without the frame role being
+    // "primary-equivalent", every frame could 404 and the dialog
+    // would happily produce a manifest-only zip.
+    const fetchImpl = vi.fn(async () => new Response(null, { status: 404, statusText: 'Not Found' })) as unknown as typeof globalThis.fetch
+    await expect(
+      buildZip(
+        makeDataset(),
+        [
+          makeAsset({ kind: 'frame', filename: 'frames/00000.png' }),
+          makeAsset({ kind: 'frame', filename: 'frames/00001.png' }),
+        ],
+        { fetchImpl },
+      ),
+    ).rejects.toThrow(/primary asset/)
+  })
+
+  it('refuses to produce a manifest-only zip even when only auxiliary kinds are selected and all fail', async () => {
+    // Defensive: a user who unchecked the primary AND every probe
+    // for the auxiliary kinds also failed. Without the bytesWritten
+    // === 0 safety net at the end of the fetch loop, the zip would
+    // contain only manifest.json — the worst kind of "successful"
+    // download.
+    const fetchImpl = vi.fn(async () => new Response(null, { status: 404, statusText: 'Not Found' })) as unknown as typeof globalThis.fetch
+    await expect(
+      buildZip(
+        makeDataset(),
+        [
+          makeAsset({ kind: 'legend', filename: 'legend.png' }),
+          makeAsset({ kind: 'thumbnail', filename: 'thumbnail.jpg' }),
+        ],
+        { fetchImpl },
+      ),
+    ).rejects.toThrow(/no data/)
+  })
+})
+
 describe('listDownloadableAssets', () => {
   it('returns only the rendered primary when frames-mode is off', async () => {
     // listDownloadableAssets defers to resolveAssets which requires

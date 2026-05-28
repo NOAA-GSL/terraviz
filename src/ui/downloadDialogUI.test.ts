@@ -255,4 +255,99 @@ describe('downloadDialogUI — re-open does not leak listeners', () => {
     const panels = document.querySelectorAll('#zip-download-dialog')
     expect(panels.length).toBe(1)
   })
+
+  it('destroyDownloadDialogUI() removes the document-level listeners it installed', async () => {
+    // destroy → init → destroy → init pattern. Without listener
+    // cleanup in destroy, each init re-attaches another copy of the
+    // click + keydown handlers; if open + outside-click after the
+    // second init fires the handler twice, closeDownloadDialog
+    // runs twice and the second iteration crashes on already-null
+    // state. Confirm cleanup by ensuring the wiring sentinel is
+    // gone and a subsequent init produces exactly one of each
+    // listener (idempotency check).
+    destroyDownloadDialogUI()
+    expect(document.body.dataset.zipDownloadDialogWired).toBeUndefined()
+    initDownloadDialogUI()
+    expect(document.body.dataset.zipDownloadDialogWired).toBe('true')
+    // A second init should NOT re-attach (idempotent).
+    initDownloadDialogUI()
+    // No assertion on listener count directly (DOM doesn't expose
+    // it), but the sentinel staying set across the second init is
+    // proof we took the early-return path.
+    expect(document.body.dataset.zipDownloadDialogWired).toBe('true')
+  })
+})
+
+describe('downloadDialogUI — selection-aware cap check', () => {
+  // Regression: previously the cap check used the static
+  // estimatedBytes (total over every resolved asset) and never
+  // changed when the user unchecked heavy assets. So a 2 GB
+  // dataset stayed at "Start disabled" forever, even when the
+  // user unchecked the primary leaving only a 5 KB legend.
+
+  function mockOversizedPrimaryWithSmallAux(): typeof globalThis.fetch {
+    return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (init?.method === 'HEAD') {
+        // The legend HEADs at a tiny size; everything else (the
+        // primary's URL probe) HEADs huge.
+        if (url.includes('legend')) {
+          return new Response(null, { status: 200, headers: { 'content-length': '5000' } })
+        }
+        return new Response(null, { status: 200, headers: { 'content-length': String(2 * 1024 * 1024 * 1024) } })
+      }
+      return new Response(JSON.stringify({
+        id: '12345', title: '', duration: 0, hls: '', dash: '',
+        files: [{ quality: '4K', width: 3840, height: 2160, size: 2 * 1024 * 1024 * 1024, type: 'video/mp4', link: 'https://video-proxy.zyra-project.org/v/12345.mp4' }],
+      }), { status: 200 })
+    }) as unknown as typeof globalThis.fetch
+  }
+
+  it('re-enables Start once the user unchecks the heavy asset bringing the selection under the cap', async () => {
+    globalThis.fetch = mockOversizedPrimaryWithSmallAux()
+    restoreDataset = stubDataset(makeDataset({
+      legendLink: 'https://r2.terraviz.zyra-project.org/legend.png',
+    }))
+    await openDownloadDialog('DS01', null)
+    await new Promise(r => setTimeout(r, 0))
+    await new Promise(r => setTimeout(r, 0))
+    // Sanity: with the primary checked, Start is disabled (over-cap).
+    let start = document.getElementById('zip-dl-start') as HTMLButtonElement | null
+    expect(start?.disabled).toBe(true)
+
+    // Uncheck the primary; the remaining 5 KB legend is well under
+    // the 1.5 GB cap so Start should re-enable.
+    const primaryCb = document.querySelector<HTMLInputElement>('input[type="checkbox"][data-kind="primary"]')!
+    primaryCb.checked = false
+    primaryCb.dispatchEvent(new Event('change'))
+
+    start = document.getElementById('zip-dl-start') as HTMLButtonElement | null
+    expect(start?.disabled).toBe(false)
+    // The displayed total + warning should also update to the
+    // selected subset, not the full-resolved-set figure.
+    expect(document.querySelector('.zip-dl-warning')).toBeNull()
+  })
+
+  it('updates the displayed total as the user toggles checkboxes', async () => {
+    globalThis.fetch = mockOversizedPrimaryWithSmallAux()
+    restoreDataset = stubDataset(makeDataset({
+      legendLink: 'https://r2.terraviz.zyra-project.org/legend.png',
+    }))
+    await openDownloadDialog('DS01', null)
+    await new Promise(r => setTimeout(r, 0))
+    await new Promise(r => setTimeout(r, 0))
+    const totalWithPrimary = document.querySelector('.zip-dl-size')?.textContent ?? ''
+    expect(totalWithPrimary).toMatch(/GB/i)
+
+    const primaryCb = document.querySelector<HTMLInputElement>('input[type="checkbox"][data-kind="primary"]')!
+    primaryCb.checked = false
+    primaryCb.dispatchEvent(new Event('change'))
+
+    const totalWithoutPrimary = document.querySelector('.zip-dl-size')?.textContent ?? ''
+    // The two reads should differ — the static estimatedBytes
+    // approach would have left them identical.
+    expect(totalWithoutPrimary).not.toBe(totalWithPrimary)
+    // 5 KB legend renders in KB units; not GB.
+    expect(totalWithoutPrimary).not.toMatch(/GB/i)
+  })
 })
