@@ -98,6 +98,33 @@ describe('playlist manager', () => {
     promptSpy.mockRestore()
   })
 
+  it('expand toggle keeps the manager open even though it re-renders the panel', () => {
+    const p = createPlaylist('with entries')
+    addToPlaylist(p.id, 'INTERNAL_A')
+    openPlaylistManager()
+    expect(isPlaylistManagerOpen()).toBe(true)
+
+    const toggleBtn = document.querySelector<HTMLButtonElement>('.pl-mgr-row-toggle')!
+    // Dispatch a real bubbling MouseEvent so the document-level
+    // outside-click handler runs after the toggle's re-render —
+    // mimicking the exact path that closed the panel before the
+    // composedPath() fix.
+    toggleBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+
+    expect(isPlaylistManagerOpen()).toBe(true)
+    expect(document.querySelectorAll('.pl-mgr-entry').length).toBe(1)
+  })
+
+  it('clicking truly outside the panel still closes it', () => {
+    createPlaylist('orig')
+    openPlaylistManager()
+    expect(isPlaylistManagerOpen()).toBe(true)
+    const outside = document.createElement('div')
+    document.body.appendChild(outside)
+    outside.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    expect(isPlaylistManagerOpen()).toBe(false)
+  })
+
   it('renders entries only when the row is expanded', () => {
     const p = createPlaylist('with entries')
     addToPlaylist(p.id, 'INTERNAL_A')

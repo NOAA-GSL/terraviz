@@ -112,13 +112,27 @@ export function initPlaylistUI(cb: PlaylistUICallbacks = {}): void {
   ensureContinuePromptHost()
   syncContinuePrompt()
 
-  // Outside-click closes the manager. Wired once.
+  // Outside-click closes the manager. Wired once. The capture-phase
+  // listener records where each click originated *before* any
+  // target-phase handlers can mutate the DOM (e.g. an in-panel
+  // button that wipes panel.innerHTML on click — without the
+  // capture sample, the bubble-phase containment check would see
+  // the orphaned target as "outside" and close the panel).
   if (!document.body.dataset.playlistUiListenersWired) {
     document.body.dataset.playlistUiListenersWired = 'true'
+    document.addEventListener('click', captureClickOrigin, true)
     document.addEventListener('click', handleDocumentClick)
     document.addEventListener('keydown', handleDocumentKeydown)
   }
 }
+
+// Module-level click-origin sentinels, written in capture phase and
+// read in bubble phase. Reset to a known state at the top of every
+// click so a stale value can't survive between events.
+let lastClickStartedInPanel = false
+let lastClickStartedInToolsMenu = false
+let lastClickStartedInPopover = false
+let lastClickStartedInPopoverAnchor = false
 
 /** Tear down listeners. Called by tests. */
 export function destroyPlaylistUI(): void {
@@ -760,30 +774,29 @@ function renderAddPopover(anchor: HTMLElement, datasetId: string): void {
   })
 }
 
-function handleDocumentClick(ev: MouseEvent): void {
+/** Capture-phase sample of where the click originated. Runs before
+ *  any in-panel handler can detach the target via a re-render. */
+function captureClickOrigin(ev: MouseEvent): void {
   const target = ev.target as Node | null
-  if (!target) return
+  const panel = document.getElementById('playlist-manager')
+  const toolsMenu = document.getElementById('map-controls')
+  const popover = document.getElementById('playlist-add-popover')
+  lastClickStartedInPanel = !!(panel && target && panel.contains(target))
+  lastClickStartedInToolsMenu = !!(toolsMenu && target && toolsMenu.contains(target))
+  lastClickStartedInPopover = !!(popover && target && popover.contains(target))
+  lastClickStartedInPopoverAnchor = !!(popoverAnchor && target && popoverAnchor.contains(target))
+}
 
-  // Add popover outside-click closes (but not when clicking the
-  // anchor that opened it — the caller's own click handler should
-  // close it on a second click if it wants).
-  if (popoverAnchor) {
-    const popover = document.getElementById('playlist-add-popover')
-    if (popover && !popover.contains(target) && !popoverAnchor.contains(target)) {
-      closeAddPopover()
-    }
+function handleDocumentClick(_ev: MouseEvent): void {
+  // Read the capture-phase determinations rather than re-checking
+  // containment here — the target may have been detached from the
+  // DOM during target-phase handlers (panel re-renders) and would
+  // then read as "outside" everything.
+  if (popoverAnchor && !lastClickStartedInPopover && !lastClickStartedInPopoverAnchor) {
+    closeAddPopover()
   }
-
-  // Manager panel outside-click closes — but never close because of
-  // a click landing inside the tools menu (the menu's "Playlists"
-  // entry is the most common way to open the manager, and the
-  // tools menu fires its outside-click handler on the same event).
-  if (managerOpen) {
-    const panel = document.getElementById('playlist-manager')
-    const toolsMenu = document.getElementById('map-controls')
-    if (panel && !panel.contains(target) && !toolsMenu?.contains(target)) {
-      closePlaylistManager()
-    }
+  if (managerOpen && !lastClickStartedInPanel && !lastClickStartedInToolsMenu) {
+    closePlaylistManager()
   }
 }
 
