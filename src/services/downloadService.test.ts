@@ -8,8 +8,14 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { formatBytes, __test__ } from './downloadService'
+import {
+  classifySourceOfTruth,
+  expandFrameAssets,
+  formatBytes,
+  __test__,
+} from './downloadService'
 import { proxyCaptionUrl } from '../utils/captionProxy'
+import type { Dataset } from '../types'
 
 const { isHttpUrl, extFromUrl, pickBestVideoFile, orderImageCandidates } = __test__
 
@@ -365,5 +371,121 @@ describe('isHttpUrl', () => {
     expect(isHttpUrl(null)).toBe(false)
     expect(isHttpUrl(undefined)).toBe(false)
     expect(isHttpUrl('')).toBe(false)
+  })
+})
+
+// --- Source-of-truth classification ---
+// The zip dialog (§8.2) shows a different note per provenance bucket
+// so users know whether the archive contains the publisher's
+// canonical upload, a Vimeo transcode, or a legacy SOS asset.
+// Substring-matching would break on attacker-chosen URLs that happen
+// to contain a known host in their path; these tests pin the
+// hostname-based check.
+
+describe('classifySourceOfTruth', () => {
+  it('classifies the video-proxy host as vimeo', () => {
+    expect(classifySourceOfTruth('https://video-proxy.zyra-project.org/video/foo.mp4')).toBe('vimeo')
+  })
+
+  it('classifies a vimeocdn subdomain as vimeo', () => {
+    expect(
+      classifySourceOfTruth('https://player.vimeocdn.com/external/123.mp4'),
+    ).toBe('vimeo')
+  })
+
+  it('classifies sos.noaa.gov assets as sos', () => {
+    expect(classifySourceOfTruth('https://sos.noaa.gov/data/foo.jpg')).toBe('sos')
+  })
+
+  it('classifies an R2 public origin (publisher upload) as publisher', () => {
+    expect(
+      classifySourceOfTruth('https://r2.terraviz.zyra-project.org/videos/DS01/source.mp4'),
+    ).toBe('publisher')
+  })
+
+  it('classifies a Cloudflare default *.r2.dev origin as publisher', () => {
+    expect(
+      classifySourceOfTruth('https://terraviz-assets.r2.dev/videos/DS01/source.mp4'),
+    ).toBe('publisher')
+  })
+
+  it('falls through to external for any other host', () => {
+    expect(classifySourceOfTruth('https://example.com/foo.mp4')).toBe('external')
+  })
+
+  it('does not be tricked by sos.noaa.gov in the path', () => {
+    // Regression for substring sanitization: the publisher-portal /
+    // Vimeo note must not be applied to an attacker-controlled URL
+    // that happens to contain a known host in its path.
+    expect(
+      classifySourceOfTruth('https://attacker.example/sos.noaa.gov/foo.srt'),
+    ).toBe('external')
+  })
+
+  it('returns external on a malformed URL rather than throwing', () => {
+    expect(classifySourceOfTruth('not-a-url')).toBe('external')
+  })
+})
+
+// --- expandFrameAssets ---
+// Frames-mode datasets carry an `urlTemplate` with a `{index}` token.
+// The zip service uses these per-frame URLs to build a folder of
+// frames inside the archive. Tests pin the zero-padding, the
+// non-http filtering, and the count semantics.
+
+describe('expandFrameAssets', () => {
+  function frameDataset(overrides: Partial<Dataset> = {}): Dataset {
+    return {
+      id: 'DS01',
+      title: 'Frames Dataset',
+      format: 'video/mp4',
+      dataLink: '/api/v1/datasets/DS01/manifest',
+      frames: {
+        count: 3,
+        urlTemplate: 'https://r2.terraviz.zyra-project.org/frames/DS01/{index}.png',
+      },
+      ...overrides,
+    } as Dataset
+  }
+
+  it('expands the urlTemplate with zero-padded 5-digit indices', () => {
+    const assets = expandFrameAssets(frameDataset())
+    expect(assets).toHaveLength(3)
+    expect(assets[0].url).toBe('https://r2.terraviz.zyra-project.org/frames/DS01/00000.png')
+    expect(assets[1].url).toBe('https://r2.terraviz.zyra-project.org/frames/DS01/00001.png')
+    expect(assets[2].url).toBe('https://r2.terraviz.zyra-project.org/frames/DS01/00002.png')
+  })
+
+  it('routes every frame under a frames/ folder inside the zip', () => {
+    const assets = expandFrameAssets(frameDataset())
+    expect(assets[0].filename).toBe('frames/frame_00000.png')
+    expect(assets[1].filename).toBe('frames/frame_00001.png')
+  })
+
+  it('marks every frame with the publisher-source bucket when hosted on R2', () => {
+    const assets = expandFrameAssets(frameDataset())
+    for (const a of assets) {
+      expect(a.kind).toBe('frame')
+      expect(a.sourceOfTruth).toBe('publisher')
+    }
+  })
+
+  it('returns an empty array when the dataset has no frames envelope', () => {
+    const noFrames = { ...frameDataset(), frames: undefined } as Dataset
+    expect(expandFrameAssets(noFrames)).toEqual([])
+  })
+
+  it('returns an empty array when the frame count is zero', () => {
+    const zero = frameDataset({ frames: { count: 0, urlTemplate: 'https://example.com/{index}.png' } })
+    expect(expandFrameAssets(zero)).toEqual([])
+  })
+
+  it('skips frames whose substituted URL is not http(s)', () => {
+    // Defensive: a publisher portal hand-rolling a `r2:` template
+    // would otherwise leak into the zip and 404 mid-download.
+    const bad = frameDataset({
+      frames: { count: 2, urlTemplate: 'r2:frames/DS01/{index}.png' },
+    })
+    expect(expandFrameAssets(bad)).toEqual([])
   })
 })
