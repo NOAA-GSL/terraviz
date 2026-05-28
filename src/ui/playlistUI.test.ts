@@ -138,7 +138,7 @@ describe('add-to-playlist popover', () => {
     const option = document.querySelector<HTMLButtonElement>('.pl-add-option')!
     option.click()
     const updated = loadPlaylists().find((x) => x.id === p.id)
-    expect(updated?.datasets).toEqual([{ datasetId: 'DATASET_X' }])
+    expect(updated?.datasets).toEqual([{ datasetId: 'DATASET_X', pauseForInput: true }])
   })
 
   it('does not double-add when the dataset is already in the playlist', () => {
@@ -165,7 +165,7 @@ describe('add-to-playlist popover', () => {
     const lists = loadPlaylists()
     expect(lists).toHaveLength(1)
     expect(lists[0].name).toBe('Fresh playlist')
-    expect(lists[0].datasets).toEqual([{ datasetId: 'DATASET_Y' }])
+    expect(lists[0].datasets).toEqual([{ datasetId: 'DATASET_Y', pauseForInput: true }])
     promptSpy.mockRestore()
   })
 })

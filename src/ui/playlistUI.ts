@@ -257,15 +257,28 @@ function renderPlaylistRow(playlist: Playlist, isActive: boolean): string {
       const title = dataset?.title ?? t('playlist.unknownDataset')
       const duration = entry.durationSec ?? ''
       const pauseChecked = entry.pauseForInput ? 'checked' : ''
+      // Two mutually-exclusive modes:
+      //  - pauseForInput: show only the "Wait for click" toggle so
+      //    the user isn't distracted by a duration that would never
+      //    apply.
+      //  - timer-driven: show "Show for [n] sec" with the prefix +
+      //    suffix making the unit obvious; the toggle sits next to
+      //    it so the user can swap modes without scrubbing.
+      const durationFieldHtml = entry.pauseForInput
+        ? ''
+        : `<label class="pl-mgr-entry-duration-field">
+            <span class="pl-mgr-entry-duration-prefix">${tHtml('playlist.duration.prefix')}</span>
+            <input type="number" min="1" step="1" class="pl-mgr-entry-duration"
+              value="${escapeAttr(String(duration))}"
+              placeholder="${escapeAttr(String(DEFAULT_ENTRY_DURATION_SEC))}"
+              aria-label="${tAttr('playlist.duration.label')}"
+              data-id="${escapeAttr(playlist.id)}" data-index="${i}">
+            <span class="pl-mgr-entry-duration-suffix">${tHtml('playlist.duration.suffix')}</span>
+          </label>`
       entriesHtml += `
         <li class="pl-mgr-entry" data-id="${escapeAttr(playlist.id)}" data-index="${i}">
           <span class="pl-mgr-entry-title">${escapeHtml(title)}</span>
-          <input type="number" min="1" step="1" class="pl-mgr-entry-duration"
-            value="${escapeAttr(String(duration))}"
-            placeholder="${escapeAttr(String(DEFAULT_ENTRY_DURATION_SEC))}"
-            aria-label="${tAttr('playlist.duration.label')}"
-            ${entry.pauseForInput ? 'disabled' : ''}
-            data-id="${escapeAttr(playlist.id)}" data-index="${i}">
+          ${durationFieldHtml}
           <label class="pl-mgr-entry-pause" title="${escapeAttr(t('playlist.entry.pauseForInput.label'))}">
             <input type="checkbox" class="pl-mgr-entry-pause-input"
               data-id="${escapeAttr(playlist.id)}" data-index="${i}"

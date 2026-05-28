@@ -166,7 +166,9 @@ describe('addToPlaylist', () => {
   it('appends an entry with no durationSec by default', () => {
     const p = createPlaylist('a')
     addToPlaylist(p.id, 'DATASET_A')
-    expect(getPlaylist(p.id)?.datasets).toEqual([{ datasetId: 'DATASET_A' }])
+    // New entries default to pauseForInput so a freshly built
+    // playlist walks the user through datasets at their own pace.
+    expect(getPlaylist(p.id)?.datasets).toEqual([{ datasetId: 'DATASET_A', pauseForInput: true }])
   })
 
   it('is idempotent — re-adding the same dataset is a no-op', () => {
@@ -284,6 +286,10 @@ describe('setEntryPauseForInput', () => {
   it('no-ops for out-of-range index or unknown playlist', () => {
     const p = createPlaylist('a')
     addToPlaylist(p.id, 'A')
+    // New entries default to pauseForInput=true; clear it first so
+    // the no-op assertion is testing the rejection path, not the
+    // default.
+    setEntryPauseForInput(p.id, 0, false)
     setEntryPauseForInput(p.id, 99, true)
     setEntryPauseForInput('pl-missing', 0, true)
     expect(getPlaylist(p.id)?.datasets[0].pauseForInput).toBeUndefined()
@@ -444,7 +450,11 @@ describe('importPlaylists + exportPlaylistsJson', () => {
     importPlaylists(JSON.parse(json))
     const restored = loadPlaylists()
     expect(restored).toHaveLength(2)
-    expect(restored[1].datasets[0]).toEqual({ datasetId: 'DATASET_X', durationSec: 60 })
+    expect(restored[1].datasets[0]).toEqual({
+      datasetId: 'DATASET_X',
+      durationSec: 60,
+      pauseForInput: true,
+    })
   })
 })
 

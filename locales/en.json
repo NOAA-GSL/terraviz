@@ -413,6 +413,8 @@
   "playlist.delete.confirm": "Delete playlist \"{name}\"? This cannot be undone.",
   "playlist.duration.helper": "Time before advancing to the next dataset. Leave blank for the 30-second default.",
   "playlist.duration.label": "Duration (seconds)",
+  "playlist.duration.prefix": "Show for",
+  "playlist.duration.suffix": "sec",
   "playlist.empty.message": "No playlists yet. Add datasets from Browse or the info panel to start one.",
   "playlist.entry.empty": "This playlist has no datasets yet.",
   "playlist.entry.moveDown.aria": "Move {title} down",

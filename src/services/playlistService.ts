@@ -240,7 +240,12 @@ export function renamePlaylist(id: string, name: string): void {
 /**
  * Append a dataset to a playlist. Idempotent: re-adding an existing
  * datasetId is a no-op (the original entry — including its
- * `durationSec` — is preserved).
+ * `durationSec` and `pauseForInput` — is preserved).
+ *
+ * New entries default to `pauseForInput: true` — the most common
+ * playlist authoring intent is "I want to walk through these
+ * datasets at my own pace" rather than "auto-advance after 30 s
+ * each." The default can still be toggled off in the manager.
  */
 export function addToPlaylist(id: string, datasetId: string): void {
   if (!datasetId) return
@@ -248,7 +253,7 @@ export function addToPlaylist(id: string, datasetId: string): void {
   const target = list.find((p) => p.id === id)
   if (!target) return
   if (target.datasets.some((e) => e.datasetId === datasetId)) return
-  target.datasets.push({ datasetId })
+  target.datasets.push({ datasetId, pauseForInput: true })
   persist()
 }
 

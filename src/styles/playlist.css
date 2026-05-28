@@ -180,8 +180,22 @@
     white-space: nowrap;
     color: #ccc;
 }
+.pl-mgr-entry-duration-field {
+    display: inline-flex;
+    align-items: center;
+    gap: calc(0.25rem * var(--ui-scale));
+    flex-shrink: 0;
+    color: var(--color-text-dim);
+    font-size: calc(0.55rem * var(--ui-scale));
+    line-height: 1;
+    letter-spacing: 0.01em;
+}
+.pl-mgr-entry-duration-prefix,
+.pl-mgr-entry-duration-suffix {
+    white-space: nowrap;
+}
 .pl-mgr-entry-duration {
-    width: calc(48px * var(--ui-scale));
+    width: calc(40px * var(--ui-scale));
     background: var(--white-o05);
     border: 1px solid var(--white-o08);
     color: #ddd;
@@ -189,6 +203,7 @@
     border-radius: calc(3px * var(--ui-scale));
     font-size: calc(0.55rem * var(--ui-scale));
     font-variant-numeric: tabular-nums;
+    text-align: end;
 }
 .pl-mgr-entry-move,
 .pl-mgr-entry-remove {
