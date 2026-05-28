@@ -91,6 +91,29 @@
     padding: calc(1.2rem * var(--ui-scale)) 0;
 }
 
+.pl-mgr-search {
+    margin-block-end: calc(0.5rem * var(--ui-scale));
+}
+.pl-mgr-search-input {
+    width: 100%;
+    background: var(--white-o05);
+    border: 1px solid var(--white-o08);
+    color: #ddd;
+    padding: calc(0.35rem * var(--ui-scale)) calc(0.55rem * var(--ui-scale));
+    border-radius: calc(5px * var(--ui-scale));
+    font-size: calc(0.65rem * var(--ui-scale));
+    line-height: 1.2;
+    box-sizing: border-box;
+}
+.pl-mgr-search-input::placeholder {
+    color: var(--color-text-faint);
+}
+.pl-mgr-search-input:focus-visible {
+    outline: 2px solid var(--color-accent, #4a8);
+    outline-offset: 0;
+    border-color: transparent;
+}
+
 .pl-mgr-list {
     list-style: none;
     padding: 0;
@@ -126,8 +149,12 @@
 .pl-mgr-row-play:disabled { opacity: 0.4; cursor: not-allowed; }
 .pl-mgr-row-play.active { background: #c44; }
 
-.pl-mgr-row-name {
+.pl-mgr-row-toggle {
     flex: 1;
+    min-width: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: calc(0.35rem * var(--ui-scale));
     text-align: start;
     background: none;
     border: none;
@@ -137,11 +164,32 @@
     cursor: pointer;
     padding: calc(0.2rem * var(--ui-scale));
     border-radius: calc(3px * var(--ui-scale));
+}
+.pl-mgr-row-toggle:hover { background: var(--white-o05); }
+.pl-mgr-row-chevron {
+    color: var(--color-text-faint);
+    font-size: calc(0.6rem * var(--ui-scale));
+    line-height: 1;
+    flex-shrink: 0;
+}
+.pl-mgr-row-name-text {
+    flex: 1;
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
-.pl-mgr-row-name:hover { background: var(--white-o05); }
+.pl-mgr-row-rename {
+    flex-shrink: 0;
+    background: none;
+    border: none;
+    color: var(--color-text-faint);
+    cursor: pointer;
+    font-size: calc(0.7rem * var(--ui-scale));
+    padding: calc(0.2rem * var(--ui-scale));
+    line-height: 1;
+}
+.pl-mgr-row-rename:hover { color: #fff; }
 
 .pl-mgr-row-count {
     font-size: calc(0.55rem * var(--ui-scale));

@@ -74,6 +74,14 @@ let popoverAnchor: HTMLElement | null = null
 let popoverDatasetId: string | null = null
 let unsubPlaylists: (() => void) | null = null
 let unsubPlayback: (() => void) | null = null
+/** Which playlists the user has expanded in the manager. Session-
+ *  only so the manager opens fresh each session — persisting
+ *  expand/collapse adds little value compared with the cost of
+ *  yet another localStorage key. The currently-playing playlist
+ *  is auto-expanded by `renderManager` regardless of this set. */
+const expandedPlaylistIds = new Set<string>()
+/** Current name-substring filter, lower-cased. Empty = no filter. */
+let managerSearchQuery = ''
 
 /** Mount the playlist manager panel + global listeners. Idempotent. */
 export function initPlaylistUI(cb: PlaylistUICallbacks = {}): void {
@@ -119,6 +127,10 @@ export function destroyPlaylistUI(): void {
   unsubPlayback?.()
   unsubPlayback = null
   closeAddPopover()
+  // Reset session-scoped UI state so a subsequent initPlaylistUI()
+  // sees a fresh slate — matters for tests, not for production.
+  expandedPlaylistIds.clear()
+  managerSearchQuery = ''
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -199,6 +211,25 @@ function renderManager(): void {
   if (!panel) return
   const playlists = loadPlaylists()
   const activePlayback = getActivePlayback()
+  // Filter by case-insensitive substring; empty query = show all.
+  // The actively-playing playlist always passes the filter so the
+  // user can never accidentally type their way out of seeing the
+  // row whose Stop button they need to reach.
+  const q = managerSearchQuery.trim().toLowerCase()
+  const filtered = q.length === 0
+    ? playlists
+    : playlists.filter((p) =>
+        p.name.toLowerCase().includes(q) || p.id === activePlayback?.playlist.id)
+
+  const searchHtml = playlists.length > 0
+    ? `<div class="pl-mgr-search">
+         <input type="search" id="playlist-manager-search"
+           class="pl-mgr-search-input"
+           placeholder="${tAttr('playlist.search.placeholder')}"
+           aria-label="${tAttr('playlist.search.aria')}"
+           value="${escapeAttr(managerSearchQuery)}">
+       </div>`
+    : ''
 
   let html = `
     <div class="pl-mgr-header">
@@ -216,15 +247,22 @@ function renderManager(): void {
         >${tHtml('playlist.import.label')}</button>
       <input type="file" id="playlist-manager-import-input" accept="application/json,.json" hidden>
     </div>
+    ${searchHtml}
   `
 
   if (playlists.length === 0) {
     html += `<div class="pl-mgr-empty">${tHtml('playlist.empty.message')}</div>`
+  } else if (filtered.length === 0) {
+    html += `<div class="pl-mgr-empty">${escapeHtml(t('playlist.search.empty', { query: managerSearchQuery }))}</div>`
   } else {
     html += `<ul class="pl-mgr-list" role="list">`
-    for (const p of playlists) {
+    for (const p of filtered) {
       const isActive = activePlayback?.playlist.id === p.id
-      html += renderPlaylistRow(p, isActive)
+      // The active playlist always expands so the user can see
+      // what's playing without an extra click; otherwise we honour
+      // the session-level expandedPlaylistIds set.
+      const isExpanded = isActive || expandedPlaylistIds.has(p.id)
+      html += renderPlaylistRow(p, isActive, isExpanded)
     }
     html += `</ul>`
   }
@@ -234,7 +272,7 @@ function renderManager(): void {
   wireManagerEvents(panel, activePlayback?.playlist.id ?? null)
 }
 
-function renderPlaylistRow(playlist: Playlist, isActive: boolean): string {
+function renderPlaylistRow(playlist: Playlist, isActive: boolean, isExpanded: boolean): string {
   const count = playlist.datasets.length
   const countLabel = plural(count,
     { one: 'browse.count.one', other: 'browse.count.other' },
@@ -304,14 +342,25 @@ function renderPlaylistRow(playlist: Playlist, isActive: boolean): string {
   }
 
   const loopChecked = playlist.loop ? 'checked' : ''
+  // Chevron points right when collapsed, down when expanded.
+  const chevron = isExpanded ? '&#x25BE;' : '&#x25B8;'
+  const expandLabel = isExpanded
+    ? t('playlist.collapse.aria', { name: playlist.name })
+    : t('playlist.expand.aria', { name: playlist.name })
   return `
-    <li class="pl-mgr-row${isActive ? ' active' : ''}" data-id="${escapeAttr(playlist.id)}">
+    <li class="pl-mgr-row${isActive ? ' active' : ''}${isExpanded ? ' expanded' : ''}" data-id="${escapeAttr(playlist.id)}">
       <div class="pl-mgr-row-header">
         ${playButton}
-        <button type="button" class="pl-mgr-row-name" data-id="${escapeAttr(playlist.id)}"
-          aria-label="${escapeAttr(t('playlist.rename.aria', { name: playlist.name }))}"
-          >${escapeHtml(playlist.name)}</button>
+        <button type="button" class="pl-mgr-row-toggle" data-id="${escapeAttr(playlist.id)}"
+          aria-expanded="${isExpanded}"
+          aria-label="${escapeAttr(expandLabel)}">
+          <span class="pl-mgr-row-chevron" aria-hidden="true">${chevron}</span>
+          <span class="pl-mgr-row-name-text">${escapeHtml(playlist.name)}</span>
+        </button>
         <span class="pl-mgr-row-count">${escapeHtml(countLabel)}</span>
+        <button type="button" class="pl-mgr-row-rename" data-id="${escapeAttr(playlist.id)}"
+          aria-label="${escapeAttr(t('playlist.rename.aria', { name: playlist.name }))}"
+          title="${escapeAttr(t('playlist.rename.aria', { name: playlist.name }))}">&#x270E;&#xFE0E;</button>
         <label class="pl-mgr-row-loop" title="${escapeAttr(t('playlist.loop.label'))}">
           <input type="checkbox" class="pl-mgr-row-loop-input"
             data-id="${escapeAttr(playlist.id)}"
@@ -324,13 +373,31 @@ function renderPlaylistRow(playlist: Playlist, isActive: boolean): string {
           aria-label="${escapeAttr(t('playlist.delete.aria', { name: playlist.name }))}"
           >&#x1F5D1;&#xFE0E;</button>
       </div>
-      <ul class="pl-mgr-entries" role="list">${entriesHtml}</ul>
+      ${isExpanded ? `<ul class="pl-mgr-entries" role="list">${entriesHtml}</ul>` : ''}
     </li>`
 }
 
 function wireManagerEvents(panel: HTMLElement, activePlaylistId: string | null): void {
   panel.querySelector<HTMLButtonElement>('#playlist-manager-close')
     ?.addEventListener('click', () => closePlaylistManager())
+
+  const searchInput = panel.querySelector<HTMLInputElement>('#playlist-manager-search')
+  if (searchInput) {
+    // Re-render on every keystroke. The list is small (<100 rows in
+    // any realistic case) and the input itself recovers its caret
+    // via the focus restore below — so a full innerHTML replace is
+    // cheaper than fine-grained DOM diffing.
+    searchInput.addEventListener('input', () => {
+      managerSearchQuery = searchInput.value
+      renderManager()
+      const refocused = document.getElementById('playlist-manager-search') as HTMLInputElement | null
+      if (refocused) {
+        refocused.focus()
+        const end = refocused.value.length
+        refocused.setSelectionRange(end, end)
+      }
+    })
+  }
 
   panel.querySelector<HTMLButtonElement>('#playlist-manager-new')?.addEventListener('click', () => {
     const name = window.prompt(t('playlist.create.prompt'), t('playlist.create.defaultName'))
@@ -372,7 +439,20 @@ function wireManagerEvents(panel: HTMLElement, activePlaylistId: string | null):
     })
   })
 
-  panel.querySelectorAll<HTMLButtonElement>('.pl-mgr-row-name').forEach((btn) => {
+  panel.querySelectorAll<HTMLButtonElement>('.pl-mgr-row-toggle').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const id = btn.dataset.id
+      if (!id) return
+      if (expandedPlaylistIds.has(id)) {
+        expandedPlaylistIds.delete(id)
+      } else {
+        expandedPlaylistIds.add(id)
+      }
+      renderManager()
+    })
+  })
+
+  panel.querySelectorAll<HTMLButtonElement>('.pl-mgr-row-rename').forEach((btn) => {
     btn.addEventListener('click', () => {
       const id = btn.dataset.id
       if (!id) return

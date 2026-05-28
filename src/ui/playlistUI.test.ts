@@ -92,19 +92,46 @@ describe('playlist manager', () => {
     const p = createPlaylist('orig')
     openPlaylistManager()
     const promptSpy = vi.spyOn(window, 'prompt').mockReturnValue('renamed')
-    const nameBtn = document.querySelector<HTMLButtonElement>('.pl-mgr-row-name')!
-    nameBtn.click()
+    const renameBtn = document.querySelector<HTMLButtonElement>('.pl-mgr-row-rename')!
+    renameBtn.click()
     expect(loadPlaylists().find((x) => x.id === p.id)?.name).toBe('renamed')
     promptSpy.mockRestore()
   })
 
-  it('renders entries when a playlist has datasets', () => {
+  it('renders entries only when the row is expanded', () => {
     const p = createPlaylist('with entries')
     addToPlaylist(p.id, 'INTERNAL_A')
     addToPlaylist(p.id, 'INTERNAL_B')
     openPlaylistManager()
-    const entries = document.querySelectorAll('.pl-mgr-entry')
-    expect(entries.length).toBe(2)
+    // Inactive rows start collapsed — no entries rendered.
+    expect(document.querySelectorAll('.pl-mgr-entry').length).toBe(0)
+    // Click the toggle to expand.
+    const toggleBtn = document.querySelector<HTMLButtonElement>('.pl-mgr-row-toggle')!
+    toggleBtn.click()
+    expect(document.querySelectorAll('.pl-mgr-entry').length).toBe(2)
+  })
+
+  it('search filters the visible rows by name substring', () => {
+    createPlaylist('Aurora Borealis')
+    createPlaylist('Ocean Temperature')
+    createPlaylist('Aurora Australis')
+    openPlaylistManager()
+    expect(document.querySelectorAll('.pl-mgr-row').length).toBe(3)
+    const search = document.getElementById('playlist-manager-search') as HTMLInputElement
+    search.value = 'aurora'
+    search.dispatchEvent(new Event('input'))
+    const rows = document.querySelectorAll('.pl-mgr-row')
+    expect(rows.length).toBe(2)
+  })
+
+  it('search non-match shows the empty-results message', () => {
+    createPlaylist('Aurora')
+    openPlaylistManager()
+    const search = document.getElementById('playlist-manager-search') as HTMLInputElement
+    search.value = 'no-such-thing'
+    search.dispatchEvent(new Event('input'))
+    expect(document.querySelectorAll('.pl-mgr-row').length).toBe(0)
+    expect(document.querySelector('.pl-mgr-empty')?.textContent).toContain('no-such-thing')
   })
 })
 
