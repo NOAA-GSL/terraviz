@@ -247,11 +247,18 @@ export async function upsertNodeIdentity(
     if (!input.public_key) {
       throw new Error('public_key is required to provision a new node_identity row')
     }
+    // Guard the insert against a concurrent first-time provision:
+    // only insert when the table is still empty. The `singleton`
+    // UNIQUE index (migration 0016) is the hard backstop; this
+    // `WHERE NOT EXISTS` keeps the idempotent re-run path graceful
+    // (a racing second call inserts nothing and falls through to
+    // return the winning row below) instead of throwing.
     await db
       .prepare(
         `INSERT INTO node_identity
            (node_id, display_name, base_url, description, contact_email, public_key, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+         SELECT ?, ?, ?, ?, ?, ?, ?
+         WHERE NOT EXISTS (SELECT 1 FROM node_identity)`,
       )
       .bind(
         newUlid(),

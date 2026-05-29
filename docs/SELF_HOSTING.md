@@ -690,7 +690,7 @@ The authoritative "is everything applied?" check is the
 stays correct as the directory grows. **Don't hard-code "the latest
 migration is NNNN" anywhere** — the count climbs every release (as
 of this writing the directory runs through
-`0015_tours_retracted_at.sql`).
+`0016_node_identity_singleton.sql`).
 
 A per-migration canary is whether that file's columns exist. For the
 newest at time of writing (`0015`):

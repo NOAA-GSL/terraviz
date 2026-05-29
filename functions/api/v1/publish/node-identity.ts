@@ -38,6 +38,25 @@ import { invalidateSnapshot } from '../_lib/snapshot'
 const CONTENT_TYPE = 'application/json; charset=utf-8'
 const MAX_FIELD_LEN = 2048
 
+/** Ed25519 public keys are 32 raw bytes; the wire format the
+ *  well-known doc + `gen-node-key` use is `ed25519:<standard-base64>`.
+ *  Validate the prefix and that the base64 body decodes to exactly
+ *  32 bytes so a typo (e.g. `abc123`) can't provision a node that
+ *  advertises an unusable key in `/.well-known/terraviz.json`. */
+function isValidNodePublicKey(s: string): boolean {
+  const prefix = 'ed25519:'
+  if (!s.startsWith(prefix)) return false
+  const b64 = s.slice(prefix.length)
+  if (b64.length === 0) return false
+  let decoded: string
+  try {
+    decoded = atob(b64)
+  } catch {
+    return false
+  }
+  return decoded.length === 32
+}
+
 function json(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -127,6 +146,12 @@ export const onRequestPut: PagesFunction<CatalogEnv> = async context => {
       errors.push({ field: 'public_key', code: 'invalid', message: 'public_key must be a non-empty string.' })
     } else if (b.public_key.length > MAX_FIELD_LEN) {
       errors.push({ field: 'public_key', code: 'too_long', message: `public_key exceeds ${MAX_FIELD_LEN} chars.` })
+    } else if (!isValidNodePublicKey(b.public_key.trim())) {
+      errors.push({
+        field: 'public_key',
+        code: 'format',
+        message: 'public_key must be an ed25519 wire key ("ed25519:<base64>" decoding to 32 bytes), as written by `npm run gen:node-key`.',
+      })
     } else {
       public_key = b.public_key.trim()
     }

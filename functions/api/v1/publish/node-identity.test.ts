@@ -4,8 +4,14 @@ import { onRequestGet, onRequestPut } from './node-identity'
 import { asD1, makeKV } from '../_lib/test-helpers'
 import type { PublisherRow } from '../_lib/publisher-store'
 
+// A real ed25519 wire key: 32 raw bytes, standard base64. The route
+// validates the prefix + that the body decodes to exactly 32 bytes,
+// so test fixtures must use a well-formed value.
+const VALID_KEY = 'ed25519:' + Buffer.alloc(32, 7).toString('base64')
+
 function freshDb() {
   const db = new Database(':memory:')
+  // Mirror migrations 0001 + 0016 (the singleton guard).
   db.exec(`
     CREATE TABLE node_identity (
       node_id       TEXT PRIMARY KEY,
@@ -14,8 +20,10 @@ function freshDb() {
       description   TEXT,
       contact_email TEXT,
       public_key    TEXT NOT NULL,
-      created_at    TEXT NOT NULL
+      created_at    TEXT NOT NULL,
+      singleton     INTEGER NOT NULL DEFAULT 1
     );
+    CREATE UNIQUE INDEX idx_node_identity_singleton ON node_identity(singleton);
   `)
   return db
 }
@@ -65,14 +73,14 @@ describe('PUT /api/v1/publish/node-identity', () => {
         display_name: 'Terraviz — Acme',
         base_url: 'https://terraviz.acme.org',
         contact_email: 'ops@acme.org',
-        public_key: 'ed25519:abc123',
+        public_key: VALID_KEY,
       }, kv),
     )
     expect(res.status).toBe(200)
     const { identity } = await bodyOf(res)
     expect(identity.display_name).toBe('Terraviz — Acme')
     expect(identity.base_url).toBe('https://terraviz.acme.org')
-    expect(identity.public_key).toBe('ed25519:abc123')
+    expect(identity.public_key).toBe(VALID_KEY)
     expect(identity.node_id).toBeTruthy()
     // Row actually written.
     const row = db.prepare('SELECT * FROM node_identity').get() as any
@@ -120,11 +128,29 @@ describe('PUT /api/v1/publish/node-identity', () => {
   it('rejects an invalid base_url', async () => {
     const db = freshDb()
     const res = await onRequestPut(
-      putCtx(db, ADMIN, { display_name: 'X', base_url: 'ftp://nope', public_key: 'ed25519:k' }),
+      putCtx(db, ADMIN, { display_name: 'X', base_url: 'ftp://nope', public_key: VALID_KEY }),
     )
     expect(res.status).toBe(400)
     const body = await bodyOf(res)
     expect(body.errors.some((e: any) => e.field === 'base_url')).toBe(true)
+  })
+
+  it('rejects a malformed public_key (wrong prefix / not 32 bytes)', async () => {
+    const db = freshDb()
+    for (const bad of ['abc123', 'ed25519:abc123', 'ed25519:' + Buffer.alloc(16).toString('base64')]) {
+      const res = await onRequestPut(
+        putCtx(db, ADMIN, {
+          display_name: 'Bad Key',
+          base_url: 'https://bad-key.example.org',
+          public_key: bad,
+        }),
+      )
+      expect(res.status).toBe(400)
+      const body = await bodyOf(res)
+      expect(body.errors.some((e: any) => e.field === 'public_key' && e.code === 'format')).toBe(true)
+    }
+    // Nothing was written.
+    expect((db.prepare('SELECT count(*) c FROM node_identity').get() as any).c).toBe(0)
   })
 
   it('allows a service token (bootstrap credential)', async () => {
@@ -133,10 +159,25 @@ describe('PUT /api/v1/publish/node-identity', () => {
       putCtx(db, SERVICE, {
         display_name: 'Svc Provisioned',
         base_url: 'https://svc.example.org',
-        public_key: 'ed25519:svc',
+        public_key: VALID_KEY,
       }),
     )
     expect(res.status).toBe(200)
+  })
+
+  it('stays a single row across repeated first-time provisions', async () => {
+    const db = freshDb()
+    for (let i = 0; i < 3; i++) {
+      const res = await onRequestPut(
+        putCtx(db, ADMIN, {
+          display_name: `Provision ${i}`,
+          base_url: 'https://once.example.org',
+          public_key: VALID_KEY,
+        }),
+      )
+      expect(res.status).toBe(200)
+    }
+    expect((db.prepare('SELECT count(*) c FROM node_identity').get() as any).c).toBe(1)
   })
 
   it('forbids a non-admin, non-service publisher', async () => {
