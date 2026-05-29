@@ -900,13 +900,26 @@ task hard-codes 30 fps as the assumed source rate when computing
 playback rate, so the normalisation matters for tour playback to
 work correctly across the catalog.
 
-**R2 bucket CORS policy (REQUIRED for the browser uploader).**
-The asset-uploader performs a cross-origin XHR PUT directly to
-the presigned R2 URL with a `Content-Type` header. Without a CORS
-policy permitting your portal origin for `PUT` and exposing the
-`ETag` response header, browsers reject the upload before R2
-sees it — the portal will spin on "Uploading…" then fail with an
-opaque CORS error.
+**R2 bucket CORS policy (REQUIRED for the browser uploader AND
+for the §8.2 web zip-download dialog).** Two different cross-
+origin paths land here:
+
+- **Upload (publisher portal).** The asset-uploader performs a
+  cross-origin XHR `PUT` directly to the presigned R2 URL with a
+  `Content-Type` header. Without a CORS policy permitting your
+  portal origin for `PUT` and exposing the `ETag` response
+  header, browsers reject the upload before R2 sees it — the
+  portal will spin on "Uploading…" then fail with an opaque CORS
+  error.
+- **Read (zip-download dialog).** The web zip-download flow
+  HEAD-probes every asset to estimate total size before the user
+  hits Start, then falls back to a `Range: bytes=0-0` GET when
+  HEAD elides `Content-Length`. Without `HEAD` in
+  `AllowedMethods` and `Content-Length` + `Content-Range` in
+  `ExposeHeaders`, the dialog renders "size unknown" for every
+  asset and the resulting fetch fails with a CORS error mid-zip.
+  Same wall blocks any other cross-origin browser read from R2
+  (e.g. fetch-based image preloading).
 
 Configure on the bucket (Cloudflare dashboard → R2 → your
 bucket → Settings → CORS policy). For a deploy at
@@ -916,7 +929,14 @@ bucket → Settings → CORS policy). For a deploy at
 [
   {
     "AllowedOrigins": ["https://terraviz.your-org.org"],
-    "AllowedMethods": ["PUT", "GET", "HEAD"],
+    "AllowedMethods": ["GET", "HEAD"],
+    "AllowedHeaders": ["*"],
+    "ExposeHeaders": ["Content-Length", "Content-Range"],
+    "MaxAgeSeconds": 3600
+  },
+  {
+    "AllowedOrigins": ["https://terraviz.your-org.org"],
+    "AllowedMethods": ["PUT", "POST"],
     "AllowedHeaders": ["Content-Type"],
     "ExposeHeaders": ["ETag"],
     "MaxAgeSeconds": 3600
@@ -924,12 +944,55 @@ bucket → Settings → CORS policy). For a deploy at
 ]
 ```
 
-Add a second entry with `"AllowedOrigins": ["http://localhost:5173"]`
-if you want the dev server to upload too. Public-read for assets
-the SPA fetches at runtime (sphere thumbnails, image data_refs)
-is a separate concern — that uses the public R2 URL via the
-`r2.dev` subdomain or your zone, and CORS for those reads is
-inherited from the bucket's public access settings.
+R2's CORS implementation is strict — `HEAD` must be listed
+explicitly even though the Fetch spec treats it as a "simple"
+method, and `Content-Range` must be in `ExposeHeaders` (it's not
+CORS-safelisted, so the Range-GET fallback can't read it
+otherwise). `Content-Length` IS safelisted but listing it is
+defensive against future spec changes.
+
+Add an entry with `"AllowedOrigins": ["http://localhost:5173"]`
+on both rules if you want the dev server to upload + zip-
+download. For desktop builds, add `tauri://localhost`,
+`http://tauri.localhost`, and `https://tauri.localhost` to the
+GET/HEAD rule — they're the Tauri webview origins on macOS /
+Windows / Linux respectively.
+
+**Legacy CloudFront-fronted S3 origins (Phase 3 catalog
+mirrors).** If you've imported the SOS snapshot and some
+datasets still resolve to a CloudFront distribution backed by
+S3 (the migration kept the legacy mirror live for rows it
+didn't transcode to R2), CORS lives in two places:
+
+1. **S3 bucket CORS** — same field names as the R2 policy
+   above, expressed as the S3 XML or JSON variant. `HEAD` in
+   `<AllowedMethod>`, `Content-Length` + `Content-Range` in
+   `<ExposeHeader>`.
+2. **CloudFront distribution behaviour** — CloudFront caches
+   responses by URL and strips CORS headers unless told
+   otherwise. Two ways to surface them at the edge:
+   - **Response Headers Policy (recommended).** CloudFront
+     console → Policies → Response Headers → Create policy →
+     CORS section: `Access-Control-Allow-Origin: *`,
+     `Allow-Methods: GET, HEAD`, `Expose-Headers:
+     Content-Length, Content-Range`, `Origin Override: Yes`.
+     Attach the policy to the distribution's default cache
+     behaviour, then invalidate `/*` so old non-CORS cached
+     responses get refreshed. Wins over S3-side config (no
+     need to fix both).
+   - **Origin-forwarding cache policy.** Default cache
+     behaviour → Cache policy → AWS-managed `CORS-S3Origin`
+     (or a custom policy that includes `Origin` in the cache
+     key + `Access-Control-Request-*` in the origin request).
+     Less invasive but increases cache fragmentation. Pair
+     with the S3 CORS fix.
+
+The S3 fix alone is enough if the existing CloudFront
+distribution already forwards `Origin` (some do by default).
+Cheapest test: apply the S3 fix, hard-refresh the SPA, and
+open the zip-download dialog on a CloudFront-served dataset.
+If the size resolves, you're done. If it doesn't, the
+Response Headers Policy path is what unblocks the rest.
 
 The Pages-side wiring you need (Settings → Bindings):
 
@@ -1359,6 +1422,36 @@ drifts from the markdown.
 they only fire when the user has opted into Research mode under
 Tools → Privacy. If your test users are on default Essential
 mode, those events legitimately won't fire.
+
+### Zip-download dialog shows "size unknown" or "Asset hosted externally" for an asset you control
+
+CORS on the asset's origin is misconfigured. Two distinct
+symptoms behind the same wall:
+
+- **"size unknown" with no console error** → the request
+  succeeded but the response didn't expose `Content-Length` /
+  `Content-Range`. Add both to `ExposeHeaders` on the R2 CORS
+  policy (or `<ExposeHeader>` on the S3 XML, or the CloudFront
+  Response Headers Policy — see §8e for all three).
+- **"size unknown" + a `Cross-Origin Request Blocked … Access-
+  Control-Allow-Origin missing` console error** → the response
+  was blocked outright. On R2, the most common cause is `HEAD`
+  not being listed in `AllowedMethods` (R2 treats HEAD and GET
+  as distinct for CORS even though the Fetch spec doesn't). On
+  a CloudFront-fronted S3 origin, the distribution is caching
+  non-CORS responses and stripping headers — see §8e for the
+  Response Headers Policy fix.
+
+The "Asset hosted externally; see manifest for source URLs"
+note in the dialog is a *separate* signal — it means the
+asset's hostname isn't in `PUBLISHER_HOSTS`
+(`src/services/downloadService.ts`). The dialog still works;
+the note is just generic instead of the publisher-specific
+"Downloaded as source data from the publisher upload". Fine
+for assets genuinely hosted on third-party CDNs; surprising
+for assets you control on a host the SPA doesn't know about.
+Patch `PUBLISHER_HOSTS` to include any project-controlled
+hosts and rebuild.
 
 ### `wrangler kv key put` says namespace not found
 

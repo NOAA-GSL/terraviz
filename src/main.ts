@@ -21,6 +21,7 @@ import type { AppState, VideoTextureHandle, TourFile, Dataset } from './types'
 // Extracted modules
 import { showBrowseUI, hideBrowseUI, collapseBrowseUI, notifyBrowseOpened } from './ui/browseUI'
 import { initDownloadUI } from './ui/downloadUI'
+import { initDownloadDialogUI } from './ui/downloadDialogUI'
 import { initPlaylistUI } from './ui/playlistUI'
 import {
   getActive as getActivePlaylistPlayback,
@@ -351,6 +352,9 @@ class InteractiveSphere {
         legend: this.viewPrefs.legendVisible,
       })
       initDownloadUI().catch(err => logger.warn('[App] Download UI init failed:', err))
+      // Web-only zip-download dialog (§8.2). Mounting is cheap and
+      // safe on desktop too; the opener affordances are the gate.
+      initDownloadDialogUI({ announce: (msg) => this.announce(msg) })
       initHelpUI()
       // Playlists — mount the manager panel host and wire the
       // playback state machine to the regular loadDataset flow.
