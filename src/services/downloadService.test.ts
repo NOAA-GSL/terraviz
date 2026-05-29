@@ -424,10 +424,18 @@ describe('classifySourceOfTruth', () => {
     ).toBe('publisher')
   })
 
-  it('classifies a Cloudflare default *.r2.dev origin as publisher', () => {
+  it('falls through to external for an unknown *.r2.dev third-party bucket', () => {
+    // Regression: a bare `r2.dev` apex entry in PUBLISHER_HOSTS
+    // would suffix-match every third-party R2 public bucket. The
+    // policy is "only zyra-project.org subdomains classify as
+    // publisher"; everything on the shared r2.dev domain is
+    // someone else's bucket until proven otherwise.
     expect(
-      classifySourceOfTruth('https://terraviz-assets.r2.dev/videos/DS01/source.mp4'),
-    ).toBe('publisher')
+      classifySourceOfTruth('https://competitor-bucket.r2.dev/asset.mp4'),
+    ).toBe('external')
+    expect(
+      classifySourceOfTruth('https://pub-1234.r2.dev/asset.mp4'),
+    ).toBe('external')
   })
 
   it('falls through to external for any other host', () => {
@@ -508,5 +516,34 @@ describe('expandFrameAssets', () => {
       frames: { count: 2, urlTemplate: 'r2:frames/DS01/{index}.png' },
     })
     expect(expandFrameAssets(bad)).toEqual([])
+  })
+
+  it('returns an empty array when count is not an integer', () => {
+    // Mirrors `resolveFrameQuery`'s guard in src/utils/frames.ts —
+    // a corrupt / mid-ingest row with `frames.count = NaN` would
+    // otherwise produce a zero-iteration loop that silently
+    // returns []. Worse, `Infinity` would loop unbounded. Fail
+    // closed for the same shape `parseFrameQueryToIndex` does.
+    const nan = frameDataset({
+      frames: { count: Number.NaN, urlTemplate: 'https://r2.example/{index}.png' },
+    })
+    expect(expandFrameAssets(nan)).toEqual([])
+
+    const infinite = frameDataset({
+      frames: { count: Number.POSITIVE_INFINITY, urlTemplate: 'https://r2.example/{index}.png' },
+    })
+    expect(expandFrameAssets(infinite)).toEqual([])
+
+    const fractional = frameDataset({
+      frames: { count: 2.5 as number, urlTemplate: 'https://r2.example/{index}.png' },
+    })
+    expect(expandFrameAssets(fractional)).toEqual([])
+  })
+
+  it('returns an empty array when count is negative', () => {
+    const neg = frameDataset({
+      frames: { count: -1, urlTemplate: 'https://r2.example/{index}.png' },
+    })
+    expect(expandFrameAssets(neg)).toEqual([])
   })
 })

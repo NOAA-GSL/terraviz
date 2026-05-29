@@ -28,15 +28,20 @@ const VIDEO_PROXY_BASE = 'https://video-proxy.zyra-project.org/video'
 
 // Hostnames whose URLs we trust as "publisher original" — the
 // Cloudflare Pages origin and any zyra-project.org subdomain we
-// operate (R2 public buckets, image transformations served from
-// the main origin, etc.). Subdomains match by suffix. A URL
-// served from any other host falls back to `external` rather
-// than being mislabelled as a publisher source.
+// operate (R2 public buckets bound to custom domains, image
+// transformations served from the main origin, etc.). Subdomains
+// match by suffix. A URL served from any other host falls back to
+// `external` rather than being mislabelled as a publisher source.
+//
+// Intentionally NOT including the bare `r2.dev` apex — a `*.r2.dev`
+// suffix match would classify every third-party R2 public bucket as
+// our publisher source. Production R2 assets are served via custom
+// domains under `*.zyra-project.org`; the default `*.r2.dev` URL
+// shouldn't appear in our manifests, and if it does it should
+// classify as `external` until someone explicitly adds the specific
+// bucket subdomain here.
 const PUBLISHER_HOSTS = [
   'zyra-project.org',
-  // Cloudflare's default *.r2.dev origin for public buckets, used
-  // as a fallback before a custom domain is bound.
-  'r2.dev',
 ]
 
 // Use Tauri's CORS-free fetch for HEAD probes when available.
@@ -374,48 +379,27 @@ async function resolveImagePrimary(dataset: Dataset): Promise<{ url: string; fil
 }
 
 /**
- * Resolve every downloadable asset for `dataset`, in primary-first
- * order. The primary entry is always index 0; auxiliary entries
- * (legend / caption / thumbnail) follow when present.
+ * Resolve only the auxiliary assets attached to a dataset row —
+ * legend / caption / thumbnail / color table. Pure HTTP-URL
+ * filtering: refs that aren't absolute http(s) are silently dropped
+ * (logged at warn level), since the catalog serializer occasionally
+ * passes raw `r2:` / `stream:` / `vimeo:` URIs through verbatim.
  *
- * Throws on a primary-asset failure (HLS-only, no usable image
- * variants); auxiliary failures are silently filtered (we'd rather
- * surface a partial archive than reject the whole download because
- * a thumbnail 404s).
- *
- * Both the desktop downloader and the web zip path consume this —
- * the zip dialog then filters the result by user-selected
- * `AssetKind`s, attaches a `manifest.json`, and packages.
+ * Extracted from `resolveAssets()` so callers that don't want the
+ * primary (notably the web zip path's frame-mode flow, where the
+ * frame bundle replaces the rendered primary and the video manifest
+ * would throw HLS-only) can resolve auxiliaries directly without
+ * tripping a primary-asset resolution error.
  */
-export async function resolveAssets(dataset: Dataset): Promise<ResolvedAsset[]> {
-  const isVideo = dataset.format.startsWith('video/')
+function resolveAuxiliaryAssets(dataset: Dataset): ResolvedAsset[] {
   const assets: ResolvedAsset[] = []
 
-  if (isVideo) {
-    const primary = await resolveVideoPrimary(dataset)
-    assets.push({
-      kind: 'primary',
-      url: primary.url,
-      filename: primary.filename,
-      sizeBytes: primary.sizeBytes > 0 ? primary.sizeBytes : undefined,
-      sourceOfTruth: classifySourceOfTruth(primary.url),
-    })
-  } else {
-    const primary = await resolveImagePrimary(dataset)
-    assets.push({
-      kind: 'primary',
-      url: primary.url,
-      filename: primary.filename,
-      sourceOfTruth: classifySourceOfTruth(primary.url),
-    })
-  }
-
-  // Auxiliary assets. The catalog serializer currently passes
-  // `thumbnail_ref` / `legend_ref` / `caption_ref` through verbatim,
-  // so they may arrive as raw `r2:` / `stream:` / `vimeo:` URIs
-  // rather than absolute https URLs. Filter to http(s) only — the
-  // downstream fetch refuses anything else, and a missing thumbnail
-  // is much better UX than a failed download.
+  // The catalog serializer currently passes `thumbnail_ref` /
+  // `legend_ref` / `caption_ref` through verbatim, so they may arrive
+  // as raw `r2:` / `stream:` / `vimeo:` URIs rather than absolute
+  // https URLs. Filter to http(s) only — the downstream fetch
+  // refuses anything else, and a missing thumbnail is much better
+  // UX than a failed download.
   if (isHttpUrl(dataset.legendLink)) {
     const ext = extFromUrl(dataset.legendLink, '.png')
     assets.push({
@@ -473,6 +457,60 @@ export async function resolveAssets(dataset: Dataset): Promise<ResolvedAsset[]> 
 }
 
 /**
+ * Resolve every downloadable asset for `dataset`, in primary-first
+ * order. The primary entry is always index 0; auxiliary entries
+ * (legend / caption / thumbnail) follow when present.
+ *
+ * Throws on a primary-asset failure (HLS-only, no usable image
+ * variants); auxiliary failures are silently filtered (we'd rather
+ * surface a partial archive than reject the whole download because
+ * a thumbnail 404s).
+ *
+ * Both the desktop downloader and the web zip path consume this —
+ * the zip dialog then filters the result by user-selected
+ * `AssetKind`s, attaches a `manifest.json`, and packages.
+ */
+export async function resolveAssets(dataset: Dataset): Promise<ResolvedAsset[]> {
+  const isVideo = dataset.format.startsWith('video/')
+  const assets: ResolvedAsset[] = []
+
+  if (isVideo) {
+    const primary = await resolveVideoPrimary(dataset)
+    assets.push({
+      kind: 'primary',
+      url: primary.url,
+      filename: primary.filename,
+      sizeBytes: primary.sizeBytes > 0 ? primary.sizeBytes : undefined,
+      sourceOfTruth: classifySourceOfTruth(primary.url),
+    })
+  } else {
+    const primary = await resolveImagePrimary(dataset)
+    assets.push({
+      kind: 'primary',
+      url: primary.url,
+      filename: primary.filename,
+      sourceOfTruth: classifySourceOfTruth(primary.url),
+    })
+  }
+
+  assets.push(...resolveAuxiliaryAssets(dataset))
+  return assets
+}
+
+/**
+ * Pure resolver for auxiliary assets only — public surface for the
+ * web zip path's frame-mode flow. Same semantics as the auxiliary
+ * portion of `resolveAssets()` but without attempting to resolve a
+ * video primary that would throw HLS-only for post-transcode
+ * publisher datasets. The frames are the canonical downloadable
+ * primary for those rows; the caller pairs this with
+ * `expandFrameAssets(dataset)`.
+ */
+export function resolveAuxiliaryAssetsOnly(dataset: Dataset): ResolvedAsset[] {
+  return resolveAuxiliaryAssets(dataset)
+}
+
+/**
  * Pure expansion of a frames-mode dataset's `frames.urlTemplate` into
  * one ResolvedAsset per frame. Returns `[]` when the dataset has no
  * `frames` envelope. The zip service uses this when the user opts to
@@ -485,8 +523,15 @@ export async function resolveAssets(dataset: Dataset): Promise<ResolvedAsset[]> 
  * `/api/v1/datasets/{id}/frames` endpoint emits.
  */
 export function expandFrameAssets(dataset: Dataset): ResolvedAsset[] {
-  if (!dataset.frames || dataset.frames.count <= 0) return []
+  if (!dataset.frames) return []
   const { count, urlTemplate } = dataset.frames
+  // Same fail-closed guard `resolveFrameQuery` uses for chat-driven
+  // frame loads (`src/utils/frames.ts:60`): non-integer / non-
+  // positive `count` means the row is corrupt or mid-ingest and the
+  // for-loop bound below would silently generate bogus indices
+  // (NaN ⇒ no iterations, Infinity ⇒ unbounded loop). Drop the
+  // bundle rather than emitting unbounded or off-by-many URLs.
+  if (!Number.isInteger(count) || count <= 0) return []
   if (!urlTemplate) return []
   const assets: ResolvedAsset[] = []
   for (let i = 0; i < count; i++) {

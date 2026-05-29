@@ -573,6 +573,46 @@ describe('buildZip — primary-equivalent kind for frame datasets', () => {
   })
 })
 
+describe('listDownloadableAssets — frames mode for HLS-only video', () => {
+  it('skips resolveAssets() and offers frame URLs even when the video manifest is HLS-only', async () => {
+    // Regression: previously listDownloadableAssets called
+    // resolveAssets() unconditionally before deciding whether to
+    // expand frames. For post-transcode publisher datasets the
+    // video manifest is HLS-only, so `pickBestVideoFile()` would
+    // throw "HLS-streamed and not yet available for offline
+    // download" and the dialog would never see the frame URLs —
+    // even though the frames ARE the canonical downloadable data
+    // for that shape. Pin the fix by making the manifest fetch
+    // produce a `files: []` HLS-only envelope; without the
+    // frame-mode bypass this would throw.
+    const frameMode: Dataset = {
+      ...makeDataset({
+        dataLink: '/api/v1/datasets/DS01/manifest',
+        legendLink: 'https://r2.terraviz.zyra-project.org/legend.png',
+      }),
+      frames: {
+        count: 3,
+        urlTemplate: 'https://r2.terraviz.zyra-project.org/frames/DS01/{index}.png',
+      },
+    }
+    const origFetch = globalThis.fetch
+    globalThis.fetch = vi.fn(async () =>
+      // HLS-only envelope: `files: []` — this is what triggered
+      // the throw before the fix.
+      new Response(JSON.stringify({ kind: 'video', files: [] }), { status: 200 }),
+    ) as unknown as typeof fetch
+    try {
+      const assets = await listDownloadableAssets(frameMode, { includeFrames: true })
+      // Expect: 3 frames + 1 legend, and no primary entry.
+      expect(assets.filter(a => a.kind === 'frame')).toHaveLength(3)
+      expect(assets.some(a => a.kind === 'legend')).toBe(true)
+      expect(assets.some(a => a.kind === 'primary')).toBe(false)
+    } finally {
+      globalThis.fetch = origFetch
+    }
+  })
+})
+
 describe('listDownloadableAssets', () => {
   it('returns only the rendered primary when frames-mode is off', async () => {
     // listDownloadableAssets defers to resolveAssets which requires

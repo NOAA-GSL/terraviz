@@ -32,6 +32,7 @@ import type { Dataset } from '../types'
 import {
   expandFrameAssets,
   resolveAssets,
+  resolveAuxiliaryAssetsOnly,
   type AssetKind,
   type ResolvedAsset,
 } from './downloadService'
@@ -133,19 +134,25 @@ interface ZipManifest {
  * the zip dialog. The expand-frames toggle is gated on `dataset.frames`
  * being populated and the caller opting in (the dialog always opts in
  * for frame datasets — there's nothing else to download).
+ *
+ * Frame-mode takes a fundamentally different path from the default:
+ * post-transcode publisher datasets carry an HLS-only video manifest
+ * (data_ref = `r2:.../master.m3u8`), so `resolveAssets()` would throw
+ * "HLS-streamed and not yet available for offline download" before
+ * the frame URLs could be offered. For frame-mode the frame bundle
+ * IS the primary data, so we skip the video primary resolution
+ * entirely and resolve only auxiliary assets.
  */
 export async function listDownloadableAssets(
   dataset: Dataset,
   opts: { includeFrames?: boolean } = {},
 ): Promise<ResolvedAsset[]> {
-  const base = await resolveAssets(dataset)
   if (opts.includeFrames && dataset.frames) {
-    // Frame datasets: the per-frame URLs replace the rendered primary
-    // (they ARE the primary data for a publisher-uploaded sequence).
     const frames = expandFrameAssets(dataset)
-    return [...frames, ...base.filter(a => a.kind !== 'primary')]
+    const aux = resolveAuxiliaryAssetsOnly(dataset)
+    return [...frames, ...aux]
   }
-  return base
+  return resolveAssets(dataset)
 }
 
 /**
