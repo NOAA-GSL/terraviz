@@ -187,37 +187,68 @@ the latest one. After the redeploy:
 
 ---
 
-## Phase 4 — LLM proxy (optional, enables Orbit chat)
+## Phase 4 — Orbit chat (optional)
 
-Two paths, depending on what LLM you want to use:
+> **Corrected 2026-05.** Earlier revisions of this section described
+> an `LLM_PROVIDER_URL` / `LLM_PROVIDER_KEY` server-side proxy at
+> `functions/api/[[route]].ts`. **That proxy does not exist in the
+> codebase** and those env vars are read by nothing. Orbit's default
+> LLM path is Cloudflare Workers AI, wired through the `AI` binding —
+> there is no external API key to inject. The accurate setup is
+> below.
 
-### 4a. Cloudflare AI Gateway (recommended)
+### 4a. Default path — Cloudflare Workers AI (recommended, zero extra config)
 
-1. Cloudflare dashboard → AI → AI Gateway → **Create Gateway**
-2. Get your gateway URL: `https://gateway.ai.cloudflare.com/v1/<account>/<gateway>/openai`
-3. Pages → Settings → Environment variables (Production):
-   - `LLM_PROVIDER_URL` = the gateway URL above
-   - `LLM_PROVIDER_KEY` = your OpenAI/Anthropic/etc. API key
-4. Redeploy
+Orbit's chat backend is `functions/api/chat/completions.ts`, which
+calls the **`AI`** (Workers AI) binding directly and streams an
+OpenAI-shaped SSE response. `functions/api/models.ts` backs the
+"Test Connection" button. Both rely only on the `AI` binding you
+already wired in **Phase 3b** — once that's attached to Production
+and Preview and you've redeployed, Orbit works with no further
+configuration.
 
-The `functions/api/[[route]].ts` proxy injects the key server-side
-so it never reaches the browser bundle.
+The SPA defaults its Orbit `apiUrl` to the relative `/api`, so on a
+web deploy every chat request is same-origin against your own Pages
+Functions. No API key reaches (or needs to reach) the browser
+bundle, because the default model runs on Cloudflare's edge.
 
-### 4b. Direct API (simpler but key-handling needs care)
+Model selection lives in `MODEL_MAP` inside
+`functions/api/chat/completions.ts` (Llama 3.x / Llama 4 Scout
+variants); the "Reduced functionality" quota guard described in
+Phase 8b kicks in when the Workers AI free-tier neuron budget is
+exhausted.
 
-Same as above without the gateway hop. Set `LLM_PROVIDER_URL` to
-the provider's API endpoint directly.
+> AI Gateway note: the `AI.run()` call accepts a `gateway` option,
+> but the current code does **not** pass one — routing Workers AI
+> through an AI Gateway (for caching / analytics / rate limits) is a
+> code change, not a binding or env var. Don't expect the gateway
+> URL from older docs to do anything on its own.
+
+### 4b. External OpenAI-compatible provider (per-client only)
+
+There is **no server-side proxy** for third-party providers. To
+point Orbit at OpenAI, an OpenAI-compatible gateway, or a hosted
+model, set the **API URL + API key in the running app** under
+Tools → Orbit Settings. On web this is stored in `localStorage`;
+on the Tauri desktop app the key goes to the OS keychain.
+
+Because the key lives in the client, this path is appropriate for a
+single operator's own browser or a desktop install — **not** for a
+shared public deployment, where every visitor would either need
+their own key or share one embedded in their local storage. For a
+public site, stay on the Workers AI path (4a).
 
 ### 4c. Local LLM (Ollama / LM Studio / llama.cpp)
 
-For development only — Pages can't reach `localhost`. Configure in
-the running app via Tools → Orbit Settings → API URL:
+Same client-side mechanism as 4b — Pages can't reach `localhost`,
+so this is a dev / desktop convenience. Configure in the app via
+Tools → Orbit Settings → API URL:
 - Ollama: `http://localhost:11434/v1`
 - LM Studio: `http://localhost:1234/v1`
 - llama.cpp: `http://localhost:8080/v1`
 
-The Tauri desktop app uses the same mechanism but routes through
-the Tauri HTTP plugin to bypass webview CORS.
+The Tauri desktop app routes these through the Tauri HTTP plugin to
+bypass webview CORS.
 
 ---
 
