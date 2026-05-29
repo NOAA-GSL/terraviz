@@ -711,6 +711,68 @@ INSERT INTO d1_migrations (name, applied_at)
 VALUES ('0010_non_global_metadata.sql', CURRENT_TIMESTAMP);
 ```
 
+### 8b.6. Provision the node identity row (remote) ⚠️ required before publishing
+
+The migrations **create** the `node_identity` table but do not
+populate it, and the seed paths are local-only:
+`npm run db:seed` writes through `better-sqlite3` to the
+`.wrangler/` SQLite file, and `npm run gen:node-key` only updates
+the **local** D1's `public_key`. **Neither touches remote D1.** So
+immediately after applying migrations to your production database,
+`node_identity` is empty — and that breaks two things:
+
+- `GET /.well-known/terraviz.json` returns **503
+  `identity_missing`** (its error text says "Run
+  `npm run gen:node-key`", which is misleading — that script doesn't
+  write remote D1).
+- **Every publish and `import-snapshot` row fails.** Dataset inserts
+  set `origin_node` via `(SELECT node_id FROM node_identity LIMIT 1)`,
+  and `datasets.origin_node` is `NOT NULL` — an empty identity table
+  makes that subquery `NULL` and the insert aborts on the constraint.
+
+So provision the row **once**, on remote D1, before §8c:
+
+1. Generate the keypair and capture the public key:
+   ```bash
+   npm run gen:node-key
+   # writes node-public-key.txt (the `ed25519:...` line) and prints
+   # the `wrangler pages secret put NODE_ID_PRIVATE_KEY_PEM` step
+   ```
+   Set the `NODE_ID_PRIVATE_KEY_PEM` secret as instructed (both
+   Production and Preview).
+2. Insert the identity row into the **remote** database with **your
+   node's real values** (not the dev defaults the local seed uses —
+   `display_name='Terraviz (dev)'`, `base_url='http://localhost:8788'`):
+   ```bash
+   wrangler d1 execute sphere-feedback --remote --config wrangler.toml \
+     --command "INSERT INTO node_identity
+       (node_id, display_name, base_url, description, contact_email, public_key, created_at)
+       VALUES (
+         lower(hex(randomblob(16))),
+         'Terraviz — Your Org',
+         'https://terraviz.your-org.org',
+         'Your org''s Terraviz node.',
+         'ops@your-org.org',
+         'ed25519:PASTE_FROM_node-public-key.txt',
+         strftime('%Y-%m-%dT%H:%M:%fZ','now')
+       )"
+   ```
+   (Use a ULID for `node_id` if you have one handy; the random-hex
+   above is a fine stand-in — it just has to be a stable unique id.)
+3. Verify:
+   ```bash
+   wrangler d1 execute sphere-feedback --remote --config wrangler.toml \
+     --command "SELECT node_id, display_name, base_url FROM node_identity"
+   ```
+   and hit `https://your-domain/.well-known/terraviz.json` — it should
+   now return 200 with your identity instead of 503.
+
+> If you later rotate the key with `npm run gen:node-key`, also push
+> the new public key to remote D1:
+> `wrangler d1 execute sphere-feedback --remote --config wrangler.toml
+> --command "UPDATE node_identity SET public_key='ed25519:...'"` — the
+> script only updates your local copy.
+
 ### 8c. Run the snapshot import
 
 Once the bindings are wired, the catalog tables are empty. Two
@@ -1286,6 +1348,18 @@ check:pages-bindings`; if the `MISSING` row says one environment
 has them and the other doesn't, that's the per-environment
 toggle gotcha from Phase 8a.
 
+### `/.well-known/terraviz.json` 503s, or publishing fails on `origin_node`
+
+The remote `node_identity` table is empty — you applied the
+catalog migrations but never provisioned the identity row.
+Symptoms: `/.well-known/terraviz.json` returns
+503 `identity_missing`, and any publish / `import-snapshot` row
+fails (the dataset insert's `origin_node` subquery returns `NULL`
+against a `NOT NULL` column). The local `db:seed` / `gen:node-key`
+paths do **not** write remote D1. Fix: provision the row per
+**§8b.6** before importing. (The 503's "Run `npm run gen:node-key`"
+hint is misleading — that script only updates your local copy.)
+
 ### Docent suggestions stop showing dataset chips after working briefly
 
 You've hit Workers AI free-tier neuron exhaustion. The chat
@@ -1355,6 +1429,27 @@ domain isn't in `TRUSTED_PUBLISHER_DOMAINS`; see §8g).
 - Open a few `feedback` events yourself with the in-app form so
   you can confirm the admin dashboard at `/api/feedback-admin`
   actually loads behind Access.
+- **Add a Content-Security-Policy.** The app ships **no CSP** in the
+  repo — `src/index.html` has no `<meta>` policy and `public/_headers`
+  sets `X-Content-Type-Options` / `Referrer-Policy` /
+  `Permissions-Policy` but no CSP. The upstream production deploy
+  enforces a strict `connect-src` CSP **at the Cloudflare edge**
+  (dashboard / Transform Rules), so it is **not inherited by a
+  fork**. Your node functions without one, but you should add your
+  own — either an edge rule or a `Content-Security-Policy` line in
+  `public/_headers`. A working starting point needs to allow your
+  own origin plus the external origins the app talks to:
+  - `connect-src`: `'self'`, your video/caption proxy
+    (`VITE_VIDEO_PROXY_BASE` host), `gibs.earthdata.nasa.gov`,
+    `s3.dualstack.us-east-1.amazonaws.com` (SOS snapshot), and your
+    R2 public host if set.
+  - `img-src` / `media-src`: `'self'` `data:` `blob:`, your Earth-asset
+    host (`VITE_EARTH_ASSET_BASE`), the SOS/CloudFront asset hosts,
+    and your R2 public host.
+  - Note the app uses `blob:` (preview tours, screenshots) — omitting
+    it from `connect-src` reproduces the "may not load data from
+    blob:" bug the code comments reference. Test playback, VR, and a
+    tour before locking it down.
 
 If you find something broken or under-documented, please open an
 issue against the upstream repo — half of this doc was written
