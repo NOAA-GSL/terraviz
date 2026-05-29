@@ -15,6 +15,7 @@ import type { Dataset } from '../types'
 import {
   isDownloadAvailable, downloadDataset, getDownload,
   isDownloading, formatBytes,
+  isZipDownloadable,
 } from '../services/downloadService'
 import { closeDownloadPanel } from './downloadUI'
 import { openDownloadDialog } from './downloadDialogUI'
@@ -1887,7 +1888,11 @@ export function showBrowseUI(
       // Web-only zip-download affordance. Desktop already has the
       // offline-cache button above; the zip flow is for users who
       // can't or don't want to install the desktop app.
-      const zipBtn = !isDownloadAvailable()
+      // `isZipDownloadable` additionally suppresses the button on
+      // datasets we know will fail today (plain HLS-only videos
+      // post Phase 3 r2-hls migration) — see the comment on the
+      // helper; widen the check once #147 / #148 land.
+      const zipBtn = !isDownloadAvailable() && isZipDownloadable(d)
         ? `<button class="browse-card-zip" data-id="${escapeAttr(d.id)}"`
           + ` aria-label="${escapeAttr(t('zip.action.zipDownload.aria', { title: d.title }))}"`
           + ` title="${escapeAttr(t('zip.action.zipDownload.title'))}">&#x1F4E6;</button>`

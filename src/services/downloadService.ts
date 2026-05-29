@@ -552,6 +552,43 @@ export function expandFrameAssets(dataset: Dataset): ResolvedAsset[] {
   return assets
 }
 
+/**
+ * Heuristic gate for whether the web zip-download button should
+ * render for a given dataset on the current deployment. Suppresses
+ * the button on rows we know will fail with the "HLS-streamed and
+ * not yet available for offline download" error from
+ * `resolveVideoPrimary` / `pickBestVideoFile` rather than surfacing
+ * a misleading entry point.
+ *
+ * - Image datasets always render: the manifest endpoint's
+ *   `variants[]` ladder gives a downloadable single image.
+ * - Frame-mode datasets render even when stored as `video/*`:
+ *   `expandFrameAssets()` exposes the per-frame URLs, and the
+ *   frame bundle is the canonical downloadable data for the
+ *   sequence-source Phase 3pf upload shape.
+ * - Plain video datasets (no `frames` envelope) suppress today:
+ *   after the Phase 3 r2-hls migration, every video row's
+ *   `data_ref` is `r2:videos/{id}/<id>/master.m3u8`, and the
+ *   manifest endpoint returns `files: []` for those. The
+ *   Vimeo-proxy fallback in `resolveVideoPrimary` exists for
+ *   the legacy direct-`vimeo:` shape but no row carries that
+ *   data_ref in the current deployment.
+ *
+ * **TEMPORARY — relax the video-without-frames suppression once
+ * issues #147 + #148 land.** #147 exposes the publisher
+ * `source.mp4` alongside the HLS manifest for new uploads; #148
+ * backfills the source for legacy migrated rows. Either one fixes
+ * the underlying "no offline download for HLS-only rows" problem;
+ * this gate should be widened when the manifest endpoint
+ * reliably returns a non-empty `files[]` for the video cohort the
+ * deployment serves.
+ */
+export function isZipDownloadable(dataset: Dataset): boolean {
+  if (dataset.format.startsWith('image/')) return true
+  if (dataset.frames) return true
+  return false
+}
+
 /** Get the estimated download size for a dataset. */
 export async function getDownloadSize(dataset: Dataset): Promise<number> {
   if (!IS_TAURI) return 0

@@ -12,6 +12,7 @@ import {
   classifySourceOfTruth,
   expandFrameAssets,
   formatBytes,
+  isZipDownloadable,
   __test__,
 } from './downloadService'
 import { proxyCaptionUrl } from '../utils/captionProxy'
@@ -545,5 +546,53 @@ describe('expandFrameAssets', () => {
       frames: { count: -1, urlTemplate: 'https://r2.example/{index}.png' },
     })
     expect(expandFrameAssets(neg)).toEqual([])
+  })
+})
+
+// --- isZipDownloadable ---
+// Capability gate the browse + info-panel surfaces use to suppress
+// the zip button on datasets we know will fail today (plain video
+// rows post Phase 3 r2-hls migration). The gate widens once
+// issues #147 + #148 land; until then it suppresses the misleading
+// entry point so users only click into the dialog on rows that
+// actually produce a working archive.
+
+describe('isZipDownloadable', () => {
+  it('renders for image datasets', () => {
+    expect(isZipDownloadable({
+      id: 'D', title: 'T', format: 'image/jpeg', dataLink: '/api/v1/datasets/D/manifest',
+    } as Dataset)).toBe(true)
+    expect(isZipDownloadable({
+      id: 'D', title: 'T', format: 'image/png', dataLink: '/api/v1/datasets/D/manifest',
+    } as Dataset)).toBe(true)
+  })
+
+  it('renders for frames-mode datasets even when stored as video/*', () => {
+    // Phase 3pf image-sequence-source video rows: format is
+    // video/mp4 (HLS playback) but `frames` carries the
+    // canonical downloadable per-frame URLs that
+    // expandFrameAssets() expands.
+    expect(isZipDownloadable({
+      id: 'D', title: 'T', format: 'video/mp4', dataLink: '/api/v1/datasets/D/manifest',
+      frames: { count: 240, urlTemplate: 'https://r2.example/{index}.png' },
+    } as Dataset)).toBe(true)
+  })
+
+  it('suppresses for plain video datasets with no frames envelope', () => {
+    // Post Phase 3 r2-hls migration, every video row's data_ref
+    // is r2:videos/{id}/<id>/master.m3u8 → manifest endpoint
+    // returns files: [] → resolveVideoPrimary throws HLS-only.
+    // Suppress the button until #147 / #148 land.
+    expect(isZipDownloadable({
+      id: 'D', title: 'T', format: 'video/mp4', dataLink: '/api/v1/datasets/D/manifest',
+    } as Dataset)).toBe(false)
+  })
+
+  it('suppresses for unknown / non-image / non-video formats', () => {
+    // Tour/json and anything else not covered above — no archive
+    // semantics defined, suppress.
+    expect(isZipDownloadable({
+      id: 'D', title: 'T', format: 'tour/json' as any, dataLink: '/api/v1/datasets/D/manifest',
+    } as Dataset)).toBe(false)
   })
 })

@@ -7,7 +7,7 @@
 import { HLSService, type VideoProxyResponse } from './hlsService'
 import { dataService } from './dataService'
 import { apiFetch, isManifestUrl } from './catalogSource'
-import { getDownload, getDownloadPath } from './downloadService'
+import { getDownload, getDownloadPath, isZipDownloadable } from './downloadService'
 import type { Dataset, AppState, GlobeRenderer, VideoTextureHandle } from '../types'
 import { overlayOptionsFromDataset } from './datasetOverlayOptions'
 import { formatDate, isSubDailyPeriod, inferDisplayInterval } from '../utils/time'
@@ -480,8 +480,11 @@ export function displayDatasetInfo(
   // "Download as .zip" affordance — §8.2. Web-only; desktop offline
   // cache is the established path there. Same data-attribute idiom
   // the playlist button uses so a future refactor can lift the row
-  // into a shared component.
-  if (!IS_TAURI) {
+  // into a shared component. `isZipDownloadable` additionally
+  // suppresses the button on datasets we know will fail today
+  // (plain HLS-only videos post Phase 3 r2-hls migration) — widen
+  // the check once issues #147 / #148 land.
+  if (!IS_TAURI && isZipDownloadable(dataset)) {
     html += `<button type="button" class="add-to-playlist-btn info-zip-download"`
       + ` data-dataset-id="${escapeAttr(dataset.id)}"`
       + ` aria-label="${escapeAttr(t('zip.action.zipDownload.aria', { title: dataset.title }))}">`
