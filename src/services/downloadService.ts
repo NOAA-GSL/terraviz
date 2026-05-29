@@ -233,11 +233,14 @@ export function classifySourceOfTruth(url: string): SourceOfTruth {
  * playback, kept in sync here so download and play resolve to the
  * same underlying URLs.
  */
-async function fetchManifestEnvelope(dataLink: string): Promise<
+async function fetchManifestEnvelope(dataLink: string, signal?: AbortSignal): Promise<
   | { kind: 'video'; files?: VideoProxyFile[] }
   | { kind: 'image'; variants?: Array<{ width: number; url: string }>; fallback?: string }
 > {
-  const res = await apiFetch(dataLink, { headers: { Accept: 'application/json' } })
+  const res = await apiFetch(dataLink, {
+    headers: { Accept: 'application/json' },
+    signal,
+  })
   if (!res.ok) throw new Error(`Manifest fetch failed: ${res.status} ${res.statusText}`)
   return res.json()
 }
@@ -292,14 +295,14 @@ function orderImageCandidates(envelope: {
 }
 
 /** Resolve the best video file for download (highest quality MP4). */
-async function resolveVideoPrimary(dataset: Dataset): Promise<{ url: string; sizeBytes: number; filename: string }> {
+async function resolveVideoPrimary(dataset: Dataset, signal?: AbortSignal): Promise<{ url: string; sizeBytes: number; filename: string }> {
   // Node-mode: dataLink is `/api/v1/datasets/{id}/manifest`. Fetch
   // the envelope and walk `files[]` — same path datasetLoader.ts
   // uses for playback. The legacy direct-Vimeo path below stays for
   // catalogs that still serve vimeo.com URLs in dataLink (the
   // `legacy` catalog source).
   if (isManifestUrl(dataset.dataLink)) {
-    const envelope = await fetchManifestEnvelope(dataset.dataLink)
+    const envelope = await fetchManifestEnvelope(dataset.dataLink, signal)
     if (envelope.kind !== 'video') {
       throw new Error(`Expected a video manifest; got kind=${envelope.kind}.`)
     }
@@ -311,7 +314,7 @@ async function resolveVideoPrimary(dataset: Dataset): Promise<{ url: string; siz
   const vimeoId = dataService.extractVimeoId(dataset.dataLink)
   if (!vimeoId) throw new Error(`Cannot extract Vimeo ID from ${dataset.dataLink}`)
 
-  const res = await fetch(`${VIDEO_PROXY_BASE}/${vimeoId}`)
+  const res = await fetch(`${VIDEO_PROXY_BASE}/${vimeoId}`, { signal })
   if (!res.ok) throw new Error(`Video proxy returned ${res.status}`)
   const manifest: VideoProxyResponse = await res.json()
 
@@ -322,11 +325,11 @@ async function resolveVideoPrimary(dataset: Dataset): Promise<{ url: string; siz
 }
 
 /** Resolve image assets for download (highest available resolution). */
-async function resolveImagePrimary(dataset: Dataset): Promise<{ url: string; filename: string }> {
+async function resolveImagePrimary(dataset: Dataset, signal?: AbortSignal): Promise<{ url: string; filename: string }> {
   // Node-mode: dataLink is the manifest endpoint. Walk `variants[]`
   // highest-width-first, HEAD-probe each, fall back to `fallback`.
   if (isManifestUrl(dataset.dataLink)) {
-    const envelope = await fetchManifestEnvelope(dataset.dataLink)
+    const envelope = await fetchManifestEnvelope(dataset.dataLink, signal)
     if (envelope.kind !== 'image') {
       throw new Error(`Expected an image manifest; got kind=${envelope.kind}.`)
     }
@@ -336,12 +339,15 @@ async function resolveImagePrimary(dataset: Dataset): Promise<{ url: string; fil
     }
     for (const candidateUrl of ordered) {
       try {
-        const probe = await corsFetch(candidateUrl, { method: 'HEAD' })
+        const probe = await corsFetch(candidateUrl, { method: 'HEAD', signal })
         if (probe.ok) {
           const ext = extFromUrl(candidateUrl, '.jpg')
           return { url: candidateUrl, filename: `image${ext}` }
         }
-      } catch { /* try next */ }
+      } catch (err) {
+        // Propagate aborts; otherwise try next candidate.
+        if ((err as { name?: string }).name === 'AbortError') throw err
+      }
     }
     // No HEAD probe succeeded; trust the highest-resolution variant
     // and let the downstream fetch surface the real HTTP error if it
@@ -366,10 +372,11 @@ async function resolveImagePrimary(dataset: Dataset): Promise<{ url: string; fil
 
   for (const candidate of candidates) {
     try {
-      const res = await corsFetch(candidate.url, { method: 'HEAD' })
+      const res = await corsFetch(candidate.url, { method: 'HEAD', signal })
       if (res.ok) return candidate
-    } catch {
-      // Try next
+    } catch (err) {
+      // Propagate aborts; otherwise try next.
+      if ((err as { name?: string }).name === 'AbortError') throw err
     }
   }
 
@@ -469,12 +476,15 @@ function resolveAuxiliaryAssets(dataset: Dataset): ResolvedAsset[] {
  * the zip dialog then filters the result by user-selected
  * `AssetKind`s, attaches a `manifest.json`, and packages.
  */
-export async function resolveAssets(dataset: Dataset): Promise<ResolvedAsset[]> {
+export async function resolveAssets(
+  dataset: Dataset,
+  opts: { signal?: AbortSignal } = {},
+): Promise<ResolvedAsset[]> {
   const isVideo = dataset.format.startsWith('video/')
   const assets: ResolvedAsset[] = []
 
   if (isVideo) {
-    const primary = await resolveVideoPrimary(dataset)
+    const primary = await resolveVideoPrimary(dataset, opts.signal)
     assets.push({
       kind: 'primary',
       url: primary.url,
@@ -483,7 +493,7 @@ export async function resolveAssets(dataset: Dataset): Promise<ResolvedAsset[]> 
       sourceOfTruth: classifySourceOfTruth(primary.url),
     })
   } else {
-    const primary = await resolveImagePrimary(dataset)
+    const primary = await resolveImagePrimary(dataset, opts.signal)
     assets.push({
       kind: 'primary',
       url: primary.url,
@@ -585,6 +595,20 @@ export function expandFrameAssets(dataset: Dataset): ResolvedAsset[] {
 export function isZipDownloadable(dataset: Dataset): boolean {
   if (dataset.format.startsWith('image/')) return true
   if (dataset.frames) return true
+  if (dataset.format.startsWith('video/')) {
+    // Legacy direct-URL videos (most commonly `https://vimeo.com/X`
+    // dataLinks predating the manifest endpoint) bypass node-mode
+    // resolution and route through `resolveVideoPrimary`'s Vimeo-
+    // proxy fallback — those produce a working archive. Only the
+    // manifest-endpoint shape is suppressed today, where the
+    // post-Phase-3-r2-hls deployment returns `files: []` for the
+    // dominant `r2:.../master.m3u8` data_ref. A manifest-URL row
+    // whose data_ref is still `vimeo:X` would also work via the
+    // proxy resolution server-side, but we can't tell which scheme
+    // is behind a manifest URL client-side; that distinction
+    // arrives via #147's server-side hint.
+    if (!isManifestUrl(dataset.dataLink)) return true
+  }
   return false
 }
 

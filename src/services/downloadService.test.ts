@@ -578,7 +578,7 @@ describe('isZipDownloadable', () => {
     } as Dataset)).toBe(true)
   })
 
-  it('suppresses for plain video datasets with no frames envelope', () => {
+  it('suppresses for plain video datasets routed through the manifest endpoint', () => {
     // Post Phase 3 r2-hls migration, every video row's data_ref
     // is r2:videos/{id}/<id>/master.m3u8 → manifest endpoint
     // returns files: [] → resolveVideoPrimary throws HLS-only.
@@ -586,6 +586,28 @@ describe('isZipDownloadable', () => {
     expect(isZipDownloadable({
       id: 'D', title: 'T', format: 'video/mp4', dataLink: '/api/v1/datasets/D/manifest',
     } as Dataset)).toBe(false)
+  })
+
+  it('renders for legacy direct-Vimeo video rows whose dataLink bypasses the manifest endpoint', () => {
+    // Legacy SOS catalog rows still carry `dataLink =
+    // https://vimeo.com/123456`, which routes through
+    // resolveVideoPrimary's Vimeo-proxy fallback. Those produce a
+    // working archive. Pin that the temporary gate doesn't
+    // over-suppress this cohort.
+    expect(isZipDownloadable({
+      id: 'D', title: 'T', format: 'video/mp4',
+      dataLink: 'https://vimeo.com/123456789',
+    } as Dataset)).toBe(true)
+  })
+
+  it('renders for direct-URL videos pointed at any non-manifest origin', () => {
+    // Same shape, different host — direct MP4 hosted on
+    // sos.noaa.gov or similar; resolveVideoPrimary's legacy
+    // branch handles it.
+    expect(isZipDownloadable({
+      id: 'D', title: 'T', format: 'video/mp4',
+      dataLink: 'https://example.com/clip.mp4',
+    } as Dataset)).toBe(true)
   })
 
   it('suppresses for unknown / non-image / non-video formats', () => {

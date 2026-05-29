@@ -143,9 +143,19 @@ export async function openDownloadDialog(datasetId: string, opener: HTMLElement 
     return
   }
 
+  // Create the abort controller BEFORE the resolve call so the
+  // manifest fetch + per-variant HEAD probes inside
+  // `listDownloadableAssets()` cancel on close/reopen too. Without
+  // this, closing the dialog mid-resolve left the network requests
+  // in flight and let a late-arriving estimate write into the
+  // wrong dialog instance.
+  activeAbortController = new AbortController()
+  const resolveSignal = activeAbortController.signal
+
   try {
     const assets = await listDownloadableAssets(dataset, {
       includeFrames: !!dataset.frames,
+      signal: resolveSignal,
     })
     // The dataset may have closed since the await; bail.
     if (!dialogOpen || activeDatasetId !== datasetId) return
@@ -158,9 +168,9 @@ export async function openDownloadDialog(datasetId: string, opener: HTMLElement 
     // selectable, so it doesn't appear in selectedKinds.
     renderDialog()
 
-    // Kick off size estimation in the background. Aborts on close.
-    activeAbortController = new AbortController()
-    estimateZipSize(assets, { signal: activeAbortController.signal })
+    // Kick off size estimation in the background. Shares the same
+    // controller as the resolve so close/reopen cancels both.
+    estimateZipSize(assets, { signal: resolveSignal })
       .then((res) => {
         if (!dialogOpen || activeDatasetId !== datasetId) return
         estimatedBytes = res.bytes

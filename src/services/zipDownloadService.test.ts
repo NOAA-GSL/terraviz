@@ -428,6 +428,55 @@ describe('buildZip — empty selection', () => {
   })
 })
 
+describe('buildZip — pre-arrayBuffer cap enforcement', () => {
+  it('throws on a declared Content-Length over cap WITHOUT touching the response body', async () => {
+    // Regression: the post-arrayBuffer check runs only after
+    // `res.arrayBuffer()` has materialised the whole body in
+    // memory. A 5 GB response would OOM the tab during that
+    // allocation even though the post-fetch guard would reject.
+    // The pre-check inspects Content-Length and throws before
+    // touching the body when the server declares an over-cap
+    // size.
+    const fetchImpl = vi.fn(async () => {
+      let arrayBufferCalls = 0
+      return {
+        ok: true,
+        statusText: 'OK',
+        headers: {
+          get(name: string) {
+            return name.toLowerCase() === 'content-length'
+              ? String(2 * 1024 * 1024 * 1024)
+              : null
+          },
+        },
+        arrayBuffer: async () => {
+          arrayBufferCalls++
+          throw new Error('arrayBuffer should not be called for over-cap declared sizes')
+        },
+        __arrayBufferCalls: () => arrayBufferCalls,
+      } as unknown as Response
+    }) as unknown as typeof globalThis.fetch
+    await expect(
+      buildZip(makeDataset(), [makeAsset({ kind: 'primary', filename: 'huge.bin' })], { fetchImpl }),
+    ).rejects.toThrow(/cap/)
+  })
+
+  it('still falls through to the post-arrayBuffer check when Content-Length is missing', async () => {
+    // Faked `byteLength: 2 GiB` simulates an origin that elides
+    // Content-Length (e.g., chunked transfer-encoding). The
+    // pre-check skips, the post-arrayBuffer check catches it.
+    const fetchImpl = vi.fn(async () => ({
+      ok: true,
+      statusText: 'OK',
+      headers: { get() { return null } },
+      arrayBuffer: async () => ({ byteLength: 2 * 1024 * 1024 * 1024 } as unknown as ArrayBuffer),
+    })) as unknown as typeof globalThis.fetch
+    await expect(
+      buildZip(makeDataset(), [makeAsset({ kind: 'primary', filename: 'huge.bin' })], { fetchImpl }),
+    ).rejects.toThrow(/cap/)
+  })
+})
+
 describe('buildZip — mid-download cap enforcement', () => {
   // The cap check reads `buf.byteLength` off the awaited arrayBuffer
   // — it doesn't actually walk the bytes. We fake the byteLength so
@@ -436,10 +485,16 @@ describe('buildZip — mid-download cap enforcement', () => {
   // whose byteLength matches the bytes; the buildZip code path
   // treats byteLength as opaque, so the fake is faithful to
   // production behaviour without the allocation.
+  //
+  // The mocked response also exposes an empty `headers.get()` so
+  // the pre-arrayBuffer Content-Length check skips for these
+  // tests — they specifically exercise the *post-arrayBuffer*
+  // fallback guard.
   function fakeFetchOfSize(byteLength: number): typeof globalThis.fetch {
     return vi.fn(async () => ({
       ok: true,
       statusText: 'OK',
+      headers: { get() { return null } },
       arrayBuffer: async () => ({ byteLength } as unknown as ArrayBuffer),
     })) as unknown as typeof globalThis.fetch
   }
@@ -467,13 +522,17 @@ describe('buildZip — mid-download cap enforcement', () => {
       // call. Make it tiny but lie about the byteLength via
       // Object.defineProperty so the cap check reads the inflated
       // value and the JSZip call doesn't allocate gigabytes.
+      // `headers.get()` returns null so the pre-arrayBuffer
+      // Content-Length guard skips; this test specifically pins
+      // the post-arrayBuffer cumulative-size enforcement.
       const buf = new ArrayBuffer(0)
       Object.defineProperty(buf, 'byteLength', { value: size })
       return {
         ok: true,
         statusText: 'OK',
+        headers: { get() { return null } },
         arrayBuffer: async () => buf,
-      } as Response
+      } as unknown as Response
     }) as unknown as typeof globalThis.fetch
     await expect(
       buildZip(
@@ -570,6 +629,40 @@ describe('buildZip — primary-equivalent kind for frame datasets', () => {
         { fetchImpl },
       ),
     ).rejects.toThrow(/no data/)
+  })
+})
+
+describe('listDownloadableAssets — abort signal threading', () => {
+  it('aborts an in-flight manifest fetch when the signal fires before resolution', async () => {
+    // Regression: previously listDownloadableAssets didn't accept
+    // a signal, so closing the dialog mid-resolve left the
+    // manifest fetch running. The fix plumbs the signal through
+    // resolveAssets → resolveImagePrimary → apiFetch. Confirm by
+    // making the manifest fetch a long-pending promise and
+    // aborting the signal once the fetch starts; the resolve
+    // promise should reject with AbortError.
+    const ctrl = new AbortController()
+    const origFetch = globalThis.fetch
+    globalThis.fetch = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+      // Return a promise that rejects only when the signal aborts.
+      // Mirrors a slow upstream that hasn't yet responded.
+      return new Promise<Response>((_resolve, reject) => {
+        const signal = init?.signal as AbortSignal | undefined
+        const onAbort = () => reject(new DOMException('aborted', 'AbortError'))
+        signal?.addEventListener('abort', onAbort, { once: true })
+      })
+    }) as unknown as typeof globalThis.fetch
+    try {
+      const dataset: Dataset = {
+        id: 'D', title: 'T', format: 'image/jpeg',
+        dataLink: '/api/v1/datasets/D/manifest',
+      } as Dataset
+      const promise = listDownloadableAssets(dataset, { signal: ctrl.signal })
+      ctrl.abort()
+      await expect(promise).rejects.toMatchObject({ name: 'AbortError' })
+    } finally {
+      globalThis.fetch = origFetch
+    }
   })
 })
 

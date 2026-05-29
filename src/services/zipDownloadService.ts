@@ -145,14 +145,14 @@ interface ZipManifest {
  */
 export async function listDownloadableAssets(
   dataset: Dataset,
-  opts: { includeFrames?: boolean } = {},
+  opts: { includeFrames?: boolean; signal?: AbortSignal } = {},
 ): Promise<ResolvedAsset[]> {
   if (opts.includeFrames && dataset.frames) {
     const frames = expandFrameAssets(dataset)
     const aux = resolveAuxiliaryAssetsOnly(dataset)
     return [...frames, ...aux]
   }
-  return resolveAssets(dataset)
+  return resolveAssets(dataset, { signal: opts.signal })
 }
 
 /**
@@ -393,9 +393,39 @@ export async function buildZip(
     try {
       const res = await fetchImpl(asset.url, { signal })
       if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`)
+      // Pre-arrayBuffer cap check. `res.arrayBuffer()` materializes
+      // the entire response body in memory before our post-fetch
+      // guard at line ~430 ever runs — a single 5 GB response can
+      // OOM the tab during that allocation even though the
+      // bytesWritten+byteLength check would have rejected it
+      // afterward. Inspect Content-Length first and abort before
+      // touching the body when the server declares an over-cap
+      // size. Origins that omit Content-Length skip this check —
+      // the post-arrayBuffer guard then catches them at the cost
+      // of one materialised buffer (best we can do without
+      // streaming the body chunk-by-chunk, which JSZip doesn't
+      // support natively).
+      const declaredLen = res.headers.get('content-length')
+      if (declaredLen) {
+        const declared = Number(declaredLen)
+        if (Number.isFinite(declared) && declared > 0 &&
+            bytesWritten + declared > ZIP_HARD_CAP_BYTES) {
+          throw new Error(
+            `Zip would exceed the ${formatCapForError(ZIP_HARD_CAP_BYTES)} cap ` +
+            `after adding ${asset.filename} (server declared ${declared} bytes). ` +
+            `Uncheck some assets and try again.`,
+          )
+        }
+      }
       buf = await res.arrayBuffer()
     } catch (err) {
       if ((err as { name?: string }).name === 'AbortError') throw err
+      // Cap-error throws need to escape the loop unconditionally —
+      // they're not a network failure, and re-classifying them as
+      // a recorded non-primary warning would defeat the safety
+      // net. The marker is the error message's "cap" substring,
+      // which we own and ship from the throws above + below.
+      if (err instanceof Error && / cap /.test(err.message)) throw err
       const reason = err instanceof Error ? err.message : String(err)
       logger.warn(`[zip] Failed to fetch ${asset.filename}:`, reason)
       if (primaryEquivalentKinds.has(asset.kind)) {
@@ -419,14 +449,12 @@ export async function buildZip(
       continue
     }
 
-    // Mid-download cap enforcement. The preflight `estimateZipSize`
-    // is best-effort — CORS can hide `Content-Length`, the frame-
-    // sample average can underestimate a heavy-tailed sequence,
-    // and some origins ignore HEAD entirely. Without a running-
-    // total check the dialog can authorise a download whose true
-    // size exceeds `ZIP_HARD_CAP_BYTES`, defeating the safety net
-    // the cap exists for. Throw before the asset lands in the
-    // archive so we don't OOM the tab on the *next* fetch either.
+    // Post-arrayBuffer cap check — defence in depth for the origins
+    // that don't return Content-Length. The buffer is already
+    // allocated, so this can't prevent the *first* over-cap
+    // response from OOMing the tab; what it does prevent is the
+    // archive growing further (the next asset's allocation, plus
+    // the eventual JSZip generate pass).
     if (bytesWritten + buf.byteLength > ZIP_HARD_CAP_BYTES) {
       throw new Error(
         `Zip would exceed the ${formatCapForError(ZIP_HARD_CAP_BYTES)} cap ` +
