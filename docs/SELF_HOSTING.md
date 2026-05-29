@@ -160,6 +160,56 @@ A web-only Cloudflare fork can ignore this.
 
 ---
 
+## Phase 1.6 — CI/CD on your fork (GitHub Actions)
+
+The `.github/workflows/*.yml` files travel with the code when you
+fork, but **the things that make them run do not**. GitHub never
+copies secrets, variables, or environments to a fork, and on a
+fork created via the GitHub "Fork" button **Actions are disabled
+until you turn them on**. Settle this before your first push so you
+aren't debugging empty-secret failures.
+
+### Three things GitHub does not carry over
+
+1. **Workflow enablement.** Forked repos land with Actions disabled.
+   Go to the **Actions** tab → enable workflows. Scheduled
+   workflows (here, `codeql.yml` runs on a `schedule:`) stay off
+   until you do. (If you instead created a *fresh* repo in your org
+   and `git push`-ed the code, Actions are on by default — but the
+   next two points still apply.)
+2. **Secrets and variables.** Every `secrets.*` / `vars.*`
+   reference is empty until you recreate it under **Settings →
+   Secrets and variables → Actions**.
+3. **Environments.** The deploy jobs reference the `production`,
+   `preview`, `poster-production`, and `poster-preview`
+   environments. Recreate them (Settings → Environments) or disable
+   the jobs that use them.
+
+> A PR opened *from* a fork never receives secrets (GitHub security
+> policy), so fork-PR runs are compile-only by design. Pushes to
+> your own `main` are what exercise the secret-gated jobs.
+
+### What each workflow needs (and what's safe to drop)
+
+| Workflow | Secrets / vars / env it needs | Disable / ignore if… |
+|---|---|---|
+| `ci.yml` — type-check / unit-tests / build | none (auto `GITHUB_TOKEN`) | **keep** — fork-safe, no setup |
+| `ci.yml` — **deploy** job | `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`; optional `vars.VITE_DEFAULT_UI_SCALE`; envs `production`/`preview`; **+ rename the `--project-name terraviz`** | you deploy via the Pages dashboard Git integration (then delete this job — see Phase 2) |
+| `poster.yml` | same Cloudflare secrets; envs `poster-production`/`poster-preview`; **+ rename `terraviz-poster`** | you don't ship the poster sub-site |
+| `transcode-hls.yml` | `R2_S3_ENDPOINT`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `CATALOG_R2_BUCKET`, `TERRAVIZ_SERVER`, `CF_ACCESS_CLIENT_ID`, `CF_ACCESS_CLIENT_SECRET` (details in §8e) | you don't use publisher video uploads |
+| `release.yml` / `desktop.yml` | `TAURI_SIGNING_PRIVATE_KEY` (+ `_PASSWORD`), 6× `APPLE_*` (Phase 9) | web-only fork |
+| `sync-weblate.yml` | `WEBLATE_TOKEN` (Phase 9d) | you don't run your own translation pipeline |
+| `codeql.yml`, `mobile.yml` | none | **keep** — fork-safe |
+
+The per-workflow detail lives in the phases referenced above; this
+table is the one-glance checklist so nothing is silently missing.
+Minimum to get a green pipeline on a web-only fork: keep the
+fork-safe jobs, set the two `CLOUDFLARE_*` secrets (or remove the
+deploy job), and disable/delete `transcode-hls.yml`, `release.yml`,
+`desktop.yml`, and `sync-weblate.yml` until you need them.
+
+---
+
 ## Phase 2 — Cloudflare Pages project
 
 ### 2a. Push your fork to GitHub
