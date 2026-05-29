@@ -730,48 +730,66 @@ immediately after applying migrations to your production database,
   and `datasets.origin_node` is `NOT NULL` — an empty identity table
   makes that subquery `NULL` and the insert aborts on the constraint.
 
-So provision the row **once**, on remote D1, before §8c:
+So provision the row **once**, before §8c. Two ways:
 
-1. Generate the keypair and capture the public key:
+**Recommended — `terraviz init-node`.** Writes the row through the
+publisher API, so it needs only the Cloudflare Access service token
+you already use for `import-snapshot` — no `wrangler` / direct D1
+access, and it works on an empty table (the publisher middleware
+only depends on the `publishers` table). It accepts an admin user or
+a service token.
+
+1. Generate the keypair and set the private-key secret:
    ```bash
    npm run gen:node-key
    # writes node-public-key.txt (the `ed25519:...` line) and prints
    # the `wrangler pages secret put NODE_ID_PRIVATE_KEY_PEM` step
    ```
-   Set the `NODE_ID_PRIVATE_KEY_PEM` secret as instructed (both
-   Production and Preview).
-2. Insert the identity row into the **remote** database with **your
-   node's real values** (not the dev defaults the local seed uses —
-   `display_name='Terraviz (dev)'`, `base_url='http://localhost:8788'`):
+   Set `NODE_ID_PRIVATE_KEY_PEM` as instructed (both Production and
+   Preview).
+2. Provision the identity with **your node's real values** (not the
+   dev defaults `db:seed` uses — `'Terraviz (dev)'` /
+   `http://localhost:8788`). `init-node` reads `node-public-key.txt`
+   automatically:
    ```bash
-   wrangler d1 execute sphere-feedback --remote --config wrangler.toml \
-     --command "INSERT INTO node_identity
-       (node_id, display_name, base_url, description, contact_email, public_key, created_at)
-       VALUES (
-         lower(hex(randomblob(16))),
-         'Terraviz — Your Org',
-         'https://terraviz.your-org.org',
-         'Your org''s Terraviz node.',
-         'ops@your-org.org',
-         'ed25519:PASTE_FROM_node-public-key.txt',
-         strftime('%Y-%m-%dT%H:%M:%fZ','now')
-       )"
+   npm run terraviz -- init-node \
+     --server https://your-domain \
+     --client-id $CF_ACCESS_CLIENT_ID \
+     --client-secret $CF_ACCESS_CLIENT_SECRET \
+     --display-name "Terraviz — Your Org" \
+     --base-url https://terraviz.your-org.org \
+     --contact ops@your-org.org
    ```
-   (Use a ULID for `node_id` if you have one handy; the random-hex
-   above is a fine stand-in — it just has to be a stable unique id.)
-3. Verify:
-   ```bash
-   wrangler d1 execute sphere-feedback --remote --config wrangler.toml \
-     --command "SELECT node_id, display_name, base_url FROM node_identity"
-   ```
-   and hit `https://your-domain/.well-known/terraviz.json` — it should
-   now return 200 with your identity instead of 503.
+   It's idempotent: re-running updates the row in place (preserving
+   `node_id` so existing `origin_node` references stay valid) and
+   keeps the existing key unless you pass a new `--public-key`.
+3. Verify — hit `https://your-domain/.well-known/terraviz.json`; it
+   should return 200 with your identity instead of 503. (`terraviz
+   verify-deploy`'s node-identity check covers this too.)
 
-> If you later rotate the key with `npm run gen:node-key`, also push
-> the new public key to remote D1:
-> `wrangler d1 execute sphere-feedback --remote --config wrangler.toml
-> --command "UPDATE node_identity SET public_key='ed25519:...'"` — the
-> script only updates your local copy.
+**Fallback — raw D1 (`wrangler` only).** If you'd rather not mint a
+service token yet, write the row directly:
+
+```bash
+wrangler d1 execute sphere-feedback --remote --config wrangler.toml \
+  --command "INSERT INTO node_identity
+    (node_id, display_name, base_url, description, contact_email, public_key, created_at)
+    VALUES (
+      lower(hex(randomblob(16))),
+      'Terraviz — Your Org',
+      'https://terraviz.your-org.org',
+      'Your org''s Terraviz node.',
+      'ops@your-org.org',
+      'ed25519:PASTE_FROM_node-public-key.txt',
+      strftime('%Y-%m-%dT%H:%M:%fZ','now')
+    )"
+```
+
+> If you later rotate the key with `npm run gen:node-key`, push the
+> new public key to remote D1 too — `npm run terraviz -- init-node
+> … --public-key ed25519:…` (or the `wrangler d1 execute … UPDATE
+> node_identity SET public_key=…` equivalent). The script only
+> updates your local copy.
 
 ### 8c. Run the snapshot import
 
