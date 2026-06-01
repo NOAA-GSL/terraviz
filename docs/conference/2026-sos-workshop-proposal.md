@@ -44,8 +44,9 @@ record a guided tour by flying the camera, and build playlists — then
 run your own node so your datasets surface across a federated network of
 peers, with your data staying on your hardware. We'll also demo Orbit, an
 AI docent that loads datasets by conversation (and can run offline on a
-local model), plus side-by-side multi-globe comparison. Our first peer
-node is already coming online at NOAA-GSL.
+local model), side-by-side multi-globe comparison, and a live look at the
+globe floating in the room through a Quest AR headset. Our first peer node
+is already coming online at NOAA-GSL.
 
 Open the app on your own phone and follow along. We'll close with a group
 discussion: what would you publish to a globe of your own, and where does
@@ -59,11 +60,13 @@ sphere room.
 
 Live, screen-shared demo of the TerraViz web app (terraviz.zyra-project.org),
 with attendees invited to open it on their own devices and follow along.
-A short pre-recorded backup clip of the Orbit AI docent and a multi-globe
-tour will be on hand in case of connectivity issues. No slides required,
-though a one-slide title/links card will be shown at the start and end.
-Optionally a Meta Quest headset for a brief VR/AR cameo if the platform
-allows. The session closes with a live, poll-prompted group discussion.
+It includes a ~2-minute live AR demo on a Meta Quest headset — the
+photoreal globe anchored and floating in my office — with the headset
+view cast into the session so everyone sees it. A short pre-recorded
+backup clip (Orbit, a multi-globe tour, and the headset AR view) is on
+hand in case of connectivity issues. No slides required, though a
+one-slide title/links card will be shown at the start and end. The
+session closes with a live, poll-prompted group discussion.
 
 ### Is there anything else you would like to tell us about your presentation?
 
@@ -86,9 +89,11 @@ federation is now in early real-world testing rather than theory. I'll
 present the wider peer network honestly as early but real.
 
 The core demo is browser-only and needs nothing more than screen share
-with audio and a stable connection; everything else (VR, desktop) is
-optional. Happy to be reformatted as a lightning talk or 15-minute SOS
-Showcase if that fits the program better.
+with audio and a stable connection. The live AR segment adds no burden on
+your end — I bring and cast my own Quest headset; if the platform can't
+show a cast feed, the pre-recorded headset capture covers it. Happy to be
+reformatted as a lightning talk or 15-minute SOS Showcase if that fits
+the program better.
 
 ### Do you have co-presenters? *
 
@@ -109,8 +114,9 @@ before submission; one proposal per presentation)._
 | 1:30–4:30 | Your SOS work carries over | Stream a familiar SOS dataset; show an SOS-format tour importing unchanged; the catalog seeds from the SOS library. |
 | 4:30–9:30 | Publish your own data (live) | Walk the live /publish portal — metadata form, image-stack/video upload, tour recorder, playlist editor — then run your own node so peers surface your rows; data stays on your hardware. Point to the first peer node, NOAA-GSL, stood up June 2026 — federation in early real-world testing. "NOAA's data is the seed, not the ceiling." |
 | 9:30–13:30 | Orbit, the AI docent | Ask Orbit a question; it explains the science and loads the dataset by conversation. Note the offline/local-LLM option. (Workshop's AI-in-the-catalog goal.) |
-| 13:30–16:30 | Versatility showcase | Multi-globe comparison (SSP1 vs. SSP5), one codebase across web/desktop/mobile, and an optional VR/AR cameo on a headset. |
-| 16:30–25:00 | Polls + group discussion | See interactivity plan below. |
+| 13:30–15:30 | Versatility showcase | Multi-globe comparison (SSP1 vs. SSP5) and one TypeScript codebase across web, desktop, and mobile. |
+| 15:30–17:30 | Live AR demo (Quest) | Put on the headset and anchor the photoreal globe in my office — floating in the room, walkable — via WebXR "Enter AR" on a Quest, cast live into the session. Pre-recorded headset capture as backup. |
+| 17:30–25:00 | Polls + group discussion | See interactivity plan below. |
 
 ### Interactivity plan (required by the form)
 
@@ -141,7 +147,12 @@ before submission; one proposal per presentation)._
 
 - Screen share **with audio** (for an HLS video dataset).
 - Stable internet connection (pre-recorded backup clip mitigates risk).
-- Optional: a Meta Quest headset for the VR/AR cameo.
+- **Meta Quest headset** (mine) for the ~2-min live AR demo, with its
+  view **cast** to a PC that is then screen-shared into the session.
+  - Launch gotcha: open the live app as a **top-level page** in the Quest
+    browser — WebXR "Enter AR" won't fire from inside an embedded iframe.
+  - Rehearse the Quest → PC casting path on the actual workshop platform
+    beforehand; keep the pre-recorded headset capture queued as fallback.
 
 ### Reference links
 
