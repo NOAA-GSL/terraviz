@@ -91,9 +91,7 @@ present the wider peer network honestly as early but real.
 The core demo is browser-only and needs nothing more than screen share
 with audio and a stable connection. The live AR segment adds no burden on
 your end — I bring and cast my own Quest headset; if the platform can't
-show a cast feed, the pre-recorded headset capture covers it. Happy to be
-reformatted as a lightning talk or 15-minute SOS Showcase if that fits
-the program better.
+show a cast feed, the pre-recorded headset capture covers it.
 
 ### Do you have co-presenters? *
 
