@@ -18,12 +18,12 @@ with its constraints so the answer can be copied directly.
 
 ### Presentation title *
 
-> **TerraViz: A Science On a Sphere in Every Pocket — AI-Guided, Offline-Ready, and Yours to Self-Host**
+> **TerraViz: Put the SOS Catalog on Every Screen — and Publish Your Own Data to It**
 
-_Alternates if a shorter title is preferred:_
+_Alternates if a different emphasis is preferred:_
 
-- *Same Data, No Museum Required: Taking the SOS Catalog to Web, Desktop, and VR*
-- *Meet Orbit: An AI Docent for the SOS Catalog*
+- *Same Data, No Museum Required. Same Publishers, No Platform Required.*
+- *Beyond the Sphere Room: A Federated, AI-Guided Home for SOS Datasets*
 
 ### Presentation description *
 
@@ -31,24 +31,25 @@ _Alternates if a shorter title is preferred:_
 > it targets. If selected, this description will appear in the workshop
 > program. (1600 character limit, ~200 words.)_
 
-TerraViz brings the Science On a Sphere catalog to any device — phone,
-laptop, museum kiosk, or VR headset — with no sphere required. Live at
-terraviz.zyra-project.org and free to install on Windows, macOS, and
-Linux, it streams the same SOS datasets you already know onto an
-interactive WebGL globe.
+Science On a Sphere lives in museums. TerraViz puts it on every screen —
+and lets any SOS site publish to every screen. It's a free, open-source
+3D globe, live at terraviz.zyra-project.org and installable on Windows,
+macOS, and Linux, that streams the SOS catalog to any phone, laptop, or
+AR/VR headset. SOS-format tours import unchanged and the catalog seeds
+from the SOS dataset library, so your existing work carries over.
 
-This hands-on breakout demonstrates three things SOS sites have asked
-for. First, Orbit, an AI digital docent: visitors simply ask a question,
-and Orbit explains the science and loads the dataset by conversation —
-with an optional local LLM so it runs fully offline at no cloud cost.
-Second, multi-globe comparison and guided tours that turn SOS data into
-classroom and kiosk narratives. Third, offline desktop use and
-self-hosting, so any site can put its own data on the globe.
+This hands-on breakout focuses on what that means for the SOS community.
+Run your own node, publish your own datasets, and have them surface
+across a federated network of peers — your data stays on your hardware,
+no museum partnership or platform handoff required. We'll also demo
+Orbit, an AI docent that loads datasets by conversation (and can run
+offline on a local model), plus side-by-side multi-globe comparison.
 
 Open the app on your own phone and follow along. We'll close with a group
-discussion on where AI helps — or gets in the way — in SOS exhibits, and
-what you'd put on a globe of your own. Aimed at SOS site operators,
-educators, and anyone curious about extending SOS beyond the sphere room.
+discussion: what would you publish to a globe of your own, and where does
+AI belong in SOS exhibits? Aimed at SOS site operators, educators,
+planetariums, and museums looking to extend their reach beyond the
+sphere room.
 
 ### What format do you plan to use for this talk?
 
@@ -65,14 +66,23 @@ allows. The session closes with a live, poll-prompted group discussion.
 ### Is there anything else you would like to tell us about your presentation?
 
 TerraViz is open source (Apache 2.0) and already live and in public use,
-so this is a working tool rather than a concept. It directly addresses
-this year's AI-in-the-catalog goal with a shipping example (the Orbit
-docent), and the self-hosting model invites SOS sites to publish their
-own data — a concrete path to the community/belonging objective. The core
-demo is browser-only and needs nothing more than screen share with audio
-and a stable connection; everything else (VR, desktop) is optional. Happy
-to be reformatted as a lightning talk or 15-minute SOS Showcase if that
-fits the program better.
+so this is a working tool rather than a concept. It speaks directly to
+several workshop goals: extending SOS reach beyond the sphere room
+(versatility), a shipping AI example with the Orbit docent
+(AI-in-the-catalog), and a federation model that lets SOS sites publish
+and keep their own data — a concrete path to the community/belonging
+objective and a candidate direction for future NOAA support of SOS.
+
+To be transparent about maturity: streaming the SOS catalog, SOS-format
+tour import, multi-globe, Orbit, and immersive AR/VR are live today, and
+self-hosting a node is documented (SELF_HOSTING.md). The one-click
+publisher portal and authoring CLI are the next milestone rather than
+shipped, and I'll frame them as the roadmap they are.
+
+The core demo is browser-only and needs nothing more than screen share
+with audio and a stable connection; everything else (VR, desktop) is
+optional. Happy to be reformatted as a lightning talk or 15-minute SOS
+Showcase if that fits the program better.
 
 ### Do you have co-presenters? *
 
@@ -89,35 +99,37 @@ before submission; one proposal per presentation)._
 
 | Time | Segment | What happens |
 |---|---|---|
-| 0:00–1:30 | Hook | Open terraviz.zyra-project.org live; invite attendees to open it too. "Same SOS data, no sphere required." |
-| 1:30–7:00 | Orbit, the AI docent | Ask Orbit a question; it explains the science and loads the dataset onto the globe. Note the offline/local-LLM option. |
-| 7:00–12:00 | Multi-globe + tours | 2/4 synced globes; run the Climate Futures tour (SSP1 vs. SSP5) as a storytelling example. |
-| 12:00–16:00 | Offline desktop + self-hosting | Offline downloads for low-connectivity sites; "NOAA's catalog is the seed, not the ceiling." |
-| 16:00–18:00 | (Optional) VR/AR cameo | Globe at human scale on a headset, if available. |
-| 18:00–25:00 | Polls + group discussion | See interactivity plan below. |
+| 0:00–1:30 | Hook | Open terraviz.zyra-project.org live; invite attendees to open it too. "SOS lives in museums — TerraViz puts it on every screen, and lets any site publish to every screen." |
+| 1:30–4:30 | Your SOS work carries over | Stream a familiar SOS dataset; show an SOS-format tour importing unchanged; the catalog seeds from the SOS library. |
+| 4:30–9:30 | Publish & federate | The federation pitch: run your own node, publish your own datasets, peers surface your rows — data stays on your hardware. Self-host is real today; publisher portal/CLI is the roadmap. "NOAA's data is the seed, not the ceiling." |
+| 9:30–13:30 | Orbit, the AI docent | Ask Orbit a question; it explains the science and loads the dataset by conversation. Note the offline/local-LLM option. (Workshop's AI-in-the-catalog goal.) |
+| 13:30–16:30 | Versatility showcase | Multi-globe comparison (SSP1 vs. SSP5), one codebase across web/desktop/mobile, and an optional VR/AR cameo on a headset. |
+| 16:30–25:00 | Polls + group discussion | See interactivity plan below. |
 
 ### Interactivity plan (required by the form)
 
 - **Hands-on, live:** attendees open the URL on their own phones/laptops,
   load a dataset, then ask Orbit a question and watch it load data by
   conversation.
-- **Polls (1–2 quick questions):** e.g. *"Does your site have reliable
-  internet for visitor-facing tools?"* and *"Would an AI guide help or
-  worry you?"* — used to steer the discussion.
-- **Group discussion (final ~7 min):** *What would you put on the globe
-  if you could self-host? Where does AI help vs. get in the way in your
-  exhibits?*
+- **Polls (1–2 quick questions):** e.g. *"Do you have visualizations
+  you'd publish if reach didn't require a museum or platform partner?"*
+  and *"Would an AI guide help or worry you in your exhibits?"* — used to
+  steer the discussion.
+- **Group discussion (final ~8 min):** *What would you publish to a globe
+  of your own, and what would hold you back? Where does AI belong in SOS
+  exhibits — and where doesn't it?*
 
 ### How the session maps to the workshop goals
 
 | Workshop goal | How the session delivers |
 |---|---|
-| Showcase the versatility of SOS technology | Same SOS datasets on web, desktop, mobile, and VR/AR |
+| Showcase the versatility of SOS technology | Same SOS datasets on web, desktop, mobile, and AR/VR — beyond the sphere room |
+| **Share ways of creating SOS datasets (spherical & non-spherical media)** | Publishing workflow + tour authoring; SOS-format tours import unchanged; equirectangular sphere thumbnails |
 | Tools & resources for understanding SOS data | Orbit explains datasets conversationally; multi-globe enables side-by-side comparison |
 | **AI in catalog / interactive exhibit / education** | Orbit (hybrid local + LLM docent) is a live, production example |
-| Educational & technical training | Walkthrough plus a path to self-host an instance |
-| Sense of belonging / community | Open source; community translations; self-hosting invites sites to participate, not just consume |
-| Inform future NOAA direction | Demonstrates a federation model for extending the SOS catalog |
+| Educational & technical training | Walkthrough plus a documented path to self-host a node (SELF_HOSTING.md) |
+| **Sense of belonging / community** | Federation = a peer network of SOS sites; open source; community translations; self-host to publish and keep your own data |
+| **Inform future NOAA direction** | The federated-catalog model itself is a candidate direction for supporting SOS |
 
 ### A/V & tech needs
 
