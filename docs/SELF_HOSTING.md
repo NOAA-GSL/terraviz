@@ -79,9 +79,15 @@ and KV namespace ID:
 | `id` (CATALOG_KV) | KV | `0000…0000` (placeholder) | Replace with your CATALOG_KV namespace ID (Phase 8a). |
 
 This matters because the migration commands in **Phase 3a** and
-**Phase 8b.5** run `wrangler d1 migrations apply sphere-feedback
---config wrangler.toml`, which resolves the target database through
-the `database_id` in this file. **If you leave the upstream ID in
+**Phase 8b.5** run `wrangler d1 migrations apply <binding>
+--config wrangler.toml` — `FEEDBACK_DB` in Phase 3a, `CATALOG_DB`
+in Phase 8b.5 — which resolves the target database (and its
+`migrations_dir`) through the matching binding's `database_id` in
+this file. **Select by binding name, not the database name:** both
+`[[d1_databases]]` blocks share `database_name = "sphere-feedback"`
+but point at different `migrations_dir`, so passing the bare name
+`sphere-feedback` is ambiguous and resolves to the wrong directory.
+**If you leave the upstream ID in
 place, you are aiming your migrations at a database you don't own**
 (it will fail on auth at best). Update `wrangler.toml` immediately
 after `wrangler d1 create` in Phase 3a, before any
@@ -301,8 +307,14 @@ wrangler d1 create sphere-feedback         # outputs an ID
 
 Apply the schema:
 ```bash
-wrangler d1 migrations apply sphere-feedback --remote
+wrangler d1 migrations apply FEEDBACK_DB --remote
 ```
+
+> Target the migration by **binding name** (`FEEDBACK_DB`), not the
+> database name. `wrangler.toml` declares two D1 bindings on the
+> same `database_name` (`sphere-feedback`) with different
+> `migrations_dir`; the bare name is ambiguous, the binding name is
+> not.
 
 Pages → Settings → Bindings → Add binding → **D1**:
 - Variable name: `FEEDBACK_DB`
@@ -650,10 +662,20 @@ as `FEEDBACK_DB`, but its migrations live in a separate directory
 (`migrations/catalog/`) and have to be applied separately:
 
 ```bash
-wrangler d1 migrations apply sphere-feedback \
+wrangler d1 migrations apply CATALOG_DB \
   --remote \
   --config wrangler.toml
 ```
+
+> ⚠️ **Use the `CATALOG_DB` binding name, not `sphere-feedback`.**
+> Both `[[d1_databases]]` blocks in `wrangler.toml` carry
+> `database_name = "sphere-feedback"`, so selecting by the database
+> name is ambiguous and wrangler resolves it to the **first** match
+> (`FEEDBACK_DB` → `migrations/`) — which silently applies the
+> feedback migrations and leaves the catalog tables uncreated,
+> producing exactly the `bbox_n` 500 described below. The binding
+> name disambiguates to `migrations/catalog/`. (This is why the
+> repo's own `db:migrate` script targets `CATALOG_DB`.)
 
 Run this **before the first deploy** to create the catalog
 tables, and **again every time you pull a new release** if it
@@ -674,7 +696,7 @@ re-running is safe and only the unapplied files take effect.
 > Production / Preview environment toggle on the D1 binding.
 
 **Verify which migrations have applied.** The cleanest check
-is `wrangler d1 migrations list sphere-feedback --remote
+is `wrangler d1 migrations list CATALOG_DB --remote
 --config wrangler.toml`, which diffs `migrations/catalog/`
 against the tracker table on the remote and prints
 applied-vs-pending. From the dashboard D1 console you can read
@@ -1379,12 +1401,12 @@ the workflow.
 The Pages project doesn't have the `ANALYTICS` binding in the
 environment that's serving traffic. Check Settings → Bindings,
 both Production and Preview tabs. The function code at
-`functions/api/ingest.ts:407` reads `context.env.ANALYTICS` and
+`functions/api/ingest.ts:444` reads `context.env.ANALYTICS` and
 silently skips the write if undefined.
 
 ### `/api/ingest` returns 403
 
-The CORS gate at `functions/api/ingest.ts:88` rejected the request.
+The CORS gate at `functions/api/ingest.ts:95` rejected the request.
 Either:
 - The `Origin` header is missing (browsers always send it; curl
   and PowerShell don't unless you explicitly set `-H "Origin: ..."`)
