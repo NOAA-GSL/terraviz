@@ -236,3 +236,51 @@ describe('privacyUI — accessibility shape', () => {
     expect(link?.getAttribute('href')).toBe('/privacy')
   })
 })
+
+describe('privacyUI — clear visit history (§9.2)', () => {
+  // happy-dom doesn't implement window.confirm; tests assign a stub.
+  // Capture the original (undefined) and restore it after each test so
+  // the stub can't leak into other suites and cause order-dependent
+  // flakiness.
+  const originalConfirm = window.confirm
+  afterEach(() => {
+    ;(window as unknown as { confirm: typeof window.confirm }).confirm = originalConfirm
+  })
+
+  it('disables the clear button when there is no visit history', async () => {
+    const { resetVisitsForTests } = await import('../services/visitMemory')
+    resetVisitsForTests()
+    localStorage.clear()
+    openPrivacyUI()
+    const btn = document.getElementById('privacy-ui-clear-visits') as HTMLButtonElement
+    expect(btn.disabled).toBe(true)
+  })
+
+  it('clears the visit log on confirm and updates the button', async () => {
+    const { recordVisit, visitCount, resetVisitsForTests } = await import('../services/visitMemory')
+    resetVisitsForTests()
+    localStorage.clear()
+    recordVisit('a')
+    recordVisit('b')
+    // happy-dom doesn't implement window.confirm — assign a stub
+    // directly (spyOn can't wrap an undefined property).
+    window.confirm = vi.fn(() => true)
+    openPrivacyUI()
+    const btn = document.getElementById('privacy-ui-clear-visits') as HTMLButtonElement
+    expect(btn.disabled).toBe(false)
+    btn.click()
+    expect(visitCount()).toBe(0)
+    expect(btn.disabled).toBe(true)
+  })
+
+  it('does nothing when the confirm is dismissed', async () => {
+    const { recordVisit, visitCount, resetVisitsForTests } = await import('../services/visitMemory')
+    resetVisitsForTests()
+    localStorage.clear()
+    recordVisit('a')
+    window.confirm = vi.fn(() => false)
+    openPrivacyUI()
+    ;(document.getElementById('privacy-ui-clear-visits') as HTMLButtonElement).click()
+    expect(visitCount()).toBe(1)
+  })
+})

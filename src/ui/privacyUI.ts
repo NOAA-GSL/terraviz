@@ -29,6 +29,7 @@ import {
 import type { TelemetryTier } from '../types'
 import { t, tAttr, tHtml, type MessageKey } from '../i18n'
 import { escapeHtml } from './domUtils'
+import { clearVisits, visitCount } from '../services/visitMemory'
 
 let mounted = false
 let isOpen = false
@@ -97,6 +98,14 @@ function buildPanel(): HTMLElement {
         </div>
         <a class="privacy-ui-policy-link" href="/privacy" target="_blank" rel="noopener">${tHtml('privacy.policyLink')}</a>
       </div>
+      <p class="privacy-ui-localnote">${tHtml('privacy.localNote.visitMemory')}</p>
+      <div class="privacy-ui-actions">
+        <button
+          type="button"
+          id="privacy-ui-clear-visits"
+          class="privacy-ui-clear-visits"
+        >${tHtml('privacy.clearVisits.label')}</button>
+      </div>
       <div id="privacy-ui-status" class="privacy-ui-status" role="status" aria-live="polite"></div>
     </section>
   `
@@ -137,6 +146,20 @@ function syncSessionId(): void {
   if (el) el.textContent = getSessionId()
 }
 
+/** Refresh the "Clear visit history" button — disabled (and labelled
+ * plainly) when there's nothing to clear, otherwise labelled with the
+ * count so the user knows the scope of the action. Called on every
+ * open and after a clear. */
+function syncClearVisitsButton(): void {
+  const btn = document.getElementById('privacy-ui-clear-visits') as HTMLButtonElement | null
+  if (!btn) return
+  const count = visitCount()
+  btn.disabled = count === 0
+  btn.textContent = count === 0
+    ? t('privacy.clearVisits.label')
+    : t('privacy.clearVisits.labelCount', { count: String(count) })
+}
+
 /** Wire up listeners on the mounted panel. Uses an AbortController
  * so re-init (tests / HMR) cleanly removes every handler. */
 function wireEvents(): void {
@@ -151,6 +174,10 @@ function wireEvents(): void {
   document
     .getElementById('privacy-ui-backdrop')
     ?.addEventListener('click', () => closePrivacyUI(), { signal })
+
+  document
+    .getElementById('privacy-ui-clear-visits')
+    ?.addEventListener('click', () => handleClearVisits(), { signal })
 
   const radios = document.querySelectorAll<HTMLInputElement>('input[name="privacy-ui-tier"]')
   radios.forEach((r) => {
@@ -237,6 +264,23 @@ function handleTierChange(tier: TelemetryTier): void {
   )
 }
 
+/** Wipe the local visit log after a confirmation prompt, then refresh
+ * the button and announce. The Continue-exploring row + Recently-viewed
+ * chip update live via visitMemory's onVisitsChange listener. No
+ * telemetry — visit memory is local-only, so clearing it isn't an
+ * event we report. */
+function handleClearVisits(): void {
+  if (visitCount() === 0) return
+  const confirmed =
+    typeof window !== 'undefined' && typeof window.confirm === 'function'
+      ? window.confirm(t('privacy.clearVisits.confirm'))
+      : true
+  if (!confirmed) return
+  clearVisits()
+  syncClearVisitsButton()
+  announce(t('privacy.clearVisits.announce'))
+}
+
 function announce(message: string): void {
   const status = document.getElementById('privacy-ui-status')
   if (!status) return
@@ -256,6 +300,7 @@ export function openPrivacyUI(triggeredBy?: HTMLElement | null): void {
   ensureMounted()
   syncRadios()
   syncSessionId()
+  syncClearVisitsButton()
   const panel = document.getElementById('privacy-ui-panel')
   const backdrop = document.getElementById('privacy-ui-backdrop')
   panel?.classList.remove('hidden')
