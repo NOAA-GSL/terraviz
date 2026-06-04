@@ -81,4 +81,21 @@ describe('renderHeroPanel', () => {
     await renderHeroPanel({ datasets: [ds('feat', { title: 'Plain title' })], onSelect: vi.fn(), isCatalogMode: true })
     expect(document.querySelector('.hero-panel-title')?.textContent).toBe('Curated headline')
   })
+
+  it('re-evaluates on each call — hides when a later call leaves catalog mode', async () => {
+    await renderHeroPanel({ datasets: [realtime], onSelect: vi.fn(), isCatalogMode: true })
+    const host = document.getElementById('hero-panel')!
+    expect(host.classList.contains('hidden')).toBe(false)
+    // Simulate the catalog↔sphere tab flipping ?catalog=true off.
+    await renderHeroPanel({ datasets: [realtime], onSelect: vi.fn(), isCatalogMode: false })
+    expect(host.classList.contains('hidden')).toBe(true)
+  })
+
+  it('destroyHeroPanel hides the panel and clears it', async () => {
+    await renderHeroPanel({ datasets: [realtime], onSelect: vi.fn(), isCatalogMode: true })
+    destroyHeroPanel()
+    const host = document.getElementById('hero-panel')!
+    expect(host.classList.contains('hidden')).toBe(true)
+    expect(host.innerHTML).toBe('')
+  })
 })

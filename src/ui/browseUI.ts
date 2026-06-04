@@ -53,7 +53,7 @@ import {
   onVisitsChange,
   VISITS_LRU_CAP,
 } from '../services/visitMemory'
-import { renderHeroPanel } from './heroPanelUI'
+import { renderHeroPanel, destroyHeroPanel } from './heroPanelUI'
 import { getCatalogMode } from '../utils/catalogMode'
 import type { CatalogGraphController } from './catalogGraphUI'
 import type { CatalogTimelineController } from './catalogTimelineUI'
@@ -664,6 +664,22 @@ export function showBrowseUI(
   // already gated on `browseInitialized`, but other call sites
   // (catalog-empty boot, catalog↔sphere tab) didn't. Centralising
   // the gate here makes the invariant uniform regardless of caller.
+
+  // §9.1 — resolve + render the "Right now" hero panel above the chip
+  // rail. Runs on EVERY showBrowseUI call (before the init
+  // short-circuit below) so the hero re-evaluates when the overlay is
+  // reopened or the catalog↔sphere tab flips `?catalog=true` — the
+  // candidate, the catalog-mode gate, and the dismiss state can all
+  // differ between opens. Catalog mode only; hides itself otherwise
+  // and when no candidate qualifies. Fire-and-forget: the override
+  // fetch is async and the panel mounts when it resolves; a close
+  // mid-fetch aborts it via destroyHeroPanel() in hide/collapse.
+  void renderHeroPanel({
+    datasets,
+    onSelect: callbacks.onSelectDataset,
+    isCatalogMode: getCatalogMode(),
+  })
+
   if (overlay.dataset.browseInitialized === 'true') return
 
   // Wire the in-header help trigger once (idempotent)
@@ -2190,17 +2206,6 @@ export function showBrowseUI(
     if (filterState.recentlyViewed?.kind === 'boolean') renderCards()
   })
 
-  // §9.1 — resolve + render the "Right now" hero panel above the
-  // chip rail. Catalog mode only (the hero is a homepage affordance,
-  // not a Tools→Browse one); it hides itself otherwise and when no
-  // candidate qualifies. Fire-and-forget: the override fetch is
-  // async, and the panel mounts when it resolves.
-  void renderHeroPanel({
-    datasets: allDatasets,
-    onSelect: callbacks.onSelectDataset,
-    isCatalogMode: getCatalogMode(),
-  })
-
   // Initial render
   renderRail()
   renderActiveFilters()
@@ -2234,6 +2239,9 @@ export function hideBrowseUI(): void {
     browseDwellHandle.stop()
     browseDwellHandle = null
   }
+  // §9.1 — abort any in-flight hero override fetch and clear the panel
+  // so a close mid-resolution can't mount a stale hero later.
+  destroyHeroPanel()
 }
 
 /**
@@ -2255,6 +2263,8 @@ export function collapseBrowseUI(): void {
     browseDwellHandle.stop()
     browseDwellHandle = null
   }
+  // §9.1 — abort any in-flight hero override fetch (see hideBrowseUI).
+  destroyHeroPanel()
 }
 
 // ---------------------------------------------------------------------------
