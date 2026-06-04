@@ -275,6 +275,32 @@ export function writeLastSession(iso: string = new Date().toISOString()): void {
   }
 }
 
+/** The number of datasets currently in the visit log. */
+export function visitCount(): number {
+  return Object.keys(ensureLoaded()).length
+}
+
+/**
+ * Wipe the entire visit log — the "Clear visit history" action in
+ * Tools → Privacy. Clears the in-memory cache and the localStorage
+ * key, then notifies listeners so the Continue-exploring row, the
+ * Recently-viewed chip, and any other visit-driven surface update
+ * live. Does NOT touch `lastSession` (that's a session-end timestamp,
+ * not browsing history). Best-effort: a throwing localStorage is
+ * swallowed but the in-memory cache is still cleared.
+ */
+export function clearVisits(): void {
+  cache = {}
+  if (typeof window !== 'undefined') {
+    try {
+      window.localStorage.removeItem(VISITS_STORAGE_KEY)
+    } catch (err) {
+      logger.warn('[visits] Failed to clear visit memory:', err)
+    }
+  }
+  notify()
+}
+
 /**
  * Subscribe to visit-log changes. Returns an unsubscribe callback.
  * Fires synchronously on the same tick as the mutation.

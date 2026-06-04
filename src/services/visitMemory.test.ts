@@ -11,6 +11,8 @@ import {
   onVisitsChange,
   recordVisit,
   resetVisitsForTests,
+  clearVisits,
+  visitCount,
   VISITS_LRU_CAP,
   VISITS_STORAGE_KEY,
 } from './visitMemory'
@@ -203,5 +205,34 @@ describe('corrupt storage', () => {
     expect(visits.good).toBeDefined()
     expect(visits.bad1).toBeUndefined()
     expect(visits.bad2).toBeUndefined()
+  })
+})
+
+describe('clearVisits / visitCount', () => {
+  it('reports the number of visited datasets', () => {
+    expect(visitCount()).toBe(0)
+    recordVisit('a')
+    recordVisit('b')
+    expect(visitCount()).toBe(2)
+  })
+
+  it('wipes the log, the storage key, and notifies listeners', () => {
+    recordVisit('a')
+    recordVisit('b')
+    const cb = vi.fn()
+    const unsub = onVisitsChange(cb)
+    clearVisits()
+    expect(visitCount()).toBe(0)
+    expect(loadVisits()).toEqual({})
+    expect(localStorage.getItem(VISITS_STORAGE_KEY)).toBeNull()
+    expect(cb).toHaveBeenCalledTimes(1)
+    unsub()
+  })
+
+  it('leaves lastSession untouched (it is not browsing history)', () => {
+    localStorage.setItem(LAST_SESSION_STORAGE_KEY, '2026-05-01T00:00:00.000Z')
+    recordVisit('a')
+    clearVisits()
+    expect(localStorage.getItem(LAST_SESSION_STORAGE_KEY)).toBe('2026-05-01T00:00:00.000Z')
   })
 })

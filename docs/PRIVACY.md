@@ -359,7 +359,9 @@ profiling.
   long you spent reading each one. This powers the "Continue
   exploring" row and the "new since your last visit" badge in the
   catalog. It is stored only in your browser (localStorage) and is
-  **never sent to our servers**. Clearing site data removes it.
+  **never sent to our servers**. You can wipe it any time with
+  **Tools → Privacy → Clear visit history**, and clearing site data
+  removes it too.
 
 ---
 
