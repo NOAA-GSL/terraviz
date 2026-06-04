@@ -1541,6 +1541,27 @@ describe('§9.2 visit memory surfaces', () => {
     expect(document.getElementById('browse-continue')!.classList.contains('hidden')).toBe(true)
   })
 
+  it('keeps the row when a top-recency dataset is retired but ≥3 resolvable remain', () => {
+    vi.useFakeTimers()
+    try {
+      // Distinct timestamps so 'gone' (not in the catalog) is newest.
+      vi.setSystemTime(new Date('2026-01-01T00:00:00Z')); recordVisit('a')
+      vi.setSystemTime(new Date('2026-01-02T00:00:00Z')); recordVisit('b')
+      vi.setSystemTime(new Date('2026-01-03T00:00:00Z')); recordVisit('c')
+      vi.setSystemTime(new Date('2026-01-04T00:00:00Z')); recordVisit('gone')
+      // Catalog omits 'gone' (retired). The gate must count resolvable
+      // visits deeper in the list, not just the top CONTINUE_MAX_CARDS.
+      showBrowseUI(cat, makeCallbacks())
+      const host = document.getElementById('browse-continue')!
+      expect(host.classList.contains('hidden')).toBe(false)
+      const ids = Array.from(host.querySelectorAll('.browse-continue-card'))
+        .map(c => (c as HTMLElement).dataset.id)
+      expect(ids).toEqual(['c', 'b', 'a'])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('a Continue-exploring card click loads the dataset', () => {
     recordVisit('a')
     recordVisit('b')

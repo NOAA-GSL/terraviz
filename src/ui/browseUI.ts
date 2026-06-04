@@ -51,6 +51,7 @@ import {
   getRecent,
   getVisitedIds,
   onVisitsChange,
+  VISITS_LRU_CAP,
 } from '../services/visitMemory'
 import type { CatalogGraphController } from './catalogGraphUI'
 import type { CatalogTimelineController } from './catalogTimelineUI'
@@ -1906,14 +1907,18 @@ export function showBrowseUI(
       hide()
       return
     }
-    const recent = getRecent(CONTINUE_MAX_CARDS)
+    // Resolve the full recency list (capped at the LRU bound) to
+    // catalog rows BEFORE applying the ≥3 gate or the display cap, so
+    // a retired/hidden dataset near the top of the list doesn't hide
+    // the row when there are still ≥3 resolvable visits deeper down.
+    const recent = getRecent(VISITS_LRU_CAP)
       .map(id => datasetById.get(id))
       .filter((d): d is Dataset => d != null && !d.isHidden)
     if (recent.length < CONTINUE_MIN_ENTRIES) {
       hide()
       return
     }
-    const cards = recent.map(d => {
+    const cards = recent.slice(0, CONTINUE_MAX_CARDS).map(d => {
       const thumb = d.thumbnailLink
         ? `<img class="browse-continue-card-thumb" src="${escapeAttr(d.thumbnailLink)}" alt="" loading="lazy">`
         : ''

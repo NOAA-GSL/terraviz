@@ -238,6 +238,15 @@ describe('privacyUI — accessibility shape', () => {
 })
 
 describe('privacyUI — clear visit history (§9.2)', () => {
+  // happy-dom doesn't implement window.confirm; tests assign a stub.
+  // Capture the original (undefined) and restore it after each test so
+  // the stub can't leak into other suites and cause order-dependent
+  // flakiness.
+  const originalConfirm = window.confirm
+  afterEach(() => {
+    ;(window as unknown as { confirm: typeof window.confirm }).confirm = originalConfirm
+  })
+
   it('disables the clear button when there is no visit history', async () => {
     const { resetVisitsForTests } = await import('../services/visitMemory')
     resetVisitsForTests()
