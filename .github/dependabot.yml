@@ -1,11 +1,19 @@
-# Dependabot configuration — keeps dependency security alerts and version
-# updates flowing for every manifest in the repo. Pairs with the existing
-# CodeQL setup (.github/workflows/codeql.yml) so we get both code scanning
-# and dependency scanning.
+# Dependabot configuration.
 #
-# Grouping: non-major (minor + patch) updates are batched into a single PR
-# per ecosystem to cut review noise; majors land as individual PRs because
-# they may carry breaking changes (e.g. a wrangler v3 -> v4 bump).
+# Version-update PRs are currently disabled via `open-pull-requests-limit: 0`
+# on every ecosystem: Dependabot still scans manifests and surfaces
+# dependency alerts in the Security tab (and pairs with the CodeQL setup in
+# .github/workflows/codeql.yml for code scanning), but it will not open
+# routine bump PRs. To re-enable, raise the limit back above 0 per ecosystem.
+#
+# Note: this does NOT affect Dependabot *security* updates (the automated
+# vulnerability-fix PRs) — those are governed by repo Settings → Code
+# security, not by this file.
+#
+# Grouping is retained below so that if version updates are re-enabled,
+# non-major (minor + patch) updates batch into a single PR per ecosystem
+# while majors land individually (they may carry breaking changes, e.g. a
+# wrangler v3 -> v4 bump).
 version: 2
 updates:
   # Frontend / tooling (package.json + package-lock.json at repo root)
@@ -13,7 +21,8 @@ updates:
     directory: /
     schedule:
       interval: weekly
-    open-pull-requests-limit: 10
+    # 0 = version-update PRs disabled (scanning/alerts still run)
+    open-pull-requests-limit: 0
     groups:
       npm-minor-and-patch:
         update-types:
@@ -25,7 +34,8 @@ updates:
     directory: /src-tauri
     schedule:
       interval: weekly
-    open-pull-requests-limit: 5
+    # 0 = version-update PRs disabled (scanning/alerts still run)
+    open-pull-requests-limit: 0
     groups:
       cargo-minor-and-patch:
         update-types:
@@ -37,6 +47,8 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    # 0 = version-update PRs disabled (scanning/alerts still run)
+    open-pull-requests-limit: 0
     groups:
       actions-all:
         patterns:
