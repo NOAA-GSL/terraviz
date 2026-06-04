@@ -119,7 +119,7 @@ jobs:
           # before the step dies, and `set -o pipefail` keeps the step failing on
           # wrangler errors.
           DEPLOY_LOG=$(mktemp)
-          npx wrangler@3 pages deploy dist/ --project-name terraviz --branch "$BRANCH_NAME" --commit-hash ${{ github.sha }} 2>&1 | tee "$DEPLOY_LOG"
+          npx wrangler@4 pages deploy dist/ --project-name terraviz --branch "$BRANCH_NAME" --commit-hash ${{ github.sha }} 2>&1 | tee "$DEPLOY_LOG"
           # Extract the preview URL from the captured log. `|| true` guards against
           # a grep no-match (which would otherwise kill the step under `bash -e`)
           # while preserving wrangler's real exit code from the pipeline above.

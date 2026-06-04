@@ -93,7 +93,7 @@ jobs:
           # ci.yml's SPA deploy — see the comments there for
           # why a naive command-substitution swallows errors.
           DEPLOY_LOG=$(mktemp)
-          npx wrangler@3 pages deploy poster/ \
+          npx wrangler@4 pages deploy poster/ \
             --project-name terraviz-poster \
             --branch "$BRANCH_NAME" \
             --commit-hash "${{ github.sha }}" 2>&1 | tee "$DEPLOY_LOG"
