@@ -15,9 +15,10 @@ function ds(id: string, opts: { tags?: string[]; endTime?: string; title?: strin
 }
 
 /** Stub fetch so the override pipeline returns the empty stub (no
- *  override) — tests exercise the auto-derived path. */
+ *  override) — tests exercise the auto-derived path. Uses
+ *  vi.stubGlobal so vi.unstubAllGlobals() in afterEach removes it. */
 function stubEmptyOverride(): void {
-  global.fetch = vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) }) as unknown as typeof fetch
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) }))
 }
 
 const realtime = ds('rt', { tags: [REAL_TIME_TAG], endTime: new Date(Date.now() - 60 * 60 * 1000).toISOString(), title: 'Live Storm' })
@@ -34,6 +35,7 @@ afterEach(() => {
   resetHeroPanelForTests()
   resetHeroCacheForTests()
   vi.restoreAllMocks()
+  vi.unstubAllGlobals()
   document.body.innerHTML = ''
 })
 
@@ -74,10 +76,10 @@ describe('renderHeroPanel', () => {
   })
 
   it('uses the curator headline when the override supplies one', async () => {
-    global.fetch = vi.fn().mockResolvedValue({
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({ datasetId: 'feat', window: { start: '2000-01-01', end: '2999-01-01' }, headline: 'Curated headline' }),
-    }) as unknown as typeof fetch
+    }))
     await renderHeroPanel({ datasets: [ds('feat', { title: 'Plain title' })], onSelect: vi.fn(), isCatalogMode: true })
     expect(document.querySelector('.hero-panel-title')?.textContent).toBe('Curated headline')
   })

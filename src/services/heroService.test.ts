@@ -24,12 +24,14 @@ function ds(id: string, opts: { tags?: string[]; endTime?: string; isHidden?: bo
   } as unknown as Dataset
 }
 
-/** Stub global fetch to return the given override JSON (or a failure). */
+/** Stub global fetch to return the given override JSON (or a failure).
+ *  Uses vi.stubGlobal so vi.unstubAllGlobals() in afterEach removes it
+ *  and it can't leak into other test files. */
 function stubFetch(value: unknown, ok = true): void {
-  global.fetch = vi.fn().mockResolvedValue({
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
     ok,
     json: async () => value,
-  }) as unknown as typeof fetch
+  }))
 }
 
 beforeEach(() => {
@@ -38,6 +40,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks()
+  vi.unstubAllGlobals()
   resetHeroCacheForTests()
 })
 

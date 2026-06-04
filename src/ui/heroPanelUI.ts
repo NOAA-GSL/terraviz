@@ -143,8 +143,11 @@ export function destroyHeroPanel(): void {
   if (host) hide(host)
 }
 
-/** Test-only — reset the session dismiss flag + in-flight controller. */
+/** Test-only — reset the session dismiss flag + in-flight controller.
+ *  Aborts any in-flight fetch first so a late resolution can't render
+ *  into the DOM after a test has moved on. */
 export function resetHeroPanelForTests(): void {
   dismissed = false
+  activeController?.abort()
   activeController = null
 }
