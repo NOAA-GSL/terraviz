@@ -28,6 +28,7 @@ import { renderDatasetDetailPage } from './pages/dataset-detail'
 import { renderDatasetEditPage } from './pages/dataset-edit'
 import { renderDatasetNewPage } from './pages/dataset-new'
 import { renderToursPage } from './pages/tours'
+import { renderFeaturedHeroPage } from './pages/featured-hero'
 import { renderTopbar } from './components/topbar'
 import '../../styles/publisher.css'
 
@@ -194,6 +195,10 @@ function importPage(mount: HTMLElement): RouteHandler {
   return () => renderPlaceholder(mount, t('publisher.section.import'), '3pf')
 }
 
+function featuredHeroPage(mount: HTMLElement): RouteHandler {
+  return () => void renderFeaturedHeroPage(mount)
+}
+
 function notFoundPage(mount: HTMLElement): RouteHandler {
   return () => renderPlaceholder(mount, t('publisher.section.notFound'), '3pa/A')
 }
@@ -233,6 +238,7 @@ export async function bootPublisherPortal(): Promise<void> {
       },
       { pattern: '/publish/datasets/:id', handler: datasetDetailPage(content, getRouter) },
       { pattern: '/publish/tours', handler: toursPage(content) },
+      { pattern: '/publish/featured-hero', handler: featuredHeroPage(content) },
       { pattern: '/publish/import', handler: importPage(content) },
     ],
     notFoundPage(content),

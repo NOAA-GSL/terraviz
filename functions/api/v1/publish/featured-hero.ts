@@ -64,8 +64,11 @@ export const onRequestPut: PagesFunction<CatalogEnv> = async context => {
 
   const validation = validateHeroInput(body)
   if (!validation.ok) {
+    // 400 with the `{ errors: [...] }` envelope — matches the rest of
+    // the publisher API (validationFailure) and the portal client's
+    // `publisherSend`, which parses field errors on 400/409.
     return new Response(JSON.stringify({ errors: validation.errors }), {
-      status: 422,
+      status: 400,
       headers: { 'Content-Type': CONTENT_TYPE },
     })
   }

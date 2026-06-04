@@ -4,7 +4,7 @@
  *
  * Coverage:
  *   - PUT sets the singleton for staff; 403 for community.
- *   - PUT 422 for a missing/invalid window; 404 for an unknown dataset.
+ *   - PUT 400 for a missing/invalid window; 404 for an unknown dataset.
  *   - PUT writes a `hero.set` audit row and busts the KV cache.
  *   - PUT upserts (a second set replaces).
  *   - DELETE clears (204) + `hero.clear` audit + KV bust; 403 for
@@ -86,10 +86,10 @@ describe('PUT /api/v1/publish/featured-hero', () => {
     expect(res.status).toBe(403)
   })
 
-  it('422 for a missing window', async () => {
+  it('400 for a missing window', async () => {
     const { env } = setupEnv()
     const res = await heroPut(ctx({ env, body: { dataset_id: DS_0 } }))
-    expect(res.status).toBe(422)
+    expect(res.status).toBe(400)
     const body = JSON.parse(await res.text()) as { errors: Array<{ field: string }> }
     expect(body.errors.some(e => e.field === 'window.start')).toBe(true)
   })

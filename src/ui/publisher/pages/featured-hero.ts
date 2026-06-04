@@ -1,0 +1,311 @@
+/**
+ * /publish/featured-hero — set the "Right now" hero override (Phase C
+ * of `docs/HERO_ADMIN_SCOPING.md`).
+ *
+ * Privileged-only (staff / admin / service). The page fetches the
+ * caller's role (`/api/v1/publish/me`), the catalog datasets for the
+ * picker (`/api/v1/publish/datasets`), and the current pin
+ * (`/api/v1/featured-hero`), then renders a form: dataset picker,
+ * mandatory activation window, optional headline, a live preview of
+ * the real hero card, and Set / Clear buttons wired to
+ * `PUT` / `DELETE /api/v1/publish/featured-hero`.
+ *
+ * Non-privileged callers get a restricted card (the API also enforces
+ * 403, but gating here avoids a fill-then-reject round-trip).
+ *
+ * The preview reuses the live hero-panel stylesheet so the curator
+ * sees exactly what ships. The portal boots its own CSS bundle
+ * (`publisher.css`), so the hero styles are imported here explicitly.
+ */
+
+import { t } from '../../../i18n'
+import { publisherGet, publisherSend, handleSessionError } from '../api'
+import { buildErrorCard } from '../components/error-card'
+import '../../../styles/hero-panel.css'
+
+/** Keep in sync with `HERO_HEADLINE_MAX_LEN` in the backend store
+ *  (`functions/api/v1/_lib/hero-override-store.ts`). The API is the
+ *  hard cap; this just stops the input early. */
+const HERO_HEADLINE_MAX_LEN = 120
+
+interface MeResponse {
+  role: string
+  is_admin: boolean
+}
+interface DatasetsResponse {
+  datasets: Array<{ id: string; title: string; thumbnail_url?: string | null }>
+}
+interface HeroResponse {
+  hero: { datasetId: string; window: { start: string; end: string }; headline?: string } | null
+}
+
+const ME_ENDPOINT = '/api/v1/publish/me'
+const DATASETS_ENDPOINT = '/api/v1/publish/datasets?limit=500'
+const HERO_PUBLIC_ENDPOINT = '/api/v1/featured-hero'
+const HERO_WRITE_ENDPOINT = '/api/v1/publish/featured-hero'
+
+export interface FeaturedHeroPageOptions {
+  fetchFn?: typeof fetch
+  navigate?: (url: string) => void
+}
+
+function clientIsPrivileged(me: MeResponse): boolean {
+  return me.is_admin === true || me.role === 'staff' || me.role === 'service'
+}
+
+/** ISO timestamp → the `YYYY-MM-DDTHH:mm` shape a `datetime-local`
+ *  input wants. Returns '' when unparseable. */
+function isoToLocalInput(iso: string | undefined): string {
+  if (!iso) return ''
+  const ms = Date.parse(iso)
+  if (!Number.isFinite(ms)) return ''
+  const d = new Date(ms)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+/** `datetime-local` value → ISO-8601, or '' when empty/invalid. */
+function localInputToIso(value: string): string {
+  if (!value) return ''
+  const ms = Date.parse(value)
+  return Number.isFinite(ms) ? new Date(ms).toISOString() : ''
+}
+
+function el<K extends keyof HTMLElementTagNameMap>(
+  tag: K,
+  props: Partial<HTMLElementTagNameMap[K]> & { className?: string } = {},
+  children: (HTMLElement | string)[] = [],
+): HTMLElementTagNameMap[K] {
+  const node = document.createElement(tag)
+  Object.assign(node, props)
+  for (const c of children) node.append(c)
+  return node
+}
+
+export async function renderFeaturedHeroPage(
+  mount: HTMLElement,
+  options: FeaturedHeroPageOptions = {},
+): Promise<void> {
+  const fetchFn = options.fetchFn
+  mount.replaceChildren(el('p', { className: 'publisher-loading', textContent: t('publisher.hero.loading') }))
+
+  const [meRes, datasetsRes, heroRes] = await Promise.all([
+    publisherGet<MeResponse>(ME_ENDPOINT, { fetchFn }),
+    publisherGet<DatasetsResponse>(DATASETS_ENDPOINT, { fetchFn }),
+    publisherGet<HeroResponse>(HERO_PUBLIC_ENDPOINT, { fetchFn }),
+  ])
+
+  if (!meRes.ok) {
+    if (meRes.kind === 'session') {
+      if (handleSessionError({ navigate: options.navigate }) === 'navigating') return
+    }
+    mount.replaceChildren(buildErrorCard(meRes.kind === 'session' ? 'session' : 'server'))
+    return
+  }
+
+  if (!clientIsPrivileged(meRes.data)) {
+    mount.replaceChildren(
+      card(
+        heading(t('publisher.hero.title')),
+        el('p', { className: 'publisher-hero-restricted', textContent: t('publisher.hero.restricted') }),
+      ),
+    )
+    return
+  }
+
+  const datasets = datasetsRes.ok ? datasetsRes.data.datasets : []
+  const currentHero = heroRes.ok ? heroRes.data.hero : null
+
+  renderForm(mount, { datasets, currentHero, fetchFn, navigate: options.navigate })
+}
+
+interface FormState {
+  datasets: DatasetsResponse['datasets']
+  currentHero: HeroResponse['hero']
+  fetchFn?: typeof fetch
+  navigate?: (url: string) => void
+}
+
+function renderForm(mount: HTMLElement, state: FormState): void {
+  const { datasets, currentHero } = state
+
+  // ----- Controls -----
+  const select = el('select', { className: 'publisher-hero-select', id: 'hero-dataset' })
+  select.append(el('option', { value: '', textContent: t('publisher.hero.pickDataset') }))
+  for (const d of datasets) {
+    select.append(el('option', { value: d.id, textContent: d.title }))
+  }
+  if (currentHero) select.value = currentHero.datasetId
+
+  const startInput = el('input', { type: 'datetime-local', className: 'publisher-hero-input', id: 'hero-start' })
+  const endInput = el('input', { type: 'datetime-local', className: 'publisher-hero-input', id: 'hero-end' })
+  if (currentHero) {
+    startInput.value = isoToLocalInput(currentHero.window.start)
+    endInput.value = isoToLocalInput(currentHero.window.end)
+  } else {
+    // Default span: now → now + 7 days, so the curator only narrows it.
+    const now = new Date()
+    const week = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000)
+    startInput.value = isoToLocalInput(now.toISOString())
+    endInput.value = isoToLocalInput(week.toISOString())
+  }
+
+  const headlineInput = el('input', {
+    type: 'text',
+    className: 'publisher-hero-input',
+    id: 'hero-headline',
+    maxLength: HERO_HEADLINE_MAX_LEN,
+    value: currentHero?.headline ?? '',
+  })
+
+  const status = el('div', { className: 'publisher-hero-status', role: 'status' })
+  const preview = el('div', { className: 'publisher-hero-preview hero-panel' })
+
+  const titleFor = (id: string): string => datasets.find(d => d.id === id)?.title ?? ''
+  const thumbFor = (id: string): string | null => datasets.find(d => d.id === id)?.thumbnail_url ?? null
+
+  const updatePreview = (): void => {
+    const id = select.value
+    if (!id) {
+      preview.replaceChildren()
+      preview.classList.add('hidden')
+      return
+    }
+    preview.classList.remove('hidden')
+    const display = headlineInput.value.trim() || titleFor(id)
+    const inner = el('div', { className: 'hero-panel-inner' })
+    const cardBtn = el('div', { className: 'hero-panel-card' })
+    const thumb = thumbFor(id)
+    if (thumb) {
+      const img = el('img', { className: 'hero-panel-thumb', src: thumb, alt: '' })
+      cardBtn.append(img)
+    }
+    const text = el('span', { className: 'hero-panel-text' }, [
+      el('span', { className: 'hero-panel-eyebrow', textContent: t('browse.hero.heading') }),
+      el('span', { className: 'hero-panel-title', textContent: display }),
+      el('span', { className: 'hero-panel-badge', textContent: t('browse.hero.label') }),
+    ])
+    cardBtn.append(text)
+    inner.append(cardBtn)
+    preview.replaceChildren(inner)
+  }
+  select.addEventListener('change', updatePreview)
+  headlineInput.addEventListener('input', updatePreview)
+  updatePreview()
+
+  // ----- Buttons -----
+  const setBtn = el('button', { type: 'button', className: 'publisher-btn publisher-btn-primary', textContent: t('publisher.hero.set') })
+  const clearBtn = el('button', { type: 'button', className: 'publisher-btn', textContent: t('publisher.hero.clear') })
+  clearBtn.disabled = !currentHero
+
+  const setBusy = (busy: boolean): void => {
+    setBtn.disabled = busy
+    clearBtn.disabled = busy || (!currentHero && !select.value)
+  }
+
+  setBtn.addEventListener('click', () => {
+    const datasetId = select.value
+    const startIso = localInputToIso(startInput.value)
+    const endIso = localInputToIso(endInput.value)
+    status.textContent = ''
+    status.classList.remove('publisher-hero-status-error')
+    if (!datasetId) {
+      showError(status, t('publisher.hero.error.noDataset'))
+      return
+    }
+    if (!startIso || !endIso || Date.parse(startIso) >= Date.parse(endIso)) {
+      showError(status, t('publisher.hero.error.window'))
+      return
+    }
+    const headline = headlineInput.value.trim()
+    setBusy(true)
+    void publisherSend<HeroResponse>(
+      HERO_WRITE_ENDPOINT,
+      { dataset_id: datasetId, window: { start: startIso, end: endIso }, ...(headline ? { headline } : {}) },
+      { method: 'PUT', fetchFn: state.fetchFn },
+    ).then(res => {
+      setBusy(false)
+      if (res.ok) {
+        status.textContent = t('publisher.hero.saved')
+        clearBtn.disabled = false
+        return
+      }
+      handleWriteError(res, status, state.navigate)
+    })
+  })
+
+  clearBtn.addEventListener('click', () => {
+    status.textContent = ''
+    setBusy(true)
+    void publisherSend<unknown>(HERO_WRITE_ENDPOINT, null, { method: 'DELETE', fetchFn: state.fetchFn }).then(res => {
+      setBusy(false)
+      if (res.ok || (!res.ok && res.kind === 'not_found')) {
+        status.textContent = t('publisher.hero.cleared')
+        select.value = ''
+        headlineInput.value = ''
+        updatePreview()
+        clearBtn.disabled = true
+        return
+      }
+      handleWriteError(res, status, state.navigate)
+    })
+  })
+
+  // ----- Layout -----
+  const form = card(
+    heading(t('publisher.hero.title')),
+    el('p', { className: 'publisher-hero-intro', textContent: t('publisher.hero.intro') }),
+    labelled(t('publisher.hero.dataset'), select),
+    labelled(t('publisher.hero.windowStart'), startInput),
+    labelled(t('publisher.hero.windowEnd'), endInput),
+    labelled(t('publisher.hero.headline'), headlineInput),
+    el('div', { className: 'publisher-hero-preview-wrap' }, [
+      el('span', { className: 'publisher-field-label', textContent: t('publisher.hero.preview') }),
+      preview,
+    ]),
+    el('div', { className: 'publisher-hero-actions' }, [setBtn, clearBtn]),
+    status,
+  )
+  mount.replaceChildren(form)
+}
+
+function handleWriteError(
+  res: { ok: false; kind: string; errors?: Array<{ message: string }> },
+  status: HTMLElement,
+  navigate?: (url: string) => void,
+): void {
+  if (res.kind === 'session') {
+    if (handleSessionError({ navigate }) === 'navigating') return
+    showError(status, t('publisher.hero.error.session'))
+    return
+  }
+  if (res.kind === 'validation' && res.errors && res.errors.length > 0) {
+    showError(status, res.errors[0].message)
+    return
+  }
+  showError(status, t('publisher.hero.error.generic'))
+}
+
+function showError(status: HTMLElement, message: string): void {
+  status.textContent = message
+  status.classList.add('publisher-hero-status-error')
+}
+
+// ----- Small DOM helpers (mirror the me.ts card/heading idiom) -----
+
+function card(...children: HTMLElement[]): HTMLElement {
+  const c = el('section', { className: 'publisher-card publisher-glass' })
+  for (const child of children) c.append(child)
+  return c
+}
+
+function heading(text: string): HTMLElement {
+  return el('h2', { className: 'publisher-card-heading', textContent: text })
+}
+
+function labelled(label: string, control: HTMLElement): HTMLElement {
+  const wrap = el('label', { className: 'publisher-hero-field' })
+  wrap.append(el('span', { className: 'publisher-field-label', textContent: label }))
+  wrap.append(control)
+  return wrap
+}
