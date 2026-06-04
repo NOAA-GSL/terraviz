@@ -69,9 +69,12 @@ export function findDestructive(sql: string): string[] {
     .filter(Boolean)
   const codes: string[] = []
   for (const stmt of statements) {
-    for (const probe of DESTRUCTIVE) {
-      if (probe.test(stmt)) codes.push(probe.code)
-    }
+    // One code per destructive statement: the probes are ordered
+    // most-specific first (DROP COLUMN before the broader ALTER ...
+    // DROP), so a single `ALTER TABLE ... DROP COLUMN` reports just
+    // `DROP COLUMN` instead of two overlapping codes.
+    const match = DESTRUCTIVE.find(probe => probe.test(stmt))
+    if (match) codes.push(match.code)
   }
   return codes
 }

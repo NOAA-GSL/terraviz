@@ -17,6 +17,12 @@ describe('findDestructive', () => {
     expect(findDestructive('ALTER TABLE foo RENAME TO baz;')).toContain('ALTER ... RENAME')
   })
 
+  it('reports a single code per statement (no overlapping ALTER…DROP duplicate)', () => {
+    // ALTER TABLE ... DROP COLUMN matches both the DROP COLUMN and the
+    // broader ALTER ... DROP probes; only the most-specific is kept.
+    expect(findDestructive('ALTER TABLE foo DROP COLUMN bar;')).toEqual(['DROP COLUMN'])
+  })
+
   it('flags DELETE FROM', () => {
     expect(findDestructive('DELETE FROM foo WHERE id = 1;')).toContain('DELETE FROM')
   })
