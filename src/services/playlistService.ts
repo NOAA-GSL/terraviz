@@ -409,11 +409,19 @@ export function onPlaylistsChange(listener: () => void): () => void {
   return () => target.removeEventListener(CHANGE_EVENT, handler)
 }
 
-/** Stable-ish id generator. Date.now() + 4 random hex chars dodges
- *  the once-per-millisecond collision window. */
+/** Monotonic sequence appended to every id so back-to-back creates
+ *  within the same millisecond can't collide on the random suffix
+ *  alone. The 16-bit `rand` has a birthday-paradox dupe chance that
+ *  shows up around ~100 ids in a tight loop (the source of an
+ *  occasional `unique ids` test flake); the counter makes uniqueness
+ *  deterministic within a process while `rand` covers cross-reload
+ *  uniqueness. Base-36 keeps the segment compact. */
+let idSequence = 0
+
+/** Stable id generator: `pl-<ms>-<seq>-<rand>`. */
 function generatePlaylistId(): string {
   const rand = Math.floor(Math.random() * 0xffff).toString(16).padStart(4, '0')
-  return `pl-${Date.now()}-${rand}`
+  return `pl-${Date.now()}-${(idSequence++).toString(36)}-${rand}`
 }
 
 /** Test-only — flush the in-memory cache so the next read re-loads

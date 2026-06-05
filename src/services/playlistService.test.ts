@@ -132,7 +132,8 @@ describe('createPlaylist', () => {
     const p = createPlaylist('My favourites')
     expect(p.name).toBe('My favourites')
     expect(p.datasets).toEqual([])
-    expect(p.id).toMatch(/^pl-\d+-[0-9a-f]+$/)
+    // `pl-<ms>-<seq base36>-<rand hex>`
+    expect(p.id).toMatch(/^pl-\d+-[0-9a-z]+-[0-9a-f]+$/)
     expect(p.createdAt).toMatch(/^\d{4}-\d{2}-\d{2}T/)
   })
 
