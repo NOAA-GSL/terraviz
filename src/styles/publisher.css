@@ -15,6 +15,13 @@
   color: var(--color-text, #e6e8ec);
   font-family: var(--font-family-sans, system-ui, sans-serif);
   box-sizing: border-box;
+  /* Declare the whole portal as a dark color scheme so the browser
+     renders every native control — <select> dropdown lists, the
+     datetime-local calendar popups, scrollbars — in dark mode. A
+     root-level declaration is far more reliable than per-element
+     color-scheme, which some browsers ignore for the native popup
+     (notably the macOS <select> menu). */
+  color-scheme: dark;
 }
 
 .publisher-content {
