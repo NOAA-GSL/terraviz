@@ -642,6 +642,40 @@ ships a new migration file. The repo follows a strict
 …) and the runner records which ones have already applied, so
 re-running is safe and only the unapplied files take effect.
 
+### Automatic apply in CI (push to `main`)
+
+If you deploy via the bundled GitHub Actions workflow
+(`.github/workflows/ci.yml`), you usually **don't** run the command
+above by hand: the **deploy job applies pending migrations to the
+remote D1 automatically on every push to `main`**, just before the
+Pages/Functions deploy. It applies both bindings (`FEEDBACK_DB` →
+`migrations/`, `CATALOG_DB` → `migrations/catalog/`). `wrangler d1
+migrations apply` is idempotent, so this is a no-op when the remote
+is already current.
+
+Notes for forks:
+
+- **Main only.** Preview deploys (from PRs) share the *same physical
+  D1* as production (one `database_id` in `wrangler.toml`), so the
+  auto-apply step is gated to `refs/heads/main` — a PR's migration
+  never touches the live schema before it merges. Test schema changes
+  locally (`npm run db:migrate`, which targets `--local`).
+- **Token scope.** The `CLOUDFLARE_API_TOKEN` secret the deploy job
+  uses must have **D1 write** permission for this to work. If your
+  token is deploy-only, either widen it or opt out (below) and apply
+  by hand.
+- **Opt out.** Set the repository/Environment variable
+  `SKIP_D1_MIGRATE=1` to disable the step — e.g. if you run your own
+  migration pipeline or prefer a manual gate. With it set, fall back
+  to the `wrangler d1 migrations apply … --remote` command above after
+  each release.
+- **Safety guard.** `npm run check:migrations` (in the type-check CI
+  job) fails the build on destructive DDL (drop/rename/delete) unless
+  the migration explicitly opts in with a `-- destructive: reviewed`
+  comment — so auto-apply only ever runs additive schema by default.
+  A reviewed-destructive migration still applies, but it forced a
+  conscious decision + reviewer attention first.
+
 > ⚠️ **Skipping this step is the #1 cause of post-deploy 500s
 > in the publisher API.** Symptom: the portal's "Save draft"
 > button surfaces a generic server error; the response body
