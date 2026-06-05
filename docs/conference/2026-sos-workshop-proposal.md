@@ -97,11 +97,10 @@ show a cast feed, the pre-recorded headset capture covers it.
 
 > _Select Yes if you have already confirmed a list of co-presenters._
 
-**Yes** — co-presenter: **Adrian Chase**.
+**Yes** — co-presenter: **Adrian Chase**, Science On a Sphere team, NOAA
+(adrian.chase@noaa.gov).
 
-> _The form collects each co-presenter's details (name, email,
-> affiliation) on the following page. Have Adrian's email and affiliation
-> ready to enter there._
+> _Enter this on the form's co-presenter page (name, email, affiliation)._
 
 ---
 
