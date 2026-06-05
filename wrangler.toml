@@ -12,7 +12,7 @@ binding = "AI"
 [[d1_databases]]
 binding = "FEEDBACK_DB"
 database_name = "sphere-feedback"
-database_id = "78fbe5c3-8e40-4504-b183-155b0069222e"
+database_id = "36ac9df2-9160-4b3d-b48e-039faf209981"
 migrations_dir = "migrations"
 
 # Catalog backend (Phase 1a onward) — datasets, tours, publishers,
@@ -32,7 +32,7 @@ migrations_dir = "migrations"
 [[d1_databases]]
 binding = "CATALOG_DB"
 database_name = "sphere-feedback"
-database_id = "78fbe5c3-8e40-4504-b183-155b0069222e"
+database_id = "36ac9df2-9160-4b3d-b48e-039faf209981"
 migrations_dir = "migrations/catalog"
 
 # Analytics Engine dataset for the telemetry event stream.
@@ -68,13 +68,13 @@ dataset = "terraviz_events"
 # Operations:
 #   - Activate (clients receive 410):
 #       wrangler kv key put telemetry_enabled disabled \
-#         --namespace-id=9c022b1295314939b76a28769fef6195
+#         --namespace-id=69ea76dc9c264755914a5767716f8a04
 #   - Deactivate (back to normal):
 #       wrangler kv key delete telemetry_enabled \
-#         --namespace-id=9c022b1295314939b76a28769fef6195
+#         --namespace-id=69ea76dc9c264755914a5767716f8a04
 [[kv_namespaces]]
 binding = "TELEMETRY_KILL_SWITCH"
-id = "9c022b1295314939b76a28769fef6195"
+id = "69ea76dc9c264755914a5767716f8a04"
 
 # KV namespace for the catalog read API's hot-path snapshot cache.
 # `functions/api/v1/catalog.ts` lazily renders the public catalog
@@ -93,7 +93,7 @@ id = "9c022b1295314939b76a28769fef6195"
 # created via `wrangler kv namespace create CATALOG_KV`.
 [[kv_namespaces]]
 binding = "CATALOG_KV"
-id = "00000000000000000000000000000000"
+id = "264b34697ccc4739b9cc96f783b7bb82"
 
 # R2 bucket for catalog assets (Phase 1b onward) — sphere thumbnails,
 # image data refs, legends, captions, and tour JSON. Stream handles
