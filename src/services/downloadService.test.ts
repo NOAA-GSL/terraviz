@@ -443,6 +443,30 @@ describe('classifySourceOfTruth', () => {
     expect(classifySourceOfTruth('https://example.com/foo.mp4')).toBe('external')
   })
 
+  it('classifies the running node\'s own page-origin subdomain as publisher', () => {
+    // Fork independence: a self-hosted node serving R2 assets from a
+    // subdomain of its own domain must classify them as `publisher`,
+    // not `external` — even though the fork's host is not in the
+    // static PUBLISHER_HOSTS list. `publisherHosts()` adds the live
+    // page origin at runtime. jsdom defaults window.location to
+    // http://localhost/, so stub a fork host for this case.
+    const original = window.location.hostname
+    Object.defineProperty(window.location, 'hostname', {
+      value: 'terraviz.test.gsl.noaa.gov',
+      configurable: true,
+    })
+    try {
+      expect(
+        classifySourceOfTruth('https://assets.terraviz.test.gsl.noaa.gov/datasets/DS01/source.mp4'),
+      ).toBe('publisher')
+    } finally {
+      Object.defineProperty(window.location, 'hostname', {
+        value: original,
+        configurable: true,
+      })
+    }
+  })
+
   it('does not be tricked by sos.noaa.gov in the path', () => {
     // Regression for substring sanitization: the publisher-portal /
     // Vimeo note must not be applied to an attacker-controlled URL
