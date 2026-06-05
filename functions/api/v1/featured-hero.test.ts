@@ -127,4 +127,21 @@ describe('GET /api/v1/featured-hero', () => {
     const body = await readJson<HeroBody>(res)
     expect(body.hero?.datasetId).toBe(datasetId)
   })
+
+  it('degrades to { hero: null } (200) when the read throws (table missing / D1 error)', async () => {
+    // Simulate the pre-migration state: a CATALOG_DB whose query throws
+    // (e.g. `no such table: hero_override`). The endpoint must not 500.
+    const throwingDb = {
+      prepare: () => ({
+        first: async () => {
+          throw new Error('D1_ERROR: no such table: hero_override')
+        },
+      }),
+    } as unknown as D1Database
+    const res = await onRequestGet(makeCtx({ env: { CATALOG_DB: throwingDb }, url: URL_HERO }))
+    expect(res.status).toBe(200)
+    expect(res.headers.get('X-Cache')).toBe('BYPASS')
+    const body = await readJson<HeroBody>(res)
+    expect(body.hero).toBeNull()
+  })
 })

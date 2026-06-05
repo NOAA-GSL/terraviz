@@ -26,7 +26,7 @@
  */
 
 import type { CatalogEnv } from './_lib/env'
-import { getHeroOverride, toPublicHero, HERO_CACHE_KEY } from './_lib/hero-override-store'
+import { getHeroOverride, toPublicHero, HERO_CACHE_KEY, type HeroOverrideRow } from './_lib/hero-override-store'
 
 const CONTENT_TYPE = 'application/json; charset=utf-8'
 const CACHE_TTL_SECONDS = 60
@@ -57,7 +57,32 @@ export const onRequestGet: PagesFunction<CatalogEnv> = async context => {
     }
   }
 
-  const row = await getHeroOverride(context.env.CATALOG_DB)
+  // Degrade gracefully: if the read fails — most commonly because the
+  // `hero_override` table doesn't exist yet (migration 0017 not applied
+  // on this deployment), but also any transient D1 error — return
+  // `{ hero: null }` rather than 500ing. The whole hero pipeline is
+  // designed to fail closed to the static `featured-now.json` /
+  // auto-derive, and the admin page should still load (showing "no
+  // pin") instead of erroring on open. We DON'T cache the degraded
+  // result, so recovery is immediate once the table exists.
+  let row: HeroOverrideRow | null
+  try {
+    row = await getHeroOverride(context.env.CATALOG_DB)
+  } catch (err) {
+    console.warn(
+      '[featured-hero] read failed — returning null (table missing / D1 error):',
+      err instanceof Error ? err.message : String(err),
+    )
+    return new Response(JSON.stringify({ hero: null }), {
+      status: 200,
+      headers: {
+        'Content-Type': CONTENT_TYPE,
+        'Cache-Control': `public, max-age=${CACHE_TTL_SECONDS}`,
+        'X-Cache': 'BYPASS',
+      },
+    })
+  }
+
   const body = JSON.stringify({ hero: row ? toPublicHero(row) : null })
 
   if (context.env.CATALOG_KV) {
