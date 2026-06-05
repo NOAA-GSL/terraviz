@@ -31,6 +31,7 @@ import {
   BASELINE_RESOLVERS,
   PERIOD_RESOLVER,
   filterDatasets,
+  makeRecentlyViewedResolver,
   mergeFilterStates,
   parseSearchQuery,
   setFacet,
@@ -44,6 +45,16 @@ import {
   applyFilterStateToUrl,
   readFilterStateFromUrl,
 } from '../utils/catalogFilters'
+import {
+  countNewSince,
+  getLastSession,
+  getRecent,
+  getVisitedIds,
+  onVisitsChange,
+  VISITS_LRU_CAP,
+} from '../services/visitMemory'
+import { renderHeroPanel, destroyHeroPanel } from './heroPanelUI'
+import { getCatalogMode } from '../utils/catalogMode'
 import type { CatalogGraphController } from './catalogGraphUI'
 import type { CatalogTimelineController } from './catalogTimelineUI'
 import type { CatalogMapController } from './catalogMapUI'
@@ -68,10 +79,61 @@ function bucketResultCount(n: number): '0' | '1-10' | '11-50' | '50+' {
 // continue to import these from browseUI.
 export { escapeHtml, escapeAttr }
 
+/**
+ * §9.2 — light (or clear) the "new since your last visit" badge on
+ * the Browse trigger button. The count is catalog entries whose
+ * `enriched.dateAdded` is later than the previous session-end
+ * timestamp; {@link countNewSince} fails closed (0 on a first-ever
+ * visit, or for rows without a parseable `dateAdded`), so the badge
+ * never produces false positives.
+ *
+ * Idempotent and DOM-defensive: a missing Browse button is a no-op
+ * (the tools menu mounts after the catalog loads, but call order is
+ * not guaranteed). Re-running with count 0 removes any existing
+ * badge so the affordance doesn't go stale once the user returns.
+ */
+export function refreshBrowseNewSinceBadge(datasets: readonly Dataset[]): void {
+  const btn = document.getElementById('tools-menu-browse')
+  if (!btn) return
+  const count = countNewSince(datasets, getLastSession())
+  const existing = btn.querySelector('.browse-new-badge')
+  // The default accessible name for the Browse trigger — restored
+  // whenever the badge clears so the button can't keep announcing a
+  // stale "{n} new since your last visit" from a prior non-zero run.
+  const defaultLabel = t('tools.browse.aria')
+  if (count <= 0) {
+    existing?.remove()
+    btn.removeAttribute('data-new-since')
+    btn.setAttribute('aria-label', defaultLabel)
+    btn.setAttribute('title', defaultLabel)
+    return
+  }
+  const label = t('browse.newSince.badge', { count: formatNumber(count) })
+  let badge = existing as HTMLElement | null
+  if (!badge) {
+    badge = document.createElement('span')
+    badge.className = 'browse-new-badge'
+    badge.setAttribute('aria-hidden', 'true')
+    btn.appendChild(badge)
+  }
+  badge.textContent = formatNumber(count)
+  btn.setAttribute('data-new-since', String(count))
+  // The numeric badge is aria-hidden (decorative); surface the count
+  // to assistive tech via the button's accessible name instead.
+  btn.setAttribute('aria-label', label)
+  btn.setAttribute('title', label)
+}
+
 // --- Browse UI constants ---
 const CARD_DESCRIPTION_MAX_LENGTH = 120
 const MAX_CARD_CATEGORIES = 3
 const MAX_CARD_KEYWORDS = 12
+
+/** §9.2 — the Continue-exploring row needs at least this many
+ *  resolvable visits before it renders (a row of one is awkward). */
+const CONTINUE_MIN_ENTRIES = 3
+/** §9.2 — and shows at most this many cards (no pagination). */
+const CONTINUE_MAX_CARDS = 3
 
 /** The fixed order of format buckets in the Format chip group. Other
  *  comes last because it's the catch-all. */
@@ -461,7 +523,7 @@ function countSectionActive(section: SectionKey, state: FilterState): number {
 const SECTION_FACETS: Readonly<Record<SectionKey, readonly string[]>> = {
   category: ['category'],
   format: ['format'],
-  time: ['dateAdded', 'dataCoverageYear'],
+  time: ['recentlyViewed', 'dateAdded', 'dataCoverageYear'],
   quality: ['hasCaptions', 'hasTour', 'includeSos'],
 }
 
@@ -602,6 +664,22 @@ export function showBrowseUI(
   // already gated on `browseInitialized`, but other call sites
   // (catalog-empty boot, catalog↔sphere tab) didn't. Centralising
   // the gate here makes the invariant uniform regardless of caller.
+
+  // §9.1 — resolve + render the "Right now" hero panel above the chip
+  // rail. Runs on EVERY showBrowseUI call (before the init
+  // short-circuit below) so the hero re-evaluates when the overlay is
+  // reopened or the catalog↔sphere tab flips `?catalog=true` — the
+  // candidate, the catalog-mode gate, and the dismiss state can all
+  // differ between opens. Catalog mode only; hides itself otherwise
+  // and when no candidate qualifies. Fire-and-forget: the override
+  // fetch is async and the panel mounts when it resolves; a close
+  // mid-fetch aborts it via destroyHeroPanel() in hide/collapse.
+  void renderHeroPanel({
+    datasets,
+    onSelect: callbacks.onSelectDataset,
+    isCatalogMode: getCatalogMode(),
+  })
+
   if (overlay.dataset.browseInitialized === 'true') return
 
   // Wire the in-header help trigger once (idempotent)
@@ -758,11 +836,32 @@ export function showBrowseUI(
     searchQuery = initialUrlState.searchQuery
   }
 
+  // §9.2 — mutable set of visited dataset ids backing the
+  // Recently-viewed facet. Held by reference so the resolver below
+  // closes over a stable object; `renderCards` refreshes its
+  // contents in place (clear + re-add) before each filter pass so a
+  // dataset opened mid-browse-session reflects immediately without
+  // rebuilding the resolver map.
+  const visitedIds = new Set<string>(getVisitedIds())
+  const refreshVisited = (): void => {
+    visitedIds.clear()
+    for (const id of getVisitedIds()) visitedIds.add(id)
+  }
+
   // Resolvers passed to the engine — baseline §6.1 set plus the
   // search-only `period:` resolver so `period:yearly` actually
-  // filters. Hoisted to module-local once for the lifetime of
-  // this overlay instance; rebuilding per render is wasted work.
-  const resolvers = { ...BASELINE_RESOLVERS, period: PERIOD_RESOLVER }
+  // filters, plus the §9.2 Recently-viewed resolver. Hoisted to
+  // module-local once for the lifetime of this overlay instance;
+  // rebuilding per render is wasted work.
+  const resolvers = {
+    ...BASELINE_RESOLVERS,
+    period: PERIOD_RESOLVER,
+    recentlyViewed: makeRecentlyViewedResolver(visitedIds),
+  }
+
+  // Fast id → Dataset lookup for the Continue-exploring row, which
+  // resolves the most-recently-visited ids back to catalog rows.
+  const datasetById = new Map<string, Dataset>(allDatasets.map(d => [d.id, d]))
 
   // Accordion section open/collapsed state — persisted to
   // localStorage so the user's expand/collapse choices stick
@@ -805,6 +904,14 @@ export function showBrowseUI(
     const hasCaptions = filterState.hasCaptions?.kind === 'boolean'
     const hasTour = filterState.hasTour?.kind === 'boolean'
     const includeSos = filterState.includeSos?.kind === 'boolean'
+    const recentlyViewed = filterState.recentlyViewed?.kind === 'boolean'
+    // §9.2 — the Recently-viewed chip only makes sense once the user
+    // has a visit history. With an empty log the predicate would
+    // match nothing, so hide the chip entirely rather than offer a
+    // toggle that empties the grid. The toggle stays visible while
+    // active even if the log somehow drains, so the user can always
+    // clear it.
+    const hasVisitHistory = visitedIds.size > 0
 
     const sections: string[] = []
 
@@ -854,10 +961,18 @@ export function showBrowseUI(
     ))
 
     // Time
+    const recentlyViewedChip = (hasVisitHistory || recentlyViewed)
+      ? `<div class="browse-toggle-row">${renderBooleanChip(
+          'recentlyViewed',
+          t('browse.filter.recentlyViewed.label'),
+          recentlyViewed,
+          t('browse.filter.recentlyViewed.help'),
+        )}</div>`
+      : ''
     sections.push(wrapSection(
       'time',
       t('browse.filter.group.time'),
-      renderRangeInputs(
+      recentlyViewedChip + renderRangeInputs(
         'dateAdded',
         t('browse.filter.dateAdded.label'),
         t('browse.filter.dateAdded.fromLabel'),
@@ -1222,6 +1337,10 @@ export function showBrowseUI(
       if (mapContainer) hideContainer(mapContainer)
       showContainer(gridContainer)
     }
+    // §9.2 — the Continue-exploring row is Cards-mode only. Its own
+    // render gates on viewMode, so a single call here keeps it in
+    // sync whether we just entered or left Cards.
+    renderContinueExploring()
   }
 
   /**
@@ -1781,10 +1900,64 @@ export function showBrowseUI(
     })
   }
 
+  /**
+   * §9.2 — render the "Continue exploring" row above the cards grid.
+   * Cards-mode only, and gated to ≥ {@link CONTINUE_MIN_ENTRIES}
+   * resolvable visits (a row of one or two is awkward; the plan
+   * calls for the Netflix continue-watching paradigm). Shows the
+   * most-recently-visited datasets, newest leftmost, capped at
+   * {@link CONTINUE_MAX_CARDS}. Hidden entirely when the gate isn't
+   * met so the surface below shifts up to fill the space.
+   *
+   * Ids that no longer resolve to a catalog row (a dataset retired
+   * since it was visited) are dropped; the gate counts resolvable
+   * entries only.
+   */
+  function renderContinueExploring(): void {
+    const host = document.getElementById('browse-continue')
+    if (!host) return
+    const hide = (): void => {
+      host.classList.add('hidden')
+      host.setAttribute('aria-hidden', 'true')
+      host.innerHTML = ''
+    }
+    if (viewMode !== 'cards') {
+      hide()
+      return
+    }
+    // Resolve the full recency list (capped at the LRU bound) to
+    // catalog rows BEFORE applying the ≥3 gate or the display cap, so
+    // a retired/hidden dataset near the top of the list doesn't hide
+    // the row when there are still ≥3 resolvable visits deeper down.
+    const recent = getRecent(VISITS_LRU_CAP)
+      .map(id => datasetById.get(id))
+      .filter((d): d is Dataset => d != null && !d.isHidden)
+    if (recent.length < CONTINUE_MIN_ENTRIES) {
+      hide()
+      return
+    }
+    const cards = recent.slice(0, CONTINUE_MAX_CARDS).map(d => {
+      const thumb = d.thumbnailLink
+        ? `<img class="browse-continue-card-thumb" src="${escapeAttr(d.thumbnailLink)}" alt="" loading="lazy">`
+        : ''
+      return `<button type="button" class="browse-continue-card" data-id="${escapeAttr(d.id)}" role="listitem"`
+        + ` aria-label="${escapeAttr(t('browse.card.load.aria', { title: d.title }))}">`
+        + `${thumb}<span class="browse-continue-card-title">${escapeHtml(d.title)}</span></button>`
+    }).join('')
+    host.innerHTML = `<h3 class="browse-continue-heading">${escapeHtml(t('browse.continue.heading'))}</h3>`
+      + `<div class="browse-continue-row" role="list">${cards}</div>`
+    host.classList.remove('hidden')
+    host.removeAttribute('aria-hidden')
+  }
+
   function renderCards(): void {
     const grid = document.getElementById('browse-grid')
     const countEl = document.getElementById('browse-count')
     if (!grid) return
+    // Keep the Recently-viewed predicate's backing set current — a
+    // dataset opened since the overlay mounted should filter
+    // immediately when the chip is toggled.
+    refreshVisited()
 
     // §6.2 — parse `category:foo` / `format:bar` / `period:yearly`
     // tokens out of the search box. The remaining free text drives
@@ -2005,9 +2178,38 @@ export function showBrowseUI(
     })
   }
 
+  // §9.2 — Continue-exploring row click delegation (wired once).
+  // A card click loads its dataset through the same path the grid's
+  // Load button uses.
+  const continueHost = document.getElementById('browse-continue')
+  if (continueHost && !continueHost.dataset.wired) {
+    continueHost.addEventListener('click', (e) => {
+      const card = (e.target as HTMLElement).closest('.browse-continue-card') as HTMLElement | null
+      const id = card?.dataset.id
+      if (id) {
+        e.stopPropagation()
+        callbacks.onSelectDataset(id)
+      }
+    })
+    continueHost.dataset.wired = 'true'
+  }
+
+  // §9.2 — keep the visit-driven surfaces live. recordVisit fires
+  // while the user is on the globe (browse collapsed/hidden); the
+  // listener refreshes the row + chip in place so reopening browse
+  // already reflects the latest history. The grid only needs a
+  // re-render when the Recently-viewed filter is the one in play.
+  onVisitsChange(() => {
+    refreshVisited()
+    renderContinueExploring()
+    renderRail()
+    if (filterState.recentlyViewed?.kind === 'boolean') renderCards()
+  })
+
   // Initial render
   renderRail()
   renderActiveFilters()
+  renderContinueExploring()
   renderCards()
   renderViewModeBar()
   // Restore the persisted view mode — if Graph was the last
@@ -2037,6 +2239,9 @@ export function hideBrowseUI(): void {
     browseDwellHandle.stop()
     browseDwellHandle = null
   }
+  // §9.1 — abort any in-flight hero override fetch and clear the panel
+  // so a close mid-resolution can't mount a stale hero later.
+  destroyHeroPanel()
 }
 
 /**
@@ -2058,6 +2263,8 @@ export function collapseBrowseUI(): void {
     browseDwellHandle.stop()
     browseDwellHandle = null
   }
+  // §9.1 — abort any in-flight hero override fetch (see hideBrowseUI).
+  destroyHeroPanel()
 }
 
 // ---------------------------------------------------------------------------
@@ -2106,6 +2313,7 @@ function booleanFacetLabel(facet: string): string {
     case 'hasCaptions': return t('browse.filter.hasCaptions.label')
     case 'hasTour': return t('browse.filter.hasTour.label')
     case 'includeSos': return t('browse.filter.includeSos.label')
+    case 'recentlyViewed': return t('browse.filter.recentlyViewed.label')
     default: return facet
   }
 }

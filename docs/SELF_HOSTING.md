@@ -642,6 +642,50 @@ ships a new migration file. The repo follows a strict
 …) and the runner records which ones have already applied, so
 re-running is safe and only the unapplied files take effect.
 
+### Automatic apply in CI (push to `main`) — opt-in
+
+The bundled GitHub Actions workflow (`.github/workflows/ci.yml`) can
+apply pending **`CATALOG_DB`** migrations to the remote automatically
+on every push to `main`, just before the Pages/Functions deploy, so
+you don't run the command above by hand. `wrangler d1 migrations
+apply` is idempotent, so it's a no-op when the remote is already
+current.
+
+**It is off by default.** Enable it by setting the repository (or
+`production` Environment) variable **`ENABLE_D1_MIGRATE=1`** — and
+**only after** granting the CI token D1 write (next bullet). Off-by-
+default keeps a fresh fork (whose deploy token usually lacks D1
+permission) from breaking its first `main` deploy.
+
+Notes:
+
+- **Token scope (required to enable).** The `CLOUDFLARE_API_TOKEN`
+  secret the deploy job uses must have **Account → D1 → Edit**. A
+  deploy-only (Pages) token produces a Cloudflare **`7403`** (no D1
+  access) or **`7500`** (D1 read but not write) at this step, and
+  because the step runs *before* the deploy, that **blocks the whole
+  deploy**. Grant D1:Edit (editing a token's permissions keeps the
+  same value — no secret rotation), then set `ENABLE_D1_MIGRATE=1`.
+- **`CATALOG_DB` only.** The step does **not** apply `FEEDBACK_DB`:
+  its `migrations_dir` is the repo-root `migrations/`, which also
+  contains the generated `catalog-schema.sql` *snapshot*, and wrangler
+  would treat that snapshot as a feedback migration. `CATALOG_DB`'s
+  dir (`migrations/catalog/`) is clean. Both bindings point at the
+  same physical D1, so the catalog migrations are all the catalog
+  backend needs; apply any (rare) feedback-DB migrations by hand
+  (Step 5).
+- **Main only.** Preview deploys (from PRs) share the *same physical
+  D1* as production (one `database_id` in `wrangler.toml`), so the
+  step is gated to `refs/heads/main` — a PR's migration never touches
+  the live schema before it merges. Test schema changes locally
+  (`npm run db:migrate`, which targets `--local`).
+- **Safety guard.** `npm run check:migrations` (in the type-check CI
+  job) fails the build on destructive DDL (drop/rename/delete) unless
+  the migration explicitly opts in with a `-- destructive: reviewed`
+  comment — so auto-apply only ever runs additive schema by default.
+  A reviewed-destructive migration still applies, but it forced a
+  conscious decision + reviewer attention first.
+
 > ⚠️ **Skipping this step is the #1 cause of post-deploy 500s
 > in the publisher API.** Symptom: the portal's "Save draft"
 > button surfaces a generic server error; the response body

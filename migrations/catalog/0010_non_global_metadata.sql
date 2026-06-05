@@ -78,4 +78,10 @@ UPDATE datasets
    AND json_extract(bounding_variables, '$.w') IS NOT NULL
    AND json_extract(bounding_variables, '$.e') IS NOT NULL;
 
+-- destructive: reviewed — drops `bounding_variables` after the
+-- backfill above copies its contents into the new bbox_* columns.
+-- Grandfathered for the auto-apply additive lint
+-- (scripts/check-migrations-additive.ts); this migration shipped and
+-- applied before the lint existed, and the column drop is intentional
+-- and post-backfill.
 ALTER TABLE datasets DROP COLUMN bounding_variables;
