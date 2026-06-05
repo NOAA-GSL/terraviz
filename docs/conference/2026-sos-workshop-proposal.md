@@ -97,8 +97,11 @@ show a cast feed, the pre-recorded headset capture covers it.
 
 > _Select Yes if you have already confirmed a list of co-presenters._
 
-**No** — _(change to **Yes** and list collaborators if any are confirmed
-before submission; one proposal per presentation)._
+**Yes** — co-presenter: **Adrian Chase**.
+
+> _The form collects each co-presenter's details (name, email,
+> affiliation) on the following page. Have Adrian's email and affiliation
+> ready to enter there._
 
 ---
 
