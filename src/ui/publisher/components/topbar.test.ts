@@ -31,7 +31,7 @@ describe('renderTopbar', () => {
     window.history.replaceState(null, '', originalPath)
   })
 
-  it('renders all four section tabs in order', () => {
+  it('renders all section tabs in order', () => {
     renderTopbar(host, router)
     const links = host.querySelectorAll<HTMLAnchorElement>(
       'a.publisher-nav-link:not(.publisher-nav-link-signout)',
@@ -40,6 +40,7 @@ describe('renderTopbar', () => {
       'Profile',
       'Datasets',
       'Tours',
+      'Right now',
       'Import',
     ])
   })

@@ -95,6 +95,12 @@
     position: absolute;
     inset-block-start: calc(0.4rem * var(--ui-scale));
     inset-inline-end: calc(0.4rem * var(--ui-scale));
+    /* Stay above the card. The card's :hover transform creates a
+       stacking context and, being later in DOM order, would otherwise
+       paint over this absolutely-positioned button — so a click on the
+       X would land on the (hovered) card and load the dataset instead
+       of dismissing. A positive z-index keeps the dismiss on top. */
+    z-index: 1;
     inline-size: calc(24px * var(--ui-scale));
     block-size: calc(24px * var(--ui-scale));
     display: inline-flex;
