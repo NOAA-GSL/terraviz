@@ -58,6 +58,14 @@ describe('renderFeaturedHeroPage', () => {
     expect(select.querySelector(`option[value="${DS}"]`)?.textContent).toBe('Live Storm')
   })
 
+  it('requests only published datasets for the picker', async () => {
+    const fetchFn = mockFetch(baseRoutes())
+    await renderFeaturedHeroPage(mount, { fetchFn })
+    const datasetsCall = fetchFn.mock.calls.find(c => String(c[0]).includes('/api/v1/publish/datasets'))
+    expect(datasetsCall).toBeTruthy()
+    expect(String(datasetsCall![0])).toContain('status=published')
+  })
+
   it('prefills the form from the current pin', async () => {
     const routes = baseRoutes()
     routes['/api/v1/featured-hero'] = {

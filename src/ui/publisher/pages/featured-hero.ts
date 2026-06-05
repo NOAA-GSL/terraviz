@@ -40,7 +40,11 @@ interface HeroResponse {
 }
 
 const ME_ENDPOINT = '/api/v1/publish/me'
-const DATASETS_ENDPOINT = '/api/v1/publish/datasets?limit=500'
+// Published only — pinning a draft/retracted dataset would never resolve
+// in the public catalog's dataset list, so the override would silently
+// fall through to auto-derive. Restrict the picker to what can actually
+// surface as a hero.
+const DATASETS_ENDPOINT = '/api/v1/publish/datasets?limit=500&status=published'
 const HERO_PUBLIC_ENDPOINT = '/api/v1/featured-hero'
 const HERO_WRITE_ENDPOINT = '/api/v1/publish/featured-hero'
 
@@ -103,8 +107,15 @@ export async function renderFeaturedHeroPage(
     if (res.ok) continue
     if (res.kind === 'session') {
       if (handleSessionError({ navigate: options.navigate }) === 'navigating') return
+      mount.replaceChildren(shell(buildErrorCard('session')))
+      return
     }
-    mount.replaceChildren(shell(buildErrorCard(res.kind === 'session' ? 'session' : 'server')))
+    // Preserve the real failure kind (network vs server vs not_found)
+    // and disclose status/body for server errors so operators can
+    // diagnose, rather than collapsing everything to a generic
+    // "server error".
+    const details = res.kind === 'server' ? { status: res.status, body: res.body } : {}
+    mount.replaceChildren(shell(buildErrorCard(res.kind, details)))
     return
   }
   // After the guard above, all three are ok — narrow the types.
