@@ -48,25 +48,32 @@ const PUBLISHER_HOSTS = [
   'zyra-project.org',
 ]
 
+// Loopback / pseudo-hosts that must never be trusted as a publisher
+// suffix: they never appear in a manifest, and a local-dev
+// `VITE_API_ORIGIN=http://localhost:...` would otherwise classify
+// every loopback URL as a publisher source.
+function isLoopbackHost(host: string): boolean {
+  return !host || host === 'localhost' || host.endsWith('.localhost')
+}
+
 // The set of trusted publisher hosts for the running node: the
 // static upstream domain(s) above plus this node's own host. The
 // own-host is derived from the configured API origin (desktop /
 // `VITE_API_ORIGIN`) and, on web, the live page origin — whichever
-// resolves. `localhost` / Tauri webview pseudo-hosts are skipped:
-// they never appear in a manifest and only add noise.
+// resolves. `localhost` / Tauri webview pseudo-hosts are skipped
+// (see `isLoopbackHost`): they never appear in a manifest and only
+// add noise.
 function publisherHosts(): string[] {
   const hosts = [...PUBLISHER_HOSTS]
   try {
     const apiHost = new URL(getApiOrigin()).hostname.toLowerCase()
-    if (apiHost) hosts.push(apiHost)
+    if (!isLoopbackHost(apiHost)) hosts.push(apiHost)
   } catch {
     // getApiOrigin always returns a valid origin, but guard anyway.
   }
   if (typeof window !== 'undefined' && window.location?.hostname) {
     const pageHost = window.location.hostname.toLowerCase()
-    if (pageHost && pageHost !== 'localhost' && !pageHost.endsWith('.localhost')) {
-      hosts.push(pageHost)
-    }
+    if (!isLoopbackHost(pageHost)) hosts.push(pageHost)
   }
   return hosts
 }
