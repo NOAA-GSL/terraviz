@@ -31,6 +31,13 @@ export interface WorkflowDetailPageOptions {
 
 const DEFAULT_REPO_SLUG = 'zyra-project/terraviz'
 
+/** Re-render timer per mount — cleared on every render so SPA
+ *  navigation away (which replaces the mount's children) can't
+ *  stack timers. Mirrors `dataset-detail.ts`'s transcode-poll
+ *  bookkeeping. */
+const activeRunPolls = new WeakMap<HTMLElement, ReturnType<typeof setTimeout>>()
+const RUN_POLL_INTERVAL_MS = 15_000
+
 export async function renderWorkflowDetailPage(
   content: HTMLElement,
   id: string,
@@ -117,6 +124,22 @@ export async function renderWorkflowDetailPage(
   }
 
   content.replaceChildren(shell)
+
+  // Phase Z3 — while a run is queued/running, refresh the page on
+  // a slow poll so status badges and gha_run_id links go live
+  // without a manual reload. Stops on terminal states; navigation
+  // replaces the mount and the stale timer is cleared above.
+  const previous = activeRunPolls.get(content)
+  if (previous !== undefined) clearTimeout(previous)
+  const hasActiveRun = runs.some(run => run.status === 'queued' || run.status === 'running')
+  if (hasActiveRun) {
+    activeRunPolls.set(
+      content,
+      setTimeout(() => {
+        if (content.isConnected) void renderWorkflowDetailPage(content, id, options)
+      }, RUN_POLL_INTERVAL_MS),
+    )
+  }
 }
 
 function messageShell(message: string): HTMLElement {

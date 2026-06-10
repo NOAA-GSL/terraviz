@@ -15,6 +15,7 @@
 import { t } from '../../../i18n'
 import { handleSessionError, type PublisherValidationError } from '../api'
 import {
+  createDraftDataset,
   createWorkflow,
   getWorkflow,
   patchWorkflow,
@@ -22,6 +23,7 @@ import {
   type PublisherWorkflow,
   type WorkflowInputBody,
 } from '../workflows-api'
+import { STAGE_SNIPPETS, WORKFLOW_TEMPLATES } from '../workflow-templates'
 
 export interface WorkflowEditPageOptions {
   navigate?: (url: string) => void
@@ -29,6 +31,10 @@ export interface WorkflowEditPageOptions {
   createFn?: typeof createWorkflow
   patchFn?: typeof patchWorkflow
   validateFn?: typeof validateWorkflow
+  /** Override the minimal-draft creation — tests inject a stub. */
+  createDatasetFn?: typeof createDraftDataset
+  /** Confirmation hook — defaults to `window.confirm`. */
+  confirm?: (message: string) => boolean
   /** YAML parser injection point for tests (avoids the lazy import). */
   parseYaml?: (text: string) => unknown
 }
@@ -36,6 +42,20 @@ export interface WorkflowEditPageOptions {
 /** Schedule presets offered via a datalist; the field stays free
  *  text so any valid ISO-8601 duration in bounds works. */
 const SCHEDULE_PRESETS = ['PT1H', 'PT6H', 'PT12H', 'P1D', 'P1W'] as const
+
+/** Which form area a server validation error belongs to — drives
+ *  the per-field highlighting (Phase Z3 richer validation
+ *  surfacing). Exported for tests. */
+export function errorArea(
+  field: string,
+): 'pipeline' | 'template' | 'name' | 'schedule' | 'target' | 'other' {
+  if (field.startsWith('pipeline_json')) return 'pipeline'
+  if (field.startsWith('metadata_template')) return 'template'
+  if (field === 'name') return 'name'
+  if (field === 'schedule') return 'schedule'
+  if (field === 'target_dataset_id') return 'target'
+  return 'other'
+}
 
 export async function renderWorkflowEditPage(
   content: HTMLElement,
@@ -159,19 +179,110 @@ function buildForm(
   target.type = 'text'
   target.required = true
   target.value = existing?.target_dataset_id ?? ''
-  form.appendChild(
-    buildField(
-      t('publisher.workflows.form.target'),
-      t('publisher.workflows.form.target.hint'),
-      target,
-    ).wrap,
+  const targetField = buildField(
+    t('publisher.workflows.form.target'),
+    t('publisher.workflows.form.target.hint'),
+    target,
   )
+  // Phase Z3 — create the draft shell without leaving the form.
+  const createTargetBtn = document.createElement('button')
+  createTargetBtn.type = 'button'
+  createTargetBtn.className = 'publisher-tab publisher-workflow-create-target'
+  createTargetBtn.textContent = t('publisher.workflows.form.createTarget')
+  const createTargetStatus = document.createElement('span')
+  createTargetStatus.className = 'publisher-row-action-status'
+  createTargetBtn.addEventListener('click', () => {
+    const createDataset = options.createDatasetFn ?? createDraftDataset
+    const title = name.value.trim()
+    if (title.length < 3) {
+      createTargetStatus.textContent = t('publisher.workflows.form.createTarget.needName')
+      createTargetStatus.classList.add('publisher-row-action-status-error')
+      return
+    }
+    createTargetBtn.disabled = true
+    createTargetStatus.classList.remove('publisher-row-action-status-error')
+    createTargetStatus.textContent = t('publisher.workflows.form.createTarget.creating')
+    void createDataset(title).then(result => {
+      createTargetBtn.disabled = false
+      if (!result.ok) {
+        createTargetStatus.textContent = t('publisher.workflows.form.createTarget.failed')
+        createTargetStatus.classList.add('publisher-row-action-status-error')
+        return
+      }
+      target.value = result.data.dataset.id
+      createTargetStatus.textContent = t('publisher.workflows.form.createTarget.done')
+    })
+  })
+  targetField.wrap.appendChild(createTargetBtn)
+  targetField.wrap.appendChild(createTargetStatus)
+  form.appendChild(targetField.wrap)
 
   const pipeline = document.createElement('textarea')
   pipeline.className = 'publisher-form-input publisher-form-textarea'
   pipeline.rows = 14
   pipeline.spellcheck = false
   pipeline.value = existing ? prettyJson(existing.pipeline_json) : ''
+
+  const template = document.createElement('textarea')
+
+  // Phase Z3 — guided authoring: a template picker that seeds both
+  // textareas, and an insert-stage palette generated from the same
+  // allowlist the server validates against.
+  const confirmFn = options.confirm ?? ((message: string) => window.confirm(message))
+  const guided = document.createElement('div')
+  guided.className = 'publisher-form-field publisher-workflow-guided'
+
+  const templatePicker = document.createElement('select')
+  templatePicker.className = 'publisher-form-input'
+  templatePicker.setAttribute('aria-label', t('publisher.workflows.form.templatePicker'))
+  const templateBlank = document.createElement('option')
+  templateBlank.value = ''
+  templateBlank.textContent = t('publisher.workflows.form.templatePicker')
+  templatePicker.appendChild(templateBlank)
+  for (const wt of WORKFLOW_TEMPLATES) {
+    const option = document.createElement('option')
+    option.value = wt.id
+    option.textContent = t(wt.labelKey)
+    templatePicker.appendChild(option)
+  }
+  templatePicker.addEventListener('change', () => {
+    const chosen = WORKFLOW_TEMPLATES.find(wt => wt.id === templatePicker.value)
+    if (!chosen) return
+    const dirty = pipeline.value.trim().length > 0 || template.value.trim().length > 0
+    if (dirty && !confirmFn(t('publisher.workflows.form.template.overwriteConfirm'))) {
+      templatePicker.value = ''
+      return
+    }
+    pipeline.value = chosen.pipelineYaml
+    template.value = chosen.metadataTemplate
+    statusLine.textContent = t('publisher.workflows.form.template.applied')
+  })
+  guided.appendChild(templatePicker)
+
+  const stagePicker = document.createElement('select')
+  stagePicker.className = 'publisher-form-input'
+  stagePicker.setAttribute('aria-label', t('publisher.workflows.form.insertStage'))
+  const stageBlank = document.createElement('option')
+  stageBlank.value = ''
+  stageBlank.textContent = t('publisher.workflows.form.insertStage')
+  stagePicker.appendChild(stageBlank)
+  for (const snippet of STAGE_SNIPPETS) {
+    const option = document.createElement('option')
+    option.value = snippet.id
+    option.textContent = snippet.id // i18n-exempt: Zyra stage/command identifiers
+    stagePicker.appendChild(option)
+  }
+  stagePicker.addEventListener('change', () => {
+    const chosen = STAGE_SNIPPETS.find(sn => sn.id === stagePicker.value)
+    stagePicker.value = ''
+    if (!chosen) return
+    if (pipeline.value.trim().length === 0) pipeline.value = 'stages:\n'
+    if (!pipeline.value.endsWith('\n')) pipeline.value += '\n'
+    pipeline.value += chosen.snippet
+  })
+  guided.appendChild(stagePicker)
+  form.appendChild(guided)
+
   form.appendChild(
     buildField(
       t('publisher.workflows.form.pipeline'),
@@ -180,7 +291,6 @@ function buildForm(
     ).wrap,
   )
 
-  const template = document.createElement('textarea')
   template.className = 'publisher-form-input publisher-form-textarea'
   template.rows = 8
   template.spellcheck = false
@@ -228,14 +338,27 @@ function buildForm(
   buttons.appendChild(saveBtn)
   form.appendChild(buttons)
 
+  // Phase Z3 — richer validation surfacing: highlight the form
+  // area each server error belongs to alongside the grouped list.
+  const areaInputs: Record<string, HTMLElement> = {
+    pipeline,
+    template,
+    name,
+    schedule,
+    target,
+  }
   const showErrors = (errors: PublisherValidationError[]): void => {
+    for (const input of Object.values(areaInputs)) input.removeAttribute('aria-invalid')
     errorList.replaceChildren(
       ...errors.map(err => {
+        const area = errorArea(err.field)
+        areaInputs[area]?.setAttribute('aria-invalid', 'true')
         const li = document.createElement('li')
         li.textContent = `${err.field}: ${err.message}` // i18n-exempt: server-side validation messages are en-only in v1
         return li
       }),
     )
+    errors[0] && areaInputs[errorArea(errors[0].field)]?.focus()
   }
 
   const collectBody = async (): Promise<WorkflowInputBody | null> => {
