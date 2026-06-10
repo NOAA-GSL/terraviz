@@ -23,7 +23,7 @@ on:
         required: true
         default: 'drought'
       zyra_image:
-        description: 'Zyra runner container image'
+        description: 'Zyra runner container image (the spike runs :latest deliberately — its job is to discover the digest Z1 pins; the resolved digest is recorded in the run summary)'
         required: true
         default: 'ghcr.io/noaa-gsl/zyra-scheduler:latest'
       dataset_id:
@@ -95,8 +95,12 @@ jobs:
           curl -fsSL \
             "https://raw.githubusercontent.com/NOAA-GSL/zyra-scheduler/main/datasets/${DATASET_NAME}.env" \
             -o dataset.env
-          echo "Fetched datasets/${DATASET_NAME}.env:"
-          cat dataset.env
+          # Log key names + content hash only — never the values.
+          # The upstream file is public today, but env files are
+          # exactly where credentials appear later, and Actions logs
+          # outlive that assumption. PR #175 Copilot review.
+          echo "Fetched datasets/${DATASET_NAME}.env ($(sha256sum dataset.env | cut -d' ' -f1)), keys:"
+          grep -oE '^[A-Za-z_][A-Za-z0-9_]*' dataset.env || true
 
       # The three Zyra stages, verbatim from zyra-scheduler's
       # reusable workflow (acquire ftp → transform metadata →
@@ -111,6 +115,13 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p _work
+          # Resolve and record the image digest so the run is
+          # reproducible after the fact — discovering the digest Z1
+          # should pin is part of the spike's deliverable. PR #175
+          # Copilot review.
+          docker pull "$ZYRA_IMAGE" > /dev/null
+          DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "$ZYRA_IMAGE" 2>/dev/null || echo 'unresolved')
+          echo "image: ${ZYRA_IMAGE} → ${DIGEST}" | tee -a _work/zyra-timings.txt
           docker run --rm --entrypoint "" --user 0 \
             -v "$PWD/_work:/work" \
             -v "$PWD/dataset.env:/dataset.env:ro" \

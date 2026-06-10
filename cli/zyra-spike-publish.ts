@@ -409,5 +409,14 @@ const invokedDirectly =
   typeof process.argv[1] === 'string' &&
   import.meta.url === `file://${process.argv[1]}`
 if (invokedDirectly) {
-  void main().then(code => process.exit(code))
+  // Catch rejections from main() itself (ffprobe binary missing,
+  // unreadable video path, …) so the workflow still gets a non-zero
+  // exit with a readable message instead of an unhandled-rejection
+  // crash. PR #175 Copilot review.
+  void main()
+    .then(code => process.exit(code))
+    .catch((err: unknown) => {
+      console.error(`error: ${err instanceof Error ? err.message : String(err)}`)
+      process.exit(1)
+    })
 }
