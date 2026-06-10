@@ -24,8 +24,8 @@ const framesMetaFixture = {
 describe('readFramesMetaRange', () => {
   it('reads the transform-metadata shape incl. period_seconds', () => {
     expect(readFramesMetaRange(framesMetaFixture)).toEqual({
-      dataStart: '2026-05-01T00:00:00',
-      dataEnd: '2026-06-05T00:00:00',
+      dataStart: '2026-05-01T00:00:00Z',
+      dataEnd: '2026-06-05T00:00:00Z',
       periodSeconds: 604800,
     })
   })
@@ -69,8 +69,8 @@ describe('renderSidecar', () => {
     expect(result.warnings).toEqual([])
     expect(result.fields).toEqual({
       title: 'Drought Risk — 2026-06-10',
-      start_time: '2026-05-01T00:00:00',
-      end_time: '2026-06-05T00:00:00',
+      start_time: '2026-05-01T00:00:00Z',
+      end_time: '2026-06-05T00:00:00Z',
       period: 'P7D',
       keywords: ['drought', `run ${RUN_ID}`],
     })
@@ -89,6 +89,15 @@ describe('renderSidecar', () => {
   it('passes literal (non-string) values through', () => {
     const result = renderSidecar({ title: 'Plain', keywords: ['a', 'b'] }, vars)
     expect(result.fields).toEqual({ title: 'Plain', keywords: ['a', 'b'] })
+  })
+})
+
+describe('toUtcIso normalisation', () => {
+  it('appends Z to naive timestamps and preserves valid UTC ones', async () => {
+    const { toUtcIso } = await import('./workflow-sidecar')
+    expect(toUtcIso('2026-05-01T00:00:00')).toBe('2026-05-01T00:00:00Z')
+    expect(toUtcIso('2026-05-01T00:00:00Z')).toBe('2026-05-01T00:00:00Z')
+    expect(toUtcIso('2026-05-01T02:00:00+02:00')).toBe('2026-05-01T00:00:00Z')
   })
 })
 

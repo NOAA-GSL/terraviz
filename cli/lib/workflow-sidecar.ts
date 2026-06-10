@@ -78,8 +78,8 @@ export function readFramesMetaRange(
   const m = meta as Record<string, unknown>
   if (typeof m.start_datetime === 'string' && typeof m.end_datetime === 'string') {
     return {
-      dataStart: m.start_datetime,
-      dataEnd: m.end_datetime,
+      dataStart: toUtcIso(m.start_datetime),
+      dataEnd: toUtcIso(m.end_datetime),
       ...(typeof m.period_seconds === 'number' && m.period_seconds > 0
         ? { periodSeconds: m.period_seconds }
         : {}),
@@ -95,9 +95,27 @@ export function readFramesMetaRange(
     }
     const first = stamp(m.frames[0])
     const last = stamp(m.frames[m.frames.length - 1])
-    if (first && last) return { dataStart: first, dataEnd: last }
+    if (first && last) return { dataStart: toUtcIso(first), dataEnd: toUtcIso(last) }
   }
   return null
+}
+
+/**
+ * Normalise a Zyra timestamp to the publisher API's required shape
+ * (`YYYY-MM-DDTHH:MM:SS[.fff]Z` — see `ISO_DATE_RE` in
+ * `functions/api/v1/_lib/validators.ts`). Zyra's filename-derived
+ * timestamps are timezone-naive (`2026-05-01T00:00:00`); SOS
+ * real-time products are UTC by convention, so naive gets a `Z`
+ * appended. Offset-carrying values are converted to UTC.
+ */
+export function toUtcIso(value: string): string {
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/.test(value)) return value
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?$/.test(value)) return `${value}Z`
+  const parsed = new Date(value)
+  if (!Number.isNaN(parsed.getTime())) {
+    return parsed.toISOString().replace(/\.000Z$/, 'Z')
+  }
+  return value
 }
 
 export interface SidecarResult {

@@ -215,7 +215,12 @@ async function main(): Promise<number> {
           if (range.periodSeconds) timing.period = secondsToIsoDuration(range.periodSeconds)
           const patched = await client.updateDataset(datasetId, timing)
           if (!patched.ok) {
-            note(`[spike] FAIL: timing PATCH → ${patched.status} ${patched.error}`)
+            const detail = patched.errors
+              ? ` ${JSON.stringify(patched.errors)}`
+              : patched.message
+                ? ` ${patched.message}`
+                : ''
+            note(`[spike] FAIL: timing PATCH → ${patched.status} ${patched.error}${detail}`)
             return 3
           }
           note(
