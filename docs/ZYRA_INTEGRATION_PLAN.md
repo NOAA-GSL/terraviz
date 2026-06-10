@@ -216,6 +216,33 @@ have scheduled handlers, so this would be the project's first
 standalone Worker and is deliberately deferred until something
 needs it.
 
+Two GitHub-imposed gotchas around scheduled workflows, both with
+mitigations the scheduler must ship with:
+
+- **The 60-day inactivity disable.** In public repositories,
+  scheduled workflows are automatically disabled after 60 days
+  without repository *activity* (commits — workflow runs don't
+  count). The timer resets whenever the workflow is re-enabled via
+  the API, so the scheduler keeps itself alive: a final step calls
+  the [enable-workflow endpoint](https://docs.github.com/en/rest/actions/workflows#enable-a-workflow)
+  (`PUT /repos/{owner}/{repo}/actions/workflows/{id}/enable`) with
+  its own `GITHUB_TOKEN` (`permissions: actions: write`) — the
+  pattern the marketplace
+  [keepalive-workflow](https://github.com/marketplace/actions/keepalive-workflow)
+  action wraps in API mode, with no dummy commits. Limitation: a
+  workflow that has already been disabled for a full cycle never
+  runs the step that would revive it, so a long-dormant node still
+  needs one manual re-enable.
+- **Forks start disabled.** Scheduled workflows in a forked
+  repository are disabled by default, and `GITHUB_TOKEN` cannot
+  bootstrap a workflow that has never run. `docs/SELF_HOSTING.md`
+  must include the one-time "enable the scheduler in the Actions
+  tab" step.
+
+The Worker Cron Trigger alternative is immune to both, which is a
+second argument for it beyond timing precision if either
+mitigation proves annoying in practice.
+
 ### Runner
 
 `.github/workflows/zyra-run.yml`, triggered by the `zyra-run`
@@ -404,15 +431,24 @@ role vocabulary (`service` today; Tier 0 may refine it).
 
 ### Cost notes
 
-The GHA free tier (2,000 min/month, the budget
-`CATALOG_ASSETS_PIPELINE.md` already plans transcodes against) now
-also carries pipeline runs. An hourly workflow that spends 4
-minutes fetching + rendering consumes ~2,900 min/month on its own
-— **over** the free tier before transcode minutes. Daily cadences
-are comfortable (~120 min/month each). The portal should surface
-estimated monthly minutes next to the schedule picker, and the
-scoping assumption is: a handful of daily workflows fits free;
-hourly workflows mean a paid Actions plan or a self-hosted runner.
+Actions minutes are **free and unlimited for public repositories**
+on standard GitHub-hosted runners (confirmed against the
+[2026 pricing changes](https://resources.github.com/actions/2026-pricing-changes-for-github-actions/),
+which keep public-repo usage free) — so on the canonical node,
+hourly Zyra pipelines cost nothing in compute. The limits that do
+apply to public repos are concurrency (20 jobs on the Free plan —
+the scheduler should cap per-tick dispatch fan-out below that) and
+the 6-hour job ceiling (irrelevant at this plan's render sizes).
+
+The 2,000 min/month quota applies to **private** forks only. There,
+an hourly workflow spending 4 minutes per run consumes ~2,900
+min/month on its own — over the quota before transcode minutes —
+while daily cadences are comfortable (~120 min/month each). The
+portal should surface estimated monthly minutes next to the
+schedule picker so a private-fork operator sees the math; hourly
+cadences on a private fork mean a paid Actions plan or a
+self-hosted runner.
+
 Storage-side, overwrite-in-place leaks old `uploads/` and
 `videos/` prefixes in R2 at one bundle per run until cleanup
 exists (§Open questions).
