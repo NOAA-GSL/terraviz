@@ -15,14 +15,16 @@
  * in `.github/workflows/zyra-run.yml` and the two are bumped
  * together, deliberately.
  *
- * Z0-pending: transcribed from NOAA-GSL/zyra-scheduler's workflow
- * and the Zyra wiki; re-verify against the spike run's observed CLI
- * surface before relaxing or extending.
+ * Verified against the Z0 spike run (actions/runs/27286624666),
+ * which also surfaced that upstream merged the `transform` stage
+ * into `process` — `transform metadata` still works as a
+ * deprecated alias (also named `scan-frames`), so both spellings
+ * are allowlisted until curated templates settle on `process`.
  */
 export const ZYRA_STAGE_ALLOWLIST: Readonly<Record<string, readonly string[]>> = {
   acquire: ['http', 'ftp', 's3'],
-  process: ['decode-grib2', 'extract-variable', 'convert-format'],
-  transform: ['metadata'],
+  process: ['decode-grib2', 'extract-variable', 'convert-format', 'metadata', 'scan-frames'],
+  transform: ['metadata', 'scan-frames'],
   visualize: ['heatmap', 'contour', 'animate', 'compose-video'],
   export: ['local'],
 }

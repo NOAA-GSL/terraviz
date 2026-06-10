@@ -13,10 +13,11 @@
 #   failure → `failed` callback with a sanitized summary, from the
 #             if: failure() step
 #
-# Z0-pending: ZYRA_IMAGE_DEFAULT below should move to a pinned
-# digest (ghcr.io/noaa-gsl/zyra-scheduler@sha256:…) once the spike
-# settles a known-good version — the digest is the Zyra version pin
-# the /validate stage allowlist is coupled to (plan doc §Runner).
+# The image is pinned by digest — the digest is the Zyra version
+# pin the /validate stage allowlist is coupled to (plan doc
+# §Runner); bump both together, deliberately. This digest was
+# observed and validated by the Z0 spike run
+# (actions/runs/27286624666: SOS-spec pass with zero warnings).
 # Override per-node without a commit via the ZYRA_SCHEDULER_IMAGE
 # repo variable.
 #
@@ -39,7 +40,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  ZYRA_IMAGE_DEFAULT: ghcr.io/noaa-gsl/zyra-scheduler:latest
+  ZYRA_IMAGE_DEFAULT: ghcr.io/noaa-gsl/zyra-scheduler@sha256:fe83cf443dd96d3a7043e52207463424fcde11937c4b177a6fb5130d2caf9937
 
 jobs:
   run:
