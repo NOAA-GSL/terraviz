@@ -1,0 +1,133 @@
+# Phase Z1 runner (docs/ZYRA_INTEGRATION_PLAN.md §Runner). Fired by
+# the publish API's `zyra-run` repository_dispatch when a workflow
+# execution is queued (scheduled tick or the portal's Run now). The
+# payload carries identifiers only; the fetch phase pulls the
+# current pipeline definition from the API, so a stale dispatch can
+# never execute a stale pipeline.
+#
+# Phases (cli/zyra-publish-from-dispatch.ts):
+#   fetch   → pipeline.json + workflow.json + `running` callback
+#   (zyra)  → the pipeline runs in the zyra-scheduler container
+#   publish → SOS preflight, sidecar PATCH, asset upload, transcode
+#             wait, `succeeded` callback
+#   failure → `failed` callback with a sanitized summary, from the
+#             if: failure() step
+#
+# Z0-pending: ZYRA_IMAGE_DEFAULT below should move to a pinned
+# digest (ghcr.io/noaa-gsl/zyra-scheduler@sha256:…) once the spike
+# settles a known-good version — the digest is the Zyra version pin
+# the /validate stage allowlist is coupled to (plan doc §Runner).
+# Override per-node without a commit via the ZYRA_SCHEDULER_IMAGE
+# repo variable.
+#
+# Required repo secrets (the transcode-hls.yml set):
+#   TERRAVIZ_SERVER, CF_ACCESS_CLIENT_ID, CF_ACCESS_CLIENT_SECRET
+name: Zyra Run
+
+on:
+  repository_dispatch:
+    types: [zyra-run]
+
+permissions:
+  contents: read
+
+# Third overlap-protection layer (behind the /due active-run skip
+# and the dataset row's transcoding guard): one run per workflow id
+# at a time, queued not cancelled.
+concurrency:
+  group: zyra-run-${{ github.event.client_payload.workflow_id }}
+  cancel-in-progress: false
+
+env:
+  ZYRA_IMAGE_DEFAULT: ghcr.io/noaa-gsl/zyra-scheduler:latest
+
+jobs:
+  run:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    steps:
+      - name: Validate payload
+        env:
+          WORKFLOW_ID: ${{ github.event.client_payload.workflow_id }}
+          RUN_ID: ${{ github.event.client_payload.run_id }}
+        run: |
+          set -euo pipefail
+          for VAR in WORKFLOW_ID RUN_ID; do
+            if ! [[ "${!VAR}" =~ ^[0-9A-HJKMNP-TV-Z]{26}$ ]]; then
+              echo "::error::client_payload.${VAR,,} must be a 26-char ULID; got '${!VAR}'"
+              exit 1
+            fi
+          done
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Fetch workflow definition (running callback)
+        env:
+          TERRAVIZ_SERVER: ${{ secrets.TERRAVIZ_SERVER }}
+          TERRAVIZ_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          TERRAVIZ_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+        run: |
+          npx tsx cli/zyra-publish-from-dispatch.ts \
+            --phase=fetch \
+            --workflow-id="${{ github.event.client_payload.workflow_id }}" \
+            --run-id="${{ github.event.client_payload.run_id }}" \
+            --workdir=_work \
+            --gha-run-id="${{ github.run_id }}"
+
+      - name: Run Zyra pipeline
+        env:
+          ZYRA_IMAGE: ${{ vars.ZYRA_SCHEDULER_IMAGE || '' }}
+        run: |
+          set -euo pipefail
+          IMAGE="${ZYRA_IMAGE:-$ZYRA_IMAGE_DEFAULT}"
+          echo "runner image: $IMAGE"
+          docker run --rm --entrypoint "" --user 0 \
+            -v "$PWD/_work:/work" \
+            "$IMAGE" \
+            bash -c 'set -euo pipefail; zyra run /work/pipeline.json'
+          if [[ ! -f _work/output/dataset.mp4 ]]; then
+            echo "::error::pipeline finished but /work/output/dataset.mp4 does not exist — the registered pipeline must write its MP4 there (enforced by /validate; see WORKFLOW_OUTPUT_PATH)"
+            exit 1
+          fi
+
+      # ffprobe for the publish phase's SOS-spec preflight (Ubuntu
+      # 22.04 ships ffmpeg 4.4 — same rationale as transcode-hls.yml).
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+
+      - name: Publish to TerraViz (succeeded callback)
+        env:
+          TERRAVIZ_SERVER: ${{ secrets.TERRAVIZ_SERVER }}
+          TERRAVIZ_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          TERRAVIZ_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+        run: |
+          npx tsx cli/zyra-publish-from-dispatch.ts \
+            --phase=publish \
+            --workflow-id="${{ github.event.client_payload.workflow_id }}" \
+            --run-id="${{ github.event.client_payload.run_id }}" \
+            --workdir=_work \
+            --gha-run-id="${{ github.run_id }}"
+
+      - name: Report failure
+        if: failure()
+        env:
+          TERRAVIZ_SERVER: ${{ secrets.TERRAVIZ_SERVER }}
+          TERRAVIZ_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          TERRAVIZ_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+        run: |
+          npx tsx cli/zyra-publish-from-dispatch.ts \
+            --phase=report-failure \
+            --workflow-id="${{ github.event.client_payload.workflow_id }}" \
+            --run-id="${{ github.event.client_payload.run_id }}" \
+            --gha-run-id="${{ github.run_id }}" \
+            --error-summary="Run failed in GitHub Actions run ${{ github.run_id }} — see the Actions log."

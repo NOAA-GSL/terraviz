@@ -57,116 +57,20 @@
 import { createHash } from 'node:crypto'
 import { readFile, writeFile, stat } from 'node:fs/promises'
 import { basename } from 'node:path'
-import { spawn } from 'node:child_process'
 import { resolveConfig } from './lib/config'
 import { TerravizClient } from './lib/client'
+import { assessSosSpec, runFfprobe } from './lib/sos-spec'
 
-// --- SOS spec assertion ------------------------------------------
-
-/** The catalog-wide spherical-video invariants the spike asserts.
- *  Width/height are the 4K ladder's top rung (what `encodeHls`
- *  emits); fps is the tour engine's `frameRate` assumption. */
-export const SOS_SPEC = {
-  width: 4096,
-  height: 2048,
-  fps: 30,
-  codec: 'h264',
-  /** 2:1 equirectangular, with a 1% tolerance for odd encoder
-   *  roundings. Non-2:1 input renders visibly wrong on the sphere,
-   *  so this one is a hard failure rather than a warning. */
-  aspectTolerance: 0.01,
-} as const
-
-/** The subset of `ffprobe -print_format json` the assertion reads. */
-export interface ProbeResult {
-  streams?: Array<{
-    codec_type?: string
-    codec_name?: string
-    width?: number
-    height?: number
-    r_frame_rate?: string
-  }>
-  format?: { duration?: string }
-}
-
-export interface SpecReport {
-  /** Hard violations — exit code 2, do not upload. */
-  failures: string[]
-  /** Soft deviations — the transcode ladder normalises these, so
-   *  they're reported for the spike record but don't block. */
-  warnings: string[]
-  /** Human-readable probe summary for the report. */
-  summary: string
-}
-
-/** Parse ffprobe's fractional rate strings ("30/1", "30000/1001"). */
-export function parseFrameRate(raw: string | undefined): number | null {
-  if (!raw) return null
-  const match = /^(\d+)\/(\d+)$/.exec(raw)
-  if (!match) {
-    const plain = Number(raw)
-    return Number.isFinite(plain) && plain > 0 ? plain : null
-  }
-  const num = Number(match[1])
-  const den = Number(match[2])
-  if (!Number.isFinite(num) || !Number.isFinite(den) || den === 0) return null
-  return num / den
-}
-
-export function assessSosSpec(probe: ProbeResult): SpecReport {
-  const failures: string[] = []
-  const warnings: string[] = []
-
-  const video = probe.streams?.find(s => s.codec_type === 'video')
-  if (!video) {
-    return {
-      failures: ['no video stream found'],
-      warnings,
-      summary: 'no video stream',
-    }
-  }
-
-  const width = video.width ?? 0
-  const height = video.height ?? 0
-  const fps = parseFrameRate(video.r_frame_rate)
-  const codec = video.codec_name ?? 'unknown'
-  const duration = Number(probe.format?.duration ?? '0')
-
-  if (width <= 0 || height <= 0) {
-    failures.push(`unreadable dimensions (${width}x${height})`)
-  } else {
-    const aspect = width / height
-    if (Math.abs(aspect - 2) > 2 * SOS_SPEC.aspectTolerance) {
-      failures.push(
-        `aspect ratio ${aspect.toFixed(3)} is not 2:1 equirectangular (${width}x${height})`,
-      )
-    }
-    if (width !== SOS_SPEC.width || height !== SOS_SPEC.height) {
-      warnings.push(
-        `resolution ${width}x${height} differs from the ${SOS_SPEC.width}x${SOS_SPEC.height} ladder top — the transcode upscales/downscales, check source quality`,
-      )
-    }
-  }
-
-  if (!(duration > 0)) {
-    failures.push(`duration ${probe.format?.duration ?? '(missing)'} is not positive`)
-  }
-
-  if (fps === null) {
-    warnings.push('frame rate unreadable from ffprobe output')
-  } else if (Math.abs(fps - SOS_SPEC.fps) > 0.01) {
-    warnings.push(
-      `frame rate ${fps.toFixed(3)} ≠ ${SOS_SPEC.fps} fps — the transcode forces -r ${SOS_SPEC.fps}, playback speed will differ from the source cadence`,
-    )
-  }
-
-  if (codec !== SOS_SPEC.codec) {
-    warnings.push(`codec ${codec} ≠ ${SOS_SPEC.codec} (fine as transcode input)`)
-  }
-
-  const summary = `${width}x${height} ${codec} ${fps === null ? '?' : fps.toFixed(2)}fps ${duration.toFixed(1)}s`
-  return { failures, warnings, summary }
-}
+// SOS-spec helpers graduated to `cli/lib/sos-spec.ts` when the Z1
+// runner landed; re-exported here so the spike's import surface
+// (and its tests) stay stable.
+export {
+  SOS_SPEC,
+  assessSosSpec,
+  parseFrameRate,
+  type ProbeResult,
+  type SpecReport,
+} from './lib/sos-spec'
 
 // --- Args ---------------------------------------------------------
 
@@ -211,34 +115,6 @@ export function parseArgs(argv: readonly string[]): Args | { error: string } {
     reportPath: get('report'),
     ffprobeBin: get('ffprobe-bin') ?? 'ffprobe',
   }
-}
-
-// --- ffprobe ------------------------------------------------------
-
-function runFfprobe(bin: string, videoPath: string): Promise<ProbeResult> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(
-      bin,
-      ['-v', 'error', '-print_format', 'json', '-show_streams', '-show_format', videoPath],
-      { stdio: ['ignore', 'pipe', 'pipe'] },
-    )
-    let out = ''
-    let err = ''
-    child.stdout.on('data', d => (out += String(d)))
-    child.stderr.on('data', d => (err += String(d)))
-    child.on('error', reject)
-    child.on('close', code => {
-      if (code !== 0) {
-        reject(new Error(`ffprobe exited ${code}: ${err.slice(0, 300)}`))
-        return
-      }
-      try {
-        resolve(JSON.parse(out) as ProbeResult)
-      } catch (e) {
-        reject(new Error(`ffprobe output is not JSON: ${e instanceof Error ? e.message : e}`))
-      }
-    })
-  })
 }
 
 // --- Wire shapes (subset of the publisher API responses) ----------

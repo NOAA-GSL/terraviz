@@ -321,6 +321,31 @@ export class TerravizClient {
     )
   }
 
+  // --- Zyra workflow endpoints (Phase Z1) --------------------------
+
+  /** Fetch a workflow definition — what the GHA runner executes. */
+  getWorkflow<T = unknown>(id: string): Promise<Result<T>> {
+    return this.request<T>('GET', `/api/v1/publish/workflows/${encodeURIComponent(id)}`)
+  }
+
+  /** Runner lifecycle callback (running / succeeded / failed / canceled). */
+  postWorkflowRunStatus<T = unknown>(
+    workflowId: string,
+    runId: string,
+    body: {
+      status: 'running' | 'succeeded' | 'failed' | 'canceled'
+      gha_run_id?: string | null
+      upload_id?: string | null
+      error_summary?: string | null
+    },
+  ): Promise<Result<T>> {
+    return this.request<T>(
+      'POST',
+      `/api/v1/publish/workflows/${encodeURIComponent(workflowId)}/runs/${encodeURIComponent(runId)}/status`,
+      body,
+    )
+  }
+
   // --- Asset upload endpoints (Phase 1b) --------------------------
 
   /** Initiate an asset upload — mints a Stream direct-upload URL or R2 presigned PUT. */
