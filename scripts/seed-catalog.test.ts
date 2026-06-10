@@ -43,6 +43,8 @@ const EXPECTED_TABLES = [
   'publishers',
   'tour_dataset_refs',
   'tours',
+  'workflow_runs',
+  'workflows',
 ]
 
 const EXPECTED_INDEXES = [
@@ -56,6 +58,9 @@ const EXPECTED_INDEXES = [
   'idx_node_identity_singleton',
   'idx_renditions_dataset',
   'idx_tours_visibility',
+  'idx_workflow_runs_active',
+  'idx_workflow_runs_workflow',
+  'idx_workflows_due',
 ]
 
 describe('catalog migrations', () => {

@@ -234,6 +234,39 @@ CREATE TABLE tours (
   FOREIGN KEY (publisher_id) REFERENCES publishers(id)
 );
 
+CREATE TABLE workflow_runs (
+  id            TEXT PRIMARY KEY,                 -- ULID
+  workflow_id   TEXT NOT NULL,
+  status        TEXT NOT NULL,                    -- queued | running | succeeded | failed | canceled
+  trigger       TEXT NOT NULL DEFAULT 'schedule', -- schedule | manual
+  created_at    TEXT NOT NULL,
+  started_at    TEXT,                             -- set on the `running` callback
+  finished_at   TEXT,                             -- set on a terminal callback
+  gha_run_id    TEXT,                             -- Actions run id, for the portal's log link
+  upload_id     TEXT,                             -- asset_uploads row a successful run produced
+  error_summary TEXT,                             -- truncated, secret-stripped (runner-side sanitization)
+  FOREIGN KEY (workflow_id) REFERENCES workflows(id) ON DELETE CASCADE
+);
+
+CREATE TABLE workflows (
+  id                 TEXT PRIMARY KEY,            -- ULID
+  publisher_id       TEXT NOT NULL,
+  name               TEXT NOT NULL,
+  description        TEXT,
+  pipeline_json      TEXT NOT NULL,               -- canonical JSON, validated against the stage allowlist
+  metadata_template  TEXT NOT NULL,               -- sidecar template JSON
+  schedule           TEXT NOT NULL,               -- ISO-8601 duration (same vocabulary as datasets.period)
+  enabled            INTEGER NOT NULL DEFAULT 0,  -- 0 | 1
+  target_dataset_id  TEXT NOT NULL,
+  update_mode        TEXT NOT NULL DEFAULT 'overwrite',
+  last_run_at        TEXT,                        -- ISO 8601; terminal status of the most recent run
+  next_run_at        TEXT,                        -- ISO 8601; null while disabled
+  created_at         TEXT NOT NULL,
+  updated_at         TEXT NOT NULL,
+  FOREIGN KEY (publisher_id)      REFERENCES publishers(id),
+  FOREIGN KEY (target_dataset_id) REFERENCES datasets(id)
+);
+
 -- Indexes
 
 CREATE INDEX idx_asset_uploads_dataset ON asset_uploads(dataset_id, created_at);
@@ -248,3 +281,6 @@ CREATE INDEX idx_featured_datasets_position ON featured_datasets(position);
 CREATE UNIQUE INDEX idx_node_identity_singleton ON node_identity(singleton);
 CREATE INDEX idx_renditions_dataset ON dataset_renditions(dataset_id);
 CREATE INDEX idx_tours_visibility ON tours(visibility, retracted_at, published_at);
+CREATE INDEX idx_workflow_runs_active ON workflow_runs (workflow_id, status);
+CREATE INDEX idx_workflow_runs_workflow ON workflow_runs (workflow_id, created_at DESC);
+CREATE INDEX idx_workflows_due ON workflows (enabled, next_run_at);
