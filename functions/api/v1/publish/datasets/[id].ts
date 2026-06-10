@@ -118,7 +118,12 @@ export const onRequestDelete: PagesFunction<CatalogEnv, 'id'> = async context =>
   const publisher = (context.data as unknown as PublisherData).publisher
   const id = pickId(context)
   if (!id) return jsonError(400, 'invalid_request', 'Missing dataset id.')
-  const result = await deleteDataset(context.env, publisher, id)
+  // Same jobQueue wiring as PUT — without it the embedding
+  // deletion would silently no-op (PR #177 Copilot review).
+  const jobQueue =
+    (context.data as unknown as UpdateContextData).jobQueue ??
+    new WaitUntilJobQueue(context.env, context.waitUntil.bind(context))
+  const result = await deleteDataset(context.env, publisher, id, { jobQueue })
   if (!result.ok) return jsonError(result.status, result.error, result.message)
   await writeDatasetAudit(context.env.CATALOG_DB!, publisher, 'dataset.delete', id)
   return new Response(JSON.stringify({ deleted_id: result.deleted_id }), {

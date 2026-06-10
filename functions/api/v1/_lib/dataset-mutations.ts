@@ -939,7 +939,27 @@ export async function deleteDataset(
       message: 'A transcode is in flight; wait for it to finish before deleting.',
     }
   }
-  await db.prepare('DELETE FROM datasets WHERE id = ?').bind(id).run()
+  // Conditional delete re-asserts the guards atomically — a row
+  // that became published or started transcoding between the
+  // pre-read and this statement survives, and meta.changes tells
+  // us to re-diagnose (PR #177 Copilot review, TOCTOU).
+  const deleted = await db
+    .prepare(
+      `DELETE FROM datasets
+        WHERE id = ?
+          AND (published_at IS NULL OR retracted_at IS NOT NULL)
+          AND (transcoding IS NULL OR transcoding = 0)`,
+    )
+    .bind(id)
+    .run()
+  if ((deleted.meta?.changes ?? 0) === 0) {
+    return {
+      ok: false,
+      status: 409,
+      error: 'conflict',
+      message: 'The dataset changed state (published or transcoding) before the delete landed; refresh and retry.',
+    }
+  }
   await invalidateSnapshot(env)
   // Idempotent at the helper level — deleting a vector that was
   // never written (drafts are unembedded) is a no-op.

@@ -248,7 +248,7 @@ function renderTable(
         statusSpan.textContent = ''
         void publisherSend<{ deleted_id: string }>(
           `/api/v1/publish/datasets/${encodeURIComponent(d.id)}`,
-          {},
+          undefined,
           { method: 'DELETE' },
         ).then(result => {
           if (!result.ok) {
