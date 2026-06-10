@@ -70,6 +70,27 @@ per-node status badges and WebSocket log streaming). We borrow the
 editor's *concepts* — stage palette, dry-run validation, run-status
 badges — but not its stack; see §Non-goals.
 
+### Prior art: zyra-scheduler
+
+[`NOAA-GSL/zyra-scheduler`](https://github.com/NOAA-GSL/zyra-scheduler)
+is a production template repo that already runs the core loop this
+plan needs: GitHub Actions cron → Zyra acquire (FTP frame pulls) →
+validate (a `frames-meta.json` integrity step) → `compose-video`
+MP4 → upload (Vimeo / S3), with **twelve pre-configured real
+datasets** (drought, SST, SST anomaly, fire, ozone, land
+temperature, snow/ice, clouds, precipitation, …) — very likely the
+automation behind the daily Vimeo re-uploads that
+`cli/lib/realtime-title.ts` detects today. It proves the
+render-on-schedule half of this plan in production and supplies
+two design inputs adopted below: a published runner container
+(`ghcr.io/noaa-gsl/zyra-scheduler`, pinned by digest) instead of
+ad-hoc `pip install`, and a worked example of per-dataset
+config (its `datasets/*.env` + per-dataset workflow wrappers are
+the static-file equivalent of our D1-resident definitions). What
+it does *not* cover is the TerraViz leg — metadata sidecar,
+publish-API upload, run reporting — which is exactly the scope
+Phase Z0 reduces to.
+
 ### The eight workflow stages
 
 Zyra organizes every pipeline around eight named stages. Half are
@@ -126,7 +147,7 @@ forks its automation capability with zero extra repositories.
             │      ▼
    zyra-scheduler.yml (cron :15) ──► zyra-run.yml
                                        │ pip install zyra + ffmpeg
-                                       │ zyra run pipeline.yaml → MP4/frames + sidecar
+                                       │ zyra run pipeline.json → MP4/frames + sidecar
                                        ▼
                                      cli/zyra-publish-from-dispatch.ts
                                        │ verify → PATCH metadata → asset init
@@ -146,7 +167,7 @@ CREATE TABLE workflows (
   publisher_id       TEXT NOT NULL REFERENCES publishers(id),
   name               TEXT NOT NULL,
   description        TEXT,
-  pipeline_yaml      TEXT NOT NULL,      -- the Zyra pipeline, verbatim
+  pipeline_json      TEXT NOT NULL,      -- the Zyra pipeline, canonical JSON (authored as YAML in the portal, converted client-side)
   metadata_template  TEXT NOT NULL,      -- sidecar template JSON (§Metadata sidecar)
   schedule           TEXT NOT NULL,      -- ISO-8601 duration (PT1H, P1D) — same vocabulary as datasets.period
   enabled            INTEGER NOT NULL DEFAULT 0,
@@ -178,6 +199,12 @@ period presets, the values round-trip into the dataset's own
 strings. `next_run_at` is computed server-side on save and after
 each run.
 
+The pipeline is **stored as canonical JSON, not YAML**. Zyra
+accepts JSON manifests natively, the portal converts the YAML
+authoring surface to JSON client-side, and the Worker then
+validates plain JSON — keeping a YAML parser out of the Pages
+Functions bundle entirely.
+
 ### API surface
 
 New routes under `functions/api/v1/publish/workflows/**`, behind
@@ -186,7 +213,7 @@ the same Access middleware as the rest of `/publish`:
 | Method + path | Caller | What |
 |---|---|---|
 | `GET /api/v1/publish/workflows` | portal | List visible workflows (role-aware, like datasets). |
-| `POST /api/v1/publish/workflows` | portal | Create. Validates YAML + template + schedule; computes `next_run_at`. |
+| `POST /api/v1/publish/workflows` | portal | Create. Validates pipeline JSON + template + schedule; computes `next_run_at`. |
 | `GET /api/v1/publish/workflows/{id}` | portal | Detail. |
 | `PATCH /api/v1/publish/workflows/{id}` | portal | Edit; re-validates; recomputes `next_run_at`. |
 | `POST /api/v1/publish/workflows/{id}/validate` | portal | Static validation only — stage/command allowlist, arg shape, template fields. The deeper `zyra run --dry-run` happens in the runner, not the Worker (no Python at the edge). |
@@ -201,9 +228,9 @@ the same Access middleware as the rest of `/publish`:
 every 15 minutes that calls `GET /workflows/due` with the service
 token and fires one `repository_dispatch` (`event_type: zyra-run`)
 per due workflow. The dispatch payload carries only identifiers
-(`workflow_id`, `run_id`) — the runner fetches the pipeline YAML
-from the API, so a stale dispatch can never execute a stale
-pipeline.
+(`workflow_id`, `run_id`) — the runner fetches the pipeline
+definition from the API, so a stale dispatch can never execute a
+stale pipeline.
 
 GHA cron granularity is 5 minutes and real-world jitter is
 minutes-scale under load. For the hourly-and-slower cadences this
@@ -248,13 +275,23 @@ mitigation proves annoying in practice.
 `.github/workflows/zyra-run.yml`, triggered by the `zyra-run`
 dispatch, structured like `transcode-hls.yml`:
 
+The job declares a GHA `concurrency:` group keyed on
+`workflow_id`, a third layer of overlap protection behind the
+`/due` skip and the `transcoding` guard.
+
 1. **Validate payload** — `workflow_id` + `run_id` present.
-2. **Checkout + toolchain** — Node 22 (`npm ci`), Python 3.11,
-   `pip install zyra`, `apt-get install ffmpeg`.
+2. **Checkout + toolchain** — Node 22 (`npm ci`) for the publish
+   CLI; Zyra runs in the
+   [`ghcr.io/noaa-gsl/zyra-scheduler`](https://github.com/NOAA-GSL/zyra-scheduler)
+   container **pinned by digest** (the digest is the Zyra version
+   pin — the `/validate` stage/command allowlist is coupled to it
+   and both are bumped together, deliberately). Fallback if the
+   image ever stops being published: `pip install zyra==X.Y.Z`,
+   pinned, + `apt-get install ffmpeg`.
 3. **Fetch definition** — `GET /workflows/{id}` with the service
-   token; write `pipeline.yaml` and the metadata template to the
+   token; write `pipeline.json` and the metadata template to the
    workdir; POST `running` status.
-4. **Execute** — `zyra run pipeline.yaml`. The pipeline's final
+4. **Execute** — `zyra run pipeline.json`. The pipeline's final
    stage exports to the local workdir: `dataset.mp4` (or a
    `frames/` directory) plus whatever intermediates it wants.
 5. **Sidecar** — render `terraviz-dataset.json` from the template
@@ -394,10 +431,34 @@ in order of importance:
 
 | Phase | Scope | Demoable state |
 |---|---|---|
+| **Z0 — spike** | Adapt one [`zyra-scheduler`](https://github.com/NOAA-GSL/zyra-scheduler) dataset (e.g. drought): run its pipeline in a manually-triggered GHA workflow, swap the Vimeo/S3 upload leg for a hand-rolled publish-API sequence against a dev node, ffprobe-assert the MP4 against the SOS spec, record real per-run minutes. Also settles open question 2 (`zyra export s3` vs R2) empirically. No schema, no portal, throwaway code allowed. | A real NOAA real-time dataset lands in a dev catalog from a button press; the Z1 contract is built on observed behaviour, not docs. |
 | **Z1 — contract + runner** | Migration (`workflows`, `workflow_runs`); CRUD + `due` + `run` + status routes; `zyra-scheduler.yml` + `zyra-run.yml`; `cli/zyra-publish-from-dispatch.ts` with the Verify preflight; sidecar template spec. Authoring via API / raw YAML only. | An operator registers a pipeline with `curl`, and an hourly dataset updates itself end-to-end. |
 | **Z2 — portal UI** | `/publish/workflows` list / new / edit / history pages; enable toggle; Run now; status badges. | A staff publisher manages workflows without leaving the dashboard. |
 | **Z3 — guided authoring** | Curated pipeline templates; stage-form builder over the allowlist; richer validation surfacing; log links. | A publisher who has never read Zyra docs ships a working hourly pipeline. |
 | **Z4 — real-time UX + upstream** | SPA consumes `period` for freshness (the §7.4 marker driven by data, targeted catalog-cache bypass for due datasets); upstream proposals to NOAA-GSL/zyra (`--preset sos`, `export terraviz`, Narrate/Verify input); alignment with federation Tier 0 once Phase 4 ships. | The catalog visibly knows which datasets are live, and the Zyra-side ergonomics stop being our fork's problem. |
+
+### Implementation conventions (Z1/Z2 checklist)
+
+Repo table stakes, listed so no phase improvises them mid-flight:
+
+- **Module maps.** Every new `functions/` / `cli/` module gets its
+  row in [`BACKEND_MODULES.md`](BACKEND_MODULES.md); portal modules
+  get CLAUDE.md rows. `check:doc-coverage` enforces both.
+- **Tests.** Vitest coverage for the pure logic: `next_run_at`
+  computation, the stage/command allowlist validator, sidecar
+  template interpolation, run-status transitions.
+- **Local dev.** The runner CLI is exercised exactly like the
+  transcode CLI: run `cli/zyra-publish-from-dispatch.ts` directly
+  against a `DEV_BYPASS_ACCESS` dev server, with the asset API's
+  existing mock mode standing in for presigned R2.
+- **Analytics.** New portal pages emit events per
+  [`ANALYTICS_CONTRIBUTING.md`](ANALYTICS_CONTRIBUTING.md)
+  (tier choice, throttling, reviewer checklist).
+- **i18n.** All strings via `publisher.workflows.*` keys; logical
+  CSS properties.
+- **Z2 UX.** Workflows reference an existing `target_dataset_id` —
+  the portal needs a "create draft dataset + workflow together"
+  path so operators aren't bounced between two forms.
 
 ### Non-goals
 
