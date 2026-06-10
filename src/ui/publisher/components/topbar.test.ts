@@ -40,6 +40,7 @@ describe('renderTopbar', () => {
       'Profile',
       'Datasets',
       'Tours',
+      'Workflows',
       'Right now',
       'Import',
     ])
