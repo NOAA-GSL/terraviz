@@ -1024,6 +1024,32 @@
   color: #ffc6c6;
 }
 
+/* Phase Z2 — Zyra workflow run badges, the queued / running /
+   succeeded / failed / canceled vocabulary from workflow_runs
+   (`src/ui/publisher/pages/workflow-detail.ts`). Succeeded /
+   failed reuse the published / retracted tones; queued and
+   canceled read muted, running reads active blue. */
+.publisher-badge-run-queued,
+.publisher-badge-run-canceled {
+  background: rgba(180, 180, 200, 0.18);
+  color: #d4d4e2;
+}
+
+.publisher-badge-run-running {
+  background: rgba(120, 170, 255, 0.18);
+  color: #bcd6ff;
+}
+
+.publisher-badge-run-succeeded {
+  background: rgba(120, 200, 140, 0.18);
+  color: #c4ecc9;
+}
+
+.publisher-badge-run-failed {
+  background: rgba(255, 120, 120, 0.18);
+  color: #ffc6c6;
+}
+
 /* --- Loading + error states --- */
 
 .publisher-loading {

@@ -163,6 +163,7 @@ npm run build:desktop # tsc + vite build + tauri build
 | `src/orbitMain.ts` | Entry point for the Orbit standalone character page (`/orbit`) |
 | `src/config/endpoints.ts` | Externally-hosted endpoint configuration (catalog / proxy / NOAA / NASA base URLs) |
 | `src/types/image-sequence-constants.ts` | Constants shared by the publisher API (`functions/`), the GHA runner (`cli/`), and the portal (`src/`) for the image-sequence upload pipeline |
+| `src/types/zyra-workflow-constants.ts` | Constants shared by the publisher API (`functions/`), the GHA runner (`cli/`), and the portal (`src/`) for the Zyra workflow pipeline — stage/command allowlist, template fields, run statuses (`docs/ZYRA_INTEGRATION_PLAN.md`) |
 | `src/data/regions.ts` | Common region bounding boxes for name-based region resolution |
 | `src/services/orbitCharacter/index.ts` | `OrbitController` — public API for the Orbit character (owns the Three.js scene, rAF loop, state machine) |
 | `src/services/orbitCharacter/orbitScene.ts` | Three.js scene + per-frame update for the Orbit character |
@@ -203,6 +204,10 @@ npm run build:desktop # tsc + vite build + tauri build
 | `src/ui/publisher/pages/dataset-edit.ts` | `/publish/datasets/:id/edit` — edit an existing draft |
 | `src/ui/publisher/pages/dataset-new.ts` | `/publish/datasets/new` — wrapper around the shared dataset form |
 | `src/ui/publisher/pages/tours.ts` | `/publish/tours` — tour-creator landing page |
+| `src/ui/publisher/workflows-api.ts` | Typed API wrappers for the Zyra workflow surface (Phase Z2 of `docs/ZYRA_INTEGRATION_PLAN.md`) |
+| `src/ui/publisher/pages/workflows.ts` | `/publish/workflows` — Zyra workflow list |
+| `src/ui/publisher/pages/workflow-detail.ts` | `/publish/workflows/:id` — workflow summary + run history + Run now |
+| `src/ui/publisher/pages/workflow-edit.ts` | `/publish/workflows/new` + `…/:id/edit` — workflow form (YAML→JSON client-side, server-side Validate) |
 | `src/ui/publisher/pages/featured-hero.ts` | `/publish/featured-hero` — set the "Right now" hero override (`docs/HERO_ADMIN_SCOPING.md`) |
 | `src/ui/publisher/pages/me.ts` | `/publish/me` — current-user identity + role display |
 | `src/ui/tourAuthoring/index.ts` | Tour-authoring public surface — detects `?tourEdit=` and mounts the dock |

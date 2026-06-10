@@ -70,7 +70,8 @@
     "jszip": "^3.10.1",
     "maplibre-gl": "^5.21.1",
     "three": "^0.183.2",
-    "tsx": "^4.21.0"
+    "tsx": "^4.21.0",
+    "yaml": "^2.9.0"
   },
   "optionalDependencies": {
     "@rolldown/binding-linux-x64-musl": "^1.0.0-rc.11"

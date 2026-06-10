@@ -28,6 +28,9 @@ import { renderDatasetDetailPage } from './pages/dataset-detail'
 import { renderDatasetEditPage } from './pages/dataset-edit'
 import { renderDatasetNewPage } from './pages/dataset-new'
 import { renderToursPage } from './pages/tours'
+import { renderWorkflowsPage } from './pages/workflows'
+import { renderWorkflowDetailPage } from './pages/workflow-detail'
+import { renderWorkflowEditPage } from './pages/workflow-edit'
 import { renderFeaturedHeroPage } from './pages/featured-hero'
 import { renderTopbar } from './components/topbar'
 import '../../styles/publisher.css'
@@ -46,10 +49,11 @@ const PORTAL_CONTENT_ID = 'publisher-content'
  */
 export function routeForPath(
   pathname: string,
-): 'me' | 'datasets' | 'tours' | 'featured_hero' | 'import' | 'unknown' {
+): 'me' | 'datasets' | 'tours' | 'featured_hero' | 'import' | 'workflows' | 'unknown' {
   if (pathname === '/publish' || pathname.startsWith('/publish/me')) return 'me'
   if (pathname.startsWith('/publish/datasets')) return 'datasets'
   if (pathname.startsWith('/publish/tours')) return 'tours'
+  if (pathname.startsWith('/publish/workflows')) return 'workflows'
   if (pathname.startsWith('/publish/featured-hero')) return 'featured_hero'
   if (pathname.startsWith('/publish/import')) return 'import'
   return 'unknown'
@@ -192,6 +196,52 @@ function toursPage(mount: HTMLElement): RouteHandler {
   return () => void renderToursPage(mount)
 }
 
+function workflowsPage(mount: HTMLElement, router: () => PublisherRouter): RouteHandler {
+  return () =>
+    void renderWorkflowsPage(mount, {
+      navigate: path => void router().navigate(path),
+    })
+}
+
+function workflowNewPage(mount: HTMLElement, router: () => PublisherRouter): RouteHandler {
+  return () =>
+    void renderWorkflowEditPage(mount, null, {
+      navigate: path => void router().navigate(path),
+    })
+}
+
+function workflowDetailPage(
+  mount: HTMLElement,
+  router: () => PublisherRouter,
+): RouteHandler {
+  return params => {
+    const id = params.id ?? ''
+    if (!id) {
+      renderPlaceholder(mount, t('publisher.section.notFound'), '3pa/A')
+      return
+    }
+    void renderWorkflowDetailPage(mount, id, {
+      navigate: path => void router().navigate(path),
+    })
+  }
+}
+
+function workflowEditPage(
+  mount: HTMLElement,
+  router: () => PublisherRouter,
+): RouteHandler {
+  return params => {
+    const id = params.id ?? ''
+    if (!id) {
+      renderPlaceholder(mount, t('publisher.section.notFound'), '3pa/A')
+      return
+    }
+    void renderWorkflowEditPage(mount, id, {
+      navigate: path => void router().navigate(path),
+    })
+  }
+}
+
 function importPage(mount: HTMLElement): RouteHandler {
   return () => renderPlaceholder(mount, t('publisher.section.import'), '3pf')
 }
@@ -239,6 +289,15 @@ export async function bootPublisherPortal(): Promise<void> {
       },
       { pattern: '/publish/datasets/:id', handler: datasetDetailPage(content, getRouter) },
       { pattern: '/publish/tours', handler: toursPage(content) },
+      { pattern: '/publish/workflows', handler: workflowsPage(content, getRouter) },
+      // Like datasets: `/new` must precede the `:id` patterns so
+      // the matcher doesn't capture "new" as an id.
+      { pattern: '/publish/workflows/new', handler: workflowNewPage(content, getRouter) },
+      {
+        pattern: '/publish/workflows/:id/edit',
+        handler: workflowEditPage(content, getRouter),
+      },
+      { pattern: '/publish/workflows/:id', handler: workflowDetailPage(content, getRouter) },
       { pattern: '/publish/featured-hero', handler: featuredHeroPage(content) },
       { pattern: '/publish/import', handler: importPage(content) },
     ],

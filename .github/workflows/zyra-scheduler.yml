@@ -1,0 +1,90 @@
+# Phase Z1 scheduler tick (docs/ZYRA_INTEGRATION_PLAN.md
+# §Scheduler). Every 15 minutes: ask the publish API which Zyra
+# workflows are due, then POST /run ({"trigger":"schedule"}) for
+# each — the Worker owns run-row creation and fires the zyra-run
+# repository_dispatch with its existing GITHUB_DISPATCH_TOKEN, so
+# this job needs no GitHub credentials beyond its own GITHUB_TOKEN
+# (used only by the keepalive step).
+#
+# Cron jitter on GitHub-hosted runners is minutes-scale; fine for
+# the hourly-and-slower cadences workflows target. The keepalive
+# step resets GitHub's 60-day scheduled-workflow disable timer by
+# re-enabling this workflow via the API on every run. Two known
+# limits (plan doc §Scheduler): a workflow disabled a full cycle
+# can't self-revive, and forks start with scheduled workflows
+# disabled — both need one manual enable in the Actions tab.
+#
+# Required repo secrets (the transcode-hls.yml set):
+#   TERRAVIZ_SERVER, CF_ACCESS_CLIENT_ID, CF_ACCESS_CLIENT_SECRET
+# When TERRAVIZ_SERVER is unset the tick exits quietly — a fork
+# without publisher infrastructure shouldn't collect red runs
+# every 15 minutes.
+name: Zyra Scheduler
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  # The keepalive step PUTs .../actions/workflows/{id}/enable.
+  actions: write
+
+concurrency:
+  group: zyra-scheduler
+  cancel-in-progress: false
+
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Dispatch due workflows
+        env:
+          TERRAVIZ_SERVER: ${{ secrets.TERRAVIZ_SERVER }}
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${TERRAVIZ_SERVER:-}" ]]; then
+            echo "TERRAVIZ_SERVER secret is not configured — nothing to schedule."
+            exit 0
+          fi
+          AUTH=(-H "CF-Access-Client-Id: ${CF_ACCESS_CLIENT_ID}" -H "CF-Access-Client-Secret: ${CF_ACCESS_CLIENT_SECRET}")
+          DUE=$(curl -fsSL "${AUTH[@]}" -H 'Accept: application/json' \
+            "${TERRAVIZ_SERVER%/}/api/v1/publish/workflows/due")
+          COUNT=$(echo "$DUE" | jq '.workflows | length')
+          echo "due workflows: $COUNT"
+          echo "$DUE" | jq -r '.workflows[] | "\(.id)\t\(.name)"'
+          FAILED=0
+          for ID in $(echo "$DUE" | jq -r '.workflows[].id'); do
+            # 409 run_in_progress is a benign race with a manual
+            # run — log and keep going; real errors fail the tick.
+            STATUS=$(curl -sS -o /tmp/run-response.json -w '%{http_code}' \
+              "${AUTH[@]}" -H 'Content-Type: application/json' \
+              -d '{"trigger":"schedule"}' \
+              "${TERRAVIZ_SERVER%/}/api/v1/publish/workflows/${ID}/run")
+            if [[ "$STATUS" == "202" ]]; then
+              echo "dispatched $ID"
+            elif [[ "$STATUS" == "409" ]]; then
+              echo "skipped $ID ($(jq -r '.error // "conflict"' /tmp/run-response.json))"
+            else
+              echo "::error::dispatch of $ID returned $STATUS: $(cat /tmp/run-response.json)"
+              FAILED=1
+            fi
+          done
+          exit "$FAILED"
+
+      # Reset the 60-day inactivity timer (plan doc §Scheduler).
+      # Re-enabling an already-enabled workflow is a no-op that
+      # still counts as activity for the disable clock.
+      - name: Keepalive
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --method PUT \
+            "repos/${{ github.repository }}/actions/workflows/zyra-scheduler.yml/enable" \
+            && echo "keepalive ok" \
+            || echo "::warning::keepalive failed — the 60-day disable timer was not reset"
