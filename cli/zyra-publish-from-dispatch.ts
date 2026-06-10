@@ -348,5 +348,14 @@ const invokedDirectly =
   typeof process.argv[1] === 'string' &&
   import.meta.url === `file://${process.argv[1]}`
 if (invokedDirectly) {
-  void main().then(code => process.exit(code))
+  // Same top-level rejection guard the spike CLI grew in PR #175
+  // review: a throw outside main()'s own try (bad argv state,
+  // unreadable workdir) still exits non-zero with a readable
+  // message rather than an unhandled-rejection crash.
+  void main()
+    .then(code => process.exit(code))
+    .catch((err: unknown) => {
+      console.error(`error: ${err instanceof Error ? err.message : String(err)}`)
+      process.exit(1)
+    })
 }
