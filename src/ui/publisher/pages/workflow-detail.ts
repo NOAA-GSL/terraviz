@@ -136,7 +136,15 @@ export async function renderWorkflowDetailPage(
     activeRunPolls.set(
       content,
       setTimeout(() => {
-        if (content.isConnected) void renderWorkflowDetailPage(content, id, options)
+        // The portal router reuses the mount and replaces its
+        // children, so isConnected alone can't detect navigation
+        // away — also require the URL to still be this workflow's
+        // detail page (PR #178 Copilot review).
+        const stillHere =
+          window.location.pathname === `/publish/workflows/${encodeURIComponent(id)}`
+        if (content.isConnected && stillHere) {
+          void renderWorkflowDetailPage(content, id, options)
+        }
       }, RUN_POLL_INTERVAL_MS),
     )
   }

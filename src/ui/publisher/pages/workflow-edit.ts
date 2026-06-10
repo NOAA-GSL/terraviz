@@ -202,16 +202,27 @@ function buildForm(
     createTargetBtn.disabled = true
     createTargetStatus.classList.remove('publisher-row-action-status-error')
     createTargetStatus.textContent = t('publisher.workflows.form.createTarget.creating')
-    void createDataset(title).then(result => {
-      createTargetBtn.disabled = false
-      if (!result.ok) {
+    void createDataset(title)
+      .then(result => {
+        if (!result.ok) {
+          createTargetStatus.textContent = t('publisher.workflows.form.createTarget.failed')
+          createTargetStatus.classList.add('publisher-row-action-status-error')
+          return
+        }
+        target.value = result.data.dataset.id
+        createTargetStatus.textContent = t('publisher.workflows.form.createTarget.done')
+      })
+      // publisherSend resolves with an error envelope rather than
+      // rejecting, but a thrown stub or unexpected exception must
+      // not leave the button stuck on "Creating…" (PR #178 Copilot
+      // review).
+      .catch(() => {
         createTargetStatus.textContent = t('publisher.workflows.form.createTarget.failed')
         createTargetStatus.classList.add('publisher-row-action-status-error')
-        return
-      }
-      target.value = result.data.dataset.id
-      createTargetStatus.textContent = t('publisher.workflows.form.createTarget.done')
-    })
+      })
+      .finally(() => {
+        createTargetBtn.disabled = false
+      })
   })
   targetField.wrap.appendChild(createTargetBtn)
   targetField.wrap.appendChild(createTargetStatus)
