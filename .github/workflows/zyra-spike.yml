@@ -188,6 +188,7 @@ jobs:
             "--title=Zyra Z0 spike — ${DATASET_NAME}"
             "--wait-seconds=${WAIT_SECONDS}"
             "--report=_work/spike-report.md"
+            "--frames-meta=_work/images/${DATASET_NAME}/metadata/frames-meta.json"
           )
           [[ -n "$DATASET_ID" ]] && ARGS+=("--dataset-id=${DATASET_ID}")
           [[ "$PUBLISH" == "true" ]] && ARGS+=("--publish")

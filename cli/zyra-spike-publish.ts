@@ -38,6 +38,11 @@
  *   --wait-seconds=<n>      Optional. How long to poll for the
  *                            transcode to finish. 0 = fire and
  *                            forget. Default 900.
+ *   --frames-meta=<path>    Optional. Zyra's frames-meta.json; when
+ *                            present the dataset row's start_time /
+ *                            end_time / period are set from it —
+ *                            the timing trio real-time datasets
+ *                            need for the freshness marker.
  *   --report=<path>         Optional. Also write the markdown
  *                            report here (the GHA workflow cats it
  *                            into $GITHUB_STEP_SUMMARY).
@@ -60,6 +65,7 @@ import { basename } from 'node:path'
 import { resolveConfig } from './lib/config'
 import { TerravizClient } from './lib/client'
 import { assessSosSpec, runFfprobe } from './lib/sos-spec'
+import { readFramesMetaRange, secondsToIsoDuration } from './lib/workflow-sidecar'
 
 // SOS-spec helpers graduated to `cli/lib/sos-spec.ts` when the Z1
 // runner landed; re-exported here so the spike's import surface
@@ -81,6 +87,7 @@ export interface Args {
   publish: boolean
   waitSeconds: number
   reportPath: string | null
+  framesMetaPath: string | null
   ffprobeBin: string
 }
 
@@ -113,6 +120,7 @@ export function parseArgs(argv: readonly string[]): Args | { error: string } {
     publish: has('publish'),
     waitSeconds,
     reportPath: get('report'),
+    framesMetaPath: get('frames-meta'),
     ffprobeBin: get('ffprobe-bin') ?? 'ffprobe',
   }
 }
@@ -192,7 +200,36 @@ async function main(): Promise<number> {
       note(`[spike] reusing dataset ${datasetId} (overwrite-in-place path)`)
     }
 
-    // 4. Asset init → presigned PUT → complete.
+    // 4. Timing metadata from the pipeline's frames-meta.json —
+    //    start/end/period are what the catalog's real-time marker
+    //    and timeline run on, so a run that has them must set them.
+    if (args.framesMetaPath) {
+      try {
+        const meta = JSON.parse(await readFile(args.framesMetaPath, 'utf-8')) as unknown
+        const range = readFramesMetaRange(meta)
+        if (range) {
+          const timing: Record<string, unknown> = {
+            start_time: range.dataStart,
+            end_time: range.dataEnd,
+          }
+          if (range.periodSeconds) timing.period = secondsToIsoDuration(range.periodSeconds)
+          const patched = await client.updateDataset(datasetId, timing)
+          if (!patched.ok) {
+            note(`[spike] FAIL: timing PATCH → ${patched.status} ${patched.error}`)
+            return 3
+          }
+          note(
+            `[spike] timing set: start=${range.dataStart} end=${range.dataEnd} period=${(timing.period as string) ?? '(none)'}`,
+          )
+        } else {
+          note(`[spike] WARN: ${args.framesMetaPath} has no recognisable range — timing not set`)
+        }
+      } catch (err) {
+        note(`[spike] WARN: could not read frames-meta: ${err instanceof Error ? err.message : err}`)
+      }
+    }
+
+    // 5. Asset init → presigned PUT → complete.
     const init = await client.initAssetUpload<AssetInitResponse>(datasetId, {
       kind: 'data',
       mime: 'video/mp4',

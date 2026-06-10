@@ -780,7 +780,7 @@
   "publisher.workflows.form.target": "Target dataset id",
   "publisher.workflows.form.target.hint": "The dataset this workflow overwrites in place each run. Create the draft dataset first, then paste its id here.",
   "publisher.workflows.form.template": "Metadata template",
-  "publisher.workflows.form.template.hint": "JSON object of dataset fields. String values may use {{run_date}}, {{run_id}}, {{data_start}}, {{data_end}}.",
+  "publisher.workflows.form.template.hint": "JSON object of dataset fields. String values may use {{run_date}}, {{run_id}}, {{data_start}}, {{data_end}}, {{data_period}} — set start_time / end_time / period so real-time freshness works.",
   "publisher.workflows.form.templateParseError": "The metadata template is not valid JSON.",
   "publisher.workflows.form.validate": "Validate",
   "publisher.workflows.form.validate.ok": "Pipeline and template look valid.",

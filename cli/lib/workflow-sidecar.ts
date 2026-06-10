@@ -20,6 +20,7 @@ export interface RunVars {
   run_id: string
   data_start: string | null
   data_end: string | null
+  data_period: string | null
 }
 
 export function buildRunVars(options: {
@@ -34,27 +35,55 @@ export function buildRunVars(options: {
     run_id: options.runId,
     data_start: range?.dataStart ?? null,
     data_end: range?.dataEnd ?? null,
+    data_period:
+      range?.periodSeconds != null ? secondsToIsoDuration(range.periodSeconds) : null,
   }
 }
 
+/** Render seconds as a compact ISO-8601 duration (604800 → P7D,
+ *  3600 → PT1H) — the `datasets.period` vocabulary. */
+export function secondsToIsoDuration(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds <= 0) return 'PT0S'
+  let rest = Math.round(seconds)
+  const days = Math.floor(rest / 86_400)
+  rest -= days * 86_400
+  const hours = Math.floor(rest / 3_600)
+  rest -= hours * 3_600
+  const minutes = Math.floor(rest / 60)
+  const secs = rest - minutes * 60
+  let out = 'P'
+  if (days) out += `${days}D`
+  if (hours || minutes || secs) {
+    out += 'T'
+    if (hours) out += `${hours}H`
+    if (minutes) out += `${minutes}M`
+    if (secs) out += `${secs}S`
+  }
+  return out === 'P' ? 'PT0S' : out
+}
+
 /**
- * Tolerant reader for Zyra's `frames-meta.json` (the `transform
- * metadata` stage output). Z0-pending: the shape below is inferred
- * from zyra-scheduler's pipeline; swap the fixture in
- * `workflow-sidecar.test.ts` for a real spike artifact and adjust.
- * Recognised shapes:
- *   - `{ start_datetime, end_datetime }` (top-level range)
- *   - `{ frames: [{ datetime | timestamp }, ...] }` (per-frame;
- *     range is first→last)
+ * Reader for Zyra's `frames-meta.json` (the `transform metadata` /
+ * `process scan-frames` output). Shape verified against upstream's
+ * `_compute_frames_metadata()` (Z0 follow-up): top-level
+ * `start_datetime` / `end_datetime` ISO strings + `period_seconds`,
+ * plus counts and an analysis blob this reader ignores. The
+ * per-frame-list fallback is kept for hand-rolled pipelines.
  * Anything else → null (the template's data_* fields get dropped).
  */
 export function readFramesMetaRange(
   meta: unknown,
-): { dataStart: string; dataEnd: string } | null {
+): { dataStart: string; dataEnd: string; periodSeconds?: number } | null {
   if (typeof meta !== 'object' || meta === null) return null
   const m = meta as Record<string, unknown>
   if (typeof m.start_datetime === 'string' && typeof m.end_datetime === 'string') {
-    return { dataStart: m.start_datetime, dataEnd: m.end_datetime }
+    return {
+      dataStart: m.start_datetime,
+      dataEnd: m.end_datetime,
+      ...(typeof m.period_seconds === 'number' && m.period_seconds > 0
+        ? { periodSeconds: m.period_seconds }
+        : {}),
+    }
   }
   if (Array.isArray(m.frames) && m.frames.length > 0) {
     const stamp = (f: unknown): string | null => {

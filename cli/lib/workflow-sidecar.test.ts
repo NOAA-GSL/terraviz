@@ -4,31 +4,41 @@ import {
   readFramesMetaRange,
   renderSidecar,
   sanitizeErrorSummary,
+  secondsToIsoDuration,
 } from './workflow-sidecar'
 
 const RUN_ID = '01HX0000000000000000000000'
 
-// Z0-pending: inferred fixture — replace with a real frames-meta.json
-// from the spike's run artifact and adjust readFramesMetaRange.
+// Mirrors upstream's `_compute_frames_metadata()` output (verified
+// against NOAA-GSL/zyra source after the Z0 spike run).
 const framesMetaFixture = {
-  frames: [
-    { datetime: '2026-05-01T00:00:00Z', filename: 'DroughtRisk_Weekly_20260501.png' },
-    { datetime: '2026-06-05T00:00:00Z', filename: 'DroughtRisk_Weekly_20260605.png' },
-  ],
+  frames_dir: '/work/images/drought',
+  pattern: '^DroughtRisk_Weekly_[0-9]{8}\\.png$',
+  datetime_format: '%Y%m%d',
+  period_seconds: 604800,
+  frame_count_actual: 53,
+  start_datetime: '2026-05-01T00:00:00',
+  end_datetime: '2026-06-05T00:00:00',
 }
 
 describe('readFramesMetaRange', () => {
-  it('reads a per-frame list (first → last)', () => {
+  it('reads the transform-metadata shape incl. period_seconds', () => {
     expect(readFramesMetaRange(framesMetaFixture)).toEqual({
-      dataStart: '2026-05-01T00:00:00Z',
-      dataEnd: '2026-06-05T00:00:00Z',
+      dataStart: '2026-05-01T00:00:00',
+      dataEnd: '2026-06-05T00:00:00',
+      periodSeconds: 604800,
     })
   })
 
-  it('reads a top-level range', () => {
+  it('reads a per-frame list fallback (first → last)', () => {
     expect(
-      readFramesMetaRange({ start_datetime: '2026-01-01', end_datetime: '2026-02-01' }),
-    ).toEqual({ dataStart: '2026-01-01', dataEnd: '2026-02-01' })
+      readFramesMetaRange({
+        frames: [
+          { datetime: '2026-05-01T00:00:00Z' },
+          { datetime: '2026-06-05T00:00:00Z' },
+        ],
+      }),
+    ).toEqual({ dataStart: '2026-05-01T00:00:00Z', dataEnd: '2026-06-05T00:00:00Z' })
   })
 
   it('returns null for unrecognised shapes', () => {
@@ -51,6 +61,7 @@ describe('renderSidecar', () => {
         title: 'Drought Risk — {{run_date}}',
         start_time: '{{data_start}}',
         end_time: '{{data_end}}',
+        period: '{{data_period}}',
         keywords: ['drought', 'run {{run_id}}'],
       },
       vars,
@@ -58,8 +69,9 @@ describe('renderSidecar', () => {
     expect(result.warnings).toEqual([])
     expect(result.fields).toEqual({
       title: 'Drought Risk — 2026-06-10',
-      start_time: '2026-05-01T00:00:00Z',
-      end_time: '2026-06-05T00:00:00Z',
+      start_time: '2026-05-01T00:00:00',
+      end_time: '2026-06-05T00:00:00',
+      period: 'P7D',
       keywords: ['drought', `run ${RUN_ID}`],
     })
   })
@@ -77,6 +89,16 @@ describe('renderSidecar', () => {
   it('passes literal (non-string) values through', () => {
     const result = renderSidecar({ title: 'Plain', keywords: ['a', 'b'] }, vars)
     expect(result.fields).toEqual({ title: 'Plain', keywords: ['a', 'b'] })
+  })
+})
+
+describe('secondsToIsoDuration', () => {
+  it('renders the datasets.period vocabulary', () => {
+    expect(secondsToIsoDuration(604800)).toBe('P7D')
+    expect(secondsToIsoDuration(86400)).toBe('P1D')
+    expect(secondsToIsoDuration(3600)).toBe('PT1H')
+    expect(secondsToIsoDuration(90061)).toBe('P1DT1H1M1S')
+    expect(secondsToIsoDuration(0)).toBe('PT0S')
   })
 })
 

@@ -60,13 +60,16 @@ export const METADATA_TEMPLATE_ALLOWED_FIELDS: readonly string[] = [
 ]
 
 /** Placeholder names the runner can interpolate into template
- *  string values as `{{name}}`. `data_start` / `data_end` derive
- *  from the pipeline's `frames-meta.json` when present. */
+ *  string values as `{{name}}`. The `data_*` trio derives from the
+ *  pipeline's `frames-meta.json` when present (`start_datetime` /
+ *  `end_datetime` / `period_seconds` per upstream's
+ *  `_compute_frames_metadata()`). */
 export const METADATA_TEMPLATE_VARIABLES: readonly string[] = [
   'run_date',
   'run_id',
   'data_start',
   'data_end',
+  'data_period',
 ]
 
 /**
