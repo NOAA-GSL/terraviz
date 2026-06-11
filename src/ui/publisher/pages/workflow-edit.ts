@@ -250,9 +250,15 @@ function buildForm(
         createTargetBtn.disabled = false
       })
   })
-  targetField.wrap.appendChild(createTargetBtn)
-  targetField.wrap.appendChild(createTargetStatus)
   form.appendChild(targetField.wrap)
+  // Interactive controls must not nest inside the field's <label>
+  // (invalid semantics; label activation steals the click) — the
+  // action row is a sibling (PR #178 Copilot review).
+  const targetActions = document.createElement('div')
+  targetActions.className = 'publisher-form-actions publisher-workflow-target-actions'
+  targetActions.appendChild(createTargetBtn)
+  targetActions.appendChild(createTargetStatus)
+  form.appendChild(targetActions)
 
   const pipeline = document.createElement('textarea')
   pipeline.className = 'publisher-form-input publisher-form-textarea'
@@ -313,9 +319,25 @@ function buildForm(
     const chosen = STAGE_SNIPPETS.find(sn => sn.id === stagePicker.value)
     stagePicker.value = ''
     if (!chosen) return
-    if (pipeline.value.trim().length === 0) pipeline.value = 'stages:\n'
-    if (!pipeline.value.endsWith('\n')) pipeline.value += '\n'
-    pipeline.value += chosen.snippet
+    void (async () => {
+      // Snippets are YAML; if the textarea currently holds JSON
+      // (pasted by the user, or the unparsable-fallback path),
+      // appending YAML would create an unparseable mix — convert
+      // to YAML first (PR #178 Copilot review).
+      let current = pipeline.value
+      if (current.trim().startsWith('{')) {
+        try {
+          const parsed = JSON.parse(current) as unknown
+          const stringify = options.stringifyYaml ?? (await import('yaml')).stringify
+          current = stringify(parsed)
+        } catch {
+          // Leave as-is; Validate will surface the real problem.
+        }
+      }
+      if (current.trim().length === 0) current = 'stages:\n'
+      if (!current.endsWith('\n')) current += '\n'
+      pipeline.value = current + chosen.snippet
+    })()
   })
   guided.appendChild(stagePicker)
   form.appendChild(guided)
