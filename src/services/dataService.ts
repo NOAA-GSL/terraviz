@@ -9,6 +9,36 @@ import { logger } from '../utils/logger'
 import { reportError } from '../analytics'
 import { apiFetch, getCatalogSource } from './catalogSource'
 
+/** Milliseconds floor for period-driven cache expiry — even a PT15M
+ *  workflow shouldn't make every page interaction re-fetch the
+ *  catalog. */
+const MIN_PERIOD_TTL_MS = 5 * 60 * 1000
+
+/**
+ * Phase Z4 (docs/ZYRA_INTEGRATION_PLAN.md): the catalog cache TTL,
+ * given its contents. Static catalogs keep the default; when any
+ * dataset carries `period` (a workflow-maintained real-time row),
+ * the TTL shrinks to the shortest period present, floored at
+ * 5 minutes — fresh enough to pick up the next scheduled
+ * re-publish, bounded enough to not hammer the API.
+ */
+export function effectiveCatalogTtl(datasets: Dataset[], defaultMs: number): number {
+  let shortest = defaultMs
+  for (const dataset of datasets) {
+    if (!dataset.period) continue
+    const parsed = parseISO8601Duration(dataset.period)
+    const ms =
+      parsed instanceof Date
+        ? NaN
+        : Number.isFinite(parsed.days)
+          ? parsed.days * 24 * 60 * 60 * 1000
+          : NaN
+    if (Number.isFinite(ms) && ms > 0 && ms < shortest) shortest = ms
+  }
+  return Math.max(shortest, MIN_PERIOD_TTL_MS)
+}
+
+
 const METADATA_URL = 'https://s3.dualstack.us-east-1.amazonaws.com/metadata.sosexplorer.gov/dataset.json'
 const ENRICHED_METADATA_URL = '/assets/sos_dataset_metadata.json'
 const NODE_CATALOG_URL = '/api/v1/catalog'
@@ -511,7 +541,14 @@ export class DataService {
   async fetchDatasets(): Promise<Dataset[]> {
     try {
       const now = Date.now()
-      if (this.cache && now - this.cacheTime < this.CACHE_DURATION) {
+      // Phase Z4: a catalog containing period-bearing (real-time)
+      // rows expires early — at the shortest period present,
+      // floored at 5 minutes — so a workflow re-publish is picked
+      // up on the next fetch instead of waiting out the full hour.
+      const ttl = this.cache
+        ? effectiveCatalogTtl(this.cache.datasets, this.CACHE_DURATION)
+        : this.CACHE_DURATION
+      if (this.cache && now - this.cacheTime < ttl) {
         logger.info('[DataService] Using cached datasets')
         return this.cache.datasets
       }

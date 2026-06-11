@@ -426,3 +426,29 @@ describe('tourWireToDataset', () => {
     expect(tour.publishedAt).toBe(wire.published_at)
   })
 })
+
+describe('effectiveCatalogTtl (Phase Z4)', () => {
+  const HOUR = 60 * 60 * 1000
+
+  it('keeps the default TTL for static catalogs', async () => {
+    const { effectiveCatalogTtl } = await import('./dataService')
+    expect(effectiveCatalogTtl([{ id: 'a' } as never], HOUR)).toBe(HOUR)
+  })
+
+  it('shrinks to the shortest period present, never grows', async () => {
+    const { effectiveCatalogTtl } = await import('./dataService')
+    const datasets = [
+      { id: 'a', period: 'P1W' },
+      { id: 'b', period: 'PT30M' },
+    ] as never[]
+    // PT30M wins; P1W (longer than the default) cannot grow the TTL.
+    expect(effectiveCatalogTtl(datasets, HOUR)).toBe(30 * 60 * 1000)
+    expect(effectiveCatalogTtl([{ id: 'a', period: 'P1W' } as never], HOUR)).toBe(HOUR)
+  })
+
+  it('tracks sub-hour cadences and floors at five minutes', async () => {
+    const { effectiveCatalogTtl } = await import('./dataService')
+    expect(effectiveCatalogTtl([{ id: 'a', period: 'PT15M' } as never], HOUR)).toBe(15 * 60 * 1000)
+    expect(effectiveCatalogTtl([{ id: 'a', period: 'PT1M' } as never], HOUR)).toBe(5 * 60 * 1000)
+  })
+})

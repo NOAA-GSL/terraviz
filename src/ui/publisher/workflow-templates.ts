@@ -9,11 +9,12 @@
  * template satisfies the server-side allowlist and writes its MP4
  * to `WORKFLOW_OUTPUT_PATH` by construction.
  *
- * `process pad-missing` (upstream's gap backfill: fill-mode
- * blank | solid | basemap | nearest, fed by the missing_timestamps
- * that `transform metadata --period-seconds` computes) sits between
- * the metadata scan and compose-video so cadence gaps don't show as
- * time-jumps in the animation.
+ * Frame-gap handling follows current upstream CLI shape
+ * (`zyra process scan-frames … --output manifest.json`, then
+ * `zyra process pad-missing … --fill nearest`; fill choices are
+ * blank | solid | basemap | nearest). pad-missing sits between the
+ * scan and compose-video so cadence gaps don't show as time-jumps
+ * in the animation.
  *
  * The stage snippets back the "Insert stage" palette — the
  * lightweight, textarea-native form of zyra-editor's stage palette
@@ -46,8 +47,8 @@ export const WORKFLOW_TEMPLATES: readonly WorkflowTemplate[] = [
       since-period: P1Y
       pattern: '^DroughtRisk_Weekly_[0-9]{8}\\.png$'
       date-format: '%Y%m%d'
-  - stage: transform
-    command: metadata
+  - stage: process
+    command: scan-frames
     args:
       frames-dir: /work/images/frames
       pattern: '^DroughtRisk_Weekly_[0-9]{8}\\.png$'
@@ -57,9 +58,8 @@ export const WORKFLOW_TEMPLATES: readonly WorkflowTemplate[] = [
   - stage: process
     command: pad-missing
     args:
-      frames-meta: /work/frames-meta.json
-      output-dir: /work/images/frames
-      fill-mode: nearest
+      frames-dir: /work/images/frames
+      fill: nearest
   - stage: visualize
     command: compose-video
     args:
@@ -88,8 +88,8 @@ export const WORKFLOW_TEMPLATES: readonly WorkflowTemplate[] = [
       sync-dir: /work/images/frames
       pattern: '^frame_[0-9]{8}\\.png$'
       date-format: '%Y%m%d'
-  - stage: transform
-    command: metadata
+  - stage: process
+    command: scan-frames
     args:
       frames-dir: /work/images/frames
       pattern: '^frame_[0-9]{8}\\.png$'
@@ -99,9 +99,8 @@ export const WORKFLOW_TEMPLATES: readonly WorkflowTemplate[] = [
   - stage: process
     command: pad-missing
     args:
-      frames-meta: /work/frames-meta.json
-      output-dir: /work/images/frames
-      fill-mode: nearest
+      frames-dir: /work/images/frames
+      fill: nearest
   - stage: visualize
     command: compose-video
     args:
@@ -158,9 +157,9 @@ export const STAGE_SNIPPETS: ReadonlyArray<{ id: string; snippet: string }> = [
 `,
   },
   {
-    id: 'transform metadata',
-    snippet: `  - stage: transform
-    command: metadata
+    id: 'process scan-frames',
+    snippet: `  - stage: process
+    command: scan-frames
     args:
       frames-dir: /work/images/frames
       pattern: '^frame_[0-9]{8}\\.png$'
@@ -174,9 +173,8 @@ export const STAGE_SNIPPETS: ReadonlyArray<{ id: string; snippet: string }> = [
     snippet: `  - stage: process
     command: pad-missing
     args:
-      frames-meta: /work/frames-meta.json
-      output-dir: /work/images/frames
-      fill-mode: nearest
+      frames-dir: /work/images/frames
+      fill: nearest
 `,
   },
   {

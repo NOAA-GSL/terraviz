@@ -194,6 +194,11 @@ export function toFractionalYear(value: string | undefined | null): number | und
  * tooltips without re-implementing the rule.
  */
 export function isRealtimeRow(dataset: Dataset, now: number): boolean {
+  // Phase Z4 (docs/ZYRA_INTEGRATION_PLAN.md): a row with an update
+  // cadence is real-time by definition — workflow-maintained
+  // datasets set `period` on every run, so the marker no longer
+  // depends on the curated tag or the 24 h endTime heuristic.
+  if (dataset.period) return true
   if ((dataset.tags ?? []).includes(REALTIME_TAG)) return true
   if (!dataset.endTime) return false
   const ms = Date.parse(dataset.endTime)
