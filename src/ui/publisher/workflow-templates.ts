@@ -9,6 +9,12 @@
  * template satisfies the server-side allowlist and writes its MP4
  * to `WORKFLOW_OUTPUT_PATH` by construction.
  *
+ * `process pad-missing` (upstream's gap backfill: fill-mode
+ * blank | solid | basemap | nearest, fed by the missing_timestamps
+ * that `transform metadata --period-seconds` computes) sits between
+ * the metadata scan and compose-video so cadence gaps don't show as
+ * time-jumps in the animation.
+ *
  * The stage snippets back the "Insert stage" palette — the
  * lightweight, textarea-native form of zyra-editor's stage palette
  * (see the plan doc's §Non-goals for why there is no node graph).
@@ -48,6 +54,12 @@ export const WORKFLOW_TEMPLATES: readonly WorkflowTemplate[] = [
       datetime-format: '%Y%m%d'
       period-seconds: 604800
       output: /work/frames-meta.json
+  - stage: process
+    command: pad-missing
+    args:
+      frames-meta: /work/frames-meta.json
+      output-dir: /work/images/frames
+      fill-mode: nearest
   - stage: visualize
     command: compose-video
     args:
@@ -84,6 +96,12 @@ export const WORKFLOW_TEMPLATES: readonly WorkflowTemplate[] = [
       datetime-format: '%Y%m%d'
       period-seconds: 86400
       output: /work/frames-meta.json
+  - stage: process
+    command: pad-missing
+    args:
+      frames-meta: /work/frames-meta.json
+      output-dir: /work/images/frames
+      fill-mode: nearest
   - stage: visualize
     command: compose-video
     args:
@@ -149,6 +167,16 @@ export const STAGE_SNIPPETS: ReadonlyArray<{ id: string; snippet: string }> = [
       datetime-format: '%Y%m%d'
       period-seconds: 86400
       output: /work/frames-meta.json
+`,
+  },
+  {
+    id: 'process pad-missing',
+    snippet: `  - stage: process
+    command: pad-missing
+    args:
+      frames-meta: /work/frames-meta.json
+      output-dir: /work/images/frames
+      fill-mode: nearest
 `,
   },
   {
