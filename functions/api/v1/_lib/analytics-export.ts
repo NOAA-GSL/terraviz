@@ -111,6 +111,13 @@ export async function fetchAeDayRows(
   fetchImpl: typeof fetch = fetch,
 ): Promise<{ rows: DecodedEventRow[]; truncatedChunks: number }> {
   const dataset = cfg.dataset ?? DEFAULT_AE_DATASET
+  // The dataset name is interpolated into the SQL string (the AE SQL
+  // API has no bind parameters). It comes from operator config, but
+  // constraining it to a bare identifier keeps a misconfigured (or
+  // poisoned) env var from becoming arbitrary SQL.
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(dataset)) {
+    throw new Error(`Invalid AE dataset name ${JSON.stringify(dataset)} — expected a bare identifier.`)
+  }
   const url = `https://api.cloudflare.com/client/v4/accounts/${cfg.accountId}/analytics_engine/sql`
   const rows: DecodedEventRow[] = []
   let truncatedChunks = 0
@@ -123,7 +130,11 @@ export async function fetchAeDayRows(
       `LIMIT ${AE_CHUNK_LIMIT}`
     const response = await fetchImpl(url, {
       method: 'POST',
-      headers: { Authorization: `Bearer ${cfg.token}` },
+      headers: {
+        Authorization: `Bearer ${cfg.token}`,
+        'Content-Type': 'text/plain; charset=utf-8',
+        Accept: 'application/json',
+      },
       body: sql,
     })
     if (!response.ok) {
@@ -252,7 +263,7 @@ export function computeRollups(rows: DecodedEventRow[], day: string): DayRollups
     const w = row.sample_interval
     const platform = row.event_type === 'session_start' ? str(row.fields, 'platform') : ''
 
-    const dailyKey = [row.event_type, row.environment, row.internal ? 1 : 0, row.country, platform].join(' ')
+    const dailyKey = [row.event_type, row.environment, row.internal ? 1 : 0, row.country, platform].join('\u0000')
     let dailyEntry = daily.get(dailyKey)
     if (!dailyEntry) {
       dailyEntry = {
@@ -280,7 +291,7 @@ export function computeRollups(rows: DecodedEventRow[], day: string): DayRollups
     if (row.event_type === 'layer_loaded' || row.event_type === 'layer_unloaded') {
       const layerId = str(row.fields, 'layer_id')
       if (layerId !== '') {
-        const key = [layerId, row.environment].join(' ')
+        const key = [layerId, row.environment].join('\u0000')
         let entry = dataset.get(key)
         if (!entry) {
           entry = {
@@ -314,7 +325,7 @@ export function computeRollups(rows: DecodedEventRow[], day: string): DayRollups
         const projection = isCamera ? str(row.fields, 'projection') : ''
         const latBin = binCoord(lat)
         const lonBin = binCoord(lon)
-        const key = [row.event_type, row.environment, layerId, projection, latBin, lonBin].join(' ')
+        const key = [row.event_type, row.environment, layerId, projection, latBin, lonBin].join('\u0000')
         const entry = spatial.get(key)
         if (entry) {
           entry.hits += w

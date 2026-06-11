@@ -244,7 +244,7 @@ CREATE TABLE analytics_daily (
   country        TEXT NOT NULL,             -- ISO 3166-1 alpha-2 or 'XX'
   platform       TEXT NOT NULL DEFAULT '',  -- session_* only; '' elsewhere
   events_count   REAL NOT NULL,             -- sample-weighted
-  sessions_count REAL NOT NULL,             -- approx uniq of index1, weighted
+  sessions_count REAL NOT NULL,             -- distinct session ids seen (unweighted)
   metrics        TEXT NOT NULL DEFAULT '{}',-- JSON: named p50/p95s per type
   PRIMARY KEY (day, event_type, environment, internal, country, platform)
 );

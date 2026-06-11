@@ -61,7 +61,12 @@ jobs:
             echo "TERRAVIZ_SERVER secret is not configured — nothing to export."
             exit 0
           fi
+          # The endpoint is idempotent, so retrying a transient
+          # network error / 5xx is safe (--retry-all-errors also
+          # re-tries the 503-unconfigured case a couple of times,
+          # which is harmless and fast).
           STATUS=$(curl -sS -o /tmp/export-response.json -w '%{http_code}' \
+            --retry 3 --retry-delay 5 --retry-all-errors \
             -X POST \
             -H "CF-Access-Client-Id: ${CF_ACCESS_CLIENT_ID}" \
             -H "CF-Access-Client-Secret: ${CF_ACCESS_CLIENT_SECRET}" \

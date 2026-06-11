@@ -459,7 +459,7 @@ describe('EVENT_LAYOUTS', () => {
     expect(FIXTURES.session_start.vr_capable).not.toBe('')
   })
 
-  it('preserves rows of unknown event types positionally', () => {
+  it('preserves rows of unknown event types positionally, including sentinel values', () => {
     const row = toAeSqlRow(FIXTURES.layer_loaded)
     row.blob1 = 'some_future_event'
     const decoded = decodeAeRow(row)
@@ -468,5 +468,10 @@ describe('EVENT_LAYOUTS', () => {
     // blob5 was layer_id; double2 was load_ms — preserved by position.
     expect(decoded.fields.blob5).toBe('INTERNAL_SOS_768')
     expect(decoded.fields.double2).toBe(1234)
+    // Every position survives — '' and 0 are legitimate sentinels in
+    // the telemetry schema, so nothing is elided.
+    expect(decoded.fields.blob20).toBe('')
+    expect(decoded.fields.double20).toBe(0)
+    expect(Object.keys(decoded.fields)).toHaveLength(16 + 20)
   })
 })

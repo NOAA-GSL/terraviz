@@ -259,6 +259,22 @@ describe('exportDay', () => {
     expect(row).toMatchObject({ n: 1, total: 1 })
   })
 
+  it('rejects a non-identifier AE dataset name before building SQL', async () => {
+    const db = makeDb()
+    const r2 = makeR2()
+    const fetchSpy = vi.fn() as unknown as typeof fetch
+    await expect(
+      exportDay({
+        db,
+        r2: r2.bucket,
+        sql: { ...SQL_CFG, dataset: 'events; DROP TABLE x' },
+        day: DAY,
+        fetchImpl: fetchSpy,
+      }),
+    ).rejects.toThrow(/Invalid AE dataset name/)
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
   it('throws on an AE SQL error without touching storage', async () => {
     const db = makeDb()
     const r2 = makeR2()

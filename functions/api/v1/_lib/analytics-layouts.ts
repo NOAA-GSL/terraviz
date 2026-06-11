@@ -325,15 +325,18 @@ export function decodeAeRow(row: Record<string, unknown>): DecodedEventRow {
 
   const layout = (EVENT_LAYOUTS as Record<string, EventLayout>)[eventType]
   if (!layout) {
-    // Unknown event type — preserve positionally rather than drop.
+    // Unknown event type — preserve every position rather than drop.
+    // Empty strings and zeros are kept too: both are legitimate
+    // sentinel values in the telemetry schema, and at decode time we
+    // can't tell a written sentinel from AE's read-side padding, so
+    // the archive errs on keeping everything. A later re-export of
+    // the day (with an updated registry) recovers the names.
     const fields: Record<string, string | number | boolean> = {}
     for (let i = ENVELOPE_BLOBS + 1; i <= 20; i++) {
-      const v = blobAt(row, i)
-      if (v !== '') fields[`blob${i}`] = v
+      fields[`blob${i}`] = blobAt(row, i)
     }
     for (let i = 1; i <= 20; i++) {
-      const v = doubleAt(row, i)
-      if (v !== 0) fields[`double${i}`] = v
+      fields[`double${i}`] = doubleAt(row, i)
     }
     return { ...base, layout: 'unknown', fields }
   }
