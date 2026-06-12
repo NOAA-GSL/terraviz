@@ -64,10 +64,13 @@ export const onRequestGet: PagesFunction<CatalogEnv> = async context => {
   if (!(ALLOWED_SECTIONS as readonly string[]).includes(section)) {
     return jsonError(400, 'invalid_section', `section must be one of: ${ALLOWED_SECTIONS.join(', ')}.`)
   }
-  const days = parseInt(params.get('days') ?? '30', 10)
-  if (!(ALLOWED_DAYS as readonly number[]).includes(days)) {
+  // Validate the raw string, not the parse result — parseInt('30junk')
+  // is 30, which would defeat the strict-allowlist posture.
+  const daysRaw = params.get('days') ?? '30'
+  if (!ALLOWED_DAYS.some(d => String(d) === daysRaw)) {
     return jsonError(400, 'invalid_days', `days must be one of: ${ALLOWED_DAYS.join(', ')}.`)
   }
+  const days = parseInt(daysRaw, 10)
   const environment = params.get('environment') ?? 'production'
   if (!(ALLOWED_ENVIRONMENTS as readonly string[]).includes(environment)) {
     return jsonError(400, 'invalid_environment', `environment must be one of: ${ALLOWED_ENVIRONMENTS.join(', ')}.`)

@@ -19,10 +19,9 @@
  *                     dataset / projection / signal. MapLibre is
  *                     lazy-imported on first render so the portal
  *                     chunk stays map-free for non-analytics visits;
- *                     the basemap reuses the same `/api/tile/…` GIBS
- *                     proxy as the SPA (on bare localhost dev the
- *                     proxy is absent and the heatmap draws on a
- *                     dark background — acceptable).
+ *                     the basemap is vendored Natural Earth land +
+ *                     country borders drawn as flat grayscale fills
+ *                     (no tile fetches — see LAND_GEOJSON_URL).
  *   - Tours, VR &   — per-day engagement counts. (The rollups don't
  *     Orbit           split tour_ended by outcome; a true completion
  *                     funnel is an open question in the plan doc.)
@@ -35,6 +34,7 @@ import { t } from '../../../i18n'
 import { formatNumber } from '../../../i18n/format'
 import { publisherGet, handleSessionError, type PublisherApiResult } from '../api'
 import { buildErrorCard } from '../components/error-card'
+import { ROUTE_CHANGE_START_EVENT } from '../router'
 import {
   formatDurationMs,
   renderBarSeries,
@@ -193,6 +193,21 @@ export async function renderAnalyticsPage(
   const funnelHost = el('section', { className: 'publisher-analytics-section' })
   let heatmap: HeatmapHandle | null = null
 
+  // Dispose on SPA route transitions (same pattern as
+  // dataset-detail's transcode polling): mark the render dead so
+  // in-flight section loads stop touching the DOM, and tear down
+  // the MapLibre instance + its listeners.
+  let disposed = false
+  const onRouteChange = (): void => {
+    disposed = true
+    window.removeEventListener(ROUTE_CHANGE_START_EVENT, onRouteChange)
+    if (heatmap) {
+      heatmap.destroy()
+      heatmap = null
+    }
+  }
+  window.addEventListener(ROUTE_CHANGE_START_EVENT, onRouteChange)
+
   const header = buildHeader(state, () => {
     if (heatmap) {
       heatmap.destroy()
@@ -241,6 +256,7 @@ export async function renderAnalyticsPage(
     const title = t('publisher.analytics.section.overview')
     overviewHost.replaceChildren(sectionHeading(title), loadingNote())
     const res = await fetchSection<OverviewData>(baseQuery('overview'))
+    if (disposed) return
     if (!res.ok) return sectionError(overviewHost, title, res)
     const data = res.data.data
 
@@ -272,6 +288,7 @@ export async function renderAnalyticsPage(
     const title = t('publisher.analytics.section.datasets')
     datasetsHost.replaceChildren(sectionHeading(title), loadingNote())
     const res = await fetchSection<DatasetsData>(baseQuery('datasets'))
+    if (disposed) return
     if (!res.ok) return sectionError(datasetsHost, title, res)
     const rows = res.data.data.datasets
     if (rows.length === 0) {
@@ -291,10 +308,13 @@ export async function renderAnalyticsPage(
       spatialHost.replaceChildren(sectionHeading(title), loadingNote())
     }
     const spatialParams =
-      `&event=${state.spatialEvent}` +
+      `&event=${encodeURIComponent(state.spatialEvent)}` +
       (state.spatialLayer !== undefined ? `&layer=${encodeURIComponent(state.spatialLayer)}` : '') +
-      (state.spatialProjection !== undefined ? `&projection=${state.spatialProjection}` : '')
+      (state.spatialProjection !== undefined
+        ? `&projection=${encodeURIComponent(state.spatialProjection)}`
+        : '')
     const res = await fetchSection<SpatialData>(baseQuery('spatial') + spatialParams)
+    if (disposed) return
     if (!res.ok) {
       // The error card replaces the section DOM — tear down any
       // mounted map so a later success rebuilds against a live
@@ -322,13 +342,22 @@ export async function renderAnalyticsPage(
     const note = emptyNote()
     note.hidden = data.bins.length > 0
     spatialHost.replaceChildren(sectionHeading(title), controls, mapContainer, note)
-    heatmap = await mountHeatmap(mapContainer, data.bins)
+    const mounted = await mountHeatmap(mapContainer, data.bins)
+    if (disposed) {
+      // Navigated away while the dynamic import / map boot was in
+      // flight — the route-change handler already ran, so this
+      // late-created instance is ours to destroy.
+      mounted.destroy()
+      return
+    }
+    heatmap = mounted
   }
 
   async function loadFunnel(): Promise<void> {
     const title = t('publisher.analytics.section.funnel')
     funnelHost.replaceChildren(sectionHeading(title), loadingNote())
     const res = await fetchSection<FunnelData>(baseQuery('funnel'))
+    if (disposed) return
     if (!res.ok) return sectionError(funnelHost, title, res)
     const days = res.data.data.days
     if (days.length === 0) {
