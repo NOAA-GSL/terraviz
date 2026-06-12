@@ -44,8 +44,10 @@ import {
 
 const ME_ENDPOINT = '/api/v1/publish/me'
 const ANALYTICS_ENDPOINT = '/api/v1/publish/analytics'
-/** Same GIBS proxy path the SPA's basemap uses (`mapRenderer.ts`). */
-const BASEMAP_TILES = '/api/tile/VIIRS_Black_Marble/default/2016-01-01/GoogleMapsCompatible_Level8/{z}/{y}/{x}.png'
+/** Same GIBS proxy path the SPA's basemap uses (`mapRenderer.ts`).
+ * Rendered desaturated + dimmed (see the raster paint below) so the
+ * basemap reads as neutral geography and the heatmap colors pop. */
+const BASEMAP_TILES = '/api/tile/BlueMarble_NextGeneration/default/2004-08/GoogleMapsCompatible_Level8/{z}/{y}/{x}.jpg'
 const RANGE_CHOICES = [7, 30, 90, 365] as const
 const ENVIRONMENTS = ['production', 'preview'] as const
 
@@ -70,6 +72,7 @@ interface OverviewData {
 interface DatasetsData {
   datasets: Array<{
     layer_id: string
+    title: string | null
     loads: number
     trigger_mix: Record<string, number>
     source_mix: Record<string, number>
@@ -80,7 +83,7 @@ interface DatasetsData {
 }
 
 interface SpatialData {
-  layers: string[]
+  layers: Array<{ id: string; title: string | null }>
   bins: Array<{ lat: number; lon: number; hits: number }>
 }
 
@@ -382,9 +385,18 @@ export async function renderAnalyticsPage(
     table.append(el('thead', {}, [head]))
     const body = el('tbody')
     for (const row of rows) {
+      // Title first (the human-readable identity); the raw telemetry
+      // id stays visible as a second line for operators correlating
+      // with AE queries or the rollup tables.
+      const nameCell = el('td', { className: 'publisher-analytics-dataset' }, [
+        el('span', { className: 'publisher-analytics-dataset-title', textContent: row.title ?? row.layer_id }),
+      ])
+      if (row.title) {
+        nameCell.append(el('span', { className: 'publisher-analytics-dataset-id', textContent: row.layer_id }))
+      }
       body.append(
         el('tr', {}, [
-          el('td', { className: 'publisher-analytics-dataset-id', textContent: row.layer_id }),
+          nameCell,
           el('td', { textContent: formatNumber(Math.round(row.loads)) }),
           el('td', {}, [renderMixBar(row.trigger_mix, t('publisher.analytics.datasets.triggers'))]),
           el('td', {}, [renderMixBar(row.source_mix, t('publisher.analytics.datasets.sources'))]),
@@ -444,7 +456,11 @@ function buildHeader(state: PageState, onChange: () => void): HTMLElement {
   return header
 }
 
-function spatialControls(layers: string[], state: PageState, onChange: () => void): HTMLElement {
+function spatialControls(
+  layers: Array<{ id: string; title: string | null }>,
+  state: PageState,
+  onChange: () => void,
+): HTMLElement {
   const host = document.createElement('div')
   host.className = 'publisher-analytics-controls'
 
@@ -466,7 +482,9 @@ function spatialControls(layers: string[], state: PageState, onChange: () => voi
       [
         { value: '*', label: t('publisher.analytics.spatial.allDatasets') },
         { value: '', label: t('publisher.analytics.spatial.defaultEarth') },
-        ...layers.filter(id => id !== '').map(id => ({ value: id, label: id })),
+        ...layers
+          .filter(layer => layer.id !== '')
+          .map(layer => ({ value: layer.id, label: layer.title ?? layer.id })),
       ],
       state.spatialLayer ?? '*',
       value => {
@@ -555,7 +573,22 @@ async function mountHeatmap(container: HTMLElement, bins: SpatialData['bins']): 
       sources: {
         basemap: { type: 'raster', tiles: [BASEMAP_TILES], tileSize: 256, maxzoom: 8 },
       },
-      layers: [{ id: 'basemap', type: 'raster', source: 'basemap' }],
+      layers: [
+        {
+          id: 'basemap',
+          type: 'raster',
+          source: 'basemap',
+          // Fully desaturated and dimmed: the imagery becomes
+          // neutral grayscale geography so the heatmap's color ramp
+          // carries all the meaning.
+          paint: {
+            'raster-saturation': -1,
+            'raster-opacity': 0.55,
+            'raster-brightness-max': 0.7,
+            'raster-contrast': 0.15,
+          },
+        },
+      ],
     },
     center: [0, 20],
     zoom: 0.9,

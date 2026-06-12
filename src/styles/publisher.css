@@ -1445,3 +1445,13 @@
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
   gap: calc(1rem * var(--ui-scale));
 }
+.publisher-analytics-dataset {
+  max-inline-size: calc(16rem * var(--ui-scale));
+}
+.publisher-analytics-dataset-title {
+  display: block;
+}
+.publisher-analytics-dataset .publisher-analytics-dataset-id {
+  display: block;
+  color: var(--color-text-muted, #999999);
+}

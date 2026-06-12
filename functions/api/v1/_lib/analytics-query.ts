@@ -45,6 +45,11 @@ export interface OverviewData {
 
 export interface DatasetEngagementRow {
   layer_id: string
+  /** Catalog title, resolved via `datasets.id` or `datasets.legacy_id`
+   * (telemetry `layer_id`s predating the catalog cutover carry the
+   * legacy SOS id). `null` when the id no longer resolves — the page
+   * falls back to showing the raw id. */
+  title: string | null
   loads: number
   trigger_mix: Record<string, number>
   source_mix: Record<string, number>
@@ -55,8 +60,8 @@ export interface DatasetEngagementRow {
 
 export interface SpatialData {
   /** Distinct camera-settled layer ids in range — feeds the page's
-   * dataset filter ('' = default Earth view). */
-  layers: string[]
+   * dataset filter ('' = default Earth view, title null). */
+  layers: Array<{ id: string; title: string | null }>
   bins: Array<{ lat: number; lon: number; hits: number }>
 }
 
@@ -73,6 +78,32 @@ const TOP_DATASETS = 25
 /** 0.5° world grid is ≤ ~260k cells; real data is far sparser, but
  * cap the response so a pathological range can't balloon it. */
 const MAX_SPATIAL_BINS = 20_000
+
+/**
+ * Resolve telemetry `layer_id`s to catalog titles. A layer id can be
+ * a catalog id (`DS…`) or — for events emitted against the legacy
+ * SOS snapshot — a `legacy_id` like `INTERNAL_SOS_768`; both columns
+ * are matched. Ids that resolve nowhere map to nothing and the
+ * caller surfaces the raw id.
+ */
+async function resolveTitles(db: D1Database, ids: string[]): Promise<Map<string, string>> {
+  const lookup = ids.filter(id => id !== '')
+  const titles = new Map<string, string>()
+  if (lookup.length === 0) return titles
+  const placeholders = lookup.map(() => '?').join(', ')
+  const rows = await db
+    .prepare(
+      `SELECT id, legacy_id, title FROM datasets
+        WHERE id IN (${placeholders}) OR legacy_id IN (${placeholders})`,
+    )
+    .bind(...lookup, ...lookup)
+    .all<{ id: string; legacy_id: string | null; title: string }>()
+  for (const row of rows.results ?? []) {
+    titles.set(row.id, row.title)
+    if (row.legacy_id) titles.set(row.legacy_id, row.title)
+  }
+  return titles
+}
 
 export async function queryOverview(db: D1Database, f: AnalyticsFilters): Promise<OverviewData> {
   const days = await db
@@ -160,12 +191,15 @@ export async function queryDatasets(
       dwell_ms_sum: number | null
     }>()
 
+  const titles = await resolveTitles(db, ids)
+
   const byId = new Map<string, DatasetEngagementRow & { _p50Weight: number; _p95Weight: number; _p50Sum: number; _p95Sum: number }>()
   for (const row of rows.results ?? []) {
     let entry = byId.get(row.layer_id)
     if (!entry) {
       entry = {
         layer_id: row.layer_id,
+        title: titles.get(row.layer_id) ?? null,
         loads: 0,
         trigger_mix: {},
         source_mix: {},
@@ -252,8 +286,10 @@ export async function querySpatial(
     .bind(...binds)
     .all<{ lat: number; lon: number; hits: number }>()
 
+  const layerIds = (layers.results ?? []).map(r => r.layer_id)
+  const titles = await resolveTitles(db, layerIds)
   return {
-    layers: (layers.results ?? []).map(r => r.layer_id),
+    layers: layerIds.map(id => ({ id, title: titles.get(id) ?? null })),
     bins: bins.results ?? [],
   }
 }

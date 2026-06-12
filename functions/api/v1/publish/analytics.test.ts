@@ -32,11 +32,19 @@ const STAFF: PublisherRow = {
 }
 const COMMUNITY: PublisherRow = { ...STAFF, id: 'PUB-COMM', email: 'c@e', role: 'community', is_admin: 0 }
 
+// Seeded by `seedFixtures({ count: 2 })`: "Test Dataset 0/1".
+const DS_A = 'DS000' + 'A'.repeat(21)
+const DS_B = 'DS001' + 'A'.repeat(21)
+/** Stamped as DS_B's legacy_id — telemetry that predates the catalog
+ * cutover carries legacy SOS ids. */
+const LEGACY = 'INTERNAL_SOS_768'
+
 const YESTERDAY = yesterdayUtc()
 const OLD_DAY = addDays(YESTERDAY, -40) // inside days=90, outside days=30
 
 function setup() {
-  const sqlite = seedFixtures({ count: 0 })
+  const sqlite = seedFixtures({ count: 2 })
+  sqlite.prepare(`UPDATE datasets SET legacy_id = ? WHERE id = ?`).run(LEGACY, DS_B)
   const insertDaily = sqlite.prepare(
     `INSERT INTO analytics_daily (day, event_type, environment, internal, country, platform, events_count, sessions_count, metrics)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, '{}')`,
@@ -61,17 +69,19 @@ function setup() {
     `INSERT INTO analytics_dataset_daily (day, layer_id, environment, loads, trigger_mix, source_mix, load_ms_p50, load_ms_p95, dwell_ms_sum)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   )
-  insertDataset.run(YESTERDAY, 'DS1', 'production', 6, '{"browse":4,"orbit":2}', '{"hls":6}', 200, 900, 120000)
-  insertDataset.run(addDays(YESTERDAY, -1), 'DS1', 'production', 2, '{"tour":2}', '{"cache":2}', 400, 1100, null)
-  insertDataset.run(YESTERDAY, 'DS2', 'production', 1, '{"url":1}', '{"image":1}', 50, 60, 5000)
+  insertDataset.run(YESTERDAY, DS_A, 'production', 6, '{"browse":4,"orbit":2}', '{"hls":6}', 200, 900, 120000)
+  insertDataset.run(addDays(YESTERDAY, -1), DS_A, 'production', 2, '{"tour":2}', '{"cache":2}', 400, 1100, null)
+  insertDataset.run(YESTERDAY, LEGACY, 'production', 1, '{"url":1}', '{"image":1}', 50, 60, 5000)
+  // A layer id that resolves to no catalog row — title stays null.
+  insertDataset.run(YESTERDAY, 'DS_GONE', 'production', 0.5, '{}', '{}', null, null, null)
 
   const insertSpatial = sqlite.prepare(
     `INSERT INTO analytics_spatial_daily (day, event_type, environment, layer_id, projection, lat_bin, lon_bin, hits)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
   )
-  insertSpatial.run(YESTERDAY, 'camera_settled', 'production', 'DS1', 'globe', 39.5, -105, 4)
-  insertSpatial.run(addDays(YESTERDAY, -1), 'camera_settled', 'production', 'DS1', 'globe', 39.5, -105, 2)
-  insertSpatial.run(YESTERDAY, 'camera_settled', 'production', 'DS1', 'vr', 35, 135.5, 1)
+  insertSpatial.run(YESTERDAY, 'camera_settled', 'production', DS_A, 'globe', 39.5, -105, 4)
+  insertSpatial.run(addDays(YESTERDAY, -1), 'camera_settled', 'production', DS_A, 'globe', 39.5, -105, 2)
+  insertSpatial.run(YESTERDAY, 'camera_settled', 'production', DS_A, 'vr', 35, 135.5, 1)
   insertSpatial.run(YESTERDAY, 'camera_settled', 'production', '', 'globe', 0, 0, 9)
   insertSpatial.run(YESTERDAY, 'map_click', 'production', '', '', 51.5, 0, 3)
 
@@ -159,6 +169,7 @@ describe('GET /api/v1/publish/analytics', () => {
     const data = await getData<{
       datasets: Array<{
         layer_id: string
+        title: string | null
         loads: number
         trigger_mix: Record<string, number>
         source_mix: Record<string, number>
@@ -167,7 +178,9 @@ describe('GET /api/v1/publish/analytics', () => {
       }>
     }>(env, '?section=datasets&days=30')
 
-    expect(data.datasets.map(d => d.layer_id)).toEqual(['DS1', 'DS2'])
+    expect(data.datasets.map(d => d.layer_id)).toEqual([DS_A, LEGACY, 'DS_GONE'])
+    // Titles resolve via datasets.id, via legacy_id, or not at all.
+    expect(data.datasets.map(d => d.title)).toEqual(['Test Dataset 0', 'Test Dataset 1', null])
     const ds1 = data.datasets[0]
     expect(ds1.loads).toBe(8)
     expect(ds1.trigger_mix).toEqual({ browse: 4, orbit: 2, tour: 2 })
@@ -179,18 +192,21 @@ describe('GET /api/v1/publish/analytics', () => {
 
   it('spatial: sums bins across days and filters by layer/projection/event', async () => {
     const { env } = setup()
-    const all = await getData<{ layers: string[]; bins: Array<{ lat: number; lon: number; hits: number }> }>(
-      env,
-      '?section=spatial&days=30',
-    )
-    expect(all.layers).toEqual(['', 'DS1'])
+    const all = await getData<{
+      layers: Array<{ id: string; title: string | null }>
+      bins: Array<{ lat: number; lon: number; hits: number }>
+    }>(env, '?section=spatial&days=30')
+    expect(all.layers).toEqual([
+      { id: '', title: null },
+      { id: DS_A, title: 'Test Dataset 0' },
+    ])
     // camera_settled only (map_click excluded by default event).
     expect(all.bins).toHaveLength(3)
     expect(all.bins.find(b => b.lat === 39.5)?.hits).toBe(6) // 4 + 2 across days
 
     const ds1Globe = await getData<{ bins: unknown[] }>(
       env,
-      '?section=spatial&days=30&layer=DS1&projection=globe',
+      `?section=spatial&days=30&layer=${DS_A}&projection=globe`,
     )
     expect(ds1Globe.bins).toHaveLength(1)
 
