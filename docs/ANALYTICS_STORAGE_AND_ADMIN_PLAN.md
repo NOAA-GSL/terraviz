@@ -294,6 +294,19 @@ Notes:
   spatial dashboards already round to, comfortably above the 3-decimal
   privacy floor applied at emit time, and keep the table small (a
   day's worth of bins is thousands of rows, not millions).
+- **Camera attention is splatted over a zoom-derived footprint**, not
+  point-binned: `camera_settled` describes a *view* of the globe, and
+  its `zoom` field is an altitude proxy. The export distributes each
+  event's weight over the bins inside a radius of `90° / 2^zoom`
+  (floored at one bin, capped at 6°) with a linear-cone kernel,
+  normalized so total attention mass is conserved — a zoomed-out
+  view reads as a broad faint wash, a zoomed-in view as one
+  concentrated cell. Map clicks stay point-binned (clicks are
+  precise). See `splatFootprint()` in
+  `functions/api/v1/_lib/analytics-export.ts`. Days exported before
+  this landed hold point-binned rollups; an idempotent re-export
+  (`?day=` or the backfill workflow) re-derives them while AE still
+  has the raw rows.
 - `metrics` / `trigger_mix` / `source_mix` are JSON columns rather
   than wide nullable column sets — D1 is SQLite, `json_extract()` is
   cheap, and the per-event metric vocabulary will drift.

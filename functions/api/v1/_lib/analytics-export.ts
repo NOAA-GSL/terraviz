@@ -220,6 +220,82 @@ function binCoord(value: number): number {
   return Math.round(Math.floor(value / SPATIAL_BIN_DEG) * SPATIAL_BIN_DEG * 1e6) / 1e6
 }
 
+/** Cap on the camera-footprint radius. Bounds the splat to ~25×50
+ * cells at high latitudes — keeps the export's CPU cost sane while
+ * still letting a zoomed-out view read as a broad wash. */
+export const MAX_FOOTPRINT_DEG = 6
+
+/**
+ * Camera-attention footprint radius, derived from zoom (the
+ * altitude proxy `camera_settled` already carries). In web-mercator
+ * terms the visible span halves with each zoom level, so the
+ * radius is `90° / 2^zoom`: a zoomed-out globe (z≈0–3) diffuses
+ * over a wide cap (clamped to MAX_FOOTPRINT_DEG), a zoomed-in view
+ * (z≳7.5) concentrates into a single 0.5° cell. VR/AR sessions
+ * report a scale-derived zoom with the same semantics.
+ */
+export function footprintRadiusDeg(zoom: number): number {
+  if (!Number.isFinite(zoom)) return SPATIAL_BIN_DEG
+  const raw = 90 / Math.pow(2, Math.max(zoom, 0))
+  return Math.min(Math.max(raw, SPATIAL_BIN_DEG), MAX_FOOTPRINT_DEG)
+}
+
+/** Wrap a bin-aligned longitude into [-180, 180). Stays on-grid
+ * because 360 is a multiple of the bin size. */
+function wrapLonBin(lon: number): number {
+  let v = lon
+  while (v >= 180) v -= 360
+  while (v < -180) v += 360
+  return Math.round(v * 1e6) / 1e6
+}
+
+/**
+ * Distribute one event's weight over the bins inside its footprint.
+ * Linear-cone kernel (full weight at the center, tapering to zero
+ * at the radius), normalized so the cell weights sum to `weight` —
+ * total attention mass is conserved, so a diffuse high-altitude
+ * view and a concentrated low-altitude one contribute equally to
+ * the day's totals, just spread differently. The longitudinal
+ * radius is widened by 1/cos(lat) so the footprint stays roughly
+ * circular on the ground instead of pinching near the poles.
+ */
+export function splatFootprint(
+  lat: number,
+  lon: number,
+  radiusDeg: number,
+  weight: number,
+): Array<{ latBin: number; lonBin: number; w: number }> {
+  if (radiusDeg <= SPATIAL_BIN_DEG) {
+    return [{ latBin: binCoord(lat), lonBin: wrapLonBin(binCoord(lon)), w: weight }]
+  }
+  const latRadius = radiusDeg
+  const cosLat = Math.max(Math.cos((lat * Math.PI) / 180), 0.2)
+  const lonRadius = radiusDeg / cosLat
+
+  const cells: Array<{ latBin: number; lonBin: number; k: number }> = []
+  const latStart = binCoord(lat - latRadius)
+  const lonStart = binCoord(lon - lonRadius)
+  const latSteps = Math.ceil((2 * latRadius) / SPATIAL_BIN_DEG) + 1
+  const lonSteps = Math.ceil((2 * lonRadius) / SPATIAL_BIN_DEG) + 1
+  for (let i = 0; i <= latSteps; i++) {
+    const latBin = Math.round((latStart + i * SPATIAL_BIN_DEG) * 1e6) / 1e6
+    if (latBin < -90 || latBin >= 90) continue
+    const latCenter = latBin + SPATIAL_BIN_DEG / 2
+    for (let j = 0; j <= lonSteps; j++) {
+      const lonBin = lonStart + j * SPATIAL_BIN_DEG
+      const lonCenter = lonBin + SPATIAL_BIN_DEG / 2
+      const d = Math.hypot((latCenter - lat) / latRadius, (lonCenter - lon) / lonRadius)
+      if (d > 1) continue
+      cells.push({ latBin, lonBin: wrapLonBin(lonBin), k: 1 - d })
+    }
+  }
+  if (cells.length === 0) {
+    return [{ latBin: binCoord(lat), lonBin: wrapLonBin(binCoord(lon)), w: weight }]
+  }
+  const norm = cells.reduce((n, c) => n + c.k, 0)
+  return cells.map(({ latBin, lonBin, k }) => ({ latBin, lonBin, w: (weight * k) / norm }))
+}
+
 function num(fields: Record<string, string | number | boolean>, key: string): number {
   const v = fields[key]
   return typeof v === 'number' ? v : 0
@@ -326,23 +402,28 @@ export function computeRollups(rows: DecodedEventRow[], day: string): DayRollups
       if (Math.abs(lat) <= 90 && Math.abs(lon) <= 180) {
         const layerId = isCamera ? str(row.fields, 'layer_id') : ''
         const projection = isCamera ? str(row.fields, 'projection') : ''
-        const latBin = binCoord(lat)
-        const lonBin = binCoord(lon)
-        const key = [row.event_type, row.environment, layerId, projection, latBin, lonBin].join('\u0000')
-        const entry = spatial.get(key)
-        if (entry) {
-          entry.hits += w
-        } else {
-          spatial.set(key, {
-            day,
-            event_type: row.event_type,
-            environment: row.environment,
-            layer_id: layerId,
-            projection,
-            lat_bin: latBin,
-            lon_bin: lonBin,
-            hits: w,
-          })
+        // Camera attention covers the visible area, not a point:
+        // diffuse the weight over a zoom-derived footprint (wide and
+        // faint when zoomed out, one concentrated cell when zoomed
+        // in). Clicks are precise — always a single cell.
+        const radius = isCamera ? footprintRadiusDeg(num(row.fields, 'zoom')) : SPATIAL_BIN_DEG
+        for (const cell of splatFootprint(lat, lon, radius, w)) {
+          const key = [row.event_type, row.environment, layerId, projection, cell.latBin, cell.lonBin].join('\u0000')
+          const entry = spatial.get(key)
+          if (entry) {
+            entry.hits += cell.w
+          } else {
+            spatial.set(key, {
+              day,
+              event_type: row.event_type,
+              environment: row.environment,
+              layer_id: layerId,
+              projection,
+              lat_bin: cell.latBin,
+              lon_bin: cell.lonBin,
+              hits: cell.w,
+            })
+          }
         }
       }
     }
