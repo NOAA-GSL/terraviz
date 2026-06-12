@@ -283,6 +283,10 @@ export async function renderAnalyticsPage(
     const data = res.data.data
 
     const breakdownHost = el('div', { className: 'publisher-analytics-errors' })
+    // Stable id so the errors tile can reference it via
+    // aria-controls (WAI-ARIA disclosure pattern); the page mounts
+    // at most one overview section, so a fixed id is safe.
+    breakdownHost.id = 'publisher-analytics-errors-breakdown'
     breakdownHost.hidden = true
     const errorRate = data.totals.sessions > 0 ? data.totals.errors / data.totals.sessions : 0
     const tiles = el('div', { className: 'publisher-analytics-stats' }, [
@@ -331,6 +335,7 @@ export async function renderAnalyticsPage(
   function buildErrorsTile(total: number, host: HTMLElement): HTMLElement {
     const tile = el('button', { className: 'publisher-analytics-stat publisher-analytics-stat-button', type: 'button' })
     tile.setAttribute('aria-expanded', 'false')
+    tile.setAttribute('aria-controls', host.id)
     tile.append(
       el('span', { className: 'publisher-analytics-stat-label', textContent: t('publisher.analytics.overview.errors') }),
       el('span', { className: 'publisher-analytics-stat-value', textContent: formatNumber(total) }),
