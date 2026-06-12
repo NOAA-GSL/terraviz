@@ -40,12 +40,22 @@ export interface BarPoint {
  */
 export function renderBarSeries(
   points: BarPoint[],
-  options: { height?: number; ariaLabel: string } = { ariaLabel: '' },
+  options: {
+    height?: number
+    ariaLabel: string
+    /** Pre-formatted axis labels rendered under the bars' start and
+     * end (the page formats the range days with the active locale).
+     * The axis runs oldest→newest left-to-right regardless of text
+     * direction — same deliberate exception as the catalog
+     * Timeline's time axis. */
+    range?: { start: string; end: string }
+  } = { ariaLabel: '' },
 ): SVGSVGElement {
   const height = options.height ?? 96
+  const axisHeight = options.range && points.length > 0 ? 16 : 0
   const width = 480
   const svg = svgEl('svg', {
-    viewBox: `0 0 ${width} ${height}`,
+    viewBox: `0 0 ${width} ${height + axisHeight}`,
     role: 'img',
     class: 'publisher-analytics-bars',
   })
@@ -70,6 +80,14 @@ export function renderBarSeries(
     rect.appendChild(title)
     svg.appendChild(rect)
   })
+  if (options.range && axisHeight > 0) {
+    const labelY = height + 12
+    const start = svgEl('text', { x: 0, y: labelY, 'text-anchor': 'start', class: 'publisher-analytics-axis' })
+    start.textContent = options.range.start
+    const end = svgEl('text', { x: width, y: labelY, 'text-anchor': 'end', class: 'publisher-analytics-axis' })
+    end.textContent = options.range.end
+    svg.append(start, end)
+  }
   return svg
 }
 

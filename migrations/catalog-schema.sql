@@ -36,10 +36,30 @@ CREATE TABLE analytics_dataset_daily (
   PRIMARY KEY (day, layer_id, environment)
 );
 
+CREATE TABLE analytics_errors_daily (
+  day           TEXT NOT NULL,             -- 'YYYY-MM-DD' (UTC)
+  environment   TEXT NOT NULL,             -- production | preview | local
+  category      TEXT NOT NULL,             -- tile | hls | llm | vr | uncaught | …
+  source        TEXT NOT NULL,             -- caught | window_error | …
+  code          TEXT NOT NULL,             -- HTTP status or classified enum
+  message_class TEXT NOT NULL,             -- sanitized first line
+  count         REAL NOT NULL,             -- sample-weighted
+  PRIMARY KEY (day, environment, category, source, code, message_class)
+);
+
 CREATE TABLE analytics_export_state (
   id         INTEGER PRIMARY KEY CHECK (id = 1),
   last_day   TEXT NOT NULL,                 -- 'YYYY-MM-DD' (UTC)
   updated_at TEXT NOT NULL
+);
+
+CREATE TABLE analytics_outcomes_daily (
+  day         TEXT NOT NULL,               -- 'YYYY-MM-DD' (UTC)
+  environment TEXT NOT NULL,               -- production | preview | local
+  event_type  TEXT NOT NULL,               -- tour_ended | vr_session_started
+  value       TEXT NOT NULL,               -- the dimension value
+  count       REAL NOT NULL,               -- sample-weighted
+  PRIMARY KEY (day, environment, event_type, value)
 );
 
 CREATE TABLE analytics_spatial_daily (
@@ -317,6 +337,10 @@ CREATE INDEX idx_analytics_daily_event
   ON analytics_daily (event_type, day);
 CREATE INDEX idx_analytics_dataset_daily_layer
   ON analytics_dataset_daily (layer_id, day);
+CREATE INDEX idx_analytics_errors_daily_day
+  ON analytics_errors_daily (environment, day);
+CREATE INDEX idx_analytics_outcomes_daily_day
+  ON analytics_outcomes_daily (environment, day);
 CREATE INDEX idx_analytics_spatial_daily_layer
   ON analytics_spatial_daily (event_type, layer_id, day);
 CREATE INDEX idx_asset_uploads_dataset ON asset_uploads(dataset_id, created_at);

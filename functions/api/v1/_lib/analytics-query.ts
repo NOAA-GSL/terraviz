@@ -34,13 +34,16 @@ export interface OverviewDay {
   sessions: number
   events: number
   errors: number
+  /** Idle-tab-aware total view time (Σ session_end.visible_ms).
+   * 0 for days whose sessions predate the visible_ms field. */
+  view_ms: number
 }
 
 export interface OverviewData {
   days: OverviewDay[]
   platforms: Record<string, number>
   countries: Array<{ country: string; sessions: number }>
-  totals: { sessions: number; events: number; errors: number }
+  totals: { sessions: number; events: number; errors: number; view_ms: number }
 }
 
 export interface DatasetEngagementRow {
@@ -65,12 +68,27 @@ export interface SpatialData {
   bins: Array<{ lat: number; lon: number; hits: number }>
 }
 
+export interface ErrorBreakdownRow {
+  category: string
+  source: string
+  code: string
+  message_class: string
+  count: number
+}
+
 export interface FunnelDay {
   day: string
   tours_started: number
   tours_ended: number
   vr_started: number
   orbit_turns: number
+}
+
+export interface FunnelOutcomes {
+  /** tour_ended counts by outcome (completed | abandoned | error). */
+  tour_ended: Record<string, number>
+  /** vr_session_started counts by mode (ar | vr). */
+  vr_session_started: Record<string, number>
 }
 
 const TOP_COUNTRIES = 12
@@ -141,7 +159,24 @@ export async function queryOverview(db: D1Database, f: AnalyticsFilters): Promis
     .bind(f.sinceDay, f.environment)
     .all<{ country: string; sessions: number }>()
 
-  const dayRows = days.results ?? []
+  // View time lives in the session_end groups' metrics JSON
+  // (visible_ms_sum) — summed per day in TS since the column is a
+  // JSON blob keyed by group.
+  const viewRows = await db
+    .prepare(
+      `SELECT day, metrics FROM analytics_daily
+        WHERE day >= ? AND environment = ? AND internal = 0
+          AND event_type = 'session_end'`,
+    )
+    .bind(f.sinceDay, f.environment)
+    .all<{ day: string; metrics: string }>()
+  const viewByDay = new Map<string, number>()
+  for (const row of viewRows.results ?? []) {
+    const visible = safeJson(row.metrics).visible_ms_sum ?? 0
+    viewByDay.set(row.day, (viewByDay.get(row.day) ?? 0) + visible)
+  }
+
+  const dayRows = (days.results ?? []).map(d => ({ ...d, view_ms: viewByDay.get(d.day) ?? 0 }))
   return {
     days: dayRows,
     platforms: Object.fromEntries((platforms.results ?? []).map(r => [r.platform, r.sessions])),
@@ -150,6 +185,7 @@ export async function queryOverview(db: D1Database, f: AnalyticsFilters): Promis
       sessions: dayRows.reduce((n, d) => n + d.sessions, 0),
       events: dayRows.reduce((n, d) => n + d.events, 0),
       errors: dayRows.reduce((n, d) => n + d.errors, 0),
+      view_ms: dayRows.reduce((n, d) => n + d.view_ms, 0),
     },
   }
 }
@@ -294,7 +330,31 @@ export async function querySpatial(
   }
 }
 
-export async function queryFunnel(db: D1Database, f: AnalyticsFilters): Promise<{ days: FunnelDay[] }> {
+/** Frequency-ordered error breakdown over the range — backs the
+ * expandable table behind the Overview section's errors tile.
+ * Telemetry has no severity field; category/source are the closest
+ * grouping, and the ordering is by sample-weighted count. */
+export async function queryErrors(
+  db: D1Database,
+  f: AnalyticsFilters,
+): Promise<{ errors: ErrorBreakdownRow[] }> {
+  const rows = await db
+    .prepare(
+      `SELECT category, source, code, message_class, SUM(count) AS count
+         FROM analytics_errors_daily
+        WHERE day >= ? AND environment = ?
+        GROUP BY category, source, code, message_class
+        ORDER BY count DESC LIMIT 100`,
+    )
+    .bind(f.sinceDay, f.environment)
+    .all<ErrorBreakdownRow>()
+  return { errors: rows.results ?? [] }
+}
+
+export async function queryFunnel(
+  db: D1Database,
+  f: AnalyticsFilters,
+): Promise<{ days: FunnelDay[]; outcomes: FunnelOutcomes }> {
   const rows = await db
     .prepare(
       `SELECT day,
@@ -309,7 +369,22 @@ export async function queryFunnel(db: D1Database, f: AnalyticsFilters): Promise<
     )
     .bind(f.sinceDay, f.environment)
     .all<FunnelDay>()
-  return { days: rows.results ?? [] }
+
+  const outcomeRows = await db
+    .prepare(
+      `SELECT event_type, value, SUM(count) AS count
+         FROM analytics_outcomes_daily
+        WHERE day >= ? AND environment = ?
+        GROUP BY event_type, value`,
+    )
+    .bind(f.sinceDay, f.environment)
+    .all<{ event_type: string; value: string; count: number }>()
+  const outcomes: FunnelOutcomes = { tour_ended: {}, vr_session_started: {} }
+  for (const row of outcomeRows.results ?? []) {
+    if (row.event_type === 'tour_ended') outcomes.tour_ended[row.value] = row.count
+    else if (row.event_type === 'vr_session_started') outcomes.vr_session_started[row.value] = row.count
+  }
+  return { days: rows.results ?? [], outcomes }
 }
 
 function safeJson(text: string): Record<string, number> {
