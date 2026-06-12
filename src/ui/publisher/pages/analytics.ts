@@ -194,6 +194,13 @@ export async function renderAnalyticsPage(
 
   mount.replaceChildren(shell(header, overviewHost, datasetsHost, spatialHost, funnelHost))
 
+  // Populate on first visit — the header's onChange only covers
+  // subsequent control changes.
+  void loadOverview()
+  void loadDatasets()
+  void loadSpatial()
+  void loadFunnel()
+
   async function fetchSection<T>(query: string): Promise<PublisherApiResult<Envelope<T>>> {
     return publisherGet<Envelope<T>>(`${ANALYTICS_ENDPOINT}${query}`, { fetchFn })
   }
@@ -246,7 +253,7 @@ export async function renderAnalyticsPage(
         countriesTable(data.countries),
       )
     }
-    overviewHost.replaceChildren(...(children as HTMLElement[]))
+    overviewHost.replaceChildren(...children)
   }
 
   async function loadDatasets(): Promise<void> {
@@ -276,11 +283,22 @@ export async function renderAnalyticsPage(
       (state.spatialLayer !== undefined ? `&layer=${encodeURIComponent(state.spatialLayer)}` : '') +
       (state.spatialProjection !== undefined ? `&projection=${state.spatialProjection}` : '')
     const res = await fetchSection<SpatialData>(baseQuery('spatial') + spatialParams)
-    if (!res.ok) return sectionError(spatialHost, title, res)
+    if (!res.ok) {
+      // The error card replaces the section DOM — tear down any
+      // mounted map so a later success rebuilds against a live
+      // container instead of feeding bins to a detached one.
+      if (heatmap) {
+        heatmap.destroy()
+        heatmap = null
+      }
+      return sectionError(spatialHost, title, res)
+    }
     const data = res.data.data
 
     if (heatmap) {
       heatmap.setBins(data.bins)
+      const note = spatialHost.querySelector<HTMLElement>('.publisher-analytics-empty')
+      if (note) note.hidden = data.bins.length > 0
       return
     }
 
@@ -288,8 +306,10 @@ export async function renderAnalyticsPage(
     const mapContainer = el('div', { className: 'publisher-analytics-map' })
     mapContainer.setAttribute('role', 'img')
     mapContainer.setAttribute('aria-label', t('publisher.analytics.spatial.mapAria'))
-    const empty = data.bins.length === 0 ? [emptyNote()] : []
-    spatialHost.replaceChildren(sectionHeading(title), controls, mapContainer, ...empty)
+    // Always present, toggled by data-only updates above.
+    const note = emptyNote()
+    note.hidden = data.bins.length > 0
+    spatialHost.replaceChildren(sectionHeading(title), controls, mapContainer, note)
     heatmap = await mountHeatmap(mapContainer, data.bins)
   }
 
@@ -542,8 +562,14 @@ async function mountHeatmap(container: HTMLElement, bins: SpatialData['bins']): 
     attributionControl: false,
   })
 
+  // `setBins` before the map's `load` event would be a silent no-op
+  // (the GeoJSON source doesn't exist yet) — keep the latest bins
+  // and apply them when the source is created.
+  let latestBins = bins
+  let sourceReady = false
+
   map.on('load', () => {
-    map.addSource('attention', { type: 'geojson', data: binsToGeoJson(bins) })
+    map.addSource('attention', { type: 'geojson', data: binsToGeoJson(latestBins) })
     map.addLayer({
       id: 'attention-heat',
       type: 'heatmap',
@@ -555,10 +581,13 @@ async function mountHeatmap(container: HTMLElement, bins: SpatialData['bins']): 
         'heatmap-opacity': 0.85,
       },
     })
+    sourceReady = true
   })
 
   return {
     setBins(next) {
+      latestBins = next
+      if (!sourceReady) return
       const source = map.getSource('attention')
       if (source && 'setData' in source) {
         ;(source as { setData(data: GeoJSON.FeatureCollection): void }).setData(binsToGeoJson(next))
