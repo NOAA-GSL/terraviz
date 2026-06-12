@@ -9,6 +9,13 @@
  * template satisfies the server-side allowlist and writes its MP4
  * to `WORKFLOW_OUTPUT_PATH` by construction.
  *
+ * Frame-gap handling follows current upstream CLI shape
+ * (`zyra process scan-frames … --output /work/frames-meta.json`, then
+ * `zyra process pad-missing … --fill nearest`; fill choices are
+ * blank | solid | basemap | nearest). pad-missing sits between the
+ * scan and compose-video so cadence gaps don't show as time-jumps
+ * in the animation.
+ *
  * The stage snippets back the "Insert stage" palette — the
  * lightweight, textarea-native form of zyra-editor's stage palette
  * (see the plan doc's §Non-goals for why there is no node graph).
@@ -40,14 +47,19 @@ export const WORKFLOW_TEMPLATES: readonly WorkflowTemplate[] = [
       since-period: P1Y
       pattern: '^DroughtRisk_Weekly_[0-9]{8}\\.png$'
       date-format: '%Y%m%d'
-  - stage: transform
-    command: metadata
+  - stage: process
+    command: scan-frames
     args:
       frames-dir: /work/images/frames
       pattern: '^DroughtRisk_Weekly_[0-9]{8}\\.png$'
       datetime-format: '%Y%m%d'
       period-seconds: 604800
       output: /work/frames-meta.json
+  - stage: process
+    command: pad-missing
+    args:
+      frames-dir: /work/images/frames
+      fill: nearest
   - stage: visualize
     command: compose-video
     args:
@@ -76,14 +88,19 @@ export const WORKFLOW_TEMPLATES: readonly WorkflowTemplate[] = [
       sync-dir: /work/images/frames
       pattern: '^frame_[0-9]{8}\\.png$'
       date-format: '%Y%m%d'
-  - stage: transform
-    command: metadata
+  - stage: process
+    command: scan-frames
     args:
       frames-dir: /work/images/frames
       pattern: '^frame_[0-9]{8}\\.png$'
       datetime-format: '%Y%m%d'
       period-seconds: 86400
       output: /work/frames-meta.json
+  - stage: process
+    command: pad-missing
+    args:
+      frames-dir: /work/images/frames
+      fill: nearest
   - stage: visualize
     command: compose-video
     args:
@@ -140,15 +157,24 @@ export const STAGE_SNIPPETS: ReadonlyArray<{ id: string; snippet: string }> = [
 `,
   },
   {
-    id: 'transform metadata',
-    snippet: `  - stage: transform
-    command: metadata
+    id: 'process scan-frames',
+    snippet: `  - stage: process
+    command: scan-frames
     args:
       frames-dir: /work/images/frames
       pattern: '^frame_[0-9]{8}\\.png$'
       datetime-format: '%Y%m%d'
       period-seconds: 86400
       output: /work/frames-meta.json
+`,
+  },
+  {
+    id: 'process pad-missing',
+    snippet: `  - stage: process
+    command: pad-missing
+    args:
+      frames-dir: /work/images/frames
+      fill: nearest
 `,
   },
   {

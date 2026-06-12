@@ -330,3 +330,57 @@ export function formatDuration(seconds: number): string {
   if (h > 0) return `${h}:${pad(m)}:${pad(sec)}`
   return `${m}:${pad(sec)}`
 }
+
+/** Fixed-unit ISO-8601 duration subset (weeks/days/hours/minutes/
+ *  seconds) — mirrors the server's `parseScheduleSeconds`.
+ *  Calendar-fuzzy units (years, months) deliberately don't match:
+ *  `parseISO8601Duration` approximates them, which is fine for
+ *  frame-time math but wrong for liveness / cache-TTL decisions
+ *  (PR #179 review). */
+const FIXED_DURATION_RE =
+  /^P(?:(\d+)W)?(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?)?$/
+
+/**
+ * Parse a `Dataset.period` ISO-8601 duration to milliseconds,
+ * returning null (never throwing) for malformed, calendar-fuzzy
+ * (P1M / P1Y), empty, or non-positive values — a single bad catalog
+ * row must not break cache math (Phase Z4, PR #179 review).
+ */
+export function safePeriodMs(period: string | null | undefined): number | null {
+  if (!period) return null
+  const match = FIXED_DURATION_RE.exec(period)
+  if (!match) return null
+  const [, weeks, days, hours, minutes, seconds] = match
+  if (!weeks && !days && !hours && !minutes && !seconds) return null
+  // A bare trailing T ("P1DT") matches the regex but is invalid.
+  if (period.includes('T') && !hours && !minutes && !seconds) return null
+  const ms =
+    Number(weeks ?? 0) * 7 * 86_400_000 +
+    Number(days ?? 0) * 86_400_000 +
+    Number(hours ?? 0) * 3_600_000 +
+    Number(minutes ?? 0) * 60_000 +
+    Number(seconds ?? 0) * 1_000
+  // Overflowed components (1e999…) produce Infinity — reject, per
+  // the "malformed returns null" contract (PR #179 review).
+  return Number.isFinite(ms) && ms > 0 ? ms : null
+}
+
+/**
+ * Is this dataset's update cadence plausibly live? True when
+ * `period` parses AND the data's trailing edge is within two
+ * cadences of `now` (or `endTime` is absent — an updating row not
+ * yet stamped). Historical time-series rows carry `period` too;
+ * their stale `endTime` keeps them out (Phase Z4, PR #179 review).
+ */
+export function isLiveCadence(
+  period: string | null | undefined,
+  endTime: string | null | undefined,
+  nowMs: number,
+): boolean {
+  const periodMs = safePeriodMs(period)
+  if (periodMs === null) return false
+  if (!endTime) return true
+  const end = Date.parse(endTime)
+  if (!Number.isFinite(end)) return false
+  return nowMs - end <= 2 * periodMs
+}

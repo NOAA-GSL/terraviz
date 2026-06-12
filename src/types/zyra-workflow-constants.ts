@@ -23,7 +23,7 @@
  */
 export const ZYRA_STAGE_ALLOWLIST: Readonly<Record<string, readonly string[]>> = {
   acquire: ['http', 'ftp', 's3'],
-  process: ['decode-grib2', 'extract-variable', 'convert-format', 'metadata', 'scan-frames'],
+  process: ['decode-grib2', 'extract-variable', 'convert-format', 'metadata', 'scan-frames', 'pad-missing'],
   transform: ['metadata', 'scan-frames'],
   visualize: ['heatmap', 'contour', 'animate', 'compose-video'],
   export: ['local'],
