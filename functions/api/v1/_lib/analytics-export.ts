@@ -176,6 +176,14 @@ export interface DatasetRollupRow {
   dwell_ms_sum: number | null
 }
 
+export interface OutcomesRollupRow {
+  day: string
+  environment: string
+  event_type: string
+  value: string
+  count: number
+}
+
 export interface ErrorsRollupRow {
   day: string
   environment: string
@@ -202,6 +210,7 @@ export interface DayRollups {
   dataset: DatasetRollupRow[]
   spatial: SpatialRollupRow[]
   errors: ErrorsRollupRow[]
+  outcomes: OutcomesRollupRow[]
 }
 
 /** Per-event-type numeric field summarized as p50/p95 in
@@ -212,6 +221,21 @@ const DAILY_METRIC_FIELDS: Record<string, string> = {
   tour_ended: 'duration_ms',
   vr_session_ended: 'duration_ms',
   perf_sample: 'frame_time_p95_ms',
+}
+
+/** Per-event-type numeric fields summed (weighted) into
+ * `analytics_daily.metrics` as `<field>_sum`. Sums compose across
+ * groups and days — unlike percentiles — so the dashboard can show
+ * totals and true averages (Σvisible / Σsessions) over any range. */
+const DAILY_SUM_FIELDS: Record<string, readonly string[]> = {
+  session_end: ['duration_ms', 'visible_ms'],
+}
+
+/** Low-cardinality dimensions kept per day in
+ * `analytics_outcomes_daily` for completion funnels. */
+const OUTCOME_FIELDS: Record<string, string> = {
+  tour_ended: 'outcome',
+  vr_session_started: 'mode',
 }
 
 function percentile(sorted: number[], p: number): number {
@@ -333,6 +357,7 @@ export function computeRollups(rows: DecodedEventRow[], day: string): DayRollups
       row: Omit<DailyRollupRow, 'sessions_count' | 'metrics'>
       sessions: Set<string>
       samples: number[]
+      sums: Record<string, number>
     }
   >()
   // analytics_dataset_daily
@@ -350,6 +375,8 @@ export function computeRollups(rows: DecodedEventRow[], day: string): DayRollups
   const spatial = new Map<string, SpatialRollupRow>()
   // analytics_errors_daily
   const errors = new Map<string, ErrorsRollupRow>()
+  // analytics_outcomes_daily
+  const outcomes = new Map<string, OutcomesRollupRow>()
 
   for (const row of rows) {
     const w = row.sample_interval
@@ -370,6 +397,7 @@ export function computeRollups(rows: DecodedEventRow[], day: string): DayRollups
         },
         sessions: new Set(),
         samples: [],
+        sums: {},
       }
       daily.set(dailyKey, dailyEntry)
     }
@@ -377,6 +405,9 @@ export function computeRollups(rows: DecodedEventRow[], day: string): DayRollups
     if (row.session_id) dailyEntry.sessions.add(row.session_id)
     const metricField = DAILY_METRIC_FIELDS[row.event_type]
     if (metricField) dailyEntry.samples.push(num(row.fields, metricField))
+    for (const sumField of DAILY_SUM_FIELDS[row.event_type] ?? []) {
+      dailyEntry.sums[`${sumField}_sum`] = (dailyEntry.sums[`${sumField}_sum`] ?? 0) + num(row.fields, sumField) * w
+    }
 
     if (row.internal) continue // dataset/spatial/errors rollups: real users only
 
@@ -404,6 +435,20 @@ export function computeRollups(rows: DecodedEventRow[], day: string): DayRollups
           entry.loadSamples.push(num(row.fields, 'load_ms'))
         } else {
           entry.dwellSum = (entry.dwellSum ?? 0) + num(row.fields, 'dwell_ms') * w
+        }
+      }
+    }
+
+    const outcomeField = OUTCOME_FIELDS[row.event_type]
+    if (outcomeField) {
+      const value = str(row.fields, outcomeField)
+      if (value !== '') {
+        const key = [row.environment, row.event_type, value].join('\u0000')
+        const entry = outcomes.get(key)
+        if (entry) {
+          entry.count += w
+        } else {
+          outcomes.set(key, { day, environment: row.environment, event_type: row.event_type, value, count: w })
         }
       }
     }
@@ -468,8 +513,8 @@ export function computeRollups(rows: DecodedEventRow[], day: string): DayRollups
   }
 
   return {
-    daily: [...daily.values()].map(({ row, sessions, samples }) => {
-      const metrics: Record<string, number> = {}
+    daily: [...daily.values()].map(({ row, sessions, samples, sums }) => {
+      const metrics: Record<string, number> = { ...sums }
       const metricField = DAILY_METRIC_FIELDS[row.event_type]
       if (metricField && samples.length > 0) {
         const sorted = [...samples].sort((a, b) => a - b)
@@ -491,6 +536,7 @@ export function computeRollups(rows: DecodedEventRow[], day: string): DayRollups
     }),
     spatial: [...spatial.values()],
     errors: [...errors.values()],
+    outcomes: [...outcomes.values()],
   }
 }
 
@@ -512,6 +558,7 @@ export async function writeRollupsToD1(db: D1Database, day: string, rollups: Day
     db.prepare(`DELETE FROM analytics_dataset_daily WHERE day = ?`).bind(day),
     db.prepare(`DELETE FROM analytics_spatial_daily WHERE day = ?`).bind(day),
     db.prepare(`DELETE FROM analytics_errors_daily WHERE day = ?`).bind(day),
+    db.prepare(`DELETE FROM analytics_outcomes_daily WHERE day = ?`).bind(day),
   ]
   const insertDaily = `INSERT INTO analytics_daily
     (day, event_type, environment, internal, country, platform, events_count, sessions_count, metrics)
@@ -551,6 +598,14 @@ export async function writeRollupsToD1(db: D1Database, day: string, rollups: Day
       db
         .prepare(insertErrors)
         .bind(r.day, r.environment, r.category, r.source, r.code, r.message_class, r.count),
+    )
+  }
+  const insertOutcomes = `INSERT INTO analytics_outcomes_daily
+    (day, environment, event_type, value, count)
+    VALUES (?, ?, ?, ?, ?)`
+  for (const r of rollups.outcomes) {
+    stmts.push(
+      db.prepare(insertOutcomes).bind(r.day, r.environment, r.event_type, r.value, r.count),
     )
   }
   await db.batch(stmts)

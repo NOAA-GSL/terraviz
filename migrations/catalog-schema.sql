@@ -53,6 +53,15 @@ CREATE TABLE analytics_export_state (
   updated_at TEXT NOT NULL
 );
 
+CREATE TABLE analytics_outcomes_daily (
+  day         TEXT NOT NULL,               -- 'YYYY-MM-DD' (UTC)
+  environment TEXT NOT NULL,               -- production | preview | local
+  event_type  TEXT NOT NULL,               -- tour_ended | vr_session_started
+  value       TEXT NOT NULL,               -- the dimension value
+  count       REAL NOT NULL,               -- sample-weighted
+  PRIMARY KEY (day, environment, event_type, value)
+);
+
 CREATE TABLE analytics_spatial_daily (
   day         TEXT NOT NULL,
   event_type  TEXT NOT NULL,                -- camera_settled | map_click
@@ -330,6 +339,8 @@ CREATE INDEX idx_analytics_dataset_daily_layer
   ON analytics_dataset_daily (layer_id, day);
 CREATE INDEX idx_analytics_errors_daily_day
   ON analytics_errors_daily (environment, day);
+CREATE INDEX idx_analytics_outcomes_daily_day
+  ON analytics_outcomes_daily (environment, day);
 CREATE INDEX idx_analytics_spatial_daily_layer
   ON analytics_spatial_daily (event_type, layer_id, day);
 CREATE INDEX idx_asset_uploads_dataset ON asset_uploads(dataset_id, created_at);

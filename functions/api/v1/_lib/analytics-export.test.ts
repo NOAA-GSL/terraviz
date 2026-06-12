@@ -231,6 +231,42 @@ describe('computeRollups', () => {
     expect(rollups.errors.some(r => r.category === 'llm')).toBe(false)
   })
 
+  it('sums weighted session view time into the daily metrics JSON', () => {
+    const rollups = computeRollups(
+      [
+        decoded({ event_type: 'session_end', fields: { exit_reason: 'pagehide', duration_ms: 100_000, event_count: 5, visible_ms: 60_000 } }),
+        decoded({ event_type: 'session_end', fields: { exit_reason: 'pagehide', duration_ms: 50_000, event_count: 2, visible_ms: 40_000 }, sample_interval: 2 }),
+      ],
+      DAY,
+    )
+    const metrics = JSON.parse(rollups.daily[0].metrics) as Record<string, number>
+    expect(metrics.visible_ms_sum).toBe(60_000 + 40_000 * 2)
+    expect(metrics.duration_ms_sum).toBe(100_000 + 50_000 * 2)
+    // Percentiles still present alongside the sums.
+    expect(metrics.duration_ms_p50).toBeDefined()
+  })
+
+  it('rolls up outcome dimensions for tours and VR, external only', () => {
+    const rollups = computeRollups(
+      [
+        decoded({ event_type: 'tour_ended', fields: { tour_id: 't1', outcome: 'completed', task_index: 8, duration_ms: 1000 } }),
+        decoded({ event_type: 'tour_ended', fields: { tour_id: 't2', outcome: 'completed', task_index: 3, duration_ms: 500 }, sample_interval: 2 }),
+        decoded({ event_type: 'tour_ended', fields: { tour_id: 't3', outcome: 'abandoned', task_index: 1, duration_ms: 100 } }),
+        decoded({ event_type: 'vr_session_started', fields: { mode: 'ar', device_class: 'quest3', layer_id: '' } }),
+        decoded({ event_type: 'tour_ended', fields: { tour_id: 't4', outcome: 'error', task_index: 0, duration_ms: 1 }, internal: true }),
+      ],
+      DAY,
+    )
+    expect(rollups.outcomes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ event_type: 'tour_ended', value: 'completed', count: 3 }),
+        expect.objectContaining({ event_type: 'tour_ended', value: 'abandoned', count: 1 }),
+        expect.objectContaining({ event_type: 'vr_session_started', value: 'ar', count: 1 }),
+      ]),
+    )
+    expect(rollups.outcomes.some(o => o.value === 'error')).toBe(false) // internal excluded
+  })
+
   it('derives the footprint radius from zoom with floor and cap', () => {
     expect(footprintRadiusDeg(0)).toBe(MAX_FOOTPRINT_DEG)
     expect(footprintRadiusDeg(5)).toBeCloseTo(90 / 32, 6)
