@@ -463,6 +463,17 @@ the repo's no-framework stance. No charting library.
 
 ## Phase C — `/publish/feedback` tab
 
+> **Status: landed.** Implementation:
+> `functions/api/v1/publish/feedback.ts` (privilege-gated facade
+> over the same `_feedback-helpers` data layer feedback-admin uses;
+> AI + general dashboard views, on-demand screenshots),
+> `src/ui/publisher/pages/feedback.ts` (tabbed review page with
+> detail overlays), and the deprecation: a bare
+> `GET /api/feedback-admin` now 302-redirects to
+> `/publish/feedback`, with the `?action=` machine endpoints
+> (exports, JSON dashboards, bearer-token fallback) surviving
+> unchanged.
+
 `src/ui/publisher/pages/feedback.ts` + route + tab, privilege-gated
 like Phase B. Server side:
 `functions/api/v1/publish/feedback.ts` (GET, middleware +
