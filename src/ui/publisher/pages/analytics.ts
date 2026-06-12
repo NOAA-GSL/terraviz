@@ -31,7 +31,7 @@
  */
 
 import { t } from '../../../i18n'
-import { formatNumber } from '../../../i18n/format'
+import { formatDate, formatNumber } from '../../../i18n/format'
 import { publisherGet, handleSessionError, type PublisherApiResult } from '../api'
 import { buildErrorCard } from '../components/error-card'
 import { ROUTE_CHANGE_START_EVENT } from '../router'
@@ -96,6 +96,16 @@ interface SpatialData {
   bins: Array<{ lat: number; lon: number; hits: number }>
 }
 
+interface ErrorsData {
+  errors: Array<{
+    category: string
+    source: string
+    code: string
+    message_class: string
+    count: number
+  }>
+}
+
 interface FunnelData {
   days: Array<{
     day: string
@@ -134,6 +144,13 @@ function el<K extends keyof HTMLElementTagNameMap>(
   Object.assign(node, props)
   for (const c of children) node.append(c)
   return node
+}
+
+/** Locale-formatted chart axis labels for the envelope's range. */
+function rangeOf(envelope: { since_day: string; through_day: string }): { start: string; end: string } {
+  const formatDay = (day: string): string =>
+    formatDate(new Date(`${day}T00:00:00Z`), { dateStyle: 'medium', timeZone: 'UTC' })
+  return { start: formatDay(envelope.since_day), end: formatDay(envelope.through_day) }
 }
 
 function shell(...children: HTMLElement[]): HTMLElement {
@@ -260,12 +277,15 @@ export async function renderAnalyticsPage(
     if (!res.ok) return sectionError(overviewHost, title, res)
     const data = res.data.data
 
+    const breakdownHost = el('div', { className: 'publisher-analytics-errors' })
+    breakdownHost.hidden = true
     const tiles = el('div', { className: 'publisher-analytics-stats' }, [
       renderStatTile(t('publisher.analytics.overview.sessions'), formatNumber(Math.round(data.totals.sessions))),
       renderStatTile(t('publisher.analytics.overview.events'), formatNumber(Math.round(data.totals.events))),
-      renderStatTile(t('publisher.analytics.overview.errors'), formatNumber(Math.round(data.totals.errors))),
+      buildErrorsTile(Math.round(data.totals.errors), breakdownHost),
     ])
-    const children: (HTMLElement | SVGElement)[] = [sectionHeading(title), tiles]
+    const range = rangeOf(res.data)
+    const children: (HTMLElement | SVGElement)[] = [sectionHeading(title), tiles, breakdownHost]
     if (data.days.length === 0) {
       children.push(emptyNote())
     } else {
@@ -273,7 +293,7 @@ export async function renderAnalyticsPage(
         el('h3', { className: 'publisher-analytics-subheading', textContent: t('publisher.analytics.overview.sessionsPerDay') }),
         renderBarSeries(
           data.days.map(d => ({ label: d.day, value: d.sessions })),
-          { ariaLabel: t('publisher.analytics.overview.sessionsPerDay') },
+          { ariaLabel: t('publisher.analytics.overview.sessionsPerDay'), range },
         ),
         el('h3', { className: 'publisher-analytics-subheading', textContent: t('publisher.analytics.overview.platforms') }),
         renderMixBar(data.platforms, t('publisher.analytics.overview.platforms')),
@@ -282,6 +302,76 @@ export async function renderAnalyticsPage(
       )
     }
     overviewHost.replaceChildren(...children)
+  }
+
+  /** The errors stat doubles as a disclosure button: first click
+   * fetches the frequency-ordered breakdown into `host`, later
+   * clicks toggle it. State resets whenever the overview reloads
+   * (range/environment change), which also refreshes the table. */
+  function buildErrorsTile(total: number, host: HTMLElement): HTMLElement {
+    const tile = el('button', { className: 'publisher-analytics-stat publisher-analytics-stat-button', type: 'button' })
+    tile.setAttribute('aria-expanded', 'false')
+    tile.append(
+      el('span', { className: 'publisher-analytics-stat-label', textContent: t('publisher.analytics.overview.errors') }),
+      el('span', { className: 'publisher-analytics-stat-value', textContent: formatNumber(total) }),
+      el('span', { className: 'publisher-analytics-stat-hint', textContent: t('publisher.analytics.errors.expandHint') }),
+    )
+    let loaded = false
+    tile.addEventListener('click', () => {
+      const open = tile.getAttribute('aria-expanded') === 'true'
+      tile.setAttribute('aria-expanded', String(!open))
+      host.hidden = open
+      if (!open && !loaded) {
+        loaded = true
+        void loadErrorsBreakdown(host)
+      }
+    })
+    return tile
+  }
+
+  async function loadErrorsBreakdown(host: HTMLElement): Promise<void> {
+    const title = t('publisher.analytics.errors.title')
+    host.replaceChildren(loadingNote())
+    const res = await fetchSection<ErrorsData>(baseQuery('errors'))
+    if (disposed) return
+    if (!res.ok) return sectionError(host, title, res)
+    const rows = res.data.data.errors
+    if (rows.length === 0) {
+      host.replaceChildren(el('h3', { className: 'publisher-analytics-subheading', textContent: title }), emptyNote())
+      return
+    }
+    const table = el('table', { className: 'publisher-analytics-table' })
+    table.append(
+      el('thead', {}, [
+        el('tr', {}, [
+          el('th', { textContent: t('publisher.analytics.errors.count') }),
+          el('th', { textContent: t('publisher.analytics.errors.category') }),
+          el('th', { textContent: t('publisher.analytics.errors.source') }),
+          el('th', { textContent: t('publisher.analytics.errors.code') }),
+          el('th', { textContent: t('publisher.analytics.errors.message') }),
+        ]),
+      ]),
+    )
+    const body = el('tbody')
+    for (const row of rows) {
+      body.append(
+        el('tr', {}, [
+          el('td', { textContent: formatNumber(Math.round(row.count)) }),
+          // category/source/code are low-cardinality telemetry enums;
+          // message_class is already sanitized at emit.
+          el('td', { textContent: row.category }),
+          el('td', { textContent: row.source }),
+          el('td', { textContent: row.code || '—' }),
+          el('td', { className: 'publisher-analytics-error-message', textContent: row.message_class || '—' }),
+        ]),
+      )
+    }
+    table.append(body)
+    host.replaceChildren(
+      el('h3', { className: 'publisher-analytics-subheading', textContent: title }),
+      table,
+      el('p', { className: 'publisher-analytics-footnote', textContent: t('publisher.analytics.errors.orderNote') }),
+    )
   }
 
   async function loadDatasets(): Promise<void> {
@@ -359,6 +449,7 @@ export async function renderAnalyticsPage(
     const res = await fetchSection<FunnelData>(baseQuery('funnel'))
     if (disposed) return
     if (!res.ok) return sectionError(funnelHost, title, res)
+    const range = rangeOf(res.data)
     const days = res.data.data.days
     if (days.length === 0) {
       funnelHost.replaceChildren(sectionHeading(title), emptyNote())
@@ -375,7 +466,7 @@ export async function renderAnalyticsPage(
         el('h3', { className: 'publisher-analytics-subheading', textContent: label }),
         renderBarSeries(
           days.map(d => ({ label: d.day, value: pick(d) })),
-          { height: 56, ariaLabel: label },
+          { height: 56, ariaLabel: label, range },
         ),
       ]),
     )

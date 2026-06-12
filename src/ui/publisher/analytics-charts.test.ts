@@ -51,6 +51,22 @@ describe('renderBarSeries', () => {
   })
 })
 
+describe('renderBarSeries range labels', () => {
+  it('renders start/end axis labels when a range is supplied', () => {
+    const svg = renderBarSeries(
+      [{ label: 'a', value: 1 }, { label: 'b', value: 2 }],
+      { ariaLabel: 'x', range: { start: 'Mar 14, 2026', end: 'Jun 11, 2026' } },
+    )
+    const labels = [...svg.querySelectorAll('text.publisher-analytics-axis')].map(t => t.textContent)
+    expect(labels).toEqual(['Mar 14, 2026', 'Jun 11, 2026'])
+  })
+
+  it('omits axis labels for an empty series', () => {
+    const svg = renderBarSeries([], { ariaLabel: 'x', range: { start: 'a', end: 'b' } })
+    expect(svg.querySelectorAll('text')).toHaveLength(0)
+  })
+})
+
 describe('renderMixBar', () => {
   it('renders descending segments summing to 100% with a legend', () => {
     const host = renderMixBar({ browse: 1, orbit: 3 }, 'Triggers')

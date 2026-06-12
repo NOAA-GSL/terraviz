@@ -1455,3 +1455,32 @@
   display: block;
   color: var(--color-text-muted, #999999);
 }
+
+/* Analytics tab revisions: clickable errors tile + chart axis labels */
+.publisher-analytics-stat-button {
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+  color: inherit;
+}
+.publisher-analytics-stat-button:hover {
+  border-color: rgba(255, 255, 255, 0.3);
+}
+.publisher-analytics-stat-button[aria-expanded='true'] {
+  border-color: var(--color-accent, #4ea1ff);
+}
+.publisher-analytics-stat-hint {
+  font-size: calc(0.65rem * var(--ui-scale));
+  color: var(--color-accent, #4ea1ff);
+  margin-block-start: calc(0.15rem * var(--ui-scale));
+}
+.publisher-analytics-errors {
+  margin-block-start: calc(0.75rem * var(--ui-scale));
+}
+.publisher-analytics-error-message {
+  overflow-wrap: anywhere;
+}
+.publisher-analytics-axis {
+  fill: var(--color-text-muted, #999999);
+  font-size: 11px;
+}
