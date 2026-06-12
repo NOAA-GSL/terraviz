@@ -22,9 +22,9 @@
  *                     the basemap is vendored Natural Earth land +
  *                     country borders drawn as flat grayscale fills
  *                     (no tile fetches — see LAND_GEOJSON_URL).
- *   - Tours, VR &   — per-day engagement counts. (The rollups don't
- *     Orbit           split tour_ended by outcome; a true completion
- *                     funnel is an open question in the plan doc.)
+ *   - Tours, VR &   — per-day engagement series plus true outcomes:
+ *     Orbit           tour completion rate + outcome mix
+ *                     (analytics_outcomes_daily) and VR mode mix.
  *
  * Range / environment controls reload every section; the
  * spatial-only filters reload just the heatmap data.
@@ -41,6 +41,7 @@ import {
   renderMixBar,
   renderStatTile,
 } from '../analytics-charts'
+
 
 const ME_ENDPOINT = '/api/v1/publish/me'
 const ANALYTICS_ENDPOINT = '/api/v1/publish/analytics'
@@ -72,10 +73,10 @@ interface Envelope<T> {
 }
 
 interface OverviewData {
-  days: Array<{ day: string; sessions: number; events: number; errors: number }>
+  days: Array<{ day: string; sessions: number; events: number; errors: number; view_ms: number }>
   platforms: Record<string, number>
   countries: Array<{ country: string; sessions: number }>
-  totals: { sessions: number; events: number; errors: number }
+  totals: { sessions: number; events: number; errors: number; view_ms: number }
 }
 
 interface DatasetsData {
@@ -114,6 +115,10 @@ interface FunnelData {
     vr_started: number
     orbit_turns: number
   }>
+  outcomes: {
+    tour_ended: Record<string, number>
+    vr_session_started: Record<string, number>
+  }
 }
 
 export interface AnalyticsPageOptions {
@@ -279,10 +284,19 @@ export async function renderAnalyticsPage(
 
     const breakdownHost = el('div', { className: 'publisher-analytics-errors' })
     breakdownHost.hidden = true
+    const errorRate = data.totals.sessions > 0 ? data.totals.errors / data.totals.sessions : 0
     const tiles = el('div', { className: 'publisher-analytics-stats' }, [
       renderStatTile(t('publisher.analytics.overview.sessions'), formatNumber(Math.round(data.totals.sessions))),
+      renderStatTile(
+        t('publisher.analytics.overview.viewTime'),
+        data.totals.view_ms > 0 ? formatDurationMs(data.totals.view_ms) : '—',
+      ),
       renderStatTile(t('publisher.analytics.overview.events'), formatNumber(Math.round(data.totals.events))),
       buildErrorsTile(Math.round(data.totals.errors), breakdownHost),
+      renderStatTile(
+        t('publisher.analytics.overview.errorRate'),
+        formatNumber(errorRate, { style: 'percent', maximumFractionDigits: 1 }),
+      ),
     ])
     const range = rangeOf(res.data)
     const children: (HTMLElement | SVGElement)[] = [sectionHeading(title), tiles, breakdownHost]
@@ -294,6 +308,12 @@ export async function renderAnalyticsPage(
         renderBarSeries(
           data.days.map(d => ({ label: d.day, value: d.sessions })),
           { ariaLabel: t('publisher.analytics.overview.sessionsPerDay'), range },
+        ),
+        el('h3', { className: 'publisher-analytics-subheading', textContent: t('publisher.analytics.overview.viewTimePerDay') }),
+        renderBarSeries(
+          // Minutes, so tooltips read at human scale.
+          data.days.map(d => ({ label: d.day, value: d.view_ms / 60_000 })),
+          { ariaLabel: t('publisher.analytics.overview.viewTimePerDay'), range },
         ),
         el('h3', { className: 'publisher-analytics-subheading', textContent: t('publisher.analytics.overview.platforms') }),
         renderMixBar(data.platforms, t('publisher.analytics.overview.platforms')),
@@ -455,6 +475,30 @@ export async function renderAnalyticsPage(
       funnelHost.replaceChildren(sectionHeading(title), emptyNote())
       return
     }
+    const outcomes = res.data.data.outcomes
+    const toursStarted = days.reduce((n, d) => n + d.tours_started, 0)
+    const toursCompleted = outcomes.tour_ended.completed ?? 0
+    const completionBlocks: HTMLElement[] = []
+    if (toursStarted > 0 || Object.keys(outcomes.tour_ended).length > 0) {
+      completionBlocks.push(
+        el('div', { className: 'publisher-analytics-stats' }, [
+          renderStatTile(
+            t('publisher.analytics.funnel.completionRate'),
+            toursStarted > 0
+              ? formatNumber(toursCompleted / toursStarted, { style: 'percent', maximumFractionDigits: 0 })
+              : '—',
+          ),
+        ]),
+        el('h3', { className: 'publisher-analytics-subheading', textContent: t('publisher.analytics.funnel.tourOutcomes') }),
+        renderMixBar(outcomes.tour_ended, t('publisher.analytics.funnel.tourOutcomes')),
+      )
+    }
+    if (Object.keys(outcomes.vr_session_started).length > 0) {
+      completionBlocks.push(
+        el('h3', { className: 'publisher-analytics-subheading', textContent: t('publisher.analytics.funnel.vrModes') }),
+        renderMixBar(outcomes.vr_session_started, t('publisher.analytics.funnel.vrModes')),
+      )
+    }
     const series: Array<[string, (d: FunnelData['days'][number]) => number]> = [
       [t('publisher.analytics.funnel.toursStarted'), d => d.tours_started],
       [t('publisher.analytics.funnel.toursEnded'), d => d.tours_ended],
@@ -472,6 +516,7 @@ export async function renderAnalyticsPage(
     )
     funnelHost.replaceChildren(
       sectionHeading(title),
+      ...completionBlocks,
       el('div', { className: 'publisher-analytics-funnel' }, blocks),
     )
   }

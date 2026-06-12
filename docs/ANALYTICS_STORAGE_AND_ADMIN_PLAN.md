@@ -378,10 +378,14 @@ care who calls it.
 >   percentile *trends* need either a smarter rollup (per-day
 >   environment-level percentiles without the country split) or the
 >   live-AE leg. Folded into the open questions.
-> - **Funnel counts, not true funnels** — the daily rollup doesn't
->   split `tour_ended` by outcome, so the section shows per-day
->   engagement series (tours started/ended, VR sessions, Orbit
->   turns). Outcome dimensions are an open question.
+> - ~~**Funnel counts, not true funnels**~~ Resolved in the
+>   tab-revisions follow-up: `analytics_outcomes_daily` (migration
+>   0021) keeps `tour_ended.outcome` / `vr_session_started.mode`,
+>   and the section shows completion rate + outcome mixes. The same
+>   follow-up added the error-breakdown table
+>   (`analytics_errors_daily`, 0020), idle-tab-aware view time
+>   (`session_end.visible_ms` + metrics sums), error-rate tile, and
+>   chart date-range labels.
 > - Dataset ≈p50/≈p95 are loads-weighted averages of daily
 >   percentiles, labelled as such in the UI.
 
