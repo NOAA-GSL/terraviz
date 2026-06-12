@@ -1483,4 +1483,11 @@
 .publisher-analytics-axis {
   fill: var(--color-text-muted, #999999);
   font-size: 11px;
+  /* text-anchor start/end resolve against `direction`. The time
+   * axis is deliberately physical (oldest at the left, like the
+   * catalog Timeline), so pin anchoring LTR under RTL locales;
+   * plaintext bidi keeps localized date strings rendering
+   * naturally inside the run. */
+  direction: ltr;
+  unicode-bidi: plaintext;
 }
