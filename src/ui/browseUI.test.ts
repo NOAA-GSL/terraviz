@@ -883,12 +883,33 @@ async function flushMicrotasks(): Promise<void> {
   // hashQuery() awaits `crypto.subtle.digest`, which in happy-dom can
   // schedule its resolution on a separate task queue rather than a pure
   // microtask. Yield a few macro-tasks (with real timers) so the digest
-  // promise resolves before the test asserts.
+  // promise resolves. Only suitable for the NEGATIVE assertions (no
+  // emit expected) — positive assertions use the bounded poll below,
+  // because a fixed yield count still flaked on loaded CI runners.
   vi.useRealTimers()
   for (let i = 0; i < 5; i++) {
     await new Promise((resolve) => setTimeout(resolve, 0))
   }
   vi.useFakeTimers()
+}
+
+/** Poll (with real timers) until at least `count` browse_search
+ * events have been emitted, or ~2 s elapse. Deterministic about
+ * intent: the test only fails if the emit truly never lands, and is
+ * merely slower on a loaded runner instead of flaking. */
+async function waitForBrowseSearchEmits(
+  count = 1,
+  timeoutMs = 2_000,
+): Promise<ReturnType<typeof __peek>> {
+  vi.useRealTimers()
+  const deadline = Date.now() + timeoutMs
+  let evs = __peek().filter((e) => e.event_type === 'browse_search')
+  while (evs.length < count && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    evs = __peek().filter((e) => e.event_type === 'browse_search')
+  }
+  vi.useFakeTimers()
+  return evs
 }
 
 describe('showBrowseUI — browse_search emit', () => {
@@ -929,8 +950,7 @@ describe('showBrowseUI — browse_search emit', () => {
     // Debounce window not yet elapsed — no emit.
     expect(__peek().filter((e) => e.event_type === 'browse_search')).toHaveLength(0)
     await vi.advanceTimersByTimeAsync(500)
-    await flushMicrotasks()
-    const evs = __peek().filter((e) => e.event_type === 'browse_search')
+    const evs = await waitForBrowseSearchEmits()
     expect(evs).toHaveLength(1)
     const e = evs[0]
     if (e.event_type !== 'browse_search') throw new Error('unreachable')
@@ -947,8 +967,7 @@ describe('showBrowseUI — browse_search emit', () => {
     fireSearch('hur')
     fireSearch('hurr')
     await vi.advanceTimersByTimeAsync(500)
-    await flushMicrotasks()
-    const evs = __peek().filter((e) => e.event_type === 'browse_search')
+    const evs = await waitForBrowseSearchEmits()
     expect(evs).toHaveLength(1)
     const e = evs[0]
     if (e.event_type !== 'browse_search') throw new Error('unreachable')
