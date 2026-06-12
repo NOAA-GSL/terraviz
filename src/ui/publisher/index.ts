@@ -32,6 +32,7 @@ import { renderWorkflowsPage } from './pages/workflows'
 import { renderWorkflowDetailPage } from './pages/workflow-detail'
 import { renderWorkflowEditPage } from './pages/workflow-edit'
 import { renderFeaturedHeroPage } from './pages/featured-hero'
+import { renderAnalyticsPage } from './pages/analytics'
 import { renderTopbar } from './components/topbar'
 import '../../styles/publisher.css'
 
@@ -49,13 +50,14 @@ const PORTAL_CONTENT_ID = 'publisher-content'
  */
 export function routeForPath(
   pathname: string,
-): 'me' | 'datasets' | 'tours' | 'featured_hero' | 'import' | 'workflows' | 'unknown' {
+): 'me' | 'datasets' | 'tours' | 'featured_hero' | 'import' | 'workflows' | 'analytics' | 'unknown' {
   if (pathname === '/publish' || pathname.startsWith('/publish/me')) return 'me'
   if (pathname.startsWith('/publish/datasets')) return 'datasets'
   if (pathname.startsWith('/publish/tours')) return 'tours'
   if (pathname.startsWith('/publish/workflows')) return 'workflows'
   if (pathname.startsWith('/publish/featured-hero')) return 'featured_hero'
   if (pathname.startsWith('/publish/import')) return 'import'
+  if (pathname.startsWith('/publish/analytics')) return 'analytics'
   return 'unknown'
 }
 
@@ -250,6 +252,10 @@ function featuredHeroPage(mount: HTMLElement): RouteHandler {
   return () => void renderFeaturedHeroPage(mount)
 }
 
+function analyticsPage(mount: HTMLElement): RouteHandler {
+  return () => void renderAnalyticsPage(mount)
+}
+
 function notFoundPage(mount: HTMLElement): RouteHandler {
   return () => renderPlaceholder(mount, t('publisher.section.notFound'), '3pa/A')
 }
@@ -299,6 +305,7 @@ export async function bootPublisherPortal(): Promise<void> {
       },
       { pattern: '/publish/workflows/:id', handler: workflowDetailPage(content, getRouter) },
       { pattern: '/publish/featured-hero', handler: featuredHeroPage(content) },
+      { pattern: '/publish/analytics', handler: analyticsPage(content) },
       { pattern: '/publish/import', handler: importPage(content) },
     ],
     notFoundPage(content),

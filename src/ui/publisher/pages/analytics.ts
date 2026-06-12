@@ -1,0 +1,669 @@
+/**
+ * /publish/analytics — the operator analytics dashboard (Phase B of
+ * `docs/ANALYTICS_STORAGE_AND_ADMIN_PLAN.md`).
+ *
+ * Privileged-only (staff / admin / service), same client-side gate
+ * as featured-hero (the API enforces 403 regardless). Data comes
+ * from `GET /api/v1/publish/analytics` — typed sections over the
+ * Phase A rollup tables; everything shown is a sample-weighted
+ * estimate over complete UTC days through yesterday, external
+ * traffic only.
+ *
+ * Four sections:
+ *   - Overview      — sessions/events/errors per day, platform mix,
+ *                     top countries.
+ *   - Dataset       — top datasets by loads with trigger/source
+ *     engagement      mixes, ≈p50/≈p95 load times, on-globe dwell.
+ *   - Spatial       — a real MapLibre map with a `heatmap` layer
+ *     attention       over the 0.5° rollup bins, filterable by
+ *                     dataset / projection / signal. MapLibre is
+ *                     lazy-imported on first render so the portal
+ *                     chunk stays map-free for non-analytics visits;
+ *                     the basemap is vendored Natural Earth land +
+ *                     country borders drawn as flat grayscale fills
+ *                     (no tile fetches — see LAND_GEOJSON_URL).
+ *   - Tours, VR &   — per-day engagement counts. (The rollups don't
+ *     Orbit           split tour_ended by outcome; a true completion
+ *                     funnel is an open question in the plan doc.)
+ *
+ * Range / environment controls reload every section; the
+ * spatial-only filters reload just the heatmap data.
+ */
+
+import { t } from '../../../i18n'
+import { formatNumber } from '../../../i18n/format'
+import { publisherGet, handleSessionError, type PublisherApiResult } from '../api'
+import { buildErrorCard } from '../components/error-card'
+import { ROUTE_CHANGE_START_EVENT } from '../router'
+import {
+  formatDurationMs,
+  renderBarSeries,
+  renderMixBar,
+  renderStatTile,
+} from '../analytics-charts'
+
+const ME_ENDPOINT = '/api/v1/publish/me'
+const ANALYTICS_ENDPOINT = '/api/v1/publish/analytics'
+/** Vendored Natural Earth 1:110m land polygons + admin-0 country
+ * boundary lines (public domain), minified + coordinate-rounded —
+ * ~54 KB gzipped combined, lazy-fetched only when the spatial
+ * section renders. Drawn as a flat grayscale basemap (dark ocean,
+ * gray land, slightly lighter country borders for geographic
+ * context) so the heatmap's color ramp is the only color on the
+ * map. No tile fetches at all — the heatmap works on bare
+ * localhost dev too. */
+const LAND_GEOJSON_URL = '/assets/ne_110m_land.geojson'
+const BORDERS_GEOJSON_URL = '/assets/ne_110m_admin0_borders.geojson'
+const OCEAN_COLOR = '#0b0e15'
+const LAND_COLOR = '#3a4150'
+const BORDER_COLOR = '#5a6374'
+const RANGE_CHOICES = [7, 30, 90, 365] as const
+const ENVIRONMENTS = ['production', 'preview'] as const
+
+interface MeResponse {
+  role: string
+  is_admin: boolean
+}
+
+interface Envelope<T> {
+  since_day: string
+  through_day: string
+  data: T
+}
+
+interface OverviewData {
+  days: Array<{ day: string; sessions: number; events: number; errors: number }>
+  platforms: Record<string, number>
+  countries: Array<{ country: string; sessions: number }>
+  totals: { sessions: number; events: number; errors: number }
+}
+
+interface DatasetsData {
+  datasets: Array<{
+    layer_id: string
+    title: string | null
+    loads: number
+    trigger_mix: Record<string, number>
+    source_mix: Record<string, number>
+    load_ms_p50: number | null
+    load_ms_p95: number | null
+    dwell_ms_sum: number
+  }>
+}
+
+interface SpatialData {
+  layers: Array<{ id: string; title: string | null }>
+  bins: Array<{ lat: number; lon: number; hits: number }>
+}
+
+interface FunnelData {
+  days: Array<{
+    day: string
+    tours_started: number
+    tours_ended: number
+    vr_started: number
+    orbit_turns: number
+  }>
+}
+
+export interface AnalyticsPageOptions {
+  fetchFn?: typeof fetch
+  navigate?: (url: string) => void
+}
+
+interface PageState {
+  days: (typeof RANGE_CHOICES)[number]
+  environment: (typeof ENVIRONMENTS)[number]
+  spatialEvent: 'camera_settled' | 'map_click'
+  /** undefined = all datasets, '' = default Earth, else a layer id. */
+  spatialLayer: string | undefined
+  /** undefined = all projections. */
+  spatialProjection: string | undefined
+}
+
+function clientIsPrivileged(me: MeResponse): boolean {
+  return me.is_admin === true || me.role === 'staff' || me.role === 'service'
+}
+
+function el<K extends keyof HTMLElementTagNameMap>(
+  tag: K,
+  props: Partial<HTMLElementTagNameMap[K]> & { className?: string } = {},
+  children: (HTMLElement | SVGElement | string)[] = [],
+): HTMLElementTagNameMap[K] {
+  const node = document.createElement(tag)
+  Object.assign(node, props)
+  for (const c of children) node.append(c)
+  return node
+}
+
+function shell(...children: HTMLElement[]): HTMLElement {
+  const main = el('main', { className: 'publisher-shell publisher-analytics' })
+  main.append(...children)
+  return main
+}
+
+export async function renderAnalyticsPage(
+  mount: HTMLElement,
+  options: AnalyticsPageOptions = {},
+): Promise<void> {
+  const fetchFn = options.fetchFn
+  mount.replaceChildren(
+    shell(el('p', { className: 'publisher-loading', textContent: t('publisher.analytics.loading') })),
+  )
+
+  const meRes = await publisherGet<MeResponse>(ME_ENDPOINT, { fetchFn })
+  if (!meRes.ok) {
+    if (meRes.kind === 'session') {
+      if (handleSessionError({ navigate: options.navigate }) === 'navigating') return
+      mount.replaceChildren(shell(buildErrorCard('session')))
+      return
+    }
+    const details = meRes.kind === 'server' ? { status: meRes.status, body: meRes.body } : {}
+    mount.replaceChildren(shell(buildErrorCard(meRes.kind, details)))
+    return
+  }
+  if (!clientIsPrivileged(meRes.data)) {
+    mount.replaceChildren(
+      shell(
+        el('h1', { textContent: t('publisher.analytics.title') }),
+        el('p', {
+          className: 'publisher-hero-restricted',
+          textContent: t('publisher.analytics.restricted'),
+        }),
+      ),
+    )
+    return
+  }
+
+  const state: PageState = {
+    days: 30,
+    environment: 'production',
+    spatialEvent: 'camera_settled',
+    spatialLayer: undefined,
+    spatialProjection: undefined,
+  }
+
+  // One container per section so a slow/failed section never blocks
+  // the others. The spatial section keeps its MapLibre instance
+  // across filter changes (data-only updates) and rebuilds it on
+  // range/environment changes (full section re-render).
+  const overviewHost = el('section', { className: 'publisher-analytics-section' })
+  const datasetsHost = el('section', { className: 'publisher-analytics-section' })
+  const spatialHost = el('section', { className: 'publisher-analytics-section' })
+  const funnelHost = el('section', { className: 'publisher-analytics-section' })
+  let heatmap: HeatmapHandle | null = null
+
+  // Dispose on SPA route transitions (same pattern as
+  // dataset-detail's transcode polling): mark the render dead so
+  // in-flight section loads stop touching the DOM, and tear down
+  // the MapLibre instance + its listeners.
+  let disposed = false
+  const onRouteChange = (): void => {
+    disposed = true
+    window.removeEventListener(ROUTE_CHANGE_START_EVENT, onRouteChange)
+    if (heatmap) {
+      heatmap.destroy()
+      heatmap = null
+    }
+  }
+  window.addEventListener(ROUTE_CHANGE_START_EVENT, onRouteChange)
+
+  const header = buildHeader(state, () => {
+    if (heatmap) {
+      heatmap.destroy()
+      heatmap = null
+    }
+    void loadOverview()
+    void loadDatasets()
+    void loadSpatial()
+    void loadFunnel()
+  })
+
+  mount.replaceChildren(shell(header, overviewHost, datasetsHost, spatialHost, funnelHost))
+
+  // Populate on first visit — the header's onChange only covers
+  // subsequent control changes.
+  void loadOverview()
+  void loadDatasets()
+  void loadSpatial()
+  void loadFunnel()
+
+  async function fetchSection<T>(query: string): Promise<PublisherApiResult<Envelope<T>>> {
+    return publisherGet<Envelope<T>>(`${ANALYTICS_ENDPOINT}${query}`, { fetchFn })
+  }
+
+  function baseQuery(section: string): string {
+    return `?section=${section}&days=${state.days}&environment=${state.environment}`
+  }
+
+  function sectionError(host: HTMLElement, title: string, res: { kind: 'session' | 'network' | 'not_found' | 'server'; status?: number; body?: string }): void {
+    if (res.kind === 'session') {
+      if (handleSessionError({ navigate: options.navigate }) === 'navigating') return
+    }
+    const details = res.kind === 'server' ? { status: res.status, body: res.body } : {}
+    host.replaceChildren(sectionHeading(title), buildErrorCard(res.kind, details))
+  }
+
+  function sectionHeading(text: string): HTMLElement {
+    return el('h2', { className: 'publisher-analytics-heading', textContent: text })
+  }
+
+  function emptyNote(): HTMLElement {
+    return el('p', { className: 'publisher-analytics-empty', textContent: t('publisher.analytics.empty') })
+  }
+
+  async function loadOverview(): Promise<void> {
+    const title = t('publisher.analytics.section.overview')
+    overviewHost.replaceChildren(sectionHeading(title), loadingNote())
+    const res = await fetchSection<OverviewData>(baseQuery('overview'))
+    if (disposed) return
+    if (!res.ok) return sectionError(overviewHost, title, res)
+    const data = res.data.data
+
+    const tiles = el('div', { className: 'publisher-analytics-stats' }, [
+      renderStatTile(t('publisher.analytics.overview.sessions'), formatNumber(Math.round(data.totals.sessions))),
+      renderStatTile(t('publisher.analytics.overview.events'), formatNumber(Math.round(data.totals.events))),
+      renderStatTile(t('publisher.analytics.overview.errors'), formatNumber(Math.round(data.totals.errors))),
+    ])
+    const children: (HTMLElement | SVGElement)[] = [sectionHeading(title), tiles]
+    if (data.days.length === 0) {
+      children.push(emptyNote())
+    } else {
+      children.push(
+        el('h3', { className: 'publisher-analytics-subheading', textContent: t('publisher.analytics.overview.sessionsPerDay') }),
+        renderBarSeries(
+          data.days.map(d => ({ label: d.day, value: d.sessions })),
+          { ariaLabel: t('publisher.analytics.overview.sessionsPerDay') },
+        ),
+        el('h3', { className: 'publisher-analytics-subheading', textContent: t('publisher.analytics.overview.platforms') }),
+        renderMixBar(data.platforms, t('publisher.analytics.overview.platforms')),
+        el('h3', { className: 'publisher-analytics-subheading', textContent: t('publisher.analytics.overview.countries') }),
+        countriesTable(data.countries),
+      )
+    }
+    overviewHost.replaceChildren(...children)
+  }
+
+  async function loadDatasets(): Promise<void> {
+    const title = t('publisher.analytics.section.datasets')
+    datasetsHost.replaceChildren(sectionHeading(title), loadingNote())
+    const res = await fetchSection<DatasetsData>(baseQuery('datasets'))
+    if (disposed) return
+    if (!res.ok) return sectionError(datasetsHost, title, res)
+    const rows = res.data.data.datasets
+    if (rows.length === 0) {
+      datasetsHost.replaceChildren(sectionHeading(title), emptyNote())
+      return
+    }
+    datasetsHost.replaceChildren(
+      sectionHeading(title),
+      datasetsTable(rows),
+      el('p', { className: 'publisher-analytics-footnote', textContent: t('publisher.analytics.datasets.approxNote') }),
+    )
+  }
+
+  async function loadSpatial(): Promise<void> {
+    const title = t('publisher.analytics.section.spatial')
+    if (!spatialHost.firstChild) {
+      spatialHost.replaceChildren(sectionHeading(title), loadingNote())
+    }
+    const spatialParams =
+      `&event=${encodeURIComponent(state.spatialEvent)}` +
+      (state.spatialLayer !== undefined ? `&layer=${encodeURIComponent(state.spatialLayer)}` : '') +
+      (state.spatialProjection !== undefined
+        ? `&projection=${encodeURIComponent(state.spatialProjection)}`
+        : '')
+    const res = await fetchSection<SpatialData>(baseQuery('spatial') + spatialParams)
+    if (disposed) return
+    if (!res.ok) {
+      // The error card replaces the section DOM — tear down any
+      // mounted map so a later success rebuilds against a live
+      // container instead of feeding bins to a detached one.
+      if (heatmap) {
+        heatmap.destroy()
+        heatmap = null
+      }
+      return sectionError(spatialHost, title, res)
+    }
+    const data = res.data.data
+
+    if (heatmap) {
+      heatmap.setBins(data.bins)
+      const note = spatialHost.querySelector<HTMLElement>('.publisher-analytics-empty')
+      if (note) note.hidden = data.bins.length > 0
+      return
+    }
+
+    const controls = spatialControls(data.layers, state, () => void loadSpatial())
+    const mapContainer = el('div', { className: 'publisher-analytics-map' })
+    mapContainer.setAttribute('role', 'img')
+    mapContainer.setAttribute('aria-label', t('publisher.analytics.spatial.mapAria'))
+    // Always present, toggled by data-only updates above.
+    const note = emptyNote()
+    note.hidden = data.bins.length > 0
+    spatialHost.replaceChildren(sectionHeading(title), controls, mapContainer, note)
+    const mounted = await mountHeatmap(mapContainer, data.bins)
+    if (disposed) {
+      // Navigated away while the dynamic import / map boot was in
+      // flight — the route-change handler already ran, so this
+      // late-created instance is ours to destroy.
+      mounted.destroy()
+      return
+    }
+    heatmap = mounted
+  }
+
+  async function loadFunnel(): Promise<void> {
+    const title = t('publisher.analytics.section.funnel')
+    funnelHost.replaceChildren(sectionHeading(title), loadingNote())
+    const res = await fetchSection<FunnelData>(baseQuery('funnel'))
+    if (disposed) return
+    if (!res.ok) return sectionError(funnelHost, title, res)
+    const days = res.data.data.days
+    if (days.length === 0) {
+      funnelHost.replaceChildren(sectionHeading(title), emptyNote())
+      return
+    }
+    const series: Array<[string, (d: FunnelData['days'][number]) => number]> = [
+      [t('publisher.analytics.funnel.toursStarted'), d => d.tours_started],
+      [t('publisher.analytics.funnel.toursEnded'), d => d.tours_ended],
+      [t('publisher.analytics.funnel.vrSessions'), d => d.vr_started],
+      [t('publisher.analytics.funnel.orbitTurns'), d => d.orbit_turns],
+    ]
+    const blocks = series.map(([label, pick]) =>
+      el('div', { className: 'publisher-analytics-funnel-block' }, [
+        el('h3', { className: 'publisher-analytics-subheading', textContent: label }),
+        renderBarSeries(
+          days.map(d => ({ label: d.day, value: pick(d) })),
+          { height: 56, ariaLabel: label },
+        ),
+      ]),
+    )
+    funnelHost.replaceChildren(
+      sectionHeading(title),
+      el('div', { className: 'publisher-analytics-funnel' }, blocks),
+    )
+  }
+
+  function loadingNote(): HTMLElement {
+    return el('p', { className: 'publisher-loading', textContent: t('publisher.analytics.loading') })
+  }
+
+  function countriesTable(countries: OverviewData['countries']): HTMLElement {
+    const table = el('table', { className: 'publisher-analytics-table' })
+    const head = el('tr', {}, [
+      el('th', { textContent: t('publisher.analytics.overview.country') }),
+      el('th', { textContent: t('publisher.analytics.overview.sessions') }),
+    ])
+    table.append(el('thead', {}, [head]))
+    const body = el('tbody')
+    for (const row of countries) {
+      body.append(
+        el('tr', {}, [
+          el('td', { textContent: row.country }),
+          el('td', { textContent: formatNumber(Math.round(row.sessions)) }),
+        ]),
+      )
+    }
+    table.append(body)
+    return table
+  }
+
+  function datasetsTable(rows: DatasetsData['datasets']): HTMLElement {
+    const table = el('table', { className: 'publisher-analytics-table' })
+    const head = el('tr', {}, [
+      el('th', { textContent: t('publisher.analytics.datasets.dataset') }),
+      el('th', { textContent: t('publisher.analytics.datasets.loads') }),
+      el('th', { textContent: t('publisher.analytics.datasets.triggers') }),
+      el('th', { textContent: t('publisher.analytics.datasets.sources') }),
+      el('th', { textContent: t('publisher.analytics.datasets.loadP50') }),
+      el('th', { textContent: t('publisher.analytics.datasets.loadP95') }),
+      el('th', { textContent: t('publisher.analytics.datasets.dwell') }),
+    ])
+    table.append(el('thead', {}, [head]))
+    const body = el('tbody')
+    for (const row of rows) {
+      // The catalog title is the identity humans read; the raw
+      // telemetry id survives only as a hover tooltip for the rare
+      // correlate-with-AE/rollup-tables debugging need. Rows whose
+      // id resolves to no catalog title show the id itself — it's
+      // the only identifier they have.
+      const nameCell = el('td', { className: 'publisher-analytics-dataset' }, [
+        el('span', {
+          className: row.title ? 'publisher-analytics-dataset-title' : 'publisher-analytics-dataset-id',
+          textContent: row.title ?? row.layer_id,
+        }),
+      ])
+      nameCell.title = row.layer_id
+      body.append(
+        el('tr', {}, [
+          nameCell,
+          el('td', { textContent: formatNumber(Math.round(row.loads)) }),
+          el('td', {}, [renderMixBar(row.trigger_mix, t('publisher.analytics.datasets.triggers'))]),
+          el('td', {}, [renderMixBar(row.source_mix, t('publisher.analytics.datasets.sources'))]),
+          el('td', { textContent: row.load_ms_p50 != null ? `${formatNumber(Math.round(row.load_ms_p50))} ms` : '—' }), // i18n-exempt: unit abbreviation
+          el('td', { textContent: row.load_ms_p95 != null ? `${formatNumber(Math.round(row.load_ms_p95))} ms` : '—' }), // i18n-exempt: unit abbreviation
+          el('td', { textContent: row.dwell_ms_sum > 0 ? formatDurationMs(row.dwell_ms_sum) : '—' }),
+        ]),
+      )
+    }
+    table.append(body)
+    return table
+  }
+}
+
+// --- Header controls -------------------------------------------------
+
+function buildHeader(state: PageState, onChange: () => void): HTMLElement {
+  const heading = document.createElement('h1')
+  heading.textContent = t('publisher.analytics.title')
+
+  const note = document.createElement('p')
+  note.className = 'publisher-analytics-freshness'
+  note.textContent = t('publisher.analytics.freshness')
+
+  const controls = document.createElement('div')
+  controls.className = 'publisher-analytics-controls'
+
+  const rangeSelect = labeledSelect(
+    t('publisher.analytics.controls.range'),
+    RANGE_CHOICES.map(d => ({
+      value: String(d),
+      label: t('publisher.analytics.controls.rangeDays', { days: String(d) }),
+    })),
+    String(state.days),
+    value => {
+      state.days = parseInt(value, 10) as PageState['days']
+      onChange()
+    },
+  )
+  const envSelect = labeledSelect(
+    t('publisher.analytics.controls.environment'),
+    [
+      { value: 'production', label: t('publisher.analytics.env.production') },
+      { value: 'preview', label: t('publisher.analytics.env.preview') },
+    ],
+    state.environment,
+    value => {
+      state.environment = value as PageState['environment']
+      onChange()
+    },
+  )
+  controls.append(rangeSelect, envSelect)
+
+  const header = document.createElement('header')
+  header.className = 'publisher-analytics-header'
+  header.append(heading, note, controls)
+  return header
+}
+
+function spatialControls(
+  layers: Array<{ id: string; title: string | null }>,
+  state: PageState,
+  onChange: () => void,
+): HTMLElement {
+  const host = document.createElement('div')
+  host.className = 'publisher-analytics-controls'
+
+  host.append(
+    labeledSelect(
+      t('publisher.analytics.spatial.event'),
+      [
+        { value: 'camera_settled', label: t('publisher.analytics.spatial.eventCamera') },
+        { value: 'map_click', label: t('publisher.analytics.spatial.eventClicks') },
+      ],
+      state.spatialEvent,
+      value => {
+        state.spatialEvent = value as PageState['spatialEvent']
+        onChange()
+      },
+    ),
+    labeledSelect(
+      t('publisher.analytics.spatial.dataset'),
+      [
+        { value: '*', label: t('publisher.analytics.spatial.allDatasets') },
+        { value: '', label: t('publisher.analytics.spatial.defaultEarth') },
+        ...layers
+          .filter(layer => layer.id !== '')
+          .map(layer => ({ value: layer.id, label: layer.title ?? layer.id })),
+      ],
+      state.spatialLayer ?? '*',
+      value => {
+        state.spatialLayer = value === '*' ? undefined : value
+        onChange()
+      },
+    ),
+    labeledSelect(
+      t('publisher.analytics.spatial.projection'),
+      [
+        { value: '*', label: t('publisher.analytics.spatial.allProjections') },
+        { value: 'globe', label: t('publisher.analytics.spatial.projGlobe') },
+        { value: 'mercator', label: t('publisher.analytics.spatial.projMercator') },
+        { value: 'vr', label: t('publisher.analytics.spatial.projVr') },
+        { value: 'ar', label: t('publisher.analytics.spatial.projAr') },
+      ],
+      state.spatialProjection ?? '*',
+      value => {
+        state.spatialProjection = value === '*' ? undefined : value
+        onChange()
+      },
+    ),
+  )
+  return host
+}
+
+function labeledSelect(
+  labelText: string,
+  optionDefs: Array<{ value: string; label: string }>,
+  selected: string,
+  onChange: (value: string) => void,
+): HTMLElement {
+  const label = document.createElement('label')
+  label.className = 'publisher-analytics-control'
+  const caption = document.createElement('span')
+  caption.textContent = labelText
+  const select = document.createElement('select')
+  for (const def of optionDefs) {
+    const option = document.createElement('option')
+    option.value = def.value
+    option.textContent = def.label
+    if (def.value === selected) option.selected = true
+    select.appendChild(option)
+  }
+  select.addEventListener('change', () => onChange(select.value))
+  label.append(caption, select)
+  return label
+}
+
+// --- MapLibre heatmap -------------------------------------------------
+
+interface HeatmapHandle {
+  setBins(bins: SpatialData['bins']): void
+  destroy(): void
+}
+
+function binsToGeoJson(bins: SpatialData['bins']): GeoJSON.FeatureCollection {
+  const max = Math.max(...bins.map(b => b.hits), 1)
+  return {
+    type: 'FeatureCollection',
+    features: bins.map(b => ({
+      type: 'Feature',
+      geometry: {
+        type: 'Point',
+        // Bin values are the cell's south-west corner; render at
+        // the cell center.
+        coordinates: [b.lon + 0.25, b.lat + 0.25],
+      },
+      properties: { weight: b.hits / max },
+    })),
+  }
+}
+
+async function mountHeatmap(container: HTMLElement, bins: SpatialData['bins']): Promise<HeatmapHandle> {
+  const [{ default: maplibregl }] = await Promise.all([
+    import('maplibre-gl'),
+    // Vite injects the stylesheet on dynamic import; the portal CSS
+    // bundle stays map-free until this section first renders.
+    import('maplibre-gl/dist/maplibre-gl.css'),
+  ])
+
+  const map = new maplibregl.Map({
+    container,
+    style: {
+      version: 8,
+      sources: {
+        land: { type: 'geojson', data: LAND_GEOJSON_URL },
+        borders: { type: 'geojson', data: BORDERS_GEOJSON_URL },
+      },
+      layers: [
+        { id: 'ocean', type: 'background', paint: { 'background-color': OCEAN_COLOR } },
+        { id: 'land', type: 'fill', source: 'land', paint: { 'fill-color': LAND_COLOR } },
+        {
+          id: 'borders',
+          type: 'line',
+          source: 'borders',
+          paint: { 'line-color': BORDER_COLOR, 'line-width': 0.6 },
+        },
+      ],
+    },
+    center: [0, 20],
+    zoom: 0.9,
+    attributionControl: false,
+  })
+
+  // `setBins` before the map's `load` event would be a silent no-op
+  // (the GeoJSON source doesn't exist yet) — keep the latest bins
+  // and apply them when the source is created.
+  let latestBins = bins
+  let sourceReady = false
+
+  map.on('load', () => {
+    map.addSource('attention', { type: 'geojson', data: binsToGeoJson(latestBins) })
+    map.addLayer({
+      id: 'attention-heat',
+      type: 'heatmap',
+      source: 'attention',
+      paint: {
+        'heatmap-weight': ['get', 'weight'],
+        'heatmap-intensity': ['interpolate', ['linear'], ['zoom'], 0, 0.8, 8, 2],
+        'heatmap-radius': ['interpolate', ['linear'], ['zoom'], 0, 8, 4, 22, 8, 44],
+        'heatmap-opacity': 0.85,
+      },
+    })
+    sourceReady = true
+  })
+
+  return {
+    setBins(next) {
+      latestBins = next
+      if (!sourceReady) return
+      const source = map.getSource('attention')
+      if (source && 'setData' in source) {
+        ;(source as { setData(data: GeoJSON.FeatureCollection): void }).setData(binsToGeoJson(next))
+      }
+    },
+    destroy() {
+      map.remove()
+    },
+  }
+}

@@ -21,8 +21,10 @@ import {
   archiveKeyFor,
   computeRollups,
   exportDay,
+  footprintRadiusDeg,
   gzipNdjson,
   isValidDay,
+  MAX_FOOTPRINT_DEG,
   readBookmark,
   yesterdayUtc,
 } from './analytics-export'
@@ -131,15 +133,15 @@ describe('computeRollups', () => {
     expect(ds.load_ms_p50).toBe(75)
   })
 
-  it('bins spatial events at 0.5 degrees, keyed by dataset and projection', () => {
+  it('bins zoomed-in spatial events at 0.5 degrees, keyed by dataset and projection', () => {
     const rollups = computeRollups(
       [
-        decoded({ event_type: 'camera_settled', fields: { center_lat: 39.739, center_lon: -104.99, layer_id: 'DS1', projection: 'globe' } }),
-        decoded({ event_type: 'camera_settled', fields: { center_lat: 39.9, center_lon: -104.7, layer_id: 'DS1', projection: 'globe' }, sample_interval: 3 }),
-        decoded({ event_type: 'camera_settled', fields: { center_lat: 39.739, center_lon: -104.99, layer_id: 'DS1', projection: 'vr' } }),
+        decoded({ event_type: 'camera_settled', fields: { center_lat: 39.739, center_lon: -104.99, zoom: 8, layer_id: 'DS1', projection: 'globe' } }),
+        decoded({ event_type: 'camera_settled', fields: { center_lat: 39.9, center_lon: -104.7, zoom: 8, layer_id: 'DS1', projection: 'globe' }, sample_interval: 3 }),
+        decoded({ event_type: 'camera_settled', fields: { center_lat: 39.739, center_lon: -104.99, zoom: 8, layer_id: 'DS1', projection: 'vr' } }),
         decoded({ event_type: 'map_click', fields: { lat: 35.011, lon: 135.768, hit_kind: 'surface' } }),
         // Internal — excluded.
-        decoded({ event_type: 'camera_settled', fields: { center_lat: 1, center_lon: 1, layer_id: '', projection: 'globe' }, internal: true }),
+        decoded({ event_type: 'camera_settled', fields: { center_lat: 1, center_lon: 1, zoom: 8, layer_id: '', projection: 'globe' }, internal: true }),
         // Garbage coordinates — skipped.
         decoded({ event_type: 'map_click', fields: { lat: 999, lon: 0 } }),
       ],
@@ -152,6 +154,69 @@ describe('computeRollups', () => {
     expect(gaze?.hits).toBe(1)
     const click = rollups.spatial.find((r) => r.event_type === 'map_click')
     expect(click).toMatchObject({ lat_bin: 35, lon_bin: 135.5, layer_id: '', projection: '' })
+  })
+
+  it('diffuses zoomed-out camera attention over a footprint, conserving total mass', () => {
+    const rollups = computeRollups(
+      [
+        decoded({
+          event_type: 'camera_settled',
+          sample_interval: 4,
+          fields: { center_lat: 0, center_lon: 0, zoom: 3, layer_id: '', projection: 'globe' },
+        }),
+      ],
+      DAY,
+    )
+    // zoom 3 → radius 90/8 = 11.25°, capped at MAX_FOOTPRINT_DEG (6°):
+    // a wide wash of fractional bins rather than one point.
+    expect(rollups.spatial.length).toBeGreaterThan(100)
+    const total = rollups.spatial.reduce((n, r) => n + r.hits, 0)
+    expect(total).toBeCloseTo(4, 6)
+    // The center cell carries the most weight (linear-cone kernel).
+    const max = Math.max(...rollups.spatial.map((r) => r.hits))
+    const center = rollups.spatial.find((r) => r.lat_bin === 0 && r.lon_bin === 0)
+    expect(center?.hits).toBeCloseTo(max, 6)
+    expect(max).toBeLessThan(4) // genuinely spread, not a point
+  })
+
+  it('concentrates the same mass into fewer cells as zoom increases', () => {
+    const at = (zoom: number) =>
+      computeRollups(
+        [decoded({ event_type: 'camera_settled', fields: { center_lat: 0, center_lon: 0, zoom, layer_id: '', projection: 'globe' } })],
+        DAY,
+      ).spatial
+    const wide = at(3)
+    const mid = at(6)
+    const tight = at(8)
+    expect(wide.length).toBeGreaterThan(mid.length)
+    expect(mid.length).toBeGreaterThan(tight.length)
+    expect(tight).toHaveLength(1)
+    expect(tight[0].hits).toBe(1)
+  })
+
+  it('wraps footprint cells across the antimeridian', () => {
+    const rollups = computeRollups(
+      [
+        decoded({
+          event_type: 'camera_settled',
+          fields: { center_lat: 0, center_lon: 179.8, zoom: 4, layer_id: '', projection: 'globe' },
+        }),
+      ],
+      DAY,
+    )
+    const lons = rollups.spatial.map((r) => r.lon_bin)
+    expect(Math.min(...lons)).toBeGreaterThanOrEqual(-180)
+    expect(Math.max(...lons)).toBeLessThan(180)
+    // Cells spilled over +180 landed on the −180 side.
+    expect(lons.some((l) => l < -170)).toBe(true)
+    expect(rollups.spatial.reduce((n, r) => n + r.hits, 0)).toBeCloseTo(1, 6)
+  })
+
+  it('derives the footprint radius from zoom with floor and cap', () => {
+    expect(footprintRadiusDeg(0)).toBe(MAX_FOOTPRINT_DEG)
+    expect(footprintRadiusDeg(5)).toBeCloseTo(90 / 32, 6)
+    expect(footprintRadiusDeg(8)).toBe(0.5)
+    expect(footprintRadiusDeg(Number.NaN)).toBe(0.5)
   })
 })
 
