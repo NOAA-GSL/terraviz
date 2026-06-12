@@ -304,7 +304,7 @@ export async function renderFeedbackPage(
         el('td', { textContent: row.dataset_id || '—' }),
         el('td', { className: 'publisher-feedback-when', textContent: formatWhen(row.created_at) }),
       ])
-      tr.addEventListener('click', () => showAiDetail(row))
+      wireRowActivation(tr, () => showAiDetail(row))
       body.append(tr)
     }
     table.append(body)
@@ -336,7 +336,7 @@ export async function renderFeedbackPage(
         el('td', { textContent: row.hasScreenshot ? '📷' : '' }), // i18n-exempt: pictographic indicator
         el('td', { className: 'publisher-feedback-when', textContent: formatWhen(row.created_at) }),
       ])
-      tr.addEventListener('click', () => showGeneralDetail(row))
+      wireRowActivation(tr, () => showGeneralDetail(row))
       body.append(tr)
     }
     table.append(body)
@@ -358,7 +358,10 @@ export async function renderFeedbackPage(
     if (row.tags.length > 0) fields.push([t('publisher.feedback.ai.topTags'), row.tags.join(', ')])
     fields.push([t('publisher.feedback.ai.userMessage'), row.user_message || '—'])
     fields.push([t('publisher.feedback.detail.assistantResponse'), row.assistant_message || '—'])
-    openOverlay(row.rating === 'thumbs-up' ? '👍' : '👎', fields) // i18n-exempt: pictographic rating icon
+    const ratingLabel = row.rating === 'thumbs-up'
+      ? t('publisher.feedback.ai.positive')
+      : t('publisher.feedback.ai.negative')
+    openOverlay(`${row.rating === 'thumbs-up' ? '👍' : '👎'} ${ratingLabel}`, fields) // i18n-exempt: pictographic rating icon prefix
   }
 
   function showGeneralDetail(row: GeneralRow): void {
@@ -461,12 +464,14 @@ function buildHeader(
   const tabs = document.createElement('div')
   tabs.className = 'publisher-feedback-tabs'
   tabs.setAttribute('role', 'tablist')
+  tabs.setAttribute('aria-label', t('publisher.feedback.tabsAria'))
   const defs: Array<['ai' | 'general', string]> = [
     ['ai', t('publisher.feedback.tab.ai')],
     ['general', t('publisher.feedback.tab.general')],
   ]
   for (const [view, label] of defs) {
     const button = document.createElement('button')
+    button.type = 'button'
     button.className = 'publisher-feedback-tab'
     button.setAttribute('role', 'tab')
     button.textContent = label
@@ -511,6 +516,19 @@ function buildHeader(
   header.className = 'publisher-feedback-header'
   header.append(heading, controls)
   return header
+}
+
+/** Clickable table rows must also work from the keyboard: focusable
+ * via Tab, activated with Enter/Space like the click path. */
+function wireRowActivation(tr: HTMLTableRowElement, open: () => void): void {
+  tr.tabIndex = 0
+  tr.addEventListener('click', open)
+  tr.addEventListener('keydown', e => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault()
+      open()
+    }
+  })
 }
 
 function clippedCell(text: string): HTMLElement {

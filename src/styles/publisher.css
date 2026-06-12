@@ -1624,3 +1624,10 @@
   border: 1px solid rgba(255, 255, 255, 0.1);
   display: block;
 }
+.publisher-feedback-row:focus-visible td {
+  background: rgba(255, 255, 255, 0.06);
+}
+.publisher-feedback-row:focus-visible {
+  outline: 2px solid var(--color-accent, #4ea1ff);
+  outline-offset: -2px;
+}
