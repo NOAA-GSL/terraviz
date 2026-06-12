@@ -887,10 +887,13 @@ async function flushMicrotasks(): Promise<void> {
   // emit expected) — positive assertions use the bounded poll below,
   // because a fixed yield count still flaked on loaded CI runners.
   vi.useRealTimers()
-  for (let i = 0; i < 5; i++) {
-    await new Promise((resolve) => setTimeout(resolve, 0))
+  try {
+    for (let i = 0; i < 5; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    }
+  } finally {
+    vi.useFakeTimers()
   }
-  vi.useFakeTimers()
 }
 
 /** Poll (with real timers) until at least `count` browse_search
@@ -902,14 +905,17 @@ async function waitForBrowseSearchEmits(
   timeoutMs = 2_000,
 ): Promise<ReturnType<typeof __peek>> {
   vi.useRealTimers()
-  const deadline = Date.now() + timeoutMs
-  let evs = __peek().filter((e) => e.event_type === 'browse_search')
-  while (evs.length < count && Date.now() < deadline) {
-    await new Promise((resolve) => setTimeout(resolve, 10))
-    evs = __peek().filter((e) => e.event_type === 'browse_search')
+  try {
+    const deadline = Date.now() + timeoutMs
+    let evs = __peek().filter((e) => e.event_type === 'browse_search')
+    while (evs.length < count && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 10))
+      evs = __peek().filter((e) => e.event_type === 'browse_search')
+    }
+    return evs
+  } finally {
+    vi.useFakeTimers()
   }
-  vi.useFakeTimers()
-  return evs
 }
 
 describe('showBrowseUI — browse_search emit', () => {
