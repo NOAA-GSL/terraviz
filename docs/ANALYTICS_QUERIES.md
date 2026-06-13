@@ -190,6 +190,14 @@ the four server-stamped blobs. Order is alphabetical by field name
 | `double5` | `pitch` (degrees) |
 | `double6` | `zoom` (2 decimals) |
 
+Emitted on `moveend` (drag release, wheel stop, `flyTo`/`easeTo`
+completion). **Auto-rotate moves are excluded** — the 2D globe's
+auto-rotate sweeps the centre longitude on a timer, and emitting
+those completions would paint a spurious latitude-wide band across
+the spatial heatmap, so `mapRenderer` skips the emit while
+auto-rotate is driving the camera (it stops on user interaction, so
+genuine settles still emit).
+
 ### `map_click` (Tier A)
 
 | Position | Field |
@@ -316,11 +324,16 @@ alphabetical order of the field name.
 
 | Position | Field |
 |---|---|
-| `blob5` | `source` (`browse` / `orbit` / `deeplink`) |
+| `blob5` | `source` (`browse` / `orbit` / `deeplink` / `auto`) |
 | `blob6` | `tour_id` |
 | `blob7` | `tour_title` |
 | `double1` | `client_offset_ms` |
 | `double2` | `task_count` |
+
+`source = 'auto'` marks tours auto-started by `dataset.runTourOnLoad`
+(no user intent). The export job rolls the source mix into the
+`tour_start` dimension and excludes `auto` tours from the completion
+funnel — see `tour_ended.was_auto` below.
 
 ### `tour_task_fired` (Tier A)
 
@@ -338,9 +351,15 @@ Position | Paused | Resumed | Ended
 ---|---|---|---
 `blob5` | `reason` | `tour_id` | `outcome`
 `blob6` | `tour_id` | — | `tour_id`
+`blob7` | — | — | `was_auto` (`true` / `false`)
 `double1` | `client_offset_ms` | `client_offset_ms` | `client_offset_ms`
 `double2` | `task_index` | `pause_ms` | `duration_ms`
 `double3` | — | `task_index` | `task_index`
+
+`tour_ended.was_auto` is `true` when the matching `tour_started`
+was `source: 'auto'`. The completion-rate rollup excludes
+`was_auto = true` rows so the funnel reflects user-started tours
+only; the example query below filters them out.
 
 ### `vr_session_started` / `vr_session_ended` (Tier A)
 
@@ -637,17 +656,22 @@ ORDER BY sessions DESC
 
 ### Tour completion rate
 
+`runTourOnLoad` auto-tours (`tour_started.source = 'auto'` /
+`tour_ended.was_auto = 'true'`) auto-play to completion and would
+inflate the rate, so both legs exclude them.
+
 ```sql
 WITH starts AS (
   SELECT blob6 AS tour_id, count() AS n
   FROM terraviz_events
-  WHERE blob1 = 'tour_started' AND blob2 = 'production'
+  WHERE blob1 = 'tour_started' AND blob2 = 'production' AND blob5 != 'auto'
   GROUP BY tour_id
 ),
 completes AS (
   SELECT blob6 AS tour_id, count() AS n
   FROM terraviz_events
   WHERE blob1 = 'tour_ended' AND blob5 = 'completed' AND blob2 = 'production'
+    AND blob7 != 'true'
   GROUP BY tour_id
 )
 SELECT

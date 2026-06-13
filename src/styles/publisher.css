@@ -1338,6 +1338,34 @@
   font-size: calc(1.15rem * var(--ui-scale));
   margin-block-end: calc(0.75rem * var(--ui-scale));
 }
+/* Heading + "Export CSV" button on one row; the button trails to the
+   inline-end edge and stays aligned with the heading baseline. */
+.publisher-analytics-section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: calc(1rem * var(--ui-scale));
+  flex-wrap: wrap;
+}
+.publisher-analytics-export {
+  flex: none;
+  align-self: center;
+  font: inherit;
+  font-size: calc(0.8rem * var(--ui-scale));
+  color: var(--color-text, #e6e6e6);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: calc(8px * var(--ui-scale));
+  padding: calc(0.3rem * var(--ui-scale)) calc(0.75rem * var(--ui-scale));
+  cursor: pointer;
+}
+.publisher-analytics-export:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+.publisher-analytics-export:focus-visible {
+  outline: 2px solid var(--color-accent, #4ea1ff);
+  outline-offset: 2px;
+}
 .publisher-analytics-subheading {
   font-size: calc(0.9rem * var(--ui-scale));
   color: var(--color-text-muted, #999999);
@@ -1373,11 +1401,23 @@
 }
 .publisher-analytics-bars {
   inline-size: 100%;
-  max-inline-size: calc(480px * var(--ui-scale));
+  /* 480px plot + 40px Y-axis gutter (see PLOT_WIDTH / Y_AXIS_GUTTER
+     in analytics-charts.ts). */
+  max-inline-size: calc(520px * var(--ui-scale));
   display: block;
 }
 .publisher-analytics-bar {
   fill: var(--color-accent, #4ea1ff);
+}
+.publisher-analytics-gridline {
+  stroke: var(--color-border, #2a2f3a);
+  stroke-width: 1;
+  shape-rendering: crispEdges;
+}
+.publisher-analytics-ytick {
+  fill: var(--color-text-muted, #999999);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
 }
 .publisher-analytics-mix-bar {
   display: flex;

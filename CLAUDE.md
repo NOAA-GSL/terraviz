@@ -193,7 +193,7 @@ npm run build:desktop # tsc + vite build + tauri build
 | `src/ui/publisher/router.ts` | Tiny History-API router for the publisher portal |
 | `src/ui/publisher/api.ts` | Shared HTTP client for the publisher portal |
 | `src/ui/publisher/types.ts` | Wire types for portal-bound publisher API responses |
-| `src/ui/publisher/analytics-charts.ts` | Hand-rolled SVG chart helpers (bar series, mix bars, stat tiles) for the analytics tab — no charting library |
+| `src/ui/publisher/analytics-charts.ts` | Hand-rolled SVG chart helpers (bar series with Y-axis, mix bars, stat tiles) + CSV export helpers for the analytics tab — no charting library |
 | `src/ui/publisher/components/dataset-form.ts` | Shared dataset create / edit form |
 | `src/ui/publisher/components/asset-uploader.ts` | Asset uploader component (Phase 3pd image-sequence pipeline) |
 | `src/ui/publisher/components/chip-input.ts` | Chip-input control — entries become removable chips as the user types |
