@@ -500,6 +500,7 @@
   "publisher.analytics.errors.orderNote": "Ordered by frequency (sample-weighted estimates).",
   "publisher.analytics.errors.source": "Source",
   "publisher.analytics.errors.title": "Error breakdown",
+  "publisher.analytics.exportCsv": "Export CSV",
   "publisher.analytics.freshness": "Sample-weighted estimates from the nightly rollups — complete UTC days through yesterday, external traffic only.",
   "publisher.analytics.funnel.autoExcluded": "Auto-tours (excluded)",
   "publisher.analytics.funnel.completionRate": "Tour completion",

@@ -192,6 +192,53 @@ export function renderStatTile(label: string, value: string): HTMLElement {
   return tile
 }
 
+// --- CSV export -------------------------------------------------------
+
+export type CsvCell = string | number | null | undefined
+export type CsvRow = CsvCell[]
+
+/** Serialize a cell, quoting only when it carries a comma, quote, or
+ * newline (RFC 4180). `null`/`undefined` become an empty field. */
+function csvCell(value: CsvCell): string {
+  if (value == null) return ''
+  const s = String(value)
+  return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
+}
+
+/** Build an RFC-4180 CSV string (CRLF line endings) from rows. The
+ * first row is conventionally the header. */
+export function buildCsv(rows: readonly CsvRow[]): string {
+  return rows.map(row => row.map(csvCell).join(',')).join('\r\n')
+}
+
+/** Trigger a browser download of `rows` as a CSV file. No-op-safe in
+ * environments without `URL.createObjectURL` (jsdom). */
+export function downloadCsv(filename: string, rows: readonly CsvRow[]): void {
+  const csv = buildCsv(rows)
+  // BOM so Excel reads UTF-8 (hashed keys / country codes stay intact).
+  const blob = new Blob(['﻿', csv], { type: 'text/csv;charset=utf-8' })
+  if (typeof URL.createObjectURL !== 'function') return
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
+}
+
+/** "Export CSV" button. The page passes a `getRows` thunk so the CSV
+ * is built from the section's current data only when clicked. */
+export function csvExportButton(label: string, filename: string, getRows: () => CsvRow[]): HTMLElement {
+  const button = document.createElement('button')
+  button.type = 'button'
+  button.className = 'publisher-analytics-export'
+  button.textContent = label
+  button.addEventListener('click', () => downloadCsv(filename, getRows()))
+  return button
+}
+
 /** Compact human duration for dwell sums: "4 h 12 m", "38 m", "55 s". */
 export function formatDurationMs(ms: number): string {
   const totalSeconds = Math.round(ms / 1000)

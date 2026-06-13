@@ -1338,6 +1338,34 @@
   font-size: calc(1.15rem * var(--ui-scale));
   margin-block-end: calc(0.75rem * var(--ui-scale));
 }
+/* Heading + "Export CSV" button on one row; the button trails to the
+   inline-end edge and stays aligned with the heading baseline. */
+.publisher-analytics-section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: calc(1rem * var(--ui-scale));
+  flex-wrap: wrap;
+}
+.publisher-analytics-export {
+  flex: none;
+  align-self: center;
+  font: inherit;
+  font-size: calc(0.8rem * var(--ui-scale));
+  color: var(--color-text, #e6e6e6);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: calc(8px * var(--ui-scale));
+  padding: calc(0.3rem * var(--ui-scale)) calc(0.75rem * var(--ui-scale));
+  cursor: pointer;
+}
+.publisher-analytics-export:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+.publisher-analytics-export:focus-visible {
+  outline: 2px solid var(--color-accent, #4ea1ff);
+  outline-offset: 2px;
+}
 .publisher-analytics-subheading {
   font-size: calc(0.9rem * var(--ui-scale));
   color: var(--color-text-muted, #999999);

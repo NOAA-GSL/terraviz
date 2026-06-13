@@ -36,10 +36,12 @@ import { publisherGet, handleSessionError, type PublisherApiResult } from '../ap
 import { buildErrorCard } from '../components/error-card'
 import { ROUTE_CHANGE_START_EVENT } from '../router'
 import {
+  csvExportButton,
   formatDurationMs,
   renderBarSeries,
   renderMixBar,
   renderStatTile,
+  type CsvRow,
 } from '../analytics-charts'
 
 
@@ -181,6 +183,18 @@ function el<K extends keyof HTMLElementTagNameMap>(
   return node
 }
 
+/** Flatten a mix (`{browse: 12, orbit: 5}`) to a single CSV cell
+ * (`browse:12;orbit:5`), descending by share — keeps the per-row
+ * breakdown in one column rather than exploding into many. Values
+ * are sample-weighted estimates, so they're rounded. */
+function mixCell(mix: Record<string, number>): string {
+  return Object.entries(mix)
+    .filter(([, v]) => v > 0)
+    .sort((a, b) => b[1] - a[1])
+    .map(([k, v]) => `${k}:${Math.round(v)}`)
+    .join(';')
+}
+
 /** Locale-formatted chart axis labels for the envelope's range. */
 function rangeOf(envelope: { since_day: string; through_day: string }): { start: string; end: string } {
   const formatDay = (day: string): string =>
@@ -247,6 +261,11 @@ export async function renderAnalyticsPage(
   const orbitHost = el('section', { className: 'publisher-analytics-section' })
   const researchHost = el('section', { className: 'publisher-analytics-section' })
   let heatmap: HeatmapHandle | null = null
+  // The spatial section's DOM (including its export button) is built
+  // once and updated data-only on filter changes, so the button's
+  // export thunk reads the latest bins from here rather than closing
+  // over the first load's data.
+  let latestSpatialBins: SpatialData['bins'] = []
 
   // Dispose on SPA route transitions (same pattern as
   // dataset-detail's transcode polling): mark the render dead so
@@ -311,6 +330,19 @@ export async function renderAnalyticsPage(
     return el('h2', { className: 'publisher-analytics-heading', textContent: text })
   }
 
+  /** Heading row with an inline "Export CSV" button. `slug` becomes
+   * the filename stem (`terraviz-analytics-<slug>-<range>.csv`); the
+   * `getRows` thunk runs at click time over the already-loaded data.
+   * Used only on success renders — loading/empty/error states keep
+   * the bare `sectionHeading`, since there's nothing to export. */
+  function sectionHead(text: string, slug: string, getRows: () => CsvRow[]): HTMLElement {
+    const filename = `terraviz-analytics-${slug}-${state.environment}-${state.days}d.csv`
+    return el('div', { className: 'publisher-analytics-section-head' }, [
+      sectionHeading(text),
+      csvExportButton(t('publisher.analytics.exportCsv'), filename, getRows),
+    ])
+  }
+
   function emptyNote(): HTMLElement {
     return el('p', { className: 'publisher-analytics-empty', textContent: t('publisher.analytics.empty') })
   }
@@ -344,7 +376,24 @@ export async function renderAnalyticsPage(
       ),
     ])
     const range = rangeOf(res.data)
-    const children: (HTMLElement | SVGElement)[] = [sectionHeading(title), tiles, breakdownHost]
+    // CSV column names are stable technical identifiers, not UI copy —
+    // analysts import these downstream, so they stay English across
+    // locales. i18n-exempt: machine-readable CSV header
+    const overviewRows = (): CsvRow[] => [
+      ['day', 'sessions', 'events', 'errors', 'view_minutes'],
+      ...data.days.map(d => [
+        d.day,
+        Math.round(d.sessions),
+        Math.round(d.events),
+        Math.round(d.errors),
+        Math.round(d.view_ms / 60_000),
+      ]),
+    ]
+    const children: (HTMLElement | SVGElement)[] = [
+      sectionHead(title, 'overview', overviewRows),
+      tiles,
+      breakdownHost,
+    ]
     if (data.days.length === 0) {
       children.push(emptyNote())
     } else {
@@ -435,8 +484,21 @@ export async function renderAnalyticsPage(
       )
     }
     table.append(body)
-    host.replaceChildren(
+    // i18n-exempt: machine-readable CSV header
+    const errorRows = (): CsvRow[] => [
+      ['count', 'category', 'source', 'code', 'message_class'],
+      ...rows.map(r => [Math.round(r.count), r.category, r.source, r.code, r.message_class]),
+    ]
+    const head = el('div', { className: 'publisher-analytics-section-head' }, [
       el('h3', { className: 'publisher-analytics-subheading', textContent: title }),
+      csvExportButton(
+        t('publisher.analytics.exportCsv'),
+        `terraviz-analytics-errors-${state.environment}-${state.days}d.csv`,
+        errorRows,
+      ),
+    ])
+    host.replaceChildren(
+      head,
       table,
       el('p', { className: 'publisher-analytics-footnote', textContent: t('publisher.analytics.errors.orderNote') }),
     )
@@ -453,8 +515,22 @@ export async function renderAnalyticsPage(
       datasetsHost.replaceChildren(sectionHeading(title), emptyNote())
       return
     }
+    // i18n-exempt: machine-readable CSV header
+    const datasetRows = (): CsvRow[] => [
+      ['layer_id', 'title', 'loads', 'trigger_mix', 'source_mix', 'load_ms_p50', 'load_ms_p95', 'dwell_ms_sum'],
+      ...rows.map(r => [
+        r.layer_id,
+        r.title ?? '',
+        Math.round(r.loads),
+        mixCell(r.trigger_mix),
+        mixCell(r.source_mix),
+        r.load_ms_p50 != null ? Math.round(r.load_ms_p50) : '',
+        r.load_ms_p95 != null ? Math.round(r.load_ms_p95) : '',
+        Math.round(r.dwell_ms_sum),
+      ]),
+    ]
     datasetsHost.replaceChildren(
-      sectionHeading(title),
+      sectionHead(title, 'datasets', datasetRows),
       datasetsTable(rows),
       el('p', { className: 'publisher-analytics-footnote', textContent: t('publisher.analytics.datasets.approxNote') }),
     )
@@ -484,6 +560,7 @@ export async function renderAnalyticsPage(
       return sectionError(spatialHost, title, res)
     }
     const data = res.data.data
+    latestSpatialBins = data.bins
 
     if (heatmap) {
       heatmap.setBins(data.bins)
@@ -492,6 +569,11 @@ export async function renderAnalyticsPage(
       return
     }
 
+    // i18n-exempt: machine-readable CSV header
+    const spatialRows = (): CsvRow[] => [
+      ['lat', 'lon', 'hits'],
+      ...latestSpatialBins.map(b => [b.lat, b.lon, Math.round(b.hits)]),
+    ]
     const controls = spatialControls(data.layers, state, () => void loadSpatial())
     const mapContainer = el('div', { className: 'publisher-analytics-map' })
     mapContainer.setAttribute('role', 'img')
@@ -506,7 +588,13 @@ export async function renderAnalyticsPage(
             renderMixBar(data.hitKinds, t('publisher.analytics.spatial.hitKinds')),
           ]
         : []
-    spatialHost.replaceChildren(sectionHeading(title), controls, mapContainer, note, ...hitKindBlock)
+    spatialHost.replaceChildren(
+      sectionHead(title, 'spatial', spatialRows),
+      controls,
+      mapContainer,
+      note,
+      ...hitKindBlock,
+    )
     const mounted = await mountHeatmap(mapContainer, data.bins)
     if (disposed) {
       // Navigated away while the dynamic import / map boot was in
@@ -589,8 +677,13 @@ export async function renderAnalyticsPage(
         ),
       ]),
     )
+    // i18n-exempt: machine-readable CSV header
+    const funnelRows = (): CsvRow[] => [
+      ['day', 'tours_started', 'tours_ended', 'vr_started', 'orbit_turns'],
+      ...days.map(d => [d.day, d.tours_started, d.tours_ended, d.vr_started, d.orbit_turns]),
+    ]
     funnelHost.replaceChildren(
-      sectionHeading(title),
+      sectionHead(title, 'funnel', funnelRows),
       ...completionBlocks,
       el('div', { className: 'publisher-analytics-funnel' }, blocks),
     )
@@ -634,8 +727,20 @@ export async function renderAnalyticsPage(
       )
     }
     table.append(body)
+    // i18n-exempt: machine-readable CSV header
+    const perfRows = (): CsvRow[] => [
+      ['surface', 'renderer', 'samples', 'avg_fps', 'avg_frame_p95_ms', 'avg_jsheap_mb'],
+      ...rows.map(r => [
+        r.surface,
+        r.renderer,
+        Math.round(r.samples),
+        Math.round(r.avg_fps),
+        Math.round(r.avg_frame_p95_ms),
+        r.avg_jsheap_mb != null ? Math.round(r.avg_jsheap_mb) : '',
+      ]),
+    ]
     perfHost.replaceChildren(
-      sectionHeading(title),
+      sectionHead(title, 'perf', perfRows),
       table,
       el('p', { className: 'publisher-analytics-footnote', textContent: t('publisher.analytics.perf.note') }),
     )
@@ -687,7 +792,12 @@ export async function renderAnalyticsPage(
       )
     }
     table.append(body)
-    const children: (HTMLElement | SVGElement)[] = [sectionHeading(title), tiles, table]
+    // i18n-exempt: machine-readable CSV header
+    const orbitRows = (): CsvRow[] => [
+      ['model', 'rounds', 'turns', 'input_tokens', 'output_tokens'],
+      ...models.map(m => [m.model, Math.round(m.rounds), Math.round(m.turns), Math.round(m.input_tokens), Math.round(m.output_tokens)]),
+    ]
+    const children: (HTMLElement | SVGElement)[] = [sectionHead(title, 'orbit', orbitRows), tiles, table]
     if (days.length > 0) {
       children.push(
         el('h3', { className: 'publisher-analytics-subheading', textContent: t('publisher.analytics.orbit.roundsPerDay') }),
@@ -723,7 +833,24 @@ export async function renderAnalyticsPage(
       )
       return
     }
-    const children: HTMLElement[] = [sectionHeading(title)]
+    // One CSV across the section's sub-tables, keyed by a `group`
+    // column; the `detail` column carries each group's extra measure
+    // (avg length / dwell ms / magnitude / latency ms), blank where
+    // none. Questions flatten to key=`tour_id/question_id`,
+    // count=answered, detail=correct_rate.
+    // i18n-exempt: machine-readable CSV header
+    const researchRows = (): CsvRow[] => {
+      const rows: CsvRow[] = [['group', 'key', 'count', 'detail']]
+      for (const r of d.topSearches) rows.push(['top_search', r.key, Math.round(r.count), Math.round(r.avg_length)])
+      for (const r of d.zeroSearches) rows.push(['zero_search', r.key, Math.round(r.count), ''])
+      for (const r of d.dwell) rows.push(['dwell', r.key, Math.round(r.count), Math.round(r.avg_ms)])
+      for (const r of d.gestures) rows.push(['gesture', r.key, Math.round(r.count), r.avg_magnitude])
+      for (const r of d.corrections) rows.push(['correction', r.key, Math.round(r.count), ''])
+      for (const r of d.followThrough) rows.push(['follow_through', r.key, Math.round(r.count), Math.round(r.avg_latency_ms)])
+      for (const q of d.worstQuestions) rows.push(['question', `${q.tour_id}/${q.question_id}`, Math.round(q.answered), q.correct_rate])
+      return rows
+    }
+    const children: HTMLElement[] = [sectionHead(title, 'research', researchRows)]
     const keyValueTable = <R extends { key: string; count: number }>(
       label: string,
       rows: R[],

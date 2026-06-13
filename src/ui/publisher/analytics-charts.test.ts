@@ -6,6 +6,7 @@
 
 import { describe, expect, it } from 'vitest'
 import {
+  buildCsv,
   formatDurationMs,
   renderBarSeries,
   renderMixBar,
@@ -118,6 +119,20 @@ describe('renderStatTile', () => {
     const tile = renderStatTile('Sessions', '1,234')
     expect(tile.querySelector('.publisher-analytics-stat-label')?.textContent).toBe('Sessions')
     expect(tile.querySelector('.publisher-analytics-stat-value')?.textContent).toBe('1,234')
+  })
+})
+
+describe('buildCsv', () => {
+  it('joins rows with CRLF and comma-separates cells', () => {
+    expect(buildCsv([['a', 'b'], [1, 2]])).toBe('a,b\r\n1,2')
+  })
+
+  it('quotes cells containing commas, quotes, or newlines', () => {
+    expect(buildCsv([['a,b', 'c"d', 'e\nf']])).toBe('"a,b","c""d","e\nf"')
+  })
+
+  it('renders null / undefined as empty fields', () => {
+    expect(buildCsv([[null, undefined, 0]])).toBe(',,0')
   })
 })
 
