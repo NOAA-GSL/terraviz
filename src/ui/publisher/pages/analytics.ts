@@ -75,6 +75,7 @@ interface Envelope<T> {
 interface OverviewData {
   days: Array<{ day: string; sessions: number; events: number; errors: number; view_ms: number }>
   platforms: Record<string, number>
+  operatingSystems: Record<string, number>
   countries: Array<{ country: string; sessions: number }>
   totals: { sessions: number; events: number; errors: number; view_ms: number }
 }
@@ -95,6 +96,34 @@ interface DatasetsData {
 interface SpatialData {
   layers: Array<{ id: string; title: string | null }>
   bins: Array<{ lat: number; lon: number; hits: number }>
+  hitKinds: Record<string, number>
+}
+
+interface PerfData {
+  rows: Array<{
+    surface: string
+    renderer: string
+    samples: number
+    avg_fps: number
+    avg_frame_p95_ms: number
+    avg_jsheap_mb: number | null
+  }>
+}
+
+interface OrbitData {
+  models: Array<{ model: string; turns: number; rounds: number; input_tokens: number; output_tokens: number }>
+  days: Array<{ day: string; rounds: number; turns: number }>
+  totals: { turns: number; rounds: number; input_tokens: number; output_tokens: number }
+}
+
+interface ResearchData {
+  topSearches: Array<{ key: string; count: number; avg_length: number }>
+  zeroSearches: Array<{ key: string; count: number }>
+  dwell: Array<{ key: string; count: number; avg_ms: number }>
+  gestures: Array<{ key: string; count: number; avg_magnitude: number }>
+  corrections: Array<{ key: string; count: number }>
+  followThrough: Array<{ key: string; count: number; avg_latency_ms: number }>
+  worstQuestions: Array<{ tour_id: string; question_id: string; answered: number; correct_rate: number }>
 }
 
 interface ErrorsData {
@@ -213,6 +242,9 @@ export async function renderAnalyticsPage(
   const datasetsHost = el('section', { className: 'publisher-analytics-section' })
   const spatialHost = el('section', { className: 'publisher-analytics-section' })
   const funnelHost = el('section', { className: 'publisher-analytics-section' })
+  const perfHost = el('section', { className: 'publisher-analytics-section' })
+  const orbitHost = el('section', { className: 'publisher-analytics-section' })
+  const researchHost = el('section', { className: 'publisher-analytics-section' })
   let heatmap: HeatmapHandle | null = null
 
   // Dispose on SPA route transitions (same pattern as
@@ -239,9 +271,14 @@ export async function renderAnalyticsPage(
     void loadDatasets()
     void loadSpatial()
     void loadFunnel()
+    void loadPerf()
+    void loadOrbit()
+    void loadResearch()
   })
 
-  mount.replaceChildren(shell(header, overviewHost, datasetsHost, spatialHost, funnelHost))
+  mount.replaceChildren(
+    shell(header, overviewHost, datasetsHost, spatialHost, funnelHost, perfHost, orbitHost, researchHost),
+  )
 
   // Populate on first visit — the header's onChange only covers
   // subsequent control changes.
@@ -249,6 +286,9 @@ export async function renderAnalyticsPage(
   void loadDatasets()
   void loadSpatial()
   void loadFunnel()
+  void loadPerf()
+  void loadOrbit()
+  void loadResearch()
 
   async function fetchSection<T>(query: string): Promise<PublisherApiResult<Envelope<T>>> {
     return publisherGet<Envelope<T>>(`${ANALYTICS_ENDPOINT}${query}`, { fetchFn })
@@ -321,6 +361,8 @@ export async function renderAnalyticsPage(
         ),
         el('h3', { className: 'publisher-analytics-subheading', textContent: t('publisher.analytics.overview.platforms') }),
         renderMixBar(data.platforms, t('publisher.analytics.overview.platforms')),
+        el('h3', { className: 'publisher-analytics-subheading', textContent: t('publisher.analytics.overview.operatingSystems') }),
+        renderMixBar(data.operatingSystems, t('publisher.analytics.overview.operatingSystems')),
         el('h3', { className: 'publisher-analytics-subheading', textContent: t('publisher.analytics.overview.countries') }),
         countriesTable(data.countries),
       )
@@ -456,7 +498,14 @@ export async function renderAnalyticsPage(
     // Always present, toggled by data-only updates above.
     const note = emptyNote()
     note.hidden = data.bins.length > 0
-    spatialHost.replaceChildren(sectionHeading(title), controls, mapContainer, note)
+    const hitKindBlock: HTMLElement[] =
+      Object.keys(data.hitKinds).length > 0
+        ? [
+            el('h3', { className: 'publisher-analytics-subheading', textContent: t('publisher.analytics.spatial.hitKinds') }),
+            renderMixBar(data.hitKinds, t('publisher.analytics.spatial.hitKinds')),
+          ]
+        : []
+    spatialHost.replaceChildren(sectionHeading(title), controls, mapContainer, note, ...hitKindBlock)
     const mounted = await mountHeatmap(mapContainer, data.bins)
     if (disposed) {
       // Navigated away while the dynamic import / map boot was in
@@ -524,6 +573,212 @@ export async function renderAnalyticsPage(
       ...completionBlocks,
       el('div', { className: 'publisher-analytics-funnel' }, blocks),
     )
+  }
+
+  async function loadPerf(): Promise<void> {
+    const title = t('publisher.analytics.section.perf')
+    perfHost.replaceChildren(sectionHeading(title), loadingNote())
+    const res = await fetchSection<PerfData>(baseQuery('perf'))
+    if (disposed) return
+    if (!res.ok) return sectionError(perfHost, title, res)
+    const rows = res.data.data.rows
+    if (rows.length === 0) {
+      perfHost.replaceChildren(sectionHeading(title), emptyNote())
+      return
+    }
+    const table = el('table', { className: 'publisher-analytics-table' })
+    table.append(
+      el('thead', {}, [
+        el('tr', {}, [
+          el('th', { textContent: t('publisher.analytics.perf.surface') }),
+          el('th', { textContent: t('publisher.analytics.perf.renderer') }),
+          el('th', { textContent: t('publisher.analytics.perf.fps') }),
+          el('th', { textContent: t('publisher.analytics.perf.frameP95') }),
+          el('th', { textContent: t('publisher.analytics.perf.jsheap') }),
+          el('th', { textContent: t('publisher.analytics.perf.samples') }),
+        ]),
+      ]),
+    )
+    const body = el('tbody')
+    for (const r of rows) {
+      body.append(
+        el('tr', {}, [
+          el('td', { textContent: r.surface }),
+          el('td', { className: 'publisher-analytics-dataset-id', textContent: r.renderer }),
+          el('td', { textContent: formatNumber(Math.round(r.avg_fps)) }),
+          el('td', { textContent: `${formatNumber(Math.round(r.avg_frame_p95_ms))} ms` }), // i18n-exempt: unit abbreviation
+          el('td', { textContent: r.avg_jsheap_mb != null ? `${formatNumber(Math.round(r.avg_jsheap_mb))} MB` : '—' }), // i18n-exempt: unit abbreviation
+          el('td', { textContent: formatNumber(Math.round(r.samples)) }),
+        ]),
+      )
+    }
+    table.append(body)
+    perfHost.replaceChildren(
+      sectionHeading(title),
+      table,
+      el('p', { className: 'publisher-analytics-footnote', textContent: t('publisher.analytics.perf.note') }),
+    )
+  }
+
+  async function loadOrbit(): Promise<void> {
+    const title = t('publisher.analytics.section.orbit')
+    orbitHost.replaceChildren(sectionHeading(title), loadingNote())
+    const res = await fetchSection<OrbitData>(baseQuery('orbit'))
+    if (disposed) return
+    if (!res.ok) return sectionError(orbitHost, title, res)
+    const { models, days, totals } = res.data.data
+    if (models.length === 0) {
+      orbitHost.replaceChildren(
+        sectionHeading(title),
+        el('p', { className: 'publisher-analytics-empty', textContent: t('publisher.analytics.orbit.empty') }),
+      )
+      return
+    }
+    const range = rangeOf(res.data)
+    const tiles = el('div', { className: 'publisher-analytics-stats' }, [
+      renderStatTile(t('publisher.analytics.orbit.rounds'), formatNumber(Math.round(totals.rounds))),
+      renderStatTile(t('publisher.analytics.orbit.turns'), formatNumber(Math.round(totals.turns))),
+      renderStatTile(t('publisher.analytics.orbit.inputTokens'), formatNumber(Math.round(totals.input_tokens))),
+      renderStatTile(t('publisher.analytics.orbit.outputTokens'), formatNumber(Math.round(totals.output_tokens))),
+    ])
+    const table = el('table', { className: 'publisher-analytics-table' })
+    table.append(
+      el('thead', {}, [
+        el('tr', {}, [
+          el('th', { textContent: t('publisher.analytics.orbit.model') }),
+          el('th', { textContent: t('publisher.analytics.orbit.rounds') }),
+          el('th', { textContent: t('publisher.analytics.orbit.turns') }),
+          el('th', { textContent: t('publisher.analytics.orbit.inputTokens') }),
+          el('th', { textContent: t('publisher.analytics.orbit.outputTokens') }),
+        ]),
+      ]),
+    )
+    const body = el('tbody')
+    for (const m of models) {
+      body.append(
+        el('tr', {}, [
+          el('td', { className: 'publisher-analytics-dataset-id', textContent: m.model }),
+          el('td', { textContent: formatNumber(Math.round(m.rounds)) }),
+          el('td', { textContent: formatNumber(Math.round(m.turns)) }),
+          el('td', { textContent: formatNumber(Math.round(m.input_tokens)) }),
+          el('td', { textContent: formatNumber(Math.round(m.output_tokens)) }),
+        ]),
+      )
+    }
+    table.append(body)
+    const children: (HTMLElement | SVGElement)[] = [sectionHeading(title), tiles, table]
+    if (days.length > 0) {
+      children.push(
+        el('h3', { className: 'publisher-analytics-subheading', textContent: t('publisher.analytics.orbit.roundsPerDay') }),
+        renderBarSeries(
+          days.map(d => ({ label: d.day, value: d.rounds })),
+          { ariaLabel: t('publisher.analytics.orbit.roundsPerDay'), range },
+        ),
+      )
+    }
+    children.push(el('p', { className: 'publisher-analytics-footnote', textContent: t('publisher.analytics.tierBNote') }))
+    orbitHost.replaceChildren(...children)
+  }
+
+  async function loadResearch(): Promise<void> {
+    const title = t('publisher.analytics.section.research')
+    researchHost.replaceChildren(sectionHeading(title), loadingNote())
+    const res = await fetchSection<ResearchData>(baseQuery('research'))
+    if (disposed) return
+    if (!res.ok) return sectionError(researchHost, title, res)
+    const d = res.data.data
+    const empty =
+      d.topSearches.length === 0 &&
+      d.dwell.length === 0 &&
+      d.gestures.length === 0 &&
+      d.corrections.length === 0 &&
+      d.followThrough.length === 0 &&
+      d.worstQuestions.length === 0
+    if (empty) {
+      researchHost.replaceChildren(
+        sectionHeading(title),
+        el('p', { className: 'publisher-analytics-empty', textContent: t('publisher.analytics.research.empty') }),
+      )
+      return
+    }
+    const children: HTMLElement[] = [sectionHeading(title)]
+    const keyValueTable = <R extends { key: string; count: number }>(
+      label: string,
+      rows: R[],
+      extraHeader?: string,
+      extra?: (r: R) => string,
+    ): void => {
+      if (rows.length === 0) return
+      const table = el('table', { className: 'publisher-analytics-table' })
+      const head = [
+        el('th', { textContent: t('publisher.analytics.research.key') }),
+        el('th', { textContent: t('publisher.analytics.research.count') }),
+      ]
+      if (extraHeader) head.push(el('th', { textContent: extraHeader }))
+      table.append(el('thead', {}, [el('tr', {}, head)]))
+      const body = el('tbody')
+      for (const r of rows) {
+        const cells = [
+          // Keys are hashed queries / enum values — verbatim.
+          // i18n-exempt: technical identifier
+          el('td', { className: 'publisher-analytics-dataset-id', textContent: r.key }),
+          el('td', { textContent: formatNumber(Math.round(r.count)) }),
+        ]
+        if (extra) cells.push(el('td', { textContent: extra(r) }))
+        body.append(el('tr', {}, cells))
+      }
+      table.append(body)
+      children.push(el('h3', { className: 'publisher-analytics-subheading', textContent: label }), table)
+    }
+
+    keyValueTable(
+      t('publisher.analytics.research.topSearches'),
+      d.topSearches,
+      t('publisher.analytics.research.avgLength'),
+      r => formatNumber(Math.round(r.avg_length)),
+    )
+    keyValueTable(t('publisher.analytics.research.zeroSearches'), d.zeroSearches)
+    keyValueTable(
+      t('publisher.analytics.research.dwell'),
+      d.dwell,
+      t('publisher.analytics.research.avgDwell'),
+      r => formatDurationMs(r.avg_ms),
+    )
+    keyValueTable(t('publisher.analytics.research.gestures'), d.gestures)
+    keyValueTable(t('publisher.analytics.research.corrections'), d.corrections)
+    keyValueTable(t('publisher.analytics.research.followThrough'), d.followThrough)
+
+    if (d.worstQuestions.length > 0) {
+      const table = el('table', { className: 'publisher-analytics-table' })
+      table.append(
+        el('thead', {}, [
+          el('tr', {}, [
+            el('th', { textContent: t('publisher.analytics.research.tour') }),
+            el('th', { textContent: t('publisher.analytics.research.question') }),
+            el('th', { textContent: t('publisher.analytics.research.answered') }),
+            el('th', { textContent: t('publisher.analytics.research.correctRate') }),
+          ]),
+        ]),
+      )
+      const body = el('tbody')
+      for (const q of d.worstQuestions) {
+        body.append(
+          el('tr', {}, [
+            el('td', { className: 'publisher-analytics-dataset-id', textContent: q.tour_id }),
+            el('td', { className: 'publisher-analytics-dataset-id', textContent: q.question_id }),
+            el('td', { textContent: formatNumber(Math.round(q.answered)) }),
+            el('td', { textContent: formatNumber(q.correct_rate, { style: 'percent', maximumFractionDigits: 0 }) }),
+          ]),
+        )
+      }
+      table.append(body)
+      children.push(
+        el('h3', { className: 'publisher-analytics-subheading', textContent: t('publisher.analytics.research.worstQuestions') }),
+        table,
+      )
+    }
+    children.push(el('p', { className: 'publisher-analytics-footnote', textContent: t('publisher.analytics.tierBNote') }))
+    researchHost.replaceChildren(...children)
   }
 
   function loadingNote(): HTMLElement {
