@@ -489,15 +489,26 @@ export async function queryOrbit(db: D1Database, f: AnalyticsFilters): Promise<O
     )
     .bind(f.sinceDay, f.environment)
     .all<{ day: string; rounds: number; turns: number }>()
-  const modelRows = models.results ?? []
+  // Totals are a separate full aggregate, not a reduce over the
+  // top-25 `models` rows — otherwise the stat tiles undercount when
+  // more than 25 models appear in range.
+  const totalsRow = await db
+    .prepare(
+      `SELECT SUM(turns) AS turns, SUM(rounds_sum) AS rounds,
+              SUM(input_tokens_sum) AS input_tokens, SUM(output_tokens_sum) AS output_tokens
+         FROM analytics_orbit_daily
+        WHERE day >= ? AND environment = ?`,
+    )
+    .bind(f.sinceDay, f.environment)
+    .first<{ turns: number; rounds: number; input_tokens: number; output_tokens: number }>()
   return {
-    models: modelRows,
+    models: models.results ?? [],
     days: days.results ?? [],
     totals: {
-      turns: modelRows.reduce((n, m) => n + m.turns, 0),
-      rounds: modelRows.reduce((n, m) => n + m.rounds, 0),
-      input_tokens: modelRows.reduce((n, m) => n + m.input_tokens, 0),
-      output_tokens: modelRows.reduce((n, m) => n + m.output_tokens, 0),
+      turns: totalsRow?.turns ?? 0,
+      rounds: totalsRow?.rounds ?? 0,
+      input_tokens: totalsRow?.input_tokens ?? 0,
+      output_tokens: totalsRow?.output_tokens ?? 0,
     },
   }
 }

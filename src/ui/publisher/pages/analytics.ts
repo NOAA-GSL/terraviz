@@ -689,6 +689,7 @@ export async function renderAnalyticsPage(
     const d = res.data.data
     const empty =
       d.topSearches.length === 0 &&
+      d.zeroSearches.length === 0 &&
       d.dwell.length === 0 &&
       d.gestures.length === 0 &&
       d.corrections.length === 0 &&
@@ -744,9 +745,19 @@ export async function renderAnalyticsPage(
       t('publisher.analytics.research.avgDwell'),
       r => formatDurationMs(r.avg_ms),
     )
-    keyValueTable(t('publisher.analytics.research.gestures'), d.gestures)
+    keyValueTable(
+      t('publisher.analytics.research.gestures'),
+      d.gestures,
+      t('publisher.analytics.research.avgMagnitude'),
+      r => formatNumber(r.avg_magnitude, { maximumFractionDigits: 2 }),
+    )
     keyValueTable(t('publisher.analytics.research.corrections'), d.corrections)
-    keyValueTable(t('publisher.analytics.research.followThrough'), d.followThrough)
+    keyValueTable(
+      t('publisher.analytics.research.followThrough'),
+      d.followThrough,
+      t('publisher.analytics.research.avgLatency'),
+      r => `${formatNumber(Math.round(r.avg_latency_ms))} ms`, // i18n-exempt: unit abbreviation
+    )
 
     if (d.worstQuestions.length > 0) {
       const table = el('table', { className: 'publisher-analytics-table' })

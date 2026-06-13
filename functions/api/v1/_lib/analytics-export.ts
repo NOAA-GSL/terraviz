@@ -437,7 +437,7 @@ export function computeRollups(rows: DecodedEventRow[], day: string): DayRollups
   const dimensions = new Map<string, DimensionRollupRow>()
   /** Accumulate one generic dimension row (count [+ value_sum]). */
   const addDimension = (environment: string, metric: string, key: string, w: number, valueAdd = 0): void => {
-    const dimKey = [environment, metric, key].join(' ')
+    const dimKey = [environment, metric, key].join('\u0000')
     const entry = dimensions.get(dimKey)
     if (entry) {
       entry.count += w
