@@ -154,6 +154,20 @@ describe('updatePublisher', () => {
     expect(res).toMatchObject({ ok: false, status: 400, error: 'no_changes' })
   })
 
+  it('writes no audit row for a profile-only edit (no role/status change)', async () => {
+    const sqlite = seedFixtures({ count: 0 })
+    seedPublisher(sqlite, { id: 'PUB-ADMIN', email: 'admin@example.com', role: 'admin', status: 'active' })
+    seedPublisher(sqlite, { id: 'PUB-P', email: 'p@example.com', role: 'publisher', status: 'active' })
+    const db = asD1(sqlite)
+    const res = await updatePublisher(db, 'PUB-P', { display_name: 'Renamed' }, actor())
+    expect(res.ok).toBe(true)
+    if (res.ok) expect(res.publisher.display_name).toBe('Renamed')
+    const audit = await db
+      .prepare(`SELECT COUNT(*) AS n FROM audit_events WHERE subject_id = 'PUB-P'`)
+      .first<{ n: number }>()
+    expect(audit?.n).toBe(0)
+  })
+
   it('blocks self-lockout: an admin cannot demote their own account', async () => {
     const sqlite = seedFixtures({ count: 0 })
     seedPublisher(sqlite, { id: 'PUB-ADMIN', email: 'admin@example.com', role: 'admin', status: 'active' })

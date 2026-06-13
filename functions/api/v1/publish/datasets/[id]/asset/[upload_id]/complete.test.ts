@@ -541,7 +541,7 @@ describe('POST .../asset/{upload_id}/complete — refusals', () => {
     expect(res.status).toBe(404)
   })
 
-  it('returns 404 when a publisher publisher tries to complete an admin-owned upload', async () => {
+  it('returns 404 when a publisher-role account tries to complete an admin-owned upload', async () => {
     const { sqlite, datasetId, kv } = setupEnv()
     insertPending(sqlite, {
       uploadId: 'UP-COMM',

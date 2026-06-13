@@ -152,7 +152,7 @@ describe('POST /api/v1/publish/featured', () => {
     expect(body.featured.position).toBe(1)
   })
 
-  it('refuses publisher publishers with 403', async () => {
+  it('refuses publisher-role accounts with 403', async () => {
     const { env } = setupEnv()
     const res = await featuredPost(
       ctx({ env, method: 'POST', publisher: PUBLISHER, body: { dataset_id: DS_0, position: 1 } }),

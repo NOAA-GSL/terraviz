@@ -148,7 +148,7 @@ describe('createDataset', () => {
 
   it('rejects legacy_id from a non-privileged publisher with 403 (1d/L)', async () => {
     // Cross-tenant existence leak guard: legacy_id is bulk-import
-    // provenance metadata, and allowing publisher publishers to set
+    // provenance metadata, and allowing publisher-role accounts to set
     // it would let them probe whether a given legacy_id exists in a
     // admin-owned row via the 409 conflict path.
     const { env } = setupEnv()
@@ -181,7 +181,7 @@ describe('listDatasetsForPublisher', () => {
     expect(datasets).toHaveLength(3)
   })
 
-  it('filters to own rows for a publisher publisher', async () => {
+  it('filters to own rows for a publisher-role account', async () => {
     const { env } = setupEnv()
     await seed3(env)
     const { datasets } = await listDatasetsForPublisher(env.CATALOG_DB!, PUBLISHER)
@@ -884,7 +884,7 @@ describe('deleteDataset', () => {
     ])
   })
 
-  it("404s when a publisher publisher targets someone else's row", async () => {
+  it("404s when a publisher-role account targets someone else's row", async () => {
     const { env } = setupEnv()
     const created = await createDataset(env as never, ADMIN, {
       title: 'Admin-owned draft',

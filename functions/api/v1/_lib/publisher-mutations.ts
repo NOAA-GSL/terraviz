@@ -219,11 +219,18 @@ export async function updatePublisher(
     affiliation: patch.affiliation !== undefined ? patch.affiliation : existing.affiliation,
   }
 
-  const action = statusAuditAction(existing.status, nextStatus) ?? 'publisher.role_change'
-  await writePublisherAudit(db, actor, action, id, {
-    role: { from: existing.role, to: publisher.role },
-    status: { from: existing.status, to: publisher.status },
-  })
+  // Audit only the security-relevant transitions (status / role).
+  // A profile-only edit (display_name / affiliation) writes no audit
+  // row — labelling it `publisher.role_change` would be misleading.
+  const statusChanged = existing.status !== publisher.status
+  const roleChanged = existing.role !== publisher.role
+  const action = statusAuditAction(existing.status, publisher.status) ?? (roleChanged ? 'publisher.role_change' : null)
+  if (action && (statusChanged || roleChanged)) {
+    await writePublisherAudit(db, actor, action, id, {
+      role: { from: existing.role, to: publisher.role },
+      status: { from: existing.status, to: publisher.status },
+    })
+  }
 
   return { ok: true, status: 200, publisher }
 }

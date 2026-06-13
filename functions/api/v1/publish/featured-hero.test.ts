@@ -80,7 +80,7 @@ function auditCount(sqlite: ReturnType<typeof seedFixtures>, action: string): nu
 }
 
 describe('PUT /api/v1/publish/featured-hero', () => {
-  it('403 for a publisher publisher', async () => {
+  it('403 for a publisher-role account', async () => {
     const { env } = setupEnv()
     const res = await heroPut(ctx({ env, publisher: PUBLISHER, body: { dataset_id: DS_0, window: WINDOW } }))
     expect(res.status).toBe(403)
@@ -128,7 +128,7 @@ describe('PUT /api/v1/publish/featured-hero', () => {
 })
 
 describe('DELETE /api/v1/publish/featured-hero', () => {
-  it('403 for a publisher publisher', async () => {
+  it('403 for a publisher-role account', async () => {
     const { env } = setupEnv()
     const res = await heroDelete(ctx({ env, publisher: PUBLISHER, method: 'DELETE' }))
     expect(res.status).toBe(403)

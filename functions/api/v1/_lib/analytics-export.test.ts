@@ -497,7 +497,7 @@ describe('POST /api/v1/publish/analytics-export', () => {
     expect(body.message).not.toContain('CATALOG_DB')
   })
 
-  it('403s for publisher publishers', async () => {
+  it('403s for publisher-role accounts', async () => {
     const { env } = setupRouteEnv()
     const response = await exportPost(ctx({ env, publisher: PUBLISHER }))
     expect(response.status).toBe(403)

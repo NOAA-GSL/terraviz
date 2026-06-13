@@ -268,7 +268,7 @@ describe('POST /api/v1/publish/datasets/{id}/asset — happy paths', () => {
 })
 
 describe('POST /api/v1/publish/datasets/{id}/asset — auth + visibility', () => {
-  it('returns 404 when the dataset is not visible to a publisher publisher', async () => {
+  it('returns 404 when the dataset is not visible to a publisher-role account', async () => {
     const { env, datasetId } = setupEnv()
     const res = await assetInit(
       ctx({
