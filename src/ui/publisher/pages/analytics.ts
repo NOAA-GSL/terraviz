@@ -31,7 +31,7 @@
  */
 
 import { t } from '../../../i18n'
-import { formatDate, formatNumber } from '../../../i18n/format'
+import { formatDate, formatNumber, formatRegion } from '../../../i18n/format'
 import { publisherGet, handleSessionError, type PublisherApiResult } from '../api'
 import { buildErrorCard } from '../components/error-card'
 import { ROUTE_CHANGE_START_EVENT } from '../router'
@@ -62,6 +62,11 @@ const LAND_COLOR = '#3a4150'
 const BORDER_COLOR = '#5a6374'
 const RANGE_CHOICES = [7, 30, 90, 365] as const
 const ENVIRONMENTS = ['production', 'preview'] as const
+/** Spatial rollup bin size in degrees — must match
+ * `SPATIAL_BIN_DEG` in `functions/api/v1/_lib/analytics-export.ts`.
+ * Bins carry the cell's south-west corner; the heatmap and the CSV
+ * export both derive the cell center by adding half this. */
+const SPATIAL_BIN_DEG = 0.5
 
 interface MeResponse {
   role: string
@@ -570,11 +575,37 @@ export async function renderAnalyticsPage(
       return
     }
 
+    // Self-describing spatial export: each row carries the filter
+    // scope (event / dataset / projection) and the full cell geometry
+    // so the heatmap is reconstructable from the CSV alone. There is
+    // no per-bin zoom — the camera footprint is splatted across cells
+    // by zoom at export time (mass-conserving), so the zoom signal is
+    // folded into `hits` (attention mass), not a separate column.
     // i18n-exempt: machine-readable CSV header
-    const spatialRows = (): CsvRow[] => [
-      ['lat', 'lon', 'hits'],
-      ...latestSpatialBins.map(b => [b.lat, b.lon, Math.round(b.hits)]),
-    ]
+    const spatialRows = (): CsvRow[] => {
+      const datasetScope =
+        state.spatialLayer === undefined
+          ? 'all'
+          : state.spatialLayer === ''
+            ? 'default-earth'
+            : state.spatialLayer
+      const projectionScope = state.spatialProjection ?? 'all'
+      const half = SPATIAL_BIN_DEG / 2
+      return [
+        ['event', 'dataset', 'projection', 'bin_deg', 'lat_sw', 'lon_sw', 'lat_center', 'lon_center', 'hits'],
+        ...latestSpatialBins.map(b => [
+          state.spatialEvent,
+          datasetScope,
+          projectionScope,
+          SPATIAL_BIN_DEG,
+          b.lat,
+          b.lon,
+          +(b.lat + half).toFixed(4),
+          +(b.lon + half).toFixed(4),
+          Math.round(b.hits),
+        ]),
+      ]
+    }
     const controls = spatialControls(data.layers, state, () => void loadSpatial())
     const mapContainer = el('div', { className: 'publisher-analytics-map' })
     mapContainer.setAttribute('role', 'img')
@@ -954,9 +985,14 @@ export async function renderAnalyticsPage(
     table.append(el('thead', {}, [head]))
     const body = el('tbody')
     for (const row of countries) {
+      // Full localized region name ("United States"); the raw ISO
+      // code survives as a hover tooltip for the rare correlate-with-
+      // raw-telemetry need (mirrors the datasets table's id tooltip).
+      const nameCell = el('td', { textContent: formatRegion(row.country) })
+      nameCell.title = row.country
       body.append(
         el('tr', {}, [
-          el('td', { textContent: row.country }),
+          nameCell,
           el('td', { textContent: formatNumber(Math.round(row.sessions)) }),
         ]),
       )
@@ -1147,8 +1183,8 @@ function binsToGeoJson(bins: SpatialData['bins']): GeoJSON.FeatureCollection {
       geometry: {
         type: 'Point',
         // Bin values are the cell's south-west corner; render at
-        // the cell center.
-        coordinates: [b.lon + 0.25, b.lat + 0.25],
+        // the cell center (same offset the CSV export records).
+        coordinates: [b.lon + SPATIAL_BIN_DEG / 2, b.lat + SPATIAL_BIN_DEG / 2],
       },
       properties: { weight: b.hits / max },
     })),
