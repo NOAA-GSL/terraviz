@@ -31,6 +31,28 @@ describe('renderBarSeries', () => {
     expect(svg.getAttribute('aria-label')).toBe('Sessions per day')
   })
 
+  it('draws Y-axis gridlines + value ticks (0 / mid / max)', () => {
+    const svg = renderBarSeries(
+      [
+        { label: 'a', value: 0 },
+        { label: 'b', value: 10 },
+      ],
+      { ariaLabel: 'x', height: 100 },
+    )
+    expect(svg.querySelectorAll('line.publisher-analytics-gridline')).toHaveLength(3)
+    const ticks = [...svg.querySelectorAll('text.publisher-analytics-ytick')].map(t => t.textContent)
+    // Max (10), mid (5), and 0 are all labelled.
+    expect(ticks).toContain('10')
+    expect(ticks).toContain('5')
+    expect(ticks).toContain('0')
+  })
+
+  it('insets bars past the Y-axis gutter', () => {
+    const svg = renderBarSeries([{ label: 'a', value: 1 }], { ariaLabel: 'x' })
+    const x = parseFloat(svg.querySelector('rect')!.getAttribute('x')!)
+    expect(x).toBeGreaterThanOrEqual(40) // Y_AXIS_GUTTER
+  })
+
   it('renders a valid empty SVG for an empty series', () => {
     const svg = renderBarSeries([], { ariaLabel: 'empty' })
     expect(svg.querySelectorAll('rect')).toHaveLength(0)
