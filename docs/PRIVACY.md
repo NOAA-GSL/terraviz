@@ -321,8 +321,8 @@ and enough text to identify it.
 Everything we store runs on **Cloudflare**:
 
 - **Analytics events**: Cloudflare Workers Analytics Engine (90-day
-  hot retention) and Cloudflare R2 object storage (long-term, Iceberg
-  format) for research analysis
+  hot retention) and Cloudflare R2 object storage (long-term archive)
+  plus Cloudflare D1 aggregate tables for product analytics
 - **Feedback submissions and Orbit ratings**: Cloudflare D1 (a
   managed SQLite database)
 - **Crash reports**: Cloudflare D1, in a separate table from feedback

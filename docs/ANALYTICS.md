@@ -57,12 +57,24 @@ client (src/analytics/) ──POST batch──▶ Cloudflare Pages Function
                                             ▼  blob/double layout
                                         Workers Analytics Engine
                                           dataset: terraviz_events
+                                          (hot store, 30–90 day retention)
                                             │
-                                            │  read-side AE SQL API
-                                            ▼
-                                        Grafana dashboards
-                                          grafana/dashboards/*.json
+                  ┌─────────────────────────┼─────────────────────────┐
+                  │ nightly export          │ live AE SQL API          │ live AE SQL API
+                  │ (GitHub Actions cron)    │ (recent window)          │
+                  ▼                          ▼                          ▼
+   R2 archive  +  D1 rollup tables      /publish/analytics tab     Grafana dashboards
+   events/v1/   analytics_*_daily       (primary, in-app,          grafana/dashboards/*.json
+   *.ndjson.gz  (indefinite)             privilege-gated)          (optional, self-host)
 ```
+
+The **`/publish/analytics`** tab is the primary read surface: it
+serves history from the D1 rollups and a recent window live from AE,
+all inside the authenticated portal. **Grafana is now optional** —
+useful for ad-hoc AE SQL exploration, but not required. The export
+pipeline (R2 archive + D1 rollups) is the durable record that outlives
+AE retention; full design in
+[`ANALYTICS_STORAGE_AND_ADMIN_PLAN.md`](ANALYTICS_STORAGE_AND_ADMIN_PLAN.md).
 
 - **Transport.** `src/analytics/transport.ts` — `fetch()` for live
   batches, `navigator.sendBeacon()` on `pagehide`. Tauri uses the
@@ -77,10 +89,18 @@ client (src/analytics/) ──POST batch──▶ Cloudflare Pages Function
   sort of the event payload keys. See
   [`ANALYTICS_QUERIES.md`](ANALYTICS_QUERIES.md) for per-event
   positions.
-- **Querying.** Grafana with the Yesoreyeram Infinity datasource
-  pointed at the AE SQL API. Dashboard JSON in `grafana/dashboards/`
-  is the source of truth — polish in-Grafana, then export and
-  re-commit.
+- **Querying.** Primary: the in-app **`/publish/analytics`** tab
+  (`functions/api/v1/publish/analytics.ts` over the D1 rollups +
+  a live-AE recent window). Optional: Grafana with the Yesoreyeram
+  Infinity datasource pointed at the AE SQL API — dashboard JSON in
+  `grafana/dashboards/` is the source of truth for that path (polish
+  in-Grafana, then export and re-commit).
+- **Long-term storage.** A nightly GitHub Actions cron
+  (`analytics-export.yml`) drains complete UTC days from AE into an
+  R2 NDJSON archive (full fidelity, indefinite) and D1 daily rollup
+  tables (`analytics_*_daily`) that back the dashboard's history.
+  Authoritative design:
+  [`ANALYTICS_STORAGE_AND_ADMIN_PLAN.md`](ANALYTICS_STORAGE_AND_ADMIN_PLAN.md).
 
 ## Privacy posture (summary)
 

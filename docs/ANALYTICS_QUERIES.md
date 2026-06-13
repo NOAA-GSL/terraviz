@@ -53,6 +53,18 @@ positional schema. The first four `blobs[]` are server-stamped
 > within that filter) so a future schema addition doesn't silently
 > change column meaning.
 
+> **Three consumers of these layouts.** The positions below are read
+> by (1) Grafana panels and human spelunking, (2) the in-app
+> `/publish/analytics` tab, and (3) the **nightly export job**, which
+> decodes AE rows back into named fields before archiving them to R2
+> (`functions/api/v1/_lib/analytics-layouts.ts` — a typed mirror of
+> this table, drift-checked against the `TelemetryEvent` union and
+> round-tripped through the real encoder in CI). When you add or
+> reorder an event field, update that registry in the same change, or
+> the archive's decoded field names go stale. See
+> [`ANALYTICS_STORAGE_AND_ADMIN_PLAN.md`](ANALYTICS_STORAGE_AND_ADMIN_PLAN.md)
+> Phase A.
+
 > **Null on the wire is forbidden.** Clients emit `''` for empty
 > strings and `0` for empty numbers; the ingest function rejects
 > events containing `null` field values with 400. Otherwise a
