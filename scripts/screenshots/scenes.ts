@@ -33,6 +33,14 @@ export interface Scene {
   description: string
   /** Drive the app to the state to capture. */
   setup: (page: Page) => Promise<void>
+  /**
+   * Selectors for non-deterministic regions to mask out of the visual
+   * regression diff (the WebGL globe, MapLibre tiles, a force-directed
+   * graph). Consumed by the report capturer's `screenshot({ mask })`;
+   * the Weblate capturer ignores it (translators want to see the
+   * content). See `docs/VISUAL_REPORT_PLAN.md`.
+   */
+  masks?: string[]
 }
 
 /** Open the catalog landing surface (the Browse overlay). */
@@ -129,6 +137,9 @@ export const scenes: Scene[] = [
   {
     name: 'browse-graph-view',
     description: 'Browse overlay switched to the Graph view',
+    // The cytoscape force layout settles to slightly different pixel
+    // positions per run; mask it so the diff doesn't flap.
+    masks: ['#browse-graph'],
     async setup(page) {
       await openCatalog(page)
       await page.locator('#browse-view-mode [data-view-mode="graph"]').click()
@@ -147,6 +158,9 @@ export const scenes: Scene[] = [
   {
     name: 'browse-map-view',
     description: 'Browse overlay switched to the Map (geographic coverage) view',
+    // MapLibre renders tiles asynchronously and non-deterministically;
+    // mask the map canvas so only the surrounding chrome is diffed.
+    masks: ['#browse-map'],
     async setup(page) {
       await openCatalog(page)
       await page.locator('#browse-view-mode [data-view-mode="map"]').click()

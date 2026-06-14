@@ -13,7 +13,7 @@
 import { parse, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { chromium, type Browser, type Page } from 'playwright'
+import { chromium, type Browser, type Locator, type Page } from 'playwright'
 
 import type { Box, Viewport } from './types'
 
@@ -106,12 +106,19 @@ export async function withScenePage<T>(
  * reports it as a misleading "waiting for fonts to load" timeout even on
  * pages with zero web fonts, and the same page screenshots fine in
  * isolation. So this is a transient-stall guard, not a correctness fix.
+ *
+ * `mask` paints the given locators with a solid colour so
+ * non-deterministic regions (the WebGL globe, MapLibre tiles, a
+ * force-directed graph) don't produce false positives in the regression
+ * diff. Both baseline and current are masked identically, so the masked
+ * area is byte-identical and contributes zero diff.
  */
 export async function screenshotWithRetry(
   page: Page,
   path: string,
+  extra: { mask?: Locator[] } = {},
 ): Promise<Buffer> {
-  const opts = { path, animations: 'disabled', timeout: 60_000 } as const
+  const opts = { path, animations: 'disabled', timeout: 60_000, ...extra } as const
   try {
     return await page.screenshot(opts)
   } catch (err) {

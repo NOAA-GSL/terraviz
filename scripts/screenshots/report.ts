@@ -105,7 +105,8 @@ async function captureShot(
         collector.signals.axeViolations = await runAxe(page)
       }
       const file = `${scene.name}-${pass.label}.png`
-      const png = await screenshotWithRetry(page, resolve(OUT_DIR, file))
+      const mask = (scene.masks ?? []).map((sel) => page.locator(sel))
+      const png = await screenshotWithRetry(page, resolve(OUT_DIR, file), { mask })
       return {
         scene: scene.name,
         description: scene.description,

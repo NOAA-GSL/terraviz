@@ -16,7 +16,12 @@
 
 import type { SceneSignals } from '../core/signals'
 
-import type { ReportManifest, ReportShot } from './types'
+import type {
+  DiffComparison,
+  DiffManifest,
+  ReportManifest,
+  ReportShot,
+} from './types'
 
 export interface SignalSummary {
   /** console errors + uncaught page errors. */
@@ -85,7 +90,34 @@ function renderProblems(s: SceneSignals): string {
   return `<ul class="problems">${lines.join('')}</ul>`
 }
 
-function renderShot(shot: ReportShot): string {
+/** A "changed N.NN% (P px)" / "new" / "size changed" diff badge. */
+function diffBadge(d: DiffComparison): string {
+  if (d.status === 'new') return '<span class="badge badge-muted">new (no baseline)</span>'
+  if (d.status === 'size-changed') return '<span class="badge badge-err">size changed</span>'
+  if (d.status === 'changed')
+    return `<span class="badge badge-err">changed ${(d.ratio * 100).toFixed(2)}% (${d.changedPixels} px)</span>`
+  return '<span class="badge badge-ok">no visual change</span>'
+}
+
+/** Baseline + diff thumbnails for a changed shot (current is the main img). */
+function renderDiffTriptych(d: DiffComparison): string {
+  if (!d.changed) return ''
+  const cells: string[] = []
+  if (d.baselineFile) {
+    cells.push(
+      `<figure><figcaption>baseline</figcaption><a href="${escapeHtml(d.baselineFile)}" target="_blank" rel="noopener"><img loading="lazy" src="${escapeHtml(d.baselineFile)}" alt="baseline" /></a></figure>`,
+    )
+  }
+  if (d.diffFile) {
+    cells.push(
+      `<figure><figcaption>diff</figcaption><a href="${escapeHtml(d.diffFile)}" target="_blank" rel="noopener"><img loading="lazy" src="${escapeHtml(d.diffFile)}" alt="diff" /></a></figure>`,
+    )
+  }
+  if (cells.length === 0) return ''
+  return `<div class="diff-row">${cells.join('')}</div>`
+}
+
+function renderShot(shot: ReportShot, diff?: DiffComparison): string {
   const sum = summarizeSignals(shot.signals)
   const badges =
     badge('errors', sum.errors, 'err') +
@@ -93,32 +125,50 @@ function renderShot(shot: ReportShot): string {
     badge('a11y', sum.axe, 'a11y') +
     badge('warnings', sum.warnings, 'muted')
   const status = sum.ok ? '<span class="badge badge-ok">ok</span>' : ''
+  const diffMark = diff ? diffBadge(diff) : ''
   return `
-      <figure class="shot ${sum.ok ? '' : 'has-problems'}">
+      <figure class="shot ${sum.ok ? '' : 'has-problems'} ${diff?.changed ? 'changed' : ''}">
         <figcaption>
           <span class="vp">${escapeHtml(shot.viewport)} · ${shot.width}×${shot.height}</span>
-          ${status}${badges}
+          ${status}${diffMark}${badges}
         </figcaption>
         <a href="${escapeHtml(shot.file)}" target="_blank" rel="noopener">
           <img loading="lazy" src="${escapeHtml(shot.file)}" alt="${escapeHtml(shot.scene)} (${escapeHtml(shot.viewport)})" />
         </a>
+        ${diff ? renderDiffTriptych(diff) : ''}
         ${renderProblems(shot.signals)}
       </figure>`
 }
 
-function renderScene(scene: string, shots: ReportShot[]): string {
+function renderScene(
+  scene: string,
+  shots: ReportShot[],
+  diffs?: Map<string, DiffComparison>,
+): string {
   const description = shots[0]?.description ?? ''
   const anyProblems = shots.some((s) => !summarizeSignals(s.signals).ok)
+  const anyChanged = shots.some((s) => diffs?.get(s.file)?.changed)
+  const heading =
+    escapeHtml(scene) +
+    (anyProblems ? ' <span class="badge badge-err">problems</span>' : '') +
+    (anyChanged ? ' <span class="badge badge-err">changed</span>' : '')
   return `
-    <section class="scene ${anyProblems ? 'scene-problems' : ''}" id="scene-${escapeHtml(scene)}">
-      <h2>${escapeHtml(scene)}${anyProblems ? ' <span class="badge badge-err">problems</span>' : ''}</h2>
+    <section class="scene ${anyProblems || anyChanged ? 'scene-problems' : ''}" id="scene-${escapeHtml(scene)}">
+      <h2>${heading}</h2>
       <p class="desc">${escapeHtml(description)}</p>
-      <div class="shots">${shots.map(renderShot).join('')}</div>
+      <div class="shots">${shots.map((s) => renderShot(s, diffs?.get(s.file))).join('')}</div>
     </section>`
 }
 
 /** Render the whole report to a single self-contained HTML document. */
-export function renderReportHtml(manifest: ReportManifest): string {
+export function renderReportHtml(
+  manifest: ReportManifest,
+  opts: { diffs?: DiffManifest } = {},
+): string {
+  const diffs = opts.diffs
+    ? new Map(opts.diffs.comparisons.map((c) => [c.file, c]))
+    : undefined
+
   const groups = groupByScene(manifest.shots)
   const sceneCount = groups.size
   const problemScenes = [...groups.values()].filter((shots) =>
@@ -128,9 +178,15 @@ export function renderReportHtml(manifest: ReportManifest): string {
     (n, s) => n + summarizeSignals(s.signals).total,
     0,
   )
+  const changedShots = diffs
+    ? [...diffs.values()].filter((c) => c.changed).length
+    : 0
+  const diffSummary = opts.diffs
+    ? ` · ${changedShots} shot(s) changed vs baseline`
+    : ''
 
   const sections = [...groups.entries()]
-    .map(([scene, shots]) => renderScene(scene, shots))
+    .map(([scene, shots]) => renderScene(scene, shots, diffs))
     .join('\n')
 
   return `<!doctype html>
@@ -156,6 +212,12 @@ export function renderReportHtml(manifest: ReportManifest): string {
   .shots { display: grid; gap: 1.25rem; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); }
   figure.shot { margin: 0; border: 1px solid #30363d; border-radius: 8px; overflow: hidden; background: #161b22; }
   figure.has-problems { border-color: #6e2630; }
+  figure.changed { border-color: #9e6a00; }
+  .diff-row { display: grid; grid-template-columns: 1fr 1fr; gap: .4rem; padding: .4rem;
+    border-top: 1px solid #30363d; }
+  .diff-row figure { margin: 0; }
+  .diff-row figcaption { padding: .25rem .4rem; color: #8b949e; border: none; font-size: .72rem; }
+  .diff-row img { border: 1px solid #30363d; }
   figcaption { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center;
     padding: .5rem .6rem; border-bottom: 1px solid #30363d; }
   figcaption .vp { color: #8b949e; margin-inline-end: auto; font-variant-numeric: tabular-nums; }
@@ -179,7 +241,7 @@ export function renderReportHtml(manifest: ReportManifest): string {
   <div class="meta">
     ${escapeHtml(manifest.baseUrl)} · ${escapeHtml(manifest.generatedAt)} ·
     ${sceneCount} scene(s) × ${manifest.viewports.length} viewport(s) ·
-    ${problemScenes} scene(s) with problems · ${totalProblems} problem(s) total
+    ${problemScenes} scene(s) with problems · ${totalProblems} problem(s) total${diffSummary}
   </div>
 </header>
 <main>
