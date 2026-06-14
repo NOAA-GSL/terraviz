@@ -295,15 +295,31 @@ export function diffUnits(
   return { add, remove }
 }
 
+/**
+ * Associate many units, logging progress every 25 so a long batch
+ * (a scene shot can have 200+ keys) isn't a multi-minute silent gap
+ * while the adaptive throttle paces the calls.
+ */
+async function associateUnits(shotId: number, ids: Iterable<number>): Promise<void> {
+  const list = [...ids]
+  let done = 0
+  for (const id of list) {
+    if (!DRY_RUN) await associateUnit(shotId, id)
+    done++
+    if (done % 25 === 0 && done < list.length) {
+      // eslint-disable-next-line no-console
+      console.log(`    …associated ${done}/${list.length}`)
+    }
+  }
+}
+
 /** Add/remove unit associations to match the desired set. */
 async function reconcileUnits(
   shot: WeblateScreenshot,
   desired: Set<number>,
 ): Promise<{ added: number; removed: number }> {
   const { add, remove } = diffUnits(currentUnitIds(shot), desired)
-  for (const id of add) {
-    if (!DRY_RUN) await associateUnit(shot.id, id)
-  }
+  await associateUnits(shot.id, add)
   for (const id of remove) {
     if (!DRY_RUN) await dissociateUnit(shot.id, id)
   }
@@ -377,7 +393,7 @@ async function run(): Promise<void> {
       }
       shot = await createScreenshot(scene, png)
       created++
-      for (const id of ids) await associateUnit(shot.id, id)
+      await associateUnits(shot.id, ids)
       unitsAdded += ids.size
       // eslint-disable-next-line no-console
       console.log(`  created, associated ${ids.size} unit(s)`)

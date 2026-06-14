@@ -92,10 +92,20 @@ async function pace(): Promise<void> {
   lastCallAt = Date.now()
 }
 
-/** Slow the global pace after a throttle response. */
+/** Slow the global pace after a throttle response (multiplicative). */
 function slowDown(): void {
   const next = (currentIntervalMs || BASE_INTERVAL_MS || MIN_INTERVAL_DEFAULT) * 2
   currentIntervalMs = Math.min(MAX_INTERVAL_MS, next)
+}
+
+/** Step the global pace back toward the base after a clean response
+ *  (additive). With `slowDown` this is AIMD: the run converges on the
+ *  server's sustainable rate instead of getting stuck at the cap. */
+const SPEEDUP_STEP_MS = 25
+function speedUp(): void {
+  if (currentIntervalMs > BASE_INTERVAL_MS) {
+    currentIntervalMs = Math.max(BASE_INTERVAL_MS, currentIntervalMs - SPEEDUP_STEP_MS)
+  }
 }
 
 /** Test-only: reset the adaptive pace between cases. */
@@ -139,9 +149,11 @@ export async function weblateFetch(
   for (let attempt = 0; ; attempt++) {
     await pace()
     const res = await fetch(url, init)
-    if ((res.status !== 429 && res.status !== 503) || attempt >= maxRetries) {
+    if (res.status !== 429 && res.status !== 503) {
+      speedUp()
       return res
     }
+    if (attempt >= maxRetries) return res
     // Throttled: slow the global pace for every subsequent request so
     // the run converges on the server's sustainable rate.
     slowDown()
