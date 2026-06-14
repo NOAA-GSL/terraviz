@@ -66,7 +66,13 @@ const sleep = (ms: number): Promise<void> =>
 // trip Weblate's burst limit (reactive backoff below still covers it).
 // ~8 req/s by default; raise WEBLATE_MIN_INTERVAL_MS if hosted.weblate.org
 // throttles harder.
-const MIN_INTERVAL_MS = Number(process.env.WEBLATE_MIN_INTERVAL_MS ?? 120)
+const MIN_INTERVAL_DEFAULT = 120
+const MIN_INTERVAL_RAW = Number(process.env.WEBLATE_MIN_INTERVAL_MS ?? MIN_INTERVAL_DEFAULT)
+// A non-numeric env value would yield NaN, which silently disables
+// pacing (every NaN comparison is false) — clamp it back to the default.
+const MIN_INTERVAL_MS = Number.isFinite(MIN_INTERVAL_RAW)
+  ? MIN_INTERVAL_RAW
+  : MIN_INTERVAL_DEFAULT
 let lastCallAt = 0
 async function pace(): Promise<void> {
   if (MIN_INTERVAL_MS <= 0) return
@@ -98,6 +104,9 @@ export function retryAfterMs(header: string | null, now = Date.now()): number | 
  *
  * Bodies must be re-readable across retries — use `FormData`,
  * `URLSearchParams`, or string/Buffer bodies, never a one-shot stream.
+ *
+ * `maxRetries` counts retries *after* the first request, so the worst
+ * case is `maxRetries + 1` total requests (1 initial + up to 8 retries).
  */
 export async function weblateFetch(
   url: string,
