@@ -8,7 +8,9 @@ name: Sync Weblate screenshots
 # are more conservative.
 #
 # Triggers:
-#   - workflow_dispatch — one-off refresh from the Actions tab
+#   - workflow_dispatch — one-off run from the Actions tab. Capture
+#     only by default (a safe "test capture": produces the artifact,
+#     no Weblate writes); tick the `upload` input to also push.
 #   - schedule (weekly) — safety net that catches drift even when the
 #     path filter below misses something
 #   - push to main, only on paths that could change a screenshot
@@ -16,10 +18,18 @@ name: Sync Weblate screenshots
 #     PNGs as a build artifact for review); never writes to Weblate
 #     from an un-merged branch.
 #
-# See docs/WEBLATE_SCREENSHOT_SYNC_PLAN.md (phase S5).
+# Note: a manual workflow_dispatch only becomes available once this
+# file is on the default branch (GitHub requirement).
+#
+# See docs/WEBLATE_SCREENSHOT_SYNC_PLAN.md (phases S5/S7).
 
 on:
   workflow_dispatch:
+    inputs:
+      upload:
+        description: 'Also push to Weblate (off = capture-only test run)'
+        type: boolean
+        default: false
   schedule:
     # Mondays 04:00 UTC.
     - cron: '0 4 * * 1'
@@ -86,10 +96,14 @@ jobs:
           path: screenshots-out/
           if-no-files-found: warn
 
-      # Push to Weblate only off main / dispatch / schedule — never
-      # from a pull request.
+      # Push to Weblate on push-to-main / schedule, and on a manual
+      # dispatch ONLY when `upload` is ticked. Never from a pull
+      # request, and never from a plain "test capture" dispatch.
       - name: Push to Weblate
-        if: github.event_name != 'pull_request'
+        if: >-
+          github.event_name == 'push' ||
+          github.event_name == 'schedule' ||
+          (github.event_name == 'workflow_dispatch' && inputs.upload)
         run: npm run screenshots:sync
         env:
           WEBLATE_TOKEN: ${{ secrets.WEBLATE_TOKEN }}
