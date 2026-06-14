@@ -1604,10 +1604,64 @@ workflow needs and what's safe to drop.
 | `ci.yml` — type-check / unit-tests / build | none (auto `GITHUB_TOKEN`) | **keep** — fork-safe, no setup |
 | `ci.yml` — **deploy** job | `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`; optional `vars.VITE_DEFAULT_UI_SCALE`; envs `production`/`preview`; **+ rename the `--project-name terraviz`** | you deploy via the Pages dashboard Git integration (then delete this job — see Step 4) |
 | `poster.yml` | same Cloudflare secrets; envs `poster-production`/`poster-preview`; **+ rename `terraviz-poster`** | you don't ship the poster sub-site |
+| `visual-report.yml` — smoke (gating) + advisory report/diff | smoke/report/diff jobs need **none** (auto `GITHUB_TOKEN`, `pull-requests: write`); the *optional* report **deploy** needs `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID` and a `terraviz-visual` Pages project; optional `vars.VISUAL_DEPLOY_URL` (see [the visual report site](#reference-the-visual-report-site-optional)) | **keep** the smoke/report jobs (fork-safe); drop only the deploy step if you don't host the report |
 | `transcode-hls.yml` | `R2_S3_ENDPOINT`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `CATALOG_R2_BUCKET`, `TERRAVIZ_SERVER`, `CF_ACCESS_CLIENT_ID`, `CF_ACCESS_CLIENT_SECRET` (details in Step 15) | you don't use publisher video uploads |
 | `release.yml` / `desktop.yml` | `TAURI_SIGNING_PRIVATE_KEY` (+ `_PASSWORD`), 6× `APPLE_*` (Step 18) | web-only fork |
 | `sync-weblate.yml` | `WEBLATE_TOKEN` (Step 18d) | you don't run your own translation pipeline |
 | `codeql.yml`, `mobile.yml` | none | **keep** — fork-safe |
+
+---
+
+## Reference: the visual report site (optional)
+
+`visual-report.yml` is the CI side of the
+[visual testing & reporting tool](VISUAL_REPORT_PLAN.md): on every PR it
+runs the gating **smoke** tests and an **advisory** screenshot report
+(per-scene problem badges + a pixel diff against `main`'s baseline,
+posted as a PR comment + artifact). None of that touches Cloudflare —
+it's all GitHub Actions + artifacts.
+
+The **only** Cloudflare piece is optional: on `push: main` the workflow
+can deploy the generated HTML report to a separate static Pages project
+so it has a stable URL (the same pattern as `poster.yml`). To turn that
+on:
+
+1. **Create the Pages project** named `terraviz-visual` (Direct Upload):
+   ```bash
+   npx wrangler pages project create terraviz-visual --production-branch main
+   ```
+   Rename it in the workflow's deploy step if you prefer another name.
+2. That's it for required setup. Specifically, you do **not** need:
+   - **Bindings** — the report is a static site (one `index.html` + PNGs);
+     no D1 / KV / R2 / Analytics Engine / Functions are involved.
+   - **New secrets** — it reuses the same `CLOUDFLARE_API_TOKEN` and
+     `CLOUDFLARE_ACCOUNT_ID` the `ci.yml` deploy and `poster.yml` already
+     use (the token needs Pages:Edit, which an account-scoped Pages token
+     already has). No GitHub Environment is referenced either.
+   - **A custom domain** — Pages serves it at
+     `https://terraviz-visual.pages.dev` (and a per-deploy
+     `<hash>.terraviz-visual.pages.dev`); the workflow captures that URL
+     and prints it in the run summary. Add a custom domain only if you
+     want a vanity hostname.
+3. **Optional** — set a repo **variable** `VISUAL_DEPLOY_URL` to your
+   production SPA URL (e.g. `https://terraviz.your-org.org`). When set,
+   the `main` run re-captures the report against the *live* site with the
+   accessibility scan on, so the deployed report reflects production
+   (real tiles, network, console). Left unset, it deploys the local
+   capture.
+
+The deploy step is `continue-on-error`, so skipping all of the above
+breaks nothing: PRs still get the smoke gate, the report artifact, and
+the advisory comment — `main` just won't host the report anywhere. To
+drop report hosting entirely, delete the "Re-capture against the live
+app" and "Deploy report to Cloudflare Pages" steps from
+`visual-report.yml`; the rest of the workflow is fork-safe and
+secret-free.
+
+> The regression diff's baseline is a **GitHub Actions artifact**
+> (`visual-baseline`) published by the `main` run — not a Cloudflare
+> resource. The first push to `main` after merging bootstraps it; until
+> then PRs soft-pass with "no baseline to diff against".
 
 ---
 
