@@ -187,7 +187,13 @@ DCO-signed.
   and 3 into a workflow separate from the Weblate sync.
 - **V6 — Deploy report against the live URL + a11y.** Completes pillar 3.
 - **V7 — Route-stub fixture harness.** Promotes data-backed scenes from
-  "Loading…" to populated views; enables pillar 4.
+  "Loading…" to populated views; enables pillar 4. The Weblate capturer
+  installs fixtures too, so its publisher/admin per-string crops become
+  populated rather than "Loading…" — a deliberate translator-context
+  improvement. The "Weblate path untouched" guarantee is about *code*:
+  the shared-core refactor (V1) keeps the manifest shape, the uploader,
+  and the sync workflow byte-identical; it was never a promise that the
+  rendered pixels for those scenes stay frozen.
 - **V8 — Smoke / interaction tests.** Delivers pillar 4; the gating
   check.
 
