@@ -44,6 +44,7 @@ import {
   screenshotWithRetry,
   withScenePage,
 } from './core/browser'
+import { installFixtures } from './core/fixtures'
 import { attachSignalCollectors, axeEnabled, runAxe } from './core/signals'
 import type { Viewport } from './core/types'
 import { renderReportHtml } from './report/render'
@@ -100,6 +101,7 @@ async function captureShot(
     { viewport: pass.viewport, baseURL: BASE_URL },
     async (page) => {
       const collector = attachSignalCollectors(page)
+      if (scene.fixtures) await installFixtures(page, scene.fixtures)
       await scene.setup(page)
       if (axeEnabled()) {
         collector.signals.axeViolations = await runAxe(page)

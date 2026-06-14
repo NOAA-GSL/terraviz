@@ -26,6 +26,9 @@
 
 import type { Page } from 'playwright'
 
+import type { FixtureRule } from './core/fixtures'
+import { publisherFixtures } from './fixtures/publisher'
+
 export interface Scene {
   /** Stable id — used as the screenshot filename and Weblate name. */
   name: string
@@ -41,6 +44,13 @@ export interface Scene {
    * content). See `docs/VISUAL_REPORT_PLAN.md`.
    */
   masks?: string[]
+  /**
+   * `/api/**` route-stub fixtures installed before `setup()` so
+   * data-backed surfaces (publisher / admin) render populated views
+   * instead of a "Loading…" state. See `core/fixtures.ts` and
+   * `fixtures/publisher.ts` (Phase V7).
+   */
+  fixtures?: FixtureRule[]
 }
 
 /** Open the catalog landing surface (the Browse overlay). */
@@ -61,19 +71,12 @@ async function openCatalog(page: Page): Promise<void> {
  * the static-form pages) field labels/placeholders. Every page
  * mounts its chrome synchronously before fetching data.
  *
- * Observed behaviour against the dev server (smoke-tested 2026-06-14):
- *   - `publish-dataset-new` renders its full static form (richest).
- *   - the data-backed list/detail pages (workflows, featured-hero,
- *     me, analytics, feedback, users) capture topbar chrome + a
- *     "Loading…" state — the fetch neither resolves nor errors into a
- *     card without a backend, so the error-card / populated strings
- *     are NOT captured here.
- *
- * Capturing those richer states (error cards, populated admin views)
- * needs a fixture session or a forced-failing fetch path — the
- * "fixture vs. live data" open question in the plan, wired in a later
- * phase. The chrome + nav strings captured here are already strictly
- * more context than today's empty Weblate screenshot field.
+ * Scenes that set `fixtures` (Phase V7) stub `/api/**` with
+ * `installFixtures` *before* this navigates, so the data-backed
+ * list/detail/admin pages render *populated* views instead of the
+ * "Loading…" state they show without a backend. Scenes without fixtures
+ * still capture the chrome + nav strings (already more context than an
+ * empty Weblate screenshot field).
  */
 async function openPublish(page: Page, path: string): Promise<void> {
   await page.goto(path)
@@ -169,11 +172,11 @@ export const scenes: Scene[] = [
   },
 
   // ── Publisher portal ──────────────────────────────────────────
-  // Chrome + forms + degraded states (no backend/auth locally). See
-  // openPublish() above for why that's still useful translator context.
+  // Populated via route-stub fixtures (Phase V7); see openPublish().
   {
     name: 'publish-datasets',
-    description: 'Publisher portal — datasets list (chrome + empty/error state)',
+    description: 'Publisher portal — datasets list (populated via fixtures)',
+    fixtures: publisherFixtures(),
     async setup(page) {
       await openPublish(page, '/publish/datasets')
     },
@@ -181,13 +184,15 @@ export const scenes: Scene[] = [
   {
     name: 'publish-dataset-new',
     description: 'Publisher portal — new-dataset form (field labels & placeholders)',
+    fixtures: publisherFixtures(),
     async setup(page) {
       await openPublish(page, '/publish/datasets/new')
     },
   },
   {
     name: 'publish-workflows',
-    description: 'Publisher portal — Zyra workflows list',
+    description: 'Publisher portal — Zyra workflows list (populated via fixtures)',
+    fixtures: publisherFixtures(),
     async setup(page) {
       await openPublish(page, '/publish/workflows')
     },
@@ -195,6 +200,7 @@ export const scenes: Scene[] = [
   {
     name: 'publish-workflow-new',
     description: 'Publisher portal — new-workflow form (YAML editor + validate)',
+    fixtures: publisherFixtures(),
     async setup(page) {
       await openPublish(page, '/publish/workflows/new')
     },
@@ -202,6 +208,7 @@ export const scenes: Scene[] = [
   {
     name: 'publish-tours',
     description: 'Publisher portal — tour-creator landing page',
+    fixtures: publisherFixtures(),
     async setup(page) {
       await openPublish(page, '/publish/tours')
     },
@@ -209,6 +216,7 @@ export const scenes: Scene[] = [
   {
     name: 'publish-import',
     description: 'Publisher portal — import page',
+    fixtures: publisherFixtures(),
     async setup(page) {
       await openPublish(page, '/publish/import')
     },
@@ -216,39 +224,45 @@ export const scenes: Scene[] = [
   {
     name: 'publish-featured-hero',
     description: 'Publisher portal — "Right now" featured-hero override',
+    fixtures: publisherFixtures({ admin: true }),
     async setup(page) {
       await openPublish(page, '/publish/featured-hero')
     },
   },
   {
     name: 'publish-me',
-    description: 'Publisher portal — current-user identity & role',
+    description: 'Publisher portal — current-user identity & role (populated)',
+    fixtures: publisherFixtures(),
     async setup(page) {
       await openPublish(page, '/publish/me')
     },
   },
 
   // ── Admin-only surfaces ───────────────────────────────────────
-  // Privileged tabs; chrome + headings + degraded states without an
-  // authenticated session. Populated data views come with the
-  // fixture session in a later phase.
+  // Privileged tabs, populated with an admin identity via fixtures so
+  // the tabs render. (Analytics/feedback rollup endpoints aren't stubbed
+  // yet — those views fall back to their error/empty surface, a
+  // representative state worth capturing.)
   {
     name: 'admin-analytics',
-    description: 'Admin — analytics dashboard chrome (charts need a fixture session)',
+    description: 'Admin — analytics dashboard (admin identity via fixtures)',
+    fixtures: publisherFixtures({ admin: true }),
     async setup(page) {
       await openPublish(page, '/publish/analytics')
     },
   },
   {
     name: 'admin-feedback',
-    description: 'Admin — feedback review chrome (AI thumbs + bug/feature reports)',
+    description: 'Admin — feedback review (admin identity via fixtures)',
+    fixtures: publisherFixtures({ admin: true }),
     async setup(page) {
       await openPublish(page, '/publish/feedback')
     },
   },
   {
     name: 'admin-users',
-    description: 'Admin — Users tab (approve / reject / suspend / role controls)',
+    description: 'Admin — Users tab (populated via fixtures)',
+    fixtures: publisherFixtures({ admin: true }),
     async setup(page) {
       await openPublish(page, '/publish/users')
     },

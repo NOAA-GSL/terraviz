@@ -62,6 +62,7 @@ import {
   slugKey,
   withScenePage,
 } from './core/browser'
+import { installFixtures } from './core/fixtures'
 import type { Box } from './core/types'
 import {
   computeCoverage,
@@ -267,6 +268,9 @@ async function captureScene(
     await page.addInitScript(() => {
       ;(window as TracedWindow).__i18nTrace?.reset()
     })
+    // Populate data-backed surfaces so per-string crops capture real
+    // content, not a "Loading…" state (Phase V7).
+    if (scene.fixtures) await installFixtures(page, scene.fixtures)
     await scene.setup(page)
     const keys = await readTracedKeys(page)
     const name = `${scene.name}${NAME_SUFFIX}`
