@@ -138,6 +138,22 @@ jobs:
               await github.rest.issues.createComment({ owner, repo, issue_number, body })
             }
 
+      # Deploy report (Phase V6): re-capture against the LIVE deployed
+      # app with the a11y scan on, so the deployed report reflects
+      # production reality — real tiles, real network, real console —
+      # and catches problems local capture structurally can't (missing
+      # images, failed tile requests, contrast issues). Runs only when a
+      # VISUAL_DEPLOY_URL repo variable is set; otherwise the local
+      # report captured above is what gets deployed. Note: the baseline
+      # was already published from the deterministic LOCAL capture above,
+      # so overwriting report-out here does not affect regression diffs.
+      - name: Re-capture against the live app (a11y on)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.VISUAL_DEPLOY_URL != ''
+        env:
+          SCREENSHOT_BASE_URL: ${{ vars.VISUAL_DEPLOY_URL }}
+          VISUAL_AXE: '1'
+        run: npm run screenshots:report || echo "::warning::Some live scenes failed; see log."
+
       # Deploy the report to the terraviz-visual Pages project for a
       # stable URL. Main only; non-fatal so a not-yet-created project
       # (or absent secrets) can't break the baseline/report above.
