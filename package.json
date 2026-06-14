@@ -18,6 +18,7 @@
     "screenshots:capture": "npx tsx scripts/screenshots/capture.ts",
     "screenshots:report": "npx tsx scripts/screenshots/report.ts",
     "screenshots:diff": "npx tsx scripts/screenshots/diff.ts",
+    "screenshots:summary": "npx tsx scripts/screenshots/summary.ts",
     "screenshots:sync": "npx tsx scripts/sync-weblate-screenshots.ts",
     "postinstall": "npm run tokens && npm run locales",
     "predev": "npm run build:privacy-page && npm run locales",
