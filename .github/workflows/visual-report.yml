@@ -41,6 +41,31 @@ permissions:
   pull-requests: write
 
 jobs:
+  # Gating: interaction smoke tests (search, Orbit local engine,
+  # navigation, a fixture-backed publisher page). Unlike the advisory
+  # report above, a failed assertion or page error fails this check.
+  smoke:
+    name: Smoke / interaction tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: Run smoke tests
+        env:
+          SCREENSHOT_BASE_URL: http://127.0.0.1:4173
+        run: |
+          npm run dev -- --host 127.0.0.1 --port 4173 &
+          for i in $(seq 1 60); do
+            curl -sf http://127.0.0.1:4173 >/dev/null && break
+            sleep 1
+          done
+          npm run screenshots:smoke
+
   visual-report:
     name: Capture + diff + report
     runs-on: ubuntu-latest
