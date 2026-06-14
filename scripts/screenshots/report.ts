@@ -85,6 +85,16 @@ export function parseViewportMatrix(
       }
       const label = part.slice(0, eq).trim()
       if (!label) throw new Error(`VISUAL_VIEWPORTS entry has an empty label: "${part}".`)
+      // The label becomes part of the screenshot filename
+      // (`<scene>-<label>.png`), so restrict it to a filesystem-safe
+      // charset — no slashes or dots — to prevent path traversal out of
+      // the output directory.
+      if (!/^[a-z0-9_-]+$/i.test(label)) {
+        throw new Error(
+          `VISUAL_VIEWPORTS label "${label}" must be alphanumeric, dash, ` +
+            'or underscore only (it is used as a filename).',
+        )
+      }
       return { label, viewport: parseViewport(part.slice(eq + 1)) }
     })
   if (passes.length === 0) throw new Error('VISUAL_VIEWPORTS resolved to no viewports.')

@@ -3,7 +3,7 @@
  *
  * Data-backed surfaces (the publisher / admin portal) render only a
  * "Loading…" state against a local dev server — there is no backend or
- * Cloudflare Access session. This harness intercepts `**​/api/**`
+ * Cloudflare Access session. This harness intercepts `/api/**`
  * requests with `page.route` and serves typed JSON fixtures, so those
  * scenes capture *populated* views (and forced error/empty states) for
  * both the visual report and the smoke tests — no CI backend required.
@@ -70,7 +70,7 @@ export interface InstallFixturesOptions {
 }
 
 /**
- * Intercept `**​/api/**` on the page and serve fixtures. Must be called
+ * Intercept `/api/**` on the page and serve fixtures. Must be called
  * before the scene navigates (route handlers only affect later
  * requests). Non-API requests (catalog snapshot, tiles, assets) are
  * untouched.

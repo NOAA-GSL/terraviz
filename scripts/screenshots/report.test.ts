@@ -24,6 +24,12 @@ describe('parseViewportMatrix', () => {
     expect(() => parseViewportMatrix('=1440x900')).toThrow(/empty label/)
   })
 
+  it('rejects labels with path separators or dots (traversal guard)', () => {
+    expect(() => parseViewportMatrix('../evil=1440x900')).toThrow(/filename/)
+    expect(() => parseViewportMatrix('a/b=1440x900')).toThrow(/filename/)
+    expect(() => parseViewportMatrix('mobile.1=390x844')).toThrow(/filename/)
+  })
+
   it('rejects a malformed dimension', () => {
     expect(() => parseViewportMatrix('desktop=wide')).toThrow(/viewport must look like/)
   })

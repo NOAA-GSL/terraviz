@@ -12,7 +12,7 @@
  *   - Orbit's local engine answers a chat message (no network/API key —
  *     on a dev server Orbit auto-falls back to the local engine), with
  *     no raw `<<LOAD:…>>` marker leaking into the visible text;
- *   - view-mode navigation mounts each surface without console errors;
+ *   - view-mode navigation mounts each surface without uncaught errors;
  *   - a fixture-backed publisher page renders populated content.
  *
  * The assertion helpers are pure and unit-tested; this file is the thin
@@ -80,9 +80,11 @@ const checks: Check[] = [
       await page.locator('#browse-search').fill('ocean')
       await page.locator('#browse-search-clear:not(.hidden)').waitFor()
       const after = await page.locator('#browse-grid .browse-card').count()
+      // Strictly fewer — a no-op search (the bug this guards against)
+      // would leave the count unchanged.
       assert(
-        after <= before,
-        `search should not grow the grid (before=${before}, after=${after})`,
+        after < before,
+        `search should narrow the grid (before=${before}, after=${after})`,
       )
     },
   },
@@ -143,8 +145,13 @@ async function runCheck(browser: Browser, check: Check): Promise<SmokeResult> {
       const signals = attachSignalCollectors(page)
       if (check.fixtures) await installFixtures(page, check.fixtures)
       await check.run(page)
-      // An uncaught page error during the interaction fails the check
-      // even when the assertions passed — it's a real runtime bug.
+      // An uncaught page error (a real JS exception) fails the check even
+      // when the assertions passed. We deliberately do NOT gate on
+      // `console` errors: the browser logs every failed resource load
+      // (map tiles, GIBS imagery, external CDNs) as a console error, so
+      // gating on them would make this job flaky on transient
+      // network/CDN/cert issues. Those are captured as failedRequests /
+      // badResponses signals in the advisory report instead.
       assert(
         signals.signals.pageErrors.length === 0,
         `uncaught page error(s): ${signals.signals.pageErrors.join('; ')}`,

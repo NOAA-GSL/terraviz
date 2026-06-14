@@ -96,7 +96,15 @@ jobs:
           done
           curl -sf http://127.0.0.1:4173 >/dev/null \
             || { echo "::error::dev server did not become reachable within 60s"; exit 1; }
-          npm run screenshots:report || echo "::warning::Some scenes failed to capture; see log."
+          # On a PR the report is advisory, so a broken scene only warns.
+          # On main it must fail loudly: swallowing here would publish an
+          # incomplete `visual-baseline`, silently turning the missing
+          # scenes into perpetual "new" soft-passes on future PRs.
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            npm run screenshots:report || echo "::warning::Some scenes failed to capture; see log."
+          else
+            npm run screenshots:report
+          fi
 
       # On a PR, pull the baseline PNGs from the latest successful main
       # run of this workflow and diff against them. Best-effort: no
