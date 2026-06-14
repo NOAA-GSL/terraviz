@@ -3,11 +3,13 @@
  *
  * Gated entirely behind `import.meta.env.VITE_I18N_TRACE`: the only
  * production caller is `t()` in `./index.ts`, inside an
- * `if (import.meta.env.VITE_I18N_TRACE)` branch. When the flag is
- * unset Vite statically replaces it with `false`, Rollup drops the
- * call, and — because this module has no import-time side effects —
- * the whole module falls out of the bundle. Keep it side-effect-free
- * at module scope for that elimination to hold.
+ * `if (import.meta.env.VITE_I18N_TRACE === 'true')` branch. Vite
+ * inlines `import.meta.env.VITE_*` as a string literal when the var
+ * is set and as `undefined` when it isn't, so in a normal build the
+ * guard becomes `undefined === 'true'` — statically `false`. Rollup
+ * drops the dead call, and — because this module has no import-time
+ * side effects — the whole module falls out of the bundle. Keep it
+ * side-effect-free at module scope for that elimination to hold.
  *
  * When the flag *is* set (CI screenshot-capture builds only), every
  * resolved message key is collected into a Set and mirrored onto

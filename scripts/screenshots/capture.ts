@@ -47,7 +47,7 @@
 
 import { createHash } from 'node:crypto'
 import { appendFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
-import { resolve } from 'node:path'
+import { parse, resolve, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 import { chromium, type Browser } from 'playwright'
@@ -63,9 +63,31 @@ const HERE = resolve(fileURLToPath(import.meta.url), '..')
 const REPO_ROOT = resolve(HERE, '..', '..')
 
 const BASE_URL = process.env.SCREENSHOT_BASE_URL ?? 'http://localhost:4173'
-const OUT_DIR =
-  process.env.SCREENSHOT_OUT_DIR ?? resolve(REPO_ROOT, 'screenshots-out')
+// Resolve to an absolute path so the safety guard and every
+// `resolve(OUT_DIR, file)` below behave the same for a relative
+// SCREENSHOT_OUT_DIR (e.g. the mobile-pass "screenshots-out-mobile").
+const OUT_DIR = resolve(
+  process.env.SCREENSHOT_OUT_DIR ?? resolve(REPO_ROOT, 'screenshots-out'),
+)
 const NAME_SUFFIX = process.env.SCREENSHOT_NAME_SUFFIX ?? ''
+
+/**
+ * Refuse to `rm -rf` a path that is the filesystem root, the repo
+ * root, or an ancestor of it. `run()` wipes OUT_DIR for a clean
+ * slate, so a mistyped SCREENSHOT_OUT_DIR (`/`, empty → cwd, a
+ * parent dir) must not nuke real files.
+ */
+function assertSafeOutDir(dir: string): void {
+  const root = parse(dir).root
+  const isAncestorOfRepo = `${REPO_ROOT}${sep}`.startsWith(`${dir}${sep}`)
+  if (dir === root || dir === REPO_ROOT || isAncestorOfRepo) {
+    throw new Error(
+      `Refusing to delete SCREENSHOT_OUT_DIR="${dir}": it is the ` +
+        'filesystem root, the repo root, or an ancestor of it. Point ' +
+        'it at a dedicated output directory.',
+    )
+  }
+}
 
 function parseViewport(): { width: number; height: number } {
   const raw = process.env.SCREENSHOT_VIEWPORT ?? '1440x900'
@@ -178,6 +200,7 @@ async function run(): Promise<void> {
   const viewport = parseViewport()
 
   // Clean slate so a removed/renamed scene doesn't leave a stale PNG.
+  assertSafeOutDir(OUT_DIR)
   await rm(OUT_DIR, { recursive: true, force: true })
   await mkdir(OUT_DIR, { recursive: true })
 

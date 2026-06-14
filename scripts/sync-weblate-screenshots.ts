@@ -82,7 +82,16 @@ export function unitIdFromUrl(url: string): number | null {
   return m ? Number(m[1]) : null
 }
 
-/** Every screenshot attached to our source (`en`) translation. */
+/**
+ * Every screenshot attached to our source (`en`) translation.
+ *
+ * Weblate's `/api/screenshots/` list endpoint has no server-side
+ * project/component filter, so we page the collection and filter by
+ * `translation` URL client-side. On a large shared instance
+ * (hosted.weblate.org) that's more pages than ideal, but this is a
+ * low-frequency CI job and the source-translation filter keeps the
+ * working set correct regardless of how many other projects exist.
+ */
 async function listSourceScreenshots(): Promise<WeblateScreenshot[]> {
   const all = await fetchAllPages<WeblateScreenshot>(
     `${WEBLATE_URL}/api/screenshots/`,
