@@ -47,9 +47,14 @@ import {
   sourceTranslationUrl,
   unitsByContext,
   WeblateError,
+  WEBLATE_COMPONENT,
+  WEBLATE_PROJECT,
   WEBLATE_URL,
   type WeblateUnit,
 } from './weblate-client'
+
+// Source language the screenshots attach to (the `en` units).
+const SOURCE_LANGUAGE = 'en'
 // Type-only import — erased at runtime, so the uploader does NOT
 // pull in the capturer's `playwright` dependency. Keeps the
 // manifest shape a single source of truth across the two scripts.
@@ -66,11 +71,12 @@ const DRY_RUN = process.argv.includes('--dry-run')
 interface WeblateScreenshot {
   id: number
   name: string
-  translation: string
+  /** URL of the related translation object (used to scope to `en`). */
+  translation?: string
   /** Absolute URL to the stored image, when the API provides it. */
   file_url?: string
   /** Associated source-unit URLs, e.g. `.../api/units/123/`. */
-  units: string[]
+  units?: string[]
 }
 
 const sha256 = (buf: Buffer | Uint8Array): string =>
@@ -85,12 +91,10 @@ export function unitIdFromUrl(url: string): number | null {
 /**
  * Every screenshot attached to our source (`en`) translation.
  *
- * Weblate's `/api/screenshots/` list endpoint has no server-side
- * project/component filter, so we page the collection and filter by
- * `translation` URL client-side. On a large shared instance
- * (hosted.weblate.org) that's more pages than ideal, but this is a
- * low-frequency CI job and the source-translation filter keeps the
- * working set correct regardless of how many other projects exist.
+ * The Weblate REST API only exposes the global `GET /api/screenshots/`
+ * (there is no component-scoped screenshots list), so we page it and
+ * filter by the `translation` URL client-side. This is a
+ * low-frequency CI job, so the extra pages are acceptable.
  */
 async function listSourceScreenshots(): Promise<WeblateScreenshot[]> {
   const all = await fetchAllPages<WeblateScreenshot>(
@@ -104,9 +108,15 @@ async function createScreenshot(
   scene: CapturedScene,
   png: Buffer,
 ): Promise<WeblateScreenshot> {
+  // Current Weblate wants the target as project/component/language
+  // slugs (not a `translation` URL); the source units live under the
+  // `en` language. (Confirmed by the API's validation_error:
+  // "project_slug: This field is required.")
   const form = new FormData()
   form.append('name', scene.name)
-  form.append('translation', sourceTranslationUrl())
+  form.append('project_slug', WEBLATE_PROJECT)
+  form.append('component_slug', WEBLATE_COMPONENT)
+  form.append('language_code', SOURCE_LANGUAGE)
   form.append(
     'image',
     new Blob([new Uint8Array(png)], { type: 'image/png' }),
@@ -154,10 +164,13 @@ async function replaceScreenshotImage(
 
 async function associateUnit(shotId: number, unitId: number): Promise<void> {
   const url = `${WEBLATE_URL}/api/screenshots/${shotId}/units/`
+  // `unit_id` is a FORM parameter per the Weblate API (not JSON).
+  // Passing URLSearchParams makes fetch send
+  // application/x-www-form-urlencoded.
   const res = await fetch(url, {
     method: 'POST',
-    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
-    body: JSON.stringify({ unit_id: unitId }),
+    headers: authHeaders(),
+    body: new URLSearchParams({ unit_id: String(unitId) }),
   })
   if (!res.ok) {
     const body = await res.text().catch(() => '')
@@ -219,7 +232,7 @@ export function resolveUnitIds(
 /** The current unit ids associated with a screenshot. */
 function currentUnitIds(shot: WeblateScreenshot): Set<number> {
   const ids = new Set<number>()
-  for (const u of shot.units) {
+  for (const u of shot.units ?? []) {
     const id = unitIdFromUrl(u)
     if (id !== null) ids.add(id)
   }
