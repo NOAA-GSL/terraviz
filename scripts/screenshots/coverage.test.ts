@@ -42,8 +42,9 @@ describe('screenshot coverage', () => {
   it('formats a console line and CI markdown', () => {
     const stats = computeCoverage([['app.title']], enKeys)
     expect(formatCoverageLine(stats)).toContain('1/3 keys')
-    const md = formatCoverageMarkdown(stats, 4)
+    const md = formatCoverageMarkdown(stats, 4, 17)
     expect(md).toContain('## Weblate screenshot coverage')
     expect(md).toContain('Scenes captured:** 4')
+    expect(md).toContain('close-up crops:** 17')
   })
 })

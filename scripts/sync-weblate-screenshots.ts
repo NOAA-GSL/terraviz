@@ -198,7 +198,7 @@ async function storedImageSha(shot: WeblateScreenshot): Promise<string | null> {
 
 /** Resolve a scene's keys to unit ids, warning on any that miss. */
 export function resolveUnitIds(
-  scene: CapturedScene,
+  scene: Pick<CapturedScene, 'keys'>,
   byKey: Map<string, WeblateUnit>,
 ): { ids: Set<number>; missing: number } {
   const ids = new Set<number>()

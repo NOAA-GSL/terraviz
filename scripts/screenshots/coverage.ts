@@ -66,11 +66,13 @@ export function formatCoverageLine(stats: CoverageStats): string {
 export function formatCoverageMarkdown(
   stats: CoverageStats,
   sceneCount: number,
+  cropCount = 0,
 ): string {
   const lines = [
     '## Weblate screenshot coverage',
     '',
     `- **Scenes captured:** ${sceneCount}`,
+    `- **Per-string close-up crops:** ${cropCount}`,
     `- **Keys with a screenshot:** ${stats.coveredKeys} / ${stats.totalKeys} (${stats.percent}%)`,
   ]
   if (stats.unknown.length > 0) {

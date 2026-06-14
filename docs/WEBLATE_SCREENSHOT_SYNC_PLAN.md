@@ -328,19 +328,21 @@ per the repo's one-logical-change-per-turn discipline.
 | **S4** | `sync-weblate-screenshots.ts` uploader (idempotent reconcile). Run manually against Weblate once, by hand, to validate the association model end-to-end before automating. | S3 |
 | **S5** | `sync-weblate-screenshots.yml` workflow (dispatch + schedule + scoped `main` push). Capture-only on PRs. | S4 |
 | **S6** | Broaden `scenes.ts` to the full high-traffic surface (~15–25 scenes); add a non-failing coverage report (`keys-with-screenshot / total keys`). | S5 |
+| **S7** | Per-string **close-up crops**: a tight, padded crop of each visible `data-i18n*` element, uploaded as that string's own screenshot alongside the full-scene shot. The translator's "zoom in on the pertinent section." | S6 |
 
 S1–S2 are safe to land immediately and carry no external side
 effects. S4 is the first phase that writes to Weblate and should
 be validated by hand before S5 automates it.
 
-**Implementation status (this branch).** S1–S6 are all implemented:
+**Implementation status (this branch).** S1–S7 are all implemented:
 the `VITE_I18N_TRACE` hook (`src/i18n/screenshotTrace.ts`), the
 shared `scripts/weblate-client.ts`, the Playwright capturer +
 `scripts/screenshots/scenes.ts` (19 scenes incl. the publisher
-portal and admin tabs), the idempotent
-`scripts/sync-weblate-screenshots.ts` uploader (`--dry-run`
-supported), the `sync-weblate-screenshots.yml` workflow, and the
-coverage report (`scripts/screenshots/coverage.ts`). Everything is
+portal and admin tabs) **with per-string close-up crops (S7)**, the
+idempotent `scripts/sync-weblate-screenshots.ts` uploader
+(`--dry-run` supported), the `sync-weblate-screenshots.yml`
+workflow, and the coverage report
+(`scripts/screenshots/coverage.ts`). Everything is
 verified by unit tests + type-check; the **one outstanding gate is
 the S4 hand-validation** — a real headless-browser capture + a live
 Weblate round-trip — which needs a session whose network policy
@@ -367,6 +369,60 @@ matches the code:
 
 ---
 
+## S7 — Per-string close-up crops
+
+**Motivation.** With S1–S6, every string a scene renders is
+associated to that scene's *full* screenshot. Useful, but a
+translator editing `browse.card.load` sees the whole Browse screen
+and has to find the "Load" button in it. They'd rather see the
+button.
+
+**What Weblate does *not* give us.** Weblate's only native
+per-string highlight is **OCR-based** — its "Find strings in image"
+button scans the image and matches source text to regions. There is
+**no coordinate/bounding-box field on the screenshot↔unit
+association** in the REST API (`POST /api/screenshots/{id}/units/`
+takes a unit id, nothing more). So we cannot push our own highlight
+rectangles, and OCR is exactly the lossy path S1 rejected (blank on
+short labels, useless for `aria-*`-only strings).
+
+**What we do instead — crop the element, upload it as the string's
+own screenshot.** The capturer already runs a real browser that
+knows precisely where each `data-i18n*` element sits. For every
+*distinct* key (first scene that renders it visibly wins), it takes
+a tight, padded crop of that element's bounding box and emits it as
+a normal screenshot entry with a single key. The uploader needs **no
+changes** — it already creates an image and associates each entry's
+`keys`. In the editor the translator then sees two screenshots for
+the string: the close-up (their exact element, zoomed, with a little
+surrounding context) and the full-scene shot (where it lives).
+
+**Mechanics.**
+
+- Source of truth for "which element is which key" is the
+  `data-i18n` / `data-i18n-aria-label` / `data-i18n-title` /
+  `data-i18n-placeholder` attributes (mirror of
+  `src/i18n/applyI18nAttributes.ts`). Each maps an element → a key.
+- Crop = element `boundingBox()` padded by `CROP_PAD` (24 px) and
+  clamped to the viewport (`padClip`), captured via
+  `page.screenshot({ clip })` with animations disabled.
+- Crop entries carry `kind: 'crop'` and a `crop:<key>` name; scene
+  shots carry `kind: 'scene'`. The coverage report counts them
+  separately. Deduped by key across the whole run.
+- Best-effort and isolated: any element that can't be measured or
+  shot is skipped, never failing the scene. Toggle off with
+  `SCREENSHOT_CROPS=false`.
+
+**Boundaries (unchanged from the plan's altitude).** Only
+`data-i18n*`-marked elements are croppable — that's the static
+markup. Strings set via `t()` in JS (dynamic browse cards, etc.)
+have no DOM marker tying a box to a key, so they keep the
+full-scene shot only; closing that gap would need a per-call-site
+annotation pass and is a future increment. `aria-*`-only strings get
+a crop of their (icon) element even though the label isn't visible —
+still better orientation than the bare key, with the Explanation
+field remaining their primary home.
+
 ## Risks & tradeoffs
 
 - **Playwright is a real new dependency and a CI cost.** It's the
@@ -381,11 +437,14 @@ matches the code:
   step errors) rather than silently shipping a blank screenshot —
   better than the manual process, where staleness is invisible.
   Scenes use role/text selectors over brittle CSS where possible.
-- **Coarse association.** "This key appeared on the Browse screen"
-  is less precise than "this key is this button." We judge the
-  coarse version clearly net-positive over today's *nothing*, and
-  the `data-i18n` static-markup path leaves a clean upgrade to
-  viewport precision later without redoing the pipeline.
+- **Coarse association — now mitigated by S7.** Scene-level
+  association says "this key appeared on the Browse screen," not
+  "this key is this button." S7's per-string crops close most of
+  that gap for the static `data-i18n*` markup (the translator gets a
+  zoomed close-up of the exact element). The remaining coarse-only
+  strings are those set via `t()` in JS with no DOM marker — still
+  covered by the full-scene shot, upgradeable later with a
+  per-call-site annotation pass.
 - **`aria`-only strings have no visible anchor.** They'll be
   associated to the scene where they're rendered but won't be
   *visible* in the image. That's acceptable — the translator at

@@ -71,6 +71,46 @@ const OUT_DIR = resolve(
 )
 const NAME_SUFFIX = process.env.SCREENSHOT_NAME_SUFFIX ?? ''
 
+// Per-string close-up crops (phase S7). Weblate's only native
+// per-string highlight is OCR-based and its REST API has no
+// coordinate field, so instead of pushing highlight regions we
+// upload a tight, padded crop of each string's own DOM element as
+// that string's screenshot — the "pertinent section, zoomed" — next
+// to the full-scene shot that gives context. Off via SCREENSHOT_CROPS=false.
+const CROPS_ENABLED = process.env.SCREENSHOT_CROPS !== 'false'
+// Context padding (CSS px) around the element in a crop.
+const CROP_PAD = 24
+// The i18n DOM attributes that name a message key (mirror of
+// src/i18n/applyI18nAttributes.ts). Each maps an element → a key, so
+// the element's box is exactly where that key renders.
+const I18N_ATTRS = [
+  'data-i18n',
+  'data-i18n-aria-label',
+  'data-i18n-title',
+  'data-i18n-placeholder',
+] as const
+
+interface Box {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+/** Filesystem-safe slug for a dotted message key. */
+export function slugKey(key: string): string {
+  return key.replace(/[^a-z0-9]+/gi, '-').replace(/^-+|-+$/g, '')
+}
+
+/** Pad a box by `pad` px and clamp it to the viewport. */
+export function padClip(box: Box, pad: number, vp: { width: number; height: number }): Box {
+  const x = Math.max(0, box.x - pad)
+  const y = Math.max(0, box.y - pad)
+  const right = Math.min(vp.width, box.x + box.width + pad)
+  const bottom = Math.min(vp.height, box.y + box.height + pad)
+  return { x, y, width: Math.max(0, right - x), height: Math.max(0, bottom - y) }
+}
+
 /**
  * Refuse to `rm -rf` a path that is the filesystem root, the repo
  * root, or an ancestor of it. `run()` wipes OUT_DIR for a clean
@@ -110,13 +150,18 @@ interface I18nTraceHandle {
 }
 type TracedWindow = Window & { __i18nTrace?: I18nTraceHandle }
 
-/** One entry in `screenshots.json`. */
+/** One entry in `screenshots.json`. A full-scene shot (`kind:
+ *  'scene'`, many keys) or a per-string close-up crop (`kind:
+ *  'crop'`, exactly one key). The uploader treats both identically —
+ *  create/replace image + associate `keys` — so crops need no special
+ *  handling there. */
 export interface CapturedScene {
   name: string
   description: string
   file: string
   sha256: string
   keys: string[]
+  kind: 'scene' | 'crop'
 }
 
 const sha256 = (buf: Buffer): string =>
@@ -165,11 +210,75 @@ async function screenshotWithRetry(
   }
 }
 
+/**
+ * Capture a padded close-up of every visible i18n-tagged element on
+ * the current page, one per *distinct* key (first scene to render a
+ * key wins — `croppedKeys` is shared across the run). Best-effort and
+ * fully isolated: any element that can't be measured or shot is
+ * skipped, never failing the scene.
+ *
+ * Only elements carrying a `data-i18n*` attribute are croppable,
+ * because that attribute tells us the exact key at that exact box.
+ * Strings set via `t()` in JS (dynamic cards, etc.) have no such
+ * marker, so they rely on the full-scene shot — same boundary the
+ * plan calls out for viewport precision.
+ */
+async function captureCrops(
+  page: import('playwright').Page,
+  scene: Scene,
+  viewport: { width: number; height: number },
+  croppedKeys: Set<string>,
+): Promise<CapturedScene[]> {
+  const crops: CapturedScene[] = []
+  for (const attr of I18N_ATTRS) {
+    const loc = page.locator(`[${attr}]`)
+    const count = await loc.count().catch(() => 0)
+    for (let i = 0; i < count; i++) {
+      const el = loc.nth(i)
+      const key = await el.getAttribute(attr).catch(() => null)
+      if (!key || croppedKeys.has(key)) continue
+      let box: Box | null = null
+      try {
+        box = await el.boundingBox({ timeout: 2_000 })
+      } catch {
+        continue
+      }
+      if (!box || box.width < 1 || box.height < 1) continue
+      const clip = padClip(box, CROP_PAD, viewport)
+      if (clip.width < 1 || clip.height < 1) continue
+      const name = `crop:${key}${NAME_SUFFIX}`
+      const file = `crop-${slugKey(key)}${NAME_SUFFIX}.png`
+      let png: Buffer
+      try {
+        png = await page.screenshot({
+          path: resolve(OUT_DIR, file),
+          clip,
+          animations: 'disabled',
+          timeout: 15_000,
+        })
+      } catch {
+        continue
+      }
+      croppedKeys.add(key)
+      crops.push({
+        name,
+        description: `Close-up of "${key}" (on ${scene.name})`,
+        file,
+        sha256: sha256(png),
+        keys: [key],
+        kind: 'crop',
+      })
+    }
+  }
+  return crops
+}
+
 async function captureScene(
   browser: Browser,
   scene: Scene,
   viewport: { width: number; height: number },
-): Promise<CapturedScene> {
+  croppedKeys: Set<string>,
+): Promise<CapturedScene[]> {
   const context = await browser.newContext({ viewport, baseURL: BASE_URL })
   const page = await context.newPage()
   try {
@@ -184,13 +293,18 @@ async function captureScene(
     const name = `${scene.name}${NAME_SUFFIX}`
     const file = `${name}.png`
     const png = await screenshotWithRetry(page, resolve(OUT_DIR, file))
-    return {
+    const sceneShot: CapturedScene = {
       name,
       description: scene.description,
       file,
       sha256: sha256(png),
       keys,
+      kind: 'scene',
     }
+    const crops = CROPS_ENABLED
+      ? await captureCrops(page, scene, viewport, croppedKeys)
+      : []
+    return [sceneShot, ...crops]
   } finally {
     await context.close()
   }
@@ -212,16 +326,25 @@ async function run(): Promise<void> {
 
   const browser = await chromium.launch()
   const captured: CapturedScene[] = []
+  // Shared across scenes so each distinct string is cropped once
+  // (first scene that renders it visibly wins).
+  const croppedKeys = new Set<string>()
   let failed = 0
   try {
     // Serial: scenes are cheap and serial keeps the log readable and
     // the trace unambiguous (one page in flight at a time).
     for (const scene of scenes) {
       try {
-        const result = await captureScene(browser, scene, viewport)
-        captured.push(result)
+        const results = await captureScene(browser, scene, viewport, croppedKeys)
+        captured.push(...results)
+        const sceneShot = results[0]
+        const crops = results.length - 1
         // eslint-disable-next-line no-console
-        console.log(`✓ ${scene.name} (${result.keys.length} keys)`)
+        console.log(
+          `✓ ${scene.name} (${sceneShot.keys.length} keys` +
+            (crops > 0 ? `, +${crops} crops` : '') +
+            ')',
+        )
       } catch (err) {
         failed++
         const msg = err instanceof Error ? err.message : String(err)
@@ -238,13 +361,15 @@ async function run(): Promise<void> {
     JSON.stringify(captured, null, 2) + '\n',
   )
 
+  const sceneCount = captured.filter((c) => c.kind === 'scene').length
+  const cropCount = captured.filter((c) => c.kind === 'crop').length
   // eslint-disable-next-line no-console
   console.log(
-    `\nDone. ${captured.length} captured, ${failed} failed → ` +
+    `\nDone. ${sceneCount} scene(s) + ${cropCount} crop(s), ${failed} failed → ` +
       `${resolve(OUT_DIR, 'screenshots.json')}`,
   )
 
-  await emitCoverage(captured)
+  await emitCoverage(captured, sceneCount, cropCount)
 
   // A broken scene (stale selector) must fail the job loudly rather
   // than silently shrinking the screenshot set.
@@ -256,7 +381,11 @@ async function run(): Promise<void> {
  * job summary. Best-effort: a missing/unreadable `en.json` is logged
  * and skipped rather than failing the capture.
  */
-async function emitCoverage(captured: CapturedScene[]): Promise<void> {
+async function emitCoverage(
+  captured: CapturedScene[],
+  sceneCount: number,
+  cropCount: number,
+): Promise<void> {
   let enKeys: Set<string>
   try {
     const raw = await readFile(resolve(REPO_ROOT, 'locales', 'en.json'), 'utf-8')
@@ -285,7 +414,7 @@ async function emitCoverage(captured: CapturedScene[]): Promise<void> {
   if (summaryPath) {
     await appendFile(
       summaryPath,
-      formatCoverageMarkdown(stats, captured.length),
+      formatCoverageMarkdown(stats, sceneCount, cropCount),
     )
   }
 }
