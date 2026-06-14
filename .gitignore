@@ -87,3 +87,9 @@ coverage/
 # code-graph tool (graph.json / graph.html / GRAPH_REPORT.md + caches).
 # Regenerable from source, multi-MB, per-developer. Never committed.
 graphify-out/
+
+# Weblate screenshot-capture output — PNGs + screenshots.json
+# manifest produced by `npm run screenshots:capture`. Regenerated
+# from the running app each run; uploaded to Weblate, never committed.
+# See docs/WEBLATE_SCREENSHOT_SYNC_PLAN.md.
+screenshots-out/
