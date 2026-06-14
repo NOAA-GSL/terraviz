@@ -286,4 +286,47 @@ export const scenes: Scene[] = [
       await openPublish(page, '/publish/users')
     },
   },
+
+  // ── Empty / error state variants ──────────────────────────────
+  // These force the empty-list and server-error responses so the
+  // capture surfaces the empty-state and shared error-card strings
+  // (publisher.*.empty.*, publisher.me.error.*, publisher.error.*) that
+  // the always-populated fixtures above never reach. High-value for
+  // translators; cheap to maintain.
+  {
+    name: 'publish-datasets-empty',
+    description: 'Publisher portal — datasets list, empty state',
+    fixtures: publisherFixtures({ datasets: 'empty' }),
+    async setup(page) {
+      await openPublish(page, '/publish/datasets')
+      await page.locator('.publisher-empty-message').first().waitFor()
+    },
+  },
+  {
+    name: 'publish-datasets-error',
+    description: 'Publisher portal — datasets list, server-error card',
+    fixtures: publisherFixtures({ datasets: 'error' }),
+    async setup(page) {
+      await openPublish(page, '/publish/datasets')
+      await page.locator('.publisher-error').first().waitFor()
+    },
+  },
+  {
+    name: 'publish-workflows-empty',
+    description: 'Publisher portal — workflows list, empty state',
+    fixtures: publisherFixtures({ workflows: 'empty' }),
+    async setup(page) {
+      await openPublish(page, '/publish/workflows')
+      await page.locator('.publisher-empty-message').first().waitFor()
+    },
+  },
+  {
+    name: 'admin-users-empty',
+    description: 'Admin — Users tab, empty state',
+    fixtures: publisherFixtures({ admin: true, publishers: 'empty' }),
+    async setup(page) {
+      await openPublish(page, '/publish/users')
+      await page.locator('.publisher-empty').first().waitFor()
+    },
+  },
 ]

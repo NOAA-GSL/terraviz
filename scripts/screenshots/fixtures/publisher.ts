@@ -85,9 +85,33 @@ const datasets: ListDatasetsResponse = {
       abstract: 'Half-hourly precipitation estimates.',
       updated_at: '2026-04-20T06:45:00.000Z',
     }),
+    // Long title → exercises truncation / wrapping in the row layout.
+    dataset({
+      id: '01HEXAMPLEDATASET00000004',
+      slug: 'global-vegetation-index-ndvi-monthly-composite',
+      title:
+        'Global Vegetation Index (NDVI) — Monthly Composite from MODIS Terra & Aqua',
+      organization: 'USGS',
+      abstract: 'Normalized difference vegetation index, monthly mean.',
+      format: 'image/png',
+      updated_at: '2026-05-01T11:20:00.000Z',
+    }),
+    // Retracted → exercises the retracted state/badge.
+    dataset({
+      id: '01HEXAMPLEDATASET00000005',
+      slug: 'experimental-aerosol-depth',
+      title: 'Experimental Aerosol Optical Depth',
+      organization: 'NASA',
+      abstract: 'Withdrawn pending reprocessing.',
+      published_at: '2026-02-20T10:00:00.000Z',
+      retracted_at: '2026-04-25T16:00:00.000Z',
+      updated_at: '2026-04-25T16:00:00.000Z',
+    }),
   ],
   next_cursor: null,
 }
+
+const datasetsEmpty: ListDatasetsResponse = { datasets: [], next_cursor: null }
 
 const datasetDetail: DatasetDetailResponse = {
   dataset: {
@@ -141,8 +165,20 @@ const workflows: { workflows: PublisherWorkflow[] } = {
       enabled: false,
       next_run_at: null,
     }),
+    workflow({
+      id: '01HEXAMPLEWORKFLOW0000003',
+      name: 'Precipitation hourly ingest',
+      description: 'Append the latest IMERG half-hourly frames.',
+      schedule: '*/30 * * * *',
+      update_mode: 'append',
+      target_dataset_id: '01HEXAMPLEDATASET00000003',
+      last_run_at: '2026-04-20T05:30:00.000Z',
+      next_run_at: '2026-04-20T06:00:00.000Z',
+    }),
   ],
 }
+
+const workflowsEmpty: { workflows: PublisherWorkflow[] } = { workflows: [] }
 
 const publisher = (over: Partial<PublisherSummary> = {}): PublisherSummary => ({
   id: 'PUB_DEMO',
@@ -166,22 +202,61 @@ const publishers: ListPublishersResponse = {
       display_name: 'Pending Applicant',
       status: 'pending',
     }),
+    publisher({
+      id: 'PUB_SUSPENDED',
+      email: 'paused@example.org',
+      display_name: 'Suspended Publisher',
+      status: 'suspended',
+    }),
   ],
   next_cursor: null,
 }
 
+const publishersEmpty: ListPublishersResponse = { publishers: [], next_cursor: null }
+
+/** A forced server error (HTTP 500) so a list page renders the shared
+ *  error card — the `publisher.me.error.*` / `publisher.error.*` strings
+ *  that a successful response never surfaces for translators. */
+const serverError = { status: 500, json: { error: 'internal_error' } } as const
+
+/** How a list endpoint should respond: populated rows, an empty list, or
+ *  a forced 500 server error. */
+export type ListState = 'populated' | 'empty' | 'error'
+
 /**
  * Fixtures for the publisher portal. `admin: true` returns an admin
  * identity so the privileged tabs (Users / Analytics / Feedback) render.
- * Rules are ordered specific → general (detail before list).
+ * The per-list state options drive the populated / empty / error scene
+ * variants (the empty + error states surface translatable strings the
+ * always-populated fixtures never reach). Rules are ordered specific →
+ * general (detail before list).
  */
-export function publisherFixtures(opts: { admin?: boolean } = {}): FixtureRule[] {
+export function publisherFixtures(
+  opts: {
+    admin?: boolean
+    datasets?: ListState
+    workflows?: ListState
+    publishers?: ListState
+  } = {},
+): FixtureRule[] {
+  const datasetsState = opts.datasets ?? 'populated'
+  const list = (
+    state: ListState,
+    url: string,
+    populated: unknown,
+    empty: unknown,
+  ): FixtureRule =>
+    state === 'error'
+      ? { url, ...serverError }
+      : { url, json: state === 'empty' ? empty : populated }
+
   return [
     { url: '/api/v1/publish/me', json: me(opts.admin ?? false) },
-    // Detail before list (both share the `/datasets` prefix).
+    // Detail before list (both share the `/datasets` prefix). The detail
+    // route is only hit by the detail scene, which stays populated.
     { url: /\/publish\/datasets\/[^/?]+(\?|$)/, json: datasetDetail },
-    { url: '/api/v1/publish/datasets', json: datasets },
-    { url: '/api/v1/publish/workflows', json: workflows },
-    { url: '/api/v1/publish/publishers', json: publishers },
+    list(datasetsState, '/api/v1/publish/datasets', datasets, datasetsEmpty),
+    list(opts.workflows ?? 'populated', '/api/v1/publish/workflows', workflows, workflowsEmpty),
+    list(opts.publishers ?? 'populated', '/api/v1/publish/publishers', publishers, publishersEmpty),
   ]
 }
