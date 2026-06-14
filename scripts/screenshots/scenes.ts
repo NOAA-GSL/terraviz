@@ -74,17 +74,12 @@ export const scenes: Scene[] = [
       await openCatalog(page)
     },
   },
-  {
-    name: 'browse-filters-open',
-    description: 'Browse overlay with the filter rail expanded',
-    async setup(page) {
-      await openCatalog(page)
-      const filters = page.locator('#browse-filters-btn')
-      await filters.click()
-      // Rail reports expanded via aria-expanded on the toggle.
-      await page.locator('#browse-filters-btn[aria-expanded="true"]').waitFor()
-    },
-  },
+  // No `browse-filters-open` scene: at desktop width on the Cards
+  // view the filter rail (`#browse-filter-rail`) is always shown
+  // inline, so its strings are already captured by `catalog-landing`.
+  // The "Filters" drawer toggle (`#browse-filters-btn`) is a
+  // ≤1024px + non-Cards affordance (see browse.css drawer mode) and
+  // belongs to a future mobile pass, not the desktop set.
   {
     name: 'browse-search-active',
     description: 'Browse overlay with an active search query and the clear button shown',
