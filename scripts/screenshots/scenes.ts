@@ -47,19 +47,25 @@ async function openCatalog(page: Page): Promise<void> {
  * Open a publisher-portal route.
  *
  * The portal lives behind Cloudflare Access with a Pages-Functions
- * API backend — neither exists against a local `vite preview`. What
+ * API backend — neither exists against a local dev server. What
  * *does* render without a backend is the part translators most need
- * context for: the topbar + section tabs, page headings, form
- * labels/placeholders, and the error / empty / "session expired —
- * sign in" states (every page mounts its chrome synchronously, then
- * async-loads data that fails gracefully into an error card). So
- * these scenes capture portal **chrome + forms + degraded states**.
+ * context for: the topbar + section tabs, page headings, and (for
+ * the static-form pages) field labels/placeholders. Every page
+ * mounts its chrome synchronously before fetching data.
  *
- * Fully-populated admin views (analytics charts over real rollups,
- * populated user rows) need an authenticated fixture session; that's
- * the "fixture vs. live data" open question in the plan, wired in a
- * later phase. The chrome captured here is already strictly more
- * context than today's empty Weblate screenshot field.
+ * Observed behaviour against the dev server (smoke-tested 2026-06-14):
+ *   - `publish-dataset-new` renders its full static form (richest).
+ *   - the data-backed list/detail pages (workflows, featured-hero,
+ *     me, analytics, feedback, users) capture topbar chrome + a
+ *     "Loading…" state — the fetch neither resolves nor errors into a
+ *     card without a backend, so the error-card / populated strings
+ *     are NOT captured here.
+ *
+ * Capturing those richer states (error cards, populated admin views)
+ * needs a fixture session or a forced-failing fetch path — the
+ * "fixture vs. live data" open question in the plan, wired in a later
+ * phase. The chrome + nav strings captured here are already strictly
+ * more context than today's empty Weblate screenshot field.
  */
 async function openPublish(page: Page, path: string): Promise<void> {
   await page.goto(path)
@@ -74,12 +80,24 @@ export const scenes: Scene[] = [
       await openCatalog(page)
     },
   },
-  // No `browse-filters-open` scene: at desktop width on the Cards
-  // view the filter rail (`#browse-filter-rail`) is always shown
-  // inline, so its strings are already captured by `catalog-landing`.
-  // The "Filters" drawer toggle (`#browse-filters-btn`) is a
-  // ≤1024px + non-Cards affordance (see browse.css drawer mode) and
-  // belongs to a future mobile pass, not the desktop set.
+  {
+    name: 'browse-filters-open',
+    description:
+      'Browse overlay with the inline filter rail and an active facet filter applied',
+    async setup(page) {
+      await openCatalog(page)
+      // At the capturer's 1440px desktop viewport the Cards view shows
+      // the filter rail inline at every breakpoint; the small-screen
+      // "Filters" drawer toggle (#browse-filters-btn) is display:none
+      // here and only appears ≤1024px on the Graph/Timeline/Map views.
+      // So drive the inline rail directly and activate the first facet
+      // chip — that captures the rail plus the active-filter chrome.
+      const rail = page.locator('#browse-filter-rail')
+      await rail.waitFor({ state: 'visible' })
+      await rail.locator('.browse-chip[data-facet]').first().click()
+      await rail.locator('.browse-chip[aria-pressed="true"]').first().waitFor()
+    },
+  },
   {
     name: 'browse-search-active',
     description: 'Browse overlay with an active search query and the clear button shown',

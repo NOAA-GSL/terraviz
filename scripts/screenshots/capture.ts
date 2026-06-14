@@ -117,6 +117,32 @@ async function readTracedKeys(
   return keys.sort()
 }
 
+/**
+ * Screenshot the page, retrying once on failure.
+ *
+ * `animations: 'disabled'` freezes CSS animations/transitions so the
+ * capture is stable. The retry absorbs an intermittent compositor
+ * stall seen under resource pressure late in a long serial run —
+ * Playwright reports it as a misleading "waiting for fonts to load"
+ * timeout even on pages with zero web fonts, and the same page
+ * screenshots fine in isolation. So this is a transient-stall guard,
+ * not a correctness fix.
+ */
+async function screenshotWithRetry(
+  page: import('playwright').Page,
+  path: string,
+): Promise<Buffer> {
+  const opts = { path, animations: 'disabled', timeout: 60_000 } as const
+  try {
+    return await page.screenshot(opts)
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    // eslint-disable-next-line no-console
+    console.warn(`  retrying screenshot after: ${msg}`)
+    return page.screenshot(opts)
+  }
+}
+
 async function captureScene(
   browser: Browser,
   scene: Scene,
@@ -135,7 +161,7 @@ async function captureScene(
     const keys = await readTracedKeys(page)
     const name = `${scene.name}${NAME_SUFFIX}`
     const file = `${name}.png`
-    const png = await page.screenshot({ path: resolve(OUT_DIR, file) })
+    const png = await screenshotWithRetry(page, resolve(OUT_DIR, file))
     return {
       name,
       description: scene.description,
