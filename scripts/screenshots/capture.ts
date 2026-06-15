@@ -327,7 +327,11 @@ async function run(): Promise<void> {
   // scenes so nothing accumulates far enough to fail. Both are
   // render-neutral (no GPU/rendering flags). See PR #201.
   const BROWSER_ARGS = ['--disable-dev-shm-usage']
-  const RECYCLE_EVERY = 5
+  // Recycle frequently: at every-5 a single scene still failed when its
+  // batch followed ~4 WebGL-heavy scenes (browse-graph/timeline/map +
+  // orbit-settings), just over the exhaustion threshold. Every-3 keeps
+  // at most ~2 heavy scenes per browser, well under it.
+  const RECYCLE_EVERY = 3
 
   let browser = await launchBrowser({ args: BROWSER_ARGS })
   const captured: CapturedScene[] = []
