@@ -141,14 +141,17 @@ export async function withScenePage<T>(
 }
 
 /**
- * Screenshot the page, retrying once on failure.
+ * Screenshot the page, retrying on failure.
  *
  * `animations: 'disabled'` freezes CSS animations/transitions so the
- * capture is stable. The retry absorbs an intermittent compositor stall
- * seen under resource pressure late in a long serial run — Playwright
- * reports it as a misleading "waiting for fonts to load" timeout even on
- * pages with zero web fonts, and the same page screenshots fine in
- * isolation. So this is a transient-stall guard, not a correctness fix.
+ * capture is stable. The retries absorb an intermittent compositor stall
+ * — Playwright reports it as a misleading "waiting for fonts to load"
+ * timeout even on pages with zero web fonts, and the same page
+ * screenshots fine on the next attempt. It's most pronounced against a
+ * live, continuously-rendering page (the WebGL globe's rAF loop + real
+ * web fonts), so a *short* per-attempt timeout with *several* attempts
+ * is faster than one long wait: a transient stall costs ~20s, not ~60s.
+ * A transient-stall guard, not a correctness fix.
  *
  * `mask` paints the given locators with a solid colour so
  * non-deterministic regions (the WebGL globe, MapLibre tiles, a
@@ -161,13 +164,21 @@ export async function screenshotWithRetry(
   path: string,
   extra: { mask?: Locator[] } = {},
 ): Promise<Buffer> {
-  const opts = { path, animations: 'disabled', timeout: 60_000, ...extra } as const
-  try {
-    return await page.screenshot(opts)
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err)
-    // eslint-disable-next-line no-console
-    console.warn(`  retrying screenshot after: ${msg}`)
-    return page.screenshot(opts)
+  const opts = { path, animations: 'disabled', timeout: 20_000, ...extra } as const
+  const attempts = 3
+  let lastErr: unknown
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    // A short quiet-down pause before a retry gives the page a moment to
+    // settle (the previous attempt's stall often clears on its own).
+    if (attempt > 1) await page.waitForTimeout(750)
+    try {
+      return await page.screenshot(opts)
+    } catch (err) {
+      lastErr = err
+      const msg = err instanceof Error ? err.message : String(err)
+      // eslint-disable-next-line no-console
+      console.warn(`  screenshot attempt ${attempt}/${attempts} failed: ${msg}`)
+    }
   }
+  throw lastErr
 }
