@@ -122,6 +122,16 @@ describe('renderReportHtml', () => {
     expect(html).toContain('<code>#cta</code>')
   })
 
+  it('renders an axe violation missing helpUrl/targets without crashing', () => {
+    const bad = emptySignals()
+    // Shape an older report.json could have (new fields absent).
+    bad.axeViolations = [{ id: 'label', impact: 'critical', nodes: 1 }]
+    const html = renderReportHtml(manifest([shot({ signals: bad })]))
+
+    // Plain inline rule id + node count — no rule link, no <details>.
+    expect(html).toContain('a11y critical — label (1 node(s))')
+  })
+
   it('renders the diff triptych and changed badge when diffs are supplied', () => {
     const diffs: DiffManifest = {
       generatedAt: '2026-06-14T00:00:00.000Z',

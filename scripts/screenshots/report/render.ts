@@ -89,10 +89,12 @@ function renderProblems(s: SceneSignals): string {
     const rule = v.helpUrl
       ? `<a href="${escapeHtml(v.helpUrl)}" target="_blank" rel="noopener">${escapeHtml(v.id)}</a>`
       : escapeHtml(v.id)
+    // `targets` may be absent on an older persisted report.json.
+    const targets = v.targets ?? []
     const where =
-      v.targets.length > 0
+      targets.length > 0
         ? `<details><summary>${v.nodes} node(s)</summary><ul class="a11y-targets">` +
-          v.targets.map((t) => `<li><code>${escapeHtml(t)}</code></li>`).join('') +
+          targets.map((t) => `<li><code>${escapeHtml(t)}</code></li>`).join('') +
           '</ul></details>'
         : `(${v.nodes} node(s))`
     lines.push(

@@ -39,11 +39,13 @@ export interface AxeViolation {
   /** How many DOM nodes triggered the rule. */
   nodes: number
   /** axe rule documentation URL (Deque University) — the report links
-   *  the rule id here. */
-  helpUrl: string
+   *  the rule id here. Optional so an older persisted `report.json`
+   *  (captured before this field existed) still parses + renders. */
+  helpUrl?: string
   /** CSS selector path(s) of the failing node(s), capped, so the report
-   *  can point at the offending element(s). */
-  targets: string[]
+   *  can point at the offending element(s). Optional for the same
+   *  backward-compatibility reason as `helpUrl`. */
+  targets?: string[]
 }
 
 /** Flatten one axe node `target` (a CSS path, possibly nested for
