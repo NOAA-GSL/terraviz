@@ -28,6 +28,7 @@ import type { Page } from 'playwright'
 
 import { gotoApp } from './core/browser'
 import type { FixtureRule } from './core/fixtures'
+import { analyticsFixtures, feedbackFixtures } from './fixtures/admin'
 import { publisherFixtures } from './fixtures/publisher'
 
 export interface Scene {
@@ -258,24 +259,39 @@ export const scenes: Scene[] = [
   },
 
   // ── Admin-only surfaces ───────────────────────────────────────
-  // Privileged tabs, populated with an admin identity via fixtures so
-  // the tabs render. (Analytics/feedback rollup endpoints aren't stubbed
-  // yet — those views fall back to their error/empty surface, a
-  // representative state worth capturing.)
+  // Privileged tabs, populated with an admin identity + the analytics /
+  // feedback rollup fixtures so the dashboards render their real charts,
+  // tables and stat tiles (synthetic, no-PII data). See fixtures/admin.ts.
   {
     name: 'admin-analytics',
-    description: 'Admin — analytics dashboard (admin identity via fixtures)',
-    fixtures: publisherFixtures({ admin: true }),
+    description: 'Admin — analytics dashboard (populated charts/tables via fixtures)',
+    fixtures: [...publisherFixtures({ admin: true }), ...analyticsFixtures()],
+    // The spatial-attention heatmap is a non-deterministic MapLibre
+    // canvas — mask it out of the diff.
+    masks: ['.publisher-analytics-map'],
     async setup(page) {
       await openPublish(page, '/publish/analytics')
+      await page.locator('.publisher-analytics-table').first().waitFor()
     },
   },
   {
     name: 'admin-feedback',
-    description: 'Admin — feedback review (admin identity via fixtures)',
-    fixtures: publisherFixtures({ admin: true }),
+    description: 'Admin — feedback review, AI thumbs tab (populated via fixtures)',
+    fixtures: [...publisherFixtures({ admin: true }), ...feedbackFixtures()],
     async setup(page) {
       await openPublish(page, '/publish/feedback')
+      await page.locator('.publisher-analytics-table').first().waitFor()
+    },
+  },
+  {
+    name: 'admin-feedback-general',
+    description: 'Admin — feedback review, general (bug/feature) tab',
+    fixtures: [...publisherFixtures({ admin: true }), ...feedbackFixtures()],
+    async setup(page) {
+      await openPublish(page, '/publish/feedback')
+      // Second tab = general; the AI tab is the default.
+      await page.locator('.publisher-feedback-tab').nth(1).click()
+      await page.locator('.publisher-analytics-table').first().waitFor()
     },
   },
   {
@@ -284,6 +300,49 @@ export const scenes: Scene[] = [
     fixtures: publisherFixtures({ admin: true }),
     async setup(page) {
       await openPublish(page, '/publish/users')
+    },
+  },
+
+  // ── Empty / error state variants ──────────────────────────────
+  // These force the empty-list and server-error responses so the
+  // capture surfaces the empty-state and shared error-card strings
+  // (publisher.*.empty.*, publisher.me.error.*, publisher.error.*) that
+  // the always-populated fixtures above never reach. High-value for
+  // translators; cheap to maintain.
+  {
+    name: 'publish-datasets-empty',
+    description: 'Publisher portal — datasets list, empty state',
+    fixtures: publisherFixtures({ datasets: 'empty' }),
+    async setup(page) {
+      await openPublish(page, '/publish/datasets')
+      await page.locator('.publisher-empty-message').first().waitFor()
+    },
+  },
+  {
+    name: 'publish-datasets-error',
+    description: 'Publisher portal — datasets list, server-error card',
+    fixtures: publisherFixtures({ datasets: 'error' }),
+    async setup(page) {
+      await openPublish(page, '/publish/datasets')
+      await page.locator('.publisher-error').first().waitFor()
+    },
+  },
+  {
+    name: 'publish-workflows-empty',
+    description: 'Publisher portal — workflows list, empty state',
+    fixtures: publisherFixtures({ workflows: 'empty' }),
+    async setup(page) {
+      await openPublish(page, '/publish/workflows')
+      await page.locator('.publisher-empty-message').first().waitFor()
+    },
+  },
+  {
+    name: 'admin-users-empty',
+    description: 'Admin — Users tab, empty state',
+    fixtures: publisherFixtures({ admin: true, publishers: 'empty' }),
+    async setup(page) {
+      await openPublish(page, '/publish/users')
+      await page.locator('.publisher-empty').first().waitFor()
     },
   },
 ]
