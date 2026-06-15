@@ -39,6 +39,15 @@ export interface Scene {
   /** Drive the app to the state to capture. */
   setup: (page: Page) => Promise<void>
   /**
+   * Optional selector for a single element to *additionally* capture as
+   * a tightly-cropped PNG (`<scene>-<viewport>-crop.png`), alongside the
+   * full-viewport shot. Use it to make a component the focus of the
+   * report — a panel / popover / form — when the full viewport is mostly
+   * context. The report capturer crops to this element's bounding box;
+   * the Weblate capturer ignores it. The full shot is always captured.
+   */
+  crop?: string
+  /**
    * Selectors for non-deterministic regions to mask out of the visual
    * regression diff (the WebGL globe, MapLibre tiles, a force-directed
    * graph). Consumed by the report capturer's `screenshot({ mask })`;
@@ -253,6 +262,9 @@ export const scenes: Scene[] = [
     // The WebGL globe renders behind the popover and is
     // non-deterministic (rotation, tiles) — mask it out of the diff.
     masks: ['#map-grid'],
+    // The popover is the focus; emit a tight crop of it alongside the
+    // full-viewport shot.
+    crop: '#tools-menu-popover',
     async setup(page) {
       await openGlobe(page)
       await page.locator('#tools-menu-toggle').click()

@@ -207,6 +207,14 @@ async function captureShot(
       const file = `${scene.name}-${pass.label}.png`
       const mask = (scene.masks ?? []).map((sel) => page.locator(sel))
       const png = await screenshotWithRetry(page, resolve(OUT_DIR, file), { mask })
+      // Optional tightly-cropped companion shot focused on one element.
+      let cropFile: string | undefined
+      if (scene.crop) {
+        cropFile = `${scene.name}-${pass.label}-crop.png`
+        await page.locator(scene.crop).first().screenshot({
+          path: resolve(OUT_DIR, cropFile),
+        })
+      }
       return {
         scene: scene.name,
         description: scene.description,
@@ -215,6 +223,7 @@ async function captureShot(
         height: pass.viewport.height,
         file,
         sha256: sha256(png),
+        ...(cropFile ? { cropFile } : {}),
         signals: collector.signals,
       }
     },
