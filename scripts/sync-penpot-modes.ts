@@ -110,6 +110,14 @@ const TOKENS_STUDIO_MODES_KEY = 'com.tokens-studio.modes'
 export const THEME_GROUP = 'Default'
 
 /**
+ * Name of the all-defaults theme (the one activated after seeding so
+ * the file leaves Penpot's "manual mode" state). Independent of
+ * THEME_GROUP — they coincidentally share the string "Default" but
+ * are distinct axes (group vs. theme name).
+ */
+export const DEFAULT_THEME_NAME = 'Default'
+
+/**
  * Composition rules between modes — designers expect the Phone
  * Portrait theme to inherit any Tablet-tier override that isn't
  * itself overridden at the phone-portrait tier, mirroring the CSS
@@ -131,13 +139,26 @@ const MODE_THEME_NAME: Record<string, string> = {
   'mobile-native': 'Mobile Native',
 }
 
-const BASE_SETS = [
-  'Global',
-  'Components/Browse',
-  'Components/Chat',
-  'Components/Playback',
-  'Components/Tools-Menu',
-] as const
+/** Penpot set name for the global token set (see sync-penpot-global.ts). */
+const GLOBAL_SET_NAME = 'Global'
+
+/**
+ * Base set names the themes must activate, derived from the same
+ * source-file listing that supplies the mode overrides — never
+ * hard-coded. The global file maps to "Global"; every
+ * `tokens/components/*.json` maps to `Components/<TitleCase>`, the
+ * identical transform `sync-penpot-components.ts` uses to name the
+ * sets it seeds. Deriving keeps the two in lock-step: a newly added
+ * component file is activated under every theme automatically,
+ * instead of being silently left out (its tokens inactive everywhere).
+ */
+function deriveBaseSets(files: string[]): string[] {
+  return files.map((file) =>
+    dirname(file) === COMPONENTS_DIR
+      ? `Components/${titleCaseHyphenated(basename(file, '.json'))}`
+      : GLOBAL_SET_NAME,
+  )
+}
 
 export function readJson(path: string): unknown {
   return JSON.parse(readFileSync(path, 'utf-8'))
@@ -161,12 +182,13 @@ export function buildModeOverrides(files: string[] = listSourceFiles()): BuildMo
   const modeSets: ModeSetPlan[] = [...overridesByMode.entries()]
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([modeKey, specs]) => ({
-      name: `Modes/${titleCaseModeKey(modeKey)}`,
+      name: `Modes/${titleCaseHyphenated(modeKey)}`,
       modeKey,
       specs: dedupeByName(specs),
     }))
-  const themes = buildThemes(modeSets)
-  return { modeSets, themes, baseSets: [...BASE_SETS], skipped }
+  const baseSets = deriveBaseSets(files)
+  const themes = buildThemes(modeSets, baseSets)
+  return { modeSets, themes, baseSets, skipped }
 }
 
 function dedupeByName(specs: ModeOverrideSpec[]): ModeOverrideSpec[] {
@@ -175,10 +197,10 @@ function dedupeByName(specs: ModeOverrideSpec[]): ModeOverrideSpec[] {
   return [...seen.values()]
 }
 
-function buildThemes(modeSets: ModeSetPlan[]): ThemePlan[] {
+function buildThemes(modeSets: ModeSetPlan[], baseSets: string[]): ThemePlan[] {
   const setNameByMode = new Map(modeSets.map((s) => [s.modeKey, s.name]))
   const themes: ThemePlan[] = [
-    { group: THEME_GROUP, name: 'Default', sets: [...BASE_SETS] },
+    { group: THEME_GROUP, name: DEFAULT_THEME_NAME, sets: [...baseSets] },
   ]
   for (const ms of modeSets) {
     const inheritedModes = MODE_COMPOSITION[ms.modeKey] ?? []
@@ -187,15 +209,15 @@ function buildThemes(modeSets: ModeSetPlan[]): ThemePlan[] {
       .filter((name): name is string => Boolean(name))
     themes.push({
       group: THEME_GROUP,
-      name: MODE_THEME_NAME[ms.modeKey] ?? titleCaseModeKey(ms.modeKey),
-      sets: [...BASE_SETS, ...inheritedSets, ms.name],
+      name: MODE_THEME_NAME[ms.modeKey] ?? titleCaseHyphenated(ms.modeKey),
+      sets: [...baseSets, ...inheritedSets, ms.name],
     })
   }
   return themes
 }
 
-function titleCaseModeKey(modeKey: string): string {
-  return modeKey
+function titleCaseHyphenated(key: string): string {
+  return key
     .split('-')
     .map((part) => (part.length === 0 ? part : part[0]!.toUpperCase() + part.slice(1)))
     .join('-')
@@ -217,15 +239,24 @@ function walk(
   if (!isPlainObject(node)) return
   if (looksLikeW3CToken(node)) {
     const joined = path.join('.')
-    const w3cType = node.$type
-    if (typeof w3cType !== 'string') return
-    const penpotType = W3C_TO_PENPOT[w3cType]
     const modes = readModesExtension(node.$extensions)
     if (!modes) return
+    // Resolve the Penpot type up front, but don't bail before logging:
+    // a token carrying a modes block with a malformed (non-string) or
+    // unsupported $type would otherwise drop every override silently,
+    // with no `skipped` entry to explain the missing mode tokens. Both
+    // cases below record a skip per non-default mode, matching the
+    // reporting in sync-penpot-global / sync-penpot-components.
+    const w3cType = node.$type
+    const penpotType = typeof w3cType === 'string' ? W3C_TO_PENPOT[w3cType] : undefined
     for (const [modeKey, rawValue] of Object.entries(modes)) {
       if (modeKey === 'default') continue
       if (!penpotType) {
-        skipped.push({ mode: modeKey, name: joined, reason: `unsupported $type "${w3cType}"`, file })
+        const reason =
+          typeof w3cType === 'string'
+            ? `unsupported $type "${w3cType}"`
+            : `malformed $type (${w3cType === null ? 'null' : typeof w3cType})`
+        skipped.push({ mode: modeKey, name: joined, reason, file })
         continue
       }
       const value = typeof rawValue === 'number' ? String(rawValue) : rawValue
@@ -373,7 +404,7 @@ for (const t of PLAN.themes) {
 //    designer-facing state. Toggling a theme active will deactivate
 //    any other theme in the same group automatically. Skipped if
 //    Default is already active or doesn't exist.
-const defaultTheme = tokens.themes.find(t => t.group === 'Default' && t.name === 'Default');
+const defaultTheme = tokens.themes.find(t => t.group === ${JSON.stringify(THEME_GROUP)} && t.name === ${JSON.stringify(DEFAULT_THEME_NAME)});
 const defaultActivated = !!(defaultTheme && !defaultTheme.active && (defaultTheme.toggleActive(), true));
 
 return { setSummary, themeSummary, defaultActivated };

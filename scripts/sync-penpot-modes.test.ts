@@ -1,7 +1,11 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, afterAll } from 'vitest'
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import {
   buildModeOverrides,
   buildPluginCode,
+  listSourceFiles,
   THEME_GROUP,
 } from './sync-penpot-modes.ts'
 
@@ -9,6 +13,12 @@ describe('sync-penpot-modes', () => {
   const result = buildModeOverrides()
   const setByName = new Map(result.modeSets.map((s) => [s.name, s]))
   const themeByName = new Map(result.themes.map((t) => [t.name, t]))
+
+  // Temp dirs created by individual tests; cleaned up after the suite.
+  const tmpDirs: string[] = []
+  afterAll(() => {
+    for (const d of tmpDirs) rmSync(d, { recursive: true, force: true })
+  })
 
   it('emits one set per non-default mode in the JSONs', () => {
     expect(setByName.has('Modes/Mobile-Native')).toBe(true)
@@ -115,5 +125,45 @@ describe('sync-penpot-modes', () => {
     // Activates the Default theme at the end so the file leaves
     // "manual" mode after seeding.
     expect(code).toMatch(/defaultTheme[\s\S]*toggleActive/)
+  })
+
+  it('derives base sets from the source-file listing, not a hard-coded list', () => {
+    // One base set per source file — global → "Global", each
+    // tokens/components/*.json → Components/<TitleCase>. Deriving (vs.
+    // hard-coding) means a newly added component file is activated
+    // under every theme instead of silently left inactive.
+    const files = listSourceFiles()
+    expect(result.baseSets).toHaveLength(files.length)
+    expect(result.baseSets).toContain('Global')
+    const componentSets = result.baseSets.filter((n) => n.startsWith('Components/'))
+    expect(componentSets).toHaveLength(files.length - 1)
+    // The Default theme activates exactly the derived base sets.
+    expect(themeByName.get('Default')!.sets).toEqual(result.baseSets)
+  })
+
+  it('records a skip (not a silent drop) for a modes block with a malformed $type', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'penpot-modes-'))
+    tmpDirs.push(dir)
+    const file = join(dir, 'malformed.json')
+    // $type is a number, not a string — but the token still carries a
+    // com.tokens-studio.modes override. It must surface in `skipped`
+    // rather than vanishing.
+    writeFileSync(
+      file,
+      JSON.stringify({
+        bad: {
+          token: {
+            $value: '8px',
+            $type: 42,
+            $extensions: { 'com.tokens-studio.modes': { default: '8px', tablet: '10px' } },
+          },
+        },
+      }),
+    )
+    const res = buildModeOverrides([file])
+    const skip = res.skipped.find((s) => s.name === 'bad.token' && s.mode === 'tablet')
+    expect(skip?.reason).toMatch(/malformed \$type/i)
+    // And it did not leak into any mode set.
+    expect(res.modeSets.flatMap((m) => m.specs).find((s) => s.name === 'bad.token')).toBeUndefined()
   })
 })
