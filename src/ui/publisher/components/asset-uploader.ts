@@ -34,6 +34,11 @@
 import { t, type MessageKey } from '../../../i18n'
 import { MAX_IMAGE_SEQUENCE_FRAMES as MAX_FRAMES } from '../../../types/image-sequence-constants'
 import {
+  generateGlobeThumbnail,
+  loadImageFromBlob,
+  type GlobeThumbnailSource,
+} from '../../../services/globeThumbnail'
+import {
   clearWarmupFlag,
   handleSessionError,
   publisherSend,
@@ -118,6 +123,23 @@ export interface AssetUploaderOptions {
   sleep?: (ms: number) => Promise<void>
   /** Navigation for the session-expired flow. */
   navigate?: (url: string) => void
+  /** A fetchable URL for the dataset's own data frame (an
+   *  equirectangular image). When provided on a `thumbnail`
+   *  uploader, enables the one-click "Generate from this dataset's
+   *  data" affordance — the publisher gets a globe thumbnail with
+   *  zero extra uploads. Hidden when null/absent (e.g. the data is
+   *  a video or an unresolvable ref). Thumbnail kind only. */
+  dataAssetUrl?: string | null
+  /** Test seam — renders a 2:1 source to a globe thumbnail Blob.
+   *  Defaults to the real WebGL `generateGlobeThumbnail`, which
+   *  can't run under happy-dom. */
+  generateThumbnail?: (source: GlobeThumbnailSource) => Promise<Blob>
+  /** Test seam — decodes a Blob into an image. Defaults to
+   *  `loadImageFromBlob`. */
+  decodeImage?: (blob: Blob) => Promise<HTMLImageElement>
+  /** Test seam — fetches the data-frame URL as a Blob for the
+   *  auto-from-data path. Defaults to `fetch().blob()`. */
+  fetchImageBlob?: (url: string) => Promise<Blob>
 }
 
 interface AssetInitResponse {
@@ -173,6 +195,25 @@ const INITIAL: StageState = {
   progress: 0,
   statusKey: 'publisher.assetUploader.status.idle',
 }
+
+/** Globe-thumbnail generator sub-flow (thumbnail uploader only).
+ *  `idle` → `rendering` → `preview` (a generated capture awaiting
+ *  the publisher's confirm) → back to `idle` once uploaded, or
+ *  `error`. The generated File + its object-URL preview live here
+ *  until the publisher confirms or discards. */
+type GenStage = 'idle' | 'rendering' | 'preview' | 'error'
+
+interface GenState {
+  stage: GenStage
+  /** Object URL of the generated preview image (revoked on
+   *  discard / regenerate / upload). */
+  previewUrl?: string
+  /** The generated capture, ready to hand to `run()`. */
+  file?: File
+  errorDetail?: string
+}
+
+const INITIAL_GEN: GenState = { stage: 'idle' }
 
 const STAGE_STATUS_KEY: Record<Stage, MessageKey> = {
   idle: 'publisher.assetUploader.status.idle',
@@ -309,6 +350,12 @@ export function renderAssetUploader(options: AssetUploaderOptions): HTMLElement 
 
   let state: StageState = INITIAL
   let framesState: FramesState = INITIAL_FRAMES
+  // Globe-thumbnail generator state — only used on a `thumbnail`
+  // uploader. Independent of the main upload `state`: the publisher
+  // generates + previews a globe capture here, then "Use this
+  // thumbnail" feeds the generated File into the same `run()` upload
+  // path the file picker uses.
+  let genState: GenState = INITIAL_GEN
   // Tab strip is only mounted for the primary `data` asset of a
   // video-format dataset — that's where image-sequence input is
   // meaningful (the catalog encodes every frames upload to a video
@@ -337,6 +384,7 @@ export function renderAssetUploader(options: AssetUploaderOptions): HTMLElement 
   const PANEL_FRAMES_ID = `${TAB_FRAMES_ID}-panel`
   const FILE_INPUT_ID = `dataset-asset-file-${ID_SUFFIX}`
   const FRAMES_INPUT_ID = `dataset-asset-frames-${ID_SUFFIX}`
+  const GENERATE_INPUT_ID = `dataset-asset-generate-${ID_SUFFIX}`
 
   function paint(): void {
     const frag = document.createDocumentFragment()
@@ -505,7 +553,192 @@ export function renderAssetUploader(options: AssetUploaderOptions): HTMLElement 
       frag.appendChild(det)
     }
 
+    // Globe-thumbnail generator — thumbnail uploader only. Lets a
+    // publisher turn a flat 2:1 data frame (or the dataset's own
+    // data) into a wrapped-on-a-globe capture without making the
+    // render themselves.
+    if (kind === 'thumbnail') {
+      frag.appendChild(buildGenerateSection(genState))
+    }
+
     return frag
+  }
+
+  /**
+   * The "Generate a globe thumbnail" block. Offers two sources — a
+   * one-click "from this dataset's data" (when a usable data-frame
+   * URL was supplied) and a manual 2:1 frame picker — then renders a
+   * preview the publisher confirms before it's uploaded through the
+   * normal `run()` path.
+   */
+  function buildGenerateSection(g: GenState): HTMLElement {
+    const section = document.createElement('div')
+    section.className = 'publisher-asset-uploader-generate'
+
+    const heading = document.createElement('p')
+    heading.className = 'publisher-asset-uploader-generate-heading'
+    heading.textContent = t('publisher.assetUploader.generate.heading')
+    section.appendChild(heading)
+
+    const help = document.createElement('p')
+    help.className = 'publisher-asset-uploader-generate-help'
+    help.textContent = t('publisher.assetUploader.generate.help')
+    section.appendChild(help)
+
+    const busy = g.stage === 'rendering'
+
+    const controls = document.createElement('div')
+    controls.className = 'publisher-asset-uploader-generate-controls'
+
+    // One-click from the dataset's own data frame, when resolvable.
+    if (options.dataAssetUrl) {
+      const fromData = document.createElement('button')
+      fromData.type = 'button'
+      fromData.className = 'publisher-button publisher-button-secondary'
+      fromData.textContent = t('publisher.assetUploader.generate.fromData')
+      fromData.disabled = busy
+      fromData.addEventListener('click', () => {
+        void runGenerateFromData(options.dataAssetUrl as string)
+      })
+      controls.appendChild(fromData)
+    }
+
+    // Manual 2:1 frame picker. The file input is visually hidden
+    // inside the button-styled label (same pattern the rest of the
+    // portal uses for file affordances).
+    const frameLabel = document.createElement('label')
+    frameLabel.className =
+      'publisher-button publisher-button-secondary publisher-asset-uploader-generate-pick'
+    frameLabel.setAttribute('for', GENERATE_INPUT_ID)
+    frameLabel.textContent = t('publisher.assetUploader.generate.fromFrame')
+    const frameInput = document.createElement('input')
+    frameInput.type = 'file'
+    frameInput.id = GENERATE_INPUT_ID
+    frameInput.className = 'publisher-asset-uploader-generate-input'
+    frameInput.accept = 'image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp'
+    frameInput.disabled = busy
+    frameInput.addEventListener('change', () => {
+      const file = frameInput.files?.[0]
+      if (!file) return
+      void runGenerateFromFile(file)
+    })
+    frameLabel.appendChild(frameInput)
+    controls.appendChild(frameLabel)
+
+    section.appendChild(controls)
+
+    if (g.stage === 'rendering') {
+      const status = document.createElement('p')
+      status.className = 'publisher-asset-uploader-status'
+      status.setAttribute('role', 'status')
+      status.textContent = t('publisher.assetUploader.generate.rendering')
+      section.appendChild(status)
+    }
+
+    if (g.stage === 'preview' && g.previewUrl) {
+      const preview = document.createElement('img')
+      preview.className = 'publisher-asset-uploader-generate-preview'
+      preview.src = g.previewUrl
+      preview.alt = t('publisher.assetUploader.generate.previewAlt')
+      section.appendChild(preview)
+
+      const actions = document.createElement('div')
+      actions.className = 'publisher-asset-uploader-generate-actions'
+
+      const use = document.createElement('button')
+      use.type = 'button'
+      use.className = 'publisher-button publisher-button-primary'
+      use.textContent = t('publisher.assetUploader.generate.use')
+      use.addEventListener('click', () => {
+        const file = g.file
+        if (!file) return
+        // Hand off to the shared upload path. Clear the preview
+        // first so the generator block collapses while the upload
+        // status takes over.
+        if (g.previewUrl) URL.revokeObjectURL(g.previewUrl)
+        genState = INITIAL_GEN
+        void run(file)
+      })
+      actions.appendChild(use)
+
+      const discard = document.createElement('button')
+      discard.type = 'button'
+      discard.className = 'publisher-button publisher-button-secondary'
+      discard.textContent = t('publisher.assetUploader.generate.discard')
+      discard.addEventListener('click', () => {
+        if (g.previewUrl) URL.revokeObjectURL(g.previewUrl)
+        genState = INITIAL_GEN
+        paint()
+      })
+      actions.appendChild(discard)
+
+      section.appendChild(actions)
+    }
+
+    if (g.stage === 'error') {
+      const err = document.createElement('p')
+      err.className = 'publisher-asset-uploader-status publisher-asset-uploader-status-error'
+      err.setAttribute('role', 'alert')
+      err.textContent = g.errorDetail ?? t('publisher.assetUploader.generate.error')
+      section.appendChild(err)
+    }
+
+    return section
+  }
+
+  /** Render a globe thumbnail from an already-decoded source and
+   *  move to the preview stage. Shared by the file + data paths. */
+  async function renderPreview(source: GlobeThumbnailSource): Promise<void> {
+    const generate = options.generateThumbnail ?? generateGlobeThumbnail
+    const blob = await generate(source)
+    const previewUrl = URL.createObjectURL(blob)
+    // WebP is the generator's default output; name + type line up
+    // with the aux image mime gate in `run()`.
+    const file = new File([blob], 'globe-thumbnail.webp', {
+      type: blob.type || 'image/webp',
+    })
+    genState = { stage: 'preview', previewUrl, file }
+    paint()
+  }
+
+  async function runGenerateFromFile(file: File): Promise<void> {
+    const decode = options.decodeImage ?? loadImageFromBlob
+    genState = { stage: 'rendering' }
+    paint()
+    try {
+      const img = await decode(file)
+      await renderPreview(img)
+    } catch (err) {
+      genState = {
+        stage: 'error',
+        errorDetail: err instanceof Error ? err.message : String(err),
+      }
+      paint()
+    }
+  }
+
+  async function runGenerateFromData(url: string): Promise<void> {
+    const decode = options.decodeImage ?? loadImageFromBlob
+    const fetchBlob =
+      options.fetchImageBlob ??
+      (async (u: string): Promise<Blob> => {
+        const res = await (options.fetchFn ?? globalThis.fetch)(u)
+        if (!res.ok) throw new Error(`Data frame fetch failed (${res.status}).`)
+        return res.blob()
+      })
+    genState = { stage: 'rendering' }
+    paint()
+    try {
+      const blob = await fetchBlob(url)
+      const img = await decode(blob)
+      await renderPreview(img)
+    } catch (err) {
+      genState = {
+        stage: 'error',
+        errorDetail: err instanceof Error ? err.message : String(err),
+      }
+      paint()
+    }
   }
 
   function buildFramesBody(s: FramesState): DocumentFragment {

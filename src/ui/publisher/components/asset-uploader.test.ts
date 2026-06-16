@@ -449,6 +449,198 @@ describe('renderAssetUploader — auxiliary kinds (thumbnail / legend)', () => {
     expect(mount.textContent).toContain("didn't return a saved reference")
   })
 
+  it('renders the globe-thumbnail generator only for the thumbnail kind', () => {
+    // Legend uploader: no generator block.
+    mount.appendChild(
+      renderAssetUploader({
+        datasetId: '01AAAAAAAAAAAAAAAAAAAAAAAA',
+        kind: 'legend',
+        format: 'image/png',
+        onUploaded: () => {},
+      }),
+    )
+    expect(mount.querySelector('.publisher-asset-uploader-generate')).toBeNull()
+    // Thumbnail uploader: generator block present.
+    mount.replaceChildren(
+      renderAssetUploader({
+        datasetId: '01AAAAAAAAAAAAAAAAAAAAAAAA',
+        kind: 'thumbnail',
+        format: 'image/png',
+        onUploaded: () => {},
+      }),
+    )
+    expect(mount.querySelector('.publisher-asset-uploader-generate')).not.toBeNull()
+  })
+
+  it('hides the "from this dataset’s data" button unless a data URL is supplied', () => {
+    mount.appendChild(
+      renderAssetUploader({
+        datasetId: '01AAAAAAAAAAAAAAAAAAAAAAAA',
+        kind: 'thumbnail',
+        format: 'image/png',
+        onUploaded: () => {},
+      }),
+    )
+    expect(mount.textContent).not.toContain('Generate from this dataset')
+    // Manual 2:1 frame picker is always offered.
+    expect(mount.querySelector('input[id^="dataset-asset-generate-"]')).not.toBeNull()
+
+    mount.replaceChildren(
+      renderAssetUploader({
+        datasetId: '01AAAAAAAAAAAAAAAAAAAAAAAA',
+        kind: 'thumbnail',
+        format: 'image/png',
+        dataAssetUrl: 'https://cdn.example/data.png',
+        onUploaded: () => {},
+      }),
+    )
+    expect(mount.textContent).toContain('Generate from this dataset')
+  })
+
+  it('generates a preview from a picked 2:1 frame, then uploads it on confirm', async () => {
+    const onUploaded = vi.fn()
+    const generated = new Blob(['globe'], { type: 'image/webp' })
+    const generateThumbnail = vi.fn().mockResolvedValue(generated)
+    const decodeImage = vi
+      .fn()
+      .mockResolvedValue({ width: 2048, height: 1024 } as unknown as HTMLImageElement)
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse(
+          {
+            upload_id: 'UP-GEN',
+            kind: 'thumbnail',
+            target: 'r2',
+            r2: { method: 'PUT', url: 'https://r2.example/put', headers: {}, key: 'k' },
+            expires_at: 'soon',
+            mock: false,
+          },
+          201,
+        ),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({ dataset: { thumbnail_ref: 'r2:datasets/X/by-digest/cc/thumbnail.webp' } }),
+      )
+
+    mount.appendChild(
+      renderAssetUploader({
+        datasetId: '01AAAAAAAAAAAAAAAAAAAAAAAA',
+        kind: 'thumbnail',
+        format: 'image/png',
+        onUploaded,
+        hashFn: async () => 'sha256:' + 'a'.repeat(64),
+        fetchFn: fetchFn as unknown as typeof fetch,
+        xhrFactory: fakeXhrFactory(),
+        generateThumbnail,
+        decodeImage,
+      }),
+    )
+
+    // Pick a frame in the generator's file input.
+    const genInput = mount.querySelector<HTMLInputElement>(
+      'input[id^="dataset-asset-generate-"]',
+    )!
+    const frame = new File(['frame'], 'frame.png', { type: 'image/png' })
+    Object.defineProperty(genInput, 'files', {
+      value: { 0: frame, length: 1, item: (i: number) => (i === 0 ? frame : null) },
+      configurable: true,
+    })
+    genInput.dispatchEvent(new Event('change', { bubbles: true }))
+    for (let i = 0; i < 6; i++) await new Promise(r => setTimeout(r, 0))
+
+    // Decode + render ran; a preview is shown.
+    expect(decodeImage).toHaveBeenCalledOnce()
+    expect(generateThumbnail).toHaveBeenCalledOnce()
+    expect(mount.querySelector('.publisher-asset-uploader-generate-preview')).not.toBeNull()
+    // No upload yet — the publisher hasn't confirmed.
+    expect(fetchFn).not.toHaveBeenCalled()
+
+    // Confirm — "Use this thumbnail" uploads the generated capture
+    // through the normal aux path.
+    const useBtn = Array.from(mount.querySelectorAll('button')).find(
+      b => b.textContent === 'Use this thumbnail',
+    )!
+    useBtn.click()
+    for (let i = 0; i < 8; i++) await new Promise(r => setTimeout(r, 0))
+
+    const mintBody = JSON.parse(fetchFn.mock.calls[0][1].body as string) as { kind: string }
+    expect(mintBody.kind).toBe('thumbnail')
+    expect(onUploaded).toHaveBeenCalledWith({
+      mode: 'aux',
+      kind: 'thumbnail',
+      ref: 'r2:datasets/X/by-digest/cc/thumbnail.webp',
+    })
+  })
+
+  it('generates from the dataset data URL when the one-click button is used', async () => {
+    const generated = new Blob(['globe'], { type: 'image/webp' })
+    const generateThumbnail = vi.fn().mockResolvedValue(generated)
+    const decodeImage = vi
+      .fn()
+      .mockResolvedValue({ width: 2048, height: 1024 } as unknown as HTMLImageElement)
+    const fetchImageBlob = vi
+      .fn()
+      .mockResolvedValue(new Blob(['data'], { type: 'image/png' }))
+
+    mount.appendChild(
+      renderAssetUploader({
+        datasetId: '01AAAAAAAAAAAAAAAAAAAAAAAA',
+        kind: 'thumbnail',
+        format: 'image/png',
+        dataAssetUrl: 'https://cdn.example/data.png',
+        onUploaded: () => {},
+        generateThumbnail,
+        decodeImage,
+        fetchImageBlob,
+      }),
+    )
+
+    const fromDataBtn = Array.from(mount.querySelectorAll('button')).find(b =>
+      b.textContent?.includes('Generate from this dataset'),
+    )!
+    fromDataBtn.click()
+    for (let i = 0; i < 6; i++) await new Promise(r => setTimeout(r, 0))
+
+    expect(fetchImageBlob).toHaveBeenCalledWith('https://cdn.example/data.png')
+    expect(generateThumbnail).toHaveBeenCalledOnce()
+    expect(mount.querySelector('.publisher-asset-uploader-generate-preview')).not.toBeNull()
+  })
+
+  it('surfaces a generator error without uploading', async () => {
+    const generateThumbnail = vi.fn().mockRejectedValue(new Error('render failed'))
+    const decodeImage = vi
+      .fn()
+      .mockResolvedValue({ width: 2048, height: 1024 } as unknown as HTMLImageElement)
+    const fetchFn = vi.fn()
+
+    mount.appendChild(
+      renderAssetUploader({
+        datasetId: '01AAAAAAAAAAAAAAAAAAAAAAAA',
+        kind: 'thumbnail',
+        format: 'image/png',
+        onUploaded: () => {},
+        fetchFn: fetchFn as unknown as typeof fetch,
+        generateThumbnail,
+        decodeImage,
+      }),
+    )
+
+    const genInput = mount.querySelector<HTMLInputElement>(
+      'input[id^="dataset-asset-generate-"]',
+    )!
+    const frame = new File(['frame'], 'frame.png', { type: 'image/png' })
+    Object.defineProperty(genInput, 'files', {
+      value: { 0: frame, length: 1, item: (i: number) => (i === 0 ? frame : null) },
+      configurable: true,
+    })
+    genInput.dispatchEvent(new Event('change', { bubbles: true }))
+    for (let i = 0; i < 6; i++) await new Promise(r => setTimeout(r, 0))
+
+    expect(mount.querySelector('.publisher-asset-uploader-generate .publisher-asset-uploader-status-error')).not.toBeNull()
+    expect(fetchFn).not.toHaveBeenCalled()
+  })
+
   it('rejects a non-image file for an aux kind before any network call', async () => {
     const fetchFn = vi.fn()
     mount.appendChild(

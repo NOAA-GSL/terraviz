@@ -886,6 +886,9 @@ function auxAssetField(
     inputId: string
     errorField: string
     cacheKey: 'thumbnailUploader' | 'legendUploader'
+    /** Fetchable URL for the dataset's own data frame, forwarded to
+     *  the uploader's globe-thumbnail generator (thumbnail only). */
+    dataAssetUrl?: string | null
   },
 ): HTMLElement {
   const wrap = document.createElement('div')
@@ -916,6 +919,7 @@ function auxAssetField(
         kind: opts.kind,
         format: state.format,
         currentDataRef: opts.refValue || null,
+        dataAssetUrl: opts.dataAssetUrl ?? null,
         navigate: ctx.navigate,
         fetchFn: ctx.fetchFn,
         sleep: ctx.sleep,
@@ -956,6 +960,26 @@ function auxAssetField(
 }
 
 /**
+ * Resolve the dataset's data into a URL the globe-thumbnail
+ * generator can fetch as a 2:1 frame. v1 is deliberately
+ * conservative: only image-format datasets whose `data_ref` is an
+ * absolute HTTPS URL, since those are directly fetchable from the
+ * portal without a server-side resolver. `r2:` / `vimeo:` refs and
+ * video frame-grabbing need backend support and are a follow-up;
+ * when this returns null the uploader simply hides the
+ * "from this dataset's data" button and the manual-frame path
+ * still works.
+ */
+function thumbnailDataSourceUrl(state: FormState): string | null {
+  const isImage =
+    state.format === 'image/png' ||
+    state.format === 'image/jpeg' ||
+    state.format === 'image/webp'
+  if (!isImage) return null
+  return /^https:\/\//i.test(state.dataRef.trim()) ? state.dataRef.trim() : null
+}
+
+/**
  * Media card — the thumbnail + legend auxiliary images. Both feed
  * the public catalog: `thumbnail_ref` is the browse-card image,
  * `legend_ref` the colour-scale legend shown alongside the loaded
@@ -988,6 +1012,7 @@ function mediaCard(
       inputId: 'dataset-thumbnail-ref',
       errorField: 'thumbnail_ref',
       cacheKey: 'thumbnailUploader',
+      dataAssetUrl: thumbnailDataSourceUrl(state),
     }),
   )
 

@@ -775,6 +775,68 @@
   font-size: calc(0.875rem * var(--ui-scale));
 }
 
+/* --- Globe-thumbnail generator (thumbnail uploader only) --- */
+.publisher-asset-uploader-generate {
+  display: flex;
+  flex-direction: column;
+  gap: calc(0.5rem * var(--ui-scale));
+  margin-block-start: calc(0.5rem * var(--ui-scale));
+  padding-block-start: calc(0.75rem * var(--ui-scale));
+  border-block-start: 1px solid var(--white-o12, rgba(255, 255, 255, 0.12));
+}
+
+.publisher-asset-uploader-generate-heading {
+  margin: 0;
+  font-size: calc(0.875rem * var(--ui-scale));
+  font-weight: 500;
+  color: var(--color-text-secondary, #bbbbbb);
+}
+
+.publisher-asset-uploader-generate-help {
+  margin: 0;
+  font-size: calc(0.8125rem * var(--ui-scale));
+  color: var(--color-text-muted, #999999);
+}
+
+.publisher-asset-uploader-generate-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(0.5rem * var(--ui-scale));
+}
+
+/* The frame picker is a button-styled <label> wrapping a hidden
+   file input — clicking the label opens the OS picker. */
+.publisher-asset-uploader-generate-pick {
+  cursor: pointer;
+}
+
+.publisher-asset-uploader-generate-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.publisher-asset-uploader-generate-preview {
+  inline-size: calc(160px * var(--ui-scale));
+  block-size: calc(160px * var(--ui-scale));
+  object-fit: contain;
+  align-self: flex-start;
+  border-radius: calc(6px * var(--ui-scale));
+  background: var(--white-o05, rgba(255, 255, 255, 0.05));
+}
+
+.publisher-asset-uploader-generate-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(0.5rem * var(--ui-scale));
+}
+
 .publisher-asset-uploader-current-label {
   color: var(--color-text-muted, #999999);
 }

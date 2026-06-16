@@ -132,6 +132,31 @@ describe('renderDatasetEditPage', () => {
     )
   })
 
+  it('offers "generate from this dataset\'s data" for an image dataset with an HTTPS data_ref', async () => {
+    const fetchFn = vi.fn().mockResolvedValue(
+      detailResponse(
+        dataset({ format: 'image/png', data_ref: 'https://cdn.example/frame.png' }),
+      ),
+    )
+    await renderDatasetEditPage(mount, '01EDIT0000000000000000000', {
+      fetchFn: fetchFn as unknown as typeof fetch,
+    })
+    expect(mount.textContent).toContain('Generate from this dataset')
+  })
+
+  it('omits the data-source generate button for a video dataset (no usable 2:1 frame)', async () => {
+    const fetchFn = vi.fn().mockResolvedValue(
+      detailResponse(dataset({ format: 'video/mp4', data_ref: 'vimeo:123' })),
+    )
+    await renderDatasetEditPage(mount, '01EDIT0000000000000000000', {
+      fetchFn: fetchFn as unknown as typeof fetch,
+    })
+    // The manual-frame generator is still offered on the thumbnail
+    // uploader; only the one-click data-source button is hidden.
+    expect(mount.querySelector('.publisher-asset-uploader-generate')).not.toBeNull()
+    expect(mount.textContent).not.toContain('Generate from this dataset')
+  })
+
   it('prefills keyword chips from the decoration arrays', async () => {
     const fetchFn = vi.fn().mockResolvedValue(
       detailResponse(dataset(), { keywords: ['sst', 'anomaly'], tags: ['demo'] }),
