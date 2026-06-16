@@ -28,6 +28,16 @@ import {
 import Database from 'better-sqlite3'
 
 const EXPECTED_TABLES = [
+  'analytics_daily',
+  'analytics_dataset_daily',
+  'analytics_dimension_daily',
+  'analytics_errors_daily',
+  'analytics_export_state',
+  'analytics_orbit_daily',
+  'analytics_outcomes_daily',
+  'analytics_perf_daily',
+  'analytics_quiz_daily',
+  'analytics_spatial_daily',
   'asset_uploads',
   'audit_events',
   'dataset_categories',
@@ -43,9 +53,20 @@ const EXPECTED_TABLES = [
   'publishers',
   'tour_dataset_refs',
   'tours',
+  'workflow_runs',
+  'workflows',
 ]
 
 const EXPECTED_INDEXES = [
+  'idx_analytics_daily_event',
+  'idx_analytics_dataset_daily_layer',
+  'idx_analytics_dimension_daily_metric',
+  'idx_analytics_errors_daily_day',
+  'idx_analytics_orbit_daily_day',
+  'idx_analytics_outcomes_daily_day',
+  'idx_analytics_perf_daily_day',
+  'idx_analytics_quiz_daily_day',
+  'idx_analytics_spatial_daily_layer',
   'idx_asset_uploads_dataset',
   'idx_audit_subject',
   'idx_datasets_legacy_id',
@@ -56,6 +77,9 @@ const EXPECTED_INDEXES = [
   'idx_node_identity_singleton',
   'idx_renditions_dataset',
   'idx_tours_visibility',
+  'idx_workflow_runs_active',
+  'idx_workflow_runs_workflow',
+  'idx_workflows_due',
 ]
 
 describe('catalog migrations', () => {

@@ -78,8 +78,9 @@ marked — skip them and the deploy still stands.
 14. [Verify the deploy](#step-14--verify-the-deploy)
 15. [Video transcode pipeline](#step-15--video-transcode-pipeline-r2--github-actions) *(if you accept video uploads)*
 16. [Publisher portal browser flow](#step-16--publisher-portal-browser-flow)
+17. [Analytics long-term export](#step-17--analytics-long-term-export-optional) *(optional)*
 
-**Part C — desktop fork (optional)** → [Step 17](#part-c--desktop-app-fork-optional)
+**Part C — desktop fork (optional)** → [Step 18](#part-c--desktop-app-fork-optional)
 
 **Reference** — [fork-pinned source values](#reference-fork-pinned-source-values), [CI/CD workflow matrix](#reference-cicd-workflow-matrix), [common failure modes](#common-failure-modes), [post-launch](#after-a-successful-launch).
 
@@ -523,9 +524,19 @@ After Steps 4–7 are wired:
 | Hashing is one-way | `node -e "import('./src/analytics/hash.ts').then(m => m.hashQuery('test').then(console.log))"` should output the same 12 hex chars you saw in AE. |
 | Kill switch | `wrangler kv key put telemetry_enabled disabled --namespace-id=<id>` → next /api/ingest POST should return 410. Then delete the key, verify back to 204. |
 
-## Step 9 — Grafana (optional)
+## Step 9 — Grafana (optional, secondary)
 
-The repo ships three dashboard JSONs under `grafana/dashboards/`.
+> **You probably don't need this.** The primary analytics surface is
+> the in-app **`/publish/analytics`** tab — it ships with the app, is
+> privilege-gated behind the portal's Cloudflare Access, and covers
+> product health, dataset engagement, the spatial heatmap, and
+> funnels with no external service. To turn it on, wire the export
+> pipeline in [Step 17](#step-17--analytics-long-term-export-optional)
+> (R2 bucket + AE SQL-API secrets + nightly cron). Grafana stays
+> available for self-hosters who want to write ad-hoc AE SQL against
+> the raw event stream, but it is no longer the recommended path.
+
+The repo ships four dashboard JSONs under `grafana/dashboards/`.
 See [`grafana/README.md`](../grafana/README.md) for the setup
 walkthrough — Cloudflare API token, Infinity plugin, datasource
 config, dashboard import.
@@ -595,7 +606,7 @@ environments.
 | `NODE_ID_PRIVATE_KEY_PEM` | Secret | Ed25519 keypair for federation signing and `/.well-known/terraviz.json` advertisement. Generated with `npm run gen:node-key`. | Publishing anything. |
 | `PREVIEW_SIGNING_KEY` | Secret | HMAC-SHA-256 secret for preview-token signing. Without it the preview endpoints fail closed. | The CLI's `terraviz preview` command. |
 | `ACCESS_TEAM_DOMAIN` / `ACCESS_AUD` | Plaintext | Cloudflare Access app credentials for `/api/v1/publish/**`. Without them the publisher middleware 503s with `access_unconfigured`. | Publisher API access. |
-| `TRUSTED_PUBLISHER_DOMAINS` | Plaintext (optional) | Comma-separated email domains whose verified Access user logins JIT-provision as `staff/active/admin=1` instead of the default `community/pending`. Required for single-org deploys where the operator IS the publisher (otherwise SSO sign-in lands the operator at `pending` and locks them out of their own deploy). Match is exact, case-insensitive, no subdomain wildcarding. Service tokens are unaffected. | Single-org publisher portal access (Step 16). |
+| `TRUSTED_PUBLISHER_DOMAINS` | Plaintext (optional) | Comma-separated email domains whose verified Access user logins JIT-provision as `admin/active/admin=1` instead of the default `publisher/pending`. Recommended for single-org deploys where the operator IS the admin (otherwise the first SSO sign-in lands at `pending` with no admin yet to approve it). Once one admin exists, additional users can be approved from the portal's Users tab instead. Match is exact, case-insensitive, no subdomain wildcarding. Service tokens are unaffected. | Single-org publisher portal access (Step 16). |
 | `R2_PUBLIC_BASE` | Plaintext | Public origin for the catalog R2 bucket (e.g. `https://assets.terraviz.your-org.org`). The manifest endpoint and SPA build playable HLS / image / tour-asset URLs from this. Bind the domain under R2 → bucket → Settings → Connect Domain first. **Not optional for the audit** (see note below). | Serving any R2-hosted asset. |
 | `R2_S3_ENDPOINT` / `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` | Secret | R2 S3-API credentials for server-side presigned PUT minting and digest verification. Minted at R2 → Manage R2 API Tokens (Read+Write on the bucket). The same three values are also consumed shell-side by the migration CLIs and the transcode workflow. | Browser/CLI asset uploads. |
 | `GITHUB_OWNER` / `GITHUB_REPO` / `GITHUB_DISPATCH_TOKEN` | Plaintext / Plaintext / Secret | Point the video-transcode `repository_dispatch` at **your fork** (e.g. `your-org` / `terraviz`). Token is a PAT with `repo`/Contents:write on that repo. Without them video uploads 503 `github_dispatch_unconfigured`. | Video transcode (Step 15). |
@@ -1266,9 +1277,9 @@ iterate without going through Access for every refresh.
 Once 16a's Access app is wired and you sign into the portal for the
 first time, the publisher middleware JIT-provisions a row for your
 email. The default classification for an Access user login is
-`role=community, status=pending` — which a multi-org review queue
-would later approve. For a single-org deploy where you ARE the
-publisher, leave the queue out of the picture by setting
+`role=publisher, status=pending` — which an admin later approves
+from the portal's **Users** tab. For a single-org deploy where you
+ARE the operator, skip the approval step by setting
 `TRUSTED_PUBLISHER_DOMAINS` to your operator's email-domain pattern
 (see the bindings table in Step 10):
 
@@ -1278,18 +1289,28 @@ TRUSTED_PUBLISHER_DOMAINS = noaa.gov,zyra-project.org
 
 Set on both Production and Preview, then redeploy. Verified
 user logins matching either domain provision as
-`role=staff, status=active, is_admin=1` — full administrative
-authority over the deploying node's catalog. Service tokens are
-unaffected (they continue to provision as `role=service`).
+`role=admin, status=active, is_admin=1` — full administrative
+authority over the deploying node's catalog, including approving and
+managing other publishers. Service tokens are unaffected (they
+continue to provision as `role=service`).
 
-**If you already signed in before setting this var.** Pages will
-have JIT-provisioned a `community/pending` row already; the
-`getOrCreatePublisher` path doesn't update existing rows.
-Promote it once via the D1 console:
+**Approving additional users.** Once at least one admin exists, new
+sign-ins land at `publisher/pending` and an admin approves them
+in-product: open **/publish/users** (the Users tab, visible only to
+admins), filter to **Pending**, and click **Approve** — or change
+their role. No D1 access required. (Admins can't demote or suspend
+their own account, nor remove the last remaining admin, so a deploy
+always keeps at least one administrator.)
+
+**If you already signed in before setting `TRUSTED_PUBLISHER_DOMAINS`
+and have no admin yet.** Pages will have JIT-provisioned a
+`publisher/pending` row already; the `getOrCreatePublisher` path
+doesn't update existing rows. Bootstrap the first admin once via the
+D1 console (afterwards, use the Users tab):
 
 ```sql
 UPDATE publishers
-SET role = 'staff', is_admin = 1, status = 'active'
+SET role = 'admin', is_admin = 1, status = 'active'
 WHERE email = 'you@your-org.org';
 ```
 
@@ -1329,6 +1350,107 @@ provision.
 
 ---
 
+## Step 17 — Analytics long-term export (optional)
+
+Analytics Engine only retains events for 30–90 days. The export
+pipeline ([`docs/ANALYTICS_STORAGE_AND_ADMIN_PLAN.md`](ANALYTICS_STORAGE_AND_ADMIN_PLAN.md)
+Phase A) drains each completed UTC day into durable storage: a raw
+NDJSON archive in R2 (indefinite, full fidelity) plus daily rollup
+tables in D1 (the data source for the upcoming `/publish/analytics`
+dashboard). Skip this step and the app works fine — you just keep
+losing history at the AE retention boundary.
+
+Prerequisites from earlier steps: the AE dataset (Step 5c), the
+catalog DB with migrations applied (Steps 10–11 — migration
+`0019_analytics_rollups.sql` ships in the repo), and the Access
+service token + GitHub secrets from the transcode wiring (Step 15b).
+
+### 17a. R2 bucket for the raw archive
+
+```bash
+wrangler r2 bucket create terraviz-analytics
+```
+
+Then Pages → Settings → Bindings → Add binding → **R2 bucket**:
+- Variable name: `ANALYTICS_R2`
+- Bucket: `terraviz-analytics`
+
+Deliberately a separate bucket from `terraviz-assets` — telemetry
+should never entangle with asset lifecycle rules or public-read
+access. No CORS policy needed: only the Pages Function writes to
+it, and nothing browser-side ever reads it.
+
+### 17b. Analytics Engine SQL API credentials
+
+The export endpoint reads AE through the SQL API, which needs two
+values on the Pages project (Settings → Variables and secrets,
+Production environment):
+
+| Variable | Type | Value |
+|---|---|---|
+| `CF_ACCOUNT_ID` | Plaintext | Your account id (dashboard sidebar / any dashboard URL) |
+| `ANALYTICS_SQL_TOKEN` | **Secret** | API token with exactly one permission: **Account → Account Analytics → Read** (My Profile → API Tokens → Create Token → Custom) |
+
+Optional: `ANALYTICS_AE_DATASET` (plaintext) if your fork named
+its AE dataset something other than `terraviz_events`.
+
+Bindings and variables take effect on the next deployment —
+redeploy (Step 5e) before testing.
+
+### 17c. Enable the nightly cron
+
+The workflow ships at `.github/workflows/analytics-export.yml`
+(daily, 00:25 UTC) and authenticates with the same repo secrets as
+the Zyra scheduler: `TERRAVIZ_SERVER`, `CF_ACCESS_CLIENT_ID`,
+`CF_ACCESS_CLIENT_SECRET` (Step 15b). Two behaviours to know:
+
+- Forks start with scheduled workflows **disabled** — enable it
+  once in the Actions tab.
+- It exits quietly when `TERRAVIZ_SERVER` is unset, and a 503
+  `export_unconfigured` response (Steps 17a/17b not done yet) logs
+  a warning instead of failing, so a partial setup never collects
+  red runs.
+
+The endpoint walks every day since its bookmark on each tick
+(capped at 7/run), so missed ticks self-heal.
+
+### 17d. Backfill while AE still remembers
+
+The nightly tick only moves forward from its first run. History is
+recoverable exactly as far back as AE's retention (≤ 90 days), so
+backfill once, oldest day first.
+
+**Easiest path:** Actions tab → **Analytics Backfill** → Run
+workflow (`.github/workflows/analytics-backfill.yml`). Inputs left
+blank default to "90 days ago through yesterday"; it reuses the
+same repo secrets as the nightly cron, walks the range oldest-first,
+and writes a per-day results table to the run summary. Idempotent —
+safe to re-run or to overlap with the nightly tick.
+
+Or by hand, one day per call (`TERRAVIZ_SERVER` is your production
+origin, the same value as the repo secret):
+
+```bash
+# Idempotent, safe to re-run.
+curl -sS -X POST \
+  -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
+  -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
+  "${TERRAVIZ_SERVER%/}/api/v1/publish/analytics-export?day=2026-03-15"
+```
+
+Verify the pipeline end to end:
+
+```bash
+# Archive object landed:
+wrangler r2 object get terraviz-analytics/events/v1/2026/03/15.ndjson.gz --pipe | gunzip | head -3
+
+# Rollups landed:
+wrangler d1 execute sphere-feedback --remote --config wrangler.toml \
+  --command "SELECT day, COUNT(*) FROM analytics_daily GROUP BY day ORDER BY day"
+```
+
+---
+
 # Part C — Desktop app fork (optional)
 
 The web deploy in Part A is self-contained. If you also intend to
@@ -1336,9 +1458,9 @@ ship the Tauri desktop app under your own brand, three
 upstream-pinned values need changing — skip this entire part for a
 web-only fork.
 
-## Step 17 — Repoint the desktop-specific values
+## Step 18 — Repoint the desktop-specific values
 
-### 17a. Tauri updater endpoint + signing key
+### 18a. Tauri updater endpoint + signing key
 
 `src-tauri/tauri.conf.json` hardcodes the auto-update feed and the
 public half of the upstream signing key:
@@ -1367,7 +1489,7 @@ If you leave the upstream pubkey/endpoint, your users' apps will
 poll the **upstream** release feed and reject any update you sign
 with a different key.
 
-### 17b. macOS notarization (optional)
+### 18b. macOS notarization (optional)
 
 `release.yml` signs + notarizes macOS builds only when the six
 `APPLE_*` secrets are present
@@ -1377,7 +1499,7 @@ with a different key.
 build still succeeds but ships unsigned — macOS users hit the
 Gatekeeper "damaged" warning until they bypass it.
 
-### 17c. `VITE_API_ORIGIN` for desktop API calls
+### 18c. `VITE_API_ORIGIN` for desktop API calls
 
 Desktop builds can't serve relative `/api/` paths (the webview
 origin is `tauri://localhost`), so `src/services/catalogSource.ts`
@@ -1391,7 +1513,7 @@ This same value also drives deep-link host recognition
 (`parseDatasetFromUrl`), so setting it makes your node accept its
 own `/dataset/<id>` links on both web and desktop.
 
-### 17d. Weblate (translation sync)
+### 18d. Weblate (translation sync)
 
 `sync-weblate.yml` calls `npm run sync:weblate`, which defaults to
 the upstream Weblate project (`hosted.weblate.org`, project
@@ -1462,7 +1584,7 @@ pointed at NOAA/NASA and need no change.
   recognises your node's own host (derived from `VITE_API_ORIGIN`)
   plus any `*.pages.dev` preview and `localhost`, so shared
   `/dataset/<id>` links work on your domain with no edit. (Set
-  `VITE_API_ORIGIN` if you ship desktop builds — see Step 17.)
+  `VITE_API_ORIGIN` if you ship desktop builds — see Step 18.)
 - The `terraviz` **CLI** defaults its server to `https://terraviz.app`
   but is already independence-ready: override per-invocation with
   `--server`, the `TERRAVIZ_SERVER` env var, or a persisted
@@ -1482,10 +1604,94 @@ workflow needs and what's safe to drop.
 | `ci.yml` — type-check / unit-tests / build | none (auto `GITHUB_TOKEN`) | **keep** — fork-safe, no setup |
 | `ci.yml` — **deploy** job | `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`; optional `vars.VITE_DEFAULT_UI_SCALE`; envs `production`/`preview`; **+ rename the `--project-name terraviz`** | you deploy via the Pages dashboard Git integration (then delete this job — see Step 4) |
 | `poster.yml` | same Cloudflare secrets; envs `poster-production`/`poster-preview`; **+ rename `terraviz-poster`** | you don't ship the poster sub-site |
+| `visual-report.yml` — smoke (gating) + advisory report/diff | smoke/report/diff jobs need **none** (auto `GITHUB_TOKEN`, `pull-requests: write`); the *optional* report **deploy** needs `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID` and a `terraviz-visual` Pages project; optional `vars.VISUAL_DEPLOY_URL` (see [the visual report site](#reference-the-visual-report-site-optional)) | **keep** the smoke/report jobs (fork-safe); drop only the deploy step if you don't host the report |
 | `transcode-hls.yml` | `R2_S3_ENDPOINT`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `CATALOG_R2_BUCKET`, `TERRAVIZ_SERVER`, `CF_ACCESS_CLIENT_ID`, `CF_ACCESS_CLIENT_SECRET` (details in Step 15) | you don't use publisher video uploads |
-| `release.yml` / `desktop.yml` | `TAURI_SIGNING_PRIVATE_KEY` (+ `_PASSWORD`), 6× `APPLE_*` (Step 17) | web-only fork |
-| `sync-weblate.yml` | `WEBLATE_TOKEN` (Step 17d) | you don't run your own translation pipeline |
+| `release.yml` / `desktop.yml` | `TAURI_SIGNING_PRIVATE_KEY` (+ `_PASSWORD`), 6× `APPLE_*` (Step 18) | web-only fork |
+| `sync-weblate.yml` | `WEBLATE_TOKEN` (Step 18d) | you don't run your own translation pipeline |
 | `codeql.yml`, `mobile.yml` | none | **keep** — fork-safe |
+
+---
+
+## Reference: the visual report site (optional)
+
+`visual-report.yml` is the CI side of the
+[visual testing & reporting tool](VISUAL_REPORT_PLAN.md): on every PR it
+runs the gating **smoke** tests and an **advisory** screenshot report
+(per-scene problem badges + a pixel diff against `main`'s baseline,
+posted as a PR comment + artifact). None of that touches Cloudflare —
+it's all GitHub Actions + artifacts.
+
+The **only** Cloudflare piece is optional: on `push: main` the workflow
+can deploy the generated HTML report to a separate static Pages project
+so it has a stable URL (the same pattern as `poster.yml`). To turn that
+on:
+
+1. **Create the Pages project** named `terraviz-visual` (Direct Upload):
+   ```bash
+   npx wrangler pages project create terraviz-visual --production-branch main
+   ```
+   Rename it in the workflow's deploy step if you prefer another name.
+2. That's it for required setup. Specifically, you do **not** need:
+   - **Bindings** — the report is a static site (one `index.html` + PNGs);
+     no D1 / KV / R2 / Analytics Engine / Functions are involved.
+   - **New secrets** — it reuses the same `CLOUDFLARE_API_TOKEN` and
+     `CLOUDFLARE_ACCOUNT_ID` the `ci.yml` deploy and `poster.yml` already
+     use (the token needs Pages:Edit, which an account-scoped Pages token
+     already has). No GitHub Environment is referenced either.
+   - **A custom domain** — Pages serves it at
+     `https://terraviz-visual.pages.dev` (and a per-deploy
+     `<hash>.terraviz-visual.pages.dev`); the workflow captures that URL
+     and prints it in the run summary. Add a custom domain only if you
+     want a vanity hostname.
+3. **Optional** — set `VISUAL_DEPLOY_URL` to your production SPA URL
+   (e.g. `https://terraviz.your-org.org`; it's the same value as your
+   `TERRAVIZ_SERVER` variable). Set it as a repository **Variable**, not
+   a Secret — it's a non-sensitive URL read as `vars.VISUAL_DEPLOY_URL`:
+   **repo Settings → Secrets and variables → Actions → Variables tab →
+   New repository variable**. When set, the `main` run re-captures the
+   report against the *live* site with the accessibility scan on, so the
+   deployed report reflects production (real tiles, network, console).
+   Left unset, it deploys the local capture.
+
+4. **Optional, for publisher/admin scenes against a live deploy** — if
+   your `/publish/**` routes sit behind Cloudflare Access (Step 7), a
+   headless live capture hits the SSO wall and those scenes time out (the
+   public scenes still capture fine). To capture the real portal, give
+   the live run a **Cloudflare Access service token** (Zero Trust →
+   Access → Service Auth). The workflow already **reuses your existing
+   `CF_ACCESS_CLIENT_ID` / `CF_ACCESS_CLIENT_SECRET`** secret (the same
+   service token `transcode-hls.yml` and the analytics/zyra workflows
+   use) — so if you have that, there is **nothing new to set**, as long
+   as the token's Service Auth policy is attached to the Access app that
+   gates `/publish/*` (usually the same app as the publisher API). To use
+   a *different* token just for the visual report, set dedicated
+   `VISUAL_ACCESS_CLIENT_ID` / `VISUAL_ACCESS_CLIENT_SECRET` secrets and
+   they take precedence. Either way the capture sends
+   `CF-Access-Client-{Id,Secret}` only on **first-party** requests (same
+   origin as `VISUAL_DEPLOY_URL`; never to third-party tile/CDN hosts, so
+   the token can't leak), so the publisher/admin pages load and the report
+   shows **real backend data** (fixtures are disabled in this mode — they
+   only stub a local no-backend run).
+
+   > Two caveats. (a) A service token bypasses Access but **not** Bot
+   > Fight Mode / WAF (Step 15c) — if your zone challenges the headless
+   > runner you'll need the same skip rule. (b) Leave the two secrets
+   > unset and the live report simply captures the public scenes and
+   > skips the gated ones (non-fatal) — or leave `VISUAL_DEPLOY_URL`
+   > unset entirely to deploy the complete local fixture capture instead.
+
+The deploy step is `continue-on-error`, so skipping all of the above
+breaks nothing: PRs still get the smoke gate, the report artifact, and
+the advisory comment — `main` just won't host the report anywhere. To
+drop report hosting entirely, delete the "Re-capture against the live
+app" and "Deploy report to Cloudflare Pages" steps from
+`visual-report.yml`; the rest of the workflow is fork-safe and
+secret-free.
+
+> The regression diff's baseline is a **GitHub Actions artifact**
+> (`visual-baseline`) published by the `main` run — not a Cloudflare
+> resource. The first push to `main` after merging bootstraps it; until
+> then PRs soft-pass with "no baseline to diff against".
 
 ---
 
@@ -1637,11 +1843,13 @@ every application-level JWT (both users and service tokens).
 Fixed in 3pa/J/A; any row JIT-provisioned before that fix
 shipped still has the wrong classification.
 
-One-shot D1 fix-up:
+One-shot fix-up (if you already have another admin, do this from the
+Users tab instead — set the row's role to Admin; the D1 form below is
+only needed when no admin exists yet):
 
 ```sql
 UPDATE publishers
-SET role = 'staff', is_admin = 1, status = 'active'
+SET role = 'admin', is_admin = 1, status = 'active'
 WHERE email = 'you@your-org.org';
 ```
 

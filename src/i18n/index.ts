@@ -19,6 +19,7 @@ import {
   type MessageKey,
 } from './messages'
 import { directionFor } from './rtl'
+import { recordI18nKey } from './screenshotTrace'
 import { escapeAttr, escapeHtml } from '../ui/domUtils'
 
 export {
@@ -97,6 +98,11 @@ export function t<K extends MessageKey>(
   params?: Readonly<Record<string, string | number>>,
 ): string {
   const k = key as unknown as string
+  // Screenshot-capture builds only — tree-shaken out otherwise.
+  // Explicit `=== 'true'` matches the repo's other build flags
+  // (e.g. VITE_TELEMETRY_CONSOLE) so a stray value like 'false'
+  // can't accidentally enable tracing.
+  if (import.meta.env.VITE_I18N_TRACE === 'true') recordI18nKey(k)
   const raw = activeMessages[k] ?? enMessages[k as keyof typeof enMessages] ?? k
   const rawStr = typeof raw === 'string' ? raw : k
   return params ? interpolate(rawStr, params) : rawStr

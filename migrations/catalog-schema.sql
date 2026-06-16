@@ -10,6 +10,116 @@
 
 -- Tables
 
+CREATE TABLE analytics_daily (
+  day            TEXT NOT NULL,             -- 'YYYY-MM-DD' (UTC)
+  event_type     TEXT NOT NULL,
+  environment    TEXT NOT NULL,             -- production | preview | local
+  internal       INTEGER NOT NULL,          -- 0 | 1 (Cloudflare Access staff)
+  country        TEXT NOT NULL,             -- ISO 3166-1 alpha-2, or 'XX'
+  platform       TEXT NOT NULL DEFAULT '',  -- web | desktop | mobile | ''
+  events_count   REAL NOT NULL,             -- sample-weighted event count
+  sessions_count REAL NOT NULL,             -- distinct session ids seen
+  metrics        TEXT NOT NULL DEFAULT '{}',-- JSON: named percentiles etc.
+  PRIMARY KEY (day, event_type, environment, internal, country, platform)
+);
+
+CREATE TABLE analytics_dataset_daily (
+  day          TEXT NOT NULL,
+  layer_id     TEXT NOT NULL,
+  environment  TEXT NOT NULL,
+  loads        REAL NOT NULL,               -- layer_loaded, weighted
+  trigger_mix  TEXT NOT NULL DEFAULT '{}',  -- JSON {browse|orbit|tour|url|default: n}
+  source_mix   TEXT NOT NULL DEFAULT '{}',  -- JSON {network|cache|hls|image: n}
+  load_ms_p50  REAL,                        -- NULL when no samples that day
+  load_ms_p95  REAL,
+  dwell_ms_sum REAL,                        -- NULL when no unloads that day
+  PRIMARY KEY (day, layer_id, environment)
+);
+
+CREATE TABLE analytics_dimension_daily (
+  day         TEXT NOT NULL,
+  environment TEXT NOT NULL,
+  metric      TEXT NOT NULL,
+  key         TEXT NOT NULL,
+  count       REAL NOT NULL,               -- sample-weighted
+  value_sum   REAL NOT NULL DEFAULT 0,     -- metric-specific accumulator
+  PRIMARY KEY (day, environment, metric, key)
+);
+
+CREATE TABLE analytics_errors_daily (
+  day           TEXT NOT NULL,             -- 'YYYY-MM-DD' (UTC)
+  environment   TEXT NOT NULL,             -- production | preview | local
+  category      TEXT NOT NULL,             -- tile | hls | llm | vr | uncaught | …
+  source        TEXT NOT NULL,             -- caught | window_error | …
+  code          TEXT NOT NULL,             -- HTTP status or classified enum
+  message_class TEXT NOT NULL,             -- sanitized first line
+  count         REAL NOT NULL,             -- sample-weighted
+  PRIMARY KEY (day, environment, category, source, code, message_class)
+);
+
+CREATE TABLE analytics_export_state (
+  id         INTEGER PRIMARY KEY CHECK (id = 1),
+  last_day   TEXT NOT NULL,                 -- 'YYYY-MM-DD' (UTC)
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE analytics_orbit_daily (
+  day              TEXT NOT NULL,
+  environment      TEXT NOT NULL,
+  model            TEXT NOT NULL,
+  turns            REAL NOT NULL,          -- sample-weighted assistant turns
+  rounds_sum       REAL NOT NULL,          -- Σ turn_rounds · weight (LLM round-trips)
+  input_tokens_sum  REAL NOT NULL,
+  output_tokens_sum REAL NOT NULL,
+  duration_ms_sum  REAL NOT NULL,
+  PRIMARY KEY (day, environment, model)
+);
+
+CREATE TABLE analytics_outcomes_daily (
+  day         TEXT NOT NULL,               -- 'YYYY-MM-DD' (UTC)
+  environment TEXT NOT NULL,               -- production | preview | local
+  event_type  TEXT NOT NULL,               -- tour_ended | vr_session_started
+  value       TEXT NOT NULL,               -- the dimension value
+  count       REAL NOT NULL,               -- sample-weighted
+  PRIMARY KEY (day, environment, event_type, value)
+);
+
+CREATE TABLE analytics_perf_daily (
+  day            TEXT NOT NULL,            -- 'YYYY-MM-DD' (UTC)
+  environment    TEXT NOT NULL,
+  surface        TEXT NOT NULL,            -- map | vr
+  renderer       TEXT NOT NULL,            -- webgl_renderer_hash (8 hex or 'unknown')
+  samples        REAL NOT NULL,            -- sample-weighted perf_sample count
+  fps_sum        REAL NOT NULL,            -- Σ fps_median_10s · weight
+  frame_p95_sum  REAL NOT NULL,            -- Σ frame_time_p95_ms · weight
+  jsheap_sum     REAL NOT NULL,            -- Σ jsheap_mb · weight (only rows > 0)
+  jsheap_samples REAL NOT NULL,            -- weight of rows with jsheap_mb > 0
+  PRIMARY KEY (day, environment, surface, renderer)
+);
+
+CREATE TABLE analytics_quiz_daily (
+  day             TEXT NOT NULL,
+  environment     TEXT NOT NULL,
+  tour_id         TEXT NOT NULL,
+  question_id     TEXT NOT NULL,
+  answered        REAL NOT NULL,           -- sample-weighted answers
+  correct         REAL NOT NULL,           -- of which were correct
+  response_ms_sum REAL NOT NULL,           -- Σ response_ms · weight
+  PRIMARY KEY (day, environment, tour_id, question_id)
+);
+
+CREATE TABLE analytics_spatial_daily (
+  day         TEXT NOT NULL,
+  event_type  TEXT NOT NULL,                -- camera_settled | map_click
+  environment TEXT NOT NULL,
+  layer_id    TEXT NOT NULL DEFAULT '',
+  projection  TEXT NOT NULL DEFAULT '',     -- globe | mercator | vr | ar | ''
+  lat_bin     REAL NOT NULL,                -- floor(lat / 0.5) * 0.5
+  lon_bin     REAL NOT NULL,
+  hits        REAL NOT NULL,                -- sample-weighted
+  PRIMARY KEY (day, event_type, environment, layer_id, projection, lat_bin, lon_bin)
+);
+
 CREATE TABLE asset_uploads (
   id              TEXT PRIMARY KEY,           -- ULID
   dataset_id      TEXT NOT NULL,
@@ -234,8 +344,59 @@ CREATE TABLE tours (
   FOREIGN KEY (publisher_id) REFERENCES publishers(id)
 );
 
+CREATE TABLE workflow_runs (
+  id            TEXT PRIMARY KEY,                 -- ULID
+  workflow_id   TEXT NOT NULL,
+  status        TEXT NOT NULL,                    -- queued | running | succeeded | failed | canceled
+  trigger       TEXT NOT NULL DEFAULT 'schedule', -- schedule | manual
+  created_at    TEXT NOT NULL,
+  started_at    TEXT,                             -- set on the `running` callback
+  finished_at   TEXT,                             -- set on a terminal callback
+  gha_run_id    TEXT,                             -- Actions run id, for the portal's log link
+  upload_id     TEXT,                             -- asset_uploads row a successful run produced
+  error_summary TEXT,                             -- truncated, secret-stripped (runner-side sanitization)
+  FOREIGN KEY (workflow_id) REFERENCES workflows(id) ON DELETE CASCADE
+);
+
+CREATE TABLE workflows (
+  id                 TEXT PRIMARY KEY,            -- ULID
+  publisher_id       TEXT NOT NULL,
+  name               TEXT NOT NULL,
+  description        TEXT,
+  pipeline_json      TEXT NOT NULL,               -- canonical JSON, validated against the stage allowlist
+  metadata_template  TEXT NOT NULL,               -- sidecar template JSON
+  schedule           TEXT NOT NULL,               -- ISO-8601 duration (same vocabulary as datasets.period)
+  enabled            INTEGER NOT NULL DEFAULT 0,  -- 0 | 1
+  target_dataset_id  TEXT NOT NULL,
+  update_mode        TEXT NOT NULL DEFAULT 'overwrite',
+  last_run_at        TEXT,                        -- ISO 8601; terminal status of the most recent run
+  next_run_at        TEXT,                        -- ISO 8601; null while disabled
+  created_at         TEXT NOT NULL,
+  updated_at         TEXT NOT NULL,
+  FOREIGN KEY (publisher_id)      REFERENCES publishers(id),
+  FOREIGN KEY (target_dataset_id) REFERENCES datasets(id)
+);
+
 -- Indexes
 
+CREATE INDEX idx_analytics_daily_event
+  ON analytics_daily (event_type, day);
+CREATE INDEX idx_analytics_dataset_daily_layer
+  ON analytics_dataset_daily (layer_id, day);
+CREATE INDEX idx_analytics_dimension_daily_metric
+  ON analytics_dimension_daily (environment, metric, day);
+CREATE INDEX idx_analytics_errors_daily_day
+  ON analytics_errors_daily (environment, day);
+CREATE INDEX idx_analytics_orbit_daily_day
+  ON analytics_orbit_daily (environment, day);
+CREATE INDEX idx_analytics_outcomes_daily_day
+  ON analytics_outcomes_daily (environment, day);
+CREATE INDEX idx_analytics_perf_daily_day
+  ON analytics_perf_daily (environment, day);
+CREATE INDEX idx_analytics_quiz_daily_day
+  ON analytics_quiz_daily (environment, day);
+CREATE INDEX idx_analytics_spatial_daily_layer
+  ON analytics_spatial_daily (event_type, layer_id, day);
 CREATE INDEX idx_asset_uploads_dataset ON asset_uploads(dataset_id, created_at);
 CREATE INDEX idx_audit_subject ON audit_events(subject_kind, subject_id, created_at);
 CREATE UNIQUE INDEX idx_datasets_legacy_id
@@ -248,3 +409,6 @@ CREATE INDEX idx_featured_datasets_position ON featured_datasets(position);
 CREATE UNIQUE INDEX idx_node_identity_singleton ON node_identity(singleton);
 CREATE INDEX idx_renditions_dataset ON dataset_renditions(dataset_id);
 CREATE INDEX idx_tours_visibility ON tours(visibility, retracted_at, published_at);
+CREATE INDEX idx_workflow_runs_active ON workflow_runs (workflow_id, status);
+CREATE INDEX idx_workflow_runs_workflow ON workflow_runs (workflow_id, created_at DESC);
+CREATE INDEX idx_workflows_due ON workflows (enabled, next_run_at);

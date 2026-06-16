@@ -11,6 +11,11 @@ interface ImportMetaEnv {
   /** When `'true'`, the emitter logs batches to `console.debug`
    * instead of sending them. Default on in `npm run dev`. */
   readonly VITE_TELEMETRY_CONSOLE?: string
+  /** When `'true'`, `t()` records every resolved message key onto
+   * `window.__i18nTrace` for the Weblate screenshot-capture
+   * pipeline. Off in every normal build; tree-shakes out. See
+   * `docs/WEBLATE_SCREENSHOT_SYNC_PLAN.md`. */
+  readonly VITE_I18N_TRACE?: string
   /** Build-time override for the initial UI scale (§7.1). Used by
    *  the SOS deployment to ship `1.5` as the first-launch default
    *  for the kiosk audience. Falls back to `1.0` when unset.

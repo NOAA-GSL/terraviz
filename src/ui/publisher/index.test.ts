@@ -20,6 +20,8 @@ describe('routeForPath', () => {
     ['/publish/datasets/abc-123', 'datasets'],
     ['/publish/tours', 'tours'],
     ['/publish/import', 'import'],
+    ['/publish/analytics', 'analytics'],
+    ['/publish/feedback', 'feedback'],
     ['/publish/anything-else', 'unknown'],
     ['/publish/random/path', 'unknown'],
   ])('maps %s → %s', (path, expected) => {

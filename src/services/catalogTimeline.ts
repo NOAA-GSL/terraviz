@@ -34,15 +34,21 @@
  *
  * Real-time marker (`isRealtime`):
  *
- *  - Set when the dataset's `tags` contain `'Real-Time'` (the
- *    curated 10-dataset SOS subset), OR when `endTime` is within
- *    the last 24 hours (a heuristic for real-time rows that
- *    aren't tagged). Plan §6.8 documents both rules.
+ *  - Set when the dataset has a LIVE update cadence — `period`
+ *    parses (fixed units) AND `endTime` is within two cadences of
+ *    now, or is absent (Phase Z4: workflow-maintained rows) — OR
+ *    when `tags` contain `'Real-Time'` (the curated 10-dataset SOS
+ *    subset), OR when `endTime` is within the last 24 hours (a
+ *    heuristic for untagged real-time rows). Plan §6.8 documents
+ *    the original two rules; `period` widens the window, it never
+ *    blanket-marks (historical time-series rows carry `period`
+ *    too).
  *  - Computed against an injectable `now` so deterministic tests
  *    pin a fixed clock. Production callers omit it and the
  *    service samples `Date.now()` once per build.
  */
 
+import { isLiveCadence } from '../utils/time'
 import type { Dataset } from '../types'
 import {
   BASELINE_RESOLVERS,
@@ -194,6 +200,13 @@ export function toFractionalYear(value: string | undefined | null): number | und
  * tooltips without re-implementing the rule.
  */
 export function isRealtimeRow(dataset: Dataset, now: number): boolean {
+  // Phase Z4 (docs/ZYRA_INTEGRATION_PLAN.md): `period` widens the
+  // freshness window around `endTime` rather than blanket-marking —
+  // historical time-series rows carry `period` too, so the marker
+  // only fires when the trailing edge is within two cadences of
+  // now (PR #179 review). The tag override and the 24 h heuristic
+  // below are unchanged.
+  if (isLiveCadence(dataset.period, dataset.endTime, now)) return true
   if ((dataset.tags ?? []).includes(REALTIME_TAG)) return true
   if (!dataset.endTime) return false
   const ms = Date.parse(dataset.endTime)

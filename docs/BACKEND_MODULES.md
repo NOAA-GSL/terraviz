@@ -31,10 +31,12 @@ design rationale in the `docs/CATALOG_*` plan docs.
 | `cli/lib/r2-upload.ts` | R2 S3-API bulk uploader for HLS bundles |
 | `cli/lib/realtime-title.ts` | Heuristic to detect "real-time" SOS rows by title — the rows whose Vimeo source is re-uploaded on a recurring (typically daily) cadence by NOAA's automation |
 | `cli/lib/snapshot-import.ts` | Pure row-mapping helpers for the SOS catalog snapshot importer |
+| `cli/lib/sos-spec.ts` | ffprobe wrapper + SOS-spec assertion (4096×2048 2:1, 30 fps, h264) shared by the Z0 spike and the Z1 runner |
 | `cli/lib/srt-to-vtt.ts` | SRT → WebVTT converter |
 | `cli/lib/tour-json-parser.ts` | SOS tour.json parser — discovers every URL-bearing field in a tour file and classifies it for migration |
 | `cli/lib/verify-checks.ts` | Production-deploy verification checks for `terraviz verify-deploy` |
 | `cli/lib/vimeo-source.ts` | Resolve a `vimeo:<id>` reference to a source MP4 download URL |
+| `cli/lib/workflow-sidecar.ts` | Metadata-sidecar rendering for the Zyra runner — template interpolation, frames-meta range reader, error-summary sanitizer |
 | `cli/list-realtime-r2.ts` | `terraviz list-realtime-r2` — find migrated rows whose Vimeo source is on a daily re-upload cadence, and recover the original Vimeo id so they can be rolled back |
 | `cli/migrate-r2-assets.ts` | `terraviz migrate-r2-assets` — migrate auxiliary asset URLs (thumbnail / legend / caption / color-table) from NOAA-hosted CloudFront URLs to R2-hosted URLs under … |
 | `cli/migrate-r2-hls.ts` | `terraviz migrate-r2-hls` — migrate legacy `vimeo:<id>` data_refs to R2-hosted HLS bundles for 4K spherical streaming |
@@ -45,6 +47,8 @@ design rationale in the `docs/CATALOG_*` plan docs.
 | `cli/terraviz.ts` | `terraviz` CLI entry point |
 | `cli/transcode-from-dispatch.ts` | `transcode-from-dispatch` — invoked by the `transcode-hls` GitHub Actions workflow when the publisher portal fires a `repository_dispatch` after a video upload lands in R2 |
 | `cli/verify-deploy.ts` | `terraviz verify-deploy` — operator-friendly post-deploy smoke-test command |
+| `cli/zyra-publish-from-dispatch.ts` | `zyra-publish-from-dispatch` — Phase Z1 runner CLI (fetch / publish / report-failure phases) invoked by the `zyra-run` GitHub Actions workflow |
+| `cli/zyra-spike-publish.ts` | `zyra-spike-publish` — Phase Z0 spike (see `docs/ZYRA_INTEGRATION_PLAN.md`): ffprobe SOS-spec assertion + publish-API leg for an MP4 a Zyra pipeline rendered on the runner; invoked by the manual `zyra-spike` GitHub Actions workflow |
 
 ## Platform & feedback Pages Functions (`functions/api/`)
 
@@ -88,6 +92,8 @@ design rationale in the `docs/CATALOG_*` plan docs.
 | File | Responsibility |
 |---|---|
 | `functions/api/v1/publish/_middleware.ts` | Auth middleware for /api/v1/publish/ |
+| `functions/api/v1/publish/analytics-export.ts` | POST /api/v1/publish/analytics-export — nightly analytics export tick (bookmark walk + operator `?day=` backfill); privileged callers only, driven by `.github/workflows/analytics-export.yml` |
+| `functions/api/v1/publish/analytics.ts` | GET /api/v1/publish/analytics — typed section facade over the D1 analytics rollups for the `/publish/analytics` tab (KV-cached ~5 min; privileged callers only) |
 | `functions/api/v1/publish/datasets.ts` | /api/v1/publish/datasets |
 | `functions/api/v1/publish/datasets/[id].ts` | /api/v1/publish/datasets/{id} |
 | `functions/api/v1/publish/datasets/[id]/asset.ts` | POST /api/v1/publish/datasets/{id}/asset |
@@ -100,8 +106,11 @@ design rationale in the `docs/CATALOG_*` plan docs.
 | `functions/api/v1/publish/featured-hero.ts` | /api/v1/publish/featured-hero — the "Right now" hero admin write API (Phase B of `docs/HERO_ADMIN_SCOPING.md`) |
 | `functions/api/v1/publish/featured.ts` | /api/v1/publish/featured |
 | `functions/api/v1/publish/featured/[dataset_id].ts` | /api/v1/publish/featured/{dataset_id} |
+| `functions/api/v1/publish/feedback.ts` | GET /api/v1/publish/feedback — privilege-gated facade over `_feedback-helpers` for the `/publish/feedback` tab (AI + general dashboards, on-demand screenshots; exports stay on `/api/feedback-admin?action=…`) |
 | `functions/api/v1/publish/me.ts` | GET /api/v1/publish/me — return the calling publisher's profile |
 | `functions/api/v1/publish/node-identity.ts` | /api/v1/publish/node-identity — read / provision this node's identity |
+| `functions/api/v1/publish/publishers.ts` | GET /api/v1/publish/publishers — admin Users tab list (status/role/q filters, cursor pagination) |
+| `functions/api/v1/publish/publishers/[id].ts` | GET / PATCH /api/v1/publish/publishers/{id} — admin approve / suspend / promote / edit-role |
 | `functions/api/v1/publish/redirect-back.ts` | GET /api/v1/publish/redirect-back?to=<path> |
 | `functions/api/v1/publish/tours.ts` | /api/v1/publish/tours — tour collection endpoint |
 | `functions/api/v1/publish/tours/[id].ts` | /api/v1/publish/tours/{id} |
@@ -110,6 +119,13 @@ design rationale in the `docs/CATALOG_*` plan docs.
 | `functions/api/v1/publish/tours/[id]/publish.ts` | POST /api/v1/publish/tours/{id}/publish |
 | `functions/api/v1/publish/tours/[id]/retract.ts` | POST /api/v1/publish/tours/{id}/retract |
 | `functions/api/v1/publish/tours/draft.ts` | POST /api/v1/publish/tours/draft |
+| `functions/api/v1/publish/workflows.ts` | /api/v1/publish/workflows — Zyra workflow collection (Phase Z1, `docs/ZYRA_INTEGRATION_PLAN.md`) |
+| `functions/api/v1/publish/workflows/[id].ts` | /api/v1/publish/workflows/{id} — read (incl. the runner's definition fetch) + PATCH |
+| `functions/api/v1/publish/workflows/[id]/run.ts` | POST /api/v1/publish/workflows/{id}/run — queue an execution + fire the `zyra-run` dispatch |
+| `functions/api/v1/publish/workflows/[id]/runs.ts` | GET /api/v1/publish/workflows/{id}/runs — run history |
+| `functions/api/v1/publish/workflows/[id]/runs/[run_id]/status.ts` | POST /api/v1/publish/workflows/{id}/runs/{run_id}/status — runner lifecycle callbacks |
+| `functions/api/v1/publish/workflows/[id]/validate.ts` | POST /api/v1/publish/workflows/{id}/validate — static pipeline/template dry-run |
+| `functions/api/v1/publish/workflows/due.ts` | GET /api/v1/publish/workflows/due — the scheduler tick's due list |
 
 ## Backend shared library (`_lib/`)
 
@@ -117,6 +133,9 @@ design rationale in the `docs/CATALOG_*` plan docs.
 |---|---|
 | `functions/api/_lib/workers-ai-error.ts` | Workers AI error classification helper for Phase 1f/D's quota guard rail |
 | `functions/api/v1/_lib/access-auth.ts` | Cloudflare Access JWT verification |
+| `functions/api/v1/_lib/analytics-export.ts` | Analytics export job core — drains one UTC day from the AE SQL API into the R2 raw archive (`events/v1/…ndjson.gz`) + the D1 rollup tables (migration 0019); `docs/ANALYTICS_STORAGE_AND_ADMIN_PLAN.md` Phase A |
+| `functions/api/v1/_lib/analytics-layouts.ts` | Positional blob/double layout registry per telemetry event type + AE-row → named-fields decoder (decode side of `ingest.ts`'s `toDataPoint`; consumed by the analytics export job — `docs/ANALYTICS_STORAGE_AND_ADMIN_PLAN.md` Phase A) |
+| `functions/api/v1/_lib/analytics-query.ts` | Analytics dashboard query layer — shapes the D1 rollup tables into the `/publish/analytics` section payloads (overview / datasets / spatial / funnel; `docs/ANALYTICS_STORAGE_AND_ADMIN_PLAN.md` Phase B) |
 | `functions/api/v1/_lib/asset-uploads.ts` | `asset_uploads` row-level helpers + per-kind validation rules |
 | `functions/api/v1/_lib/audit-store.ts` | Append-only writes to the `audit_events` table |
 | `functions/api/v1/_lib/bounded-pool.ts` | Tiny bounded-concurrency helper for parallelizable async work that can't safely fan-out to N at once |
@@ -137,6 +156,7 @@ design rationale in the `docs/CATALOG_*` plan docs.
 | `functions/api/v1/_lib/job-queue.ts` | Asynchronous job queue interface — Phase 1b |
 | `functions/api/v1/_lib/loopback.ts` | Loopback hostname check — shared by the publish middleware's `DEV_BYPASS_ACCESS=true` gate and the asset-complete handler's `MOCK_R2=true` gate |
 | `functions/api/v1/_lib/preview-token.ts` | Short-lived signed preview tokens for unpublished datasets and tours |
+| `functions/api/v1/_lib/publisher-mutations.ts` | Admin user-administration store helper — list / get / update publishers, self-lockout + last-admin guardrails |
 | `functions/api/v1/_lib/publisher-store.ts` | D1 reader / writer for the `publishers` table |
 | `functions/api/v1/_lib/r2-public-url.ts` | Build a publicly-readable URL for an R2 object key |
 | `functions/api/v1/_lib/r2-store.ts` | R2 storage helpers — Phase 1b |
@@ -148,5 +168,8 @@ design rationale in the `docs/CATALOG_*` plan docs.
 | `functions/api/v1/_lib/tour-mutations.ts` | Publisher-API write paths for the `tours` table |
 | `functions/api/v1/_lib/ulid.ts` | Single source of truth for ULID minting on the publisher write paths |
 | `functions/api/v1/_lib/validators.ts` | Field-level validators for the publisher-API write paths |
+| `functions/api/v1/_lib/workflow-schedule.ts` | ISO-8601 duration parsing + `next_run_at` math for Zyra workflows |
+| `functions/api/v1/_lib/workflow-store.ts` | D1 data layer for `workflows` + `workflow_runs` (incl. the due query and run-status transitions) |
+| `functions/api/v1/_lib/workflow-validators.ts` | Workflow body validation — the stage/command allowlist boundary, metadata-template checks, run-status callbacks |
 | `functions/api/v1/_lib/vectorize-store.ts` | Vectorize helpers — Phase 1c |
 

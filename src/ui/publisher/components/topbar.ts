@@ -26,17 +26,33 @@ export interface NavLink {
     | 'publisher.nav.profile'
     | 'publisher.nav.datasets'
     | 'publisher.nav.tours'
+    | 'publisher.nav.workflows'
     | 'publisher.nav.featuredHero'
+    | 'publisher.nav.analytics'
+    | 'publisher.nav.feedback'
     | 'publisher.nav.import'
+    | 'publisher.nav.users'
+  /** When true the link is only shown to admins (role === 'admin'). */
+  adminOnly?: boolean
 }
 
 const NAV_LINKS: ReadonlyArray<NavLink> = [
   { path: '/publish/me', labelKey: 'publisher.nav.profile' },
   { path: '/publish/datasets', labelKey: 'publisher.nav.datasets' },
   { path: '/publish/tours', labelKey: 'publisher.nav.tours' },
+  { path: '/publish/workflows', labelKey: 'publisher.nav.workflows' },
   { path: '/publish/featured-hero', labelKey: 'publisher.nav.featuredHero' },
+  { path: '/publish/analytics', labelKey: 'publisher.nav.analytics' },
+  { path: '/publish/feedback', labelKey: 'publisher.nav.feedback' },
   { path: '/publish/import', labelKey: 'publisher.nav.import' },
+  { path: '/publish/users', labelKey: 'publisher.nav.users', adminOnly: true },
 ]
+
+export interface TopbarOptions {
+  /** Show admin-only nav links (e.g. the Users tab). The page and
+   *  API still gate independently — this only controls visibility. */
+  isAdmin?: boolean
+}
 
 /**
  * A modified-key click (cmd/ctrl/shift/middle/right) should fall
@@ -81,7 +97,11 @@ function applyActiveState(nav: HTMLElement, currentPath: string): void {
  * removes the prior topbar before mounting a fresh one (the
  * route-change listener and DOM both get replaced cleanly).
  */
-export function renderTopbar(host: HTMLElement, router: PublisherRouter): void {
+export function renderTopbar(
+  host: HTMLElement,
+  router: PublisherRouter,
+  options: TopbarOptions = {},
+): void {
   // Remove any prior topbar + listener.
   const prior = host.querySelector('.publisher-topbar')
   if (prior) prior.remove()
@@ -115,6 +135,7 @@ export function renderTopbar(host: HTMLElement, router: PublisherRouter): void {
   nav.setAttribute('aria-label', t('publisher.nav.aria'))
 
   for (const link of NAV_LINKS) {
+    if (link.adminOnly && !options.isAdmin) continue
     const a = document.createElement('a')
     a.href = link.path
     a.className = 'publisher-nav-link'

@@ -76,6 +76,11 @@ npm run test         # vitest run
 npm run tokens       # regenerate src/styles/tokens.css from tokens/*.json
 npm run dev:desktop  # Tauri dev mode (requires Rust)
 npm run build:desktop # tsc + vite build + tauri build
+
+# Visual testing & reporting (run against a dev server on :4173)
+npm run screenshots:report  # capture every scene × viewport → report-out/index.html
+npm run screenshots:diff -- --baseline <dir>  # pixel-diff vs a baseline
+npm run screenshots:smoke   # gating interaction tests (search, Orbit, nav)
 ```
 
 > **Note:** `src/styles/tokens.css` is a generated build artifact
@@ -163,6 +168,7 @@ npm run build:desktop # tsc + vite build + tauri build
 | `src/orbitMain.ts` | Entry point for the Orbit standalone character page (`/orbit`) |
 | `src/config/endpoints.ts` | Externally-hosted endpoint configuration (catalog / proxy / NOAA / NASA base URLs) |
 | `src/types/image-sequence-constants.ts` | Constants shared by the publisher API (`functions/`), the GHA runner (`cli/`), and the portal (`src/`) for the image-sequence upload pipeline |
+| `src/types/zyra-workflow-constants.ts` | Constants shared by the publisher API (`functions/`), the GHA runner (`cli/`), and the portal (`src/`) for the Zyra workflow pipeline — stage/command allowlist, template fields, run statuses (`docs/ZYRA_INTEGRATION_PLAN.md`) |
 | `src/data/regions.ts` | Common region bounding boxes for name-based region resolution |
 | `src/services/orbitCharacter/index.ts` | `OrbitController` — public API for the Orbit character (owns the Three.js scene, rAF loop, state machine) |
 | `src/services/orbitCharacter/orbitScene.ts` | Three.js scene + per-frame update for the Orbit character |
@@ -192,6 +198,7 @@ npm run build:desktop # tsc + vite build + tauri build
 | `src/ui/publisher/router.ts` | Tiny History-API router for the publisher portal |
 | `src/ui/publisher/api.ts` | Shared HTTP client for the publisher portal |
 | `src/ui/publisher/types.ts` | Wire types for portal-bound publisher API responses |
+| `src/ui/publisher/analytics-charts.ts` | Hand-rolled SVG chart helpers (bar series with Y-axis, mix bars, stat tiles) + CSV export helpers for the analytics tab — no charting library |
 | `src/ui/publisher/components/dataset-form.ts` | Shared dataset create / edit form |
 | `src/ui/publisher/components/asset-uploader.ts` | Asset uploader component (Phase 3pd image-sequence pipeline) |
 | `src/ui/publisher/components/chip-input.ts` | Chip-input control — entries become removable chips as the user types |
@@ -203,8 +210,16 @@ npm run build:desktop # tsc + vite build + tauri build
 | `src/ui/publisher/pages/dataset-edit.ts` | `/publish/datasets/:id/edit` — edit an existing draft |
 | `src/ui/publisher/pages/dataset-new.ts` | `/publish/datasets/new` — wrapper around the shared dataset form |
 | `src/ui/publisher/pages/tours.ts` | `/publish/tours` — tour-creator landing page |
+| `src/ui/publisher/workflows-api.ts` | Typed API wrappers for the Zyra workflow surface (Phase Z2 of `docs/ZYRA_INTEGRATION_PLAN.md`) |
+| `src/ui/publisher/workflow-templates.ts` | Curated workflow templates + insert-stage snippets for guided authoring (Phase Z3) |
+| `src/ui/publisher/pages/workflows.ts` | `/publish/workflows` — Zyra workflow list |
+| `src/ui/publisher/pages/workflow-detail.ts` | `/publish/workflows/:id` — workflow summary + run history + Run now |
+| `src/ui/publisher/pages/workflow-edit.ts` | `/publish/workflows/new` + `…/:id/edit` — workflow form (YAML→JSON client-side, server-side Validate) |
 | `src/ui/publisher/pages/featured-hero.ts` | `/publish/featured-hero` — set the "Right now" hero override (`docs/HERO_ADMIN_SCOPING.md`) |
+| `src/ui/publisher/pages/analytics.ts` | `/publish/analytics` — privileged analytics dashboard over the D1 rollups, incl. the MapLibre spatial-attention heatmap (Phase B of `docs/ANALYTICS_STORAGE_AND_ADMIN_PLAN.md`) |
+| `src/ui/publisher/pages/feedback.ts` | `/publish/feedback` — privileged feedback review (AI thumbs + bug/feature reports) over the D1 feedback tables; replaces the feedback-admin HTML dashboard (Phase C of `docs/ANALYTICS_STORAGE_AND_ADMIN_PLAN.md`) |
 | `src/ui/publisher/pages/me.ts` | `/publish/me` — current-user identity + role display |
+| `src/ui/publisher/pages/users.ts` | `/publish/users` — admin-only Users tab: approve / reject / suspend / reactivate publishers and change roles (admin / publisher / readonly) |
 | `src/ui/tourAuthoring/index.ts` | Tour-authoring public surface — detects `?tourEdit=` and mounts the dock |
 | `src/ui/tourAuthoring/dock.ts` | Floating tour-authoring dock — attaches to SPA chrome on `/?tourEdit=<id>` (or `=new`) |
 | `src/ui/tourAuthoring/state.ts` | In-memory tour-authoring state — dock reads/writes here; `autosave.ts` flushes it |
@@ -292,6 +307,44 @@ Run it via `/graphify <paths>` in a Claude Code session (e.g.
 `locales/` + `tokens/` JSON). Outputs land in `graphify-out/`
 (gitignored). The CLI is pre-installed by the SessionStart hook;
 no API key is used — the semantic pass runs on the host session.
+
+---
+
+## Visual testing & reporting
+
+A Playwright-driven tool captures the real UI to catch visual and
+interaction regressions. It started as the Weblate translator-screenshot
+pipeline and now shares one capture core
+(`scripts/screenshots/core/`) across several consumers. Authoritative
+design: [`docs/VISUAL_REPORT_PLAN.md`](docs/VISUAL_REPORT_PLAN.md).
+
+| Command | What it does |
+|---|---|
+| `npm run screenshots:report` | Captures every scene × viewport (desktop + mobile) into a self-contained `report-out/index.html` gallery with per-scene problem badges (console/page errors, failed requests, optional `VISUAL_AXE` a11y). The local visual-debug surface. Add `-- --scene <name>[,<name>]` (or `VISUAL_ONLY=`) to capture just one surface while iterating on it — reuses the scene's maintained navigation/fixtures/masks instead of an ad-hoc script. |
+| `npm run screenshots:diff -- --baseline <dir>` | Pixel-diffs the current `report-out/` against a baseline PNG dir (masked regions excluded); advisory. |
+| `npm run screenshots:smoke` | Gating interaction tests — search, Orbit's local engine, navigation, a fixture-backed publisher page. |
+| `npm run screenshots:capture` | The Weblate translator-screenshot capture (separate output + uploader). |
+
+All capture commands run against a dev server on `:4173`
+(`npm run dev -- --port 4173`). CI is
+[`.github/workflows/visual-report.yml`](.github/workflows/visual-report.yml):
+PRs get an advisory `visual-report` artifact + comment (diffed against
+the latest `main` baseline) and a gating smoke job; `main` publishes the
+baseline and deploys the report. The Weblate sync
+(`sync-weblate-screenshots.yml`) is deliberately separate.
+
+- **Scenes** are the one human-maintained list:
+  [`scripts/screenshots/scenes.ts`](scripts/screenshots/scenes.ts)
+  (`{ name, description, setup(page), masks?, fixtures? }`). `masks`
+  excludes non-deterministic regions (globe / MapLibre / graph) from the
+  diff; `fixtures` route-stubs `/api/**` so data-backed pages render
+  populated (see
+  [`scripts/screenshots/fixtures/`](scripts/screenshots/fixtures/),
+  typed against `src/ui/publisher/types.ts`).
+- **Convention (mirrors the module-map coverage rule):** when you add a
+  UI route or surface under `src/ui/`, add a `Scene` for it in the same
+  PR — and a smoke assertion if it is interactive. Report strings are
+  dev/CI output and are intentionally **not** routed through i18n.
 
 ---
 
@@ -469,6 +522,7 @@ not individually documented):
 | `src/i18n/format.ts` | Locale-aware formatting helpers (numbers, dates, lists) |
 | `src/i18n/applyI18nAttributes.ts` | DOM walker that translates static markup carrying `data-i18n` attributes |
 | `src/i18n/rtl.ts` | RTL locale set + `<html dir>` resolution |
+| `src/i18n/screenshotTrace.ts` | Build-flag-gated (`VITE_I18N_TRACE`) recorder — `t()` mirrors every resolved key onto `window.__i18nTrace` for the Weblate screenshot-capture pipeline (`docs/WEBLATE_SCREENSHOT_SYNC_PLAN.md`); tree-shakes out of normal builds |
 
 ### When you add a new UI string
 

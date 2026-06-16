@@ -55,23 +55,24 @@ export interface CatalogEnv {
   /**
    * Comma-separated list of email domains (e.g.
    * `noaa.gov,zyra-project.org`) whose verified Access user logins
-   * auto-promote to `role='staff', is_admin=1, status='active'` on
+   * auto-promote to `role='admin', is_admin=1, status='active'` on
    * JIT provisioning. Empty / unset means the default
-   * community/pending classification applies — appropriate for
-   * multi-org deploys (Phase 6) where strangers signing in via
-   * SSO must wait for explicit approval.
+   * publisher/pending classification applies — appropriate for
+   * multi-org deploys where strangers signing in via SSO must wait
+   * for an admin to approve them in the portal's Users tab.
    *
-   * For Phase 3 single-org deploys (one organisation's Access
-   * application gating one Terraviz instance), setting this to
-   * the operator's email domain is the right default — the
-   * operator IS the publisher, and pending-by-default would lock
-   * them out of their own deploy.
+   * For single-org deploys (one organisation's Access application
+   * gating one Terraviz instance), setting this to the operator's
+   * email domain is the right default — the operator IS the admin,
+   * and pending-by-default would lock them out of their own deploy.
    *
    * Domain matching is case-insensitive and exact: `noaa.gov`
    * matches `alice@noaa.gov` but not `alice@example.noaa.gov`
    * (subdomains require their own entry). Service-token identities
    * are unaffected; they continue to provision as
-   * `role='service', is_admin=0, status='active'`.
+   * `role='service', is_admin=0, status='active'`. Admins can also
+   * approve/promote accounts after the fact in the portal's Users
+   * tab — `TRUSTED_PUBLISHER_DOMAINS` is just the zero-touch path.
    */
   TRUSTED_PUBLISHER_DOMAINS?: string
   /**
@@ -227,6 +228,45 @@ export interface CatalogEnv {
    * `MOCK_VECTORIZE=true` for the full mocked docent path.
    */
   MOCK_AI?: string
+  /**
+   * D1 database holding the `feedback` + `general_feedback` tables
+   * (same physical database as CATALOG_DB in the canonical deploy —
+   * two bindings, one instance; the root `migrations/` dir owns its
+   * schema). Read by `/api/v1/publish/feedback` (Phase C of
+   * `docs/ANALYTICS_STORAGE_AND_ADMIN_PLAN.md`); the write paths
+   * (`/api/feedback`, `/api/general-feedback`) live outside the
+   * publish middleware and keep their own Env types.
+   */
+  FEEDBACK_DB?: D1Database
+  /**
+   * R2 bucket binding for the long-term analytics archive
+   * (`terraviz-analytics` — deliberately separate from
+   * `terraviz-assets` so asset lifecycle rules and access policies
+   * never entangle with telemetry). The nightly export job writes
+   * one `events/v1/YYYY/MM/DD.ndjson.gz` object per UTC day. See
+   * `docs/ANALYTICS_STORAGE_AND_ADMIN_PLAN.md` Phase A.
+   */
+  ANALYTICS_R2?: R2Bucket
+  /**
+   * Cloudflare account id used to build the Analytics Engine SQL
+   * API URL (`/accounts/{id}/analytics_engine/sql`). Required by
+   * the analytics export endpoint; the dashboard query endpoint
+   * (Phase B) reuses it.
+   */
+  CF_ACCOUNT_ID?: string
+  /**
+   * API token with "Account Analytics Read" permission only —
+   * authorizes the AE SQL API reads. Wrangler secret in
+   * production; never reaches the client (the portal talks to
+   * `/api/v1/publish/**`, which proxies server-side).
+   */
+  ANALYTICS_SQL_TOKEN?: string
+  /**
+   * Analytics Engine dataset name to read from. Defaults to
+   * `terraviz_events` (the dataset `functions/api/ingest.ts`
+   * writes); override only if a fork renamed its dataset binding.
+   */
+  ANALYTICS_AE_DATASET?: string
   /**
    * GitHub repository owner that hosts the transcode workflow
    * (e.g. `zyra-project`). Used by the video-upload /complete

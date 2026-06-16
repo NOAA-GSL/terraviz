@@ -4,10 +4,43 @@
 
 import axios from 'axios'
 import type { Dataset, DatasetFormat, DatasetMetadata, EnrichedMetadata, TimeInfo, Tour } from '../types'
-import { parseISO8601Duration } from '../utils/time'
+import { isLiveCadence, parseISO8601Duration, safePeriodMs } from '../utils/time'
 import { logger } from '../utils/logger'
 import { reportError } from '../analytics'
 import { apiFetch, getCatalogSource } from './catalogSource'
+
+/** Milliseconds floor for period-driven cache expiry — even a PT15M
+ *  workflow shouldn't make every page interaction re-fetch the
+ *  catalog. */
+const MIN_PERIOD_TTL_MS = 5 * 60 * 1000
+
+/**
+ * Phase Z4 (docs/ZYRA_INTEGRATION_PLAN.md): the catalog cache TTL,
+ * given its contents. Static catalogs keep the default; when any
+ * dataset carries `period` (a workflow-maintained real-time row),
+ * the TTL shrinks to the shortest period present, floored at
+ * 5 minutes — fresh enough to pick up the next scheduled
+ * re-publish, bounded enough to not hammer the API.
+ */
+export function effectiveCatalogTtl(
+  datasets: Dataset[],
+  defaultMs: number,
+  now: number = Date.now(),
+): number {
+  let shortest = defaultMs
+  for (const dataset of datasets) {
+    // Only LIVE cadences count — historical time-series rows carry
+    // `period` too, and malformed periods are ignored rather than
+    // thrown (PR #179 review).
+    if (!isLiveCadence(dataset.period, dataset.endTime, now)) continue
+    const ms = safePeriodMs(dataset.period)
+    if (ms !== null && ms < shortest) shortest = ms
+  }
+  // Floor at 5 min, but never grow past the caller's default — the
+  // helper's contract is shrink-only (PR #179 review).
+  return Math.min(defaultMs, Math.max(shortest, MIN_PERIOD_TTL_MS))
+}
+
 
 const METADATA_URL = 'https://s3.dualstack.us-east-1.amazonaws.com/metadata.sosexplorer.gov/dataset.json'
 const ENRICHED_METADATA_URL = '/assets/sos_dataset_metadata.json'
@@ -511,7 +544,14 @@ export class DataService {
   async fetchDatasets(): Promise<Dataset[]> {
     try {
       const now = Date.now()
-      if (this.cache && now - this.cacheTime < this.CACHE_DURATION) {
+      // Phase Z4: a catalog containing period-bearing (real-time)
+      // rows expires early — at the shortest period present,
+      // floored at 5 minutes — so a workflow re-publish is picked
+      // up on the next fetch instead of waiting out the full hour.
+      const ttl = this.cache
+        ? effectiveCatalogTtl(this.cache.datasets, this.CACHE_DURATION, now)
+        : this.CACHE_DURATION
+      if (this.cache && now - this.cacheTime < ttl) {
         logger.info('[DataService] Using cached datasets')
         return this.cache.datasets
       }
