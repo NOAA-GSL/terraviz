@@ -90,12 +90,12 @@ through guided tours and a docent that answers questions and pulls the right
 dataset onto the globe.
 
 But TerraViz does not only sit at the tail of the pipeline. Its catalog and
-publisher on-ramp are also an entry point. When an institution publishes a
+publisher on-ramp are an entry point of their own. When an institution publishes a
 finished dataset, this is where it joins the public, shareable catalog, which
 makes TerraViz an import surface as much as an export one. It carries the
 discovery stage on the consumption side as well: browse, search, and semantic
 search let people find what exists, and the catalog is built to federate, so that
-as peer nodes come online their holdings become discoverable too, without ever
+as peer nodes come online, their holdings become discoverable too, without ever
 leaving their owners' hands.
 
 That bookending is the point. TerraViz is the constellation's storefront and one
