@@ -74,6 +74,35 @@ replacement for the systems you already run. And it is not a safe channel for
 anyone reporting at personal risk: the tools are built to attribute and credit,
 not to conceal, and they should never be trusted to protect a source.
 
+## What TerraViz Brings
+
+Everything above describes the constellation. This repository holds one of its
+tools. TerraViz is the public face: a free, no-account viewer that streams
+public-interest data onto a navigable 3D globe, on any device from a phone to a
+headset. It is where the reach half of reach without surrender is made real, the
+place the data finally meets the person.
+
+In pipeline terms, TerraViz lives at the export and dissemination end. It takes
+finished datasets and turns them into something a person can explore, compare
+across multiple globes, watch over time, and have explained to them by a
+conversational guide. Dissemination here is not only display. It is storytelling,
+through guided tours and a docent that answers questions and pulls the right
+dataset onto the globe.
+
+But TerraViz does not only sit at the tail of the pipeline. Its catalog and
+publisher on-ramp are also an entry point. When an institution publishes a
+finished dataset, this is where it joins the public, shareable catalog, which
+makes TerraViz an import surface as much as an export one. It carries the
+discovery stage on the consumption side as well: browse, search, and semantic
+search let people find what exists, and the catalog is built to federate, so that
+as peer nodes come online their holdings become discoverable too, without ever
+leaving their owners' hands.
+
+That bookending is the point. TerraViz is the constellation's storefront and one
+of its loading docks at once, the stage where data leaves to reach the public and
+the stage where new data arrives to join it. It closes the loop that turns a
+one-way pipeline into something that keeps feeding itself.
+
 ## Who It's For
 
 Two audiences, both essential.
