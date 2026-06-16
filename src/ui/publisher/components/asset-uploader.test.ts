@@ -290,6 +290,188 @@ describe('renderAssetUploader', () => {
   })
 })
 
+describe('renderAssetUploader — auxiliary kinds (thumbnail / legend)', () => {
+  let mount: HTMLDivElement
+
+  beforeEach(() => {
+    mount = document.createElement('div')
+    document.body.appendChild(mount)
+    sessionStorage.clear()
+  })
+
+  it('never mounts the frames tab strip for an aux kind, even on a video dataset', () => {
+    mount.appendChild(
+      renderAssetUploader({
+        datasetId: '01AAAAAAAAAAAAAAAAAAAAAAAA',
+        kind: 'thumbnail',
+        // A thumbnail can ride on a video dataset — the tab strip
+        // must still stay hidden (image-sequence input is data-only).
+        format: 'video/mp4',
+        onUploaded: () => {},
+      }),
+    )
+    expect(mount.querySelector('.publisher-asset-uploader-tabs')).toBeNull()
+    expect(mount.querySelector('input[id^="dataset-asset-file-"]')).not.toBeNull()
+  })
+
+  it('accepts an image regardless of the dataset format and reports an aux outcome', async () => {
+    const onUploaded = vi.fn()
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse(
+          {
+            upload_id: 'UP-THUMB',
+            kind: 'thumbnail',
+            target: 'r2',
+            r2: { method: 'PUT', url: 'https://r2.example/put', headers: {}, key: 'k' },
+            expires_at: 'soon',
+            mock: false,
+          },
+          201,
+        ),
+      )
+      // /complete stamps thumbnail_ref (no data_ref, no transcoding).
+      .mockResolvedValueOnce(
+        jsonResponse({ dataset: { thumbnail_ref: 'r2:datasets/X/by-digest/aa/thumbnail.png' } }),
+      )
+
+    mount.appendChild(
+      renderAssetUploader({
+        datasetId: '01AAAAAAAAAAAAAAAAAAAAAAAA',
+        kind: 'thumbnail',
+        // Dataset's primary format is video — the thumbnail upload
+        // must still accept a PNG.
+        format: 'video/mp4',
+        onUploaded,
+        hashFn: async () => 'sha256:' + 'd'.repeat(64),
+        fetchFn: fetchFn as unknown as typeof fetch,
+        xhrFactory: fakeXhrFactory(),
+      }),
+    )
+
+    pickFile(mount, 'image/png', 'mock-png-bytes')
+    for (let i = 0; i < 8; i++) await new Promise(r => setTimeout(r, 0))
+
+    // The mint body carried kind=thumbnail, not data.
+    const mintBody = JSON.parse(fetchFn.mock.calls[0][1].body as string) as { kind: string }
+    expect(mintBody.kind).toBe('thumbnail')
+    expect(onUploaded).toHaveBeenCalledWith({
+      mode: 'aux',
+      kind: 'thumbnail',
+      ref: 'r2:datasets/X/by-digest/aa/thumbnail.png',
+    })
+  })
+
+  it('reads legend_ref from the complete response for a legend upload', async () => {
+    const onUploaded = vi.fn()
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse(
+          {
+            upload_id: 'UP-LEGEND',
+            kind: 'legend',
+            target: 'r2',
+            r2: { method: 'PUT', url: 'https://r2.example/put', headers: {}, key: 'k' },
+            expires_at: 'soon',
+            mock: false,
+          },
+          201,
+        ),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({ dataset: { legend_ref: 'r2:datasets/X/by-digest/bb/legend.webp' } }),
+      )
+
+    mount.appendChild(
+      renderAssetUploader({
+        datasetId: '01AAAAAAAAAAAAAAAAAAAAAAAA',
+        kind: 'legend',
+        format: 'image/png',
+        onUploaded,
+        hashFn: async () => 'sha256:' + 'e'.repeat(64),
+        fetchFn: fetchFn as unknown as typeof fetch,
+        xhrFactory: fakeXhrFactory(),
+      }),
+    )
+
+    pickFile(mount, 'image/webp', 'mock-webp-bytes')
+    for (let i = 0; i < 8; i++) await new Promise(r => setTimeout(r, 0))
+
+    expect(onUploaded).toHaveBeenCalledWith({
+      mode: 'aux',
+      kind: 'legend',
+      ref: 'r2:datasets/X/by-digest/bb/legend.webp',
+    })
+  })
+
+  it('errors instead of reporting success when the complete response omits the ref', async () => {
+    // PR #207 Copilot review — a 200 complete with no stamped ref
+    // must surface as a failure, not a false success that sets the
+    // form ref to an empty string.
+    const onUploaded = vi.fn()
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse(
+          {
+            upload_id: 'UP-NOREF',
+            kind: 'thumbnail',
+            target: 'r2',
+            r2: { method: 'PUT', url: 'https://r2.example/put', headers: {}, key: 'k' },
+            expires_at: 'soon',
+            mock: false,
+          },
+          201,
+        ),
+      )
+      // /complete returns 200 but without thumbnail_ref.
+      .mockResolvedValueOnce(jsonResponse({ dataset: {} }))
+
+    mount.appendChild(
+      renderAssetUploader({
+        datasetId: '01AAAAAAAAAAAAAAAAAAAAAAAA',
+        kind: 'thumbnail',
+        format: 'image/png',
+        onUploaded,
+        hashFn: async () => 'sha256:' + 'a'.repeat(64),
+        fetchFn: fetchFn as unknown as typeof fetch,
+        xhrFactory: fakeXhrFactory(),
+      }),
+    )
+
+    pickFile(mount, 'image/png', 'mock-png-bytes')
+    for (let i = 0; i < 8; i++) await new Promise(r => setTimeout(r, 0))
+
+    expect(onUploaded).not.toHaveBeenCalled()
+    expect(mount.querySelector('.publisher-asset-uploader-status-error')).not.toBeNull()
+    expect(mount.textContent).toContain("didn't return a saved reference")
+  })
+
+  it('rejects a non-image file for an aux kind before any network call', async () => {
+    const fetchFn = vi.fn()
+    mount.appendChild(
+      renderAssetUploader({
+        datasetId: '01AAAAAAAAAAAAAAAAAAAAAAAA',
+        kind: 'thumbnail',
+        format: 'image/png',
+        onUploaded: () => {},
+        hashFn: async () => 'sha256:' + 'f'.repeat(64),
+        fetchFn: fetchFn as unknown as typeof fetch,
+      }),
+    )
+    // An MP4 is a valid `data` asset but not a valid thumbnail.
+    pickFile(mount, 'video/mp4')
+    await new Promise(r => setTimeout(r, 0))
+    expect(mount.querySelector('.publisher-asset-uploader-status-error')?.textContent).toBe(
+      'Upload failed.',
+    )
+    expect(mount.textContent).toContain("isn't a supported image")
+    expect(fetchFn).not.toHaveBeenCalled()
+  })
+})
+
 describe('renderAssetUploader — frames tab (3pf/D)', () => {
   let mount: HTMLDivElement
 

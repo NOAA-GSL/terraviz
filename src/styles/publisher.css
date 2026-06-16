@@ -320,6 +320,15 @@
   gap: calc(0.375rem * var(--ui-scale));
 }
 
+/* One auxiliary-image slot (thumbnail / legend): stacks the
+   guided uploader above its manual ref input. The parent card's
+   own gap separates the thumbnail group from the legend group. */
+.publisher-form-aux-asset {
+  display: flex;
+  flex-direction: column;
+  gap: calc(0.5rem * var(--ui-scale));
+}
+
 .publisher-form-label {
   font-size: calc(0.875rem * var(--ui-scale));
   font-weight: 500;

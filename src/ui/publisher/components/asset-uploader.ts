@@ -54,14 +54,47 @@ import {
 export type AssetUploadOutcome =
   | { mode: 'direct'; dataRef: string }
   | { mode: 'transcoding' }
+  /** An auxiliary asset (thumbnail / legend) finished uploading.
+   *  These never transcode and don't touch `data_ref` — the server
+   *  stamped the matching `*_ref` column, and `ref` is its new
+   *  value. The parent form mirrors it into the manual ref input +
+   *  form state so a subsequent Save persists it. */
+  | { mode: 'aux'; kind: AuxAssetKind; ref: string }
+
+/** Asset kinds this uploader can drive. `data` is the primary
+ *  asset (video / image / tour). `thumbnail` / `legend` are the
+ *  auxiliary images surfaced on the browse card + info panel.
+ *  Caption (VTT) + sphere_thumbnail (auto-generated) are not
+ *  publisher-uploaded through this component. */
+export type AuxAssetKind = 'thumbnail' | 'legend'
+export type UploaderKind = 'data' | AuxAssetKind
+
+/** Mimes accepted for an auxiliary image upload — mirrors the
+ *  server's `MIME_ALLOWLIST` entries for `thumbnail` / `legend` in
+ *  `functions/api/v1/_lib/asset-uploads.ts`. Worth duplicating
+ *  client-side so the picker rejects the file before any network
+ *  call. */
+const AUX_IMAGE_MIMES: ReadonlySet<string> = new Set([
+  'image/png',
+  'image/jpeg',
+  'image/webp',
+])
 
 export interface AssetUploaderOptions {
   /** Dataset id this uploader writes to. Required — the asset
    *  endpoints are scoped to the row. */
   datasetId: string
+  /** Which asset slot this uploader writes. Defaults to `'data'`
+   *  (the primary asset). `'thumbnail'` / `'legend'` drive the
+   *  auxiliary-image upload path: image-only mime gate, no
+   *  format coupling, no transcode/frames affordances, and an
+   *  `aux`-mode outcome that carries the new `*_ref`. */
+  kind?: UploaderKind
   /** Dataset's declared `format` (`video/mp4`, `image/png`, etc.).
    *  Used to pre-validate the picked file before any network call
-   *  and to constrain the `accept` attribute on the input. */
+   *  and to constrain the `accept` attribute on the input. Ignored
+   *  for `thumbnail` / `legend` uploads, which always accept the
+   *  image mimes regardless of the dataset's primary format. */
   format: string
   /** Current `data_ref` from the existing row in edit mode, if
    *  any. Surfaced read-only above the picker so the publisher
@@ -89,7 +122,7 @@ export interface AssetUploaderOptions {
 
 interface AssetInitResponse {
   upload_id: string
-  kind: 'data'
+  kind: UploaderKind
   target: 'r2'
   r2: { method: 'PUT'; url: string; headers: Record<string, string>; key: string }
   expires_at: string
@@ -97,7 +130,15 @@ interface AssetInitResponse {
 }
 
 interface AssetCompleteResponse {
-  dataset: { data_ref: string }
+  /** The full updated dataset row. `data_ref` flips for `data`
+   *  uploads; `thumbnail_ref` / `legend_ref` flip for the matching
+   *  auxiliary upload. All optional so one shape covers every
+   *  kind. */
+  dataset: {
+    data_ref?: string
+    thumbnail_ref?: string | null
+    legend_ref?: string | null
+  }
   transcoding?: boolean
 }
 
@@ -264,14 +305,17 @@ export function renderAssetUploader(options: AssetUploaderOptions): HTMLElement 
   const root = document.createElement('div')
   root.className = 'publisher-asset-uploader'
 
+  const kind: UploaderKind = options.kind ?? 'data'
+
   let state: StageState = INITIAL
   let framesState: FramesState = INITIAL_FRAMES
-  // Tab strip is only mounted for video-format datasets — that's
-  // where image-sequence input is meaningful (the catalog encodes
-  // every frames upload to a video HLS bundle). Image / tour
-  // datasets see the single-file picker unchanged.
+  // Tab strip is only mounted for the primary `data` asset of a
+  // video-format dataset — that's where image-sequence input is
+  // meaningful (the catalog encodes every frames upload to a video
+  // HLS bundle). Image / tour datasets and the auxiliary
+  // thumbnail / legend uploaders see the single-file picker.
   let activeTab: UploaderTab = 'video'
-  const tabsEnabled = options.format === 'video/mp4'
+  const tabsEnabled = kind === 'data' && options.format === 'video/mp4'
 
   // Stable ids used to wire the tab buttons to their tabpanel via
   // ARIA. Per-instance unique enough that two uploaders mounted
@@ -405,7 +449,13 @@ export function renderAssetUploader(options: AssetUploaderOptions): HTMLElement 
     input.type = 'file'
     input.id = inputId
     input.className = 'publisher-asset-uploader-input'
-    input.accept = acceptForFormat(options.format)
+    // Auxiliary (thumbnail / legend) uploads always accept the
+    // image mimes regardless of the dataset's primary format; the
+    // `data` uploader narrows to the dataset's declared format.
+    input.accept =
+      kind === 'data'
+        ? acceptForFormat(options.format)
+        : 'image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp'
     // Re-enable only when the uploader is idle, in an error
     // state the publisher can retry from, or done with a
     // direct (non-transcode) finalisation. `done-transcoding`
@@ -957,15 +1007,27 @@ export function renderAssetUploader(options: AssetUploaderOptions): HTMLElement 
     // both halves agree. PR #112 followup.
     const rawMime = file.type || mimeFromFilename(file.name)
     const effectiveMime = rawMime === 'image/jpg' ? 'image/jpeg' : rawMime
-    if (!mimeAcceptedForFormat(effectiveMime, options.format)) {
+    // `data` uploads must match the dataset's declared format;
+    // auxiliary (thumbnail / legend) uploads just have to be one of
+    // the supported image mimes.
+    const mimeOk =
+      kind === 'data'
+        ? mimeAcceptedForFormat(effectiveMime, options.format)
+        : AUX_IMAGE_MIMES.has(effectiveMime)
+    if (!mimeOk) {
       state = {
         ...INITIAL,
         stage: 'error',
         statusKey: 'publisher.assetUploader.status.error',
-        errorDetail: t('publisher.assetUploader.mimeMismatch', {
-          actual: effectiveMime || 'unknown',
-          expected: options.format,
-        }),
+        errorDetail:
+          kind === 'data'
+            ? t('publisher.assetUploader.mimeMismatch', {
+                actual: effectiveMime || 'unknown',
+                expected: options.format,
+              })
+            : t('publisher.assetUploader.mimeNotImage', {
+                actual: effectiveMime || 'unknown',
+              }),
       }
       paint()
       return
@@ -983,7 +1045,7 @@ export function renderAssetUploader(options: AssetUploaderOptions): HTMLElement 
       const initResult = await publisherSend<AssetInitResponse>(
         `/api/v1/publish/datasets/${encodeURIComponent(options.datasetId)}/asset`,
         {
-          kind: 'data',
+          kind,
           mime: effectiveMime,
           size: file.size,
           content_digest: digest,
@@ -1035,6 +1097,32 @@ export function renderAssetUploader(options: AssetUploaderOptions): HTMLElement 
         paint()
         options.onUploaded({ mode: 'transcoding' })
       } else {
+        // Non-transcoding completion: the server has stamped the
+        // relevant `*_ref` (`data_ref` for a direct image upload,
+        // `thumbnail_ref` / `legend_ref` for an aux upload) on the
+        // row and echoes the updated dataset back. A missing value
+        // here means the response shape is wrong or the row didn't
+        // actually update — treat it as a failure rather than
+        // reporting success with an empty ref. An empty ref would
+        // later be dropped by the form's save (silently losing the
+        // upload the publisher just did) or, worse, used to
+        // overwrite an existing ref. PR #207 Copilot review.
+        const ref =
+          kind === 'data'
+            ? completeResult.data.dataset.data_ref
+            : kind === 'thumbnail'
+              ? completeResult.data.dataset.thumbnail_ref
+              : completeResult.data.dataset.legend_ref
+        if (!ref) {
+          state = {
+            ...state,
+            stage: 'error',
+            statusKey: STAGE_STATUS_KEY.error,
+            errorDetail: t('publisher.assetUploader.completeMissingRef'),
+          }
+          paint()
+          return
+        }
         state = {
           ...state,
           stage: 'done-direct',
@@ -1042,7 +1130,13 @@ export function renderAssetUploader(options: AssetUploaderOptions): HTMLElement 
           statusKey: STAGE_STATUS_KEY['done-direct'],
         }
         paint()
-        options.onUploaded({ mode: 'direct', dataRef: completeResult.data.dataset.data_ref })
+        if (kind === 'data') {
+          options.onUploaded({ mode: 'direct', dataRef: ref })
+        } else {
+          // Aux upload — hand the new ref back so the parent form
+          // mirrors it into its manual input + state.
+          options.onUploaded({ mode: 'aux', kind, ref })
+        }
       }
     } catch (err) {
       state = {

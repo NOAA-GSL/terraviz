@@ -665,6 +665,56 @@ describe('renderDatasetNewPage', () => {
     expect(body.tags).toEqual(['featured'])
   })
 
+  it('renders the media card with thumbnail + legend manual inputs but no uploaders in create mode', () => {
+    // The guided uploader needs a saved row to scope its /asset
+    // endpoint against, so create mode (no id yet) shows only the
+    // manual ref inputs. The uploader appears on the edit page.
+    renderDatasetNewPage(mount)
+    expect(mount.querySelector('#dataset-thumbnail-ref')).not.toBeNull()
+    expect(mount.querySelector('#dataset-legend-ref')).not.toBeNull()
+    expect(mount.querySelector('.publisher-asset-uploader')).toBeNull()
+  })
+
+  it('omits thumbnail_ref + legend_ref from the body when blank', async () => {
+    const fetchFn = vi.fn().mockResolvedValue(jsonResponse({ dataset: { id: 'X' } }))
+    renderDatasetNewPage(mount, {
+      fetchFn: fetchFn as unknown as typeof fetch,
+      routerNavigate: vi.fn(),
+    })
+
+    setInput(mount, '#dataset-title', 'A title')
+    submitForm(mount)
+    await new Promise(r => setTimeout(r, 0))
+
+    const body = JSON.parse(fetchFn.mock.calls[0][1].body as string) as Record<
+      string,
+      unknown
+    >
+    expect(body.thumbnail_ref).toBeUndefined()
+    expect(body.legend_ref).toBeUndefined()
+  })
+
+  it('includes trimmed thumbnail_ref + legend_ref in the body when set', async () => {
+    const fetchFn = vi.fn().mockResolvedValue(jsonResponse({ dataset: { id: 'X' } }))
+    renderDatasetNewPage(mount, {
+      fetchFn: fetchFn as unknown as typeof fetch,
+      routerNavigate: vi.fn(),
+    })
+
+    setInput(mount, '#dataset-title', 'A title')
+    setInput(mount, '#dataset-thumbnail-ref', '  r2:datasets/X/thumbnail.png  ')
+    setInput(mount, '#dataset-legend-ref', '  r2:datasets/X/legend.png  ')
+    submitForm(mount)
+    await new Promise(r => setTimeout(r, 0))
+
+    const body = JSON.parse(fetchFn.mock.calls[0][1].body as string) as Record<
+      string,
+      unknown
+    >
+    expect(body.thumbnail_ref).toBe('r2:datasets/X/thumbnail.png')
+    expect(body.legend_ref).toBe('r2:datasets/X/legend.png')
+  })
+
   it('Cancel link routes back to /publish/datasets via SPA navigation', () => {
     const routerNavigate = vi.fn()
     renderDatasetNewPage(mount, { routerNavigate })

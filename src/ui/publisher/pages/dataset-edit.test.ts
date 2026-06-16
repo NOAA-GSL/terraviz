@@ -109,6 +109,29 @@ describe('renderDatasetEditPage', () => {
     expect(manualInput?.value).toBe('r2:videos/01XYZ/master.m3u8')
   })
 
+  it('mounts thumbnail + legend uploaders in edit mode and prefills their manual refs', async () => {
+    const fetchFn = vi.fn().mockResolvedValue(
+      detailResponse(
+        dataset({
+          thumbnail_ref: 'r2:datasets/01EDIT/thumbnail.png',
+          legend_ref: 'r2:datasets/01EDIT/legend.png',
+        }),
+      ),
+    )
+    await renderDatasetEditPage(mount, '01EDIT0000000000000000000', {
+      fetchFn: fetchFn as unknown as typeof fetch,
+    })
+    // Three uploaders now: data + thumbnail + legend.
+    expect(mount.querySelectorAll('.publisher-asset-uploader').length).toBe(3)
+    // Manual ref inputs prefill from the row.
+    expect(mount.querySelector<HTMLInputElement>('#dataset-thumbnail-ref')?.value).toBe(
+      'r2:datasets/01EDIT/thumbnail.png',
+    )
+    expect(mount.querySelector<HTMLInputElement>('#dataset-legend-ref')?.value).toBe(
+      'r2:datasets/01EDIT/legend.png',
+    )
+  })
+
   it('prefills keyword chips from the decoration arrays', async () => {
     const fetchFn = vi.fn().mockResolvedValue(
       detailResponse(dataset(), { keywords: ['sst', 'anomaly'], tags: ['demo'] }),
@@ -139,8 +162,10 @@ describe('renderDatasetEditPage', () => {
     await renderDatasetEditPage(mount, '01EDIT0000000000000000000', {
       fetchFn: fetchFn as unknown as typeof fetch,
     })
-    // No file picker mounted while transcoding.
-    expect(mount.querySelector('input[type="file"]')).toBeNull()
+    // The data uploader is replaced by the notice; only the two
+    // auxiliary uploaders (thumbnail + legend) remain — those are
+    // independent of the data transcode and stay available.
+    expect(mount.querySelectorAll('.publisher-asset-uploader').length).toBe(2)
     // Manual-ref input is also hidden — pasting a ref into a
     // soon-to-be-overwritten data_ref would just cause a race.
     expect(mount.querySelector('#dataset-data-ref')).toBeNull()

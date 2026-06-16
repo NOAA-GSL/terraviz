@@ -29,7 +29,7 @@ import {
 import { buildErrorCard, type ErrorCardDetails } from './error-card'
 import { attachToolbar, renderMarkdownToolbar } from './markdown-toolbar'
 import { renderChipInput } from './chip-input'
-import { renderAssetUploader } from './asset-uploader'
+import { renderAssetUploader, type AuxAssetKind } from './asset-uploader'
 import { renderMarkdown } from '../../../services/markdownRenderer'
 import type { PublisherDatasetDetail } from '../types'
 import { ROUTE_CHANGE_START_EVENT } from '../router'
@@ -80,6 +80,12 @@ interface FormState {
    *  with it empty. Stays as a manual text input until the
    *  3pd asset uploader replaces it with a guided upload flow. */
   dataRef: string
+  /** Auxiliary-image references surfaced on the browse card +
+   *  info panel. Same shape rules as `dataRef` (an `r2:` / absolute
+   *  HTTPS ref); in edit mode the guided uploader writes them, and
+   *  the manual input is the create-mode + external fallback. */
+  thumbnailRef: string
+  legendRef: string
   organization: string
   abstract: string
   /** Toggle between editing the abstract markdown source and
@@ -846,7 +852,163 @@ interface RenderContext {
     disposed: boolean
     uploader?: HTMLElement
     uploaderFormat?: string
+    /** Cached auxiliary-asset uploader subtrees (thumbnail /
+     *  legend), preserved across parent re-renders so an in-flight
+     *  image upload isn't torn down when an unrelated field change
+     *  repaints the form. Aux uploaders aren't format-keyed (they
+     *  accept images regardless of the dataset's primary format),
+     *  so there's no `*Format` companion the way `data` has. */
+    thumbnailUploader?: HTMLElement
+    legendUploader?: HTMLElement
   }
+}
+
+/**
+ * One auxiliary-image slot (thumbnail or legend): a guided
+ * uploader (edit mode, where the `/asset` endpoint has a row to
+ * scope against) plus a manual ref/URL input that doubles as the
+ * create-mode entry point and the escape hatch for external /
+ * already-encoded `r2:` refs the uploader can't express. Mirrors
+ * the `data_ref` uploader-plus-manual-input layout in `renderForm`.
+ */
+function auxAssetField(
+  content: HTMLElement,
+  state: FormState,
+  ctx: RenderContext,
+  opts: {
+    kind: AuxAssetKind
+    refValue: string
+    setRef: (v: string) => void
+    uploaderLabelKey: MessageKey
+    manualLabelKey: MessageKey
+    manualHelpKey: MessageKey
+    placeholder: string
+    inputId: string
+    errorField: string
+    cacheKey: 'thumbnailUploader' | 'legendUploader'
+  },
+): HTMLElement {
+  const wrap = document.createElement('div')
+  wrap.className = 'publisher-form-aux-asset'
+
+  // Guided uploader — edit mode only. The `/asset` init endpoint
+  // is scoped to a saved dataset id, so create mode (no row yet)
+  // gets only the manual input; once the draft is saved the
+  // publisher lands on the edit page where the uploader appears.
+  if (ctx.mode === 'edit' && ctx.datasetId) {
+    const uploaderWrap = document.createElement('div')
+    uploaderWrap.className = 'publisher-field'
+    const label = document.createElement('span')
+    label.className = 'publisher-field-label'
+    label.textContent = t(opts.uploaderLabelKey)
+    uploaderWrap.appendChild(label)
+
+    // Reuse the previously-mounted uploader subtree across renders
+    // so a parent repaint (title edit, save-in-progress) doesn't
+    // interrupt an in-flight upload. Same rationale as the `data`
+    // uploader's subtree preservation, minus the format key.
+    const cached = ctx.lifecycle[opts.cacheKey]
+    if (cached) {
+      uploaderWrap.appendChild(cached)
+    } else {
+      const uploaderEl = renderAssetUploader({
+        datasetId: ctx.datasetId,
+        kind: opts.kind,
+        format: state.format,
+        currentDataRef: opts.refValue || null,
+        navigate: ctx.navigate,
+        fetchFn: ctx.fetchFn,
+        sleep: ctx.sleep,
+        onUploaded: outcome => {
+          if (ctx.lifecycle.disposed) return
+          if (outcome.mode !== 'aux') return
+          // The server already stamped the row's `*_ref`; mirror it
+          // into form state + the manual input so a later Save
+          // doesn't omit it and the publisher sees the new value.
+          opts.setRef(outcome.ref)
+          const manual = content.querySelector<HTMLInputElement>(`#${opts.inputId}`)
+          if (manual) manual.value = outcome.ref
+        },
+      })
+      ctx.lifecycle[opts.cacheKey] = uploaderEl
+      uploaderWrap.appendChild(uploaderEl)
+    }
+    wrap.appendChild(uploaderWrap)
+  }
+
+  // Manual ref input — both modes.
+  wrap.appendChild(
+    inputField({
+      id: opts.inputId,
+      labelKey: opts.manualLabelKey,
+      required: false,
+      value: opts.refValue,
+      placeholder: opts.placeholder,
+      helpKey: opts.manualHelpKey,
+      error: findError(state.errors, opts.errorField),
+      onChange: v => {
+        opts.setRef(v)
+      },
+    }),
+  )
+
+  return wrap
+}
+
+/**
+ * Media card — the thumbnail + legend auxiliary images. Both feed
+ * the public catalog: `thumbnail_ref` is the browse-card image,
+ * `legend_ref` the colour-scale legend shown alongside the loaded
+ * dataset.
+ */
+function mediaCard(
+  content: HTMLElement,
+  state: FormState,
+  ctx: RenderContext,
+): HTMLElement {
+  const card = document.createElement('section')
+  card.className = 'publisher-card publisher-glass publisher-form-card'
+
+  const heading = document.createElement('h2')
+  heading.className = 'publisher-card-heading'
+  heading.textContent = t('publisher.datasetForm.section.media')
+  card.appendChild(heading)
+
+  card.appendChild(
+    auxAssetField(content, state, ctx, {
+      kind: 'thumbnail',
+      refValue: state.thumbnailRef,
+      setRef: v => {
+        state.thumbnailRef = v
+      },
+      uploaderLabelKey: 'publisher.datasetForm.field.thumbnail',
+      manualLabelKey: 'publisher.datasetForm.field.thumbnailManual',
+      manualHelpKey: 'publisher.datasetForm.help.thumbnail',
+      placeholder: 'r2:datasets/.../thumbnail.png',
+      inputId: 'dataset-thumbnail-ref',
+      errorField: 'thumbnail_ref',
+      cacheKey: 'thumbnailUploader',
+    }),
+  )
+
+  card.appendChild(
+    auxAssetField(content, state, ctx, {
+      kind: 'legend',
+      refValue: state.legendRef,
+      setRef: v => {
+        state.legendRef = v
+      },
+      uploaderLabelKey: 'publisher.datasetForm.field.legend',
+      manualLabelKey: 'publisher.datasetForm.field.legendManual',
+      manualHelpKey: 'publisher.datasetForm.help.legend',
+      placeholder: 'r2:datasets/.../legend.png',
+      inputId: 'dataset-legend-ref',
+      errorField: 'legend_ref',
+      cacheKey: 'legendUploader',
+    }),
+  )
+
+  return card
 }
 
 function renderForm(
@@ -1164,6 +1326,7 @@ function renderForm(
 
   form.appendChild(identityCard)
   form.appendChild(abstractCard(state, update))
+  form.appendChild(mediaCard(content, state, ctx))
   form.appendChild(licensingCard(state, update))
   form.appendChild(timeRangeCard(state))
   form.appendChild(categorizationCard(state))
@@ -1246,6 +1409,8 @@ function renderForm(
       if (t) body[field] = t
     }
     setIfPresent('data_ref', state.dataRef)
+    setIfPresent('thumbnail_ref', state.thumbnailRef)
+    setIfPresent('legend_ref', state.legendRef)
     setIfPresent('abstract', state.abstract)
     setIfPresent('organization', state.organization)
     setIfPresent('license_spdx', state.licenseSpdx)
@@ -1362,6 +1527,8 @@ function initialState(
       format: 'video/mp4',
       visibility: 'public',
       dataRef: '',
+      thumbnailRef: '',
+      legendRef: '',
       organization: '',
       abstract: '',
       abstractPreviewing: false,
@@ -1397,6 +1564,8 @@ function initialState(
     format: row.format,
     visibility: row.visibility,
     dataRef: row.data_ref ?? '',
+    thumbnailRef: row.thumbnail_ref ?? '',
+    legendRef: row.legend_ref ?? '',
     organization: row.organization ?? '',
     abstract: row.abstract ?? '',
     abstractPreviewing: false,
