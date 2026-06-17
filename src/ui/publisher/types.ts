@@ -43,6 +43,10 @@ export interface PublisherDataset {
   retracted_at: string | null
   publisher_id: string | null
   legacy_id: string | null
+  /** The row's `thumbnail_ref` resolved to a publicly-readable URL,
+   *  for a thumbnail cell in the list table. Null/absent when there's
+   *  no thumbnail or it can't be resolved (no R2 public base bound). */
+  thumbnail_url?: string | null
 }
 
 /**
@@ -56,6 +60,19 @@ export interface PublisherDatasetDetail extends PublisherDataset {
   thumbnail_ref: string | null
   legend_ref: string | null
   caption_ref: string | null
+  // Render hints (Phase 3d typed metadata) — used by the globe-
+  // thumbnail generator to render the dataset the way the live globe
+  // does (regional data clips to its bbox, flipped data isn't
+  // upside-down, dateline-centered data is oriented right). Optional
+  // so older payloads / fixtures without them still type-check;
+  // `overlayFromRow` treats absent the same as null.
+  bbox_n?: number | null
+  bbox_s?: number | null
+  bbox_w?: number | null
+  bbox_e?: number | null
+  lon_origin?: number | null
+  is_flipped_in_y?: number | null
+  celestial_body?: string | null
   website_link: string | null
   start_time: string | null
   end_time: string | null
@@ -88,6 +105,19 @@ export interface ListDatasetsResponse {
 
 export interface DatasetDetailResponse {
   dataset: PublisherDatasetDetail
+  /** The dataset's raw `data_ref` resolved to a publicly-readable
+   *  URL (an `r2:` ref → its public origin, a bare URL → itself).
+   *  Null when it can't be resolved (no R2 public base bound). The
+   *  edit form uses it to offer the globe-thumbnail generator's
+   *  "Generate from this dataset's data" one-click path for already-
+   *  uploaded image datasets. */
+  data_url?: string | null
+  /** The dataset's `thumbnail_ref` / `legend_ref` resolved to
+   *  publicly-readable URLs, so the edit form can render an actual
+   *  image preview of each (not just the `r2:` ref text). Null/absent
+   *  when unset or unresolvable. */
+  thumbnail_url?: string | null
+  legend_url?: string | null
   /** Decoration arrays sit alongside the row rather than inline
    *  because the server stores them in separate join tables; the
    *  edit form prefills its chip inputs from these. */

@@ -137,6 +137,49 @@ const checks: Check[] = [
         .waitFor({ timeout: 15_000 })
     },
   },
+  {
+    name: 'globe-thumbnail generator renders a preview and re-renders on rotation',
+    fixtures: publisherFixtures(),
+    async run(page) {
+      await gotoApp(page, '/publish/datasets/01HEXAMPLEDATASET00000001/edit')
+      await page.locator('#publisher-root .publisher-topbar').waitFor({ state: 'visible' })
+      // The thumbnail uploader's globe-thumbnail generator block.
+      await page
+        .locator('.publisher-asset-uploader-generate')
+        .first()
+        .waitFor({ timeout: 15_000 })
+      // Pick a 2:1 equirectangular frame; the in-browser WebGL globe
+      // render must produce a preview.
+      await page
+        .locator('input[type="file"][id^="dataset-asset-generate-"]')
+        .first()
+        .setInputFiles('scripts/screenshots/fixtures/equirect-sample.png')
+      const preview = page.locator('.publisher-asset-uploader-generate-preview')
+      await preview.waitFor({ state: 'visible', timeout: 20_000 })
+      const before = await preview.getAttribute('src')
+      assert(
+        !!before && before.startsWith('blob:'),
+        'generated preview should be a blob-URL image',
+      )
+      // Rotating must re-render: moving the longitude slider swaps the
+      // preview to a freshly captured image (a new object URL).
+      await page
+        .locator('input[type="range"][id$="-lon"]')
+        .evaluate((el: HTMLInputElement) => {
+          el.value = '120'
+          el.dispatchEvent(new Event('input', { bubbles: true }))
+          el.dispatchEvent(new Event('change', { bubbles: true }))
+        })
+      await page.waitForFunction(
+        (prev) => {
+          const img = document.querySelector('.publisher-asset-uploader-generate-preview')
+          return img instanceof HTMLImageElement && img.getAttribute('src') !== prev
+        },
+        before,
+        { timeout: 20_000 },
+      )
+    },
+  },
 ]
 
 async function runCheck(browser: Browser, check: Check): Promise<SmokeResult> {

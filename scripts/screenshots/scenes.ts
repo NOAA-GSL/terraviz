@@ -328,6 +328,33 @@ export const scenes: Scene[] = [
     },
   },
   {
+    name: 'publish-dataset-edit-thumbnail',
+    description:
+      'Publisher portal — dataset edit, globe-thumbnail generator: a rendered preview with longitude/latitude rotation sliders',
+    fixtures: publisherFixtures(),
+    requiresFixtures: true,
+    // Focus the report on the generator block (sources, the rendered
+    // globe preview, and the rotation sliders).
+    crop: '.publisher-asset-uploader-generate',
+    // The generated preview is a live WebGL render of the globe —
+    // non-deterministic at the pixel level, so mask it from the diff.
+    masks: ['.publisher-asset-uploader-generate-preview'],
+    async setup(page) {
+      await openPublish(page, '/publish/datasets/01HEXAMPLEDATASET00000001/edit')
+      // The thumbnail uploader's generator block (thumbnail kind only).
+      await page.locator('.publisher-asset-uploader-generate').first().waitFor()
+      // Feed a 2:1 equirectangular frame (the bundled Earth specular
+      // map) and let the in-browser globe render produce a preview.
+      await page
+        .locator('input[type="file"][id^="dataset-asset-generate-"]')
+        .first()
+        .setInputFiles('scripts/screenshots/fixtures/equirect-sample.png')
+      await page.locator('.publisher-asset-uploader-generate-preview').waitFor()
+      // Rotation sliders accompany the preview.
+      await page.locator('input[type="range"][id$="-lon"]').waitFor()
+    },
+  },
+  {
     name: 'publish-workflows',
     description: 'Publisher portal — Zyra workflows list (populated via fixtures)',
     fixtures: publisherFixtures(),

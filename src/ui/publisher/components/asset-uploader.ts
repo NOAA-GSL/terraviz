@@ -34,11 +34,19 @@
 import { t, type MessageKey } from '../../../i18n'
 import { MAX_IMAGE_SEQUENCE_FRAMES as MAX_FRAMES } from '../../../types/image-sequence-constants'
 import {
+  generateGlobeThumbnail,
+  loadImageFromBlob,
+  type GlobeThumbnailOptions,
+  type GlobeThumbnailSource,
+} from '../../../services/globeThumbnail'
+import type { DatasetOverlayOptions } from '../../../types'
+import {
   clearWarmupFlag,
   handleSessionError,
   publisherSend,
   type PublisherSendResult,
 } from '../api'
+import { ROUTE_CHANGE_START_EVENT } from '../router'
 
 /** Result of a finished upload. `mode='direct'` means data_ref
  *  is set on the row already; `mode='transcoding'` means a
@@ -80,6 +88,83 @@ const AUX_IMAGE_MIMES: ReadonlySet<string> = new Set([
   'image/webp',
 ])
 
+/**
+ * A loaded video the publisher can scrub to pick a frame for the
+ * globe thumbnail. Backs the video path of "Generate from this
+ * dataset's data" — the dataset's data *is* a 2:1 equirectangular
+ * video, so any frame is a valid globe source.
+ */
+export interface VideoScrubHandle {
+  /** A visible `<video controls>` with the stream attached; mounted
+   *  into the scrub UI so the publisher seeks with native controls. */
+  video: HTMLVideoElement
+  /** Draw the currently-shown frame onto a 2:1 canvas usable as a
+   *  `generateGlobeThumbnail` source. */
+  capture: () => HTMLCanvasElement
+  /** Tear down the HLS instance + remove the video element.
+   *  Idempotent. */
+  dispose: () => void
+}
+
+/**
+ * Default video-scrub loader — lazy-imports the shared `HLSService`
+ * (so hls.js stays out of the portal bundle until a publisher
+ * actually grabs a video frame) and attaches the stream to a
+ * controls-enabled, CORS-anonymous `<video>`. The same crossOrigin
+ * setup the globe's video textures use, so reading a frame off the
+ * canvas is taint-free.
+ */
+async function defaultLoadVideoScrub(url: string): Promise<VideoScrubHandle> {
+  const { HLSService } = await import('../../../services/hlsService')
+  const video = document.createElement('video')
+  video.crossOrigin = 'anonymous'
+  video.controls = true
+  video.muted = true
+  video.playsInline = true
+  video.preload = 'auto'
+  video.className = 'publisher-asset-uploader-generate-video'
+  const svc = new HLSService()
+  try {
+    await svc.loadStream(url, video)
+  } catch (err) {
+    // On a load failure the handle (and its `dispose`) is never
+    // returned, so tear the HLS instance + element down here rather
+    // than leaking a live loader. PR #208 Copilot review.
+    try {
+      svc.destroy()
+    } catch {
+      /* already torn down */
+    }
+    video.remove()
+    throw err
+  }
+  let disposed = false
+  return {
+    video,
+    capture: () => {
+      const canvas = document.createElement('canvas')
+      canvas.width = video.videoWidth || 2
+      canvas.height = video.videoHeight || 1
+      const ctx = canvas.getContext('2d')
+      if (ctx) ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+      return canvas
+    },
+    dispose: () => {
+      if (disposed) return
+      disposed = true
+      // `svc.destroy()` only owns the HLS instance here (we passed our
+      // own video, so the service's internal video ref is null); we
+      // remove the element ourselves.
+      try {
+        svc.destroy()
+      } catch {
+        /* already torn down */
+      }
+      video.remove()
+    },
+  }
+}
+
 export interface AssetUploaderOptions {
   /** Dataset id this uploader writes to. Required — the asset
    *  endpoints are scoped to the row. */
@@ -118,6 +203,38 @@ export interface AssetUploaderOptions {
   sleep?: (ms: number) => Promise<void>
   /** Navigation for the session-expired flow. */
   navigate?: (url: string) => void
+  /** A fetchable URL for the dataset's own data frame (an
+   *  equirectangular image). When provided on a `thumbnail`
+   *  uploader, enables the one-click "Generate from this dataset's
+   *  data" affordance — the publisher gets a globe thumbnail with
+   *  zero extra uploads. Hidden when null/absent (e.g. the data is
+   *  a video or an unresolvable ref). Thumbnail kind only. */
+  dataAssetUrl?: string | null
+  /** The dataset's render hints (bbox / lonOrigin / flip / celestial
+   *  body). Applied when generating from the dataset's *own* data
+   *  (the one-click button / a captured video frame) so the
+   *  thumbnail matches the live globe. Not applied to a hand-picked
+   *  frame, whose projection is unknown. */
+  dataAssetOverlay?: DatasetOverlayOptions | null
+  /** Test seam — renders a 2:1 source to a globe thumbnail Blob at
+   *  the given longitude/latitude. Defaults to the real WebGL
+   *  `generateGlobeThumbnail`, which can't run under happy-dom. */
+  generateThumbnail?: (
+    source: GlobeThumbnailSource,
+    options?: GlobeThumbnailOptions,
+  ) => Promise<Blob>
+  /** Test seam — decodes a Blob into an image. Defaults to
+   *  `loadImageFromBlob`. */
+  decodeImage?: (blob: Blob) => Promise<HTMLImageElement>
+  /** Test seam — fetches the data-frame URL as a Blob for the
+   *  auto-from-data path (image datasets). Defaults to
+   *  `fetch().blob()`. */
+  fetchImageBlob?: (url: string) => Promise<Blob>
+  /** Test seam — loads a video URL into a scrubable handle for the
+   *  video auto-from-data path. Defaults to an HLS.js-backed loader;
+   *  injected in tests since hls.js / video decode can't run under
+   *  happy-dom. */
+  loadVideoScrub?: (url: string) => Promise<VideoScrubHandle>
 }
 
 interface AssetInitResponse {
@@ -173,6 +290,42 @@ const INITIAL: StageState = {
   progress: 0,
   statusKey: 'publisher.assetUploader.status.idle',
 }
+
+/** Globe-thumbnail generator sub-flow (thumbnail uploader only).
+ *  `idle` → (`scrubbing`, video only) → `rendering` → `preview` (a
+ *  generated capture awaiting the publisher's confirm) → back to
+ *  `idle` once uploaded, or `error`. The decoded source, current
+ *  rotation, generated File, and its object-URL preview live here so
+ *  the publisher can rotate to a desired area of focus (re-rendering
+ *  from the same source) before confirming. */
+type GenStage = 'idle' | 'scrubbing' | 'rendering' | 'preview' | 'error'
+
+interface GenState {
+  stage: GenStage
+  /** The decoded 2:1 source, kept so rotation re-renders don't
+   *  re-decode / re-fetch. An image, or a frame captured from the
+   *  dataset's own video. */
+  source?: GlobeThumbnailSource
+  /** Active video-scrub handle during the `scrubbing` stage (video
+   *  datasets) — the publisher seeks it, then captures a frame. */
+  scrub?: VideoScrubHandle
+  /** The dataset's render hints to apply to this render — set when
+   *  the source is the dataset's own data, undefined for a
+   *  hand-picked frame. */
+  overlay?: DatasetOverlayOptions
+  /** Current longitude spin in degrees (-180..180). */
+  lon: number
+  /** Current latitude tilt in degrees (-90..90). */
+  lat: number
+  /** Object URL of the generated preview image (revoked on
+   *  re-render / discard / upload). */
+  previewUrl?: string
+  /** The generated capture, ready to hand to `run()`. */
+  file?: File
+  errorDetail?: string
+}
+
+const INITIAL_GEN: GenState = { stage: 'idle', lon: 0, lat: 0 }
 
 const STAGE_STATUS_KEY: Record<Stage, MessageKey> = {
   idle: 'publisher.assetUploader.status.idle',
@@ -309,6 +462,41 @@ export function renderAssetUploader(options: AssetUploaderOptions): HTMLElement 
 
   let state: StageState = INITIAL
   let framesState: FramesState = INITIAL_FRAMES
+  // Globe-thumbnail generator state — only used on a `thumbnail`
+  // uploader. Independent of the main upload `state`: the publisher
+  // generates + previews a globe capture here (rotating to a desired
+  // area of focus), then "Use this thumbnail" feeds the generated
+  // File into the same `run()` upload path the file picker uses.
+  let genState: GenState = INITIAL_GEN
+  // Monotonic token so a slower rotation re-render can't overwrite a
+  // newer one — the publisher dragging a slider fires renders faster
+  // than they resolve.
+  let genRenderSeq = 0
+  // The currently-loaded video scrub handle, tracked outside genState
+  // so it's torn down (HLS instance + element) on capture, cancel, or
+  // route navigation — a streaming HLS left running would leak
+  // bandwidth + memory.
+  let activeScrub: VideoScrubHandle | null = null
+  // Monotonic token bumped whenever a scrub is cleared — lets an
+  // in-flight `loadVideoScrub()` detect it was cancelled (route
+  // change / new load) while awaiting and dispose its handle instead
+  // of re-attaching a stale HLS instance + listener. PR #208 Copilot
+  // review.
+  let scrubLoadSeq = 0
+  function clearScrub(): void {
+    scrubLoadSeq++
+    if (activeScrub) {
+      activeScrub.dispose()
+      activeScrub = null
+    }
+    window.removeEventListener(ROUTE_CHANGE_START_EVENT, clearScrub)
+  }
+  // True while a render is in flight (initial generate or a rotation
+  // re-render). Folded into the generator's `busy` so "Use this
+  // thumbnail" can't upload a stale capture mid-re-render and a late
+  // render can't repaint after the publisher has moved on. PR #208
+  // Copilot review.
+  let genRendering = false
   // Tab strip is only mounted for the primary `data` asset of a
   // video-format dataset — that's where image-sequence input is
   // meaningful (the catalog encodes every frames upload to a video
@@ -337,6 +525,7 @@ export function renderAssetUploader(options: AssetUploaderOptions): HTMLElement 
   const PANEL_FRAMES_ID = `${TAB_FRAMES_ID}-panel`
   const FILE_INPUT_ID = `dataset-asset-file-${ID_SUFFIX}`
   const FRAMES_INPUT_ID = `dataset-asset-frames-${ID_SUFFIX}`
+  const GENERATE_INPUT_ID = `dataset-asset-generate-${ID_SUFFIX}`
 
   function paint(): void {
     const frag = document.createDocumentFragment()
@@ -505,7 +694,467 @@ export function renderAssetUploader(options: AssetUploaderOptions): HTMLElement 
       frag.appendChild(det)
     }
 
+    // Globe-thumbnail generator — thumbnail uploader only. Lets a
+    // publisher turn a flat 2:1 data frame (or the dataset's own
+    // data) into a wrapped-on-a-globe capture without making the
+    // render themselves.
+    if (kind === 'thumbnail') {
+      frag.appendChild(buildGenerateSection(genState))
+    }
+
     return frag
+  }
+
+  /**
+   * The "Generate a globe thumbnail" block. Offers two sources — a
+   * one-click "from this dataset's data" (when a usable data-frame
+   * URL was supplied) and a manual 2:1 frame picker — then renders a
+   * preview the publisher confirms before it's uploaded through the
+   * normal `run()` path.
+   */
+  function buildGenerateSection(g: GenState): HTMLElement {
+    const section = document.createElement('div')
+    section.className = 'publisher-asset-uploader-generate'
+
+    const heading = document.createElement('p')
+    heading.className = 'publisher-asset-uploader-generate-heading'
+    heading.textContent = t('publisher.assetUploader.generate.heading')
+    section.appendChild(heading)
+
+    const help = document.createElement('p')
+    help.className = 'publisher-asset-uploader-generate-help'
+    help.textContent = t('publisher.assetUploader.generate.help')
+    section.appendChild(help)
+
+    // Busy whenever the generator is rendering OR the main uploader
+    // has an upload in flight — generator actions ("Generate…",
+    // "Use this thumbnail") must be inert during a hash/mint/PUT/
+    // complete cycle so a publisher can't kick off a second,
+    // overlapping `/asset` upload that stomps the in-flight state.
+    // Mirrors the main file picker's own disabled rule. PR #208
+    // Copilot review.
+    const uploadInFlight =
+      state.stage !== 'idle' && state.stage !== 'error' && state.stage !== 'done-direct'
+    const busy = g.stage === 'rendering' || g.stage === 'scrubbing' || uploadInFlight || genRendering
+
+    const controls = document.createElement('div')
+    controls.className = 'publisher-asset-uploader-generate-controls'
+
+    // One-click from the dataset's own data frame, when resolvable.
+    if (options.dataAssetUrl) {
+      const fromData = document.createElement('button')
+      fromData.type = 'button'
+      fromData.className = 'publisher-button publisher-button-secondary'
+      fromData.textContent = t('publisher.assetUploader.generate.fromData')
+      fromData.disabled = busy
+      fromData.addEventListener('click', () => {
+        const url = options.dataAssetUrl as string
+        // Video datasets scrub a frame out of their own stream;
+        // images fetch + wrap the data frame directly.
+        if (options.format === 'video/mp4') void runScrubFromData(url)
+        else void runGenerateFromData(url)
+      })
+      controls.appendChild(fromData)
+    }
+
+    // Manual 2:1 frame picker. The file input is visually hidden
+    // inside the button-styled label (same pattern the rest of the
+    // portal uses for file affordances).
+    const frameLabel = document.createElement('label')
+    frameLabel.className =
+      'publisher-button publisher-button-secondary publisher-asset-uploader-generate-pick'
+    frameLabel.setAttribute('for', GENERATE_INPUT_ID)
+    frameLabel.textContent = t('publisher.assetUploader.generate.fromFrame')
+    const frameInput = document.createElement('input')
+    frameInput.type = 'file'
+    frameInput.id = GENERATE_INPUT_ID
+    frameInput.className = 'publisher-asset-uploader-generate-input'
+    frameInput.accept = 'image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp'
+    frameInput.disabled = busy
+    frameInput.addEventListener('change', () => {
+      const file = frameInput.files?.[0]
+      if (!file) return
+      void runGenerateFromFile(file)
+    })
+    frameLabel.appendChild(frameInput)
+    controls.appendChild(frameLabel)
+
+    section.appendChild(controls)
+
+    if (g.stage === 'rendering') {
+      const status = document.createElement('p')
+      status.className = 'publisher-asset-uploader-status'
+      status.setAttribute('role', 'status')
+      status.textContent = t('publisher.assetUploader.generate.rendering')
+      section.appendChild(status)
+    }
+
+    // Video scrub stage — load the dataset's stream, let the
+    // publisher seek with native controls, then capture a frame.
+    if (g.stage === 'scrubbing') {
+      if (!g.scrub) {
+        const status = document.createElement('p')
+        status.className = 'publisher-asset-uploader-status'
+        status.setAttribute('role', 'status')
+        status.textContent = t('publisher.assetUploader.generate.videoLoading')
+        section.appendChild(status)
+      } else {
+        const hint = document.createElement('p')
+        hint.className = 'publisher-asset-uploader-generate-help'
+        hint.textContent = t('publisher.assetUploader.generate.scrubHint')
+        section.appendChild(hint)
+
+        // Mount the live <video controls>; it carries its own state
+        // (current frame, buffering) across re-appends.
+        section.appendChild(g.scrub.video)
+
+        const actions = document.createElement('div')
+        actions.className = 'publisher-asset-uploader-generate-actions'
+
+        const capture = document.createElement('button')
+        capture.type = 'button'
+        capture.className = 'publisher-button publisher-button-primary'
+        capture.textContent = t('publisher.assetUploader.generate.capture')
+        capture.addEventListener('click', () => {
+          const handle = g.scrub
+          if (!handle) return
+          // `drawImage(video)` can throw if the frame isn't decodable
+          // yet (videoWidth=0 → InvalidStateError). Catch it, tear the
+          // stream down, and surface a generator error rather than
+          // letting it bubble out and strand a live HLS stream. PR
+          // #208 Copilot review.
+          let canvas: HTMLCanvasElement
+          try {
+            canvas = handle.capture()
+          } catch (err) {
+            clearScrub()
+            genState = {
+              ...INITIAL_GEN,
+              stage: 'error',
+              errorDetail: err instanceof Error ? err.message : String(err),
+            }
+            paint()
+            return
+          }
+          // Grab the frame, then tear the stream down (disposes the
+          // handle, removes the listener, bumps the load token).
+          clearScrub()
+          // The captured frame IS the dataset's data — apply its
+          // render hints so the thumbnail matches the live globe.
+          genState = {
+            ...INITIAL_GEN,
+            stage: 'rendering',
+            source: canvas,
+            overlay: options.dataAssetOverlay ?? undefined,
+          }
+          paint()
+          void renderPreview()
+        })
+        actions.appendChild(capture)
+
+        const cancel = document.createElement('button')
+        cancel.type = 'button'
+        cancel.className = 'publisher-button publisher-button-secondary'
+        cancel.textContent = t('publisher.assetUploader.generate.cancel')
+        cancel.addEventListener('click', () => {
+          clearScrub()
+          genState = INITIAL_GEN
+          paint()
+        })
+        actions.appendChild(cancel)
+
+        section.appendChild(actions)
+      }
+    }
+
+    if (g.stage === 'preview' && g.previewUrl) {
+      const preview = document.createElement('img')
+      preview.className = 'publisher-asset-uploader-generate-preview'
+      preview.src = g.previewUrl
+      preview.alt = t('publisher.assetUploader.generate.previewAlt')
+      section.appendChild(preview)
+
+      // Rotation controls — bring a desired area of focus to the
+      // centre of the capture. Each slider re-renders from the kept
+      // source on release (`change`), with a live degree readout on
+      // `input`; re-rendering on every pixel of drag would spin up a
+      // fresh WebGL context per frame.
+      const rotateHint = document.createElement('p')
+      rotateHint.className = 'publisher-asset-uploader-generate-help'
+      rotateHint.textContent = t('publisher.assetUploader.generate.rotateHint')
+      section.appendChild(rotateHint)
+
+      section.appendChild(
+        buildRotationSlider({
+          axis: 'lon',
+          labelKey: 'publisher.assetUploader.generate.longitude',
+          min: -180,
+          max: 180,
+          value: g.lon,
+        }),
+      )
+      section.appendChild(
+        buildRotationSlider({
+          axis: 'lat',
+          labelKey: 'publisher.assetUploader.generate.latitude',
+          min: -90,
+          max: 90,
+          value: g.lat,
+        }),
+      )
+
+      const actions = document.createElement('div')
+      actions.className = 'publisher-asset-uploader-generate-actions'
+
+      const use = document.createElement('button')
+      use.type = 'button'
+      use.className = 'publisher-button publisher-button-primary'
+      use.textContent = t('publisher.assetUploader.generate.use')
+      // Inert while an upload is in flight — clicking it would start a
+      // second concurrent `run(file)` over the same row. PR #208
+      // Copilot review.
+      use.disabled = busy
+      use.addEventListener('click', () => {
+        // Belt-and-suspenders: even if a stale click lands, no-op
+        // while busy.
+        if (busy) return
+        const file = g.file
+        if (!file) return
+        // Hand off to the shared upload path. Clear the preview
+        // first so the generator block collapses while the upload
+        // status takes over.
+        if (g.previewUrl) URL.revokeObjectURL(g.previewUrl)
+        genState = INITIAL_GEN
+        void run(file)
+      })
+      actions.appendChild(use)
+
+      const discard = document.createElement('button')
+      discard.type = 'button'
+      discard.className = 'publisher-button publisher-button-secondary'
+      discard.textContent = t('publisher.assetUploader.generate.discard')
+      // Disabled (and no-op) while a rotation re-render is in flight —
+      // otherwise an in-flight render could resolve after the discard
+      // and repaint the preview, undoing it. PR #208 Copilot review.
+      discard.disabled = busy
+      discard.addEventListener('click', () => {
+        if (busy) return
+        if (g.previewUrl) URL.revokeObjectURL(g.previewUrl)
+        genState = INITIAL_GEN
+        paint()
+      })
+      actions.appendChild(discard)
+
+      section.appendChild(actions)
+    }
+
+    if (g.stage === 'error') {
+      const err = document.createElement('p')
+      err.className = 'publisher-asset-uploader-status publisher-asset-uploader-status-error'
+      err.setAttribute('role', 'alert')
+      err.textContent = g.errorDetail ?? t('publisher.assetUploader.generate.error')
+      section.appendChild(err)
+    }
+
+    return section
+  }
+
+  /** A labelled rotation slider with a live degree readout. Updates
+   *  `genState` on drag (`input`) and re-renders the preview on
+   *  release (`change`) — re-rendering per drag frame would spin up
+   *  a fresh WebGL context each move. */
+  function buildRotationSlider(o: {
+    axis: 'lon' | 'lat'
+    labelKey: MessageKey
+    min: number
+    max: number
+    value: number
+  }): HTMLElement {
+    const sliderId = `${GENERATE_INPUT_ID}-${o.axis}`
+    const row = document.createElement('div')
+    row.className = 'publisher-asset-uploader-generate-rotate'
+
+    const label = document.createElement('label')
+    label.className = 'publisher-asset-uploader-generate-rotate-label'
+    label.htmlFor = sliderId
+    label.textContent = t(o.labelKey)
+    row.appendChild(label)
+
+    const slider = document.createElement('input')
+    slider.type = 'range'
+    slider.id = sliderId
+    slider.className = 'publisher-asset-uploader-generate-rotate-input'
+    slider.min = String(o.min)
+    slider.max = String(o.max)
+    slider.step = '1'
+    slider.value = String(o.value)
+    row.appendChild(slider)
+
+    const readout = document.createElement('span')
+    readout.className = 'publisher-asset-uploader-generate-rotate-readout'
+    readout.textContent = t('publisher.assetUploader.generate.degrees', {
+      value: String(o.value),
+    })
+    row.appendChild(readout)
+
+    slider.addEventListener('input', () => {
+      const v = Number(slider.value)
+      if (o.axis === 'lon') genState.lon = v
+      else genState.lat = v
+      readout.textContent = t('publisher.assetUploader.generate.degrees', {
+        value: String(v),
+      })
+    })
+    slider.addEventListener('change', () => {
+      void renderPreview()
+    })
+    return row
+  }
+
+  /** Render (or re-render) the preview from the source currently in
+   *  `genState`, at its current longitude/latitude. Stale renders
+   *  (superseded by a newer rotation) are dropped via `genRenderSeq`
+   *  so a slow render can't clobber a newer preview. The previous
+   *  preview stays visible until the new one lands, so rotating
+   *  doesn't flash an empty frame.
+   *
+   *  Self-handles render failures (WebGL context loss, encode error)
+   *  by moving to the generator's error state — every caller (the
+   *  rotation slider's fire-and-forget `change`, the file/data
+   *  entrypoints) is therefore safe and can't produce an unhandled
+   *  rejection. PR #208 Copilot review. */
+  async function renderPreview(): Promise<void> {
+    const source = genState.source
+    if (!source) return
+    const seq = ++genRenderSeq
+    // Mark busy + repaint so the action buttons (Use this thumbnail,
+    // Generate…) disable for the duration — the rotation sliders stay
+    // live so the publisher can keep adjusting. The current preview
+    // stays visible (no empty flash). PR #208 Copilot review.
+    genRendering = true
+    paint()
+    const generate = options.generateThumbnail ?? generateGlobeThumbnail
+    try {
+      const blob = await generate(source, {
+        lonOrigin: genState.lon,
+        latOrigin: genState.lat,
+        overlay: genState.overlay,
+      })
+      // A newer rotation started while this one was rendering — drop
+      // this result so the latest one wins. The newer render owns
+      // `genRendering` and will clear it when it settles.
+      if (seq !== genRenderSeq) return
+      genRendering = false
+      const previewUrl = URL.createObjectURL(blob)
+      // WebP is the generator's default output; name + type line up
+      // with the aux image mime gate in `run()`.
+      const file = new File([blob], 'globe-thumbnail.webp', {
+        type: blob.type || 'image/webp',
+      })
+      if (genState.previewUrl) URL.revokeObjectURL(genState.previewUrl)
+      genState = { ...genState, stage: 'preview', previewUrl, file }
+      paint()
+    } catch (err) {
+      // Drop a stale failure superseded by a newer rotation.
+      if (seq !== genRenderSeq) return
+      genRendering = false
+      if (genState.previewUrl) URL.revokeObjectURL(genState.previewUrl)
+      genState = {
+        ...INITIAL_GEN,
+        stage: 'error',
+        errorDetail: err instanceof Error ? err.message : String(err),
+      }
+      paint()
+    }
+  }
+
+  async function runGenerateFromFile(file: File): Promise<void> {
+    const decode = options.decodeImage ?? loadImageFromBlob
+    if (genState.previewUrl) URL.revokeObjectURL(genState.previewUrl)
+    genState = { ...INITIAL_GEN, stage: 'rendering' }
+    paint()
+    try {
+      const img = await decode(file)
+      genState = { ...genState, source: img }
+      await renderPreview()
+    } catch (err) {
+      genState = {
+        ...INITIAL_GEN,
+        stage: 'error',
+        errorDetail: err instanceof Error ? err.message : String(err),
+      }
+      paint()
+    }
+  }
+
+  async function runGenerateFromData(url: string): Promise<void> {
+    const decode = options.decodeImage ?? loadImageFromBlob
+    const fetchBlob =
+      options.fetchImageBlob ??
+      (async (u: string): Promise<Blob> => {
+        const res = await (options.fetchFn ?? globalThis.fetch)(u)
+        if (!res.ok) throw new Error(`Data frame fetch failed (${res.status}).`)
+        return res.blob()
+      })
+    if (genState.previewUrl) URL.revokeObjectURL(genState.previewUrl)
+    genState = { ...INITIAL_GEN, stage: 'rendering' }
+    paint()
+    try {
+      const blob = await fetchBlob(url)
+      const img = await decode(blob)
+      // This IS the dataset's own data — apply its render hints so the
+      // thumbnail matches the live globe.
+      genState = { ...genState, source: img, overlay: options.dataAssetOverlay ?? undefined }
+      await renderPreview()
+    } catch (err) {
+      genState = {
+        ...INITIAL_GEN,
+        stage: 'error',
+        errorDetail: err instanceof Error ? err.message : String(err),
+      }
+      paint()
+    }
+  }
+
+  /** Video path of "Generate from this dataset's data": load the
+   *  dataset's stream into a scrubable handle, then let the publisher
+   *  seek + capture a frame (handled by the `scrubbing`-stage UI). */
+  async function runScrubFromData(url: string): Promise<void> {
+    clearScrub()
+    // Capture the load token AFTER clearScrub bumped it; a later
+    // clearScrub (route change / new load) will bump it again, which
+    // is how we detect this load was cancelled while awaiting.
+    const seq = scrubLoadSeq
+    if (genState.previewUrl) URL.revokeObjectURL(genState.previewUrl)
+    genState = { ...INITIAL_GEN, stage: 'scrubbing' }
+    paint()
+    // Attach the teardown listener BEFORE the await so a route change
+    // during the (possibly slow) HLS load still fires clearScrub and
+    // invalidates this load.
+    window.addEventListener(ROUTE_CHANGE_START_EVENT, clearScrub)
+    const load = options.loadVideoScrub ?? defaultLoadVideoScrub
+    try {
+      const handle = await load(url)
+      if (seq !== scrubLoadSeq) {
+        // Cancelled (route change / a newer load) while loading — drop
+        // this handle instead of re-attaching a stale HLS instance.
+        handle.dispose()
+        return
+      }
+      activeScrub = handle
+      genState = { ...genState, scrub: handle }
+      paint()
+    } catch (err) {
+      // Ignore a stale failure from a cancelled load.
+      if (seq !== scrubLoadSeq) return
+      window.removeEventListener(ROUTE_CHANGE_START_EVENT, clearScrub)
+      genState = {
+        ...INITIAL_GEN,
+        stage: 'error',
+        errorDetail: err instanceof Error ? err.message : String(err),
+      }
+      paint()
+    }
   }
 
   function buildFramesBody(s: FramesState): DocumentFragment {

@@ -1373,7 +1373,12 @@ body.browse-view-map .browse-title {
     height: var(--component-browse-thumb-size);
     border-radius: var(--component-browse-thumb-radius);
     object-fit: cover;
-    background: var(--color-surface-alt);
+    /* Transparent so a globe thumbnail (a round disc on transparency)
+       blends onto the card instead of sitting in a grey box. The img
+       only renders when a thumbnail exists, so this is never a
+       no-thumbnail placeholder; opaque thumbnails cover the slot via
+       object-fit so the background is moot for them. */
+    background: transparent;
 }
 
 .browse-card.expanded .browse-card-thumb {
@@ -1876,7 +1881,8 @@ body.catalog-empty #map-controls {
     block-size: calc(32px * var(--ui-scale));
     border-radius: calc(4px * var(--ui-scale));
     object-fit: cover;
-    background: var(--color-surface-alt);
+    /* Transparent — see .browse-card-thumb. */
+    background: transparent;
 }
 
 .browse-continue-card-title {

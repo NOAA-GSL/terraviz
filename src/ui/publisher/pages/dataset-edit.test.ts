@@ -41,11 +41,20 @@ function dataset(
 
 function detailResponse(
   d: PublisherDatasetDetail,
-  extras: { keywords?: string[]; tags?: string[] } = {},
+  extras: {
+    keywords?: string[]
+    tags?: string[]
+    data_url?: string | null
+    thumbnail_url?: string | null
+    legend_url?: string | null
+  } = {},
 ): Response {
   return new Response(
     JSON.stringify({
       dataset: d,
+      data_url: extras.data_url ?? null,
+      thumbnail_url: extras.thumbnail_url ?? null,
+      legend_url: extras.legend_url ?? null,
       keywords: extras.keywords ?? [],
       tags: extras.tags ?? [],
     }),
@@ -130,6 +139,92 @@ describe('renderDatasetEditPage', () => {
     expect(mount.querySelector<HTMLInputElement>('#dataset-legend-ref')?.value).toBe(
       'r2:datasets/01EDIT/legend.png',
     )
+  })
+
+  it('offers "generate from this dataset\'s data" for an image dataset with a resolved data URL', async () => {
+    // The server resolves the row's `r2:` data_ref to a public URL
+    // (`data_url`) — so an already-uploaded image gets the one-click
+    // path without re-uploading.
+    const fetchFn = vi.fn().mockResolvedValue(
+      detailResponse(
+        dataset({ format: 'image/png', data_ref: 'r2:datasets/01EDIT/by-digest/aa/asset.png' }),
+        { data_url: 'https://assets.example/datasets/01EDIT/by-digest/aa/asset.png' },
+      ),
+    )
+    await renderDatasetEditPage(mount, '01EDIT0000000000000000000', {
+      fetchFn: fetchFn as unknown as typeof fetch,
+    })
+    expect(mount.textContent).toContain('Generate from this dataset')
+  })
+
+  it('hides the one-click button for an image dataset when no data URL resolved', async () => {
+    // No `data_url` (e.g. R2 public base not bound) → the one-click
+    // path is hidden; the manual frame picker still works.
+    const fetchFn = vi.fn().mockResolvedValue(
+      detailResponse(
+        dataset({ format: 'image/png', data_ref: 'r2:datasets/01EDIT/by-digest/aa/asset.png' }),
+        { data_url: null },
+      ),
+    )
+    await renderDatasetEditPage(mount, '01EDIT0000000000000000000', {
+      fetchFn: fetchFn as unknown as typeof fetch,
+    })
+    expect(mount.querySelector('.publisher-asset-uploader-generate')).not.toBeNull()
+    expect(mount.textContent).not.toContain('Generate from this dataset')
+  })
+
+  it('offers the data-source button for a video dataset with a resolved HLS URL', async () => {
+    // The resolved `data_url` is the dataset's HLS playlist; the
+    // uploader loads it into a scrubable video so the publisher picks
+    // a frame.
+    const fetchFn = vi.fn().mockResolvedValue(
+      detailResponse(
+        dataset({ format: 'video/mp4', data_ref: 'r2:videos/01EDIT/master.m3u8' }),
+        { data_url: 'https://assets.example/videos/01EDIT/master.m3u8' },
+      ),
+    )
+    await renderDatasetEditPage(mount, '01EDIT0000000000000000000', {
+      fetchFn: fetchFn as unknown as typeof fetch,
+    })
+    expect(mount.textContent).toContain('Generate from this dataset')
+  })
+
+  it('omits the data-source button for a legacy video dataset with no resolved URL', async () => {
+    // A `vimeo:` data_ref doesn't resolve to a public URL → null
+    // data_url → manual-frame path only.
+    const fetchFn = vi.fn().mockResolvedValue(
+      detailResponse(dataset({ format: 'video/mp4', data_ref: 'vimeo:123' }), {
+        data_url: null,
+      }),
+    )
+    await renderDatasetEditPage(mount, '01EDIT0000000000000000000', {
+      fetchFn: fetchFn as unknown as typeof fetch,
+    })
+    expect(mount.querySelector('.publisher-asset-uploader-generate')).not.toBeNull()
+    expect(mount.textContent).not.toContain('Generate from this dataset')
+  })
+
+  it('shows image previews of the current thumbnail + legend', async () => {
+    const fetchFn = vi.fn().mockResolvedValue(
+      detailResponse(
+        dataset({
+          thumbnail_ref: 'r2:datasets/01EDIT/thumbnail.webp',
+          legend_ref: 'r2:datasets/01EDIT/legend.png',
+        }),
+        {
+          thumbnail_url: 'https://assets.example/thumbnail.webp',
+          legend_url: 'https://assets.example/legend.png',
+        },
+      ),
+    )
+    await renderDatasetEditPage(mount, '01EDIT0000000000000000000', {
+      fetchFn: fetchFn as unknown as typeof fetch,
+    })
+    const previews = Array.from(
+      mount.querySelectorAll<HTMLImageElement>('img.publisher-form-aux-preview'),
+    ).map(i => i.src)
+    expect(previews).toContain('https://assets.example/thumbnail.webp')
+    expect(previews).toContain('https://assets.example/legend.png')
   })
 
   it('prefills keyword chips from the decoration arrays', async () => {

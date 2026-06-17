@@ -420,6 +420,59 @@ function renderCategorizationCard(
   return card
 }
 
+/**
+ * Image previews of the dataset's thumbnail + legend (resolved
+ * URLs). Read-only counterpart to the edit form's previews — the
+ * asset *refs* still appear as text in the Assets card; this card
+ * shows the actual images. Renders nothing when neither resolved.
+ */
+function renderMediaCard(
+  thumbnailUrl: string | null | undefined,
+  legendUrl: string | null | undefined,
+): HTMLElement {
+  if (!thumbnailUrl && !legendUrl) {
+    return document.createDocumentFragment() as unknown as HTMLElement
+  }
+  const card = document.createElement('section')
+  card.className = 'publisher-card publisher-glass'
+
+  const h2 = document.createElement('h2')
+  h2.className = 'publisher-card-heading'
+  h2.textContent = t('publisher.datasetDetail.section.media')
+  card.appendChild(h2)
+
+  const row = document.createElement('div')
+  row.className = 'publisher-detail-media'
+
+  const figures: ReadonlyArray<
+    readonly [
+      string | null | undefined,
+      'publisher.datasetDetail.media.thumbnail' | 'publisher.datasetDetail.media.legend',
+    ]
+  > = [
+    [thumbnailUrl, 'publisher.datasetDetail.media.thumbnail'],
+    [legendUrl, 'publisher.datasetDetail.media.legend'],
+  ]
+  for (const [url, captionKey] of figures) {
+    if (!url) continue
+    const figure = document.createElement('figure')
+    figure.className = 'publisher-detail-media-figure'
+    const img = document.createElement('img')
+    img.className = 'publisher-detail-media-img'
+    img.src = url
+    img.alt = t(captionKey)
+    img.loading = 'lazy'
+    figure.appendChild(img)
+    const caption = document.createElement('figcaption')
+    caption.className = 'publisher-detail-media-caption'
+    caption.textContent = t(captionKey)
+    figure.appendChild(caption)
+    row.appendChild(figure)
+  }
+  card.appendChild(row)
+  return card
+}
+
 function renderDetail(
   content: HTMLElement,
   d: PublisherDatasetDetail,
@@ -427,6 +480,8 @@ function renderDetail(
   tags: ReadonlyArray<string>,
   hooks: HeaderHooks,
   actionError: string | null,
+  thumbnailUrl: string | null | undefined,
+  legendUrl: string | null | undefined,
 ): void {
   const shell = document.createElement('main')
   shell.className = 'publisher-shell'
@@ -441,6 +496,7 @@ function renderDetail(
     shell.appendChild(err)
   }
   shell.appendChild(renderAbstract(d))
+  shell.appendChild(renderMediaCard(thumbnailUrl, legendUrl))
 
   shell.appendChild(
     renderFieldsCard('publisher.datasetDetail.section.identity', [
@@ -613,6 +669,8 @@ function paint(
     data.tags ?? [],
     hooks,
     actionError,
+    data.thumbnail_url,
+    data.legend_url,
   )
   // Start (or restart) transcode polling if the row is still
   // transcoding. Stop any running poller if it isn't. The

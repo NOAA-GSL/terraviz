@@ -113,6 +113,7 @@ npm run screenshots:smoke   # gating interaction tests (search, Orbit, nav)
 | `src/services/deepLinkService.ts` | Deep-link handler — `zyra://` URLs and `/dataset/…` links |
 | `src/services/shareService.ts` | Share datasets via the Web Share API or clipboard |
 | `src/services/screenshotService.ts` | Captures the globe canvas (+ optional UI) as a compressed JPEG data URL |
+| `src/services/globeThumbnail.ts` | Renders a 2:1 equirectangular data frame onto a sphere (lazy Three.js, in-browser) and captures a square globe thumbnail — the publisher-portal generator for `thumbnail_ref` |
 | `src/services/zipDownloadService.ts` | Web-only "package a dataset as a `.zip`" entry point |
 | `src/services/heroService.ts` | Picks the single "Right now" hero candidate for the catalog landing surface |
 | `src/services/generalFeedbackService.ts` | Posts app-level feedback (bug / feature / other) to `/api/general-feedback` |

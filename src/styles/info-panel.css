@@ -281,7 +281,9 @@
     display: block;
     width: 100%;
     border-radius: calc(4px * var(--ui-scale));
-    background: var(--color-surface-alt);
+    /* Transparent so a globe thumbnail blends in rather than sitting
+       in a grey box (matches .browse-card-thumb). */
+    background: transparent;
 }
 .info-thumbnail-download-label {
     display: inline-block;
