@@ -137,13 +137,25 @@ function fakeThree() {
  * (so a test can assert the dataset overlay was forwarded), and
  * fires `onReady` synchronously like the real image branch.
  */
-function fakeEarthFactory(events: string[]) {
+function fakeEarthFactory(events: string[], opts: { baseDeferred?: boolean } = {}) {
   const specs: Array<{ kind?: string; options?: unknown }> = []
+  // `baseDeferred` models a regional dataset whose colour base-Earth
+  // diffuse hasn't streamed in yet — `baseDiffuseTexture` is null
+  // until `fireBaseLoaded()`.
+  let baseLoaded = !opts.baseDeferred
+  let baseCb: (() => void) | null = null
   const createEarth = (() => ({
     globe: { rotation: { x: 0, y: 0 } },
-    baseDiffuseTexture: null,
+    get baseDiffuseTexture() {
+      return baseLoaded ? {} : null
+    },
     baseEarthTexture: {},
-    onBaseDiffuseChange: () => () => {},
+    onBaseDiffuseChange: (cb: () => void) => {
+      baseCb = cb
+      return () => {
+        baseCb = null
+      }
+    },
     addTo: () => events.push('earth.addTo'),
     removeFrom: () => events.push('earth.removeFrom'),
     setTexture: (spec: { kind?: string; options?: unknown }, onReady?: () => void) => {
@@ -157,7 +169,11 @@ function fakeEarthFactory(events: string[]) {
   })) as unknown as NonNullable<
     Parameters<typeof generateGlobeThumbnail>[2]
   >['createEarth']
-  return { createEarth, specs }
+  const fireBaseLoaded = (): void => {
+    baseLoaded = true
+    baseCb?.()
+  }
+  return { createEarth, specs, fireBaseLoaded }
 }
 
 function fakeCanvasFactory(blob: Blob) {
@@ -221,6 +237,59 @@ describe('generateGlobeThumbnail', () => {
 
     expect(specs).toHaveLength(1)
     expect(specs[0]).toMatchObject({ kind: 'image', options: overlay })
+  })
+
+  it('waits for the colour base-Earth diffuse before capturing a regional dataset', async () => {
+    const { three, events, blob } = fakeThree()
+    const { createEarth, fireBaseLoaded } = fakeEarthFactory(events, { baseDeferred: true })
+    const source = { width: 2048, height: 1024 } as unknown as HTMLImageElement
+
+    const p = generateGlobeThumbnail(
+      source,
+      // Regional Earth dataset → base Earth shows outside the bbox.
+      { overlay: { boundingBox: { n: 60, s: 20, w: -10, e: 30 } }, baseDiffuseTimeoutMs: 10_000 },
+      { loadThree: async () => three, createCanvas: fakeCanvasFactory(blob), createEarth },
+    )
+    // Let setTexture + the base-diffuse subscribe settle.
+    for (let i = 0; i < 4; i++) await new Promise(r => setTimeout(r, 0))
+    // The render is gated on the base diffuse — it hasn't fired yet.
+    expect(events).not.toContain('render')
+
+    fireBaseLoaded()
+    const result = await p
+    expect(result).toBe(blob)
+    expect(events).toContain('render')
+  })
+
+  it('captures with the fallback base after the timeout when the diffuse never loads', async () => {
+    const { three, events, blob } = fakeThree()
+    const { createEarth } = fakeEarthFactory(events, { baseDeferred: true })
+    const source = { width: 2048, height: 1024 } as unknown as HTMLImageElement
+
+    // Never fire base-loaded; a short timeout must still let it capture.
+    const result = await generateGlobeThumbnail(
+      source,
+      { overlay: { boundingBox: { n: 60, s: 20, w: -10, e: 30 } }, baseDiffuseTimeoutMs: 5 },
+      { loadThree: async () => three, createCanvas: fakeCanvasFactory(blob), createEarth },
+    )
+    expect(result).toBe(blob)
+    expect(events).toContain('render')
+  })
+
+  it('does NOT wait for the base on a global dataset (no bbox)', async () => {
+    const { three, events, blob } = fakeThree()
+    // Deferred base, but no bbox → no base is shown, so no wait.
+    const { createEarth } = fakeEarthFactory(events, { baseDeferred: true })
+    const source = { width: 2048, height: 1024 } as unknown as HTMLImageElement
+
+    const result = await generateGlobeThumbnail(
+      source,
+      { baseDiffuseTimeoutMs: 10_000 },
+      { loadThree: async () => three, createCanvas: fakeCanvasFactory(blob), createEarth },
+    )
+    // Resolved immediately (didn't hang on the 10s base wait).
+    expect(result).toBe(blob)
+    expect(events).toContain('render')
   })
 
   it('still disposes resources when the render throws', async () => {

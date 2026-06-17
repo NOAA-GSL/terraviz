@@ -25,6 +25,7 @@
 
 import type * as THREE from 'three'
 import type { DatasetOverlayOptions } from '../types'
+import { isEarthBody } from './datasetOverlayOptions'
 import type {
   PhotorealEarthHandle,
   PhotorealEarthOptions,
@@ -70,6 +71,12 @@ export interface GlobeThumbnailOptions {
    *  etc.). Omit for a generic hand-picked frame (full-globe
    *  equirectangular). */
   overlay?: DatasetOverlayOptions
+  /** Max time to wait for the colour base-Earth diffuse to stream in
+   *  before capturing a *regional* (bbox) Earth dataset — otherwise
+   *  the base would freeze on the low-detail grey fallback. Ignored
+   *  for global / non-Earth datasets (no base is shown). Default
+   *  4000 ms; on timeout we capture with whatever base has loaded. */
+  baseDiffuseTimeoutMs?: number
 }
 
 /** Injection seam — WebGL / the photoreal-Earth shaders can't run
@@ -196,6 +203,38 @@ function defaultCreateCanvas(width: number, height: number): HTMLCanvasElement {
   return c
 }
 
+/** Default ceiling on the base-Earth diffuse wait for regional
+ *  datasets — long enough for the 2K tier on a typical connection,
+ *  short enough that a slow/unreachable CDN doesn't hang thumbnail
+ *  generation (we capture with the grey fallback on timeout). */
+const DEFAULT_BASE_DIFFUSE_TIMEOUT_MS = 4000
+
+/**
+ * Resolve once the base-Earth colour diffuse has loaded (the handle
+ * exposes a "tier upgraded" subscription), or after `timeoutMs` —
+ * whichever comes first. Resolves immediately if a tier already
+ * landed. Used only for regional Earth datasets, where the area
+ * outside the bbox shows the base Earth.
+ */
+function waitForBaseDiffuse(earth: PhotorealEarthHandle, timeoutMs: number): Promise<void> {
+  if (earth.baseDiffuseTexture) return Promise.resolve()
+  return new Promise<void>(resolve => {
+    let settled = false
+    const finish = (): void => {
+      if (settled) return
+      settled = true
+      unsubscribe()
+      clearTimeout(timer)
+      resolve()
+    }
+    const unsubscribe = earth.onBaseDiffuseChange(() => finish())
+    const timer = setTimeout(finish, timeoutMs)
+    // The texture may have landed between the guard above and the
+    // subscribe — capture that so we don't wait the full timeout.
+    if (earth.baseDiffuseTexture) finish()
+  })
+}
+
 /**
  * Render `source` onto the globe and capture a square thumbnail.
  *
@@ -273,6 +312,21 @@ export async function generateGlobeThumbnail(
         resolve,
       )
     })
+
+    // A regional Earth dataset shows a base Earth outside its bbox,
+    // which streams 2K→4K→8K from a CDN. A thumbnail is a one-shot
+    // capture, so wait (bounded) for the colour diffuse to land —
+    // otherwise the base freezes on the low-detail grey fallback.
+    // Global / non-Earth datasets never show a base, so skip the wait.
+    const overlay = options.overlay
+    const needsBase = !!overlay?.boundingBox && isEarthBody(overlay.celestialBody)
+    if (needsBase && !earth.baseDiffuseTexture) {
+      await waitForBaseDiffuse(
+        earth,
+        options.baseDiffuseTimeoutMs ?? DEFAULT_BASE_DIFFUSE_TIMEOUT_MS,
+      )
+    }
+
     earth.update()
     renderer.render(scene, camera)
 
