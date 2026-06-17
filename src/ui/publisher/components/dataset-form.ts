@@ -974,27 +974,36 @@ function auxAssetField(
  * Resolve the dataset's data into a URL the globe-thumbnail
  * generator can fetch as a 2:1 frame.
  *
- * Image datasets only: the data frame *is* a 2:1 equirectangular
- * image, so the generator can wrap it directly. The server resolves
- * the row's `data_ref` (an `r2:` ref or a bare URL) to a public URL
- * and hands it back as `state.dataUrl` — so an already-uploaded
- * image dataset gets the one-click "Generate from this dataset's
- * data" path without re-uploading. The legacy `https://` `data_ref`
- * is a fallback for any path that didn't carry a resolved `dataUrl`.
+ * The server resolves the row's `data_ref` (an `r2:` ref or a bare
+ * URL) to a public URL and hands it back as `state.dataUrl`, so an
+ * already-uploaded dataset gets the one-click "Generate from this
+ * dataset's data" path without re-uploading:
  *
- * Video datasets return null here: `data_ref` is an HLS playlist,
- * not a still — a "scrub to a frame" picker is a separate follow-up.
- * When this returns null the generator hides the one-click button
- * and the manual frame picker is the path.
+ *  - **Image** datasets: the data frame *is* a 2:1 equirectangular
+ *    image, wrapped directly. A legacy `https://` `data_ref` is a
+ *    fallback for any path that didn't carry a resolved `dataUrl`.
+ *  - **Video** datasets: `dataUrl` is the HLS playlist, which the
+ *    uploader loads into a scrubable `<video>` so the publisher
+ *    picks a frame. Legacy `vimeo:` refs don't resolve to a public
+ *    URL → null → the manual frame picker.
+ *
+ * Returns null for anything else (tours) and when no URL resolved,
+ * which hides the one-click button and leaves the manual frame
+ * picker as the path.
  */
 function thumbnailDataSourceUrl(state: FormState): string | null {
   const isImage =
     state.format === 'image/png' ||
     state.format === 'image/jpeg' ||
     state.format === 'image/webp'
-  if (!isImage) return null
+  const isVideo = state.format === 'video/mp4'
+  if (!isImage && !isVideo) return null
   if (state.dataUrl.trim()) return state.dataUrl.trim()
-  return /^https:\/\//i.test(state.dataRef.trim()) ? state.dataRef.trim() : null
+  // Legacy fallback only applies to a directly-fetchable image ref.
+  if (isImage) {
+    return /^https:\/\//i.test(state.dataRef.trim()) ? state.dataRef.trim() : null
+  }
+  return null
 }
 
 /**

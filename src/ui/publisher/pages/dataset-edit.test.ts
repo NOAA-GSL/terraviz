@@ -165,15 +165,33 @@ describe('renderDatasetEditPage', () => {
     expect(mount.textContent).not.toContain('Generate from this dataset')
   })
 
-  it('omits the data-source generate button for a video dataset (no usable 2:1 frame)', async () => {
+  it('offers the data-source button for a video dataset with a resolved HLS URL', async () => {
+    // The resolved `data_url` is the dataset's HLS playlist; the
+    // uploader loads it into a scrubable video so the publisher picks
+    // a frame.
     const fetchFn = vi.fn().mockResolvedValue(
-      detailResponse(dataset({ format: 'video/mp4', data_ref: 'vimeo:123' })),
+      detailResponse(
+        dataset({ format: 'video/mp4', data_ref: 'r2:videos/01EDIT/master.m3u8' }),
+        { data_url: 'https://assets.example/videos/01EDIT/master.m3u8' },
+      ),
     )
     await renderDatasetEditPage(mount, '01EDIT0000000000000000000', {
       fetchFn: fetchFn as unknown as typeof fetch,
     })
-    // The manual-frame generator is still offered on the thumbnail
-    // uploader; only the one-click data-source button is hidden.
+    expect(mount.textContent).toContain('Generate from this dataset')
+  })
+
+  it('omits the data-source button for a legacy video dataset with no resolved URL', async () => {
+    // A `vimeo:` data_ref doesn't resolve to a public URL → null
+    // data_url → manual-frame path only.
+    const fetchFn = vi.fn().mockResolvedValue(
+      detailResponse(dataset({ format: 'video/mp4', data_ref: 'vimeo:123' }), {
+        data_url: null,
+      }),
+    )
+    await renderDatasetEditPage(mount, '01EDIT0000000000000000000', {
+      fetchFn: fetchFn as unknown as typeof fetch,
+    })
     expect(mount.querySelector('.publisher-asset-uploader-generate')).not.toBeNull()
     expect(mount.textContent).not.toContain('Generate from this dataset')
   })

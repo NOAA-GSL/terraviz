@@ -830,6 +830,15 @@
   border: 0;
 }
 
+.publisher-asset-uploader-generate-video {
+  inline-size: 100%;
+  max-inline-size: calc(360px * var(--ui-scale));
+  block-size: auto;
+  align-self: flex-start;
+  border-radius: calc(6px * var(--ui-scale));
+  background: #000;
+}
+
 .publisher-asset-uploader-generate-preview {
   inline-size: calc(160px * var(--ui-scale));
   block-size: calc(160px * var(--ui-scale));

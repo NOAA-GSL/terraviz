@@ -657,6 +657,83 @@ describe('renderAssetUploader — auxiliary kinds (thumbnail / legend)', () => {
     expect(mount.querySelector('.publisher-asset-uploader-generate-preview')).not.toBeNull()
   })
 
+  it('lets a video dataset capture a frame from its own stream and renders a thumbnail', async () => {
+    const generated = new Blob(['globe'], { type: 'image/webp' })
+    const generateThumbnail = vi.fn().mockResolvedValue(generated)
+    const capturedCanvas = document.createElement('canvas')
+    const dispose = vi.fn()
+    const fakeVideo = document.createElement('video')
+    const loadVideoScrub = vi.fn().mockResolvedValue({
+      video: fakeVideo,
+      capture: () => capturedCanvas,
+      dispose,
+    })
+
+    mount.appendChild(
+      renderAssetUploader({
+        datasetId: '01AAAAAAAAAAAAAAAAAAAAAAAA',
+        kind: 'thumbnail',
+        format: 'video/mp4',
+        dataAssetUrl: 'https://assets.example/master.m3u8',
+        onUploaded: () => {},
+        generateThumbnail,
+        loadVideoScrub,
+      }),
+    )
+
+    // One-click "Generate from this dataset's data" → loads the stream.
+    Array.from(mount.querySelectorAll('button'))
+      .find(b => b.textContent?.includes('Generate from this dataset'))!
+      .click()
+    for (let i = 0; i < 6; i++) await new Promise(r => setTimeout(r, 0))
+
+    expect(loadVideoScrub).toHaveBeenCalledWith('https://assets.example/master.m3u8')
+    // The scrub UI mounts the video + a Capture button.
+    expect(mount.contains(fakeVideo)).toBe(true)
+    const captureBtn = Array.from(mount.querySelectorAll('button')).find(
+      b => b.textContent === 'Capture this frame',
+    )!
+    expect(captureBtn).toBeTruthy()
+
+    // Capturing renders a globe thumbnail from the grabbed frame and
+    // tears the stream down.
+    captureBtn.click()
+    for (let i = 0; i < 6; i++) await new Promise(r => setTimeout(r, 0))
+
+    expect(generateThumbnail).toHaveBeenCalledOnce()
+    expect(generateThumbnail.mock.calls[0][0]).toBe(capturedCanvas)
+    expect(dispose).toHaveBeenCalled()
+    expect(mount.querySelector('.publisher-asset-uploader-generate-preview')).not.toBeNull()
+  })
+
+  it('disposes the video stream when the scrub is cancelled', async () => {
+    const dispose = vi.fn()
+    const loadVideoScrub = vi.fn().mockResolvedValue({
+      video: document.createElement('video'),
+      capture: () => document.createElement('canvas'),
+      dispose,
+    })
+    mount.appendChild(
+      renderAssetUploader({
+        datasetId: '01AAAAAAAAAAAAAAAAAAAAAAAA',
+        kind: 'thumbnail',
+        format: 'video/mp4',
+        dataAssetUrl: 'https://assets.example/master.m3u8',
+        onUploaded: () => {},
+        loadVideoScrub,
+      }),
+    )
+    Array.from(mount.querySelectorAll('button'))
+      .find(b => b.textContent?.includes('Generate from this dataset'))!
+      .click()
+    for (let i = 0; i < 6; i++) await new Promise(r => setTimeout(r, 0))
+    Array.from(mount.querySelectorAll('button'))
+      .find(b => b.textContent === 'Cancel')!
+      .click()
+    expect(dispose).toHaveBeenCalled()
+    expect(mount.querySelector('.publisher-asset-uploader-generate-video')).toBeNull()
+  })
+
   it('surfaces a generator error without uploading', async () => {
     const generateThumbnail = vi.fn().mockRejectedValue(new Error('render failed'))
     const decodeImage = vi
