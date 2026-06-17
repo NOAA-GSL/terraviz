@@ -25,6 +25,7 @@ import {
   getDatasetForPublisher,
   updateDataset,
 } from '../../_lib/dataset-mutations'
+import { resolveAssetRefStrict } from '../../_lib/r2-public-url'
 import { type JobQueue, WaitUntilJobQueue } from '../../_lib/job-queue'
 
 /** Test injection point — middleware/tests can pre-populate `context.data.jobQueue`. */
@@ -55,9 +56,18 @@ export const onRequestGet: PagesFunction<CatalogEnv, 'id'> = async context => {
   const row = await getDatasetForPublisher(db, publisher, id)
   if (!row) return jsonError(404, 'not_found', `Dataset ${id} not found.`)
   const decorations = (await getDecorations(db, [id])).get(id)
+  // Resolve the raw `data_ref` (`r2:<key>` or a bare URL) to a
+  // publicly-readable URL so the publisher portal's globe-thumbnail
+  // generator can fetch the dataset's own data frame ("Generate from
+  // this dataset's data") without the publisher re-uploading it.
+  // Null when the ref can't be resolved (no R2_PUBLIC_BASE bound, or
+  // a non-resolvable scheme) — the portal then hides the one-click
+  // affordance and falls back to the manual frame picker.
+  const dataUrl = resolveAssetRefStrict(context.env, row.data_ref)
   return new Response(
     JSON.stringify({
       dataset: row,
+      data_url: dataUrl,
       keywords: decorations?.keywords ?? [],
       tags: decorations?.tags ?? [],
     }),

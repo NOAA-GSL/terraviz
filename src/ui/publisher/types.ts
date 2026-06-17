@@ -88,6 +88,13 @@ export interface ListDatasetsResponse {
 
 export interface DatasetDetailResponse {
   dataset: PublisherDatasetDetail
+  /** The dataset's raw `data_ref` resolved to a publicly-readable
+   *  URL (an `r2:` ref → its public origin, a bare URL → itself).
+   *  Null when it can't be resolved (no R2 public base bound). The
+   *  edit form uses it to offer the globe-thumbnail generator's
+   *  "Generate from this dataset's data" one-click path for already-
+   *  uploaded image datasets. */
+  data_url?: string | null
   /** Decoration arrays sit alongside the row rather than inline
    *  because the server stores them in separate join tables; the
    *  edit form prefills its chip inputs from these. */

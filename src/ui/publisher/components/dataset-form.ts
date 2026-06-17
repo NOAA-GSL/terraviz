@@ -45,6 +45,13 @@ export interface DatasetFormOptions {
    *  `PublisherDatasetDetail` shape (the detail page's wire type)
    *  carries every field the form reads. */
   initial?: PublisherDatasetDetail
+  /** The dataset's `data_ref` resolved to a publicly-readable URL
+   *  (edit mode). When the dataset is an image, this becomes the
+   *  source for the globe-thumbnail generator's "Generate from this
+   *  dataset's data" one-click path — so an already-uploaded image
+   *  doesn't have to be re-uploaded. Null/absent → that affordance
+   *  is hidden and the manual frame picker is the path. */
+  dataUrl?: string | null
   /** Keyword chips to prefill in edit mode. Optional — server
    *  endpoints that don't yet ship keywords can pass an empty
    *  array and the chip input starts blank. */
@@ -86,6 +93,10 @@ interface FormState {
    *  the manual input is the create-mode + external fallback. */
   thumbnailRef: string
   legendRef: string
+  /** Resolved public URL of the dataset's own data (edit mode), used
+   *  as the globe-thumbnail generator's auto source for image
+   *  datasets. Empty when absent / unresolvable. */
+  dataUrl: string
   organization: string
   abstract: string
   /** Toggle between editing the abstract markdown source and
@@ -961,14 +972,20 @@ function auxAssetField(
 
 /**
  * Resolve the dataset's data into a URL the globe-thumbnail
- * generator can fetch as a 2:1 frame. v1 is deliberately
- * conservative: only image-format datasets whose `data_ref` is an
- * absolute HTTPS URL, since those are directly fetchable from the
- * portal without a server-side resolver. `r2:` / `vimeo:` refs and
- * video frame-grabbing need backend support and are a follow-up;
- * when this returns null the uploader simply hides the
- * "from this dataset's data" button and the manual-frame path
- * still works.
+ * generator can fetch as a 2:1 frame.
+ *
+ * Image datasets only: the data frame *is* a 2:1 equirectangular
+ * image, so the generator can wrap it directly. The server resolves
+ * the row's `data_ref` (an `r2:` ref or a bare URL) to a public URL
+ * and hands it back as `state.dataUrl` — so an already-uploaded
+ * image dataset gets the one-click "Generate from this dataset's
+ * data" path without re-uploading. The legacy `https://` `data_ref`
+ * is a fallback for any path that didn't carry a resolved `dataUrl`.
+ *
+ * Video datasets return null here: `data_ref` is an HLS playlist,
+ * not a still — a "scrub to a frame" picker is a separate follow-up.
+ * When this returns null the generator hides the one-click button
+ * and the manual frame picker is the path.
  */
 function thumbnailDataSourceUrl(state: FormState): string | null {
   const isImage =
@@ -976,6 +993,7 @@ function thumbnailDataSourceUrl(state: FormState): string | null {
     state.format === 'image/jpeg' ||
     state.format === 'image/webp'
   if (!isImage) return null
+  if (state.dataUrl.trim()) return state.dataUrl.trim()
   return /^https:\/\//i.test(state.dataRef.trim()) ? state.dataRef.trim() : null
 }
 
@@ -1543,6 +1561,7 @@ function initialState(
   row: PublisherDatasetDetail | undefined,
   initialKeywords: ReadonlyArray<string>,
   initialTags: ReadonlyArray<string>,
+  dataUrl: string | null | undefined,
 ): FormState {
   if (mode === 'create' || !row) {
     return {
@@ -1554,6 +1573,7 @@ function initialState(
       dataRef: '',
       thumbnailRef: '',
       legendRef: '',
+      dataUrl: '',
       organization: '',
       abstract: '',
       abstractPreviewing: false,
@@ -1591,6 +1611,7 @@ function initialState(
     dataRef: row.data_ref ?? '',
     thumbnailRef: row.thumbnail_ref ?? '',
     legendRef: row.legend_ref ?? '',
+    dataUrl: dataUrl ?? '',
     organization: row.organization ?? '',
     abstract: row.abstract ?? '',
     abstractPreviewing: false,
@@ -1630,6 +1651,7 @@ export function renderDatasetForm(
     options.initial,
     options.initialKeywords ?? [],
     options.initialTags ?? [],
+    options.dataUrl,
   )
   // One lifecycle token per form mount, shared across every
   // renderForm call (internal re-renders included). Flipped to

@@ -41,11 +41,12 @@ function dataset(
 
 function detailResponse(
   d: PublisherDatasetDetail,
-  extras: { keywords?: string[]; tags?: string[] } = {},
+  extras: { keywords?: string[]; tags?: string[]; data_url?: string | null } = {},
 ): Response {
   return new Response(
     JSON.stringify({
       dataset: d,
+      data_url: extras.data_url ?? null,
       keywords: extras.keywords ?? [],
       tags: extras.tags ?? [],
     }),
@@ -132,16 +133,36 @@ describe('renderDatasetEditPage', () => {
     )
   })
 
-  it('offers "generate from this dataset\'s data" for an image dataset with an HTTPS data_ref', async () => {
+  it('offers "generate from this dataset\'s data" for an image dataset with a resolved data URL', async () => {
+    // The server resolves the row's `r2:` data_ref to a public URL
+    // (`data_url`) — so an already-uploaded image gets the one-click
+    // path without re-uploading.
     const fetchFn = vi.fn().mockResolvedValue(
       detailResponse(
-        dataset({ format: 'image/png', data_ref: 'https://cdn.example/frame.png' }),
+        dataset({ format: 'image/png', data_ref: 'r2:datasets/01EDIT/by-digest/aa/asset.png' }),
+        { data_url: 'https://assets.example/datasets/01EDIT/by-digest/aa/asset.png' },
       ),
     )
     await renderDatasetEditPage(mount, '01EDIT0000000000000000000', {
       fetchFn: fetchFn as unknown as typeof fetch,
     })
     expect(mount.textContent).toContain('Generate from this dataset')
+  })
+
+  it('hides the one-click button for an image dataset when no data URL resolved', async () => {
+    // No `data_url` (e.g. R2 public base not bound) → the one-click
+    // path is hidden; the manual frame picker still works.
+    const fetchFn = vi.fn().mockResolvedValue(
+      detailResponse(
+        dataset({ format: 'image/png', data_ref: 'r2:datasets/01EDIT/by-digest/aa/asset.png' }),
+        { data_url: null },
+      ),
+    )
+    await renderDatasetEditPage(mount, '01EDIT0000000000000000000', {
+      fetchFn: fetchFn as unknown as typeof fetch,
+    })
+    expect(mount.querySelector('.publisher-asset-uploader-generate')).not.toBeNull()
+    expect(mount.textContent).not.toContain('Generate from this dataset')
   })
 
   it('omits the data-source generate button for a video dataset (no usable 2:1 frame)', async () => {

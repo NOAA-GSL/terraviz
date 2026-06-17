@@ -27,7 +27,7 @@ import type { DatasetDetailResponse } from '../types'
 
 export type DatasetEditPageOptions = Omit<
   DatasetFormOptions,
-  'mode' | 'initial' | 'initialKeywords' | 'initialTags'
+  'mode' | 'initial' | 'dataUrl' | 'initialKeywords' | 'initialTags'
 >
 
 function endpoint(id: string): string {
@@ -95,6 +95,7 @@ export async function renderDatasetEditPage(
     ...options,
     mode: 'edit',
     initial: result.data.dataset,
+    dataUrl: result.data.data_url ?? null,
     initialKeywords: result.data.keywords ?? [],
     initialTags: result.data.tags ?? [],
   })
