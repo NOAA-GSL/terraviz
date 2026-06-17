@@ -748,6 +748,15 @@ function geographyCard(state: FormState): HTMLElement {
   heading.textContent = t('publisher.datasetForm.section.geography')
   card.appendChild(heading)
 
+  // Projection expectation — the globe (and the generated thumbnail)
+  // assume equirectangular imagery; reprojecting other CRSs is a
+  // Zyra-workflow / offline step, not something this form does. See
+  // docs/ZYRA_INTEGRATION_PLAN.md §"Reprojection lives in Zyra".
+  const projectionNote = document.createElement('p')
+  projectionNote.className = 'publisher-form-help'
+  projectionNote.textContent = t('publisher.datasetForm.help.geography')
+  card.appendChild(projectionNote)
+
   // Bounding box — four numeric corners in a row.
   const bboxWrap = document.createElement('div')
   bboxWrap.className = 'publisher-form-field'

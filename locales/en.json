@@ -741,6 +741,7 @@
   "publisher.datasetForm.help.dataRef": "Required to publish (drafts may leave it blank). Accepts a Vimeo ID (`vimeo:1234567`), an R2 path (`r2:videos/.../master.m3u8` or `r2:datasets/.../image.png`), or an absolute HTTPS URL. A guided uploader replaces this in a later phase.",
   "publisher.datasetForm.help.dataRefManual": "Optional. Use this to swap the row to a legacy `vimeo:` / `url:` reference or paste an existing `r2:videos/.../master.m3u8` path without re-uploading bytes. The uploader above is the normal path for new content.",
   "publisher.datasetForm.help.flippedInY": "Check if the source imagery is authored with an inverted (top-to-bottom) Y axis.",
+  "publisher.datasetForm.help.geography": "The globe expects equirectangular (plate carrée, EPSG:4326) imagery. Reproject other map projections first — e.g. `gdalwarp -t_srs EPSG:4326` — or render the data through a Zyra workflow.",
   "publisher.datasetForm.help.keywords": "Press Enter or comma to add. Max 20 keywords, 40 characters each.",
   "publisher.datasetForm.help.legend": "Optional. PNG, JPEG, or WebP — the colour-scale legend shown alongside the loaded dataset. Upload above (saved drafts), or paste an `r2:` / absolute HTTPS reference.",
   "publisher.datasetForm.help.licenseSpdx": "SPDX identifier (e.g., CC0-1.0, CC-BY-4.0). One of SPDX or License statement is required before publishing.",
