@@ -1,6 +1,7 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+import type { Page } from 'playwright'
 
-import { isSameOrigin } from './browser'
+import { gotoApp, isSameOrigin } from './browser'
 
 describe('isSameOrigin', () => {
   const base = 'https://terraviz.zyra-project.org'
@@ -25,5 +26,34 @@ describe('isSameOrigin', () => {
 
   it('is false for a malformed URL rather than throwing', () => {
     expect(isSameOrigin('not a url', base)).toBe(false)
+  })
+})
+
+describe('gotoApp', () => {
+  it('uses a 60s ceiling and waits only for domcontentloaded', async () => {
+    const goto = vi.fn().mockResolvedValue(null)
+    await gotoApp({ goto } as unknown as Page, '/?catalog=true')
+    expect(goto).toHaveBeenCalledTimes(1)
+    expect(goto).toHaveBeenCalledWith('/?catalog=true', {
+      waitUntil: 'domcontentloaded',
+      timeout: 60_000,
+    })
+  })
+
+  it('retries once when the first navigation times out (the catalog flake)', async () => {
+    const goto = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('page.goto: Timeout 60000ms exceeded.'))
+      .mockResolvedValueOnce(null)
+    await gotoApp({ goto } as unknown as Page, '/?catalog=true')
+    expect(goto).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not retry — and rethrows — a non-timeout navigation error', async () => {
+    const goto = vi.fn().mockRejectedValue(new Error('net::ERR_CONNECTION_REFUSED'))
+    await expect(
+      gotoApp({ goto } as unknown as Page, '/?catalog=true'),
+    ).rejects.toThrow('ERR_CONNECTION_REFUSED')
+    expect(goto).toHaveBeenCalledTimes(1)
   })
 })
