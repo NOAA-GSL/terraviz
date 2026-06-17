@@ -124,7 +124,20 @@ async function defaultLoadVideoScrub(url: string): Promise<VideoScrubHandle> {
   video.preload = 'auto'
   video.className = 'publisher-asset-uploader-generate-video'
   const svc = new HLSService()
-  await svc.loadStream(url, video)
+  try {
+    await svc.loadStream(url, video)
+  } catch (err) {
+    // On a load failure the handle (and its `dispose`) is never
+    // returned, so tear the HLS instance + element down here rather
+    // than leaking a live loader. PR #208 Copilot review.
+    try {
+      svc.destroy()
+    } catch {
+      /* already torn down */
+    }
+    video.remove()
+    throw err
+  }
   let disposed = false
   return {
     video,

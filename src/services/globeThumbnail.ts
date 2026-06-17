@@ -23,7 +23,6 @@
  * cleanly on the card surface.
  */
 
-import type * as THREE from 'three'
 import type { DatasetOverlayOptions } from '../types'
 import { isEarthBody } from './datasetOverlayOptions'
 import type {
