@@ -73,6 +73,7 @@ export interface PublisherDatasetDetail extends PublisherDataset {
   lon_origin?: number | null
   is_flipped_in_y?: number | null
   celestial_body?: string | null
+  radius_mi?: number | null
   website_link: string | null
   start_time: string | null
   end_time: string | null

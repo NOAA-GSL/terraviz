@@ -80,9 +80,25 @@ export function launchBrowser(opts: { args?: string[] } = {}): Promise<Browser> 
  * keeps streaming external resources (GIBS map tiles, video) well after
  * it is interactive, so waiting for `load` flakily times out in CI.
  * Scenes and checks wait on their own readiness selectors after this.
+ *
+ * The catalog / globe routes are WebGL-heavy, and in a long-lived
+ * capture browser (the Weblate capturer + the smoke suite both run many
+ * scenes through one browser) accumulated GPU + dev-server pressure can
+ * push the *initial* navigation past Playwright's default 30 s timeout —
+ * an intermittent `page.goto: Timeout 30000ms exceeded` on
+ * `/?catalog=true`. Use a longer ceiling and retry once: a stalled
+ * first attempt almost always succeeds on a warm second try (module
+ * transforms cached, transient contention passed).
  */
+const GOTO_TIMEOUT_MS = 60_000
+
 export async function gotoApp(page: Page, path: string): Promise<void> {
-  await page.goto(path, { waitUntil: 'domcontentloaded' })
+  try {
+    await page.goto(path, { waitUntil: 'domcontentloaded', timeout: GOTO_TIMEOUT_MS })
+  } catch (err) {
+    if (!(err instanceof Error) || !/timeout/i.test(err.message)) throw err
+    await page.goto(path, { waitUntil: 'domcontentloaded', timeout: GOTO_TIMEOUT_MS })
+  }
 }
 
 /** True when `url` is on the same origin as `baseURL`. Used to scope

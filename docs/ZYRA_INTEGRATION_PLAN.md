@@ -109,6 +109,46 @@ gap needs a tool on our side (or an upstream contribution).
 | 7 | **Verify** | Conceptual (checksums, schema validation, provenance) | Pre-upload QA | v1 implements the preflight in our runner CLI: ffprobe dimensions / codec / fps / duration against the SOS spec, SHA-256 digests (the publish API requires them anyway), frame-count match for sequences. Track upstream Verify for provenance manifests later. |
 | 8 | **Export** (disseminate, decimate) | Implemented — `zyra export local\|s3\|ftp\|post\|vimeo` | Hand off to TerraViz | **Deliberately unused for the upload.** Zyra exports to the runner's local disk; our publish CLI carries the bytes the rest of the way (rationale in §Integration principle). Upstream candidate once the contract is stable: a `zyra export terraviz` connector wrapping the same API flow. |
 
+### Reprojection lives in Zyra, not the portal
+
+**Decision.** The globe + thumbnail render stack assumes
+**equirectangular** (plate carrée, EPSG:4326) imagery — the sphere
+shader, `photorealEarth`, and the globe-thumbnail generator all map a
+2:1 equirectangular texture onto the sphere. Reprojecting data from
+other CRSs (polar-stereographic sea ice, geostationary full-disk,
+Mercator, …) into that form is a **Zyra responsibility, not a
+TerraViz one** — and explicitly *not* an in-browser feature nor a
+bespoke step in our own runner.
+
+Two cases, only one of which is a gap:
+
+- **Native scientific data** (GRIB2 / NetCDF carrying its own grid /
+  CRS). Already covered: Zyra's **Process** stage subsets + reprojects
+  and **Visualize** renders equirectangular frames (rows 2 & 5 above).
+  This is Zyra's core competency; nothing new is needed on our side.
+- **An already-rendered raster in a non-equirectangular projection**
+  (e.g. a polar-stereographic PNG someone produced offline). This is
+  the genuinely missing capability — a `process` `reproject`
+  (warp-to-EPSG:4326) command. It belongs **upstream in
+  `NOAA-GSL/zyra`**, where the Python geospatial stack (GDAL / pyproj /
+  rasterio) already lives, so every Zyra consumer benefits and it's
+  maintained once rather than reinvented per node.
+
+**TerraViz's footprint is an allowlist entry + a curated template,**
+once that command lands: add the subcommand to `ZYRA_STAGE_ALLOWLIST`
+(`src/types/zyra-workflow-constants.ts`) and ship a
+"reproject → visualize → publish" template. We **deliberately do not
+whitelist it yet** — the allowlist is coupled to a pinned Zyra runner
+container digest, so the entry waits until the upstream command set
+has solidified.
+
+**Manual-upload boundary.** The one-off asset/upload form has no Zyra
+in the loop, so it can't reproject. Source imagery there must already
+be equirectangular (EPSG:4326); the form says so and points at
+`gdalwarp -t_srs EPSG:4326`. Supporting arbitrary projections on the
+manual path would require a server-side warp step — out of scope and
+demand-gated.
+
 ### Integration principle: everything through the publish API
 
 Zyra's S3 export could conceivably write into R2 directly (R2 is

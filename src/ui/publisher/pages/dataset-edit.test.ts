@@ -227,6 +227,32 @@ describe('renderDatasetEditPage', () => {
     expect(previews).toContain('https://assets.example/legend.png')
   })
 
+  it('prefills the geography & projection fields from the row', async () => {
+    const fetchFn = vi.fn().mockResolvedValue(
+      detailResponse(
+        dataset({
+          bbox_n: 60,
+          bbox_s: 20,
+          bbox_w: -10,
+          bbox_e: 30,
+          lon_origin: 180,
+          is_flipped_in_y: 1,
+          celestial_body: 'Mars',
+          radius_mi: 2106,
+        }),
+      ),
+    )
+    await renderDatasetEditPage(mount, '01EDIT0000000000000000000', {
+      fetchFn: fetchFn as unknown as typeof fetch,
+    })
+    expect(mount.querySelector<HTMLInputElement>('#dataset-bbox-n')?.value).toBe('60')
+    expect(mount.querySelector<HTMLInputElement>('#dataset-bbox-e')?.value).toBe('30')
+    expect(mount.querySelector<HTMLInputElement>('#dataset-lon-origin')?.value).toBe('180')
+    expect(mount.querySelector<HTMLInputElement>('#dataset-flipped-y')?.checked).toBe(true)
+    expect(mount.querySelector<HTMLInputElement>('#dataset-celestial-body')?.value).toBe('Mars')
+    expect(mount.querySelector<HTMLInputElement>('#dataset-radius-mi')?.value).toBe('2106')
+  })
+
   it('prefills keyword chips from the decoration arrays', async () => {
     const fetchFn = vi.fn().mockResolvedValue(
       detailResponse(dataset(), { keywords: ['sst', 'anomaly'], tags: ['demo'] }),
