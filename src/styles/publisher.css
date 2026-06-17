@@ -810,6 +810,14 @@
   cursor: pointer;
 }
 
+/* The file input is visually hidden but still keyboard-focusable, so
+   surface focus on the styled label instead — otherwise keyboard
+   users tabbing to the picker get no visible focus (WCAG 2.4.7). */
+.publisher-asset-uploader-generate-pick:focus-within {
+  outline: 2px solid var(--color-accent, #6ea8fe);
+  outline-offset: 2px;
+}
+
 .publisher-asset-uploader-generate-input {
   position: absolute;
   width: 1px;

@@ -691,6 +691,57 @@ describe('renderAssetUploader — auxiliary kinds (thumbnail / legend)', () => {
     expect(fetchFn).not.toHaveBeenCalled()
   })
 
+  it('moves to the error state (no unhandled rejection) when a rotation re-render fails', async () => {
+    const generated = new Blob(['globe'], { type: 'image/webp' })
+    // First render (the initial preview) succeeds; the rotation
+    // re-render rejects.
+    const generateThumbnail = vi
+      .fn()
+      .mockResolvedValueOnce(generated)
+      .mockRejectedValueOnce(new Error('context lost'))
+    const decodeImage = vi
+      .fn()
+      .mockResolvedValue({ width: 2048, height: 1024 } as unknown as HTMLImageElement)
+
+    mount.appendChild(
+      renderAssetUploader({
+        datasetId: '01AAAAAAAAAAAAAAAAAAAAAAAA',
+        kind: 'thumbnail',
+        format: 'image/png',
+        onUploaded: () => {},
+        generateThumbnail,
+        decodeImage,
+      }),
+    )
+
+    const genInput = mount.querySelector<HTMLInputElement>(
+      'input[id^="dataset-asset-generate-"][type="file"]',
+    )!
+    const frame = new File(['frame'], 'frame.png', { type: 'image/png' })
+    Object.defineProperty(genInput, 'files', {
+      value: { 0: frame, length: 1, item: (i: number) => (i === 0 ? frame : null) },
+      configurable: true,
+    })
+    genInput.dispatchEvent(new Event('change', { bubbles: true }))
+    for (let i = 0; i < 6; i++) await new Promise(r => setTimeout(r, 0))
+    expect(mount.querySelector('.publisher-asset-uploader-generate-preview')).not.toBeNull()
+
+    // Move the longitude slider — the re-render rejects.
+    const lonSlider = mount.querySelector<HTMLInputElement>(
+      'input[type="range"][id$="-lon"]',
+    )!
+    lonSlider.value = '90'
+    lonSlider.dispatchEvent(new Event('input', { bubbles: true }))
+    lonSlider.dispatchEvent(new Event('change', { bubbles: true }))
+    for (let i = 0; i < 6; i++) await new Promise(r => setTimeout(r, 0))
+
+    // The generator surfaces the error rather than throwing into the void.
+    expect(
+      mount.querySelector('.publisher-asset-uploader-generate .publisher-asset-uploader-status-error'),
+    ).not.toBeNull()
+    expect(mount.querySelector('.publisher-asset-uploader-generate-preview')).toBeNull()
+  })
+
   it('rejects a non-image file for an aux kind before any network call', async () => {
     const fetchFn = vi.fn()
     mount.appendChild(

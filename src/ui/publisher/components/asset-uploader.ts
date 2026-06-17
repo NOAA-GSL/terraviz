@@ -602,7 +602,16 @@ export function renderAssetUploader(options: AssetUploaderOptions): HTMLElement 
     help.textContent = t('publisher.assetUploader.generate.help')
     section.appendChild(help)
 
-    const busy = g.stage === 'rendering'
+    // Busy whenever the generator is rendering OR the main uploader
+    // has an upload in flight — generator actions ("Generate…",
+    // "Use this thumbnail") must be inert during a hash/mint/PUT/
+    // complete cycle so a publisher can't kick off a second,
+    // overlapping `/asset` upload that stomps the in-flight state.
+    // Mirrors the main file picker's own disabled rule. PR #208
+    // Copilot review.
+    const uploadInFlight =
+      state.stage !== 'idle' && state.stage !== 'error' && state.stage !== 'done-direct'
+    const busy = g.stage === 'rendering' || uploadInFlight
 
     const controls = document.createElement('div')
     controls.className = 'publisher-asset-uploader-generate-controls'
@@ -695,7 +704,14 @@ export function renderAssetUploader(options: AssetUploaderOptions): HTMLElement 
       use.type = 'button'
       use.className = 'publisher-button publisher-button-primary'
       use.textContent = t('publisher.assetUploader.generate.use')
+      // Inert while an upload is in flight — clicking it would start a
+      // second concurrent `run(file)` over the same row. PR #208
+      // Copilot review.
+      use.disabled = busy
       use.addEventListener('click', () => {
+        // Belt-and-suspenders: even if a stale click lands, no-op
+        // while busy.
+        if (busy) return
         const file = g.file
         if (!file) return
         // Hand off to the shared upload path. Clear the preview
@@ -789,28 +805,46 @@ export function renderAssetUploader(options: AssetUploaderOptions): HTMLElement 
    *  (superseded by a newer rotation) are dropped via `genRenderSeq`
    *  so a slow render can't clobber a newer preview. The previous
    *  preview stays visible until the new one lands, so rotating
-   *  doesn't flash an empty frame. */
+   *  doesn't flash an empty frame.
+   *
+   *  Self-handles render failures (WebGL context loss, encode error)
+   *  by moving to the generator's error state — every caller (the
+   *  rotation slider's fire-and-forget `change`, the file/data
+   *  entrypoints) is therefore safe and can't produce an unhandled
+   *  rejection. PR #208 Copilot review. */
   async function renderPreview(): Promise<void> {
     const source = genState.source
     if (!source) return
     const seq = ++genRenderSeq
     const generate = options.generateThumbnail ?? generateGlobeThumbnail
-    const blob = await generate(source, {
-      lonOrigin: genState.lon,
-      latOrigin: genState.lat,
-    })
-    // A newer rotation started while this one was rendering — drop
-    // this result so the latest one wins.
-    if (seq !== genRenderSeq) return
-    const previewUrl = URL.createObjectURL(blob)
-    // WebP is the generator's default output; name + type line up
-    // with the aux image mime gate in `run()`.
-    const file = new File([blob], 'globe-thumbnail.webp', {
-      type: blob.type || 'image/webp',
-    })
-    if (genState.previewUrl) URL.revokeObjectURL(genState.previewUrl)
-    genState = { ...genState, stage: 'preview', previewUrl, file }
-    paint()
+    try {
+      const blob = await generate(source, {
+        lonOrigin: genState.lon,
+        latOrigin: genState.lat,
+      })
+      // A newer rotation started while this one was rendering — drop
+      // this result so the latest one wins.
+      if (seq !== genRenderSeq) return
+      const previewUrl = URL.createObjectURL(blob)
+      // WebP is the generator's default output; name + type line up
+      // with the aux image mime gate in `run()`.
+      const file = new File([blob], 'globe-thumbnail.webp', {
+        type: blob.type || 'image/webp',
+      })
+      if (genState.previewUrl) URL.revokeObjectURL(genState.previewUrl)
+      genState = { ...genState, stage: 'preview', previewUrl, file }
+      paint()
+    } catch (err) {
+      // Drop a stale failure superseded by a newer rotation.
+      if (seq !== genRenderSeq) return
+      if (genState.previewUrl) URL.revokeObjectURL(genState.previewUrl)
+      genState = {
+        ...INITIAL_GEN,
+        stage: 'error',
+        errorDetail: err instanceof Error ? err.message : String(err),
+      }
+      paint()
+    }
   }
 
   async function runGenerateFromFile(file: File): Promise<void> {
