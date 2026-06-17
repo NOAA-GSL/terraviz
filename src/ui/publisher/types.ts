@@ -56,6 +56,19 @@ export interface PublisherDatasetDetail extends PublisherDataset {
   thumbnail_ref: string | null
   legend_ref: string | null
   caption_ref: string | null
+  // Render hints (Phase 3d typed metadata) — used by the globe-
+  // thumbnail generator to render the dataset the way the live globe
+  // does (regional data clips to its bbox, flipped data isn't
+  // upside-down, dateline-centered data is oriented right). Optional
+  // so older payloads / fixtures without them still type-check;
+  // `overlayFromRow` treats absent the same as null.
+  bbox_n?: number | null
+  bbox_s?: number | null
+  bbox_w?: number | null
+  bbox_e?: number | null
+  lon_origin?: number | null
+  is_flipped_in_y?: number | null
+  celestial_body?: string | null
   website_link: string | null
   start_time: string | null
   end_time: string | null

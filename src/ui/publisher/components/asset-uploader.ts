@@ -39,6 +39,7 @@ import {
   type GlobeThumbnailOptions,
   type GlobeThumbnailSource,
 } from '../../../services/globeThumbnail'
+import type { DatasetOverlayOptions } from '../../../types'
 import {
   clearWarmupFlag,
   handleSessionError,
@@ -196,6 +197,12 @@ export interface AssetUploaderOptions {
    *  zero extra uploads. Hidden when null/absent (e.g. the data is
    *  a video or an unresolvable ref). Thumbnail kind only. */
   dataAssetUrl?: string | null
+  /** The dataset's render hints (bbox / lonOrigin / flip / celestial
+   *  body). Applied when generating from the dataset's *own* data
+   *  (the one-click button / a captured video frame) so the
+   *  thumbnail matches the live globe. Not applied to a hand-picked
+   *  frame, whose projection is unknown. */
+  dataAssetOverlay?: DatasetOverlayOptions | null
   /** Test seam — renders a 2:1 source to a globe thumbnail Blob at
    *  the given longitude/latitude. Defaults to the real WebGL
    *  `generateGlobeThumbnail`, which can't run under happy-dom. */
@@ -289,6 +296,10 @@ interface GenState {
   /** Active video-scrub handle during the `scrubbing` stage (video
    *  datasets) — the publisher seeks it, then captures a frame. */
   scrub?: VideoScrubHandle
+  /** The dataset's render hints to apply to this render — set when
+   *  the source is the dataset's own data, undefined for a
+   *  hand-picked frame. */
+  overlay?: DatasetOverlayOptions
   /** Current longitude spin in degrees (-180..180). */
   lon: number
   /** Current latitude tilt in degrees (-90..90). */
@@ -791,7 +802,14 @@ export function renderAssetUploader(options: AssetUploaderOptions): HTMLElement 
           window.removeEventListener(ROUTE_CHANGE_START_EVENT, clearScrub)
           handle.dispose()
           activeScrub = null
-          genState = { ...INITIAL_GEN, stage: 'rendering', source: canvas }
+          // The captured frame IS the dataset's data — apply its
+          // render hints so the thumbnail matches the live globe.
+          genState = {
+            ...INITIAL_GEN,
+            stage: 'rendering',
+            source: canvas,
+            overlay: options.dataAssetOverlay ?? undefined,
+          }
           paint()
           void renderPreview()
         })
@@ -978,6 +996,7 @@ export function renderAssetUploader(options: AssetUploaderOptions): HTMLElement 
       const blob = await generate(source, {
         lonOrigin: genState.lon,
         latOrigin: genState.lat,
+        overlay: genState.overlay,
       })
       // A newer rotation started while this one was rendering — drop
       // this result so the latest one wins. The newer render owns
@@ -1041,7 +1060,9 @@ export function renderAssetUploader(options: AssetUploaderOptions): HTMLElement 
     try {
       const blob = await fetchBlob(url)
       const img = await decode(blob)
-      genState = { ...genState, source: img }
+      // This IS the dataset's own data — apply its render hints so the
+      // thumbnail matches the live globe.
+      genState = { ...genState, source: img, overlay: options.dataAssetOverlay ?? undefined }
       await renderPreview()
     } catch (err) {
       genState = {

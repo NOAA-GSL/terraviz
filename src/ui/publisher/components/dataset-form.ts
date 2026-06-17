@@ -32,6 +32,7 @@ import { renderChipInput } from './chip-input'
 import { renderAssetUploader, type AuxAssetKind } from './asset-uploader'
 import { renderMarkdown } from '../../../services/markdownRenderer'
 import type { PublisherDatasetDetail } from '../types'
+import type { DatasetOverlayOptions } from '../../../types'
 import { ROUTE_CHANGE_START_EVENT } from '../router'
 
 export type DatasetFormMode = 'create' | 'edit'
@@ -97,6 +98,11 @@ interface FormState {
    *  as the globe-thumbnail generator's auto source for image
    *  datasets. Empty when absent / unresolvable. */
   dataUrl: string
+  /** The dataset's render hints (bbox / lonOrigin / flip / celestial
+   *  body), forwarded to the globe-thumbnail generator so a
+   *  generated thumbnail matches the live globe. Null in create mode
+   *  (no row yet). */
+  overlay: DatasetOverlayOptions | null
   organization: string
   abstract: string
   /** Toggle between editing the abstract markdown source and
@@ -900,6 +906,9 @@ function auxAssetField(
     /** Fetchable URL for the dataset's own data frame, forwarded to
      *  the uploader's globe-thumbnail generator (thumbnail only). */
     dataAssetUrl?: string | null
+    /** The dataset's render hints, forwarded so a generated thumbnail
+     *  matches the live globe (thumbnail only). */
+    dataAssetOverlay?: DatasetOverlayOptions | null
   },
 ): HTMLElement {
   const wrap = document.createElement('div')
@@ -931,6 +940,7 @@ function auxAssetField(
         format: state.format,
         currentDataRef: opts.refValue || null,
         dataAssetUrl: opts.dataAssetUrl ?? null,
+        dataAssetOverlay: opts.dataAssetOverlay ?? null,
         navigate: ctx.navigate,
         fetchFn: ctx.fetchFn,
         sleep: ctx.sleep,
@@ -968,6 +978,33 @@ function auxAssetField(
   )
 
   return wrap
+}
+
+/**
+ * Build the dataset's render hints from the detail row, mirroring
+ * the public serializer's mapping (bbox surfaces only when all four
+ * corners are present; lonOrigin / flip / celestialBody only when
+ * populated). Returns null when nothing is set, so the generator
+ * takes the plain full-globe path. The shape matches the live
+ * globe's `DatasetOverlayOptions`, so a thumbnail generated from it
+ * looks like the real globe.
+ */
+function overlayFromRow(row: PublisherDatasetDetail): DatasetOverlayOptions | null {
+  const overlay: DatasetOverlayOptions = {}
+  if (
+    row.bbox_n != null &&
+    row.bbox_s != null &&
+    row.bbox_w != null &&
+    row.bbox_e != null
+  ) {
+    overlay.boundingBox = { n: row.bbox_n, s: row.bbox_s, w: row.bbox_w, e: row.bbox_e }
+  }
+  if (typeof row.lon_origin === 'number') overlay.lonOrigin = row.lon_origin
+  if (row.is_flipped_in_y === 1) overlay.isFlippedInY = true
+  if (row.celestial_body && row.celestial_body.trim()) {
+    overlay.celestialBody = row.celestial_body
+  }
+  return Object.keys(overlay).length > 0 ? overlay : null
 }
 
 /**
@@ -1040,6 +1077,7 @@ function mediaCard(
       errorField: 'thumbnail_ref',
       cacheKey: 'thumbnailUploader',
       dataAssetUrl: thumbnailDataSourceUrl(state),
+      dataAssetOverlay: state.overlay,
     }),
   )
 
@@ -1583,6 +1621,7 @@ function initialState(
       thumbnailRef: '',
       legendRef: '',
       dataUrl: '',
+      overlay: null,
       organization: '',
       abstract: '',
       abstractPreviewing: false,
@@ -1621,6 +1660,7 @@ function initialState(
     thumbnailRef: row.thumbnail_ref ?? '',
     legendRef: row.legend_ref ?? '',
     dataUrl: dataUrl ?? '',
+    overlay: overlayFromRow(row),
     organization: row.organization ?? '',
     abstract: row.abstract ?? '',
     abstractPreviewing: false,

@@ -734,6 +734,75 @@ describe('renderAssetUploader — auxiliary kinds (thumbnail / legend)', () => {
     expect(mount.querySelector('.publisher-asset-uploader-generate-video')).toBeNull()
   })
 
+  it('forwards the dataset render hints (overlay) when generating from its own data', async () => {
+    const generated = new Blob(['globe'], { type: 'image/webp' })
+    const generateThumbnail = vi.fn().mockResolvedValue(generated)
+    const decodeImage = vi
+      .fn()
+      .mockResolvedValue({ width: 2048, height: 1024 } as unknown as HTMLImageElement)
+    const fetchImageBlob = vi.fn().mockResolvedValue(new Blob(['data'], { type: 'image/png' }))
+    const overlay = { boundingBox: { n: 60, s: 20, w: -10, e: 30 }, isFlippedInY: true }
+
+    mount.appendChild(
+      renderAssetUploader({
+        datasetId: '01AAAAAAAAAAAAAAAAAAAAAAAA',
+        kind: 'thumbnail',
+        format: 'image/png',
+        dataAssetUrl: 'https://cdn.example/data.png',
+        dataAssetOverlay: overlay,
+        onUploaded: () => {},
+        generateThumbnail,
+        decodeImage,
+        fetchImageBlob,
+      }),
+    )
+
+    Array.from(mount.querySelectorAll('button'))
+      .find(b => b.textContent?.includes('Generate from this dataset'))!
+      .click()
+    for (let i = 0; i < 6; i++) await new Promise(r => setTimeout(r, 0))
+
+    expect(generateThumbnail).toHaveBeenCalled()
+    expect(generateThumbnail.mock.calls[0][1]).toMatchObject({ overlay })
+  })
+
+  it('does NOT apply the dataset overlay to a hand-picked frame', async () => {
+    const generated = new Blob(['globe'], { type: 'image/webp' })
+    const generateThumbnail = vi.fn().mockResolvedValue(generated)
+    const decodeImage = vi
+      .fn()
+      .mockResolvedValue({ width: 2048, height: 1024 } as unknown as HTMLImageElement)
+
+    mount.appendChild(
+      renderAssetUploader({
+        datasetId: '01AAAAAAAAAAAAAAAAAAAAAAAA',
+        kind: 'thumbnail',
+        format: 'image/png',
+        // A regional overlay exists on the dataset, but the publisher
+        // picks an arbitrary frame — its projection is unknown, so the
+        // overlay must NOT be applied.
+        dataAssetOverlay: { boundingBox: { n: 60, s: 20, w: -10, e: 30 } },
+        onUploaded: () => {},
+        generateThumbnail,
+        decodeImage,
+      }),
+    )
+
+    const genInput = mount.querySelector<HTMLInputElement>(
+      'input[id^="dataset-asset-generate-"][type="file"]',
+    )!
+    const frame = new File(['frame'], 'frame.png', { type: 'image/png' })
+    Object.defineProperty(genInput, 'files', {
+      value: { 0: frame, length: 1, item: (i: number) => (i === 0 ? frame : null) },
+      configurable: true,
+    })
+    genInput.dispatchEvent(new Event('change', { bubbles: true }))
+    for (let i = 0; i < 6; i++) await new Promise(r => setTimeout(r, 0))
+
+    expect(generateThumbnail).toHaveBeenCalled()
+    expect(generateThumbnail.mock.calls[0][1]?.overlay).toBeUndefined()
+  })
+
   it('surfaces a generator error without uploading', async () => {
     const generateThumbnail = vi.fn().mockRejectedValue(new Error('render failed'))
     const decodeImage = vi

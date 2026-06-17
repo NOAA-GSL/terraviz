@@ -87,12 +87,6 @@ describe('canvasToBlob', () => {
 function fakeThree() {
   const events: string[] = []
   const blob = new Blob(['rendered'], { type: 'image/webp' })
-  const textures: Array<{
-    minFilter: unknown
-    magFilter: unknown
-    generateMipmaps: boolean
-  }> = []
-
   class WebGLRenderer {
     domElement: unknown
     constructor(opts: { canvas: unknown }) {
@@ -113,37 +107,6 @@ function fakeThree() {
   class Scene {
     add() {}
   }
-  class SphereGeometry {
-    dispose() {
-      events.push('geometry.dispose')
-    }
-  }
-  class Texture {
-    colorSpace = ''
-    needsUpdate = false
-    minFilter: unknown = 'mipmap-default'
-    magFilter: unknown = 'mipmap-default'
-    generateMipmaps = true
-    constructor(public image: unknown) {
-      textures.push(this)
-    }
-    dispose() {
-      events.push('texture.dispose')
-    }
-  }
-  class MeshBasicMaterial {
-    constructor(public opts: unknown) {}
-    dispose() {
-      events.push('material.dispose')
-    }
-  }
-  class Mesh {
-    rotation = { y: 0 }
-    constructor(
-      public geometry: unknown,
-      public material: unknown,
-    ) {}
-  }
   class OrthographicCamera {
     position = { set: vi.fn() }
     constructor(
@@ -160,16 +123,41 @@ function fakeThree() {
   const three = {
     WebGLRenderer,
     Scene,
-    SphereGeometry,
-    Texture,
-    MeshBasicMaterial,
-    Mesh,
     OrthographicCamera,
     SRGBColorSpace: 'srgb',
     LinearFilter: 'linear',
   } as unknown as typeof import('three')
 
-  return { three, events, blob, textures }
+  return { three, events, blob }
+}
+
+/**
+ * Fake earth factory — records lifecycle (addTo / setTexture /
+ * update / removeFrom / dispose) and the texture spec it's handed
+ * (so a test can assert the dataset overlay was forwarded), and
+ * fires `onReady` synchronously like the real image branch.
+ */
+function fakeEarthFactory(events: string[]) {
+  const specs: Array<{ kind?: string; options?: unknown }> = []
+  const createEarth = (() => ({
+    globe: { rotation: { x: 0, y: 0 } },
+    baseDiffuseTexture: null,
+    baseEarthTexture: {},
+    onBaseDiffuseChange: () => () => {},
+    addTo: () => events.push('earth.addTo'),
+    removeFrom: () => events.push('earth.removeFrom'),
+    setTexture: (spec: { kind?: string; options?: unknown }, onReady?: () => void) => {
+      specs.push(spec)
+      events.push('earth.setTexture')
+      onReady?.()
+    },
+    sunDir: {},
+    update: () => events.push('earth.update'),
+    dispose: () => events.push('earth.dispose'),
+  })) as unknown as NonNullable<
+    Parameters<typeof generateGlobeThumbnail>[2]
+  >['createEarth']
+  return { createEarth, specs }
 }
 
 function fakeCanvasFactory(blob: Blob) {
@@ -188,44 +176,56 @@ function fakeCanvasFactory(blob: Blob) {
 }
 
 describe('generateGlobeThumbnail', () => {
-  it('renders, captures a blob, and releases every GPU resource', async () => {
-    const { three, events, blob, textures } = fakeThree()
+  it('renders via the earth stack, captures a blob, and releases every resource', async () => {
+    const { three, events, blob } = fakeThree()
+    const { createEarth } = fakeEarthFactory(events)
     const source = { width: 2048, height: 1024 } as unknown as HTMLImageElement
 
     const result = await generateGlobeThumbnail(
       source,
       { size: 256, supersample: 2 },
-      { loadThree: async () => three, createCanvas: fakeCanvasFactory(blob) },
+      { loadThree: async () => three, createCanvas: fakeCanvasFactory(blob), createEarth },
     )
 
     expect(result).toBe(blob)
-    // Linear filtering, no mipmaps — one-shot render, NPOT-safe.
-    expect(textures).toHaveLength(1)
-    expect(textures[0]).toMatchObject({
-      minFilter: 'linear',
-      magFilter: 'linear',
-      generateMipmaps: false,
-    })
-    // The render fired before teardown, and every GPU handle was
-    // disposed (a leaked context would exhaust the browser pool
-    // after a few previews).
-    expect(events).toContain('render')
+    // The dataset texture is set + the render fires before teardown,
+    // and every resource is released (a leaked context would exhaust
+    // the browser pool after a few previews).
     expect(events).toEqual(
       expect.arrayContaining([
+        'earth.addTo',
+        'earth.setTexture',
+        'earth.update',
         'render',
-        'geometry.dispose',
-        'material.dispose',
-        'texture.dispose',
+        'earth.removeFrom',
+        'earth.dispose',
         'renderer.dispose',
         'renderer.forceContextLoss',
       ]),
     )
-    // render happens before any dispose.
-    expect(events.indexOf('render')).toBeLessThan(events.indexOf('renderer.dispose'))
+    expect(events.indexOf('earth.setTexture')).toBeLessThan(events.indexOf('render'))
+    expect(events.indexOf('render')).toBeLessThan(events.indexOf('earth.dispose'))
+  })
+
+  it('forwards the dataset overlay (bbox / flip / lonOrigin) to the earth texture', async () => {
+    const { three, events, blob } = fakeThree()
+    const { createEarth, specs } = fakeEarthFactory(events)
+    const source = { width: 2048, height: 1024 } as unknown as HTMLImageElement
+    const overlay = { boundingBox: { n: 50, s: 10, w: -20, e: 20 }, isFlippedInY: true }
+
+    await generateGlobeThumbnail(
+      source,
+      { overlay },
+      { loadThree: async () => three, createCanvas: fakeCanvasFactory(blob), createEarth },
+    )
+
+    expect(specs).toHaveLength(1)
+    expect(specs[0]).toMatchObject({ kind: 'image', options: overlay })
   })
 
   it('still disposes resources when the render throws', async () => {
     const { three, events, blob } = fakeThree()
+    const { createEarth } = fakeEarthFactory(events)
     // Force the render to throw.
     ;(three as unknown as { WebGLRenderer: { prototype: { render: () => void } } }).WebGLRenderer.prototype.render =
       () => {
@@ -237,15 +237,14 @@ describe('generateGlobeThumbnail', () => {
       generateGlobeThumbnail(
         source,
         {},
-        { loadThree: async () => three, createCanvas: fakeCanvasFactory(blob) },
+        { loadThree: async () => three, createCanvas: fakeCanvasFactory(blob), createEarth },
       ),
     ).rejects.toThrow('gl boom')
 
     expect(events).toEqual(
       expect.arrayContaining([
-        'geometry.dispose',
-        'material.dispose',
-        'texture.dispose',
+        'earth.removeFrom',
+        'earth.dispose',
         'renderer.dispose',
         'renderer.forceContextLoss',
       ]),
