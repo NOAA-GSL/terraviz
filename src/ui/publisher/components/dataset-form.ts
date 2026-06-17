@@ -148,6 +148,20 @@ interface FormState {
   endDate: string
   endTime: string
   period: string
+  // Geography & projection (Phase 3d render hints). Bounding-box
+  // corners are kept as raw input strings; the submit composes them
+  // into the typed `bounding_box` object only when all four are
+  // present (the validator requires the full set + n >= s). lonOrigin
+  // / radiusMi are likewise raw strings parsed at submit; flippedInY
+  // is a real boolean (checkbox); celestialBody is free text.
+  bboxN: string
+  bboxS: string
+  bboxW: string
+  bboxE: string
+  lonOrigin: string
+  isFlippedInY: boolean
+  celestialBody: string
+  radiusMi: string
   // Categorization (3pc/C3b). Both arrays cap at 20 entries
   // server-side; chip-input applies the same cap so the UI
   // matches the validator.
@@ -343,6 +357,9 @@ function inputField(opts: {
   placeholder?: string
   error: PublisherValidationError | null
   helpKey?: MessageKey
+  /** Input type — `'text'` (default) or `'number'` for the
+   *  lat/lon/radius fields. */
+  type?: 'text' | 'number'
   onChange: (v: string) => void
   onInput?: (v: string) => void
 }): HTMLElement {
@@ -365,7 +382,7 @@ function inputField(opts: {
   wrap.appendChild(label)
 
   const input = document.createElement('input')
-  input.type = 'text'
+  input.type = opts.type ?? 'text'
   input.id = opts.id
   input.className = 'publisher-form-input'
   input.value = opts.value
@@ -672,6 +689,185 @@ function timeRangeCard(state: FormState): HTMLElement {
   hint.className = 'publisher-form-help'
   hint.textContent = t('publisher.datasetForm.help.timeRange')
   card.appendChild(hint)
+
+  return card
+}
+
+function checkboxField(opts: {
+  id: string
+  labelKey: MessageKey
+  checked: boolean
+  helpKey?: MessageKey
+  onChange: (v: boolean) => void
+}): HTMLElement {
+  const wrap = document.createElement('div')
+  wrap.className = 'publisher-form-field'
+
+  const label = document.createElement('label')
+  label.className = 'publisher-form-checkbox'
+  label.htmlFor = opts.id
+
+  const input = document.createElement('input')
+  input.type = 'checkbox'
+  input.id = opts.id
+  input.checked = opts.checked
+  input.addEventListener('change', () => opts.onChange(input.checked))
+  label.appendChild(input)
+
+  const span = document.createElement('span')
+  span.textContent = t(opts.labelKey)
+  label.appendChild(span)
+
+  wrap.appendChild(label)
+
+  if (opts.helpKey) {
+    const help = document.createElement('p')
+    help.className = 'publisher-form-help'
+    help.textContent = t(opts.helpKey)
+    wrap.appendChild(help)
+  }
+  return wrap
+}
+
+/**
+ * Geography & projection card — the dataset's render hints (bounding
+ * box, longitude origin, Y-flip, celestial body + radius). These tell
+ * the globe how to project the data: a bounding box clips regional
+ * data to its extent over a base Earth, `lonOrigin` re-centres the
+ * dateline, `isFlippedInY` corrects inverted-Y imagery, and a
+ * non-Earth `celestialBody` swaps the base body. The validator
+ * requires all four bbox corners together (n >= s); the submit only
+ * sends `bounding_box` when the full set is present.
+ */
+function geographyCard(state: FormState): HTMLElement {
+  const card = document.createElement('section')
+  card.className = 'publisher-card publisher-glass publisher-form-card'
+
+  const heading = document.createElement('h2')
+  heading.className = 'publisher-card-heading'
+  heading.textContent = t('publisher.datasetForm.section.geography')
+  card.appendChild(heading)
+
+  // Bounding box — four numeric corners in a row.
+  const bboxWrap = document.createElement('div')
+  bboxWrap.className = 'publisher-form-field'
+  const bboxLabel = document.createElement('span')
+  bboxLabel.className = 'publisher-form-label'
+  bboxLabel.textContent = t('publisher.datasetForm.field.boundingBox')
+  bboxWrap.appendChild(bboxLabel)
+
+  const bboxRow = document.createElement('div')
+  bboxRow.className = 'publisher-form-bbox-row'
+  const corners: ReadonlyArray<{
+    id: string
+    labelKey: MessageKey
+    value: string
+    placeholder: string
+    field: string
+    set: (v: string) => void
+  }> = [
+    { id: 'dataset-bbox-n', labelKey: 'publisher.datasetForm.field.bboxN', value: state.bboxN, placeholder: '90', field: 'bounding_box.n', set: v => { state.bboxN = v } },
+    { id: 'dataset-bbox-s', labelKey: 'publisher.datasetForm.field.bboxS', value: state.bboxS, placeholder: '-90', field: 'bounding_box.s', set: v => { state.bboxS = v } },
+    { id: 'dataset-bbox-w', labelKey: 'publisher.datasetForm.field.bboxW', value: state.bboxW, placeholder: '-180', field: 'bounding_box.w', set: v => { state.bboxW = v } },
+    { id: 'dataset-bbox-e', labelKey: 'publisher.datasetForm.field.bboxE', value: state.bboxE, placeholder: '180', field: 'bounding_box.e', set: v => { state.bboxE = v } },
+  ]
+  for (const c of corners) {
+    const col = document.createElement('div')
+    col.className = 'publisher-form-bbox-col'
+    const lbl = document.createElement('label')
+    lbl.className = 'publisher-form-datetime-sublabel'
+    lbl.htmlFor = c.id
+    lbl.textContent = t(c.labelKey)
+    col.appendChild(lbl)
+    const input = document.createElement('input')
+    input.type = 'number'
+    input.id = c.id
+    input.className = 'publisher-form-input'
+    input.value = c.value
+    input.placeholder = c.placeholder
+    const err = findError(state.errors, c.field)
+    if (err) input.setAttribute('aria-invalid', 'true')
+    input.addEventListener('input', () => c.set(input.value))
+    input.addEventListener('change', () => c.set(input.value))
+    col.appendChild(input)
+    bboxRow.appendChild(col)
+  }
+  bboxWrap.appendChild(bboxRow)
+
+  const bboxHelp = document.createElement('p')
+  bboxHelp.className = 'publisher-form-help'
+  bboxHelp.textContent = t('publisher.datasetForm.help.boundingBox')
+  bboxWrap.appendChild(bboxHelp)
+
+  // Group-level bbox error (e.g. "n >= s", or "all four required").
+  const bboxErr = findError(state.errors, 'bounding_box')
+  if (bboxErr) {
+    const e = document.createElement('p')
+    e.className = 'publisher-form-error'
+    e.setAttribute('role', 'alert')
+    e.textContent = bboxErr.message
+    bboxWrap.appendChild(e)
+  }
+  card.appendChild(bboxWrap)
+
+  card.appendChild(
+    inputField({
+      id: 'dataset-lon-origin',
+      labelKey: 'publisher.datasetForm.field.lonOrigin',
+      required: false,
+      value: state.lonOrigin,
+      placeholder: '0',
+      type: 'number',
+      helpKey: 'publisher.datasetForm.help.lonOrigin',
+      error: findError(state.errors, 'lon_origin'),
+      onChange: v => {
+        state.lonOrigin = v
+      },
+    }),
+  )
+
+  card.appendChild(
+    checkboxField({
+      id: 'dataset-flipped-y',
+      labelKey: 'publisher.datasetForm.field.flippedInY',
+      checked: state.isFlippedInY,
+      helpKey: 'publisher.datasetForm.help.flippedInY',
+      onChange: v => {
+        state.isFlippedInY = v
+      },
+    }),
+  )
+
+  card.appendChild(
+    inputField({
+      id: 'dataset-celestial-body',
+      labelKey: 'publisher.datasetForm.field.celestialBody',
+      required: false,
+      value: state.celestialBody,
+      placeholder: 'Earth',
+      helpKey: 'publisher.datasetForm.help.celestialBody',
+      error: findError(state.errors, 'celestial_body'),
+      onChange: v => {
+        state.celestialBody = v
+      },
+    }),
+  )
+
+  card.appendChild(
+    inputField({
+      id: 'dataset-radius-mi',
+      labelKey: 'publisher.datasetForm.field.radiusMi',
+      required: false,
+      value: state.radiusMi,
+      placeholder: '2106',
+      type: 'number',
+      helpKey: 'publisher.datasetForm.help.radiusMi',
+      error: findError(state.errors, 'radius_mi'),
+      onChange: v => {
+        state.radiusMi = v
+      },
+    }),
+  )
 
   return card
 }
@@ -1445,6 +1641,7 @@ function renderForm(
   form.appendChild(mediaCard(content, state, ctx))
   form.appendChild(licensingCard(state, update))
   form.appendChild(timeRangeCard(state))
+  form.appendChild(geographyCard(state))
   form.appendChild(categorizationCard(state))
 
   // Submit row.
@@ -1543,6 +1740,32 @@ function renderForm(
     setIfPresent('start_time', dateTimeToIso(state.startDate, state.startTime))
     setIfPresent('end_time', dateTimeToIso(state.endDate, state.endTime))
     setIfPresent('period', state.period)
+    // Geography & projection. The validator requires the full
+    // bounding-box set (n/s/w/e) together, so only send it when all
+    // four parse as finite numbers — a partially-filled box is
+    // treated as "no box" rather than a guaranteed validation error.
+    const num = (v: string): number | null => {
+      const t = v.trim()
+      if (!t) return null
+      const n = Number(t)
+      return Number.isFinite(n) ? n : null
+    }
+    const bn = num(state.bboxN)
+    const bs = num(state.bboxS)
+    const bw = num(state.bboxW)
+    const be = num(state.bboxE)
+    if (bn != null && bs != null && bw != null && be != null) {
+      body.bounding_box = { n: bn, s: bs, w: bw, e: be }
+    }
+    const lon = num(state.lonOrigin)
+    if (lon != null) body.lon_origin = lon
+    // Always send the flip flag (a checkbox is explicitly on/off) so
+    // it can be toggled back off on edit, unlike the omit-when-empty
+    // text fields.
+    body.is_flipped_in_y = state.isFlippedInY
+    setIfPresent('celestial_body', state.celestialBody)
+    const radius = num(state.radiusMi)
+    if (radius != null) body.radius_mi = radius
     // Arrays — omit when empty so the join tables stay empty
     // instead of carrying placeholder rows.
     if (state.keywords.length > 0) body.keywords = [...state.keywords]
@@ -1667,6 +1890,14 @@ function initialState(
       endDate: '',
       endTime: '',
       period: '',
+      bboxN: '',
+      bboxS: '',
+      bboxW: '',
+      bboxE: '',
+      lonOrigin: '',
+      isFlippedInY: false,
+      celestialBody: '',
+      radiusMi: '',
       keywords: [],
       tags: [],
       isSaving: false,
@@ -1708,6 +1939,14 @@ function initialState(
     endDate,
     endTime,
     period: row.period ?? '',
+    bboxN: row.bbox_n != null ? String(row.bbox_n) : '',
+    bboxS: row.bbox_s != null ? String(row.bbox_s) : '',
+    bboxW: row.bbox_w != null ? String(row.bbox_w) : '',
+    bboxE: row.bbox_e != null ? String(row.bbox_e) : '',
+    lonOrigin: row.lon_origin != null ? String(row.lon_origin) : '',
+    isFlippedInY: row.is_flipped_in_y === 1,
+    celestialBody: row.celestial_body ?? '',
+    radiusMi: row.radius_mi != null ? String(row.radius_mi) : '',
     keywords: [...initialKeywords],
     tags: [...initialTags],
     isSaving: false,
