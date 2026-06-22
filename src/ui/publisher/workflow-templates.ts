@@ -4,10 +4,12 @@
  *
  * Templates are hard-coded in the portal chunk (the plan doc's
  * §Open questions lean: versioned with the app, revisit when a
- * second node wants different ones). The drought template is the
- * exact pipeline validated end-to-end by the Z0 spike runs; every
- * template satisfies the server-side allowlist and writes its MP4
- * to `WORKFLOW_OUTPUT_PATH` by construction.
+ * second node wants different ones). Every template satisfies the
+ * server-side allowlist and declares an output the publish leg can
+ * find — either an MP4 at `WORKFLOW_OUTPUT_PATH` (video templates,
+ * e.g. `http-frames-sos`) or a frame set at `WORKFLOW_FRAMES_OUTPUT_DIR`
+ * (the recall-enabled drought template, which publishes frames via
+ * the image-sequence path instead of composing a video).
  *
  * Frame-gap handling follows the zyra-scheduler pipeline's command
  * shape: `zyra process scan-frames … --output /work/frames-meta.json`

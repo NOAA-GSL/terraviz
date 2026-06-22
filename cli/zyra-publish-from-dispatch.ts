@@ -63,6 +63,7 @@ import {
   windowFrameBudget,
 } from './lib/r2-frames'
 import { publishFrameSequence } from './lib/frames-publish'
+import { WORKFLOW_OUTPUT_PATH } from '../src/types/zyra-workflow-constants'
 
 const ULID_RE = /^[0-9A-HJKMNP-TV-Z]{26}$/
 
@@ -305,12 +306,40 @@ async function phasePublish(client: TerravizClient, args: Args): Promise<number>
   const workflow = JSON.parse(
     await readFile(join(args.workdir, 'workflow.json'), 'utf-8'),
   ) as WorkflowEnvelope['workflow']
-  // Branch on what the pipeline produced: a composed MP4, or a frame
-  // sequence (recall-enabled templates drop `compose-video` and
-  // leave their padded frames on disk for the image-sequence path).
-  return existsSync(args.video)
-    ? await publishVideo(client, args, workflow)
-    : await publishFrames(client, args, workflow)
+  // Branch on what the pipeline *declares* it produces, not on which
+  // files happen to be present: with the frame cache, restored frames
+  // almost always exist, so a video pipeline whose compose-video
+  // silently failed must NOT fall through to publishing stale frames
+  // and reporting success — it has to fail.
+  if (expectedOutputKind(workflow.pipeline_json) === 'video') {
+    if (!existsSync(args.video)) {
+      log(`FAIL: pipeline declares MP4 output but ${args.video} is missing — compose-video did not produce it`)
+      return 4
+    }
+    return await publishVideo(client, args, workflow)
+  }
+  return await publishFrames(client, args, workflow)
+}
+
+/** What artifact the pipeline declares: an MP4 (a stage writes
+ *  `WORKFLOW_OUTPUT_PATH`) or a frame sequence (anything else — the
+ *  recall-enabled shape). Mirrors the server-side validator's
+ *  output check. */
+export function expectedOutputKind(pipelineJson: string): 'video' | 'frames' {
+  try {
+    const parsed = JSON.parse(pipelineJson) as {
+      stages?: Array<{ args?: Record<string, unknown> }>
+    }
+    for (const stage of parsed.stages ?? []) {
+      for (const value of Object.values(stage.args ?? {})) {
+        if (value === WORKFLOW_OUTPUT_PATH) return 'video'
+      }
+    }
+  } catch {
+    /* unparseable — treat as frames-output; the publish leg will
+       surface a real error if there's nothing to publish */
+  }
+  return 'frames'
 }
 
 async function publishVideo(

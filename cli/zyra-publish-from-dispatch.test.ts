@@ -2,7 +2,12 @@ import { describe, it, expect } from 'vitest'
 import { mkdtemp, mkdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { findFramesMeta, parseArgs, readPaddedFrameNames } from './zyra-publish-from-dispatch'
+import {
+  expectedOutputKind,
+  findFramesMeta,
+  parseArgs,
+  readPaddedFrameNames,
+} from './zyra-publish-from-dispatch'
 
 const ULID = '01HX0000000000000000000000'
 
@@ -40,6 +45,38 @@ describe('parseArgs', () => {
         parseArgs([`--phase=${phase}`, `--workflow-id=${ULID}`, `--run-id=${ULID}`]),
       ).toMatchObject({ phase, workdir: '_work' })
     }
+  })
+})
+
+describe('expectedOutputKind', () => {
+  it('detects a video pipeline by its WORKFLOW_OUTPUT_PATH arg', () => {
+    const video = JSON.stringify({
+      stages: [
+        {
+          stage: 'visualize',
+          command: 'compose-video',
+          args: { frames: '/work/images/frames', output: '/work/output/dataset.mp4' },
+        },
+      ],
+    })
+    expect(expectedOutputKind(video)).toBe('video')
+  })
+
+  it('treats a frames-output pipeline (no MP4 path) as frames', () => {
+    const frames = JSON.stringify({
+      stages: [
+        {
+          stage: 'process',
+          command: 'scan-frames',
+          args: { 'frames-dir': '/work/images/frames', output: '/work/frames-meta.json' },
+        },
+      ],
+    })
+    expect(expectedOutputKind(frames)).toBe('frames')
+  })
+
+  it('falls back to frames on unparseable pipeline JSON', () => {
+    expect(expectedOutputKind('not json')).toBe('frames')
   })
 })
 

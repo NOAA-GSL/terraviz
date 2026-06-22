@@ -118,23 +118,32 @@ jobs:
               # pad-missing needs Pillow, which the scheduler image does
               # not bundle — install it on demand (as the zyra-scheduler
               # GitLab pipeline does) when the pipeline uses that stage.
+              # Pinned for reproducibility; bump deliberately alongside
+              # the runner image digest.
               if grep -q "pad-missing" /work/pipeline.json && ! python -c "import PIL" >/dev/null 2>&1; then
                 echo "Installing Pillow for the pad-missing stage..."
-                pip install --no-cache-dir --disable-pip-version-check pillow
+                pip install --no-cache-dir --disable-pip-version-check "pillow==12.2.0"
               fi
               zyra run /work/pipeline.json
             '
-          # A pipeline produces either a composed MP4 (compose-video)
-          # or a frame sequence (recall-enabled templates drop it and
-          # publish frames via the image-sequence path). Require one
-          # of the two — a pipeline that produced neither is broken.
-          if [[ -f _work/output/dataset.mp4 ]]; then
-            echo "pipeline produced a composed MP4"
-          elif [[ -n "$(find _work/images/frames -maxdepth 1 -type f \( -iname '*.png' -o -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.webp' \) -print -quit 2>/dev/null)" ]]; then
-            echo "pipeline produced a frame sequence — publishing via the image-sequence path"
+          # Gate on what the pipeline DECLARES, not on which files are
+          # present. With the frame cache, restored frames almost always
+          # exist, so a "frames exist?" check would let a video pipeline
+          # whose compose-video silently failed slip through and publish
+          # stale frames. Decide by whether pipeline.json writes the MP4
+          # output path (mirrors WORKFLOW_OUTPUT_PATH / the validator).
+          if grep -q '/work/output/dataset.mp4' _work/pipeline.json; then
+            if [[ ! -f _work/output/dataset.mp4 ]]; then
+              echo "::error::pipeline declares MP4 output (WORKFLOW_OUTPUT_PATH) but /work/output/dataset.mp4 was not produced"
+              exit 1
+            fi
+            echo "pipeline produced the declared MP4"
           else
-            echo "::error::pipeline finished but produced neither /work/output/dataset.mp4 nor frames under /work/images/frames (see WORKFLOW_OUTPUT_PATH / WORKFLOW_FRAMES_OUTPUT_DIR)"
-            exit 1
+            if [[ -z "$(find _work/images/frames -maxdepth 1 -type f \( -iname '*.png' -o -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.webp' \) -print -quit 2>/dev/null)" ]]; then
+              echo "::error::frames-output pipeline produced no frames under /work/images/frames (WORKFLOW_FRAMES_OUTPUT_DIR)"
+              exit 1
+            fi
+            echo "pipeline produced a frame sequence — publishing via the image-sequence path"
           fi
 
       # Push newly-acquired frames back to the cache and prune it to
