@@ -128,6 +128,7 @@ npm run screenshots:smoke   # gating interaction tests (search, Orbit, nav)
 | `src/services/docentDegradedState.ts` | Session-scoped degraded-mode state for the docent |
 | `src/services/appleIntelligenceProvider.ts` | On-device LLM Orbit backend via Apple's Foundation Models framework (macOS) |
 | `src/services/voiceService.ts` | Orbit voice foundation — STT/TTS capability detection, provider registry + resolver (on-device → cloud → browser), per-locale capability matrix, spoken-form projection + sentence chunking (`docs/ORBIT_VOICE_PLAN.md`) |
+| `src/services/voiceBrowserEngines.ts` | Phase 1 browser Web Speech engines (`SpeechRecognition` STT + `speechSynthesis` TTS) registered against `voiceService`'s resolver |
 | `src/services/uiScaleService.ts` | Runtime side of the `--ui-scale` token (§7.1) |
 | `src/services/shaderSettingsService.ts` | Runtime side of the globe-shader uniforms (§7.2) |
 | `src/services/atmosphereConstants.ts` | Atmospheric-scattering constants + GLSL snippets shared by `earthTileLayer` and the VR/Orbit Earth |
