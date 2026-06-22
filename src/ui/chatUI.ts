@@ -23,7 +23,7 @@ import { isAvailable as isAppleIntelligenceAvailable } from '../services/appleIn
 import { setLogLevel, logger } from '../utils/logger'
 import { emit, startDwell, type DwellHandle } from '../analytics'
 import { enMessages, t, getLocale, type MessageKey } from '../i18n'
-import { resolveSttEngine, voiceSupportForLocale, type SttSession } from '../services/voiceService'
+import { resolveSttEngine, resolveTtsEngine, voiceSupportForLocale, splitIntoSpokenChunks, type SttSession, type TtsEngine } from '../services/voiceService'
 import { registerBrowserVoiceEngines } from '../services/voiceBrowserEngines'
 
 // --- Constants ---
@@ -84,6 +84,12 @@ let lastUserSendAt: number | null = null
 
 /** Active speech-recognition session, or null when not listening (ORBIT_VOICE_PLAN §1). */
 let sttSession: SttSession | null = null
+
+/** TTS (auto-speak) state for the in-flight reply (ORBIT_VOICE_PLAN §1.1, §2). */
+let ttsEngine: TtsEngine | null = null
+let spokenChunkCount = 0
+let ttsChain: Promise<void> = Promise.resolve()
+let speakingActive = false
 
 /** Globe-control actions deferred until a load-dataset action in the same message completes. */
 let pendingGlobeActions: ChatAction[] = []
@@ -410,6 +416,10 @@ function wireEvents(): void {
   document.getElementById('chat-close')?.addEventListener('click', closeChat)
   document.getElementById('chat-send')?.addEventListener('click', handleSend)
   document.getElementById('chat-mic')?.addEventListener('click', toggleListening)
+  document.getElementById('chat-stop-speaking')?.addEventListener('click', () => {
+    stopSpeaking()
+    callbacks?.announce(t('chat.announce.voiceStopped'))
+  })
   document.getElementById('chat-settings-btn')?.addEventListener('click', toggleSettings)
 
   // Prevent wheel events from bubbling to the globe's zoom handler
@@ -566,6 +576,63 @@ function setMicListening(on: boolean): void {
   btn.title = on ? t('chat.voice.titleListening') : t('chat.voice.title')
 }
 
+// --- Voice output (TTS auto-speak) — ORBIT_VOICE_PLAN.md §1.1, §2 ---
+
+/**
+ * Start a fresh speaking session for a reply. Cancels any prior
+ * speech, then resolves a TTS engine only when auto-speak is on and
+ * one is available for the active locale. No engine → stays silent.
+ */
+function beginSpeaking(): void {
+  stopSpeaking()
+  const cfg = loadConfig()
+  if (!cfg.voiceAutoSpeak) { ttsEngine = null; return }
+  ttsEngine = resolveTtsEngine(cfg.voiceProvider ?? 'auto', cfg.voiceLang || getLocale())
+  spokenChunkCount = 0
+  speakingActive = !!ttsEngine
+  if (speakingActive) setStopSpeakingVisible(true)
+}
+
+/**
+ * Enqueue any newly-complete sentences for speech. Reads the
+ * spoken-form projection of the full message so far (markers /
+ * markdown / URLs stripped) and queues sentences past the cursor.
+ * While streaming, the last (possibly partial) sentence is held
+ * back; `final` flushes it. (§1.1 projection, §2 sentence-chunking)
+ */
+function pumpSpeech(fullText: string, final: boolean): void {
+  if (!speakingActive || !ttsEngine) return
+  const sentences = splitIntoSpokenChunks(fullText)
+  const upto = final ? sentences.length : Math.max(0, sentences.length - 1)
+  const cfg = loadConfig()
+  const lang = cfg.voiceLang || getLocale()
+  const rate = cfg.voiceRate
+  const engine = ttsEngine
+  for (let i = spokenChunkCount; i < upto; i++) {
+    const sentence = sentences[i]
+    if (!sentence) continue
+    ttsChain = ttsChain.then(() => (speakingActive ? engine.speak(sentence, { lang, rate }) : undefined))
+  }
+  spokenChunkCount = Math.max(spokenChunkCount, upto)
+  if (final) {
+    // Hide the Stop control once the queued speech drains.
+    ttsChain = ttsChain.then(() => { if (speakingActive) setStopSpeakingVisible(false) })
+  }
+}
+
+/** Stop speech immediately (Stop control / barge-in / new reply). */
+function stopSpeaking(): void {
+  speakingActive = false
+  ttsEngine?.cancel()
+  ttsChain = Promise.resolve()
+  setStopSpeakingVisible(false)
+}
+
+function setStopSpeakingVisible(visible: boolean): void {
+  const btn = document.getElementById('chat-stop-speaking')
+  if (btn) btn.style.display = visible ? 'flex' : 'none'
+}
+
 // --- Settings panel ---
 
 function toggleSettings(): void {
@@ -598,6 +665,8 @@ async function populateSettings(): Promise<void> {
   if (enabledInput) enabledInput.checked = config.enabled
   if (visionInput) visionInput.checked = config.visionEnabled
   if (debugInput) debugInput.checked = config.debugPrompt ?? false
+  const autospeakInput = document.getElementById('chat-settings-voice-autospeak') as HTMLInputElement | null
+  if (autospeakInput) autospeakInput.checked = config.voiceAutoSpeak ?? false
   // Apply saved debug log level on startup
   setLogLevel(config.debugPrompt ? 'debug' : null)
   // Seed the select with the saved model immediately, then refresh from API
@@ -688,6 +757,10 @@ function readSettingsForm(): DocentConfig {
   const enabledInput = document.getElementById('chat-settings-enabled') as HTMLInputElement | null
   const visionInput = document.getElementById('chat-settings-vision') as HTMLInputElement | null
   const debugInput = document.getElementById('chat-settings-debug') as HTMLInputElement | null
+  const autospeakInput = document.getElementById('chat-settings-voice-autospeak') as HTMLInputElement | null
+  // Carry forward voice config not exposed in this form so a save
+  // doesn't wipe it (only auto-speak is editable here for now).
+  const current = loadConfig()
   return {
     apiUrl: urlInput?.value.trim() || defaults.apiUrl,
     apiKey: keyInput?.value.trim() ?? '',
@@ -696,6 +769,12 @@ function readSettingsForm(): DocentConfig {
     enabled: enabledInput?.checked ?? defaults.enabled,
     visionEnabled: visionInput?.checked ?? defaults.visionEnabled,
     debugPrompt: debugInput?.checked ?? defaults.debugPrompt,
+    voiceEnabled: current.voiceEnabled,
+    voiceAutoSpeak: autospeakInput?.checked ?? current.voiceAutoSpeak,
+    voiceProvider: current.voiceProvider,
+    voiceLang: current.voiceLang,
+    voiceName: current.voiceName,
+    voiceRate: current.voiceRate,
   }
 }
 
@@ -804,6 +883,7 @@ async function handleSend(): Promise<void> {
   isStreaming = true
   showTyping()
   setSendEnabled(false)
+  beginSpeaking()
   const turnStartedAt = Date.now()
   let streamFinishReason: 'stop' | 'length' | 'tool_calls' | 'error' = 'stop'
 
@@ -842,6 +922,7 @@ async function handleSend(): Promise<void> {
           docentMsg.text += chunk.text
           updateStreamingMessage(docentMsg)
           scrollToBottom()
+          pumpSpeech(docentMsg.text, false)
           break
 
         case 'action': {
@@ -949,6 +1030,8 @@ async function handleSend(): Promise<void> {
   hideTyping()
   isStreaming = false
   setSendEnabled(true)
+  // Speak any remaining (final) sentence and let the queue drain.
+  pumpSpeech(docentMsg.text, true)
 
   // Clean up empty actions array
   if (docentMsg.actions?.length === 0) delete docentMsg.actions

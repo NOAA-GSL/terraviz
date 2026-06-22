@@ -166,6 +166,12 @@
                         </div>
                         <div class="chat-settings-row">
                             <label class="chat-settings-check">
+                                <input type="checkbox" id="chat-settings-voice-autospeak" />
+                                <span data-i18n="chat.settings.voiceAutoSpeak.label">Speak replies aloud — Orbit reads its answers using your device's voice. Available in supported languages.</span>
+                            </label>
+                        </div>
+                        <div class="chat-settings-row">
+                            <label class="chat-settings-check">
                                 <input type="checkbox" id="chat-settings-debug" />
                                 <span data-i18n="chat.settings.debug.label">Debug — show all log messages in browser console</span>
                             </label>
@@ -196,6 +202,9 @@
                         </button>
                         <textarea id="chat-input" rows="1" placeholder="Ask about any dataset…" data-i18n-placeholder="chat.input.placeholder" autocomplete="off" spellcheck="true"></textarea>
                         <button id="chat-send" aria-label="Send message" data-i18n-aria-label="chat.send.aria">&#x27A4;</button>
+                        <button id="chat-stop-speaking" class="chat-stop-btn" type="button" style="display:none" aria-label="Stop speaking" title="Stop speaking" data-i18n-aria-label="chat.voice.stopAria" data-i18n-title="chat.voice.stopAria">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+                        </button>
                     </div>
                 </div>
 

@@ -555,6 +555,24 @@
     .chat-mic-btn.listening { animation: none; }
 }
 .chat-mic-btn svg { pointer-events: none; }
+/* Stop-speaking (TTS) button — shown only while Orbit is speaking. */
+.chat-stop-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: calc(32px * var(--ui-scale));
+    height: calc(32px * var(--ui-scale));
+    padding: 0 !important;
+    background: rgba(77, 166, 255, 0.1) !important;
+    border: 1px solid var(--accent-o50) !important;
+    border-radius: calc(6px * var(--ui-scale));
+    color: var(--color-accent);
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: color 0.2s, border-color 0.2s, background 0.2s;
+}
+.chat-stop-btn:hover { border-color: var(--color-accent) !important; }
+.chat-stop-btn svg { pointer-events: none; }
 .chat-vision-hint {
     display: none;
     padding: calc(0.3rem * var(--ui-scale)) calc(0.6rem * var(--ui-scale));
