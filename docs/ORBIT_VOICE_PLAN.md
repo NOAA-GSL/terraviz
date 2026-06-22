@@ -35,8 +35,14 @@ ducking**. The true **WebSocket** streaming path (Deepgram Nova-3/Flux
 via the AI Gateway realtime endpoint) has now landed too — the
 `/api/voice/stream` proxy + a client WS engine for **live interim
 transcripts**, flag-gated (`VITE_VOICE_WS_STREAMING`) and pending live
-AI-Gateway validation. Remaining Phase 3+ work: **streaming-turn
-telemetry** (§10.4), Phase 3.5 **wake-word**, and Phase 4 (on-device).
+AI-Gateway validation. **Phase 3.5 wake-word** has now landed as well:
+the on-device `WakeWordDetector` + the **openWakeWord ONNX scorer**
+(built-in `hey jarvis`; lazy onnxruntime-web, operator-hosted models,
+runbook + custom-"Hey Orbit" training steps in `docs/ORBIT_WAKEWORD.md`)
+— pending on-hardware validation and the hands-free UI wiring. Remaining
+Phase 3+ work: **streaming-turn telemetry** (§10.4), the wake-word
+**hands-free integration** (a wake-arm mode + settings), and Phase 4
+(on-device).
 
 > Cross-references:
 > [`docs/DOCENT_UX_IMPROVEMENT_PLAN.md`](DOCENT_UX_IMPROVEMENT_PLAN.md)
