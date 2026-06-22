@@ -18,6 +18,8 @@
  * in a noisy public hall (§9.1).
  */
 
+import { createOnnxWakeWordScorer } from './voiceWakeWordOnnx'
+
 export interface WakeWordOptions {
   /** Model score (0..1) at or above which a frame counts as a hit. */
   threshold?: number
@@ -112,10 +114,14 @@ export type WakeWordScorer = (
 export interface StartWakeWordOptions extends WakeWordOptions {
   /**
    * Base URL the openWakeWord ONNX models are hosted at (operator-
-   * provided — they aren't bundled). Passed through to the default
-   * ONNX scorer; ignored when a `scorer` is injected.
+   * provided — they aren't bundled). When set (and no `scorer` is
+   * injected), the default openWakeWord ONNX backend is used.
    */
   modelBaseUrl?: string
+  /** Wake model filename under `modelBaseUrl` (default: `hey jarvis`). */
+  wakeModel?: string
+  /** onnxruntime-web ESM URL (CDN by default; self-host for offline). */
+  ortUrl?: string
   /** Injectable scorer (tests / alternate backends). */
   scorer?: WakeWordScorer
 }
@@ -137,7 +143,10 @@ export async function startWakeWord(
   opts: StartWakeWordOptions,
 ): Promise<WakeWordSession> {
   const detector = new WakeWordDetector(opts)
-  const scorer = opts.scorer ?? defaultScorerUnavailable
+  const scorer = opts.scorer
+    ?? (opts.modelBaseUrl
+      ? createOnnxWakeWordScorer({ modelBaseUrl: opts.modelBaseUrl, wakeModel: opts.wakeModel, ortUrl: opts.ortUrl })
+      : defaultScorerUnavailable)
   let stopped = false
   let capture: WakeWordCapture | null = null
   capture = await scorer(stream, (score) => { if (!stopped) detector.push(score) })
@@ -153,12 +162,10 @@ export async function startWakeWord(
 }
 
 /**
- * Placeholder backend until the openWakeWord ONNX scorer lands. It
- * reports unavailable (never scores) so wake-word stays inert rather
- * than silently broken when no real scorer is wired. The ONNX pipeline
- * — lazy `import('onnxruntime-web')`, the three openWakeWord models
- * loaded from `modelBaseUrl`, 80 ms / 16 kHz framing → score — replaces
- * this; it needs the operator-hosted model files and real-hardware
- * validation, so it's deliberately not faked in as if it worked.
+ * Inert fallback when no models are configured and no scorer is
+ * injected — reports unavailable (never scores) rather than silently
+ * pretending to work. The real openWakeWord ONNX backend lives in
+ * `voiceWakeWordOnnx.ts` and is selected automatically when
+ * `modelBaseUrl` is set.
  */
 const defaultScorerUnavailable: WakeWordScorer = () => ({ stop: () => {} })
