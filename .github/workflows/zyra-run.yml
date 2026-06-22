@@ -85,6 +85,24 @@ jobs:
             --workdir=_work \
             --gha-run-id="${{ github.run_id }}"
 
+      # Pull this dataset's cached frames into the workdir so the
+      # pipeline's `acquire --sync-dir` only fetches new frames from
+      # source instead of re-downloading the whole window. Best-
+      # effort: disabled (and skipped) when the R2 trio is unset, and
+      # a cache miss never fails the run (see r2-frames.ts).
+      - name: Restore frame cache
+        env:
+          R2_S3_ENDPOINT: ${{ secrets.R2_S3_ENDPOINT }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          CATALOG_R2_BUCKET: ${{ secrets.CATALOG_R2_BUCKET }}
+        run: |
+          npx tsx cli/zyra-publish-from-dispatch.ts \
+            --phase=restore-frames \
+            --workflow-id="${{ github.event.client_payload.workflow_id }}" \
+            --run-id="${{ github.event.client_payload.run_id }}" \
+            --workdir=_work
+
       - name: Run Zyra pipeline
         env:
           ZYRA_IMAGE: ${{ vars.ZYRA_SCHEDULER_IMAGE || '' }}
@@ -95,11 +113,55 @@ jobs:
           docker run --rm --entrypoint "" --user 0 \
             -v "$PWD/_work:/work" \
             "$IMAGE" \
-            bash -c 'set -euo pipefail; zyra run /work/pipeline.json'
-          if [[ ! -f _work/output/dataset.mp4 ]]; then
-            echo "::error::pipeline finished but /work/output/dataset.mp4 does not exist — the registered pipeline must write its MP4 there (enforced by /validate; see WORKFLOW_OUTPUT_PATH)"
-            exit 1
+            bash -c '
+              set -euo pipefail
+              # pad-missing needs Pillow, which the scheduler image does
+              # not bundle — install it on demand (as the zyra-scheduler
+              # GitLab pipeline does) when the pipeline uses that stage.
+              # Pinned for reproducibility; bump deliberately alongside
+              # the runner image digest.
+              if grep -q "pad-missing" /work/pipeline.json && ! python -c "import PIL" >/dev/null 2>&1; then
+                echo "Installing Pillow for the pad-missing stage..."
+                pip install --no-cache-dir --disable-pip-version-check "pillow==12.2.0"
+              fi
+              zyra run /work/pipeline.json
+            '
+          # Gate on what the pipeline DECLARES, not on which files are
+          # present. With the frame cache, restored frames almost always
+          # exist, so a "frames exist?" check would let a video pipeline
+          # whose compose-video silently failed slip through and publish
+          # stale frames. Decide by whether pipeline.json writes the MP4
+          # output path (mirrors WORKFLOW_OUTPUT_PATH / the validator).
+          if grep -q '/work/output/dataset.mp4' _work/pipeline.json; then
+            if [[ ! -f _work/output/dataset.mp4 ]]; then
+              echo "::error::pipeline declares MP4 output (WORKFLOW_OUTPUT_PATH) but /work/output/dataset.mp4 was not produced"
+              exit 1
+            fi
+            echo "pipeline produced the declared MP4"
+          else
+            if [[ -z "$(find _work/images/frames -maxdepth 1 -type f \( -iname '*.png' -o -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.webp' \) -print -quit 2>/dev/null)" ]]; then
+              echo "::error::frames-output pipeline produced no frames under /work/images/frames (WORKFLOW_FRAMES_OUTPUT_DIR)"
+              exit 1
+            fi
+            echo "pipeline produced a frame sequence — publishing via the image-sequence path"
           fi
+
+      # Push newly-acquired frames back to the cache and prune it to
+      # the active window (since-period ÷ period-seconds). Same best-
+      # effort posture as restore — failing to cache never fails a
+      # run that already produced a video.
+      - name: Save frame cache
+        env:
+          R2_S3_ENDPOINT: ${{ secrets.R2_S3_ENDPOINT }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          CATALOG_R2_BUCKET: ${{ secrets.CATALOG_R2_BUCKET }}
+        run: |
+          npx tsx cli/zyra-publish-from-dispatch.ts \
+            --phase=save-frames \
+            --workflow-id="${{ github.event.client_payload.workflow_id }}" \
+            --run-id="${{ github.event.client_payload.run_id }}" \
+            --workdir=_work
 
       # ffprobe for the publish phase's SOS-spec preflight (Ubuntu
       # 22.04 ships ffmpeg 4.4 — same rationale as transcode-hls.yml).
