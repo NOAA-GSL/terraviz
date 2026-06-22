@@ -453,7 +453,9 @@ function wireEvents(): void {
   micBtn?.addEventListener('pointerleave', releasePtt)
   micBtn?.addEventListener('pointercancel', releasePtt)
   document.getElementById('chat-stop-speaking')?.addEventListener('click', () => {
-    const wasSpeaking = speakingActive
+    // Only a barge-in if speech was actually produced — Stop clicked
+    // before the first chunk speaks shouldn't count (§10.4).
+    const wasSpeaking = ttsEmitted
     stopSpeaking()
     // Hands-free interrupt: don't just stop Orbit's voice — hand the
     // turn back to the user immediately by resuming the mic and
@@ -570,7 +572,7 @@ function initVoiceInput(): void {
   handsFree?.teardown()
   handsFree = new HandsFreeController({
     onPartial: (text) => fillVoiceInput(text),
-    onTurn: (text) => { emitHandsFreeTurn(); fillVoiceInput(text); void handleSend() },
+    onTurn: (text) => { emitHandsFreeTurn(text); fillVoiceInput(text); void handleSend() },
     onStateChange: (state) => {
       setMicListening(state === 'capturing' || state === 'listening')
       // Duck dataset audio the moment we start capturing a turn (kept
@@ -596,7 +598,7 @@ let handsFreeCaptureStartedAt = 0
  * These are the §10.4 numbers that decide the exhibit's interaction
  * model. No transcript text leaves the device.
  */
-function emitHandsFreeTurn(): void {
+function emitHandsFreeTurn(transcript: string): void {
   const cfg = loadConfig()
   const mode = cfg.voiceHandsFree ?? 'off'
   if (mode === 'off') return
@@ -609,7 +611,9 @@ function emitHandsFreeTurn(): void {
     trigger: mode, // 'open-mic' | 'push-to-talk'
     duration_ms: handsFreeCaptureStartedAt ? Math.max(0, Date.now() - handsFreeCaptureStartedAt) : 0,
     lang: baseLanguage(lang),
-    success: true,
+    // An empty final transcript (the streaming engine can emit one) is
+    // not a successful turn — derive success from real text.
+    success: transcript.trim().length > 0,
   })
 }
 
@@ -618,17 +622,19 @@ function emitHandsFreeTurn(): void {
  * spoken reply. Drives the barge-in-frequency metric (§10.4).
  */
 function emitBargeIn(): void {
-  const cfg = loadConfig()
-  const lang = cfg.voiceLang || getLocale()
-  const provider = resolveTtsEngine(cfg.voiceProvider ?? 'auto', lang)?.provider ?? 'browser'
+  const lang = loadConfig().voiceLang || getLocale()
   emit({
     event_type: 'voice_interaction',
     mode: 'tts',
-    provider,
-    trigger: 'autospeak',
+    // The reply that was cut short — use the engine/trigger that were
+    // actually speaking, not a fresh re-resolve.
+    provider: ttsEngine?.provider ?? 'browser',
+    trigger: ttsTrigger, // 'autospeak' | 'replay'
     duration_ms: 0,
     lang: baseLanguage(lang),
-    success: false,
+    // TTS *had* started (success = "TTS started"); `interrupted` is what
+    // marks the barge-in. Caller only emits this once speech was produced.
+    success: true,
     interrupted: true,
   })
 }
