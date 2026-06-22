@@ -158,11 +158,14 @@ export function resetVoiceEngines(): void {
 
 /**
  * Resolution order for `auto`. On-device first (best privacy, no
- * per-use cost), then the Cloudflare edge, then the browser API.
- * Phases 2/4 register the `cloud` / `local` engines; until then
- * `auto` falls through to `browser`. (docs/ORBIT_VOICE_PLAN.md §4.4)
+ * per-use cost), then the browser API. **`cloud` is deliberately
+ * excluded from `auto`** — Cloudflare edge inference is metered and
+ * changes the STT UX (record→upload, no live interim), so it's
+ * opt-in: reachable only by pinning `voiceProvider: 'cloud'` (e.g. a
+ * kiosk, or a user who wants the better/private path). Phase 4
+ * registers the `local` engine. (docs/ORBIT_VOICE_PLAN.md §4.4)
  */
-const AUTO_ORDER: readonly VoiceProvider[] = ['local', 'cloud', 'browser']
+const AUTO_ORDER: readonly VoiceProvider[] = ['local', 'browser']
 
 function pickEngine<T extends { provider: VoiceProvider; supportsLanguage(l: string): boolean; isAvailable(c: VoiceCapabilities): boolean }>(
   engines: readonly T[],

@@ -25,6 +25,7 @@ import { emit, startDwell, type DwellHandle } from '../analytics'
 import { enMessages, t, getLocale, type MessageKey } from '../i18n'
 import { resolveSttEngine, resolveTtsEngine, voiceSupportForLocale, splitIntoSpokenChunks, baseLanguage, type SttSession, type TtsEngine } from '../services/voiceService'
 import { registerBrowserVoiceEngines, primeBrowserTts, listBrowserVoices, curateVoices, onBrowserVoicesChanged } from '../services/voiceBrowserEngines'
+import { registerCloudVoiceEngines } from '../services/voiceCloudEngines'
 
 // --- Constants ---
 const SESSION_STORAGE_KEY = 'sos-docent-chat'
@@ -514,6 +515,9 @@ function setVisionUI(enabled: boolean): void {
  */
 function initVoiceInput(): void {
   registerBrowserVoiceEngines()
+  // Cloud engines register too but are opt-in (provider=cloud) — `auto`
+  // never picks them; web-only (no /api proxy in the desktop shell).
+  registerCloudVoiceEngines()
   updateMicVisibility()
   populateVoiceOptions()
   // System voices load asynchronously — refresh the picker when they
@@ -818,6 +822,8 @@ async function populateSettings(): Promise<void> {
   const autospeakInput = document.getElementById('chat-settings-voice-autospeak') as HTMLInputElement | null
   if (autospeakInput) autospeakInput.checked = config.voiceAutoSpeak ?? false
   populateVoiceOptions()
+  const providerSelect = document.getElementById('chat-settings-voice-provider') as HTMLSelectElement | null
+  if (providerSelect) providerSelect.value = config.voiceProvider ?? 'auto'
   const rateSelect = document.getElementById('chat-settings-voice-rate') as HTMLSelectElement | null
   if (rateSelect) rateSelect.value = String(config.voiceRate ?? 1)
   // Apply saved debug log level on startup
@@ -913,10 +919,15 @@ function readSettingsForm(): DocentConfig {
   const autospeakInput = document.getElementById('chat-settings-voice-autospeak') as HTMLInputElement | null
   const voiceNameSelect = document.getElementById('chat-settings-voice-name') as HTMLSelectElement | null
   const voiceRateSelect = document.getElementById('chat-settings-voice-rate') as HTMLSelectElement | null
+  const voiceProviderSelect = document.getElementById('chat-settings-voice-provider') as HTMLSelectElement | null
   const parsedRate = Number(voiceRateSelect?.value)
   // Carry forward voice config not exposed in this form so a save
-  // doesn't wipe it (provider / recognition language land later).
+  // doesn't wipe it (recognition language lands later).
   const current = loadConfig()
+  const providerValue = voiceProviderSelect?.value
+  const voiceProvider = providerValue === 'browser' || providerValue === 'cloud' || providerValue === 'auto'
+    ? providerValue
+    : current.voiceProvider
   return {
     apiUrl: urlInput?.value.trim() || defaults.apiUrl,
     apiKey: keyInput?.value.trim() ?? '',
@@ -926,7 +937,7 @@ function readSettingsForm(): DocentConfig {
     visionEnabled: visionInput?.checked ?? defaults.visionEnabled,
     debugPrompt: debugInput?.checked ?? defaults.debugPrompt,
     voiceAutoSpeak: autospeakInput?.checked ?? current.voiceAutoSpeak,
-    voiceProvider: current.voiceProvider,
+    voiceProvider,
     voiceLang: current.voiceLang,
     voiceName: voiceNameSelect ? (voiceNameSelect.value || undefined) : current.voiceName,
     voiceRate: Number.isFinite(parsedRate) && parsedRate > 0 ? parsedRate : current.voiceRate,
@@ -940,6 +951,10 @@ function handleSettingsSave(): void {
   setLogLevel(config.debugPrompt ? 'debug' : null)
   // Keep vision toggle button + hint banner in sync with settings checkbox
   setVisionUI(config.visionEnabled)
+  // Provider change can flip which engine resolves for the locale —
+  // refresh mic visibility + the voice picker.
+  updateMicVisibility()
+  populateVoiceOptions()
   const status = document.getElementById('chat-settings-status')
   if (status) {
     status.textContent = t('chat.settings.status.saved')

@@ -18,9 +18,13 @@ auto-send), **TTS auto-speak** + the per-message **🔊 Speak**
 button (Orbit reads its reply sentence-by-sentence via
 `speechSynthesis`, with a Stop control and a default-off settings
 toggle), the **voice / rate picker** (novelty voices filtered), and
-the **`voice_interaction`** Tier B telemetry event. Next:
-**Phase 2 — Cloudflare-edge STT/TTS** (§7) plus the remaining voice
-settings (provider / recognition language).
+the **`voice_interaction`** Tier B telemetry event. **Phase 2** has
+also landed: the **Cloudflare-edge STT/TTS** Pages Functions
+(`/api/voice/transcribe` Whisper, `/api/voice/synthesize`
+MeloTTS/Aura) behind `KILL_VOICE`, the opt-in **cloud** client
+engines, and a **Voice-engine** picker (Auto / Browser / Cloud).
+Next: Phase 3 (realtime / hands-free) and Phase 4 (on-device),
+plus the recognition-language override.
 
 > Cross-references:
 > [`docs/DOCENT_UX_IMPROVEMENT_PLAN.md`](DOCENT_UX_IMPROVEMENT_PLAN.md)
@@ -308,16 +312,30 @@ command in `src-tauri/`. High quality, fully local, no cost. Phase
 
 ### 4.4 Provider-selection resolver
 
-`voiceService.ts` exposes a single `resolveProviders()` that picks,
-at runtime:
+`voiceService.ts` resolves an engine at runtime from the registered
+set. **As shipped, `auto` is `on-device → browser`** and Cloudflare
+is **opt-in** (reachable only by pinning `voiceProvider: 'cloud'`):
 
 ```
-STT:  on-device (if enabled & capable) → Cloudflare edge (web/desktop) → Web Speech (web) → none
-TTS:  OS-native (Apple/desktop) → Cloudflare edge → speechSynthesis → none
+auto:   on-device (Phase 4, if capable) → browser (Web Speech)   [free, no per-use cost]
+cloud:  Cloudflare edge — Whisper STT, MeloTTS/Aura TTS           [pinned; metered]
+browser / local: pin the specific engine
 ```
+
+> **Why cloud is opt-in, not auto** (decision, 2026-06-22):
+> auto-preferring the edge would make every auto-speak / 🔊 / mic
+> turn a metered Workers AI call, and cloud STT changes the UX
+> (record→upload, no live interim). So `auto` stays on the free
+> browser path; users / kiosk operators **pin** `cloud` via the
+> Voice-engine setting when they want the better, browser-consistent,
+> non-Apple/Google path. This supersedes the original
+> `on-device → cloud → browser` auto order above; revisit if the
+> kiosk wants cloud as its default (it would pin `cloud` anyway).
 
 Config surfaces this as `voiceProvider: 'auto' | 'cloud' | 'local' | 'browser'`
 so power users / kiosk operators can pin a path. Default `'auto'`.
+Cloud engines are **web-only** (the `/api` proxy is absent in the
+desktop shell) and honour the `KILL_VOICE` session cooldown.
 
 ---
 

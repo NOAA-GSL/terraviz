@@ -102,11 +102,20 @@ describe('resolver + capability matrix', () => {
     expect(resolveSttEngine('auto', 'pt', ALL_CAPS)).toBeNull() // unsupported language
   })
 
-  it('honours auto order: local before cloud before browser', () => {
+  it('auto order is local → browser, and excludes cloud (opt-in)', () => {
     registerTtsEngine(createFakeTtsEngine({ provider: 'browser', languages: ['en'] }))
     registerTtsEngine(createFakeTtsEngine({ provider: 'cloud', languages: ['en'] }))
+    // cloud is registered but auto must not pick it — browser wins.
+    expect(resolveTtsEngine('auto', 'en', ALL_CAPS)?.provider).toBe('browser')
+    // local outranks browser when present.
     registerTtsEngine(createFakeTtsEngine({ provider: 'local', languages: ['en'] }))
     expect(resolveTtsEngine('auto', 'en', ALL_CAPS)?.provider).toBe('local')
+  })
+
+  it('cloud is reachable only by an explicit pin', () => {
+    registerTtsEngine(createFakeTtsEngine({ provider: 'cloud', languages: ['en'] }))
+    expect(resolveTtsEngine('auto', 'en', ALL_CAPS)).toBeNull()
+    expect(resolveTtsEngine('cloud', 'en', ALL_CAPS)?.provider).toBe('cloud')
   })
 
   it('a pinned preference selects only that provider', () => {
@@ -120,15 +129,17 @@ describe('resolver + capability matrix', () => {
     expect(resolveSttEngine('auto', 'en', ALL_CAPS)).toBeNull()
   })
 
-  it('reports per-locale support for STT and TTS independently', () => {
+  it('reports per-locale support for STT and TTS independently (cloud pinned)', () => {
     registerSttEngine(createFakeSttEngine({ provider: 'cloud', languages: CLOUD_STT_LANGUAGES }))
     registerTtsEngine(createFakeTtsEngine({ provider: 'cloud', languages: CLOUD_TTS_LANGUAGES }))
     // Hindi: Nova-3 STT yes, cloud TTS no.
-    expect(voiceSupportForLocale('hi', 'auto', ALL_CAPS)).toEqual({ stt: 'cloud', tts: null })
+    expect(voiceSupportForLocale('hi', 'cloud', ALL_CAPS)).toEqual({ stt: 'cloud', tts: null })
     // Korean: cloud TTS yes, STT no.
-    expect(voiceSupportForLocale('ko', 'auto', ALL_CAPS)).toEqual({ stt: null, tts: 'cloud' })
+    expect(voiceSupportForLocale('ko', 'cloud', ALL_CAPS)).toEqual({ stt: null, tts: 'cloud' })
     // Kabyle: neither.
-    expect(voiceSupportForLocale('kab', 'auto', ALL_CAPS)).toEqual({ stt: null, tts: null })
+    expect(voiceSupportForLocale('kab', 'cloud', ALL_CAPS)).toEqual({ stt: null, tts: null })
+    // Under auto, cloud is excluded entirely (opt-in).
+    expect(voiceSupportForLocale('hi', 'auto', ALL_CAPS)).toEqual({ stt: null, tts: null })
   })
 })
 
