@@ -91,6 +91,50 @@ of this: capability detection, the STT/TTS provider abstraction,
 and the audio plumbing. `chatUI.ts` only ever sees "give me a
 transcript" and "speak this sentence."
 
+### 1.1 A spoken answer is not a written answer
+
+This is the single most important correctness point, and it makes
+"two transducers on an unchanged core" an over-simplification.
+Orbit's current output is tuned for **reading**: markdown, bullet
+lists, dataset titles, URLs, and inline `<<LOAD:DATASET_ID>>`
+markers. Feed that raw to TTS and it speaks "asterisk asterisk,"
+reads dataset IDs and URLs aloud, and enumerates bullets
+robotically. Two things follow:
+
+1. **TTS never reads the raw stream.** It reads a **spoken-form
+   projection** — markers stripped, markdown flattened, links and
+   IDs removed, abbreviations/units expanded ("SST" → "sea surface
+   temperature"). This is a sibling of the existing
+   `renderChatText()` marker-stripping in `chatUI.ts` (~`:1026`),
+   but for the *ear*, not the DOM. It is the source-of-truth for
+   sentence-chunking, **not** the visible text.
+2. **The model should be asked to talk differently when voice is
+   on.** A **voice-aware system-prompt variant** in
+   `docentContext.ts` requests shorter, link-free, list-free prose
+   and at most one dataset recommendation per turn (you can't scan
+   five options by ear). This is a genuine pipeline change, not a
+   post-filter — gated on `config.voiceEnabled` so typed chat is
+   unaffected.
+
+### 1.2 Acting on a recommendation, hands-free
+
+Today a recommended dataset loads via a **click** on the inline
+button rendered from the `action` / `auto-load` chunk
+(`renderChatText()`). With no keyboard or mouse in the exhibit,
+that affordance is dead. Voice needs its own path:
+
+- **Auto-load with spoken confirmation** — Orbit says "loading sea
+  surface temperature now" and fires the load (reuse the existing
+  `auto-load` chunk, which already carries the chosen action +
+  alternatives), or
+- a small **confirmation grammar** ("say *show me* to load it").
+
+Either way the `DocentStreamChunk` contract is unchanged; the
+voice layer interprets `action` / `auto-load` chunks as *spoken*
+offers instead of *clickable* buttons. This must be designed, not
+assumed — it's the difference between voice being usable and being
+a demo.
+
 ---
 
 ## 2. Best practices (what "good" looks like)
@@ -156,6 +200,19 @@ same Cloudflare edge the app already deploys to, behind the same
 | Whisper large v3 turbo | `@cf/openai/whisper-large-v3-turbo` | Out of beta, priced, accurate, simple **request/response** (POST audio → JSON transcript). Best **MVP cloud** choice — no WebSocket complexity. |
 | Deepgram Nova-3 | `@cf/deepgram/nova-3` | Fast, high-accuracy, **10 languages** with regional variants, **WebSocket streaming** for live partial transcripts. The Phase 3 realtime choice. |
 | Deepgram Flux | `@cf/deepgram/flux` | Conversational STT with **built-in turn detection** — the right primitive for barge-in / always-listening without rolling our own VAD. |
+
+**Language coverage is a matrix, not a flag.** The app localizes
+well beyond the languages these models support — Nova-3 covers
+~10 languages with regional variants, Aura-2 ships `en` + `es`,
+MeloTTS is multilingual but bounded, and locales like **Kabyle
+(`kab`)** almost certainly have **no** STT/TTS at all. So voice is
+available for a *subset* of the UI's locales. `voiceService` must
+own an explicit **per-locale capability matrix** (`{ locale →
+{ stt: provider|null, tts: provider|null } }`) and the UI must
+**degrade gracefully**: when the active locale has no voice
+support, the mic/speaker controls hide (or show "voice isn't
+available in this language yet") and typed chat is exactly as
+before. Locale-matching is *not* a safe default to assume.
 
 **Text-to-speech (TTS):**
 
@@ -313,6 +370,15 @@ for the listening/speaking state. New scenes for
 `scripts/screenshots/scenes.ts` (mic idle/listening, settings with
 voice rows) per the visual-testing convention.
 
+**The double-speak trap.** If auto-speak (TTS) is on *and* a
+screen reader is reading the live `aria-live` caption, the user
+hears every reply **twice**, overlapping. The two must be
+coordinated: when TTS is active, the streamed caption should not
+also be announced via an assertive live region (use `aria-live`
+politely / suppress, or gate one on the other). The mic must be
+**keyboard-operable** (not tap-only), and the listening-state
+audio meter must honor `prefers-reduced-motion`.
+
 ---
 
 ## 6. Privacy & analytics
@@ -338,6 +404,37 @@ analytics model (`docs/ANALYTICS.md`, `docs/PRIVACY.md`).
   `public/privacy.html` via `npm run build:privacy-page`, guarded
   by `check:privacy-page`) describing the voice data flow per
   provider.
+
+### 6.1 The exhibit changes the privacy calculus
+
+A public, always-on kiosk that records the public (including
+**minors**) is a different privacy posture from a hobbyist on the
+open web, and it creates a contradiction we have to resolve
+explicitly:
+
+- **Browser Web Speech STT is wrong for the exhibit.** In Chrome
+  it ships captured audio to **Google's** servers. That's an
+  acceptable trade for the zero-cost Phase 1 *web* MVP, but it is
+  **not** acceptable for a NOAA kiosk silently recording visitors.
+  **The exhibit (hands-free, Phase 3) must use the Cloudflare-edge
+  or on-device path, never Web Speech.** Decision #2 (browser-API
+  MVP) and decision #5 (hands-free exhibit) therefore target
+  *different deployments*, not one escalating build.
+- **Wake-word must be on-device.** "Hey Orbit" requires
+  continuously processing mic audio. That detection runs **locally**
+  (Porcupine / openWakeWord class) and **never streams raw audio to
+  the cloud** just to spot the trigger — a privacy *and* cost
+  requirement, not an optimization.
+- **Physical recording notice.** Always-on audio capture in a
+  public space typically needs **on-site signage** disclosing
+  recording — something the in-app banner cannot satisfy. Flag for
+  the install/operations checklist, and confirm the legal posture
+  for the install jurisdiction(s).
+- **Public input is adversarial.** Spoken input from strangers
+  will include profanity and probing; it flows into the LLM as
+  text and reuses Orbit's existing moderation/guardrails, but the
+  exhibit raises the stakes — worth an explicit content-safety
+  note at Phase 3.
 
 ---
 
@@ -385,7 +482,8 @@ recommendations elsewhere in this doc where they differ.
 4. **Cost guardrails are in scope.** Add a server **`KILL_VOICE`**
    env (modeled on `KILL_TELEMETRY` → 410 + client cooldown) plus
    **per-session usage caps**. These land **with Phase 2** (the
-   first phase that incurs edge inference cost), not later. (§6, §9)
+   first phase that incurs edge inference cost), not later.
+   (§6, §10.6 cost model)
 5. **Hands-free is a committed exhibit requirement** — *not* a
    deferred stretch. The NOAA SOS install needs always-listening
    operation. This **promotes the realtime work (Phase 3) and a
@@ -404,9 +502,126 @@ recommendations elsewhere in this doc where they differ.
 > unchanged building blocks (push-to-talk MVP, then the cloud
 > proxy + `voiceProvider` resolver that Phase 3 streams over).
 
+> **Open implementation tension within #5:** "hands-free" is the
+> requirement; **always-open-mic is one implementation, a physical
+> press-to-talk button is another.** In a noisy, multi-visitor hall
+> a single hardware button is often *more* robust than an open mic
+> (no echo loop, no crowd false-fires, clear turn-taking). This is
+> a Phase 3 design decision, not a settled one — see §9.1.
+
 ---
 
-## 9. Risks & mitigations
+## 9. Designing for the exhibit — hostile audio & conversation design
+
+The plan above optimizes for "voice on the open web." The
+*exhibit* — a noisy, public, multi-visitor museum hall — is a
+harder problem, and it's the deployment decision #5 commits us to.
+These are the things that decide whether hands-free actually works
+there.
+
+### 9.1 The room is a hostile audio environment
+
+- **Echo / self-trigger loop.** An always-open mic next to a
+  speaker playing Orbit's voice **hears Orbit** and re-triggers
+  itself. Mitigation: acoustic echo cancellation (AEC), **duck or
+  gate the mic while TTS is playing**, and/or directional mic
+  hardware. Untreated, always-on + TTS is a feedback loop.
+- **Dataset-audio collision.** Datasets are HLS video that can
+  carry an audio track; the mic hears it and TTS competes with it.
+  **Duck dataset audio during a voice turn**, and treat dataset
+  audio as a known echo source for AEC.
+- **Crowd noise, crosstalk, wake-word false-fires.** A busy lobby
+  is the worst case for STT accuracy and for "Hey Orbit"
+  mis-triggering on passing conversation. Tune endpointing and
+  wake-word sensitivity against *recorded hall noise*, and track
+  the false-fire rate as a first-class metric (§10.4).
+- **Hands-free ≠ open-mic (the §8 #5 tension).** A **physical
+  press-to-talk button** at the kiosk delivers "hands-free of a
+  keyboard" while sidestepping echo, crowd false-fires, and
+  turn-taking ambiguity. Recommendation: prototype **both** an
+  open-mic+wake-word path and a button path early in Phase 3 and
+  let a real install pick — don't assume open-mic.
+
+### 9.2 Conversation design
+
+- **One recommendation per turn.** You can scan five dataset
+  options on screen; you cannot by ear. The voice-aware prompt
+  (§1.1) caps recommendations and the voice layer reads `action` /
+  `auto-load` chunks as *spoken* offers (§1.2).
+- **Endpointing.** When does a turn end? Too-short silence cuts
+  people off mid-sentence; too-long feels laggy. This is exactly
+  why **Deepgram Flux's turn detection** is the Phase 3 STT choice
+  rather than a hand-rolled silence timer.
+- **Conversational repair.** Mis-transcription needs an out — a
+  visible/editable transcript before send (push-to-talk), and a
+  re-ask path. Tie corrections to the existing `orbit_correction`
+  telemetry so we can measure STT-driven misunderstanding.
+- **Silence / no-input timeouts** and a graceful "I didn't catch
+  that" rather than a dead state.
+
+---
+
+## 10. Engineering specifics the MVP must not hand-wave
+
+### 10.1 Audio capture & encoding
+
+`MediaRecorder` output differs by browser (Chrome → `webm/opus`,
+Safari → `mp4/aac`), and the STT endpoint expects specific
+formats/sample rates. `voiceService` normalizes capture (codec,
+sample rate, mono) per provider, and the Cloudflare `transcribe`
+function documents exactly what it accepts. Don't assume one format
+works everywhere.
+
+### 10.2 TTS playback & streaming
+
+TTS returns **encoded audio**, not text — it must be decoded and
+played (`HTMLAudioElement` or Web Audio), and for low latency the
+audio should be **streamed/queued per sentence** rather than played
+as one blob. Sentence-chunked synthesis (§2, practice 4) only pays off if the
+playback layer can enqueue chunk N+1 while chunk N plays.
+
+### 10.3 Testing nondeterministic audio
+
+Real STT/TTS can't run in CI. The provider abstraction therefore
+ships a **fake provider** behind the resolver: scripted transcripts
+in, silent/stub audio out, so the pipeline, the spoken-form
+projection (§1.1), sentence-chunking, and the UI state machine are
+**deterministically testable**. Screenshot scenes cover the
+listening/thinking/speaking states; a smoke assertion drives the
+fake STT → `handleSend()` → spoken-offer path.
+
+### 10.4 Telemetry beyond the basic event
+
+The `voice_interaction` event (§6) should also let us tune the
+exhibit: STT/TTS **latency**, provider, language, success, and —
+for hands-free — **wake-word trigger and false-positive rate** and
+**barge-in frequency**. (Still no transcript text, no audio.) These
+are the numbers that decide open-mic vs button (§9.1).
+
+### 10.5 Desktop / Tauri & localhost
+
+- **Tauri mic permissions aren't free:** macOS needs
+  `NSMicrophoneUsageDescription` in the bundle, the capability
+  allowlist must permit mic + the voice endpoints, and
+  `getUserMedia` in WKWebView has caveats. Phase 2 desktop voice
+  carries this plumbing cost.
+- **Localhost has no `/api` proxy** (same constraint as the LLM
+  path). The cloud STT/TTS endpoints are unreachable in local dev,
+  so dev relies on the Web Speech / fake-provider fallback — or a
+  `wrangler`/miniflare shim. Note this so Phase 2 dev isn't blocked.
+
+### 10.6 Cost model
+
+Turn the abstract "MeloTTS ≈ $0.0002/audio-min" into a real
+projection before setting the §8 #4 caps: estimate an
+8-hour/day kiosk's STT + TTS + LLM minutes, derive a per-session
+cap and a monthly ceiling, and size `KILL_VOICE` / cooldown
+thresholds against it. On-device (Phase 4) is the structural answer
+to recurring per-use cost at exhibit scale.
+
+---
+
+## 11. Risks & mitigations
 
 | Risk | Mitigation |
 |---|---|
@@ -417,21 +632,34 @@ recommendations elsewhere in this doc where they differ.
 | Bundle bloat | All voice code lazy-loaded behind capability + config gates (Three.js-chunk precedent); WebGPU models only fetched in on-device mode. |
 | i18n/RTL/a11y regressions | All strings via `t()`; logical CSS properties; new screenshot scenes + smoke assertion per the repo conventions. |
 | Scope creep into a full voice agent | Hard phase boundaries; realtime/barge-in gated behind a proven turn-based MVP; non-goals enumerated above. |
+| Echo / self-trigger loop (always-on mic + TTS) | AEC; duck/gate mic during TTS; duck dataset audio; directional-mic hardware; prototype a press-to-talk-button path as the robust alternative (§9.1). |
+| Voice unavailable in many UI locales | Explicit per-locale capability matrix in `voiceService`; controls hide / "not available in this language" rather than failing (§3). |
+| Robotic TTS reading markdown/IDs/URLs | Spoken-form projection + voice-aware system prompt (§1.1); TTS never reads the raw stream. |
+| Double-speak (TTS + screen-reader caption) | Coordinate live-region announcement with TTS state (§5.5). |
+| Recording the public in a kiosk (incl. minors) | Exhibit uses Cloudflare/on-device STT, never Web Speech; on-device wake-word; physical recording signage + jurisdiction check (§6.1). |
 
 ---
 
-## 10. First implementation slice (when approved)
+## 12. First implementation slice (when approved)
 
 To keep changes "one logical change per turn" (per `CLAUDE.md`):
 
 1. Add `voiceService.ts` skeleton + capability detection + the
-   provider resolver (no UI yet). Module-map row in `CLAUDE.md`
-   in the same commit (doc-coverage gate).
-2. Extend `DocentConfig` with `voice*` fields + defaults.
-3. Mic button + listening UI + interim transcript (Web Speech STT)
-   → `handleSend()`. New scene + i18n keys.
-4. `speechSynthesis` auto-speak with sentence-chunking + Stop
-   control + settings toggle.
-5. Tier B `voice_interaction` event + test + `ANALYTICS.md` row.
+   provider resolver, **including the per-locale capability matrix
+   and a fake provider for tests** (§3, §10.3). Module-map row in
+   `CLAUDE.md` in the same commit (doc-coverage gate).
+2. Extend `DocentConfig` with `voice*` fields + defaults
+   (auto-speak **off** by default).
+3. **Spoken-form projection** (marker/markdown/URL stripping for
+   the ear) + a voice-aware prompt variant gated on
+   `voiceEnabled` (§1.1).
+4. Mic button + listening UI + interim transcript (Web Speech STT)
+   → `handleSend()`; spoken-offer handling for `action` /
+   `auto-load` chunks (§1.2). New scene + i18n keys.
+5. `speechSynthesis` auto-speak with sentence-chunked, queued
+   playback + Stop control + settings toggle; coordinate with the
+   `aria-live` caption to avoid double-speak (§5.5).
+6. Tier B `voice_interaction` event (+ latency fields) + test +
+   `ANALYTICS.md` row.
 
 Each is a self-contained, signed-off (`git commit -s`) commit.
