@@ -9,12 +9,24 @@
  * template satisfies the server-side allowlist and writes its MP4
  * to `WORKFLOW_OUTPUT_PATH` by construction.
  *
- * Frame-gap handling follows current upstream CLI shape
- * (`zyra process scan-frames … --output /work/frames-meta.json`, then
- * `zyra process pad-missing … --fill nearest`; fill choices are
- * blank | solid | basemap | nearest). pad-missing sits between the
- * scan and compose-video so cadence gaps don't show as time-jumps
- * in the animation.
+ * Frame-gap handling follows the zyra-scheduler pipeline's command
+ * shape: `zyra process scan-frames … --output /work/frames-meta.json`
+ * builds the cadence metadata, then `zyra process pad-missing
+ * --frames-meta … --output-dir … --fill-mode <blank|solid|basemap|nearest>
+ * [--basemap <img>] [--json-report …]` fills the gaps, and a second
+ * scan-frames refreshes the metadata so the newly-padded frames are
+ * reflected in the data range. pad-missing sits between the scans and
+ * compose-video so cadence gaps don't show as time-jumps in the
+ * animation. The drought template fills gaps from the bundled
+ * vegetation basemap (the SOS DroughtRisk product's MISSING_FRAME);
+ * other datasets typically use `--fill-mode nearest`.
+ *
+ * Not modelled here: the scheduler's `acquire --prefer-remote-if-meta-newer`
+ * flag, which swaps previously-padded synthetic frames for real ones
+ * once they land. It depends on the frame directory persisting across
+ * runs (the GitLab pipeline caches it); the TerraViz runner mounts a
+ * fresh `_work` per run, so there is nothing to replace — revisit if
+ * the runner grows a cross-run frame cache.
  *
  * The stage snippets back the "Insert stage" palette — the
  * lightweight, textarea-native form of zyra-editor's stage palette
@@ -58,8 +70,19 @@ export const WORKFLOW_TEMPLATES: readonly WorkflowTemplate[] = [
   - stage: process
     command: pad-missing
     args:
+      frames-meta: /work/frames-meta.json
+      output-dir: /work/images/frames
+      fill-mode: basemap
+      basemap: pkg:zyra.assets/images/earth_vegetation.jpg
+      json-report: /work/pad-missing-report.json
+  - stage: process
+    command: scan-frames
+    args:
       frames-dir: /work/images/frames
-      fill: nearest
+      pattern: '^DroughtRisk_Weekly_[0-9]{8}\\.png$'
+      datetime-format: '%Y%m%d'
+      period-seconds: 604800
+      output: /work/frames-meta.json
   - stage: visualize
     command: compose-video
     args:
@@ -99,8 +122,9 @@ export const WORKFLOW_TEMPLATES: readonly WorkflowTemplate[] = [
   - stage: process
     command: pad-missing
     args:
-      frames-dir: /work/images/frames
-      fill: nearest
+      frames-meta: /work/frames-meta.json
+      output-dir: /work/images/frames
+      fill-mode: nearest
   - stage: visualize
     command: compose-video
     args:
@@ -173,8 +197,9 @@ export const STAGE_SNIPPETS: ReadonlyArray<{ id: string; snippet: string }> = [
     snippet: `  - stage: process
     command: pad-missing
     args:
-      frames-dir: /work/images/frames
-      fill: nearest
+      frames-meta: /work/frames-meta.json
+      output-dir: /work/images/frames
+      fill-mode: nearest
 `,
   },
   {
