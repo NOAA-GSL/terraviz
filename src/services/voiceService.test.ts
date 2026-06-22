@@ -13,6 +13,9 @@ import {
   listVoiceLanguageOptions,
   createFakeSttEngine,
   createFakeTtsEngine,
+  registerStreamingSttEngine,
+  resolveStreamingSttEngine,
+  createFakeStreamingSttEngine,
   CLOUD_STT_LANGUAGES,
   CLOUD_TTS_LANGUAGES,
   type VoiceCapabilities,
@@ -165,6 +168,69 @@ describe('fake engines', () => {
     const engine = createFakeTtsEngine({ spoken })
     await engine.speak('hello', { lang: 'en' })
     expect(spoken).toEqual(['hello'])
+  })
+})
+
+describe('streaming STT (Phase 3 realtime)', () => {
+  it('resolves a registered streaming engine by preference + language', () => {
+    registerStreamingSttEngine(createFakeStreamingSttEngine({ provider: 'cloud', languages: ['en', 'es'] }))
+    expect(resolveStreamingSttEngine('cloud', 'es', ALL_CAPS)?.provider).toBe('cloud')
+    // Unsupported language → no engine.
+    expect(resolveStreamingSttEngine('cloud', 'ja', ALL_CAPS)).toBeNull()
+    // `cloud` is opt-in, excluded from `auto`.
+    expect(resolveStreamingSttEngine('auto', 'en', ALL_CAPS)).toBeNull()
+  })
+
+  it('delivers partials then a completed turn to the session callbacks', () => {
+    const engine = createFakeStreamingSttEngine({})
+    const partials: string[] = []
+    const turns: string[] = []
+    const session = engine.startStreaming({
+      lang: 'en',
+      onPartial: (t) => partials.push(t),
+      onTurn: (t) => turns.push(t),
+      onError: () => {},
+    })
+    expect(engine.active).toBe(true)
+    engine.emitPartial('hel')
+    engine.emitPartial('hello wor')
+    engine.emitTurn('hello world')
+    expect(partials).toEqual(['hel', 'hello wor'])
+    expect(turns).toEqual(['hello world'])
+    session.stop()
+    expect(engine.active).toBe(false)
+    expect(engine.stopCount).toBe(1)
+  })
+
+  it('abortTurn (barge-in) keeps the session open; stop ends it once', () => {
+    const engine = createFakeStreamingSttEngine({})
+    let ended = 0
+    const session = engine.startStreaming({ lang: 'en', onTurn: () => {}, onError: () => {}, onEnd: () => { ended++ } })
+    session.abortTurn()
+    session.abortTurn()
+    expect(engine.abortTurnCount).toBe(2)
+    expect(engine.active).toBe(true) // still listening after barge-in
+    session.stop()
+    session.stop() // idempotent — no second onEnd
+    expect(ended).toBe(1)
+    expect(engine.stopCount).toBe(1)
+  })
+
+  it('reports VAD speech-state transitions and errors', () => {
+    const engine = createFakeStreamingSttEngine({})
+    const states: boolean[] = []
+    const errors: string[] = []
+    engine.startStreaming({
+      lang: 'en',
+      onTurn: () => {},
+      onSpeechStateChange: (s) => states.push(s),
+      onError: (e) => errors.push(e.message),
+    })
+    engine.emitSpeechState(true)
+    engine.emitSpeechState(false)
+    engine.emitError(new Error('boom'))
+    expect(states).toEqual([true, false])
+    expect(errors).toEqual(['boom'])
   })
 })
 
