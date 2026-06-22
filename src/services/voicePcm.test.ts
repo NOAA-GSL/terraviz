@@ -3,6 +3,7 @@ import {
   downsampleTo16kHz,
   floatToLinear16,
   parseDeepgramMessage,
+  parseStreamErrorFrame,
   TARGET_SAMPLE_RATE,
 } from './voicePcm'
 
@@ -87,5 +88,23 @@ describe('parseDeepgramMessage', () => {
     expect(parseDeepgramMessage({ channel: { alternatives: [] } })).toBeNull()
     expect(parseDeepgramMessage(null)).toBeNull()
     expect(parseDeepgramMessage(42)).toBeNull()
+  })
+})
+
+describe('parseStreamErrorFrame', () => {
+  it('reads the code from a proxy error frame', () => {
+    expect(parseStreamErrorFrame(JSON.stringify({ type: 'error', code: 'voice_disabled' }))).toBe('voice_disabled')
+    expect(parseStreamErrorFrame({ type: 'error', code: 'rate_limited' })).toBe('rate_limited')
+  })
+
+  it('defaults a code-less error frame to a generic code', () => {
+    expect(parseStreamErrorFrame({ type: 'error' })).toBe('voice_stream_error')
+  })
+
+  it('returns null for transcripts and malformed frames', () => {
+    expect(parseStreamErrorFrame(JSON.stringify({ channel: { alternatives: [{ transcript: 'hi' }] } }))).toBeNull()
+    expect(parseStreamErrorFrame('not json')).toBeNull()
+    expect(parseStreamErrorFrame(null)).toBeNull()
+    expect(parseStreamErrorFrame(42)).toBeNull()
   })
 })

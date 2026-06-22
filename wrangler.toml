@@ -173,8 +173,11 @@ index_name = "terraviz-datasets"
 # /api/voice/stream proxies a browser WebSocket to Cloudflare's AI
 # Gateway realtime endpoint (Deepgram Nova-3/Flux) for live interim
 # transcripts. Configure in the Pages dashboard (Settings → Variables);
-# absent any of these the route 503s and the client falls back to the
-# batch Whisper engine, so this is opt-in:
+# absent any of these (or with KILL_VOICE set) the route accepts the
+# socket and sends a JSON error frame ({type:"error",code}) before
+# closing — a browser WebSocket can't read an HTTP status — so the
+# client disables WS streaming for the session and the resolver falls
+# back to the batch Whisper engine. That makes this opt-in:
 #   CF_ACCOUNT_ID     - Cloudflare account id (plain var)
 #   CF_AI_GATEWAY     - AI Gateway name (plain var)
 #   CF_AIG_TOKEN      - AI Gateway authorization, the `cf-aig-authorization`

@@ -19,9 +19,25 @@ import {
   type StreamingSttEngine,
   type VoiceCapabilities,
 } from './voiceService'
-import { downsampleTo16kHz, floatToLinear16, parseDeepgramMessage } from './voicePcm'
+import { downsampleTo16kHz, floatToLinear16, parseDeepgramMessage, parseStreamErrorFrame } from './voicePcm'
 import { baseLanguage, CLOUD_STT_LANGUAGES } from './voiceService'
 import { logger } from '../utils/logger'
+
+/**
+ * Set once the proxy signals the realtime route is off (an error
+ * control frame, or a handshake/socket failure). A browser WebSocket
+ * can't read the 503 the POST routes return, so this session-scoped
+ * cooldown is how the WS engine reports "unavailable" — the streaming
+ * resolver then skips it and falls back to the batch cloud engine
+ * (registered behind it). Mirrors `cloudVoiceDisabled` in
+ * `voiceCloudEngines.ts`. (docs/ORBIT_VOICE_PLAN.md §3)
+ */
+let wsStreamingDisabled = false
+
+/** Test seam. */
+export function __resetWsStreamingDisabled(): void {
+  wsStreamingDisabled = false
+}
 
 /** Minimal WebSocket surface (injectable for tests). */
 export interface WsLike {
@@ -94,66 +110,108 @@ export function createWsStreamingSttEngine(deps: WsStreamingEngineDeps = {}): St
     supportsLanguage: (lang) => CLOUD_STT_LANGUAGES.has(baseLanguage(lang)),
     // Needs Web Audio + a live mic stream (the session provides it) and
     // a same-origin proxy — so web-only, like the batch cloud engine.
-    isAvailable: (caps: VoiceCapabilities) => caps.getUserMedia && typeof WebSocket !== 'undefined',
+    // Goes unavailable for the session once the proxy signals the route
+    // is off, so the resolver falls back to the batch engine.
+    isAvailable: (caps: VoiceCapabilities) =>
+      !wsStreamingDisabled && caps.getUserMedia && typeof WebSocket !== 'undefined',
     startStreaming: ({ lang, stream, onPartial, onTurn, onError, onEnd }) => {
-      let closed = false
+      // This engine streams the session's mic PCM up the socket; with no
+      // stream there's nothing to send. Fail fast rather than opening an
+      // idle connection that would just sit there.
+      if (!stream) {
+        onError(new Error('voice stream requires a mic stream'))
+        onEnd?.()
+        return { stop: () => {}, abortTurn: () => {} }
+      }
+
+      let ended = false // the whole session is over (stop / fatal error)
       let capture: PcmCapture | null = null
       let socket: WsLike | null = null
 
-      const teardown = (): void => {
+      const dropConnection = (): void => {
         capture?.stop(); capture = null
         if (socket) {
-          try { socket.close() } catch { /* already closing */ }
-          socket = null
+          const s = socket
+          socket = null // detach first so the stale onclose is ignored
+          try { s.close() } catch { /* already closing */ }
         }
       }
-      const finish = (): void => {
-        if (closed) return
-        closed = true
-        teardown()
+      const end = (): void => {
+        if (ended) return
+        ended = true
+        dropConnection()
         onEnd?.()
       }
 
-      try {
-        socket = createSocket(buildStreamUrl(lang))
-      } catch (err) {
-        onError(err as Error)
-        finish()
-        return { stop: finish, abortTurn: finish }
-      }
-      socket.binaryType = 'arraybuffer'
+      // Open (or re-open, on barge-in) a socket and wire its handlers.
+      const connect = (): void => {
+        let s: WsLike
+        try {
+          s = createSocket(buildStreamUrl(lang))
+        } catch (err) {
+          onError(err as Error)
+          end()
+          return
+        }
+        socket = s
+        s.binaryType = 'arraybuffer'
 
-      socket.onopen = () => {
-        if (closed || !stream || !socket) return
-        // Only now (socket ready) start pumping audio.
-        capture = startCapture(stream, (pcm) => {
-          if (!closed && socket) {
-            try { socket.send(pcm) } catch { /* socket closing */ }
+        s.onopen = () => {
+          if (ended || socket !== s) return
+          // Only now (socket ready) start pumping audio.
+          capture = startCapture(stream, (pcm) => {
+            if (!ended && socket === s) {
+              try { s.send(pcm) } catch { /* socket closing */ }
+            }
+          })
+        }
+        s.onmessage = (ev) => {
+          if (ended || socket !== s) return
+          // The proxy sends a JSON error frame (route off / unconfigured
+          // / rate-limited) instead of an unreadable HTTP status. Cool
+          // down for the session and surface the error so the resolver
+          // falls back to the batch engine next time.
+          const code = parseStreamErrorFrame(ev.data)
+          if (code) {
+            wsStreamingDisabled = true
+            logger.info(`[voice] ws streaming disabled by server (${code})`)
+            onError(new Error(`voice stream ${code}`))
+            end()
+            return
           }
-        })
+          const msg = parseDeepgramMessage(ev.data)
+          if (!msg || !msg.transcript) return
+          if (msg.isFinal) onTurn(msg.transcript.trim())
+          else onPartial?.(msg.transcript)
+        }
+        s.onerror = () => {
+          if (ended || socket !== s) return
+          onError(new Error('voice stream socket error'))
+          end()
+        }
+        s.onclose = () => {
+          // Ignore the close of a socket we've already detached (a
+          // barge-in reopen, or teardown). A live socket closing on us
+          // ends the session.
+          if (socket !== s) return
+          end()
+        }
       }
-      socket.onmessage = (ev) => {
-        if (closed) return
-        const msg = parseDeepgramMessage(ev.data)
-        if (!msg || !msg.transcript) return
-        if (msg.isFinal) onTurn(msg.transcript.trim())
-        else onPartial?.(msg.transcript)
-      }
-      socket.onerror = () => {
-        if (closed) return
-        onError(new Error('voice stream socket error'))
-        finish()
-      }
-      socket.onclose = () => finish()
+
+      connect()
 
       return {
-        stop: () => finish(),
+        stop: () => end(),
         abortTurn: () => {
-          // Barge-in: drop the in-flight turn. With a per-utterance
-          // socket that means ending this stream; the session reopens on
-          // the next onset/press.
-          logger.debug('[voice] ws stream abortTurn')
-          finish()
+          // Barge-in: discard the in-flight turn WITHOUT ending the
+          // session (the contract). Deepgram realtime is a continuous
+          // socket, so reset its context by closing and reopening; the
+          // detached socket's onclose is ignored (identity guard) so no
+          // onEnd fires and listening continues on the fresh socket.
+          if (ended) return
+          logger.debug('[voice] ws stream abortTurn (reopen)')
+          dropConnection()
+          connect()
         },
       }
     },

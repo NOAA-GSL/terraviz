@@ -1,7 +1,10 @@
-import { describe, it, expect, vi } from 'vitest'
-import { createWsStreamingSttEngine, type WsLike, type StartPcmCapture } from './voiceWsStreaming'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { createWsStreamingSttEngine, __resetWsStreamingDisabled, type WsLike, type StartPcmCapture } from './voiceWsStreaming'
 
 const ALL_CAPS = { webSpeechStt: true, speechSynthesis: true, mediaRecorder: true, getUserMedia: true }
+
+// The session-scoped cooldown is module state shared across instances.
+beforeEach(() => { __resetWsStreamingDisabled() })
 
 function makeFakeSocket() {
   const sent: Array<ArrayBuffer | string> = []
@@ -101,5 +104,59 @@ describe('ws streaming engine — transport', () => {
     fakeSock.sock.onerror?.()
     expect(onError).toHaveBeenCalled()
     expect(onEnd).toHaveBeenCalledTimes(1)
+  })
+
+  it('fails fast (onError + onEnd, no socket) when no mic stream is provided', () => {
+    const createSocket = vi.fn()
+    const onError = vi.fn()
+    const onEnd = vi.fn()
+    const engine = createWsStreamingSttEngine({ createSocket, startCapture: makeFakeCapture().startCapture })
+    const session = engine.startStreaming({ lang: 'en', onTurn: () => {}, onError, onEnd })
+
+    expect(createSocket).not.toHaveBeenCalled() // no idle connection
+    expect(onError).toHaveBeenCalled()
+    expect(onEnd).toHaveBeenCalledTimes(1)
+    // The returned handles are inert no-ops.
+    expect(() => { session.stop(); session.abortTurn() }).not.toThrow()
+  })
+
+  it('cools down and ends on a proxy error frame, going unavailable for the session', () => {
+    const fakeSock = makeFakeSocket()
+    const onError = vi.fn()
+    const onEnd = vi.fn()
+    const engine = createWsStreamingSttEngine({ createSocket: () => fakeSock.sock, startCapture: makeFakeCapture().startCapture })
+    expect(engine.isAvailable(ALL_CAPS)).toBe(true)
+
+    engine.startStreaming({ lang: 'en', stream: dummyStream, onTurn: () => {}, onError, onEnd })
+    fakeSock.sock.onopen?.()
+    fakeSock.sock.onmessage?.({ data: JSON.stringify({ type: 'error', code: 'voice_disabled' }) })
+
+    expect(onError).toHaveBeenCalled()
+    expect(onEnd).toHaveBeenCalledTimes(1)
+    // Session-scoped cooldown → the resolver now falls back to batch.
+    expect(engine.isAvailable(ALL_CAPS)).toBe(false)
+  })
+
+  it('abortTurn reopens a fresh socket without ending the session', () => {
+    const socks: Array<ReturnType<typeof makeFakeSocket>> = []
+    const createSocket = (): WsLike => { const f = makeFakeSocket(); socks.push(f); return f.sock }
+    const onTurn = vi.fn()
+    const onEnd = vi.fn()
+    const engine = createWsStreamingSttEngine({ createSocket, startCapture: makeFakeCapture().startCapture })
+    const session = engine.startStreaming({ lang: 'en', stream: dummyStream, onTurn, onError: () => {}, onEnd })
+    expect(socks).toHaveLength(1)
+    socks[0]!.sock.onopen?.()
+
+    session.abortTurn()
+    // Old socket closed, a fresh one opened, session NOT ended.
+    expect(socks[0]!.closed).toBe(true)
+    expect(socks).toHaveLength(2)
+    expect(onEnd).not.toHaveBeenCalled()
+
+    // The fresh socket carries the next turn.
+    socks[1]!.sock.onopen?.()
+    socks[1]!.sock.onmessage?.({ data: JSON.stringify({ channel: { alternatives: [{ transcript: 'hi' }] }, is_final: true }) })
+    expect(onTurn).toHaveBeenCalledWith('hi')
+    expect(onEnd).not.toHaveBeenCalled()
   })
 })

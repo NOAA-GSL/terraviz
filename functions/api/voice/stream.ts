@@ -10,15 +10,19 @@
  *
  * Config (Pages → Settings → Variables; the token as an encrypted
  * secret): `CF_ACCOUNT_ID`, `CF_AI_GATEWAY` (gateway name),
- * `CF_AIG_TOKEN` (AI Gateway authorization). Absent any of them, the
- * endpoint reports 503 and the client falls back to the batch Whisper
- * engine. `KILL_VOICE` disables it like the other voice routes.
+ * `CF_AIG_TOKEN` (AI Gateway authorization). Absent any of them — or
+ * with `KILL_VOICE` set, or over the per-IP rate cap — the proxy
+ * accepts the socket and sends a JSON error frame
+ * (`{ type: 'error', code }`) before closing, since a browser
+ * WebSocket can't read an HTTP status. The client cools down on that
+ * frame and the streaming resolver falls back to the batch Whisper
+ * engine, so the realtime path is fully opt-in.
  *
  * See docs/ORBIT_VOICE_PLAN.md §3 (realtime path) and
  * https://developers.cloudflare.com/ai-gateway/usage/websockets-api/realtime-api/
  */
 
-import { type VoiceEnv, isVoiceKilled, isAllowedOrigin } from './_voice-lib'
+import { type VoiceEnv, isVoiceKilled, isAllowedOrigin, makeRateLimiter } from './_voice-lib'
 
 export interface StreamEnv extends VoiceEnv {
   /** Cloudflare account id for the AI Gateway URL. */
@@ -34,6 +38,28 @@ export interface StreamEnv extends VoiceEnv {
 /** Base language (strip any region subtag) for the Deepgram `language` param. */
 function baseLang(lang: string): string {
   return (lang || '').toLowerCase().split('-')[0]?.trim() ?? ''
+}
+
+// Per-IP new-connection cap. Streaming sockets are long-lived, so the
+// abuse vector is opening many of them; 20 fresh connections/min/IP is
+// generous for a real user (a few barge-in reopens) but caps a flood.
+// In-memory per-isolate, like the POST voice routes.
+const isRateLimited = makeRateLimiter(20)
+
+/**
+ * Accept the WebSocket and hand the client a single JSON error frame
+ * (`{ type: 'error', code }`) before closing. A browser WebSocket can't
+ * read an HTTP status, so this is how the client learns the route is
+ * off / unconfigured / rate-limited and cools down to the batch engine.
+ */
+function wsError(code: string): Response {
+  const pair = new WebSocketPair()
+  const client = pair[0]
+  const server = pair[1]
+  server.accept()
+  try { server.send(JSON.stringify({ type: 'error', code })) } catch { /* closing */ }
+  try { server.close() } catch { /* already closed */ }
+  return new Response(null, { status: 101, webSocket: client })
 }
 
 /** True once all three gateway settings are present. Pure — tested. */
@@ -60,10 +86,19 @@ export const onRequest: PagesFunction<StreamEnv> = async (context) => {
   if ((request.headers.get('Upgrade') ?? '').toLowerCase() !== 'websocket') {
     return new Response('expected websocket', { status: 426 })
   }
+  // Origin is rejected with a plain 403 (no WS upgrade): a cross-origin
+  // attacker isn't a real client and shouldn't get a socket. Legitimate
+  // same-origin browsers always send a matching Origin.
   const origin = request.headers.get('Origin')
   if (!origin || !isAllowedOrigin(origin, request.url)) return new Response(null, { status: 403 })
-  if (isVoiceKilled(env)) return new Response('voice disabled', { status: 503 })
-  if (!streamConfigured(env)) return new Response('voice stream not configured', { status: 503 })
+
+  // From here the caller is a real same-origin WS client. Disabled /
+  // unconfigured / rate-limited cases are reported as a readable error
+  // frame (not an unreadable HTTP status) so the client can fall back.
+  if (isVoiceKilled(env)) return wsError('voice_disabled')
+  if (!streamConfigured(env)) return wsError('voice_unavailable')
+  const ip = request.headers.get('CF-Connecting-IP') ?? 'anon'
+  if (isRateLimited(ip)) return wsError('rate_limited')
 
   const lang = new URL(request.url).searchParams.get('lang') ?? 'en'
 
@@ -77,7 +112,9 @@ export const onRequest: PagesFunction<StreamEnv> = async (context) => {
   } catch {
     upstream = null
   }
-  if (!upstream) return new Response('upstream connect failed', { status: 502 })
+  // Same reasoning: a 502 is unreadable by a browser WS. Report the
+  // gateway hiccup as an error frame so the client falls back cleanly.
+  if (!upstream) return wsError('upstream_unavailable')
 
   const pair = new WebSocketPair()
   const client = pair[0]

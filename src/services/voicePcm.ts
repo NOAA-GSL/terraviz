@@ -77,3 +77,22 @@ export function parseDeepgramMessage(raw: unknown): DeepgramTranscript | null {
   if (typeof transcript !== 'string') return null
   return { transcript, isFinal: m.is_final === true }
 }
+
+/**
+ * Parse a control frame sent by our `/api/voice/stream` proxy. A
+ * browser WebSocket can't read an HTTP status, so the proxy signals
+ * "this route is off / unconfigured / rate-limited" with a JSON frame
+ * (`{ type: 'error', code }`) before closing. Returns the `code` so the
+ * client can cool down and fall back to the batch engine; `null` for
+ * any other frame (a normal transcript). (docs/ORBIT_VOICE_PLAN.md §3)
+ */
+export function parseStreamErrorFrame(raw: unknown): string | null {
+  let msg: unknown = raw
+  if (typeof raw === 'string') {
+    try { msg = JSON.parse(raw) } catch { return null }
+  }
+  if (!msg || typeof msg !== 'object') return null
+  const m = msg as { type?: unknown; code?: unknown }
+  if (m.type !== 'error') return null
+  return typeof m.code === 'string' && m.code ? m.code : 'voice_stream_error'
+}
