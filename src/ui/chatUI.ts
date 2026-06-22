@@ -24,7 +24,7 @@ import { setLogLevel, logger } from '../utils/logger'
 import { emit, startDwell, type DwellHandle } from '../analytics'
 import { enMessages, t, getLocale, type MessageKey } from '../i18n'
 import { resolveSttEngine, resolveTtsEngine, voiceSupportForLocale, splitIntoSpokenChunks, type SttSession, type TtsEngine } from '../services/voiceService'
-import { registerBrowserVoiceEngines } from '../services/voiceBrowserEngines'
+import { registerBrowserVoiceEngines, primeBrowserTts } from '../services/voiceBrowserEngines'
 
 // --- Constants ---
 const SESSION_STORAGE_KEY = 'sos-docent-chat'
@@ -420,6 +420,11 @@ function wireEvents(): void {
     stopSpeaking()
     callbacks?.announce(t('chat.announce.voiceStopped'))
   })
+  // Enabling auto-speak is a user gesture — prime iOS TTS here so the
+  // very next reply can be spoken without waiting for another tap.
+  document.getElementById('chat-settings-voice-autospeak')?.addEventListener('change', (e) => {
+    if ((e.target as HTMLInputElement | null)?.checked) primeBrowserTts()
+  })
   document.getElementById('chat-settings-btn')?.addEventListener('click', toggleSettings)
 
   // Prevent wheel events from bubbling to the globe's zoom handler
@@ -516,6 +521,10 @@ function updateMicVisibility(): void {
 }
 
 function toggleListening(): void {
+  // The mic tap is a user gesture — prime iOS TTS now so a
+  // voice-initiated reply (which auto-sends later, off-gesture) can
+  // still be spoken aloud.
+  primeBrowserTts()
   if (sttSession) stopListening()
   else startListening()
 }
@@ -587,6 +596,9 @@ function beginSpeaking(): void {
   stopSpeaking()
   const cfg = loadConfig()
   if (!cfg.voiceAutoSpeak) { ttsEngine = null; return }
+  // Runs in the send-click / Enter gesture task — unlock iOS audio
+  // before the (later, async) real speech fires.
+  primeBrowserTts()
   ttsEngine = resolveTtsEngine(cfg.voiceProvider ?? 'auto', cfg.voiceLang || getLocale())
   spokenChunkCount = 0
   speakingActive = !!ttsEngine

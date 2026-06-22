@@ -590,6 +590,16 @@ audio should be **streamed/queued per sentence** rather than played
 as one blob. Sentence-chunked synthesis (§2, practice 4) only pays off if the
 playback layer can enqueue chunk N+1 while chunk N plays.
 
+**Two browser gotchas the playback layer must handle** (both hit in
+Phase 1's `speechSynthesis` path): **(1) iOS Safari** only produces
+audio if synthesis was first invoked from inside a *user gesture* —
+auto-speak fires later from an async chain, so it must be **primed
+once from an early tap** (a silent blank utterance) to unlock the
+session. **(2) Chrome** garbage-collects an utterance that isn't
+referenced from JS while mid-flight, so it never plays and never
+fires `onend`; retain a reference until it settles, and keep a
+safety timeout so the queue can't wedge.
+
 ### 10.3 Testing nondeterministic audio
 
 Real STT/TTS can't run in CI. The provider abstraction therefore

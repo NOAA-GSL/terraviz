@@ -164,6 +164,30 @@ export const browserTtsEngine: TtsEngine = {
   },
 }
 
+let ttsPrimed = false
+
+/**
+ * Unlock `speechSynthesis` for iOS Safari, which only produces audio
+ * if synthesis was first invoked from inside a user gesture. Auto-speak
+ * fires later from an async chain, so we prime it once from an early tap
+ * (mic / send / enabling auto-speak) by speaking a silent blank
+ * utterance. Idempotent and inaudible. (ORBIT_VOICE_PLAN §10.5)
+ */
+export function primeBrowserTts(): void {
+  if (ttsPrimed) return
+  const w = window as unknown as Record<string, any>
+  const synth = w['speechSynthesis']
+  const Utterance = w['SpeechSynthesisUtterance']
+  if (!synth || !Utterance) return
+  try {
+    const u = new Utterance(' ')
+    u.volume = 0
+    synth.speak(u)
+    synth.resume?.()
+    ttsPrimed = true
+  } catch { /* priming is best-effort */ }
+}
+
 /**
  * Register the browser engines that the current runtime can support.
  * Idempotent (the registry de-dupes by provider). Safe to call from
