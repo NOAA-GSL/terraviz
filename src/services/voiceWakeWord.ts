@@ -19,6 +19,7 @@
  */
 
 import { createOnnxWakeWordScorer } from './voiceWakeWordOnnx'
+import { logger } from '../utils/logger'
 
 export interface WakeWordOptions {
   /** Model score (0..1) at or above which a frame counts as a hit. */
@@ -134,14 +135,19 @@ export interface WakeWordSession {
 /**
  * Compose a scorer with a `WakeWordDetector`: every score the scorer
  * emits is fed through the threshold/debounce/cooldown machine, and
- * `onWake` fires on a confirmed "Hey Orbit". Returns a session whose
- * `stop()` releases the scorer. Resolving the scorer is async (model
- * load), so a `stop()` that races the load is honoured.
+ * `onWake` fires on a confirmed wake.
+ *
+ * Returns **synchronously** so the caller holds a `stop()` while the
+ * scorer is still loading (the ONNX backend fetches a runtime + three
+ * models — seconds). Calling `stop()` during that window genuinely
+ * cancels: the resolved capture is released the moment it arrives.
+ * A scorer that fails to start is soft-failed (logged) — wake-word
+ * just stays inert rather than rejecting and wedging voice startup.
  */
-export async function startWakeWord(
+export function startWakeWord(
   stream: MediaStream,
   opts: StartWakeWordOptions,
-): Promise<WakeWordSession> {
+): WakeWordSession {
   const detector = new WakeWordDetector(opts)
   const scorer = opts.scorer
     ?? (opts.modelBaseUrl
@@ -149,8 +155,9 @@ export async function startWakeWord(
       : defaultScorerUnavailable)
   let stopped = false
   let capture: WakeWordCapture | null = null
-  capture = await scorer(stream, (score) => { if (!stopped) detector.push(score) })
-  if (stopped) { capture.stop(); return { stop: () => {} } }
+  Promise.resolve(scorer(stream, (score) => { if (!stopped) detector.push(score) }))
+    .then((c) => { if (stopped) c.stop(); else capture = c })
+    .catch((err) => logger.warn('[voice] wake-word failed to start', err))
   return {
     stop: () => {
       stopped = true

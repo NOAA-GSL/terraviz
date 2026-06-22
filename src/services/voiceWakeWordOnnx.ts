@@ -84,13 +84,25 @@ export function createOnnxWakeWordScorer(opts: OnnxWakeWordOptions): WakeWordSco
 
   return async (stream: MediaStream, onScore: (score: number) => void): Promise<WakeWordCapture> => {
     let stopped = false
-    const ort = await loadOrt(ortUrl)
-    const [melSess, embSess, wakeSess] = await Promise.all([
-      ort.InferenceSession.create(`${base}/melspectrogram.onnx`),
-      ort.InferenceSession.create(`${base}/embedding_model.onnx`),
-      ort.InferenceSession.create(`${base}/${wakeModel}`),
-    ])
-    if (stopped) return { stop: () => {} }
+    const inert: WakeWordCapture = { stop: () => { stopped = true } }
+
+    // Soft-fail the runtime + model load: a missing CDN, bad modelBaseUrl
+    // or incompatible model must not reject and wedge voice startup — log
+    // and stay inert (no scores → no wakes).
+    let ort: OrtModule
+    let melSess: OrtSession, embSess: OrtSession, wakeSess: OrtSession
+    try {
+      ort = await loadOrt(ortUrl)
+      ;[melSess, embSess, wakeSess] = await Promise.all([
+        ort.InferenceSession.create(`${base}/melspectrogram.onnx`),
+        ort.InferenceSession.create(`${base}/embedding_model.onnx`),
+        ort.InferenceSession.create(`${base}/${wakeModel}`),
+      ])
+    } catch (err) {
+      logger.warn('[voice] wake-word: failed to load onnxruntime-web / models', err)
+      return inert
+    }
+    if (stopped) return inert
 
     // Rolling feature buffers.
     const melBuffer: Float32Array[] = []  // each entry = one 32-bin frame
@@ -136,10 +148,25 @@ export function createOnnxWakeWordScorer(opts: OnnxWakeWordOptions): WakeWordSco
 
     // --- Audio capture at 16 kHz, serialized inference ---
     const ctx = new AudioContext({ sampleRate: SAMPLE_RATE })
+    const closeCtx = (): void => {
+      try { void ctx.close().catch(() => {}) } catch { /* already closing */ }
+    }
+    // The requested rate is only a hint — the browser may pick another.
+    // Feeding the models off-rate audio yields meaningless scores (and
+    // could false-fire), so fail closed rather than misfire. (A resampler
+    // is the future fix; see docs/ORBIT_WAKEWORD.md.)
+    if (ctx.sampleRate !== SAMPLE_RATE) {
+      logger.warn(`[voice] wake-word: AudioContext is ${ctx.sampleRate} Hz, not ${SAMPLE_RATE} Hz — disabling`)
+      closeCtx()
+      return inert
+    }
     const source = ctx.createMediaStreamSource(stream)
     const processor = ctx.createScriptProcessor(2048, 1, 1)
     let pending = new Float32Array(0)
     let inflight = false
+    // Cap the backlog so a kiosk that can't keep up drops the oldest
+    // audio rather than growing memory/latency unbounded.
+    const MAX_PENDING = SAMPLE_RATE * 2 // ~2 s of 16 kHz audio
 
     async function drain(): Promise<void> {
       if (inflight) return // serialize: one chunk through the models at a time
@@ -161,8 +188,10 @@ export function createOnnxWakeWordScorer(opts: OnnxWakeWordOptions): WakeWordSco
     processor.onaudioprocess = (e: AudioProcessingEvent): void => {
       if (stopped) return
       const input = e.inputBuffer.getChannelData(0)
-      const merged = new Float32Array(pending.length + input.length)
+      let merged = new Float32Array(pending.length + input.length)
       merged.set(pending); merged.set(input, pending.length)
+      // Drop oldest audio beyond the cap (inference fell behind).
+      if (merged.length > MAX_PENDING) merged = merged.slice(merged.length - MAX_PENDING)
       pending = merged
       void drain()
     }
@@ -172,7 +201,8 @@ export function createOnnxWakeWordScorer(opts: OnnxWakeWordOptions): WakeWordSco
     return {
       stop: () => {
         stopped = true
-        try { processor.disconnect(); source.disconnect(); void ctx.close() } catch { /* already torn down */ }
+        try { processor.disconnect(); source.disconnect() } catch { /* already torn down */ }
+        closeCtx()
       },
     }
   }

@@ -98,4 +98,24 @@ describe('startWakeWord (scorer composition)', () => {
     session.stop()
     expect(onWake).not.toHaveBeenCalled()
   })
+
+  it('cancels a still-loading scorer: stop() before it resolves releases the late capture', async () => {
+    let resolveScorer: (() => void) | null = null
+    let captureStopped = false
+    const scorer: WakeWordScorer = () => new Promise<{ stop: () => void }>((res) => {
+      resolveScorer = () => res({ stop: () => { captureStopped = true } })
+    })
+    const session = startWakeWord(dummyStream, { scorer })
+    session.stop()         // stop while the scorer (model load) is still pending
+    resolveScorer!()       // load finishes only now
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(captureStopped).toBe(true) // the late-arriving capture was released
+  })
+
+  it('soft-fails a scorer that rejects (does not throw)', async () => {
+    const scorer: WakeWordScorer = () => Promise.reject(new Error('model load failed'))
+    expect(() => startWakeWord(dummyStream, { scorer })).not.toThrow()
+    await Promise.resolve()
+  })
 })
