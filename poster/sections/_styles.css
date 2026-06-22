@@ -3004,6 +3004,35 @@ h3 a[href*="github.com/zyra-project/terraviz/blob/"]:focus-visible {
   padding: 0.25rem 0.7rem;
 }
 
+.pub__demo-launch {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-family: var(--font-mono);
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: white;
+  background: var(--cable-blue, #0066cc);
+  border-radius: 8px;
+  padding: 0.6rem 1.15rem;
+  text-decoration: none;
+  box-shadow: 0 6px 18px -10px rgba(0, 0, 0, 0.4);
+  transition: background 0.15s ease, transform 0.15s ease;
+}
+
+.pub__demo-launch:hover {
+  background: #00529e;
+  transform: translateY(-1px);
+}
+
+.pub__demo-note {
+  margin: 0;
+  max-width: 34rem;
+  font-size: 0.82rem;
+  line-height: 1.5;
+  color: var(--neutral-600);
+}
+
 .pub__demo-caption {
   font-size: 0.92rem;
   color: var(--neutral-700);
