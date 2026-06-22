@@ -31,8 +31,11 @@ engines, and a **Voice-engine** picker (Auto / Browser / Cloud).
 Web Speech) and **Cloudflare** (Whisper, VAD-segmented), the
 **hands-free chat wiring** (partials→input, turn→send, self-trigger
 suspend, mute, listening indicator), and **barge-in + dataset-audio
-ducking**. Remaining Phase 3+ work: a true **WebSocket** streaming path
-(Deepgram Nova-3/Flux on Workers AI) for live partials, **streaming-turn
+ducking**. The true **WebSocket** streaming path (Deepgram Nova-3/Flux
+via the AI Gateway realtime endpoint) has now landed too — the
+`/api/voice/stream` proxy + a client WS engine for **live interim
+transcripts**, flag-gated (`VITE_VOICE_WS_STREAMING`) and pending live
+AI-Gateway validation. Remaining Phase 3+ work: **streaming-turn
 telemetry** (§10.4), Phase 3.5 **wake-word**, and Phase 4 (on-device).
 
 > Cross-references:
