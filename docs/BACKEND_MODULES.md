@@ -68,6 +68,9 @@ design rationale in the `docs/CATALOG_*` plan docs.
 | `functions/api/ingest.ts` | Route: /api/ingest |
 | `functions/api/legend.ts` | Route: /api/legend |
 | `functions/api/models.ts` | Route: /api/models |
+| `functions/api/voice/_voice-lib.ts` | Shared helpers for the voice Pages Functions — Workers AI model IDs, `KILL_VOICE` kill switch, CORS/origin, per-IP rate limiter, base64 (`docs/ORBIT_VOICE_PLAN.md` §7) |
+| `functions/api/voice/synthesize.ts` | Route: POST /api/voice/synthesize — text-to-speech via Workers AI (MeloTTS default, Aura opt-in) |
+| `functions/api/voice/transcribe.ts` | Route: POST /api/voice/transcribe — speech-to-text via Workers AI (Whisper large v3 turbo) |
 | `functions/api/tile/[[path]].ts` | Route: /api/tile/[...path] |
 
 ## Catalog read API (`functions/api/v1/`)
