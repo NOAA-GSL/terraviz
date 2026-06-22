@@ -273,7 +273,12 @@
     gap: calc(0.3rem * var(--ui-scale));
     margin-top: calc(0.2rem * var(--ui-scale));
 }
-.chat-feedback-btn {
+/* The Speak (replay TTS) button shares the feedback-button look but is
+   deliberately NOT a .chat-feedback-btn — submitting thumbs feedback
+   disables every .chat-feedback-btn in the row, and replay must stay
+   available afterwards. */
+.chat-feedback-btn,
+.chat-speak-btn {
     background: none;
     border: none;
     color: var(--white-o30);
@@ -284,7 +289,8 @@
     transition: color 0.15s, background 0.15s;
     line-height: 1;
 }
-.chat-feedback-btn:hover {
+.chat-feedback-btn:hover,
+.chat-speak-btn:hover {
     color: var(--white-o70);
     background: var(--white-o08);
 }
@@ -521,6 +527,58 @@
     background: rgba(77, 166, 255, 0.1) !important;
 }
 .chat-vision-btn svg { pointer-events: none; }
+/* Voice (STT) mic button — mirrors the vision toggle; see ORBIT_VOICE_PLAN. */
+.chat-mic-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: calc(32px * var(--ui-scale));
+    height: calc(32px * var(--ui-scale));
+    padding: 0 !important;
+    background: transparent !important;
+    border: 1px solid var(--white-o15) !important;
+    border-radius: calc(6px * var(--ui-scale));
+    color: var(--color-text-dim);
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: color 0.2s, border-color 0.2s, background 0.2s;
+}
+.chat-mic-btn:hover {
+    color: #ccc;
+    border-color: var(--white-o30) !important;
+}
+.chat-mic-btn.listening {
+    color: var(--color-accent);
+    border-color: var(--accent-o50) !important;
+    background: rgba(77, 166, 255, 0.1) !important;
+    animation: chat-mic-pulse 1.4s ease-in-out infinite;
+}
+@keyframes chat-mic-pulse {
+    0%, 100% { box-shadow: 0 0 0 0 var(--accent-o50); }
+    50% { box-shadow: 0 0 0 calc(4px * var(--ui-scale)) rgba(77, 166, 255, 0); }
+}
+@media (prefers-reduced-motion: reduce) {
+    .chat-mic-btn.listening { animation: none; }
+}
+.chat-mic-btn svg { pointer-events: none; }
+/* Stop-speaking (TTS) button — shown only while Orbit is speaking. */
+.chat-stop-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: calc(32px * var(--ui-scale));
+    height: calc(32px * var(--ui-scale));
+    padding: 0 !important;
+    background: rgba(77, 166, 255, 0.1) !important;
+    border: 1px solid var(--accent-o50) !important;
+    border-radius: calc(6px * var(--ui-scale));
+    color: var(--color-accent);
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: color 0.2s, border-color 0.2s, background 0.2s;
+}
+.chat-stop-btn:hover { border-color: var(--color-accent) !important; }
+.chat-stop-btn svg { pointer-events: none; }
 .chat-vision-hint {
     display: none;
     padding: calc(0.3rem * var(--ui-scale)) calc(0.6rem * var(--ui-scale));
@@ -591,6 +649,13 @@
     padding: calc(0.6rem * var(--ui-scale)) calc(0.75rem * var(--ui-scale));
     border-bottom: 1px solid var(--color-surface);
     font-size: calc(0.68rem * var(--ui-scale));
+    /* Scroll internally so the panel (now with voice rows) never
+       clips the Save button on a short viewport — the settings form
+       shares the bounded, overflow:hidden #chat-panel column with
+       the message log. min-height:0 lets the flex item shrink below
+       its content so overflow-y can engage. */
+    min-height: 0;
+    overflow-y: auto;
 }
 .chat-settings-row {
     margin-bottom: calc(0.4rem * var(--ui-scale));

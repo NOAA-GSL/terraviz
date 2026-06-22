@@ -166,6 +166,33 @@
                         </div>
                         <div class="chat-settings-row">
                             <label class="chat-settings-check">
+                                <input type="checkbox" id="chat-settings-voice-autospeak" />
+                                <span data-i18n="chat.settings.voiceAutoSpeak.label">Speak replies aloud — Orbit reads its answers using your device's voice. Available in supported languages.</span>
+                            </label>
+                        </div>
+                        <div class="chat-settings-row">
+                            <label class="chat-settings-label" for="chat-settings-voice-provider" data-i18n="chat.settings.voiceProvider.label">Voice engine</label>
+                            <select id="chat-settings-voice-provider">
+                                <option value="auto" data-i18n="chat.settings.voiceProvider.auto">Automatic</option>
+                                <option value="browser" data-i18n="chat.settings.voiceProvider.browser">Browser</option>
+                                <option value="cloud" data-i18n="chat.settings.voiceProvider.cloud">Cloud (Cloudflare)</option>
+                            </select>
+                        </div>
+                        <div class="chat-settings-row">
+                            <label class="chat-settings-label" for="chat-settings-voice-name" data-i18n="chat.settings.voiceName.label">Voice</label>
+                            <select id="chat-settings-voice-name"></select>
+                        </div>
+                        <div class="chat-settings-row">
+                            <label class="chat-settings-label" for="chat-settings-voice-rate" data-i18n="chat.settings.voiceRate.label">Speaking rate</label>
+                            <select id="chat-settings-voice-rate">
+                                <option value="0.8" data-i18n="chat.settings.voiceRate.slow">Slow</option>
+                                <option value="1" data-i18n="chat.settings.voiceRate.normal">Normal</option>
+                                <option value="1.25" data-i18n="chat.settings.voiceRate.fast">Fast</option>
+                                <option value="1.5" data-i18n="chat.settings.voiceRate.faster">Faster</option>
+                            </select>
+                        </div>
+                        <div class="chat-settings-row">
+                            <label class="chat-settings-check">
                                 <input type="checkbox" id="chat-settings-debug" />
                                 <span data-i18n="chat.settings.debug.label">Debug — show all log messages in browser console</span>
                             </label>
@@ -191,8 +218,14 @@
                         <button id="chat-vision-toggle" class="chat-vision-btn" aria-label="Toggle vision analysis" aria-pressed="false" title="Vision: analyze globe screenshot" data-i18n-title="chat.vision.title" data-i18n-aria-label="chat.vision.aria">
                             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
                         </button>
+                        <button id="chat-mic" class="chat-mic-btn" type="button" style="display:none" aria-label="Voice input" aria-pressed="false" title="Speak to Orbit" data-i18n-title="chat.voice.title" data-i18n-aria-label="chat.voice.aria">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+                        </button>
                         <textarea id="chat-input" rows="1" placeholder="Ask about any dataset…" data-i18n-placeholder="chat.input.placeholder" autocomplete="off" spellcheck="true"></textarea>
                         <button id="chat-send" aria-label="Send message" data-i18n-aria-label="chat.send.aria">&#x27A4;</button>
+                        <button id="chat-stop-speaking" class="chat-stop-btn" type="button" style="display:none" aria-label="Stop speaking" title="Stop speaking" data-i18n-aria-label="chat.voice.stopAria" data-i18n-title="chat.voice.stopAria">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+                        </button>
                     </div>
                 </div>
 

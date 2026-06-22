@@ -534,6 +534,22 @@ export interface GeneralFeedbackPayload {
  */
 export type ReadingLevel = 'young-learner' | 'general' | 'in-depth' | 'expert'
 
+/**
+ * Where Orbit's voice (STT/TTS) is sourced from. `auto` resolves
+ * **on-device → browser** at runtime; `cloud` is **opt-in only**
+ * (deliberately excluded from `auto` because edge inference is
+ * metered) and the explicit values pin a path for power users /
+ * kiosk operators. See `docs/ORBIT_VOICE_PLAN.md` §4.4.
+ */
+export type VoiceProviderPreference = 'auto' | 'cloud' | 'local' | 'browser'
+
+/**
+ * A *concrete* voice engine backend — `VoiceProviderPreference`
+ * minus the `'auto'` meta-preference. Engines declare one of these,
+ * and resolved per-locale support reports one of these (or `null`).
+ */
+export type VoiceProvider = Exclude<VoiceProviderPreference, 'auto'>
+
 export interface DocentConfig {
   apiUrl: string         // default: '/api'
   apiKey: string         // default: '' (empty = no auth, for Ollama)
@@ -542,6 +558,15 @@ export interface DocentConfig {
   readingLevel: ReadingLevel  // default: 'general'
   visionEnabled: boolean // default: false — captures globe screenshot as context
   debugPrompt?: boolean  // default: false — log full system prompt to console
+  // --- Voice (Orbit Voice Plan, Phase 1). All optional; auto-speak
+  // defaults off so typed chat is byte-for-byte unchanged when unused.
+  // Mic visibility is capability-gated (STT support for the active
+  // locale), not a stored toggle. ---
+  voiceAutoSpeak?: boolean          // auto-read replies via TTS; default false (§8 decision 1)
+  voiceProvider?: VoiceProviderPreference // default 'auto'
+  voiceLang?: string                // BCP-47 override; default = active UI locale
+  voiceName?: string                // specific TTS voice id (provider-scoped)
+  voiceRate?: number                // TTS speaking rate (0.5–2); default 1
 }
 
 /**
@@ -927,6 +952,7 @@ export const TIER_B_EVENT_TYPES = [
   'error_detail',
   'tour_question_answered',
   'publisher_validation_failed',
+  'voice_interaction',
 ] as const
 export type TierBEventType = (typeof TIER_B_EVENT_TYPES)[number]
 
@@ -1781,6 +1807,30 @@ export interface PublisherValidationFailedEvent extends TelemetryEventBase {
   code: string
 }
 
+/**
+ * One voice (STT or TTS) interaction. Tier B: a research signal for
+ * how Orbit's voice is used (provider / language / success / latency),
+ * not an operator-critical metric. Privacy: **no transcript text and
+ * no audio ever** — only the bucketed fields below; the spoken/heard
+ * content never leaves the device through telemetry.
+ * (docs/ORBIT_VOICE_PLAN.md §6)
+ */
+export interface VoiceInteractionEvent extends TelemetryEventBase {
+  event_type: 'voice_interaction'
+  /** Speech-to-text (mic input) or text-to-speech (spoken reply). */
+  mode: 'stt' | 'tts'
+  /** Which engine served it. */
+  provider: VoiceProvider
+  /** How it was initiated: mic capture, auto-speak, or the per-message replay button. */
+  trigger: 'mic' | 'autospeak' | 'replay'
+  /** Recognition / synthesis wall-clock duration in ms; `0` when not measured (e.g. TTS start). */
+  duration_ms: number
+  /** BCP-47 base language (e.g. `en`, `es`). Low-cardinality, not free text. */
+  lang: string
+  /** Whether it completed successfully (STT produced a final transcript / TTS started). */
+  success: boolean
+}
+
 /** The full discriminated event union. Add new events here, add them
  * to `TIER_B_EVENT_TYPES` if Tier B, and update the wiring table in
  * `docs/ANALYTICS_IMPLEMENTATION_PLAN.md`. */
@@ -1830,3 +1880,4 @@ export type TelemetryEvent =
   | CatalogMapRegionDrawnEvent
   | VrInteractionEvent
   | ErrorDetailEvent
+  | VoiceInteractionEvent

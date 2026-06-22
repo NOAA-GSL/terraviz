@@ -22,7 +22,10 @@ import { fetchModels } from '../services/llmProvider'
 import { isAvailable as isAppleIntelligenceAvailable } from '../services/appleIntelligenceProvider'
 import { setLogLevel, logger } from '../utils/logger'
 import { emit, startDwell, type DwellHandle } from '../analytics'
-import { enMessages, t, type MessageKey } from '../i18n'
+import { enMessages, t, getLocale, type MessageKey } from '../i18n'
+import { resolveSttEngine, resolveTtsEngine, voiceSupportForLocale, splitIntoSpokenChunks, baseLanguage, type SttSession, type TtsEngine } from '../services/voiceService'
+import { registerBrowserVoiceEngines, primeBrowserTts, listBrowserVoices, curateVoices, onBrowserVoicesChanged } from '../services/voiceBrowserEngines'
+import { registerCloudVoiceEngines } from '../services/voiceCloudEngines'
 
 // --- Constants ---
 const SESSION_STORAGE_KEY = 'sos-docent-chat'
@@ -80,6 +83,26 @@ let chatDwellHandle: DwellHandle | null = null
  * later clicks an inline load button in the docent's reply. */
 let lastUserSendAt: number | null = null
 
+/** Active speech-recognition session, or null when not listening (ORBIT_VOICE_PLAN §1). */
+let sttSession: SttSession | null = null
+/** Release handle for the `voiceschanged` subscription (re-init safe). */
+let voicesUnsub: (() => void) | null = null
+/** Set when a send terminates listening, so the session's `onEnd` doesn't re-send. */
+let sttSuppressAutoSend = false
+
+/** TTS (auto-speak) state for the in-flight reply (ORBIT_VOICE_PLAN §1.1, §2). */
+let ttsEngine: TtsEngine | null = null
+let spokenChunkCount = 0
+let ttsChain: Promise<void> = Promise.resolve()
+let speakingActive = false
+let ttsTrigger: 'autospeak' | 'replay' = 'autospeak'
+let ttsEmitted = false
+/** Monotonic id bumped when a new speaking session begins. Queued
+ * `ttsChain` callbacks capture it and bail if a newer session has
+ * started — otherwise a prior reply's pending promise could hide the
+ * Stop control or enqueue speech into the current session. */
+let ttsSessionId = 0
+
 /** Globe-control actions deferred until a load-dataset action in the same message completes. */
 let pendingGlobeActions: ChatAction[] = []
 
@@ -99,6 +122,7 @@ export function initChatUI(cb: ChatCallbacks): void {
   callbacks = cb
   restoreSession()
   wireEvents()
+  initVoiceInput()
   renderMessages()
   // Apply the persisted debug-prompt setting now, at boot — not just
   // when the settings panel is first opened. Otherwise the checkbox
@@ -403,6 +427,16 @@ function wireEvents(): void {
   }
   document.getElementById('chat-close')?.addEventListener('click', closeChat)
   document.getElementById('chat-send')?.addEventListener('click', handleSend)
+  document.getElementById('chat-mic')?.addEventListener('click', toggleListening)
+  document.getElementById('chat-stop-speaking')?.addEventListener('click', () => {
+    stopSpeaking()
+    callbacks?.announce(t('chat.announce.voiceStopped'))
+  })
+  // Enabling auto-speak is a user gesture — prime iOS TTS here so the
+  // very next reply can be spoken without waiting for another tap.
+  document.getElementById('chat-settings-voice-autospeak')?.addEventListener('change', (e) => {
+    if ((e.target as HTMLInputElement | null)?.checked) primeBrowserTts()
+  })
   document.getElementById('chat-settings-btn')?.addEventListener('click', toggleSettings)
 
   // Prevent wheel events from bubbling to the globe's zoom handler
@@ -476,6 +510,293 @@ function setVisionUI(enabled: boolean): void {
   if (settingsCheck) settingsCheck.checked = enabled
 }
 
+// --- Voice input (STT) — ORBIT_VOICE_PLAN.md Phase 1 ---
+
+/**
+ * Register the browser speech engines this runtime supports and
+ * reveal the mic button when STT is actually available for the
+ * active locale. No-op (button stays hidden) otherwise, so the
+ * typed experience is unchanged where voice can't run.
+ */
+function initVoiceInput(): void {
+  registerBrowserVoiceEngines()
+  // Cloud engines register too but are opt-in (provider=cloud) — `auto`
+  // never picks them; web-only (no /api proxy in the desktop shell).
+  registerCloudVoiceEngines()
+  updateMicVisibility()
+  populateVoiceOptions()
+  // System voices load asynchronously — refresh the picker when they
+  // arrive. Release any prior subscription first so a re-init (hot
+  // reload / tests) doesn't accumulate duplicate listeners.
+  voicesUnsub?.()
+  voicesUnsub = onBrowserVoicesChanged(populateVoiceOptions)
+}
+
+/** Show the mic only when an STT engine resolves for the active locale (§3 matrix). */
+function updateMicVisibility(): void {
+  const btn = document.getElementById('chat-mic')
+  if (!btn) return
+  const cfg = loadConfig()
+  const support = voiceSupportForLocale(cfg.voiceLang || getLocale(), cfg.voiceProvider ?? 'auto')
+  btn.style.display = support.stt ? 'flex' : 'none'
+}
+
+/**
+ * Fill the settings Voice picker with the system TTS voices,
+ * preferring those that match the active language. Voices load
+ * asynchronously, so this re-runs on `voiceschanged`.
+ */
+function populateVoiceOptions(): void {
+  const select = document.getElementById('chat-settings-voice-name') as HTMLSelectElement | null
+  if (!select) return
+  const cfg = loadConfig()
+  const lang = baseLanguage(cfg.voiceLang || getLocale())
+  // Curate first (drop Apple novelty voices, sort best-first), then
+  // prefer voices for the active language, falling back to all.
+  const all = curateVoices(listBrowserVoices())
+  const matching = all.filter(v => baseLanguage(v.lang) === lang)
+  const voices = matching.length ? matching : all
+  const selected = cfg.voiceName ?? ''
+  const defaultLabel = t('chat.settings.voiceName.default')
+  select.innerHTML = ''
+  const defaultOpt = document.createElement('option')
+  defaultOpt.value = ''
+  defaultOpt.textContent = defaultLabel
+  select.appendChild(defaultOpt)
+  for (const v of voices) {
+    const opt = document.createElement('option')
+    opt.value = v.name
+    opt.textContent = `${v.name} (${v.lang})` // i18n-exempt: system voice id + BCP-47 tag
+    select.appendChild(opt)
+  }
+  select.value = selected
+}
+
+function toggleListening(): void {
+  // The mic tap is a user gesture — prime iOS TTS now so a
+  // voice-initiated reply (which auto-sends later, off-gesture) can
+  // still be spoken aloud.
+  primeBrowserTts()
+  if (sttSession) stopListening()
+  else startListening()
+}
+
+function startListening(): void {
+  const input = document.getElementById('chat-input') as HTMLTextAreaElement | null
+  if (!input || isStreaming) return
+  // Barge-in: never capture while Orbit is speaking, or the mic would
+  // transcribe its own TTS (echo / self-trigger). (§9.1)
+  stopSpeaking()
+  const cfg = loadConfig()
+  const lang = cfg.voiceLang || getLocale()
+  const engine = resolveSttEngine(cfg.voiceProvider ?? 'auto', lang)
+  if (!engine) {
+    callbacks?.announce(t('chat.announce.voiceError'))
+    return
+  }
+  sttSuppressAutoSend = false
+  let sawFinal = false
+  let sttError = false
+  const startedAt = Date.now()
+  const provider = engine.provider
+  const langBase = baseLanguage(lang)
+  setMicListening(true)
+  callbacks?.announce(t('chat.announce.voiceListening'))
+  sttSession = engine.start({
+    lang,
+    interim: true,
+    // Fill the input live so the user sees what's being heard and
+    // can edit before it sends (conversational repair, §9.2).
+    onResult: (result) => {
+      input.value = result.transcript
+      input.style.height = 'auto'
+      input.style.height = Math.min(input.scrollHeight, 96) + 'px'
+      if (result.isFinal) sawFinal = true
+    },
+    onError: (err) => {
+      logger.warn('[voice] STT error', err)
+      sttError = true
+      endListening()
+      callbacks?.announce(t('chat.announce.voiceError'))
+    },
+    onEnd: () => {
+      const hadFinal = sawFinal
+      const suppressed = sttSuppressAutoSend
+      sttSuppressAutoSend = false
+      endListening()
+      // Tier B: no transcript text — only provider/lang/duration/success.
+      emit({
+        event_type: 'voice_interaction',
+        mode: 'stt',
+        provider,
+        trigger: 'mic',
+        duration_ms: Math.max(0, Date.now() - startedAt),
+        lang: langBase,
+        success: hadFinal && !sttError,
+      })
+      // Auto-send on a committed transcript (push-to-talk turn) —
+      // unless an error was reported (could be partial/wrong) or a
+      // manual send already terminated this session.
+      if (hadFinal && !sttError && !suppressed && input.value.trim()) void handleSend()
+    },
+  })
+}
+
+/** Stop capture; the engine's `onEnd` resets the UI (and may auto-send). */
+function stopListening(): void {
+  sttSession?.stop()
+}
+
+function endListening(): void {
+  sttSession = null
+  setMicListening(false)
+}
+
+function setMicListening(on: boolean): void {
+  const btn = document.getElementById('chat-mic')
+  if (!btn) return
+  btn.classList.toggle('listening', on)
+  btn.setAttribute('aria-pressed', String(on))
+  btn.title = on ? t('chat.voice.titleListening') : t('chat.voice.title')
+}
+
+// --- Voice output (TTS auto-speak) — ORBIT_VOICE_PLAN.md §1.1, §2 ---
+
+/**
+ * Start a fresh speaking session for a reply. Cancels any prior
+ * speech, then resolves a TTS engine only when auto-speak is on and
+ * one is available for the active locale. No engine → stays silent.
+ */
+function beginSpeaking(): void {
+  stopSpeaking()
+  ttsSessionId++
+  const cfg = loadConfig()
+  if (!cfg.voiceAutoSpeak) { ttsEngine = null; return }
+  // Runs in the send-click / Enter gesture task — unlock iOS audio
+  // before the (later, async) real speech fires.
+  primeBrowserTts()
+  ttsEngine = resolveTtsEngine(cfg.voiceProvider ?? 'auto', cfg.voiceLang || getLocale())
+  spokenChunkCount = 0
+  speakingActive = !!ttsEngine
+  ttsTrigger = 'autospeak'
+  ttsEmitted = false
+  if (speakingActive) setStopSpeakingVisible(true)
+}
+
+/**
+ * Emit the Tier B `voice_interaction` (TTS) event once per speaking
+ * session, the first time speech is actually produced. No text or
+ * audio — only provider / language / trigger. (ORBIT_VOICE_PLAN §6)
+ */
+function emitTtsOnce(): void {
+  if (ttsEmitted || !ttsEngine) return
+  ttsEmitted = true
+  emit({
+    event_type: 'voice_interaction',
+    mode: 'tts',
+    provider: ttsEngine.provider,
+    trigger: ttsTrigger,
+    duration_ms: 0,
+    lang: baseLanguage(loadConfig().voiceLang || getLocale()),
+    success: true,
+  })
+}
+
+/**
+ * Enqueue any newly-complete sentences for speech. Reads the
+ * spoken-form projection of the full message so far (markers /
+ * markdown / URLs stripped) and queues sentences past the cursor.
+ * While streaming, the last (possibly partial) sentence is held
+ * back; `final` flushes it. (§1.1 projection, §2 sentence-chunking)
+ */
+function pumpSpeech(fullText: string, final: boolean): void {
+  if (!speakingActive || !ttsEngine) return
+  const session = ttsSessionId
+  const sentences = splitIntoSpokenChunks(fullText)
+  const upto = final ? sentences.length : Math.max(0, sentences.length - 1)
+  const cfg = loadConfig()
+  const lang = cfg.voiceLang || getLocale()
+  const rate = cfg.voiceRate
+  const voice = cfg.voiceName
+  const engine = ttsEngine
+  for (let i = spokenChunkCount; i < upto; i++) {
+    const sentence = sentences[i]
+    if (!sentence) continue
+    emitTtsOnce()
+    ttsChain = ttsChain.then(() => (speakingActive && session === ttsSessionId ? engine.speak(sentence, { lang, rate, voice }) : undefined))
+  }
+  spokenChunkCount = Math.max(spokenChunkCount, upto)
+  if (final) {
+    // Hide the Stop control once the queued speech drains — but only
+    // if this is still the active session.
+    ttsChain = ttsChain.then(() => { if (speakingActive && session === ttsSessionId) setStopSpeakingVisible(false) })
+  }
+}
+
+/** Stop speech immediately (Stop control / barge-in / new reply). */
+function stopSpeaking(): void {
+  speakingActive = false
+  ttsEngine?.cancel()
+  ttsChain = Promise.resolve()
+  setStopSpeakingVisible(false)
+}
+
+function setStopSpeakingVisible(visible: boolean): void {
+  const btn = document.getElementById('chat-stop-speaking')
+  if (btn) btn.style.display = visible ? 'flex' : 'none'
+}
+
+/** Whether a TTS engine resolves for the active locale (gates the per-message Speak button). */
+function canSpeakReplies(): boolean {
+  const cfg = loadConfig()
+  return !!resolveTtsEngine(cfg.voiceProvider ?? 'auto', cfg.voiceLang || getLocale())
+}
+
+/**
+ * Speak a specific message on demand. The first chunk is spoken
+ * **synchronously** so this works when invoked from a tap — iOS
+ * Safari requires speech to originate inside a user gesture, which
+ * the streamed auto-speak path (microtask-queued) can't guarantee.
+ */
+function speakMessage(text: string): void {
+  const cfg = loadConfig()
+  const engine = resolveTtsEngine(cfg.voiceProvider ?? 'auto', cfg.voiceLang || getLocale())
+  if (!engine) return
+  const chunks = splitIntoSpokenChunks(text)
+  const first = chunks[0]
+  if (!first) return
+  stopSpeaking()
+  ttsSessionId++
+  const session = ttsSessionId
+  speakingActive = true
+  ttsEngine = engine
+  ttsTrigger = 'replay'
+  ttsEmitted = false
+  emitTtsOnce()
+  setStopSpeakingVisible(true)
+  const lang = cfg.voiceLang || getLocale()
+  const rate = cfg.voiceRate
+  const voice = cfg.voiceName
+  let chain = engine.speak(first, { lang, rate, voice })
+  for (let i = 1; i < chunks.length; i++) {
+    const sentence = chunks[i]
+    if (!sentence) continue
+    chain = chain.then(() => (speakingActive && session === ttsSessionId ? engine.speak(sentence, { lang, rate, voice }) : undefined))
+  }
+  ttsChain = chain.then(() => { if (speakingActive && session === ttsSessionId) setStopSpeakingVisible(false) })
+}
+
+function wireSpeakButtons(container: ParentNode): void {
+  container.querySelectorAll<HTMLButtonElement>('.chat-speak-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const msg = messages.find((m) => m.id === btn.dataset.msgId)
+      if (!msg?.text) return
+      primeBrowserTts()
+      speakMessage(msg.text)
+    })
+  })
+}
+
 // --- Settings panel ---
 
 function toggleSettings(): void {
@@ -508,6 +829,13 @@ async function populateSettings(): Promise<void> {
   if (enabledInput) enabledInput.checked = config.enabled
   if (visionInput) visionInput.checked = config.visionEnabled
   if (debugInput) debugInput.checked = config.debugPrompt ?? false
+  const autospeakInput = document.getElementById('chat-settings-voice-autospeak') as HTMLInputElement | null
+  if (autospeakInput) autospeakInput.checked = config.voiceAutoSpeak ?? false
+  populateVoiceOptions()
+  const providerSelect = document.getElementById('chat-settings-voice-provider') as HTMLSelectElement | null
+  if (providerSelect) providerSelect.value = config.voiceProvider ?? 'auto'
+  const rateSelect = document.getElementById('chat-settings-voice-rate') as HTMLSelectElement | null
+  if (rateSelect) rateSelect.value = String(config.voiceRate ?? 1)
   // Apply saved debug log level on startup
   setLogLevel(config.debugPrompt ? 'debug' : null)
   // Seed the select with the saved model immediately, then refresh from API
@@ -598,6 +926,18 @@ function readSettingsForm(): DocentConfig {
   const enabledInput = document.getElementById('chat-settings-enabled') as HTMLInputElement | null
   const visionInput = document.getElementById('chat-settings-vision') as HTMLInputElement | null
   const debugInput = document.getElementById('chat-settings-debug') as HTMLInputElement | null
+  const autospeakInput = document.getElementById('chat-settings-voice-autospeak') as HTMLInputElement | null
+  const voiceNameSelect = document.getElementById('chat-settings-voice-name') as HTMLSelectElement | null
+  const voiceRateSelect = document.getElementById('chat-settings-voice-rate') as HTMLSelectElement | null
+  const voiceProviderSelect = document.getElementById('chat-settings-voice-provider') as HTMLSelectElement | null
+  const parsedRate = Number(voiceRateSelect?.value)
+  // Carry forward voice config not exposed in this form so a save
+  // doesn't wipe it (recognition language lands later).
+  const current = loadConfig()
+  const providerValue = voiceProviderSelect?.value
+  const voiceProvider = providerValue === 'browser' || providerValue === 'cloud' || providerValue === 'auto'
+    ? providerValue
+    : current.voiceProvider
   return {
     apiUrl: urlInput?.value.trim() || defaults.apiUrl,
     apiKey: keyInput?.value.trim() ?? '',
@@ -606,6 +946,11 @@ function readSettingsForm(): DocentConfig {
     enabled: enabledInput?.checked ?? defaults.enabled,
     visionEnabled: visionInput?.checked ?? defaults.visionEnabled,
     debugPrompt: debugInput?.checked ?? defaults.debugPrompt,
+    voiceAutoSpeak: autospeakInput?.checked ?? current.voiceAutoSpeak,
+    voiceProvider,
+    voiceLang: current.voiceLang,
+    voiceName: voiceNameSelect ? (voiceNameSelect.value || undefined) : current.voiceName,
+    voiceRate: Number.isFinite(parsedRate) && parsedRate > 0 ? parsedRate : current.voiceRate,
   }
 }
 
@@ -616,6 +961,10 @@ function handleSettingsSave(): void {
   setLogLevel(config.debugPrompt ? 'debug' : null)
   // Keep vision toggle button + hint banner in sync with settings checkbox
   setVisionUI(config.visionEnabled)
+  // Provider change can flip which engine resolves for the locale —
+  // refresh mic visibility + the voice picker.
+  updateMicVisibility()
+  populateVoiceOptions()
   const status = document.getElementById('chat-settings-status')
   if (status) {
     status.textContent = t('chat.settings.status.saved')
@@ -666,6 +1015,15 @@ async function handleSend(): Promise<void> {
   const input = document.getElementById('chat-input') as HTMLTextAreaElement | null
   if (!input || !callbacks || isStreaming) return
 
+  // Terminate any active listening first (regardless of how send was
+  // triggered) so recognition can't keep mutating the input after we
+  // read and clear it. Suppress the session's auto-send — this send
+  // already commits the current transcript.
+  if (sttSession) {
+    sttSuppressAutoSend = true
+    stopListening()
+  }
+
   const text = input.value.trim()
   if (!text) return
 
@@ -714,6 +1072,7 @@ async function handleSend(): Promise<void> {
   isStreaming = true
   showTyping()
   setSendEnabled(false)
+  beginSpeaking()
   const turnStartedAt = Date.now()
   let streamFinishReason: 'stop' | 'length' | 'tool_calls' | 'error' = 'stop'
 
@@ -752,6 +1111,10 @@ async function handleSend(): Promise<void> {
           docentMsg.text += chunk.text
           updateStreamingMessage(docentMsg)
           scrollToBottom()
+          // Only re-chunk for speech when this delta may have completed
+          // a sentence — re-splitting the whole message on every token
+          // would be O(n²). The `done` flush catches any trailing text.
+          if (/[.!?\n]/.test(chunk.text)) pumpSpeech(docentMsg.text, false)
           break
 
         case 'action': {
@@ -859,6 +1222,8 @@ async function handleSend(): Promise<void> {
   hideTyping()
   isStreaming = false
   setSendEnabled(true)
+  // Speak any remaining (final) sentence and let the queue drain.
+  pumpSpeech(docentMsg.text, true)
 
   // Clean up empty actions array
   if (docentMsg.actions?.length === 0) delete docentMsg.actions
@@ -960,6 +1325,7 @@ function renderMessages(): void {
   container.innerHTML = messages.map(msg => renderMessage(msg)).join('')
   wireActionButtons(container)
   wireFeedbackButtons(container)
+  wireSpeakButtons(container)
 }
 
 /** Render a single chat message as an HTML string with inline action buttons. */
@@ -970,8 +1336,13 @@ function renderMessage(msg: ChatMessage): string {
   const actionsHtml = remaining?.length ? renderActions(remaining) : ''
   const thumbsUpLabel = t('chat.feedback.thumbsUp')
   const thumbsDownLabel = t('chat.feedback.thumbsDown')
+  const speakLabel = t('chat.voice.speakAria')
+  const speakBtnHtml = canSpeakReplies()
+    ? `<button class="chat-speak-btn" data-msg-id="${escapeAttr(msg.id)}" aria-label="${escapeAttr(speakLabel)}" title="${escapeAttr(speakLabel)}">&#x1F50A;&#xFE0E;</button>`
+    : ''
   const feedbackHtml = msg.role === 'docent' && msg.text
     ? `<div class="chat-feedback">
+         ${speakBtnHtml}
          <button class="chat-feedback-btn" data-feedback="thumbs-up" data-msg-id="${escapeAttr(msg.id)}" aria-label="${escapeAttr(thumbsUpLabel)}" aria-pressed="false" title="${escapeAttr(thumbsUpLabel)}">&#x1F44D;&#xFE0E;</button>
          <button class="chat-feedback-btn" data-feedback="thumbs-down" data-msg-id="${escapeAttr(msg.id)}" aria-label="${escapeAttr(thumbsDownLabel)}" aria-pressed="false" title="${escapeAttr(thumbsDownLabel)}">&#x1F44E;&#xFE0E;</button>
        </div>`

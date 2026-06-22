@@ -1007,6 +1007,21 @@ exposes the standard Web Speech API — both `SpeechRecognition`
 (text-to-speech, works offline with built-in voices). Neither is
 blocked by an active WebXR session.
 
+> **Authoritative voice design:**
+> [`docs/ORBIT_VOICE_PLAN.md`](ORBIT_VOICE_PLAN.md). VR is **one
+> surface of a shared capability**, not a standalone voice build.
+> The voice plan introduces `src/services/voiceService.ts` — the
+> provider abstraction (STT/TTS resolver, capability detection,
+> spoken-form projection, sentence-chunked playback) that the 2D
+> chat and the VR docent both consume. The Web Speech specifics in
+> this section are the **in-headset MVP path** (Quest's Chromium
+> gives it for free); when `voiceService` lands, the VR docent
+> calls *it* ("give me a transcript" / "speak this sentence")
+> rather than touching `SpeechRecognition` / `SpeechSynthesis`
+> directly. Read the voice plan's §1.1–§1.2, §3, and §6 before
+> implementing — the points below are the VR-specific deltas on
+> top of that shared design.
+
 The interaction loop:
 
 ```
@@ -1029,11 +1044,11 @@ parallel rendering surface, not a rewrite of the intelligence.
 
 | Component | LOC est. | Notes |
 |---|---|---|
-| Voice input | ~100-150 | `SpeechRecognition` + push-to-talk (controller button or HUD mic icon). Visual: recording indicator, live transcript on the chat panel. |
-| VR chat panel | ~200-300 | CanvasTexture panel (larger than the HUD — subtitle-panel sized, floating near the globe). Word-wrap, auto-scroll, streaming text append. |
-| Voice output | ~50 | `SpeechSynthesis` reads Orbit's response. Strip `<<LOAD:...>>` markers before speaking. Toggle on/off via HUD. |
-| Dataset actions | ~50 | `<<LOAD:DATASET_ID>>` markers trigger `vrScene.setTexture()` directly — partial delivery of Phase 3 without the browse panel. |
-| Feature detection | ~20 | `'SpeechRecognition' in window` — hide voice features if unavailable. |
+| Voice input | ~100-150 | Calls `voiceService` for a transcript; **push-to-talk via controller button** (the natural answer to the voice plan's open-mic-vs-button tension, §9.1 — see deltas below). Visual: recording indicator, live transcript on the chat panel. |
+| VR chat panel | ~200-300 | CanvasTexture panel (larger than the HUD — subtitle-panel sized, floating near the globe). Word-wrap, auto-scroll, streaming text append. **Captions always render here even when TTS speaks** (accessibility + the double-speak rule, voice plan §5.5). |
+| Voice output | ~50 | `voiceService.speak()` reads Orbit's **spoken-form projection** (voice plan §1.1) — not just `<<LOAD:...>>` stripping but markdown/URL/ID removal and the voice-aware prompt. Toggle on/off via HUD; **default off**. |
+| Dataset actions | ~50 | `action` / `auto-load` chunks become **spoken offers** (voice plan §1.2) and trigger `vrScene.setTexture()` directly — partial delivery of Phase 3 without the browse panel. |
+| Feature detection | ~20 | Delegate to `voiceService` capability + **per-locale matrix** (voice plan §3) — hide voice features when unsupported in the active language, not just when the API is absent. |
 
 **End-to-end latency:** ~1 s for speech recognition + 2-3 s for
 LLM first token. Comparable to asking a museum docent a question
@@ -1048,6 +1063,32 @@ and waiting for them to think — feels natural in a spatial context.
   vary in noisy environments.
 - Long Orbit responses need careful typography on the VR chat panel
   (font size, line height, scroll behaviour on a CanvasTexture).
+
+**VR-specific deltas on the shared voice design** (read alongside
+`ORBIT_VOICE_PLAN.md`):
+
+- **The headset resolves the kiosk's hardest problems.** The voice
+  plan's §9.1 "hostile audio" concerns (acoustic echo loop,
+  open-mic crowd false-fires) are *much milder* in VR: it's a
+  single user wearing the device, audio plays to near-field
+  headphones, and the **controller button gives natural
+  push-to-talk** — so the open-mic-vs-button tension resolves
+  cleanly toward the button here. VR can adopt voice *before* the
+  always-listening exhibit work is settled.
+- **Web Speech privacy still applies.** On Quest, `SpeechRecognition`
+  ships audio to Google (voice plan §6.1). Fine for an MVP; if a
+  privacy-sensitive deployment is needed, VR should route STT
+  through `voiceService`'s Cloudflare-edge path like the 2D app
+  rather than the browser API.
+- **Spoken-form projection, not marker-stripping.** "Strip
+  `<<LOAD:...>>`" undersells it — reuse the voice plan's §1.1
+  projection (markdown/IDs/URLs out, voice-aware shorter prose, one
+  recommendation per turn) so the docent doesn't read syntax aloud
+  in a context where there's no screen to fall back on.
+- **Spatial audio is the VR upside.** Pin Orbit's TTS to the chat
+  panel's world position so the voice comes *from the docent* (see
+  the spatial-audio note later in this doc) — a sense the 2D app
+  can't offer. A VR-only stretch on top of the shared TTS.
 
 **Hand tracking — bat the globe with your hands.**
 
