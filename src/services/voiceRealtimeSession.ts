@@ -191,6 +191,7 @@ export class RealtimeVoiceSession {
     if (this.sttSession || !this.stream) return
     this.sttSession = this.opts.engine.startStreaming({
       lang: this.opts.lang,
+      stream: this.stream, // let a record→transcribe engine reuse our mic
       onPartial: (t) => this.opts.onPartial?.(t),
       onTurn: (t) => {
         this.opts.onTurn(t)

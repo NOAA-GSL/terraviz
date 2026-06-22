@@ -173,6 +173,15 @@ export interface StreamingSttCallbacks {
 
 export interface StreamingSttStartOptions extends StreamingSttCallbacks {
   lang: string
+  /**
+   * The session's live mic stream, when it has one. An engine that
+   * captures its own audio (e.g. cloud record→transcribe) reuses this
+   * instead of opening a second `getUserMedia` — avoiding a duplicate
+   * mic and the start-of-utterance clip an async re-acquire would
+   * cause. Engines that capture internally (browser Web Speech) ignore
+   * it.
+   */
+  stream?: MediaStream
 }
 
 /** A live continuous recognition session. */
