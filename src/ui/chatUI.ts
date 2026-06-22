@@ -23,8 +23,8 @@ import { isAvailable as isAppleIntelligenceAvailable } from '../services/appleIn
 import { setLogLevel, logger } from '../utils/logger'
 import { emit, startDwell, type DwellHandle } from '../analytics'
 import { enMessages, t, getLocale, type MessageKey } from '../i18n'
-import { resolveSttEngine, resolveTtsEngine, voiceSupportForLocale, splitIntoSpokenChunks, type SttSession, type TtsEngine } from '../services/voiceService'
-import { registerBrowserVoiceEngines, primeBrowserTts } from '../services/voiceBrowserEngines'
+import { resolveSttEngine, resolveTtsEngine, voiceSupportForLocale, splitIntoSpokenChunks, baseLanguage, type SttSession, type TtsEngine } from '../services/voiceService'
+import { registerBrowserVoiceEngines, primeBrowserTts, listBrowserVoices, onBrowserVoicesChanged } from '../services/voiceBrowserEngines'
 
 // --- Constants ---
 const SESSION_STORAGE_KEY = 'sos-docent-chat'
@@ -509,6 +509,9 @@ function setVisionUI(enabled: boolean): void {
 function initVoiceInput(): void {
   registerBrowserVoiceEngines()
   updateMicVisibility()
+  populateVoiceOptions()
+  // System voices load asynchronously — refresh the picker when they arrive.
+  onBrowserVoicesChanged(populateVoiceOptions)
 }
 
 /** Show the mic only when an STT engine resolves for the active locale (§3 matrix). */
@@ -518,6 +521,35 @@ function updateMicVisibility(): void {
   const cfg = loadConfig()
   const support = voiceSupportForLocale(cfg.voiceLang || getLocale(), cfg.voiceProvider ?? 'auto')
   btn.style.display = support.stt ? 'flex' : 'none'
+}
+
+/**
+ * Fill the settings Voice picker with the system TTS voices,
+ * preferring those that match the active language. Voices load
+ * asynchronously, so this re-runs on `voiceschanged`.
+ */
+function populateVoiceOptions(): void {
+  const select = document.getElementById('chat-settings-voice-name') as HTMLSelectElement | null
+  if (!select) return
+  const cfg = loadConfig()
+  const lang = baseLanguage(cfg.voiceLang || getLocale())
+  const all = listBrowserVoices()
+  const matching = all.filter(v => baseLanguage(v.lang) === lang)
+  const voices = matching.length ? matching : all
+  const selected = cfg.voiceName ?? ''
+  const defaultLabel = t('chat.settings.voiceName.default')
+  select.innerHTML = ''
+  const defaultOpt = document.createElement('option')
+  defaultOpt.value = ''
+  defaultOpt.textContent = defaultLabel
+  select.appendChild(defaultOpt)
+  for (const v of voices) {
+    const opt = document.createElement('option')
+    opt.value = v.name
+    opt.textContent = `${v.name} (${v.lang})` // i18n-exempt: system voice id + BCP-47 tag
+    select.appendChild(opt)
+  }
+  select.value = selected
 }
 
 function toggleListening(): void {
@@ -619,11 +651,12 @@ function pumpSpeech(fullText: string, final: boolean): void {
   const cfg = loadConfig()
   const lang = cfg.voiceLang || getLocale()
   const rate = cfg.voiceRate
+  const voice = cfg.voiceName
   const engine = ttsEngine
   for (let i = spokenChunkCount; i < upto; i++) {
     const sentence = sentences[i]
     if (!sentence) continue
-    ttsChain = ttsChain.then(() => (speakingActive ? engine.speak(sentence, { lang, rate }) : undefined))
+    ttsChain = ttsChain.then(() => (speakingActive ? engine.speak(sentence, { lang, rate, voice }) : undefined))
   }
   spokenChunkCount = Math.max(spokenChunkCount, upto)
   if (final) {
@@ -670,11 +703,12 @@ function speakMessage(text: string): void {
   setStopSpeakingVisible(true)
   const lang = cfg.voiceLang || getLocale()
   const rate = cfg.voiceRate
-  let chain = engine.speak(first, { lang, rate })
+  const voice = cfg.voiceName
+  let chain = engine.speak(first, { lang, rate, voice })
   for (let i = 1; i < chunks.length; i++) {
     const sentence = chunks[i]
     if (!sentence) continue
-    chain = chain.then(() => (speakingActive ? engine.speak(sentence, { lang, rate }) : undefined))
+    chain = chain.then(() => (speakingActive ? engine.speak(sentence, { lang, rate, voice }) : undefined))
   }
   ttsChain = chain.then(() => { if (speakingActive) setStopSpeakingVisible(false) })
 }
@@ -724,6 +758,9 @@ async function populateSettings(): Promise<void> {
   if (debugInput) debugInput.checked = config.debugPrompt ?? false
   const autospeakInput = document.getElementById('chat-settings-voice-autospeak') as HTMLInputElement | null
   if (autospeakInput) autospeakInput.checked = config.voiceAutoSpeak ?? false
+  populateVoiceOptions()
+  const rateSelect = document.getElementById('chat-settings-voice-rate') as HTMLSelectElement | null
+  if (rateSelect) rateSelect.value = String(config.voiceRate ?? 1)
   // Apply saved debug log level on startup
   setLogLevel(config.debugPrompt ? 'debug' : null)
   // Seed the select with the saved model immediately, then refresh from API
@@ -815,8 +852,11 @@ function readSettingsForm(): DocentConfig {
   const visionInput = document.getElementById('chat-settings-vision') as HTMLInputElement | null
   const debugInput = document.getElementById('chat-settings-debug') as HTMLInputElement | null
   const autospeakInput = document.getElementById('chat-settings-voice-autospeak') as HTMLInputElement | null
+  const voiceNameSelect = document.getElementById('chat-settings-voice-name') as HTMLSelectElement | null
+  const voiceRateSelect = document.getElementById('chat-settings-voice-rate') as HTMLSelectElement | null
+  const parsedRate = Number(voiceRateSelect?.value)
   // Carry forward voice config not exposed in this form so a save
-  // doesn't wipe it (only auto-speak is editable here for now).
+  // doesn't wipe it (provider / recognition language land later).
   const current = loadConfig()
   return {
     apiUrl: urlInput?.value.trim() || defaults.apiUrl,
@@ -830,8 +870,8 @@ function readSettingsForm(): DocentConfig {
     voiceAutoSpeak: autospeakInput?.checked ?? current.voiceAutoSpeak,
     voiceProvider: current.voiceProvider,
     voiceLang: current.voiceLang,
-    voiceName: current.voiceName,
-    voiceRate: current.voiceRate,
+    voiceName: voiceNameSelect ? (voiceNameSelect.value || undefined) : current.voiceName,
+    voiceRate: Number.isFinite(parsedRate) && parsedRate > 0 ? parsedRate : current.voiceRate,
   }
 }
 

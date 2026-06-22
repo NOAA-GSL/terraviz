@@ -188,6 +188,35 @@ export function primeBrowserTts(): void {
   } catch { /* priming is best-effort */ }
 }
 
+/** A `speechSynthesis` voice the user can choose in settings. */
+export interface BrowserVoiceInfo {
+  name: string
+  lang: string
+  isDefault: boolean
+}
+
+/** List the system TTS voices (empty until the browser has loaded them). */
+export function listBrowserVoices(): BrowserVoiceInfo[] {
+  const synth = (window as unknown as Record<string, any>)['speechSynthesis']
+  if (!synth?.getVoices) return []
+  return (synth.getVoices() as Array<{ name: string; lang: string; default?: boolean }>).map(v => ({
+    name: v.name,
+    lang: v.lang,
+    isDefault: !!v.default,
+  }))
+}
+
+/**
+ * Subscribe to the async `voiceschanged` event (voices often aren't
+ * ready on first call). Returns an unsubscribe function.
+ */
+export function onBrowserVoicesChanged(cb: () => void): () => void {
+  const synth = (window as unknown as Record<string, any>)['speechSynthesis']
+  if (!synth?.addEventListener) return () => {}
+  synth.addEventListener('voiceschanged', cb)
+  return () => synth.removeEventListener?.('voiceschanged', cb)
+}
+
 /**
  * Register the browser engines that the current runtime can support.
  * Idempotent (the registry de-dupes by provider). Safe to call from

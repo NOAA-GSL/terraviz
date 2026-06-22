@@ -171,6 +171,19 @@
                             </label>
                         </div>
                         <div class="chat-settings-row">
+                            <label class="chat-settings-label" for="chat-settings-voice-name" data-i18n="chat.settings.voiceName.label">Voice</label>
+                            <select id="chat-settings-voice-name"></select>
+                        </div>
+                        <div class="chat-settings-row">
+                            <label class="chat-settings-label" for="chat-settings-voice-rate" data-i18n="chat.settings.voiceRate.label">Speaking rate</label>
+                            <select id="chat-settings-voice-rate">
+                                <option value="0.8" data-i18n="chat.settings.voiceRate.slow">Slow</option>
+                                <option value="1" data-i18n="chat.settings.voiceRate.normal">Normal</option>
+                                <option value="1.25" data-i18n="chat.settings.voiceRate.fast">Fast</option>
+                                <option value="1.5" data-i18n="chat.settings.voiceRate.faster">Faster</option>
+                            </select>
+                        </div>
+                        <div class="chat-settings-row">
                             <label class="chat-settings-check">
                                 <input type="checkbox" id="chat-settings-debug" />
                                 <span data-i18n="chat.settings.debug.label">Debug — show all log messages in browser console</span>
