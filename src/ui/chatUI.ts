@@ -865,6 +865,8 @@ async function populateSettings(): Promise<void> {
   populateVoiceLanguageOptions()
   const providerSelect = document.getElementById('chat-settings-voice-provider') as HTMLSelectElement | null
   if (providerSelect) providerSelect.value = config.voiceProvider ?? 'auto'
+  const handsFreeSelect = document.getElementById('chat-settings-voice-handsfree') as HTMLSelectElement | null
+  if (handsFreeSelect) handsFreeSelect.value = config.voiceHandsFree ?? 'off'
   const rateSelect = document.getElementById('chat-settings-voice-rate') as HTMLSelectElement | null
   if (rateSelect) rateSelect.value = String(config.voiceRate ?? 1)
   // Apply saved debug log level on startup
@@ -962,6 +964,7 @@ function readSettingsForm(): DocentConfig {
   const voiceRateSelect = document.getElementById('chat-settings-voice-rate') as HTMLSelectElement | null
   const voiceProviderSelect = document.getElementById('chat-settings-voice-provider') as HTMLSelectElement | null
   const voiceLangSelect = document.getElementById('chat-settings-voice-lang') as HTMLSelectElement | null
+  const handsFreeSelect = document.getElementById('chat-settings-voice-handsfree') as HTMLSelectElement | null
   const parsedRate = Number(voiceRateSelect?.value)
   // Carry forward voice config not exposed in this form so a save
   // doesn't wipe it.
@@ -972,6 +975,10 @@ function readSettingsForm(): DocentConfig {
     : current.voiceProvider
   // "" (Same as app) clears the override so voice tracks the UI locale.
   const voiceLang = voiceLangSelect ? (voiceLangSelect.value || undefined) : current.voiceLang
+  const handsFreeValue = handsFreeSelect?.value
+  const voiceHandsFree = handsFreeValue === 'push-to-talk' || handsFreeValue === 'open-mic' || handsFreeValue === 'off'
+    ? handsFreeValue
+    : current.voiceHandsFree
   return {
     apiUrl: urlInput?.value.trim() || defaults.apiUrl,
     apiKey: keyInput?.value.trim() ?? '',
@@ -983,6 +990,7 @@ function readSettingsForm(): DocentConfig {
     voiceAutoSpeak: autospeakInput?.checked ?? current.voiceAutoSpeak,
     voiceProvider,
     voiceLang,
+    voiceHandsFree,
     voiceName: voiceNameSelect ? (voiceNameSelect.value || undefined) : current.voiceName,
     voiceRate: Number.isFinite(parsedRate) && parsedRate > 0 ? parsedRate : current.voiceRate,
   }

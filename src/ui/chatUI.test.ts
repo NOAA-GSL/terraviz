@@ -46,6 +46,11 @@ function setupDOM(): void {
           <option value="es">es</option>
           <option value="ja">ja</option>
         </select>
+        <select id="chat-settings-voice-handsfree">
+          <option value="off"></option>
+          <option value="push-to-talk">Push to talk</option>
+          <option value="open-mic">Open mic</option>
+        </select>
         <button id="chat-settings-test"></button>
         <button id="chat-settings-save"></button>
         <span id="chat-settings-status"></span>
@@ -101,6 +106,22 @@ describe('recognition-language override (voiceLang)', () => {
     sel.value = ''
     save.click()
     expect(loadConfig().voiceLang).toBeUndefined()
+  })
+})
+
+describe('hands-free mode (voiceHandsFree)', () => {
+  it('persists the chosen hands-free mode through settings', () => {
+    initChatUI(makeCallbacks())
+    const sel = document.getElementById('chat-settings-voice-handsfree') as HTMLSelectElement
+    const save = document.getElementById('chat-settings-save') as HTMLButtonElement
+
+    sel.value = 'open-mic'
+    save.click()
+    expect(loadConfig().voiceHandsFree).toBe('open-mic')
+
+    sel.value = 'off'
+    save.click()
+    expect(loadConfig().voiceHandsFree).toBe('off')
   })
 })
 
