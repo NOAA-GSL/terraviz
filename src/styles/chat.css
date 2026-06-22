@@ -273,7 +273,12 @@
     gap: calc(0.3rem * var(--ui-scale));
     margin-top: calc(0.2rem * var(--ui-scale));
 }
-.chat-feedback-btn {
+/* The Speak (replay TTS) button shares the feedback-button look but is
+   deliberately NOT a .chat-feedback-btn — submitting thumbs feedback
+   disables every .chat-feedback-btn in the row, and replay must stay
+   available afterwards. */
+.chat-feedback-btn,
+.chat-speak-btn {
     background: none;
     border: none;
     color: var(--white-o30);
@@ -284,7 +289,8 @@
     transition: color 0.15s, background 0.15s;
     line-height: 1;
 }
-.chat-feedback-btn:hover {
+.chat-feedback-btn:hover,
+.chat-speak-btn:hover {
     color: var(--white-o70);
     background: var(--white-o08);
 }

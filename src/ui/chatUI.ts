@@ -1338,7 +1338,7 @@ function renderMessage(msg: ChatMessage): string {
   const thumbsDownLabel = t('chat.feedback.thumbsDown')
   const speakLabel = t('chat.voice.speakAria')
   const speakBtnHtml = canSpeakReplies()
-    ? `<button class="chat-feedback-btn chat-speak-btn" data-msg-id="${escapeAttr(msg.id)}" aria-label="${escapeAttr(speakLabel)}" title="${escapeAttr(speakLabel)}">&#x1F50A;&#xFE0E;</button>`
+    ? `<button class="chat-speak-btn" data-msg-id="${escapeAttr(msg.id)}" aria-label="${escapeAttr(speakLabel)}" title="${escapeAttr(speakLabel)}">&#x1F50A;&#xFE0E;</button>`
     : ''
   const feedbackHtml = msg.role === 'docent' && msg.text
     ? `<div class="chat-feedback">

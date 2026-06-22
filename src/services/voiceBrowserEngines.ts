@@ -79,11 +79,19 @@ export const browserSttEngine: SttEngine = {
     rec.continuous = false
     rec.maxAlternatives = 1
     rec.onresult = (event) => {
-      for (let i = event.resultIndex; i < event.results.length; i++) {
+      // `results` accumulates every segment of the utterance (prior
+      // finals + the current interim/final). Emit the full combined
+      // transcript each time so a caller that overwrites the field
+      // doesn't lose earlier speech; `isFinal` only once all are final.
+      let transcript = ''
+      let isFinal = true
+      for (let i = 0; i < event.results.length; i++) {
         const result = event.results[i]
         if (!result) continue
-        onResult({ transcript: result[0]?.transcript ?? '', isFinal: result.isFinal })
+        transcript += result[0]?.transcript ?? ''
+        if (!result.isFinal) isFinal = false
       }
+      onResult({ transcript, isFinal })
     }
     rec.onerror = (event) => onError(new Error(event?.error || 'speech-recognition-error'))
     rec.onend = () => onEnd()
