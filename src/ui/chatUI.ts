@@ -23,7 +23,7 @@ import { isAvailable as isAppleIntelligenceAvailable } from '../services/appleIn
 import { setLogLevel, logger } from '../utils/logger'
 import { emit, startDwell, type DwellHandle } from '../analytics'
 import { enMessages, t, getLocale, type MessageKey } from '../i18n'
-import { resolveSttEngine, resolveTtsEngine, voiceSupportForLocale, splitIntoSpokenChunks, baseLanguage, listVoiceLanguageOptions, type SttSession, type TtsEngine } from '../services/voiceService'
+import { resolveSttEngine, resolveTtsEngine, resolveStreamingSttEngine, voiceSupportForLocale, splitIntoSpokenChunks, baseLanguage, listVoiceLanguageOptions, type SttSession, type TtsEngine } from '../services/voiceService'
 import { HandsFreeController } from './voiceHandsFree'
 import { registerBrowserVoiceEngines, primeBrowserTts, listBrowserVoices, curateVoices, onBrowserVoicesChanged } from '../services/voiceBrowserEngines'
 import { registerCloudVoiceEngines } from '../services/voiceCloudEngines'
@@ -453,12 +453,14 @@ function wireEvents(): void {
   micBtn?.addEventListener('pointerleave', releasePtt)
   micBtn?.addEventListener('pointercancel', releasePtt)
   document.getElementById('chat-stop-speaking')?.addEventListener('click', () => {
+    const wasSpeaking = speakingActive
     stopSpeaking()
     // Hands-free interrupt: don't just stop Orbit's voice — hand the
     // turn back to the user immediately by resuming the mic and
     // restoring dataset audio, rather than waiting for the cancelled
     // reply to drain. (§9.1 "Stop speaking" → "interrupt".)
     if ((loadConfig().voiceHandsFree ?? 'off') !== 'off') {
+      if (wasSpeaking) emitBargeIn() // a real reply was cut short (§10.4)
       handsFree?.setBusy(false)
       setVoiceAudioFocus(false)
     }
@@ -568,12 +570,12 @@ function initVoiceInput(): void {
   handsFree?.teardown()
   handsFree = new HandsFreeController({
     onPartial: (text) => fillVoiceInput(text),
-    onTurn: (text) => { fillVoiceInput(text); void handleSend() },
+    onTurn: (text) => { emitHandsFreeTurn(); fillVoiceInput(text); void handleSend() },
     onStateChange: (state) => {
       setMicListening(state === 'capturing' || state === 'listening')
       // Duck dataset audio the moment we start capturing a turn (kept
       // ducked through send + reply; released at the resume point).
-      if (state === 'capturing') setVoiceAudioFocus(true)
+      if (state === 'capturing') { handsFreeCaptureStartedAt = Date.now(); setVoiceAudioFocus(true) }
     },
   })
   syncHandsFree()
@@ -584,6 +586,52 @@ let handsFree: HandsFreeController | null = null
 
 /** Whether dataset audio is currently ducked for a voice turn. */
 let voiceAudioFocused = false
+
+/** Wall-clock start of the current hands-free capture, for turn latency. */
+let handsFreeCaptureStartedAt = 0
+
+/**
+ * Tier B: record a completed hands-free STT turn — provider, language,
+ * latency, and which interaction model (`open-mic` vs `push-to-talk`).
+ * These are the §10.4 numbers that decide the exhibit's interaction
+ * model. No transcript text leaves the device.
+ */
+function emitHandsFreeTurn(): void {
+  const cfg = loadConfig()
+  const mode = cfg.voiceHandsFree ?? 'off'
+  if (mode === 'off') return
+  const lang = cfg.voiceLang || getLocale()
+  const provider = resolveStreamingSttEngine(cfg.voiceProvider ?? 'auto', lang)?.provider ?? 'browser'
+  emit({
+    event_type: 'voice_interaction',
+    mode: 'stt',
+    provider,
+    trigger: mode, // 'open-mic' | 'push-to-talk'
+    duration_ms: handsFreeCaptureStartedAt ? Math.max(0, Date.now() - handsFreeCaptureStartedAt) : 0,
+    lang: baseLanguage(lang),
+    success: true,
+  })
+}
+
+/**
+ * Tier B: record a hands-free barge-in — the user interrupted Orbit's
+ * spoken reply. Drives the barge-in-frequency metric (§10.4).
+ */
+function emitBargeIn(): void {
+  const cfg = loadConfig()
+  const lang = cfg.voiceLang || getLocale()
+  const provider = resolveTtsEngine(cfg.voiceProvider ?? 'auto', lang)?.provider ?? 'browser'
+  emit({
+    event_type: 'voice_interaction',
+    mode: 'tts',
+    provider,
+    trigger: 'autospeak',
+    duration_ms: 0,
+    lang: baseLanguage(lang),
+    success: false,
+    interrupted: true,
+  })
+}
 
 /** Duck / restore the dataset audio for a voice turn (deduped). */
 function setVoiceAudioFocus(active: boolean): void {
