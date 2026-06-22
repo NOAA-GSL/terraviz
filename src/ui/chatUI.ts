@@ -22,7 +22,9 @@ import { fetchModels } from '../services/llmProvider'
 import { isAvailable as isAppleIntelligenceAvailable } from '../services/appleIntelligenceProvider'
 import { setLogLevel, logger } from '../utils/logger'
 import { emit, startDwell, type DwellHandle } from '../analytics'
-import { enMessages, t, type MessageKey } from '../i18n'
+import { enMessages, t, getLocale, type MessageKey } from '../i18n'
+import { resolveSttEngine, voiceSupportForLocale, type SttSession } from '../services/voiceService'
+import { registerBrowserVoiceEngines } from '../services/voiceBrowserEngines'
 
 // --- Constants ---
 const SESSION_STORAGE_KEY = 'sos-docent-chat'
@@ -80,6 +82,9 @@ let chatDwellHandle: DwellHandle | null = null
  * later clicks an inline load button in the docent's reply. */
 let lastUserSendAt: number | null = null
 
+/** Active speech-recognition session, or null when not listening (ORBIT_VOICE_PLAN §1). */
+let sttSession: SttSession | null = null
+
 /** Globe-control actions deferred until a load-dataset action in the same message completes. */
 let pendingGlobeActions: ChatAction[] = []
 
@@ -99,6 +104,7 @@ export function initChatUI(cb: ChatCallbacks): void {
   callbacks = cb
   restoreSession()
   wireEvents()
+  initVoiceInput()
   renderMessages()
   // Apply the persisted debug-prompt setting now, at boot — not just
   // when the settings panel is first opened. Otherwise the checkbox
@@ -403,6 +409,7 @@ function wireEvents(): void {
   }
   document.getElementById('chat-close')?.addEventListener('click', closeChat)
   document.getElementById('chat-send')?.addEventListener('click', handleSend)
+  document.getElementById('chat-mic')?.addEventListener('click', toggleListening)
   document.getElementById('chat-settings-btn')?.addEventListener('click', toggleSettings)
 
   // Prevent wheel events from bubbling to the globe's zoom handler
@@ -474,6 +481,89 @@ function setVisionUI(enabled: boolean): void {
   btn?.setAttribute('aria-pressed', String(enabled))
   hint?.classList.toggle('visible', enabled)
   if (settingsCheck) settingsCheck.checked = enabled
+}
+
+// --- Voice input (STT) — ORBIT_VOICE_PLAN.md Phase 1 ---
+
+/**
+ * Register the browser speech engines this runtime supports and
+ * reveal the mic button when STT is actually available for the
+ * active locale. No-op (button stays hidden) otherwise, so the
+ * typed experience is unchanged where voice can't run.
+ */
+function initVoiceInput(): void {
+  registerBrowserVoiceEngines()
+  updateMicVisibility()
+}
+
+/** Show the mic only when an STT engine resolves for the active locale (§3 matrix). */
+function updateMicVisibility(): void {
+  const btn = document.getElementById('chat-mic')
+  if (!btn) return
+  const cfg = loadConfig()
+  const support = voiceSupportForLocale(cfg.voiceLang || getLocale(), cfg.voiceProvider ?? 'auto')
+  btn.style.display = support.stt ? 'flex' : 'none'
+}
+
+function toggleListening(): void {
+  if (sttSession) stopListening()
+  else startListening()
+}
+
+function startListening(): void {
+  const input = document.getElementById('chat-input') as HTMLTextAreaElement | null
+  if (!input || isStreaming) return
+  const cfg = loadConfig()
+  const lang = cfg.voiceLang || getLocale()
+  const engine = resolveSttEngine(cfg.voiceProvider ?? 'auto', lang)
+  if (!engine) {
+    callbacks?.announce(t('chat.announce.voiceError'))
+    return
+  }
+  let sawFinal = false
+  setMicListening(true)
+  callbacks?.announce(t('chat.announce.voiceListening'))
+  sttSession = engine.start({
+    lang,
+    interim: true,
+    // Fill the input live so the user sees what's being heard and
+    // can edit before it sends (conversational repair, §9.2).
+    onResult: (result) => {
+      input.value = result.transcript
+      input.style.height = 'auto'
+      input.style.height = Math.min(input.scrollHeight, 96) + 'px'
+      if (result.isFinal) sawFinal = true
+    },
+    onError: (err) => {
+      logger.warn('[voice] STT error', err)
+      endListening()
+      callbacks?.announce(t('chat.announce.voiceError'))
+    },
+    onEnd: () => {
+      const hadFinal = sawFinal
+      endListening()
+      // Auto-send on a committed transcript (push-to-talk turn).
+      if (hadFinal && input.value.trim()) void handleSend()
+    },
+  })
+}
+
+/** Stop capture; the engine's `onEnd` resets the UI (and may auto-send). */
+function stopListening(): void {
+  sttSession?.stop()
+}
+
+function endListening(): void {
+  sttSession = null
+  setMicListening(false)
+}
+
+function setMicListening(on: boolean): void {
+  const btn = document.getElementById('chat-mic')
+  if (!btn) return
+  btn.classList.toggle('listening', on)
+  btn.setAttribute('aria-pressed', String(on))
+  btn.title = on ? t('chat.voice.titleListening') : t('chat.voice.title')
 }
 
 // --- Settings panel ---

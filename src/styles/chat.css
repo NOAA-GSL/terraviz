@@ -521,6 +521,40 @@
     background: rgba(77, 166, 255, 0.1) !important;
 }
 .chat-vision-btn svg { pointer-events: none; }
+/* Voice (STT) mic button — mirrors the vision toggle; see ORBIT_VOICE_PLAN. */
+.chat-mic-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: calc(32px * var(--ui-scale));
+    height: calc(32px * var(--ui-scale));
+    padding: 0 !important;
+    background: transparent !important;
+    border: 1px solid var(--white-o15) !important;
+    border-radius: calc(6px * var(--ui-scale));
+    color: var(--color-text-dim);
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: color 0.2s, border-color 0.2s, background 0.2s;
+}
+.chat-mic-btn:hover {
+    color: #ccc;
+    border-color: var(--white-o30) !important;
+}
+.chat-mic-btn.listening {
+    color: var(--color-accent);
+    border-color: var(--accent-o50) !important;
+    background: rgba(77, 166, 255, 0.1) !important;
+    animation: chat-mic-pulse 1.4s ease-in-out infinite;
+}
+@keyframes chat-mic-pulse {
+    0%, 100% { box-shadow: 0 0 0 0 var(--accent-o50); }
+    50% { box-shadow: 0 0 0 calc(4px * var(--ui-scale)) rgba(77, 166, 255, 0); }
+}
+@media (prefers-reduced-motion: reduce) {
+    .chat-mic-btn.listening { animation: none; }
+}
+.chat-mic-btn svg { pointer-events: none; }
 .chat-vision-hint {
     display: none;
     padding: calc(0.3rem * var(--ui-scale)) calc(0.6rem * var(--ui-scale));

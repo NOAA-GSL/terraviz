@@ -10,10 +10,12 @@ Status: **draft for review — Phase 1 implementation underway.**
 This document scopes the approach, the UI, the Cloudflare and
 client-side options, and a phase plan that lands a usable web MVP
 first and defers the expensive bits (realtime streaming, on-device
-models) behind it. The voice-service foundation (capability
-detection, provider resolver, per-locale matrix, spoken-form
-projection) and the browser Web Speech engines have landed in this
-branch; the mic UI is the next slice (§12).
+models) behind it. Landed in this branch so far: the voice-service
+foundation (capability detection, provider resolver, per-locale
+matrix, spoken-form projection), the browser Web Speech engines,
+and the **mic (STT) input** in the chat panel (push-to-talk →
+interim transcript → auto-send). Next slice: auto-speak (TTS)
+output with the Stop control and settings toggles (§12).
 
 > Cross-references:
 > [`docs/DOCENT_UX_IMPROVEMENT_PLAN.md`](DOCENT_UX_IMPROVEMENT_PLAN.md)
