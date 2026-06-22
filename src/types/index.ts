@@ -534,6 +534,15 @@ export interface GeneralFeedbackPayload {
  */
 export type ReadingLevel = 'young-learner' | 'general' | 'in-depth' | 'expert'
 
+/**
+ * Where Orbit's voice (STT/TTS) is sourced from. `auto` lets
+ * `voiceService` pick the best available engine at runtime
+ * (on-device → Cloudflare edge → browser). The explicit values pin
+ * a path for power users / kiosk operators. See
+ * `docs/ORBIT_VOICE_PLAN.md` §4.4.
+ */
+export type VoiceProviderPreference = 'auto' | 'cloud' | 'local' | 'browser'
+
 export interface DocentConfig {
   apiUrl: string         // default: '/api'
   apiKey: string         // default: '' (empty = no auth, for Ollama)
@@ -542,6 +551,14 @@ export interface DocentConfig {
   readingLevel: ReadingLevel  // default: 'general'
   visionEnabled: boolean // default: false — captures globe screenshot as context
   debugPrompt?: boolean  // default: false — log full system prompt to console
+  // --- Voice (Orbit Voice Plan, Phase 1). All optional + default
+  // off so typed chat is byte-for-byte unchanged when unused. ---
+  voiceEnabled?: boolean            // mic / STT input on/off; default false
+  voiceAutoSpeak?: boolean          // auto-read replies via TTS; default false (§8 decision 1)
+  voiceProvider?: VoiceProviderPreference // default 'auto'
+  voiceLang?: string                // BCP-47 override; default = active UI locale
+  voiceName?: string                // specific TTS voice id (provider-scoped)
+  voiceRate?: number                // TTS speaking rate (0.5–2); default 1
 }
 
 /**
