@@ -39,8 +39,10 @@ and a strong accessibility win.
 ## Non-goals
 
 - **Not** a full real-time conversational voice agent in v1 (no
-  always-on listening, no barge-in interruption). That is Phase 3,
-  gated on the simpler turn-based MVP proving useful.
+  always-on listening, no barge-in interruption). That is Phase 3
+  — now a **committed** phase (the exhibit requires hands-free; see
+  §8 decision 5), but still sequenced *after* the turn-based
+  push-to-talk MVP it builds on.
 - **Not** voice for any surface other than Orbit. The catalog
   browse search, tour narration, and publisher portal are out of
   scope (tour *narration* via TTS is noted as a future stretch).
@@ -342,43 +344,65 @@ analytics model (`docs/ANALYTICS.md`, `docs/PRIVACY.md`).
 ## 7. Phase plan
 
 Each phase is independently shippable and adds no regression risk
-to typed chat. Ordering front-loads value and defers cost/complexity.
+to typed chat. Ordering front-loads value; ordering reflects the
+§8 decisions (auto-speak off, browser-API MVP, MeloTTS default,
+cost guards with Phase 2, and **hands-free as a committed
+requirement** that pulls realtime ahead of on-device).
 
 | Phase | Scope | Surface | Backend | Cost |
 |---|---|---|---|---|
 | **0 — Spike** | `voiceService.ts` skeleton + capability detection; throwaway prototype wiring Web Speech STT into `handleSend()` and `speechSynthesis` onto a reply. Validate UX, latency, the sentence-chunking. | branch only | none | none |
-| **1 — Web MVP** | Mic button + listening UI + interim transcript; auto-speak toggle; settings rows; i18n + a11y + scenes + Tier B telemetry. **Browser APIs only.** | web | none | none |
-| **2 — Cloud STT/TTS** | `functions/api/voice/{transcribe,synthesize}.ts` over the `AI` binding (Whisper turbo + Aura/MeloTTS); `voiceProvider` resolver; desktop support via `corsFetch`; consistent cross-browser quality. | web + desktop | 2 Pages Functions | edge inference |
-| **3 — Realtime** | Deepgram **Nova-3/Flux WebSocket** streaming partials; **barge-in** + turn detection; "Stop speaking" → "interrupt" upgrade. | web + desktop | WS proxy / Realtime | edge inference |
+| **1 — Web MVP** | Mic button + listening UI + interim transcript; auto-speak toggle (**default off**); settings rows; i18n + a11y + scenes + Tier B telemetry. **Browser APIs only.** | web | none | none |
+| **2 — Cloud STT/TTS + guards** | `functions/api/voice/{transcribe,synthesize}.ts` over the `AI` binding (Whisper turbo STT; **MeloTTS default**, Aura-2 opt-in); `voiceProvider` resolver; desktop via `corsFetch`. **`KILL_VOICE` env + per-session usage caps + client cooldown land here.** | web + desktop | 2 Pages Functions | edge inference |
+| **3 — Realtime / hands-free** *(committed — exhibit req.)* | Deepgram **Flux** turn detection + **Nova-3/Flux WebSocket** streaming partials; always-listening with **local VAD gating before any audio is streamed**, clear listening indicator + mute; **barge-in**; "Stop speaking" → "interrupt" upgrade. | web + desktop | WS proxy / Realtime | edge inference |
+| **3.5 — Wake-word** *(committed)* | "Hey Orbit" off-the-shelf small wake model to arm listening hands-free in the exhibit. | web + desktop | local / WS | edge inference |
 | **4 — On-device / private** | WebGPU Whisper + local TTS (`transformers.js`); Apple Speech/AVSpeechSynthesizer on macOS Tauri; "private mode." | web (WebGPU) + desktop | none (local) | none |
 | **5 — Character & VR** | Orbit-character speaking animation / amplitude lip-sync; wire `voiceService` into the VR docent (`VR_INVESTIGATION_PLAN.md` §5); optional spatial audio. | web + VR | reuse | reuse |
 
-**Stretch / explicitly deferred:** wake-word ("Hey Orbit"), tour
-**narration** via TTS, voice-driven catalog search (noted as a
-Phase 3 stretch in the VR plan), speaker diarization for
-multi-visitor kiosks.
+**Stretch / explicitly deferred:** tour **narration** via TTS,
+voice-driven catalog search (noted as a Phase 3 stretch in the VR
+plan), speaker diarization for multi-visitor kiosks. *(Wake-word
+moved into the committed roadmap as Phase 3.5 per §8 decision 5.)*
 
 ---
 
-## 8. Open questions (for review before Phase 1)
+## 8. Resolved decisions
 
-1. **Default for auto-speak:** off (opt-in, safest for shared/
-   quiet exhibit spaces) vs on (most "voice assistant"-like).
-   Recommendation: **off**, with a prominent first-run nudge.
-2. **MVP scope of Phase 1** — is browser-only (no edge cost,
-   web-only, inconsistent desktop) acceptable as the first ship,
-   or do we want to jump straight to the Cloudflare path (Phase 2)
-   for consistency and desktop coverage? Recommendation: ship
-   Phase 1 to learn cheaply, but it's a real fork worth confirming.
-3. **TTS default model** when on cloud: **Aura-2** (quality) vs
-   **MeloTTS** (≈10× cheaper). Recommendation: MeloTTS default,
-   Aura as an opt-in "higher-quality voice."
-4. **Cost guardrails** for the edge path — per-session caps / kill
-   switch like `KILL_TELEMETRY`? Worth a `KILL_VOICE` env and a
-   client cooldown.
-5. **Kiosk/exhibit mode** — is hands-free always-listening an
-   actual requirement for the NOAA SOS install context? If so it
-   promotes Phase 3 / wake-word up the priority list.
+These five were locked in review (2026-06-22). They supersede the
+recommendations elsewhere in this doc where they differ.
+
+1. **Auto-speak is OFF by default.** Voice output is opt-in via a
+   toggle, with a prominent first-run nudge. Captions (the streamed
+   text) always remain regardless. Rationale: shared/quiet exhibit
+   spaces; no surprise audio. (§5.2)
+2. **Phase 1 ships browser APIs only** (Web Speech STT +
+   `speechSynthesis` TTS). Web-only, zero cost, fast to validate
+   UX — accepting the known cross-browser inconsistency and desktop
+   gap, which the Phase 2 Cloudflare path then closes. (§7)
+3. **Cloud TTS default is MeloTTS**, with Deepgram **Aura-2 as an
+   opt-in "higher-quality voice."** Rationale: MeloTTS is ~10×
+   cheaper — the right default for high-volume kiosk use. (§3, §7)
+4. **Cost guardrails are in scope.** Add a server **`KILL_VOICE`**
+   env (modeled on `KILL_TELEMETRY` → 410 + client cooldown) plus
+   **per-session usage caps**. These land **with Phase 2** (the
+   first phase that incurs edge inference cost), not later. (§6, §9)
+5. **Hands-free is a committed exhibit requirement** — *not* a
+   deferred stretch. The NOAA SOS install needs always-listening
+   operation. This **promotes the realtime work (Phase 3) and a
+   wake-word into the committed roadmap** and reorders priority:
+   Phase 3 now lands **before** the on-device/private work (former
+   Phase 4), since the exhibit value depends on it. Deepgram
+   **Flux** (built-in turn detection) is the primitive; wake-word
+   ("Hey Orbit") becomes **Phase 3.5** rather than a stretch item.
+   Privacy handling for an always-on mic (local VAD gating before
+   any audio is streamed, clear "listening" indicator, mute
+   control, disclosure) is elevated to a Phase 3 acceptance
+   criterion. (§7, §6)
+
+> **Phasing impact of #5:** the table in §7 is renumbered so the
+> realtime/hands-free phase precedes on-device. Phases 1–2 are
+> unchanged building blocks (push-to-talk MVP, then the cloud
+> proxy + `voiceProvider` resolver that Phase 3 streams over).
 
 ---
 
