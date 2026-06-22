@@ -248,6 +248,7 @@
   "chat.visionHint.body": " — Orbit can see the globe. A screenshot of the current view is sent with each message for visual analysis.",
   "chat.visionHint.label": "Vision on",
   "chat.voice.aria": "Voice input",
+  "chat.voice.speakAria": "Read aloud",
   "chat.voice.stopAria": "Stop speaking",
   "chat.voice.title": "Speak to Orbit",
   "chat.voice.titleListening": "Stop listening",

@@ -645,6 +645,51 @@ function setStopSpeakingVisible(visible: boolean): void {
   if (btn) btn.style.display = visible ? 'flex' : 'none'
 }
 
+/** Whether a TTS engine resolves for the active locale (gates the per-message Speak button). */
+function canSpeakReplies(): boolean {
+  const cfg = loadConfig()
+  return !!resolveTtsEngine(cfg.voiceProvider ?? 'auto', cfg.voiceLang || getLocale())
+}
+
+/**
+ * Speak a specific message on demand. The first chunk is spoken
+ * **synchronously** so this works when invoked from a tap — iOS
+ * Safari requires speech to originate inside a user gesture, which
+ * the streamed auto-speak path (microtask-queued) can't guarantee.
+ */
+function speakMessage(text: string): void {
+  const cfg = loadConfig()
+  const engine = resolveTtsEngine(cfg.voiceProvider ?? 'auto', cfg.voiceLang || getLocale())
+  if (!engine) return
+  const chunks = splitIntoSpokenChunks(text)
+  const first = chunks[0]
+  if (!first) return
+  stopSpeaking()
+  speakingActive = true
+  ttsEngine = engine
+  setStopSpeakingVisible(true)
+  const lang = cfg.voiceLang || getLocale()
+  const rate = cfg.voiceRate
+  let chain = engine.speak(first, { lang, rate })
+  for (let i = 1; i < chunks.length; i++) {
+    const sentence = chunks[i]
+    if (!sentence) continue
+    chain = chain.then(() => (speakingActive ? engine.speak(sentence, { lang, rate }) : undefined))
+  }
+  ttsChain = chain.then(() => { if (speakingActive) setStopSpeakingVisible(false) })
+}
+
+function wireSpeakButtons(container: ParentNode): void {
+  container.querySelectorAll<HTMLButtonElement>('.chat-speak-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const msg = messages.find((m) => m.id === btn.dataset.msgId)
+      if (!msg?.text) return
+      primeBrowserTts()
+      speakMessage(msg.text)
+    })
+  })
+}
+
 // --- Settings panel ---
 
 function toggleSettings(): void {
@@ -1145,6 +1190,7 @@ function renderMessages(): void {
   container.innerHTML = messages.map(msg => renderMessage(msg)).join('')
   wireActionButtons(container)
   wireFeedbackButtons(container)
+  wireSpeakButtons(container)
 }
 
 /** Render a single chat message as an HTML string with inline action buttons. */
@@ -1155,8 +1201,13 @@ function renderMessage(msg: ChatMessage): string {
   const actionsHtml = remaining?.length ? renderActions(remaining) : ''
   const thumbsUpLabel = t('chat.feedback.thumbsUp')
   const thumbsDownLabel = t('chat.feedback.thumbsDown')
+  const speakLabel = t('chat.voice.speakAria')
+  const speakBtnHtml = canSpeakReplies()
+    ? `<button class="chat-feedback-btn chat-speak-btn" data-msg-id="${escapeAttr(msg.id)}" aria-label="${escapeAttr(speakLabel)}" title="${escapeAttr(speakLabel)}">&#x1F50A;&#xFE0E;</button>`
+    : ''
   const feedbackHtml = msg.role === 'docent' && msg.text
     ? `<div class="chat-feedback">
+         ${speakBtnHtml}
          <button class="chat-feedback-btn" data-feedback="thumbs-up" data-msg-id="${escapeAttr(msg.id)}" aria-label="${escapeAttr(thumbsUpLabel)}" aria-pressed="false" title="${escapeAttr(thumbsUpLabel)}">&#x1F44D;&#xFE0E;</button>
          <button class="chat-feedback-btn" data-feedback="thumbs-down" data-msg-id="${escapeAttr(msg.id)}" aria-label="${escapeAttr(thumbsDownLabel)}" aria-pressed="false" title="${escapeAttr(thumbsDownLabel)}">&#x1F44E;&#xFE0E;</button>
        </div>`
