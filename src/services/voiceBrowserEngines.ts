@@ -192,6 +192,7 @@ export function primeBrowserTts(): void {
 export interface BrowserVoiceInfo {
   name: string
   lang: string
+  voiceURI: string
   isDefault: boolean
 }
 
@@ -199,11 +200,58 @@ export interface BrowserVoiceInfo {
 export function listBrowserVoices(): BrowserVoiceInfo[] {
   const synth = (window as unknown as Record<string, any>)['speechSynthesis']
   if (!synth?.getVoices) return []
-  return (synth.getVoices() as Array<{ name: string; lang: string; default?: boolean }>).map(v => ({
+  return (synth.getVoices() as Array<{ name: string; lang: string; voiceURI?: string; default?: boolean }>).map(v => ({
     name: v.name,
     lang: v.lang,
+    voiceURI: v.voiceURI ?? v.name,
     isDefault: !!v.default,
   }))
+}
+
+/**
+ * Apple's built-in *novelty* voices (Bad News, Zarvox, Bubbles…),
+ * exposed wholesale by `speechSynthesis.getVoices()`. They're musical
+ * / joke voices, useless for reading a docent reply, so we hide them
+ * from the picker. Matched case-insensitively against the base name
+ * (a trailing platform suffix like " (Enhanced)" is tolerated).
+ */
+const NOVELTY_VOICE_NAMES: ReadonlySet<string> = new Set([
+  'albert', 'bad news', 'bahh', 'bells', 'boing', 'bubbles', 'cellos',
+  'deranged', 'good news', 'hysterical', 'jester', 'organ', 'pipe organ',
+  'superstar', 'trinoids', 'whisper', 'wobble', 'zarvox',
+])
+
+function isNoveltyVoice(v: BrowserVoiceInfo): boolean {
+  const base = v.name.toLowerCase().replace(/\s*\(.*\)\s*$/, '').trim()
+  return NOVELTY_VOICE_NAMES.has(base)
+}
+
+/**
+ * Rank a voice by likely quality from its URI/name. Higher is better:
+ * Apple/Google neural & "enhanced/premium" and Siri voices first,
+ * stripped-down "compact" voices last. Used only for ordering the
+ * picker — never to exclude (besides novelty).
+ */
+export function voiceQualityRank(v: BrowserVoiceInfo): number {
+  const hay = `${v.voiceURI} ${v.name}`.toLowerCase()
+  if (/siri|enhanced|premium|neural|natural|wavenet/.test(hay)) return 3
+  if (/compact|eloquence/.test(hay)) return 1
+  return 2
+}
+
+/**
+ * Curate the raw voice list for the picker: drop novelty voices and
+ * sort best-first (quality rank, then the system default, then name).
+ */
+export function curateVoices(voices: BrowserVoiceInfo[]): BrowserVoiceInfo[] {
+  return voices
+    .filter(v => !isNoveltyVoice(v))
+    .sort((a, b) => {
+      const r = voiceQualityRank(b) - voiceQualityRank(a)
+      if (r !== 0) return r
+      if (a.isDefault !== b.isDefault) return a.isDefault ? -1 : 1
+      return a.name.localeCompare(b.name)
+    })
 }
 
 /**

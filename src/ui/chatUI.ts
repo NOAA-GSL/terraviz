@@ -24,7 +24,7 @@ import { setLogLevel, logger } from '../utils/logger'
 import { emit, startDwell, type DwellHandle } from '../analytics'
 import { enMessages, t, getLocale, type MessageKey } from '../i18n'
 import { resolveSttEngine, resolveTtsEngine, voiceSupportForLocale, splitIntoSpokenChunks, baseLanguage, type SttSession, type TtsEngine } from '../services/voiceService'
-import { registerBrowserVoiceEngines, primeBrowserTts, listBrowserVoices, onBrowserVoicesChanged } from '../services/voiceBrowserEngines'
+import { registerBrowserVoiceEngines, primeBrowserTts, listBrowserVoices, curateVoices, onBrowserVoicesChanged } from '../services/voiceBrowserEngines'
 
 // --- Constants ---
 const SESSION_STORAGE_KEY = 'sos-docent-chat'
@@ -535,7 +535,9 @@ function populateVoiceOptions(): void {
   if (!select) return
   const cfg = loadConfig()
   const lang = baseLanguage(cfg.voiceLang || getLocale())
-  const all = listBrowserVoices()
+  // Curate first (drop Apple novelty voices, sort best-first), then
+  // prefer voices for the active language, falling back to all.
+  const all = curateVoices(listBrowserVoices())
   const matching = all.filter(v => baseLanguage(v.lang) === lang)
   const voices = matching.length ? matching : all
   const selected = cfg.voiceName ?? ''

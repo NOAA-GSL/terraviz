@@ -3,6 +3,9 @@ import {
   registerBrowserVoiceEngines,
   browserSttEngine,
   browserTtsEngine,
+  curateVoices,
+  voiceQualityRank,
+  type BrowserVoiceInfo,
 } from './voiceBrowserEngines'
 import {
   resetVoiceEngines,
@@ -28,6 +31,35 @@ afterEach(() => {
   delete w['SpeechRecognition']
   delete w['speechSynthesis']
   delete w['SpeechSynthesisUtterance']
+})
+
+describe('voice curation', () => {
+  const v = (name: string, voiceURI = name, isDefault = false): BrowserVoiceInfo => ({
+    name, lang: 'en-US', voiceURI, isDefault,
+  })
+
+  it('drops Apple novelty voices (incl. a platform suffix)', () => {
+    const out = curateVoices([
+      v('Bad News'), v('Zarvox'), v('Bubbles (Enhanced)'), v('Samantha'),
+    ])
+    expect(out.map(x => x.name)).toEqual(['Samantha'])
+  })
+
+  it('ranks enhanced / Siri voices above compact ones', () => {
+    expect(voiceQualityRank(v('Siri', 'com.apple.ttsbundle.siri_female_en-US'))).toBe(3)
+    expect(voiceQualityRank(v('Sam', 'com.apple.voice.enhanced.en-US.Sam'))).toBe(3)
+    expect(voiceQualityRank(v('Sam', 'com.apple.voice.compact.en-US.Sam'))).toBe(1)
+    expect(voiceQualityRank(v('Generic'))).toBe(2)
+  })
+
+  it('sorts best-first: quality, then default, then name', () => {
+    const out = curateVoices([
+      v('Compact', 'com.apple.voice.compact.en-US.Compact'),
+      v('Zoe', 'com.apple.voice.enhanced.en-US.Zoe'),
+      v('Alex', 'com.apple.voice.enhanced.en-US.Alex'),
+    ])
+    expect(out.map(x => x.name)).toEqual(['Alex', 'Zoe', 'Compact'])
+  })
 })
 
 describe('engine metadata', () => {
