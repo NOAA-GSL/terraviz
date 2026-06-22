@@ -39,6 +39,14 @@
  * The stage snippets back the "Insert stage" palette — the
  * lightweight, textarea-native form of zyra-editor's stage palette
  * (see the plan doc's §Non-goals for why there is no node graph).
+ *
+ * Arg-name gotcha: `zyra run` emits a per-command list of
+ * positionals as bare args and everything else as `--flags`
+ * (`pipeline_runner._build_argv_for_stage`). The source URL is a
+ * positional, and its key differs by backend — `acquire ftp` uses
+ * `path:` (→ `zyra acquire ftp <url>`), while `acquire http` uses
+ * `url:`. Using `url:` on an ftp stage produces a rejected `--url`
+ * flag, so keep the ftp templates on `path:`.
  */
 
 import type { MessageKey } from '../../i18n/messages'
@@ -62,7 +70,7 @@ export const WORKFLOW_TEMPLATES: readonly WorkflowTemplate[] = [
   - stage: acquire
     command: ftp
     args:
-      url: ftp://ftp.nnvl.noaa.gov/SOS/DroughtRisk_Weekly
+      path: ftp://ftp.nnvl.noaa.gov/SOS/DroughtRisk_Weekly
       sync-dir: /work/images/frames
       since-period: P1Y
       pattern: '^DroughtRisk_Weekly_[0-9]{8}\\.png$'
@@ -158,7 +166,7 @@ export const STAGE_SNIPPETS: ReadonlyArray<{ id: string; snippet: string }> = [
     snippet: `  - stage: acquire
     command: ftp
     args:
-      url: ftp://host/path
+      path: ftp://host/path
       sync-dir: /work/images/frames
       since-period: P1Y
       pattern: '^frame_[0-9]{8}\\.png$'
