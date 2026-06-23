@@ -27,6 +27,7 @@ design rationale in the `docs/CATALOG_*` plan docs.
 | `cli/lib/client.ts` | Thin HTTP client wrapping fetch + the Access auth headers |
 | `cli/lib/config.ts` | Resolve the CLI's runtime configuration: server URL + auth |
 | `cli/lib/ffmpeg-hls.ts` | FFmpeg HLS encoder wrapper — multi-rendition equirectangular |
+| `cli/lib/hls-incremental.ts` | Pure core of incremental HLS re-encoding — absolute-grid chunking, content-addressed segment hashing, reuse-vs-encode diff, playlist assembly (`docs/INCREMENTAL_HLS_PLAN.md`) |
 | `cli/lib/migration-telemetry.ts` | Operator-side telemetry emitter for the migration CLIs |
 | `cli/lib/frames-publish.ts` | Publish a runner's padded frame directory as an image-sequence asset (hash → init → PUT frames + `source_filenames.json` → complete) so the Zyra recall path reuses the existing `/frames` surface (`docs/ZYRA_INTEGRATION_PLAN.md` §Real-time frame store) |
 | `cli/lib/r2-frames.ts` | R2-backed frame cache for real-time Zyra workflow runs — restore/save a dataset's frames under `workflow-frames/{dataset_id}/` with window-only prune (`docs/ZYRA_INTEGRATION_PLAN.md` §Real-time frame store) |
