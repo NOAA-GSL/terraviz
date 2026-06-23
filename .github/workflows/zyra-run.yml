@@ -166,7 +166,21 @@ jobs:
       # ffprobe for the publish phase's SOS-spec preflight (Ubuntu
       # 22.04 ships ffmpeg 4.4 — same rationale as transcode-hls.yml).
       - name: Install ffmpeg
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+        # apt on GitHub runners can hang for minutes when a package
+        # mirror stalls or the boot-time apt-daily / unattended-upgrades
+        # job holds the dpkg lock (observed: a 10-minute stall here).
+        # Stop those services, bound every network wait so a stalled
+        # mirror fails fast and retries, and cap the lock wait — a
+        # transient hiccup costs seconds, not the 30-minute job timeout.
+        run: |
+          set -euo pipefail
+          export DEBIAN_FRONTEND=noninteractive
+          sudo systemctl stop apt-daily.timer apt-daily-upgrade.timer 2>/dev/null || true
+          sudo systemctl stop apt-daily.service apt-daily-upgrade.service unattended-upgrades.service 2>/dev/null || true
+          APT_OPTS="-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=180"
+          sudo apt-get $APT_OPTS update
+          sudo apt-get $APT_OPTS install -y --no-install-recommends ffmpeg
+          ffmpeg -version | head -n1
 
       - name: Publish to TerraViz (succeeded callback)
         env:
