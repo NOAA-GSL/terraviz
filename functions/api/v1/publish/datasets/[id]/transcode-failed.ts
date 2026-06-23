@@ -131,6 +131,18 @@ export const onRequestPost: PagesFunction<CatalogEnv, 'id'> = async context => {
   // that won the race) is a no-op success — the cleanup step must not
   // turn a benign double-callback into a workflow failure.
   if (!existing.transcoding) {
+    // Defensive: if `transcoding` is already NULL but the active-upload
+    // binding still dangles at THIS upload (a partially-applied prior
+    // clear), release it too so the row can't be left half-locked.
+    // Otherwise it's a clean no-op.
+    if (existing.active_transcode_upload_id === validated.upload_id) {
+      await abandonTranscoding(db, id, validated.upload_id, new Date().toISOString())
+      const refreshed = await db
+        .prepare(`SELECT * FROM datasets WHERE id = ?`)
+        .bind(id)
+        .first<DatasetRow>()
+      return ok({ dataset: refreshed, idempotent: true })
+    }
     return ok({ dataset: existing, idempotent: true })
   }
 
@@ -169,7 +181,7 @@ export const onRequestPost: PagesFunction<CatalogEnv, 'id'> = async context => {
   // No snapshot invalidation: data_ref is unchanged, so public clients
   // keep serving the prior good bundle — nothing to refresh.
   await writeDatasetAudit(db, publisher, 'dataset.update', id, {
-    fields: ['transcoding', 'active_transcode_upload_id'],
+    fields: ['transcoding', 'active_transcode_upload_id', 'source_digest'],
     reason: 'transcode_failed',
     upload_id: validated.upload_id,
     error_summary: validated.error_summary,

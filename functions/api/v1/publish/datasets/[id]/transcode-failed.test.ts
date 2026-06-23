@@ -31,6 +31,10 @@ const DATASET_ID = 'DS000' + 'A'.repeat(21)
 const UPLOAD_ID = 'KP000' + 'A'.repeat(21)
 const OTHER_UPLOAD = 'KP000' + 'B'.repeat(21)
 const HELD_DATA_REF = 'r2:videos/' + DATASET_ID + '/PRIORUPLOAD0000000000000001/master.m3u8'
+// The stamp overwrote source_digest with the FAILED upload's digest
+// (the prior one isn't persisted); abandon clears it so the public
+// framesDigest isn't advertised against the prior bundle's frames.
+const FAILED_SOURCE_DIGEST = 'sha256:' + 'a'.repeat(64)
 
 function setupEnv(opts: { transcoding?: boolean; activeUploadId?: string | null } = {}) {
   const sqlite = seedFixtures({ count: 1 })
@@ -43,17 +47,19 @@ function setupEnv(opts: { transcoding?: boolean; activeUploadId?: string | null 
       .run(p.id, p.email, p.display_name, p.role, p.is_admin, p.status, p.created_at)
   }
   const activeUploadId = opts.activeUploadId === null ? null : opts.activeUploadId ?? UPLOAD_ID
-  // Seed a row mid-transcode that HELD a prior published data_ref —
-  // the failure path must leave it intact.
+  // Seed a row mid-transcode that HELD a prior published data_ref (the
+  // failure path must leave it intact) but whose source_digest the stamp
+  // already swapped to the failed upload (abandon must clear it).
   sqlite
     .prepare(
       `UPDATE datasets
          SET transcoding = ?,
              active_transcode_upload_id = ?,
-             data_ref = ?
+             data_ref = ?,
+             source_digest = ?
        WHERE id = ?`,
     )
-    .run(opts.transcoding ?? true ? 1 : null, activeUploadId, HELD_DATA_REF, DATASET_ID)
+    .run(opts.transcoding ?? true ? 1 : null, activeUploadId, HELD_DATA_REF, FAILED_SOURCE_DIGEST, DATASET_ID)
   return { sqlite, datasetId: DATASET_ID, uploadId: UPLOAD_ID, env: { CATALOG_DB: asD1(sqlite), CATALOG_KV: makeKV() } }
 }
 
@@ -89,11 +95,19 @@ describe('POST .../transcode-failed', () => {
     expect(body.dataset.data_ref).toBe(HELD_DATA_REF)
 
     const row = sqlite
-      .prepare(`SELECT data_ref, transcoding, active_transcode_upload_id FROM datasets WHERE id = ?`)
-      .get(datasetId) as { data_ref: string; transcoding: number | null; active_transcode_upload_id: string | null }
+      .prepare(
+        `SELECT data_ref, transcoding, active_transcode_upload_id, source_digest FROM datasets WHERE id = ?`,
+      )
+      .get(datasetId) as {
+      data_ref: string
+      transcoding: number | null
+      active_transcode_upload_id: string | null
+      source_digest: string | null
+    }
     expect(row.transcoding).toBeNull()
     expect(row.active_transcode_upload_id).toBeNull()
     expect(row.data_ref).toBe(HELD_DATA_REF) // prior bundle preserved
+    expect(row.source_digest).toBeNull() // failed upload's digest dropped
   })
 
   it('writes a transcode_failed audit entry with the error summary', async () => {
@@ -108,12 +122,25 @@ describe('POST .../transcode-failed', () => {
     expect(meta.error_summary).toBe('boom timed out') // \u0007 collapsed to a space
   })
 
-  it('is idempotent when the row is no longer transcoding', async () => {
-    const { datasetId, uploadId, env } = setupEnv({ transcoding: false })
+  it('is idempotent when the lock is already fully released (both columns NULL)', async () => {
+    const { datasetId, uploadId, env } = setupEnv({ transcoding: false, activeUploadId: null })
     const res = await transcodeFailed(ctx({ env, datasetId, body: { upload_id: uploadId } }))
     expect(res.status).toBe(200)
     const body = await readJson<{ idempotent?: boolean }>(res)
     expect(body.idempotent).toBe(true)
+  })
+
+  it('defensively clears a dangling binding when transcoding is already NULL', async () => {
+    // Half-cleared row: transcoding NULL but the binding still points at
+    // this upload. Idempotent success AND the binding gets released.
+    const { sqlite, datasetId, uploadId, env } = setupEnv({ transcoding: false })
+    const res = await transcodeFailed(ctx({ env, datasetId, body: { upload_id: uploadId } }))
+    expect(res.status).toBe(200)
+    expect((await readJson<{ idempotent?: boolean }>(res)).idempotent).toBe(true)
+    const row = sqlite
+      .prepare(`SELECT active_transcode_upload_id FROM datasets WHERE id = ?`)
+      .get(datasetId) as { active_transcode_upload_id: string | null }
+    expect(row.active_transcode_upload_id).toBeNull()
   })
 
   it('refuses (409) when a newer upload owns the active transcode', async () => {
