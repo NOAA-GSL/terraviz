@@ -35,9 +35,15 @@ import { createHash } from 'node:crypto'
 import {
   DEFAULT_RENDITIONS,
   DEFAULT_SEGMENT_SECONDS,
+  MASTER_PLAYLIST_NAME,
   OUTPUT_FRAME_RATE,
   type HlsRendition,
 } from './ffmpeg-hls'
+
+/** Master playlist filename — the per-upload bundle entry point the
+ *  `data_ref` points at. Mirrors the encoder's name so the two
+ *  paths can never drift. */
+export const MASTER_PLAYLIST_FILE = MASTER_PLAYLIST_NAME
 
 /** Frames per chunk = one segment's worth at the pinned encode
  *  settings (6 s × 30 fps). The whole scheme rests on this matching
