@@ -118,15 +118,25 @@ jobs:
         run: npm ci
 
       - name: Install ffmpeg
+        # apt on GitHub runners can hang for minutes when a package
+        # mirror stalls or the boot-time apt-daily / unattended-upgrades
+        # job holds the dpkg lock. Stop those services, bound every
+        # network wait so a stalled mirror fails fast and retries, and
+        # cap the lock wait — a transient hiccup costs seconds, not the
+        # 30-minute job timeout.
         run: |
           set -e
-          sudo apt-get update -qq
+          export DEBIAN_FRONTEND=noninteractive
+          sudo systemctl stop apt-daily.timer apt-daily-upgrade.timer 2>/dev/null || true
+          sudo systemctl stop apt-daily.service apt-daily-upgrade.service unattended-upgrades.service 2>/dev/null || true
           # The Ubuntu 22.04 runner ships ffmpeg 4.4, which covers
           # every codec the ladder uses (H.264 + AAC + HLS muxer).
           # The PPA upgrade would buy us AV1 support but the ladder
           # stays on H.264 main profile for now (see
           # CATALOG_ASSETS_PIPELINE.md "Codec choices").
-          sudo apt-get install -y -qq ffmpeg
+          APT_OPTS="-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=180"
+          sudo apt-get $APT_OPTS update
+          sudo apt-get $APT_OPTS install -y --no-install-recommends ffmpeg
           ffmpeg -version | head -n1
           ffprobe -version | head -n1
 
