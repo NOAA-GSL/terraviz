@@ -6,12 +6,17 @@
 # never execute a stale pipeline.
 #
 # Phases (cli/zyra-publish-from-dispatch.ts):
-#   fetch   → pipeline.json + workflow.json + `running` callback
-#   (zyra)  → the pipeline runs in the zyra-scheduler container
-#   publish → SOS preflight, sidecar PATCH, asset upload, transcode
-#             wait, `succeeded` callback
-#   failure → `failed` callback with a sanitized summary, from the
-#             if: failure() step
+#   fetch    → pipeline.json + workflow.json + `running` callback
+#   (zyra)   → the pipeline runs in the zyra-scheduler container
+#   publish  → SOS preflight, sidecar PATCH, asset upload, transcode
+#              wait, `succeeded` callback
+#   failure  → `failed` callback with a sanitized summary, from the
+#              if: failure() step
+#   softpass → when `zyra run` fails at the acquire stage but the
+#              dataset still serves a fresh bundle, posts a no-op
+#              `succeeded` so a transient NOAA-FTP hiccup finishes
+#              GREEN instead of firing a false-positive failure. A
+#              sustained outage (stale bundle) still escalates.
 #
 # The image is pinned by digest — the digest is the Zyra version
 # pin the /validate stage allowlist is coupled to (plan doc
@@ -104,6 +109,7 @@ jobs:
             --workdir=_work
 
       - name: Run Zyra pipeline
+        id: zyra
         env:
           ZYRA_IMAGE: ${{ vars.ZYRA_SCHEDULER_IMAGE || '' }}
           # Verbosity for the in-container `zyra run`. Defaults to debug
@@ -116,12 +122,35 @@ jobs:
           # 30s timeout, sync_directory's RETR is un-try/caught), so a
           # single transient NOAA-FTP hiccup crashes `acquire`. Retry the
           # whole `zyra run`; tune via the ZYRA_RUN_ATTEMPTS repo variable.
-          ZYRA_RUN_ATTEMPTS: ${{ vars.ZYRA_RUN_ATTEMPTS || '3' }}
+          ZYRA_RUN_ATTEMPTS: ${{ vars.ZYRA_RUN_ATTEMPTS || '4' }}
+          # Soft-pass support: when `zyra run` ultimately fails at the
+          # acquire stage but the dataset already serves a still-fresh
+          # bundle, finish GREEN as a no-op instead of firing a false-
+          # positive failure. Escalate once the published bundle's
+          # trailing edge falls behind this many seconds (default 2
+          # days). Needs the publisher-API creds the CLI uses for the
+          # dataset GET + the `succeeded` callback.
+          ZYRA_STALE_AFTER_SECONDS: ${{ vars.ZYRA_STALE_AFTER_SECONDS || '172800' }}
+          TERRAVIZ_SERVER: ${{ secrets.TERRAVIZ_SERVER }}
+          TERRAVIZ_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          TERRAVIZ_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+          WORKFLOW_ID: ${{ github.event.client_payload.workflow_id }}
+          RUN_ID: ${{ github.event.client_payload.run_id }}
+          GHA_RUN_ID: ${{ github.run_id }}
         run: |
-          set -euo pipefail
+          # NOTE: no `-e` — we capture the container's exit code and
+          # branch on it (success → gate; failure → acquire soft-pass
+          # decision) rather than letting a failed `zyra run` abort the
+          # step outright. A genuine failure still ends the job red via
+          # the explicit `exit 1` below.
+          set -uo pipefail
           IMAGE="${ZYRA_IMAGE:-$ZYRA_IMAGE_DEFAULT}"
           echo "runner image: $IMAGE"
           echo "zyra verbosity: $ZYRA_VERBOSITY ; run attempts: $ZYRA_RUN_ATTEMPTS"
+          # Capture the container's combined output so the soft-pass
+          # phase can classify a failure (transient acquire/FTP vs a
+          # real compose/code error). PIPESTATUS[0] is docker's exit,
+          # not tee's.
           docker run --rm --entrypoint "" --user 0 \
             -v "$PWD/_work:/work" \
             -e "ZYRA_VERBOSITY=$ZYRA_VERBOSITY" \
@@ -146,14 +175,15 @@ jobs:
               # frames already downloaded and only fetches what is still
               # missing. zyra stops at the first failed stage, so a retry
               # never leaves a half-run pipeline (pad-missing only runs
-              # once acquire succeeds).
-              attempts="${ZYRA_RUN_ATTEMPTS:-3}"
+              # once acquire succeeds). The longer per-attempt backoff
+              # gives NOAA'\''s server time to recover between tries.
+              attempts="${ZYRA_RUN_ATTEMPTS:-4}"
               # Guard against a bad repo-variable value (0, empty, or
               # non-integer) — otherwise seq errors under set -e or the
               # loop runs zero times and never invokes zyra.
               if ! [[ "$attempts" =~ ^[1-9][0-9]*$ ]]; then
-                echo "::warning::ZYRA_RUN_ATTEMPTS=\"$attempts\" is not a positive integer; using 3"
-                attempts=3
+                echo "::warning::ZYRA_RUN_ATTEMPTS=\"$attempts\" is not a positive integer; using 4"
+                attempts=4
               fi
               ok=0
               for i in $(seq 1 "$attempts"); do
@@ -161,21 +191,50 @@ jobs:
                 if zyra run /work/pipeline.json; then ok=1; echo "::endgroup::"; break; fi
                 echo "::endgroup::"
                 if [ "$i" -lt "$attempts" ]; then
-                  echo "::warning::zyra run attempt $i/$attempts failed; retrying after $((i * 30))s"
-                  sleep $((i * 30))
+                  echo "::warning::zyra run attempt $i/$attempts failed; retrying after $((i * 45))s"
+                  sleep $((i * 45))
                 fi
               done
               if [ "$ok" -ne 1 ]; then
                 echo "::error::zyra run failed after $attempts attempt(s)"
                 exit 1
               fi
-            '
-          # Gate on what the pipeline DECLARES, not on which files are
-          # present. With the frame cache, restored frames almost always
-          # exist, so a "frames exist?" check would let a video pipeline
-          # whose compose-video silently failed slip through and publish
-          # stale frames. Decide by whether pipeline.json writes the MP4
-          # output path (mirrors WORKFLOW_OUTPUT_PATH / the validator).
+            ' 2>&1 | tee _work/zyra-run.log
+          ZYRA_RC=${PIPESTATUS[0]}
+
+          if [ "$ZYRA_RC" -ne 0 ]; then
+            # `zyra run` failed after all retries. Hand the captured log
+            # + the dataset's published-bundle state to the soft-pass
+            # phase: a transient acquire/FTP hiccup over a still-fresh
+            # bundle finishes GREEN (it posts a no-op `succeeded`);
+            # anything else exits non-zero and we fail the job so the
+            # `if: failure()` Report-failure step notifies.
+            echo "zyra run failed (rc=$ZYRA_RC) — evaluating acquire soft-pass"
+            SOFT_RC=0
+            npx tsx cli/zyra-publish-from-dispatch.ts \
+              --phase=acquire-softpass \
+              --workflow-id="$WORKFLOW_ID" \
+              --run-id="$RUN_ID" \
+              --gha-run-id="$GHA_RUN_ID" \
+              --workdir=_work \
+              --zyra-log=_work/zyra-run.log \
+              --stale-after-seconds="$ZYRA_STALE_AFTER_SECONDS" || SOFT_RC=$?
+            if [ "$SOFT_RC" -eq 0 ]; then
+              echo "::notice::Soft-passed a transient acquire failure — no new data this tick; the prior bundle is preserved and the run is marked succeeded."
+              echo "result=softpass" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "::error::zyra run failed and was not a soft-passable transient acquire failure"
+            exit 1
+          fi
+
+          # Success path: gate on what the pipeline DECLARES, not on
+          # which files are present. With the frame cache, restored
+          # frames almost always exist, so a "frames exist?" check would
+          # let a video pipeline whose compose-video silently failed slip
+          # through and publish stale frames. Decide by whether
+          # pipeline.json writes the MP4 output path (mirrors
+          # WORKFLOW_OUTPUT_PATH / the validator).
           if grep -q '/work/output/dataset.mp4' _work/pipeline.json; then
             if [[ ! -f _work/output/dataset.mp4 ]]; then
               echo "::error::pipeline declares MP4 output (WORKFLOW_OUTPUT_PATH) but /work/output/dataset.mp4 was not produced"
@@ -189,12 +248,16 @@ jobs:
             fi
             echo "pipeline produced a frame sequence — publishing via the image-sequence path"
           fi
+          echo "result=success" >> "$GITHUB_OUTPUT"
 
       # Push newly-acquired frames back to the cache and prune it to
       # the active window (since-period ÷ period-seconds). Same best-
       # effort posture as restore — failing to cache never fails a
       # run that already produced a video.
       - name: Save frame cache
+        # Skip on a soft-pass: acquire failed, so no new frames were
+        # fetched — there is nothing to push back to the cache.
+        if: steps.zyra.outputs.result == 'success'
         env:
           R2_S3_ENDPOINT: ${{ secrets.R2_S3_ENDPOINT }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
@@ -210,6 +273,8 @@ jobs:
       # ffprobe for the publish phase's SOS-spec preflight (Ubuntu
       # 22.04 ships ffmpeg 4.4 — same rationale as transcode-hls.yml).
       - name: Install ffmpeg
+        # Skip on a soft-pass: there is no new MP4 to preflight/publish.
+        if: steps.zyra.outputs.result == 'success'
         # apt on GitHub runners can hang for minutes when a package
         # mirror stalls or the boot-time apt-daily / unattended-upgrades
         # job holds the dpkg lock (observed: a 10-minute stall here).
@@ -227,6 +292,9 @@ jobs:
           ffmpeg -version | head -n1
 
       - name: Publish to TerraViz (succeeded callback)
+        # Skip on a soft-pass: the acquire-softpass phase already posted
+        # the no-op `succeeded`, and there is no new asset to publish.
+        if: steps.zyra.outputs.result == 'success'
         env:
           TERRAVIZ_SERVER: ${{ secrets.TERRAVIZ_SERVER }}
           TERRAVIZ_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
