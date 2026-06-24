@@ -644,6 +644,21 @@ describe('r2ObjectExists', () => {
     expect(flaky).toHaveBeenCalledTimes(2)
   })
 
+  it('falls back to the default attempts on a non-finite attempts (no infinite loop)', async () => {
+    // A NaN attempts (e.g. from a parsed env/flag) must not make
+    // `attempt >= attempts` never trip — retryBudget falls back to the
+    // default 4 attempts.
+    const err = vi.fn(async () => new Response(null, { status: 500 }))
+    await expect(
+      r2ObjectExists(CONFIG, 'videos/x/frames/sha256/a.png', {
+        fetchImpl: err as unknown as typeof fetch,
+        attempts: Number.NaN,
+        retryDelayMs: 0,
+      }),
+    ).rejects.toBeInstanceOf(R2UploadError)
+    expect(err).toHaveBeenCalledTimes(4) // default, not infinite
+  })
+
   it('does NOT retry a deterministic 4xx (403 fails fast — only 429/5xx are retried)', async () => {
     const forbidden = vi.fn(async () => new Response(null, { status: 403 }))
     await expect(

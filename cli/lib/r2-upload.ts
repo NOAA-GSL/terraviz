@@ -163,18 +163,27 @@ async function signedFetchWithRetry(
       continue
     }
     if (res.ok || !isRetryableR2Status(res.status) || attempt >= attempts) return res
+    // Drain the discarded retryable response before retrying — an
+    // unconsumed body pins the undici connection, defeating keep-alive
+    // and leaking sockets under a sustained retry loop.
+    await res.body?.cancel().catch(() => {})
     await r2Sleep(delayMs * 2 ** (attempt - 1))
   }
 }
 
-/** Resolve the per-request retry budget from caller options. */
+/** Resolve the per-request retry budget from caller options. Guards
+ *  non-finite inputs (a `NaN` from a parsed env/flag would make
+ *  `attempt >= attempts` never trip → an infinite retry loop) by
+ *  falling back to the defaults. */
 function retryBudget(options: { attempts?: number; retryDelayMs?: number }): {
   attempts: number
   delayMs: number
 } {
+  const a = Math.floor(options.attempts ?? DEFAULT_R2_ATTEMPTS)
+  const d = options.retryDelayMs ?? DEFAULT_R2_RETRY_DELAY_MS
   return {
-    attempts: Math.max(1, Math.floor(options.attempts ?? DEFAULT_R2_ATTEMPTS)),
-    delayMs: Math.max(0, options.retryDelayMs ?? DEFAULT_R2_RETRY_DELAY_MS),
+    attempts: Number.isFinite(a) ? Math.max(1, a) : DEFAULT_R2_ATTEMPTS,
+    delayMs: Number.isFinite(d) ? Math.max(0, d) : DEFAULT_R2_RETRY_DELAY_MS,
   }
 }
 

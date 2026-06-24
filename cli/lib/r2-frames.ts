@@ -27,7 +27,6 @@
  * video, so the runner phases log and continue rather than throw.
  */
 
-import { AwsClient } from 'aws4fetch'
 import { existsSync } from 'node:fs'
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -35,15 +34,11 @@ import {
   contentTypeForFile,
   deleteR2Object,
   getR2ObjectBytes,
-  parseListKeys,
+  listR2KeysPaginated,
   uploadR2Object,
   validateR2Config,
-  R2UploadError,
   type R2UploadConfig,
 } from './r2-upload'
-
-/** S3-API region R2 expects in the SigV4 signature (see r2-upload). */
-const R2_REGION = 'auto'
 
 /** Default parallelism for per-object transfers — matches the HLS
  *  bundle uploader's worker-pool size. */
@@ -127,15 +122,6 @@ export interface SaveOptions extends FrameSyncOptions {
   excludeNames?: Iterable<string>
 }
 
-function makeClient(config: R2UploadConfig): AwsClient {
-  return new AwsClient({
-    accessKeyId: config.accessKeyId,
-    secretAccessKey: config.secretAccessKey,
-    service: 's3',
-    region: R2_REGION,
-  })
-}
-
 /**
  * Run `fn` over `items` with bounded parallelism. Counters mutated
  * inside `fn` are safe — Node's event loop is single-threaded, so
@@ -162,59 +148,6 @@ async function runPool<T>(
     }
   }
   await Promise.all(Array.from({ length: width }, () => worker()))
-}
-
-/**
- * List every key under `prefix`, following ListObjectsV2
- * continuation tokens so a frame set larger than one S3 page (1000
- * objects) enumerates fully — the large frame sets this cache
- * exists for are exactly the ones that paginate.
- */
-async function listPrefixKeys(
-  config: R2UploadConfig,
-  client: AwsClient,
-  fetchImpl: typeof fetch,
-  prefix: string,
-): Promise<string[]> {
-  const keys: string[] = []
-  let token: string | undefined
-  do {
-    let listUrl =
-      `${config.endpoint}/${encodeURIComponent(config.bucket)}` +
-      `?list-type=2&prefix=${encodeURIComponent(prefix)}`
-    if (token) listUrl += `&continuation-token=${encodeURIComponent(token)}`
-    const signed = await client.sign(listUrl, { method: 'GET' })
-    let res: Response
-    try {
-      res = await fetchImpl(signed)
-    } catch (e) {
-      throw new R2UploadError(
-        null,
-        prefix,
-        `LIST ${prefix} unreachable: ${e instanceof Error ? e.message : String(e)}`,
-      )
-    }
-    if (!res.ok) {
-      const text = await res.text().catch(() => '')
-      throw new R2UploadError(
-        res.status,
-        prefix,
-        `LIST ${prefix} failed (${res.status}): ${text.slice(0, 200)}`,
-      )
-    }
-    const xml = await res.text()
-    for (const k of parseListKeys(xml)) keys.push(k)
-    token = nextContinuationToken(xml)
-  } while (token)
-  return keys
-}
-
-/** Pull the NextContinuationToken from a ListObjectsV2 body when it
- *  is truncated, else undefined. */
-function nextContinuationToken(xml: string): string | undefined {
-  if (!/<IsTruncated>\s*true\s*<\/IsTruncated>/i.test(xml)) return undefined
-  const m = /<NextContinuationToken>([^<]+)<\/NextContinuationToken>/.exec(xml)
-  return m ? m[1] : undefined
 }
 
 /** Map a cache key back to its bare frame filename, or null if the
@@ -246,10 +179,9 @@ export async function restoreFramesFromR2(
   validateR2Config(config)
   const fetchImpl = options.fetchImpl ?? fetch
   const log = options.log ?? (() => {})
-  const client = makeClient(config)
   const prefix = buildWorkflowFramesPrefix(datasetId)
 
-  const keys = await listPrefixKeys(config, client, fetchImpl, prefix)
+  const keys = await listR2KeysPaginated(config, prefix, { fetchImpl })
   await mkdir(framesDir, { recursive: true })
 
   // Resolve the set to download first (skipping frames already on
@@ -326,7 +258,6 @@ export async function saveFramesToR2(
   validateR2Config(config)
   const fetchImpl = options.fetchImpl ?? fetch
   const log = options.log ?? (() => {})
-  const client = makeClient(config)
   const prefix = buildWorkflowFramesPrefix(datasetId)
 
   let localNames: string[]
@@ -363,7 +294,7 @@ export async function saveFramesToR2(
   const desired = exclude.size > 0 ? kept.filter(n => !exclude.has(n)) : kept
   const desiredSet = new Set(desired)
 
-  const remoteKeys = await listPrefixKeys(config, client, fetchImpl, prefix)
+  const remoteKeys = await listR2KeysPaginated(config, prefix, { fetchImpl })
   const remoteByName = new Map<string, string>()
   for (const key of remoteKeys) {
     const name = frameNameFromKey(prefix, key)
