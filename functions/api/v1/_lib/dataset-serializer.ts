@@ -204,10 +204,15 @@ export type AssetRefResolver = (ref: string | null | undefined) => string | null
  * bindings; call sites close over what they have on hand. Returns
  * null when R2 public-base resolution falls through, mirroring
  * `AssetRefResolver`'s shape.
+ *
+ * The template now points at the `/frames/{index}` redirect endpoint
+ * (content-addressed frames can't be a direct-R2 `{index}` template),
+ * so the resolver takes the `datasetId` + node `baseUrl` it builds the
+ * redirect URL from — see `buildFramesRedirectTemplate`.
  */
 export type FramesUrlTemplateResolver = (
-  frameSourceFilenamesRef: string,
-  frameExtension: string,
+  datasetId: string,
+  baseUrl: string,
 ) => string | null
 
 function nonNull<T>(v: T | null | undefined): T | undefined {
@@ -415,10 +420,7 @@ export function serializeDataset(
     row.frame_source_filenames_ref != null &&
     resolveFramesUrlTemplate
   ) {
-    const urlTemplate = resolveFramesUrlTemplate(
-      row.frame_source_filenames_ref,
-      row.frame_extension,
-    )
+    const urlTemplate = resolveFramesUrlTemplate(row.id, identity.base_url)
     if (urlTemplate) {
       const frames: WireDatasetFrames = {
         count: row.frame_count,
