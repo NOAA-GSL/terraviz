@@ -138,11 +138,20 @@ jobs:
           RUN_ID: ${{ github.event.client_payload.run_id }}
           GHA_RUN_ID: ${{ github.run_id }}
         run: |
-          # NOTE: no `-e` — we capture the container's exit code and
-          # branch on it (success → gate; failure → acquire soft-pass
-          # decision) rather than letting a failed `zyra run` abort the
-          # step outright. A genuine failure still ends the job red via
-          # the explicit `exit 1` below.
+          # We capture the container's exit code and branch on it
+          # (success → gate; failure → acquire soft-pass decision) rather
+          # than letting a failed `zyra run` abort the step outright. A
+          # genuine failure still ends the job red via the explicit
+          # `exit 1` below.
+          #
+          # The default GitHub shell is `bash -eo pipefail {0}`, so
+          # errexit is ON unless we clear it — `set -uo pipefail` does
+          # NOT turn `-e` off. Without `set +e` the `docker run | tee`
+          # pipeline's non-zero exit kills the step before we ever reach
+          # the soft-pass branch (the bug that sent a real transient
+          # acquire failure straight to report-failure). Clear it
+          # explicitly; keep nounset + pipefail.
+          set +e
           set -uo pipefail
           IMAGE="${ZYRA_IMAGE:-$ZYRA_IMAGE_DEFAULT}"
           echo "runner image: $IMAGE"
