@@ -519,6 +519,14 @@ async function publishFrames(
   //    only the delta — a scheduled re-publish uploads the day's new
   //    frames, not the whole window.
   const r2 = frameCacheConfig()
+  // Capture the digests of the manifest the row advertises RIGHT NOW —
+  // before this run's transcode swaps it — as the GC grace set. This is
+  // the prior window the live `/frames` recall is still serving; reading
+  // it up front (rather than at GC time) makes the prune race-proof:
+  // even if the transcode completes during the publish wait below, the
+  // prior frames are already pinned for a one-run grace window.
+  const priorDigests = r2 ? await fetchAdvertisedFrameDigests(client, r2, datasetId) : []
+
   let uploadId: string
   let currentDigests: string[] = []
   try {
@@ -541,65 +549,70 @@ async function publishFrames(
   const code = await waitAndReportSucceeded(client, args, datasetId, uploadId)
 
   // 4. GC the content-addressed frame store (best-effort — never
-  //    changes the run's outcome). Only after a successful publish, and
-  //    only when R2 creds are wired.
+  //    changes the run's outcome). Keep this run's frames ∪ the prior
+  //    window captured above (the one-run grace window).
   if (code === 0 && r2) {
-    await gcFrameStore(client, r2, datasetId, currentDigests)
+    await gcFrameStore(r2, datasetId, [...currentDigests, ...priorDigests])
   }
   return code
 }
 
 /**
- * Mark-and-sweep the shared content-addressed frame store
- * (`docs/INCREMENTAL_FRAME_UPLOAD_PLAN.md` §GC). Keep every frame
- * referenced by THIS run's manifest (`currentDigests`) plus every frame
- * referenced by whatever manifest the dataset row currently advertises
- * (`frame_source_filenames_ref`) — the latter is the bundle `/frames`
- * recall is serving right now, so its frames must survive until the new
- * transcode swaps it in. Deleting the rest reclaims frames that slid
- * off the window. Safe in both orderings: if the transcode already
- * completed, the advertised manifest IS the current one and the prior
- * window's frames are pruned; if it's still running, both are kept.
+ * Read the digests of whatever frame manifest the dataset row currently
+ * advertises (`frame_source_filenames_ref`). Called at publish start so
+ * the value is the PRIOR window (the bundle `/frames` recall is serving
+ * before this run's transcode swaps it in) — the grace set the frame GC
+ * must keep so an in-flight reader on the prior manifest doesn't lose
+ * frames mid-enumeration.
  *
- * Fully best-effort: any failure logs and returns without affecting the
- * run, exactly like `pruneSegments` in the HLS path.
+ * Best-effort: returns [] (no grace contribution) on any miss — a
+ * missing row, no prior frames, an unreadable or unparseable manifest.
+ * This run's own digests still protect the just-published frames.
  */
-async function gcFrameStore(
+async function fetchAdvertisedFrameDigests(
   client: TerravizClient,
   r2: R2UploadConfig,
   datasetId: string,
-  currentDigests: string[],
-): Promise<void> {
+): Promise<string[]> {
   try {
-    const keep = [...currentDigests]
-    // Add the currently-advertised manifest's digests (the grace set).
     const row = await client.get<DatasetEnvelope>(datasetId)
     const ref = row.ok ? row.body.dataset.frame_source_filenames_ref : null
-    if (ref) {
-      const manifestKey = ref.startsWith('r2:') ? ref.slice('r2:'.length) : ref
-      const blob = await getR2ObjectText(r2, manifestKey)
-      if (blob) {
-        try {
-          const entries = JSON.parse(blob) as Array<{ digest?: unknown }>
-          for (const e of entries) {
-            if (typeof e.digest === 'string') keep.push(e.digest)
-          }
-        } catch {
-          // Unparseable advertised manifest — skip the grace set rather
-          // than risk under-keeping; current digests still protect the
-          // just-published frames.
-          log('WARN: frame GC — advertised manifest unparseable; keeping current digests only')
-        }
-      }
-    }
+    if (!ref) return []
+    const manifestKey = ref.startsWith('r2:') ? ref.slice('r2:'.length) : ref
+    const blob = await getR2ObjectText(r2, manifestKey)
+    if (!blob) return []
+    const entries = JSON.parse(blob) as Array<{ digest?: unknown }>
+    return entries
+      .filter((e): e is { digest: string } => typeof e.digest === 'string')
+      .map(e => e.digest)
+  } catch (err) {
+    log(`WARN: frame GC — could not read the prior manifest for the grace set (${err instanceof Error ? err.message : String(err)})`)
+    return []
+  }
+}
 
+/**
+ * Mark-and-sweep the shared content-addressed frame store
+ * (`docs/INCREMENTAL_FRAME_UPLOAD_PLAN.md` §GC). `keepDigests` is this
+ * run's frames ∪ the prior window captured at publish start, so every
+ * frame either the new bundle or the still-serving prior bundle
+ * references survives; the rest (frames that slid off ≥2 windows ago)
+ * is reclaimed. Fully best-effort: any failure logs and returns without
+ * affecting the run, exactly like `pruneSegments` in the HLS path.
+ */
+async function gcFrameStore(
+  r2: R2UploadConfig,
+  datasetId: string,
+  keepDigests: string[],
+): Promise<void> {
+  try {
     const keys = await listR2KeysPaginated(r2, frameStorePrefix(datasetId))
     const hexToKey = new Map<string, string>()
     for (const k of keys) {
       const hex = frameHexFromKey(k)
       if (hex) hexToKey.set(hex, k)
     }
-    const orphanHexes = selectFrameOrphans([...hexToKey.keys()], keep)
+    const orphanHexes = selectFrameOrphans([...hexToKey.keys()], keepDigests)
     if (orphanHexes.length === 0) {
       log(`frame GC: nothing to prune (${hexToKey.size} frame(s) all referenced)`)
       return

@@ -132,11 +132,15 @@ the front is no longer in any manifest). GC after a successful publish:
 
 1. List `videos/{dataset}/frames/sha256/`.
 2. Keep = digests in the **current** upload's `source_filenames.json` ∪
-   the **previous** upload's (grace window for in-flight readers on the
-   prior bundle).
+   the **previous** upload's. The previous set is read **at publish
+   start** (`fetchAdvertisedFrameDigests`), before this run's transcode
+   can swap the advertised manifest — so the grace window for in-flight
+   readers on the prior bundle is race-proof, not dependent on the
+   transcode-vs-GC timing.
 3. Delete the rest. Best-effort, logged, never fails the run.
 
-Mirrors `pruneSegments` in `cli/lib/hls-incremental-runner.ts`.
+Mirrors `pruneSegments` in `cli/lib/hls-incremental-runner.ts` (same
+one-run grace window).
 
 ## Safety / migration
 
