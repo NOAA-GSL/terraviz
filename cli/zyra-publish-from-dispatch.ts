@@ -26,6 +26,14 @@
  *                    error summary. The workflow calls this from an
  *                    `if: failure()` step so any broken step still
  *                    lands a terminal status in `workflow_runs`.
+ *   --phase=acquire-softpass
+ *                    After `zyra run` failed: decide whether it was a
+ *                    transient NOAA-FTP `acquire` hiccup over a still-
+ *                    fresh published bundle. If so, POST a no-op
+ *                    `succeeded` (the run lands GREEN, no false-
+ *                    positive notification); otherwise exit non-zero
+ *                    and let the `if: failure()` step report `failed`.
+ *                    See `cli/lib/zyra-acquire-softpass.ts`.
  *
  * Environment (same resolution as every `terraviz` command — see
  * `cli/lib/config.ts`): TERRAVIZ_SERVER,
@@ -67,11 +75,33 @@ import {
   windowFrameBudget,
 } from './lib/r2-frames'
 import { publishFrameSequence } from './lib/frames-publish'
+import {
+  assessBundleFreshness,
+  classifyZyraFailure,
+  decideAcquireSoftPass,
+} from './lib/zyra-acquire-softpass'
 import { WORKFLOW_OUTPUT_PATH } from '../src/types/zyra-workflow-constants'
 
 const ULID_RE = /^[0-9A-HJKMNP-TV-Z]{26}$/
 
-export type Phase = 'fetch' | 'publish' | 'report-failure' | 'restore-frames' | 'save-frames'
+/** Default staleness threshold for the acquire soft-pass (2 days):
+ *  how long the published bundle's trailing edge may fall behind real
+ *  time before a transient acquire failure escalates instead of
+ *  soft-passing. Overridable per node via the workflow's
+ *  ZYRA_STALE_AFTER_SECONDS repo variable. */
+const DEFAULT_STALE_AFTER_SECONDS = 172_800
+/** Upper bound on --stale-after-seconds (30 days) — a guard against a
+ *  fat-fingered repo variable that would let an indefinite outage
+ *  soft-pass forever. */
+const MAX_STALE_AFTER_SECONDS = 2_592_000
+
+export type Phase =
+  | 'fetch'
+  | 'publish'
+  | 'report-failure'
+  | 'acquire-softpass'
+  | 'restore-frames'
+  | 'save-frames'
 
 export interface Args {
   phase: Phase
@@ -83,6 +113,11 @@ export interface Args {
   waitSeconds: number
   errorSummary: string
   ffprobeBin: string
+  /** Path to the captured `zyra run` combined output — the
+   *  acquire-softpass classifier's input. */
+  zyraLog: string | null
+  /** Staleness threshold (seconds) for the acquire soft-pass. */
+  staleAfterSeconds: number
 }
 
 export function parseArgs(argv: readonly string[]): Args | { error: string } {
@@ -97,11 +132,12 @@ export function parseArgs(argv: readonly string[]): Args | { error: string } {
     phase !== 'fetch' &&
     phase !== 'publish' &&
     phase !== 'report-failure' &&
+    phase !== 'acquire-softpass' &&
     phase !== 'restore-frames' &&
     phase !== 'save-frames'
   ) {
     return {
-      error: `--phase must be fetch, publish, report-failure, restore-frames, or save-frames; got ${phase ?? '(missing)'}`,
+      error: `--phase must be fetch, publish, report-failure, acquire-softpass, restore-frames, or save-frames; got ${phase ?? '(missing)'}`,
     }
   }
   const workflowId = get('workflow-id')
@@ -118,6 +154,17 @@ export function parseArgs(argv: readonly string[]): Args | { error: string } {
   if (!Number.isInteger(waitSeconds) || waitSeconds < 0 || waitSeconds > 21_600) {
     return { error: `--wait-seconds must be an integer 0..21600; got ${waitRaw}` }
   }
+  const staleRaw = get('stale-after-seconds')
+  const staleAfterSeconds = staleRaw === null ? DEFAULT_STALE_AFTER_SECONDS : Number(staleRaw)
+  if (
+    !Number.isInteger(staleAfterSeconds) ||
+    staleAfterSeconds < 0 ||
+    staleAfterSeconds > MAX_STALE_AFTER_SECONDS
+  ) {
+    return {
+      error: `--stale-after-seconds must be an integer 0..${MAX_STALE_AFTER_SECONDS}; got ${staleRaw}`,
+    }
+  }
   return {
     phase,
     workflowId,
@@ -128,6 +175,8 @@ export function parseArgs(argv: readonly string[]): Args | { error: string } {
     waitSeconds,
     errorSummary: get('error-summary') ?? 'Workflow run failed (no detail provided).',
     ffprobeBin: get('ffprobe-bin') ?? 'ffprobe',
+    zyraLog: get('zyra-log'),
+    staleAfterSeconds,
   }
 }
 
@@ -143,7 +192,12 @@ interface WorkflowEnvelope {
 }
 
 interface DatasetEnvelope {
-  dataset: { id: string; data_ref?: string | null; transcoding?: number | null }
+  dataset: {
+    id: string
+    data_ref?: string | null
+    transcoding?: number | null
+    end_time?: string | null
+  }
 }
 
 interface AssetInitResponse {
@@ -661,6 +715,104 @@ async function phaseReportFailure(client: TerravizClient, args: Args): Promise<n
   return 0
 }
 
+/** Read the target dataset id the fetch phase stored in
+ *  workflow.json. Returns null (not an error) when the file is absent
+ *  or malformed — the soft-pass then can't confirm a published bundle
+ *  and escalates. */
+async function readTargetDatasetId(workdir: string): Promise<string | null> {
+  try {
+    const wf = JSON.parse(await readFile(join(workdir, 'workflow.json'), 'utf-8')) as {
+      target_dataset_id?: unknown
+    }
+    return typeof wf.target_dataset_id === 'string' ? wf.target_dataset_id : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * acquire-softpass: the workflow calls this after `zyra run` has
+ * failed (and exhausted its retries) to decide whether the failure is
+ * a soft-passable transient NOAA-FTP `acquire` hiccup. See
+ * `cli/lib/zyra-acquire-softpass.ts` for the decision logic.
+ *
+ *   - Soft-pass (transient acquire failure + fresh published bundle):
+ *     POST a no-op `succeeded` and exit 0, so the run finishes GREEN
+ *     with no false-positive failure notification. The workflow gates
+ *     its publish steps off this outcome (no new data was produced).
+ *   - Escalate (anything else — a non-acquire failure, a
+ *     never-published dataset, or a stale bundle = sustained outage):
+ *     exit non-zero WITHOUT posting, so the workflow's `if: failure()`
+ *     step posts `failed` and the operator is notified.
+ */
+async function phaseAcquireSoftpass(client: TerravizClient, args: Args): Promise<number> {
+  // 1. Classify the captured `zyra run` output.
+  let logText = ''
+  if (args.zyraLog) {
+    try {
+      logText = await readFile(args.zyraLog, 'utf-8')
+    } catch (err) {
+      log(
+        `WARN: cannot read zyra log ${args.zyraLog} — cannot confirm an acquire failure (${err instanceof Error ? err.message : String(err)})`,
+      )
+    }
+  } else {
+    log('WARN: no --zyra-log provided — cannot confirm an acquire failure')
+  }
+  const classification = classifyZyraFailure(logText)
+
+  // 2. Resolve the dataset's published-bundle state for the freshness
+  //    check.
+  const datasetId = await readTargetDatasetId(args.workdir)
+  let dataRef: string | null | undefined
+  let endTime: string | null | undefined
+  if (datasetId) {
+    const row = await client.get<DatasetEnvelope>(datasetId)
+    if (row.ok) {
+      dataRef = row.body.dataset.data_ref
+      endTime = row.body.dataset.end_time
+    } else {
+      log(`WARN: dataset GET → ${row.status} ${row.error} — treating as unpublished (will escalate)`)
+    }
+  } else {
+    log('WARN: no target_dataset_id in workflow.json — treating as unpublished (will escalate)')
+  }
+
+  const freshness = assessBundleFreshness({
+    dataRef,
+    endTime,
+    nowMs: Date.now(),
+    staleAfterSeconds: args.staleAfterSeconds,
+  })
+  const decision = decideAcquireSoftPass({ classification, freshness })
+  log(decision.reason)
+
+  if (!decision.softPass) {
+    // Escalate: leave the `failed` callback to the workflow's
+    // if: failure() step. Non-zero exit fails the job.
+    log(`run ${args.runId} NOT soft-passed — failing the job`)
+    return 2
+  }
+
+  // Soft-pass: land a terminal `succeeded` (no upload_id — nothing was
+  // published this tick).
+  const status = await client.postWorkflowRunStatus(args.workflowId, args.runId, {
+    status: 'succeeded',
+    gha_run_id: args.ghaRunId,
+  })
+  if (!status.ok) {
+    // A 409 means the run already reached a terminal status — fine.
+    if (status.status === 409) {
+      log('soft-pass callback skipped — run already terminal')
+      return 0
+    }
+    log(`FAIL: soft-pass succeeded callback → ${status.status} ${status.error}`)
+    return 2
+  }
+  log(`run ${args.runId} soft-passed (no new data this tick; prior bundle preserved)`)
+  return 0
+}
+
 async function main(): Promise<number> {
   const parsed = parseArgs(process.argv.slice(2))
   if ('error' in parsed) {
@@ -682,6 +834,8 @@ async function main(): Promise<number> {
         return await phasePublish(client, parsed)
       case 'report-failure':
         return await phaseReportFailure(client, parsed)
+      case 'acquire-softpass':
+        return await phaseAcquireSoftpass(client, parsed)
     }
   } catch (err) {
     console.error(`error: ${err instanceof Error ? err.message : String(err)}`)
