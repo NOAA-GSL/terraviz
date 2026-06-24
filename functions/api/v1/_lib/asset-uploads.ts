@@ -514,7 +514,13 @@ export const FRAME_VERIFY_SAMPLE_SIZE = 16
  */
 export function sampleFrameIndices(count: number, max: number = FRAME_VERIFY_SAMPLE_SIZE): number[] {
   if (count <= 0) return []
-  const n = Math.min(count, Math.max(1, Math.floor(max)))
+  if (count === 1) return [0]
+  // n in [2, count]: at least 2 so the spread always covers BOTH the
+  // first and last frame and `(n - 1)` is never zero (a `max` that
+  // floors/clamps to 1, or a non-finite `max`, would otherwise divide
+  // by zero → NaN indices). Non-finite `max` falls back to the default.
+  const m = Number.isFinite(max) ? Math.floor(max) : FRAME_VERIFY_SAMPLE_SIZE
+  const n = Math.min(count, Math.max(2, m))
   if (count <= n) return Array.from({ length: count }, (_, i) => i)
   const indices = new Set<number>()
   for (let i = 0; i < n; i++) {

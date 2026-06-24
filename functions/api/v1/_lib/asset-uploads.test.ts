@@ -226,6 +226,22 @@ describe('sampleFrameIndices', () => {
     expect(sampleFrameIndices(10_000)[0]).toBe(0)
     expect(sampleFrameIndices(10_000).at(-1)).toBe(9999)
   })
+
+  it('never yields NaN on a degenerate max — clamps to first+last, not a div-by-zero', () => {
+    // max floors/clamps to 1 (or below) with count > 1 would divide by
+    // (n-1)=0 → NaN without the >=2 clamp.
+    for (const m of [1, 0, -5]) {
+      expect(sampleFrameIndices(5, m)).toEqual([0, 4])
+    }
+    // count === 1 is the single-frame special case.
+    expect(sampleFrameIndices(1, 1)).toEqual([0])
+    // A non-finite max falls back to the default rather than NaN/[].
+    const s = sampleFrameIndices(100, Number.NaN)
+    expect(s.length).toBeGreaterThan(0)
+    expect(s.every(i => Number.isInteger(i))).toBe(true)
+    expect(s[0]).toBe(0)
+    expect(s.at(-1)).toBe(99)
+  })
 })
 
 describe('validateImageSequenceInit', () => {
