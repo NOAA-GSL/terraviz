@@ -555,11 +555,17 @@ async function handleImageSequenceInit(
       headers: presigned.headers,
       key: presigned.key,
     }))
-    // Source-filenames blob — short-TTL because the publisher
-    // builds + PUTs it in seconds, not minutes.
+    // Source-filenames blob — same video-tier TTL as the frames.
+    // The GHA runner PUTs this manifest *after* uploading every frame,
+    // so on a multi-GB cold upload (a first content-addressed run can
+    // push the whole window, ~18 min) the default short TTL would have
+    // already expired, 403-ing the manifest PUT with `ExpiredRequest`.
+    // The manifest is part of the same long upload, so its URL must
+    // live as long as the frame URLs.
     const fnKey = buildFrameSourceFilenamesKey(id, uploadId)
     const fnPresigned = await presignPut(context.env, fnKey, {
       contentType: 'application/json',
+      ttlSeconds: R2_PUT_TTL_VIDEO_SECONDS,
     })
     sourceFilenamesMint = {
       method: fnPresigned.method,

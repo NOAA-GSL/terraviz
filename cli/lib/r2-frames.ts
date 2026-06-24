@@ -27,23 +27,18 @@
  * video, so the runner phases log and continue rather than throw.
  */
 
-import { AwsClient } from 'aws4fetch'
 import { existsSync } from 'node:fs'
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import {
-  buildObjectUrl,
   contentTypeForFile,
   deleteR2Object,
-  parseListKeys,
+  getR2ObjectBytes,
+  listR2KeysPaginated,
   uploadR2Object,
   validateR2Config,
-  R2UploadError,
   type R2UploadConfig,
 } from './r2-upload'
-
-/** S3-API region R2 expects in the SigV4 signature (see r2-upload). */
-const R2_REGION = 'auto'
 
 /** Default parallelism for per-object transfers — matches the HLS
  *  bundle uploader's worker-pool size. */
@@ -127,15 +122,6 @@ export interface SaveOptions extends FrameSyncOptions {
   excludeNames?: Iterable<string>
 }
 
-function makeClient(config: R2UploadConfig): AwsClient {
-  return new AwsClient({
-    accessKeyId: config.accessKeyId,
-    secretAccessKey: config.secretAccessKey,
-    service: 's3',
-    region: R2_REGION,
-  })
-}
-
 /**
  * Run `fn` over `items` with bounded parallelism. Counters mutated
  * inside `fn` are safe — Node's event loop is single-threaded, so
@@ -162,59 +148,6 @@ async function runPool<T>(
     }
   }
   await Promise.all(Array.from({ length: width }, () => worker()))
-}
-
-/**
- * List every key under `prefix`, following ListObjectsV2
- * continuation tokens so a frame set larger than one S3 page (1000
- * objects) enumerates fully — the large frame sets this cache
- * exists for are exactly the ones that paginate.
- */
-async function listPrefixKeys(
-  config: R2UploadConfig,
-  client: AwsClient,
-  fetchImpl: typeof fetch,
-  prefix: string,
-): Promise<string[]> {
-  const keys: string[] = []
-  let token: string | undefined
-  do {
-    let listUrl =
-      `${config.endpoint}/${encodeURIComponent(config.bucket)}` +
-      `?list-type=2&prefix=${encodeURIComponent(prefix)}`
-    if (token) listUrl += `&continuation-token=${encodeURIComponent(token)}`
-    const signed = await client.sign(listUrl, { method: 'GET' })
-    let res: Response
-    try {
-      res = await fetchImpl(signed)
-    } catch (e) {
-      throw new R2UploadError(
-        null,
-        prefix,
-        `LIST ${prefix} unreachable: ${e instanceof Error ? e.message : String(e)}`,
-      )
-    }
-    if (!res.ok) {
-      const text = await res.text().catch(() => '')
-      throw new R2UploadError(
-        res.status,
-        prefix,
-        `LIST ${prefix} failed (${res.status}): ${text.slice(0, 200)}`,
-      )
-    }
-    const xml = await res.text()
-    for (const k of parseListKeys(xml)) keys.push(k)
-    token = nextContinuationToken(xml)
-  } while (token)
-  return keys
-}
-
-/** Pull the NextContinuationToken from a ListObjectsV2 body when it
- *  is truncated, else undefined. */
-function nextContinuationToken(xml: string): string | undefined {
-  if (!/<IsTruncated>\s*true\s*<\/IsTruncated>/i.test(xml)) return undefined
-  const m = /<NextContinuationToken>([^<]+)<\/NextContinuationToken>/.exec(xml)
-  return m ? m[1] : undefined
 }
 
 /** Map a cache key back to its bare frame filename, or null if the
@@ -246,10 +179,9 @@ export async function restoreFramesFromR2(
   validateR2Config(config)
   const fetchImpl = options.fetchImpl ?? fetch
   const log = options.log ?? (() => {})
-  const client = makeClient(config)
   const prefix = buildWorkflowFramesPrefix(datasetId)
 
-  const keys = await listPrefixKeys(config, client, fetchImpl, prefix)
+  const keys = await listR2KeysPaginated(config, prefix, { fetchImpl })
   await mkdir(framesDir, { recursive: true })
 
   // Resolve the set to download first (skipping frames already on
@@ -269,27 +201,33 @@ export async function restoreFramesFromR2(
   }
 
   let restored = 0
+  let failed = 0
   await runPool(toFetch, options.concurrency ?? DEFAULT_CONCURRENCY, async ({ key, dest }) => {
-    const signed = await client.sign(buildObjectUrl(config, key), { method: 'GET' })
-    let res: Response
+    // Per-frame non-fatal: `getR2ObjectBytes` already retries the
+    // transient R2 throttles (429 "reduce simultaneous reads" / 5xx),
+    // and a frame that still fails must NOT abort the rest of the
+    // restore — the uncached frames simply get re-fetched from source.
+    // (A whole-pool abort on the first blip means a large NOAA re-fetch,
+    // which is exactly the FTP load we want to avoid.)
     try {
-      res = await fetchImpl(signed)
-    } catch (e) {
-      throw new R2UploadError(
-        null,
-        key,
-        `GET ${key} unreachable: ${e instanceof Error ? e.message : String(e)}`,
-      )
+      const bytes = await getR2ObjectBytes(config, key, { fetchImpl })
+      if (bytes === null) {
+        failed++
+        return
+      }
+      await writeFile(dest, bytes)
+      restored++
+    } catch (err) {
+      failed++
+      log(`WARN: cache restore ${key} failed (continuing) — ${err instanceof Error ? err.message : String(err)}`)
     }
-    if (!res.ok) {
-      const text = await res.text().catch(() => '')
-      throw new R2UploadError(res.status, key, `GET ${key} failed (${res.status}): ${text.slice(0, 200)}`)
-    }
-    await writeFile(dest, new Uint8Array(await res.arrayBuffer()))
-    restored++
   })
 
-  log(`restore: ${restored} restored, ${skipped} already present (${keys.length} in cache)`)
+  log(
+    `restore: ${restored} restored, ${skipped} already present` +
+      (failed > 0 ? `, ${failed} failed (will re-fetch from source)` : '') +
+      ` (${keys.length} in cache)`,
+  )
   return { restored, skipped }
 }
 
@@ -320,7 +258,6 @@ export async function saveFramesToR2(
   validateR2Config(config)
   const fetchImpl = options.fetchImpl ?? fetch
   const log = options.log ?? (() => {})
-  const client = makeClient(config)
   const prefix = buildWorkflowFramesPrefix(datasetId)
 
   let localNames: string[]
@@ -357,7 +294,7 @@ export async function saveFramesToR2(
   const desired = exclude.size > 0 ? kept.filter(n => !exclude.has(n)) : kept
   const desiredSet = new Set(desired)
 
-  const remoteKeys = await listPrefixKeys(config, client, fetchImpl, prefix)
+  const remoteKeys = await listR2KeysPaginated(config, prefix, { fetchImpl })
   const remoteByName = new Map<string, string>()
   for (const key of remoteKeys) {
     const name = frameNameFromKey(prefix, key)
@@ -369,24 +306,44 @@ export async function saveFramesToR2(
   // frames for a 10-minute product), so serial PUTs were the
   // 20-minutes-plus save bottleneck.
   const concurrency = options.concurrency ?? DEFAULT_CONCURRENCY
+  // Per-frame non-fatal everywhere below: `uploadR2Object` /
+  // `deleteR2Object` already retry the transient R2 errors (sporadic
+  // 500 InternalError / 429), and one frame that still fails must not
+  // abort the rest of the save — caching is best-effort, and a dropped
+  // upload just means next run re-fetches that frame from source.
   const toUpload = desired.filter(name => !remoteByName.has(name))
+  let uploaded = 0
+  let saveFailed = 0
   await runPool(toUpload, concurrency, async name => {
-    const body = new Uint8Array(await readFile(join(framesDir, name)))
-    await uploadR2Object(config, prefix + name, body, contentTypeForFile(name), { fetchImpl })
+    try {
+      const body = new Uint8Array(await readFile(join(framesDir, name)))
+      await uploadR2Object(config, prefix + name, body, contentTypeForFile(name), { fetchImpl })
+      uploaded++
+    } catch (err) {
+      saveFailed++
+      log(`WARN: cache save ${name} failed (continuing) — ${err instanceof Error ? err.message : String(err)}`)
+    }
   })
-  const uploaded = toUpload.length
 
   // Prune everything not in the desired set — frames that aged out
   // of the window, frames whose local file is gone, and any stale
   // synthetic copy a prior run cached.
   const toPrune = [...remoteByName.entries()].filter(([name]) => !desiredSet.has(name))
+  let pruned = 0
   await runPool(toPrune, concurrency, async ([, key]) => {
-    await deleteR2Object(config, key, { fetchImpl })
+    try {
+      await deleteR2Object(config, key, { fetchImpl })
+      pruned++
+    } catch (err) {
+      log(`WARN: cache prune ${key} failed (continuing) — ${err instanceof Error ? err.message : String(err)}`)
+    }
   })
-  const pruned = toPrune.length
 
-  log(`save: ${uploaded} uploaded, ${pruned} pruned, ${desired.length} kept in cache` +
-    (exclude.size > 0 ? ` (${exclude.size} synthetic excluded)` : ''))
+  log(
+    `save: ${uploaded} uploaded${saveFailed > 0 ? `, ${saveFailed} failed` : ''}, ${pruned} pruned, ` +
+      `${desired.length} kept in cache` +
+      (exclude.size > 0 ? ` (${exclude.size} synthetic excluded)` : ''),
+  )
   return { uploaded, pruned, kept: desired.length }
 }
 

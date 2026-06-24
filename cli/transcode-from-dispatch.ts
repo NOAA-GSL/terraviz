@@ -94,9 +94,10 @@ import { AwsClient } from 'aws4fetch'
 import { DEFAULT_RENDITIONS, encodeHls, OUTPUT_FRAME_RATE } from './lib/ffmpeg-hls'
 import { MAX_IMAGE_SEQUENCE_FRAMES } from '../src/types/image-sequence-constants'
 import {
-  buildObjectUrl,
   deleteR2Object,
-  parseListKeys,
+  getR2ObjectText,
+  listR2KeysPaginated,
+  r2ObjectExists,
   uploadHlsBundle,
   uploadR2Object,
   loadR2ConfigFromEnv,
@@ -792,36 +793,16 @@ function parseMasterCodecs(masterText: string): Record<string, string> | undefin
   return Object.keys(codecs).length > 0 ? codecs : undefined
 }
 
-/** New `AwsClient` for an ad-hoc R2 request (GET/HEAD/LIST). The
- *  helpers in `r2-upload.ts` build their own; these few one-offs
- *  outside the bundle uploader's surface build theirs here. */
-function r2Client(config: R2UploadConfig): AwsClient {
-  return new AwsClient({
-    accessKeyId: config.accessKeyId,
-    secretAccessKey: config.secretAccessKey,
-    service: 's3',
-    region: R2_REGION,
-  })
-}
-
-/** HEAD an R2 object — true when present, false on 404. */
-async function r2ObjectExists(config: R2UploadConfig, key: string): Promise<boolean> {
-  const res = await r2Client(config).fetch(buildObjectUrl(config, key), { method: 'HEAD' })
-  if (res.status === 404) return false
-  if (res.ok) return true
-  throw new Error(`R2 HEAD ${key} returned ${res.status}`)
-}
-
 /** GET + parse the prior segment manifest, or null on 404 (cold
- *  start). */
+ *  start). Uses the shared retrying `getR2ObjectText`, so a transient
+ *  R2 blip on the manifest read doesn't needlessly drop the run to a
+ *  full re-encode. */
 async function loadSegmentManifest(
   config: R2UploadConfig,
   key: string,
 ): Promise<SegmentManifest | null> {
-  const res = await r2Client(config).fetch(buildObjectUrl(config, key), { method: 'GET' })
-  if (res.status === 404) return null
-  if (!res.ok) throw new Error(`R2 GET ${key} returned ${res.status}`)
-  const text = await res.text()
+  const text = await getR2ObjectText(config, key)
+  if (text === null) return null
   try {
     return JSON.parse(text) as SegmentManifest
   } catch (err) {
@@ -832,32 +813,16 @@ async function loadSegmentManifest(
 }
 
 /**
- * List the shared segment store's hexes via paginated ListObjectsV2.
- * Keys look like `videos/{ds}/segments/sha256/{hex}.ts`; strip the
- * prefix + `.ts` to recover the hex. Used by GC to find orphans.
+ * List the shared segment store's hexes via the shared paginated
+ * `listR2KeysPaginated`. Keys look like
+ * `videos/{ds}/segments/sha256/{hex}.ts`; strip the prefix + `.ts` to
+ * recover the hex. Used by GC to find orphans.
  */
 async function listSegmentHexesR2(config: R2UploadConfig, prefix: string): Promise<string[]> {
-  const client = r2Client(config)
-  const hexes: string[] = []
-  let token: string | undefined
-  do {
-    let url =
-      `${config.endpoint}/${encodeURIComponent(config.bucket)}` +
-      `?list-type=2&prefix=${encodeURIComponent(prefix)}`
-    if (token) url += `&continuation-token=${encodeURIComponent(token)}`
-    const res = await client.fetch(url, { method: 'GET' })
-    if (!res.ok) throw new Error(`R2 LIST ${prefix} returned ${res.status}`)
-    const xml = await res.text()
-    for (const key of parseListKeys(xml)) {
-      if (key.startsWith(prefix) && key.endsWith('.ts')) {
-        hexes.push(key.slice(prefix.length, -'.ts'.length))
-      }
-    }
-    token = /<IsTruncated>\s*true\s*<\/IsTruncated>/i.test(xml)
-      ? /<NextContinuationToken>([^<]+)<\/NextContinuationToken>/.exec(xml)?.[1]
-      : undefined
-  } while (token)
-  return hexes
+  const keys = await listR2KeysPaginated(config, prefix)
+  return keys
+    .filter(key => key.startsWith(prefix) && key.endsWith('.ts'))
+    .map(key => key.slice(prefix.length, -'.ts'.length))
 }
 
 /**
