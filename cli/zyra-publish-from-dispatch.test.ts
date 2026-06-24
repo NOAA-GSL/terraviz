@@ -46,6 +46,26 @@ describe('parseArgs', () => {
       ).toMatchObject({ phase, workdir: '_work' })
     }
   })
+
+  it('accepts the acquire-softpass phase with a default staleness threshold', () => {
+    expect(
+      parseArgs([
+        `--phase=acquire-softpass`,
+        `--workflow-id=${ULID}`,
+        `--run-id=${ULID}`,
+        `--zyra-log=_work/zyra-run.log`,
+      ]),
+    ).toMatchObject({ phase: 'acquire-softpass', zyraLog: '_work/zyra-run.log', staleAfterSeconds: 172_800 })
+  })
+
+  it('bounds --stale-after-seconds', () => {
+    expect(
+      parseArgs([`--phase=acquire-softpass`, `--workflow-id=${ULID}`, `--run-id=${ULID}`, `--stale-after-seconds=99999999`]),
+    ).toHaveProperty('error')
+    expect(
+      parseArgs([`--phase=acquire-softpass`, `--workflow-id=${ULID}`, `--run-id=${ULID}`, `--stale-after-seconds=3600`]),
+    ).toMatchObject({ staleAfterSeconds: 3600 })
+  })
 })
 
 describe('expectedOutputKind', () => {

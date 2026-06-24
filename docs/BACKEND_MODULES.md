@@ -41,6 +41,7 @@ design rationale in the `docs/CATALOG_*` plan docs.
 | `cli/lib/verify-checks.ts` | Production-deploy verification checks for `terraviz verify-deploy` |
 | `cli/lib/vimeo-source.ts` | Resolve a `vimeo:<id>` reference to a source MP4 download URL |
 | `cli/lib/workflow-sidecar.ts` | Metadata-sidecar rendering for the Zyra runner — template interpolation, frames-meta range reader, error-summary sanitizer |
+| `cli/lib/zyra-acquire-softpass.ts` | Pure soft-pass decision for a transient NOAA-FTP `acquire` failure in a scheduled Zyra run — classify the `zyra run` log (FTP/network transient vs real failure), assess published-bundle freshness, and decide soft-pass (no-op `succeeded`, GREEN) vs escalate (fail loudly). Consumed by `zyra-publish-from-dispatch.ts --phase=acquire-softpass` |
 | `cli/list-realtime-r2.ts` | `terraviz list-realtime-r2` — find migrated rows whose Vimeo source is on a daily re-upload cadence, and recover the original Vimeo id so they can be rolled back |
 | `cli/migrate-r2-assets.ts` | `terraviz migrate-r2-assets` — migrate auxiliary asset URLs (thumbnail / legend / caption / color-table) from NOAA-hosted CloudFront URLs to R2-hosted URLs under … |
 | `cli/migrate-r2-hls.ts` | `terraviz migrate-r2-hls` — migrate legacy `vimeo:<id>` data_refs to R2-hosted HLS bundles for 4K spherical streaming |
@@ -52,7 +53,7 @@ design rationale in the `docs/CATALOG_*` plan docs.
 | `cli/transcode-from-dispatch.ts` | `transcode-from-dispatch` — invoked by the `transcode-hls` GitHub Actions workflow when the publisher portal fires a `repository_dispatch` after a video upload lands in R2 |
 | `cli/report-transcode-failure.ts` | `report-transcode-failure` — the `transcode-hls` workflow's failure/cancellation step; POSTs `/transcode-failed` to release a dataset's stuck `transcoding` lock when the encode errors or the job times out (the timeout SIGKILLs the main runner before it can self-report) |
 | `cli/verify-deploy.ts` | `terraviz verify-deploy` — operator-friendly post-deploy smoke-test command |
-| `cli/zyra-publish-from-dispatch.ts` | `zyra-publish-from-dispatch` — Phase Z1 runner CLI (fetch / restore-frames / save-frames / publish / report-failure phases) invoked by the `zyra-run` GitHub Actions workflow |
+| `cli/zyra-publish-from-dispatch.ts` | `zyra-publish-from-dispatch` — Phase Z1 runner CLI (fetch / restore-frames / save-frames / publish / report-failure / acquire-softpass phases) invoked by the `zyra-run` GitHub Actions workflow |
 | `cli/zyra-spike-publish.ts` | `zyra-spike-publish` — Phase Z0 spike (see `docs/ZYRA_INTEGRATION_PLAN.md`): ffprobe SOS-spec assertion + publish-API leg for an MP4 a Zyra pipeline rendered on the runner; invoked by the manual `zyra-spike` GitHub Actions workflow |
 
 ## Platform & feedback Pages Functions (`functions/api/`)
