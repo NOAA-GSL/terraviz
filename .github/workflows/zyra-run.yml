@@ -148,6 +148,13 @@ jobs:
               # never leaves a half-run pipeline (pad-missing only runs
               # once acquire succeeds).
               attempts="${ZYRA_RUN_ATTEMPTS:-3}"
+              # Guard against a bad repo-variable value (0, empty, or
+              # non-integer) — otherwise seq errors under set -e or the
+              # loop runs zero times and never invokes zyra.
+              if ! [[ "$attempts" =~ ^[1-9][0-9]*$ ]]; then
+                echo "::warning::ZYRA_RUN_ATTEMPTS=\"$attempts\" is not a positive integer; using 3"
+                attempts=3
+              fi
               ok=0
               for i in $(seq 1 "$attempts"); do
                 echo "::group::zyra run (attempt $i/$attempts)"
