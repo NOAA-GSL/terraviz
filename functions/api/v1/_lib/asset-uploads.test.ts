@@ -19,12 +19,14 @@ import { freshMigratedDb } from '../../../../scripts/lib/catalog-migrations'
 import { asD1 } from './test-helpers'
 import {
   extForMime,
+  FRAME_VERIFY_SAMPLE_SIZE,
   getAssetUpload,
   insertAssetUpload,
   markAssetUploadCompleted,
   markAssetUploadFailed,
   maxSizeForKind,
   MAX_IMAGE_SEQUENCE_FRAMES,
+  sampleFrameIndices,
   validateAssetInit,
   validateImageSequenceInit,
 } from './asset-uploads'
@@ -198,6 +200,31 @@ describe('maxSizeForKind', () => {
   it('uses small caps for sphere thumb + caption', () => {
     expect(maxSizeForKind('sphere_thumbnail')).toBe(10 * 1024 ** 2)
     expect(maxSizeForKind('caption')).toBe(1 * 1024 ** 2)
+  })
+})
+
+describe('sampleFrameIndices', () => {
+  it('returns all indices when count <= max (small uploads verify in full)', () => {
+    expect(sampleFrameIndices(0, 16)).toEqual([])
+    expect(sampleFrameIndices(1, 16)).toEqual([0])
+    expect(sampleFrameIndices(16, 16)).toEqual(Array.from({ length: 16 }, (_, i) => i))
+  })
+
+  it('samples a sorted, distinct spread when count > max, always incl first + last', () => {
+    const s = sampleFrameIndices(4316, 16)
+    expect(s.length).toBeLessThanOrEqual(16)
+    expect(s).toEqual([...s].sort((a, b) => a - b)) // sorted
+    expect(new Set(s).size).toBe(s.length) // distinct
+    expect(s[0]).toBe(0)
+    expect(s[s.length - 1]).toBe(4315)
+    // Every index is in range.
+    expect(s.every(i => i >= 0 && i < 4316)).toBe(true)
+  })
+
+  it('defaults to FRAME_VERIFY_SAMPLE_SIZE', () => {
+    expect(sampleFrameIndices(10_000).length).toBeLessThanOrEqual(FRAME_VERIFY_SAMPLE_SIZE)
+    expect(sampleFrameIndices(10_000)[0]).toBe(0)
+    expect(sampleFrameIndices(10_000).at(-1)).toBe(9999)
   })
 })
 
