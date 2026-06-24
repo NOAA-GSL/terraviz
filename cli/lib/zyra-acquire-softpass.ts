@@ -188,7 +188,10 @@ export function assessBundleFreshness(input: FreshnessInput): FreshnessResult {
       detail: `neither end_time (${input.endTime ?? 'unset'}) nor updated_at (${input.updatedAt ?? 'unset'}) is parseable — cannot measure staleness, treating the bundle as fresh`,
     }
   }
-  const ageSeconds = Math.round((input.nowMs - referenceMs) / 1000)
+  // Floor (not round) for a deterministic boundary, and clamp at 0 so
+  // a trailing edge slightly ahead of the runner's clock (real-time
+  // rows can carry a near-now end_time) never logs a negative age.
+  const ageSeconds = Math.max(0, Math.floor((input.nowMs - referenceMs) / 1000))
   const stale = ageSeconds > input.staleAfterSeconds
   return {
     published: true,

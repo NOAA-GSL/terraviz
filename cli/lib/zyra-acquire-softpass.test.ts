@@ -157,6 +157,17 @@ describe('assessBundleFreshness', () => {
     expect(r.detail).toMatch(/end_time/)
   })
 
+  it('clamps a future trailing edge to a non-negative age (clock skew)', () => {
+    const r = assessBundleFreshness({
+      dataRef: 'r2:videos/DS/UP/master.m3u8',
+      endTime: '2026-06-24T00:00:30Z', // 30s ahead of NOW
+      nowMs: NOW,
+      staleAfterSeconds: STALE_AFTER,
+    })
+    expect(r.ageSeconds).toBe(0)
+    expect(r.stale).toBe(false)
+  })
+
   it('treats both timestamps unparseable as fresh (no escalation on a pure unknown)', () => {
     const r = assessBundleFreshness({
       dataRef: 'r2:videos/DS/UP/master.m3u8',
