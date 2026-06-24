@@ -64,10 +64,16 @@ jobs:
     name: Deploy poster to Cloudflare Pages
     runs-on: ubuntu-latest
     needs: [drift-check]
-    # Forked-PR builds cannot read repo secrets, so wrangler
-    # would fail authentication. Skip deploy on those; the
-    # rendered poster is still reviewable on the diff.
-    if: github.event_name == 'push' || (github.event_name == 'pull_request' && !github.event.pull_request.head.repo.fork)
+    # Deploy ONLY on push, never on pull_request. A PR branch in this
+    # repo already fires the push event (branches: ['**']), so PR
+    # commits still get a preview deploy — but running this job on both
+    # events raced two wrangler deploys against the same Pages project
+    # and produced Cloudflare "Unknown internal error" collisions. Fork
+    # PRs can't read the deploy secrets anyway; their rendered poster
+    # stays reviewable via the drift-check diff. (Single deploy path:
+    # the Cloudflare Pages git integration for this project is disabled
+    # so wrangler here is the only deployer.)
+    if: github.event_name == 'push'
     environment:
       name: ${{ github.ref == 'refs/heads/main' && 'poster-production' || 'poster-preview' }}
       url: ${{ steps.deploy.outputs.url }}
