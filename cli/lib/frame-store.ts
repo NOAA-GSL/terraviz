@@ -15,6 +15,11 @@
  * the two must agree byte-for-byte.
  */
 
+/** ULID shape (Crockford base32, 26 chars) — the same alphabet the
+ *  server's `assertUlid` enforces. Kept local so this module stays
+ *  dependency-free. */
+const ULID_RE = /^[0-9A-HJKMNP-TV-Z]{26}$/
+
 /** 64-char lowercase hex of a `sha256:<hex>` (or bare hex) digest, or
  *  null when it doesn't look like a SHA-256. */
 export function frameHexFromDigest(digest: string): string | null {
@@ -24,9 +29,13 @@ export function frameHexFromDigest(digest: string): string | null {
 
 /** Shared content-addressed key for a frame:
  *  `videos/{datasetId}/frames/sha256/{hex}.{ext}`. Throws on a
- *  malformed digest or extension (callers pass manifest-validated
- *  values, so a throw means a real desync, not user input). */
+ *  malformed datasetId, digest, or extension — callers pass
+ *  manifest-validated values, so a throw means a real desync, not user
+ *  input. The validation matches the server's
+ *  `buildContentAddressedFrameKey` so the two agree on which inputs are
+ *  rejected, not just on the bytes a valid input produces. */
 export function frameContentKey(datasetId: string, digest: string, ext: string): string {
+  if (!ULID_RE.test(datasetId)) throw new Error(`frame-store: datasetId must be a ULID, got "${datasetId}"`)
   const hex = frameHexFromDigest(digest)
   if (!hex) throw new Error(`frame-store: bad digest "${digest}"`)
   if (!/^[a-z0-9]+$/.test(ext)) throw new Error(`frame-store: bad extension "${ext}"`)
@@ -35,8 +44,11 @@ export function frameContentKey(datasetId: string, digest: string, ext: string):
 
 /** Prefix holding all content-addressed frames for a dataset:
  *  `videos/{datasetId}/frames/sha256/` (trailing slash). Scopes the
- *  GC's R2 list to exactly the frame objects. */
+ *  GC's R2 list to exactly the frame objects. Throws on a non-ULID
+ *  datasetId (parity with the server's `buildFramesContentPrefix`), so
+ *  a bad id can't silently list the wrong prefix. */
 export function frameStorePrefix(datasetId: string): string {
+  if (!ULID_RE.test(datasetId)) throw new Error(`frame-store: datasetId must be a ULID, got "${datasetId}"`)
   return `videos/${datasetId}/frames/sha256/`
 }
 

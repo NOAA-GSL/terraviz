@@ -35,6 +35,11 @@ describe('frameContentKey + frameStorePrefix', () => {
     expect(() => frameContentKey(DS, `sha256:${HEX}`, 'JPG')).toThrow(/extension/)
   })
 
+  it('throws on a non-ULID datasetId (parity with the server twin)', () => {
+    expect(() => frameContentKey('NOTAULID', `sha256:${HEX}`, 'jpg')).toThrow(/ULID/)
+    expect(() => frameStorePrefix('NOTAULID')).toThrow(/ULID/)
+  })
+
   it('agrees with the server-side key shape', () => {
     // Must match functions/api/v1/_lib/r2-store.ts:buildContentAddressedFrameKey.
     expect(frameContentKey(DS, `sha256:${HEX}`, 'png')).toBe(`videos/${DS}/frames/sha256/${HEX}.png`)
