@@ -29,9 +29,10 @@ import {
 import { buildErrorCard, type ErrorCardDetails } from './error-card'
 import { attachToolbar, renderMarkdownToolbar } from './markdown-toolbar'
 import { renderChipInput } from './chip-input'
-import { renderAssetUploader } from './asset-uploader'
+import { renderAssetUploader, type AuxAssetKind } from './asset-uploader'
 import { renderMarkdown } from '../../../services/markdownRenderer'
 import type { PublisherDatasetDetail } from '../types'
+import type { DatasetOverlayOptions } from '../../../types'
 import { ROUTE_CHANGE_START_EVENT } from '../router'
 
 export type DatasetFormMode = 'create' | 'edit'
@@ -45,6 +46,18 @@ export interface DatasetFormOptions {
    *  `PublisherDatasetDetail` shape (the detail page's wire type)
    *  carries every field the form reads. */
   initial?: PublisherDatasetDetail
+  /** The dataset's `data_ref` resolved to a publicly-readable URL
+   *  (edit mode). When the dataset is an image, this becomes the
+   *  source for the globe-thumbnail generator's "Generate from this
+   *  dataset's data" one-click path — so an already-uploaded image
+   *  doesn't have to be re-uploaded. Null/absent → that affordance
+   *  is hidden and the manual frame picker is the path. */
+  dataUrl?: string | null
+  /** Resolved public URLs of the dataset's current thumbnail /
+   *  legend (edit mode), so the form can show an image preview of
+   *  each alongside its uploader. Null/absent → no preview. */
+  thumbnailUrl?: string | null
+  legendUrl?: string | null
   /** Keyword chips to prefill in edit mode. Optional — server
    *  endpoints that don't yet ship keywords can pass an empty
    *  array and the chip input starts blank. */
@@ -80,6 +93,25 @@ interface FormState {
    *  with it empty. Stays as a manual text input until the
    *  3pd asset uploader replaces it with a guided upload flow. */
   dataRef: string
+  /** Auxiliary-image references surfaced on the browse card +
+   *  info panel. Same shape rules as `dataRef` (an `r2:` / absolute
+   *  HTTPS ref); in edit mode the guided uploader writes them, and
+   *  the manual input is the create-mode + external fallback. */
+  thumbnailRef: string
+  legendRef: string
+  /** Resolved public URL of the dataset's own data (edit mode), used
+   *  as the globe-thumbnail generator's auto source for image
+   *  datasets. Empty when absent / unresolvable. */
+  dataUrl: string
+  /** The dataset's render hints (bbox / lonOrigin / flip / celestial
+   *  body), forwarded to the globe-thumbnail generator so a
+   *  generated thumbnail matches the live globe. Null in create mode
+   *  (no row yet). */
+  overlay: DatasetOverlayOptions | null
+  /** Resolved URLs of the currently-saved thumbnail / legend images
+   *  (edit mode), shown as a preview in the media card. */
+  currentThumbnailUrl: string | null
+  currentLegendUrl: string | null
   organization: string
   abstract: string
   /** Toggle between editing the abstract markdown source and
@@ -116,6 +148,20 @@ interface FormState {
   endDate: string
   endTime: string
   period: string
+  // Geography & projection (Phase 3d render hints). Bounding-box
+  // corners are kept as raw input strings; the submit composes them
+  // into the typed `bounding_box` object only when all four are
+  // present (the validator requires the full set + n >= s). lonOrigin
+  // / radiusMi are likewise raw strings parsed at submit; flippedInY
+  // is a real boolean (checkbox); celestialBody is free text.
+  bboxN: string
+  bboxS: string
+  bboxW: string
+  bboxE: string
+  lonOrigin: string
+  isFlippedInY: boolean
+  celestialBody: string
+  radiusMi: string
   // Categorization (3pc/C3b). Both arrays cap at 20 entries
   // server-side; chip-input applies the same cap so the UI
   // matches the validator.
@@ -311,6 +357,9 @@ function inputField(opts: {
   placeholder?: string
   error: PublisherValidationError | null
   helpKey?: MessageKey
+  /** Input type — `'text'` (default) or `'number'` for the
+   *  lat/lon/radius fields. */
+  type?: 'text' | 'number'
   onChange: (v: string) => void
   onInput?: (v: string) => void
 }): HTMLElement {
@@ -333,7 +382,7 @@ function inputField(opts: {
   wrap.appendChild(label)
 
   const input = document.createElement('input')
-  input.type = 'text'
+  input.type = opts.type ?? 'text'
   input.id = opts.id
   input.className = 'publisher-form-input'
   input.value = opts.value
@@ -644,6 +693,208 @@ function timeRangeCard(state: FormState): HTMLElement {
   return card
 }
 
+function checkboxField(opts: {
+  id: string
+  labelKey: MessageKey
+  checked: boolean
+  helpKey?: MessageKey
+  onChange: (v: boolean) => void
+}): HTMLElement {
+  const wrap = document.createElement('div')
+  wrap.className = 'publisher-form-field'
+
+  const label = document.createElement('label')
+  label.className = 'publisher-form-checkbox'
+  label.htmlFor = opts.id
+
+  const input = document.createElement('input')
+  input.type = 'checkbox'
+  input.id = opts.id
+  input.checked = opts.checked
+  input.addEventListener('change', () => opts.onChange(input.checked))
+  label.appendChild(input)
+
+  const span = document.createElement('span')
+  span.textContent = t(opts.labelKey)
+  label.appendChild(span)
+
+  wrap.appendChild(label)
+
+  if (opts.helpKey) {
+    const help = document.createElement('p')
+    help.className = 'publisher-form-help'
+    help.textContent = t(opts.helpKey)
+    wrap.appendChild(help)
+  }
+  return wrap
+}
+
+/**
+ * Geography & projection card — the dataset's render hints (bounding
+ * box, longitude origin, Y-flip, celestial body + radius). These tell
+ * the globe how to project the data: a bounding box clips regional
+ * data to its extent over a base Earth, `lonOrigin` re-centres the
+ * dateline, `isFlippedInY` corrects inverted-Y imagery, and a
+ * non-Earth `celestialBody` swaps the base body. The validator
+ * requires all four bbox corners together (n >= s); the submit only
+ * sends `bounding_box` when the full set is present.
+ */
+function geographyCard(state: FormState): HTMLElement {
+  const card = document.createElement('section')
+  card.className = 'publisher-card publisher-glass publisher-form-card'
+
+  const heading = document.createElement('h2')
+  heading.className = 'publisher-card-heading'
+  heading.textContent = t('publisher.datasetForm.section.geography')
+  card.appendChild(heading)
+
+  // Projection expectation — the globe (and the generated thumbnail)
+  // assume equirectangular imagery; reprojecting other CRSs is a
+  // Zyra-workflow / offline step, not something this form does. See
+  // docs/ZYRA_INTEGRATION_PLAN.md §"Reprojection lives in Zyra".
+  const projectionNote = document.createElement('p')
+  projectionNote.className = 'publisher-form-help'
+  projectionNote.textContent = t('publisher.datasetForm.help.geography')
+  card.appendChild(projectionNote)
+
+  // Bounding box — four numeric corners in a row.
+  const bboxWrap = document.createElement('div')
+  bboxWrap.className = 'publisher-form-field'
+  const bboxLabel = document.createElement('span')
+  bboxLabel.className = 'publisher-form-label'
+  bboxLabel.textContent = t('publisher.datasetForm.field.boundingBox')
+  bboxWrap.appendChild(bboxLabel)
+
+  const bboxRow = document.createElement('div')
+  bboxRow.className = 'publisher-form-bbox-row'
+  const corners: ReadonlyArray<{
+    id: string
+    labelKey: MessageKey
+    value: string
+    placeholder: string
+    field: string
+    set: (v: string) => void
+  }> = [
+    { id: 'dataset-bbox-n', labelKey: 'publisher.datasetForm.field.bboxN', value: state.bboxN, placeholder: '90', field: 'bounding_box.n', set: v => { state.bboxN = v } },
+    { id: 'dataset-bbox-s', labelKey: 'publisher.datasetForm.field.bboxS', value: state.bboxS, placeholder: '-90', field: 'bounding_box.s', set: v => { state.bboxS = v } },
+    { id: 'dataset-bbox-w', labelKey: 'publisher.datasetForm.field.bboxW', value: state.bboxW, placeholder: '-180', field: 'bounding_box.w', set: v => { state.bboxW = v } },
+    { id: 'dataset-bbox-e', labelKey: 'publisher.datasetForm.field.bboxE', value: state.bboxE, placeholder: '180', field: 'bounding_box.e', set: v => { state.bboxE = v } },
+  ]
+  for (const c of corners) {
+    const col = document.createElement('div')
+    col.className = 'publisher-form-bbox-col'
+    const lbl = document.createElement('label')
+    lbl.className = 'publisher-form-datetime-sublabel'
+    lbl.htmlFor = c.id
+    lbl.textContent = t(c.labelKey)
+    col.appendChild(lbl)
+    const input = document.createElement('input')
+    input.type = 'number'
+    input.id = c.id
+    input.className = 'publisher-form-input'
+    input.value = c.value
+    input.placeholder = c.placeholder
+    const err = findError(state.errors, c.field)
+    if (err) {
+      input.setAttribute('aria-invalid', 'true')
+      input.setAttribute('aria-describedby', `${c.id}-err`)
+    }
+    input.addEventListener('input', () => c.set(input.value))
+    input.addEventListener('change', () => c.set(input.value))
+    col.appendChild(input)
+    // Surface the validator's actionable per-corner message (e.g.
+    // "bounding_box.n must be in [-90, 90]") rather than just a red
+    // input. PR #209 Copilot review.
+    if (err) {
+      const cornerErr = document.createElement('p')
+      cornerErr.id = `${c.id}-err`
+      cornerErr.className = 'publisher-form-error'
+      cornerErr.setAttribute('role', 'alert')
+      cornerErr.textContent = err.message
+      col.appendChild(cornerErr)
+    }
+    bboxRow.appendChild(col)
+  }
+  bboxWrap.appendChild(bboxRow)
+
+  const bboxHelp = document.createElement('p')
+  bboxHelp.className = 'publisher-form-help'
+  bboxHelp.textContent = t('publisher.datasetForm.help.boundingBox')
+  bboxWrap.appendChild(bboxHelp)
+
+  // Group-level bbox error (e.g. "n >= s", or "all four required").
+  const bboxErr = findError(state.errors, 'bounding_box')
+  if (bboxErr) {
+    const e = document.createElement('p')
+    e.className = 'publisher-form-error'
+    e.setAttribute('role', 'alert')
+    e.textContent = bboxErr.message
+    bboxWrap.appendChild(e)
+  }
+  card.appendChild(bboxWrap)
+
+  card.appendChild(
+    inputField({
+      id: 'dataset-lon-origin',
+      labelKey: 'publisher.datasetForm.field.lonOrigin',
+      required: false,
+      value: state.lonOrigin,
+      placeholder: '0',
+      type: 'number',
+      helpKey: 'publisher.datasetForm.help.lonOrigin',
+      error: findError(state.errors, 'lon_origin'),
+      onChange: v => {
+        state.lonOrigin = v
+      },
+    }),
+  )
+
+  card.appendChild(
+    checkboxField({
+      id: 'dataset-flipped-y',
+      labelKey: 'publisher.datasetForm.field.flippedInY',
+      checked: state.isFlippedInY,
+      helpKey: 'publisher.datasetForm.help.flippedInY',
+      onChange: v => {
+        state.isFlippedInY = v
+      },
+    }),
+  )
+
+  card.appendChild(
+    inputField({
+      id: 'dataset-celestial-body',
+      labelKey: 'publisher.datasetForm.field.celestialBody',
+      required: false,
+      value: state.celestialBody,
+      placeholder: 'Earth',
+      helpKey: 'publisher.datasetForm.help.celestialBody',
+      error: findError(state.errors, 'celestial_body'),
+      onChange: v => {
+        state.celestialBody = v
+      },
+    }),
+  )
+
+  card.appendChild(
+    inputField({
+      id: 'dataset-radius-mi',
+      labelKey: 'publisher.datasetForm.field.radiusMi',
+      required: false,
+      value: state.radiusMi,
+      placeholder: '2106',
+      type: 'number',
+      helpKey: 'publisher.datasetForm.help.radiusMi',
+      error: findError(state.errors, 'radius_mi'),
+      onChange: v => {
+        state.radiusMi = v
+      },
+    }),
+  )
+
+  return card
+}
+
 function categorizationCard(state: FormState): HTMLElement {
   const card = document.createElement('section')
   card.className = 'publisher-card publisher-glass publisher-form-card'
@@ -846,7 +1097,253 @@ interface RenderContext {
     disposed: boolean
     uploader?: HTMLElement
     uploaderFormat?: string
+    /** Cached auxiliary-asset uploader subtrees (thumbnail /
+     *  legend), preserved across parent re-renders so an in-flight
+     *  image upload isn't torn down when an unrelated field change
+     *  repaints the form. Aux uploaders aren't format-keyed (they
+     *  accept images regardless of the dataset's primary format),
+     *  so there's no `*Format` companion the way `data` has. */
+    thumbnailUploader?: HTMLElement
+    legendUploader?: HTMLElement
   }
+}
+
+/**
+ * One auxiliary-image slot (thumbnail or legend): a guided
+ * uploader (edit mode, where the `/asset` endpoint has a row to
+ * scope against) plus a manual ref/URL input that doubles as the
+ * create-mode entry point and the escape hatch for external /
+ * already-encoded `r2:` refs the uploader can't express. Mirrors
+ * the `data_ref` uploader-plus-manual-input layout in `renderForm`.
+ */
+function auxAssetField(
+  content: HTMLElement,
+  state: FormState,
+  ctx: RenderContext,
+  opts: {
+    kind: AuxAssetKind
+    refValue: string
+    setRef: (v: string) => void
+    uploaderLabelKey: MessageKey
+    manualLabelKey: MessageKey
+    manualHelpKey: MessageKey
+    placeholder: string
+    inputId: string
+    errorField: string
+    cacheKey: 'thumbnailUploader' | 'legendUploader'
+    /** Fetchable URL for the dataset's own data frame, forwarded to
+     *  the uploader's globe-thumbnail generator (thumbnail only). */
+    dataAssetUrl?: string | null
+    /** The dataset's render hints, forwarded so a generated thumbnail
+     *  matches the live globe (thumbnail only). */
+    dataAssetOverlay?: DatasetOverlayOptions | null
+    /** Resolved URL of the currently-saved image for this slot, shown
+     *  as a preview above the uploader. Null → no preview. */
+    currentImageUrl?: string | null
+  },
+): HTMLElement {
+  const wrap = document.createElement('div')
+  wrap.className = 'publisher-form-aux-asset'
+
+  // Preview of the currently-saved image (edit mode), so the
+  // publisher sees the actual thumbnail / legend rather than only its
+  // `r2:` ref text.
+  if (opts.currentImageUrl) {
+    const preview = document.createElement('img')
+    preview.className = 'publisher-form-aux-preview'
+    preview.src = opts.currentImageUrl
+    preview.alt = t(opts.uploaderLabelKey)
+    preview.loading = 'lazy'
+    wrap.appendChild(preview)
+  }
+
+  // Guided uploader — edit mode only. The `/asset` init endpoint
+  // is scoped to a saved dataset id, so create mode (no row yet)
+  // gets only the manual input; once the draft is saved the
+  // publisher lands on the edit page where the uploader appears.
+  if (ctx.mode === 'edit' && ctx.datasetId) {
+    const uploaderWrap = document.createElement('div')
+    uploaderWrap.className = 'publisher-field'
+    const label = document.createElement('span')
+    label.className = 'publisher-field-label'
+    label.textContent = t(opts.uploaderLabelKey)
+    uploaderWrap.appendChild(label)
+
+    // Reuse the previously-mounted uploader subtree across renders
+    // so a parent repaint (title edit, save-in-progress) doesn't
+    // interrupt an in-flight upload. Same rationale as the `data`
+    // uploader's subtree preservation, minus the format key.
+    const cached = ctx.lifecycle[opts.cacheKey]
+    if (cached) {
+      uploaderWrap.appendChild(cached)
+    } else {
+      const uploaderEl = renderAssetUploader({
+        datasetId: ctx.datasetId,
+        kind: opts.kind,
+        format: state.format,
+        currentDataRef: opts.refValue || null,
+        dataAssetUrl: opts.dataAssetUrl ?? null,
+        dataAssetOverlay: opts.dataAssetOverlay ?? null,
+        navigate: ctx.navigate,
+        fetchFn: ctx.fetchFn,
+        sleep: ctx.sleep,
+        onUploaded: outcome => {
+          if (ctx.lifecycle.disposed) return
+          if (outcome.mode !== 'aux') return
+          // The server already stamped the row's `*_ref`; mirror it
+          // into form state + the manual input so a later Save
+          // doesn't omit it and the publisher sees the new value.
+          opts.setRef(outcome.ref)
+          const manual = content.querySelector<HTMLInputElement>(`#${opts.inputId}`)
+          if (manual) manual.value = outcome.ref
+        },
+      })
+      ctx.lifecycle[opts.cacheKey] = uploaderEl
+      uploaderWrap.appendChild(uploaderEl)
+    }
+    wrap.appendChild(uploaderWrap)
+  }
+
+  // Manual ref input — both modes.
+  wrap.appendChild(
+    inputField({
+      id: opts.inputId,
+      labelKey: opts.manualLabelKey,
+      required: false,
+      value: opts.refValue,
+      placeholder: opts.placeholder,
+      helpKey: opts.manualHelpKey,
+      error: findError(state.errors, opts.errorField),
+      onChange: v => {
+        opts.setRef(v)
+      },
+    }),
+  )
+
+  return wrap
+}
+
+/**
+ * Build the dataset's render hints from the detail row, mirroring
+ * the public serializer's mapping (bbox surfaces only when all four
+ * corners are present; lonOrigin / flip / celestialBody only when
+ * populated). Returns null when nothing is set, so the generator
+ * takes the plain full-globe path. The shape matches the live
+ * globe's `DatasetOverlayOptions`, so a thumbnail generated from it
+ * looks like the real globe.
+ */
+function overlayFromRow(row: PublisherDatasetDetail): DatasetOverlayOptions | null {
+  const overlay: DatasetOverlayOptions = {}
+  if (
+    row.bbox_n != null &&
+    row.bbox_s != null &&
+    row.bbox_w != null &&
+    row.bbox_e != null
+  ) {
+    overlay.boundingBox = { n: row.bbox_n, s: row.bbox_s, w: row.bbox_w, e: row.bbox_e }
+  }
+  if (typeof row.lon_origin === 'number') overlay.lonOrigin = row.lon_origin
+  if (row.is_flipped_in_y === 1) overlay.isFlippedInY = true
+  if (row.celestial_body && row.celestial_body.trim()) {
+    overlay.celestialBody = row.celestial_body
+  }
+  return Object.keys(overlay).length > 0 ? overlay : null
+}
+
+/**
+ * Resolve the dataset's data into a URL the globe-thumbnail
+ * generator can fetch as a 2:1 frame.
+ *
+ * The server resolves the row's `data_ref` (an `r2:` ref or a bare
+ * URL) to a public URL and hands it back as `state.dataUrl`, so an
+ * already-uploaded dataset gets the one-click "Generate from this
+ * dataset's data" path without re-uploading:
+ *
+ *  - **Image** datasets: the data frame *is* a 2:1 equirectangular
+ *    image, wrapped directly. A legacy `https://` `data_ref` is a
+ *    fallback for any path that didn't carry a resolved `dataUrl`.
+ *  - **Video** datasets: `dataUrl` is the HLS playlist, which the
+ *    uploader loads into a scrubable `<video>` so the publisher
+ *    picks a frame. Legacy `vimeo:` refs don't resolve to a public
+ *    URL → null → the manual frame picker.
+ *
+ * Returns null for anything else (tours) and when no URL resolved,
+ * which hides the one-click button and leaves the manual frame
+ * picker as the path.
+ */
+function thumbnailDataSourceUrl(state: FormState): string | null {
+  const isImage =
+    state.format === 'image/png' ||
+    state.format === 'image/jpeg' ||
+    state.format === 'image/webp'
+  const isVideo = state.format === 'video/mp4'
+  if (!isImage && !isVideo) return null
+  if (state.dataUrl.trim()) return state.dataUrl.trim()
+  // Legacy fallback only applies to a directly-fetchable image ref.
+  if (isImage) {
+    return /^https:\/\//i.test(state.dataRef.trim()) ? state.dataRef.trim() : null
+  }
+  return null
+}
+
+/**
+ * Media card — the thumbnail + legend auxiliary images. Both feed
+ * the public catalog: `thumbnail_ref` is the browse-card image,
+ * `legend_ref` the colour-scale legend shown alongside the loaded
+ * dataset.
+ */
+function mediaCard(
+  content: HTMLElement,
+  state: FormState,
+  ctx: RenderContext,
+): HTMLElement {
+  const card = document.createElement('section')
+  card.className = 'publisher-card publisher-glass publisher-form-card'
+
+  const heading = document.createElement('h2')
+  heading.className = 'publisher-card-heading'
+  heading.textContent = t('publisher.datasetForm.section.media')
+  card.appendChild(heading)
+
+  card.appendChild(
+    auxAssetField(content, state, ctx, {
+      kind: 'thumbnail',
+      refValue: state.thumbnailRef,
+      setRef: v => {
+        state.thumbnailRef = v
+      },
+      uploaderLabelKey: 'publisher.datasetForm.field.thumbnail',
+      manualLabelKey: 'publisher.datasetForm.field.thumbnailManual',
+      manualHelpKey: 'publisher.datasetForm.help.thumbnail',
+      placeholder: 'r2:datasets/.../thumbnail.png',
+      inputId: 'dataset-thumbnail-ref',
+      errorField: 'thumbnail_ref',
+      cacheKey: 'thumbnailUploader',
+      dataAssetUrl: thumbnailDataSourceUrl(state),
+      dataAssetOverlay: state.overlay,
+      currentImageUrl: state.currentThumbnailUrl,
+    }),
+  )
+
+  card.appendChild(
+    auxAssetField(content, state, ctx, {
+      kind: 'legend',
+      refValue: state.legendRef,
+      setRef: v => {
+        state.legendRef = v
+      },
+      uploaderLabelKey: 'publisher.datasetForm.field.legend',
+      manualLabelKey: 'publisher.datasetForm.field.legendManual',
+      manualHelpKey: 'publisher.datasetForm.help.legend',
+      placeholder: 'r2:datasets/.../legend.png',
+      inputId: 'dataset-legend-ref',
+      errorField: 'legend_ref',
+      cacheKey: 'legendUploader',
+      currentImageUrl: state.currentLegendUrl,
+    }),
+  )
+
+  return card
 }
 
 function renderForm(
@@ -1164,8 +1661,10 @@ function renderForm(
 
   form.appendChild(identityCard)
   form.appendChild(abstractCard(state, update))
+  form.appendChild(mediaCard(content, state, ctx))
   form.appendChild(licensingCard(state, update))
   form.appendChild(timeRangeCard(state))
+  form.appendChild(geographyCard(state))
   form.appendChild(categorizationCard(state))
 
   // Submit row.
@@ -1246,6 +1745,8 @@ function renderForm(
       if (t) body[field] = t
     }
     setIfPresent('data_ref', state.dataRef)
+    setIfPresent('thumbnail_ref', state.thumbnailRef)
+    setIfPresent('legend_ref', state.legendRef)
     setIfPresent('abstract', state.abstract)
     setIfPresent('organization', state.organization)
     setIfPresent('license_spdx', state.licenseSpdx)
@@ -1262,6 +1763,32 @@ function renderForm(
     setIfPresent('start_time', dateTimeToIso(state.startDate, state.startTime))
     setIfPresent('end_time', dateTimeToIso(state.endDate, state.endTime))
     setIfPresent('period', state.period)
+    // Geography & projection. The validator requires the full
+    // bounding-box set (n/s/w/e) together, so only send it when all
+    // four parse as finite numbers — a partially-filled box is
+    // treated as "no box" rather than a guaranteed validation error.
+    const num = (v: string): number | null => {
+      const t = v.trim()
+      if (!t) return null
+      const n = Number(t)
+      return Number.isFinite(n) ? n : null
+    }
+    const bn = num(state.bboxN)
+    const bs = num(state.bboxS)
+    const bw = num(state.bboxW)
+    const be = num(state.bboxE)
+    if (bn != null && bs != null && bw != null && be != null) {
+      body.bounding_box = { n: bn, s: bs, w: bw, e: be }
+    }
+    const lon = num(state.lonOrigin)
+    if (lon != null) body.lon_origin = lon
+    // Always send the flip flag (a checkbox is explicitly on/off) so
+    // it can be toggled back off on edit, unlike the omit-when-empty
+    // text fields.
+    body.is_flipped_in_y = state.isFlippedInY
+    setIfPresent('celestial_body', state.celestialBody)
+    const radius = num(state.radiusMi)
+    if (radius != null) body.radius_mi = radius
     // Arrays — omit when empty so the join tables stay empty
     // instead of carrying placeholder rows.
     if (state.keywords.length > 0) body.keywords = [...state.keywords]
@@ -1353,6 +1880,9 @@ function initialState(
   row: PublisherDatasetDetail | undefined,
   initialKeywords: ReadonlyArray<string>,
   initialTags: ReadonlyArray<string>,
+  dataUrl: string | null | undefined,
+  thumbnailUrl: string | null | undefined,
+  legendUrl: string | null | undefined,
 ): FormState {
   if (mode === 'create' || !row) {
     return {
@@ -1362,6 +1892,12 @@ function initialState(
       format: 'video/mp4',
       visibility: 'public',
       dataRef: '',
+      thumbnailRef: '',
+      legendRef: '',
+      dataUrl: '',
+      overlay: null,
+      currentThumbnailUrl: null,
+      currentLegendUrl: null,
       organization: '',
       abstract: '',
       abstractPreviewing: false,
@@ -1377,6 +1913,14 @@ function initialState(
       endDate: '',
       endTime: '',
       period: '',
+      bboxN: '',
+      bboxS: '',
+      bboxW: '',
+      bboxE: '',
+      lonOrigin: '',
+      isFlippedInY: false,
+      celestialBody: '',
+      radiusMi: '',
       keywords: [],
       tags: [],
       isSaving: false,
@@ -1397,6 +1941,12 @@ function initialState(
     format: row.format,
     visibility: row.visibility,
     dataRef: row.data_ref ?? '',
+    thumbnailRef: row.thumbnail_ref ?? '',
+    legendRef: row.legend_ref ?? '',
+    dataUrl: dataUrl ?? '',
+    overlay: overlayFromRow(row),
+    currentThumbnailUrl: thumbnailUrl ?? null,
+    currentLegendUrl: legendUrl ?? null,
     organization: row.organization ?? '',
     abstract: row.abstract ?? '',
     abstractPreviewing: false,
@@ -1412,6 +1962,14 @@ function initialState(
     endDate,
     endTime,
     period: row.period ?? '',
+    bboxN: row.bbox_n != null ? String(row.bbox_n) : '',
+    bboxS: row.bbox_s != null ? String(row.bbox_s) : '',
+    bboxW: row.bbox_w != null ? String(row.bbox_w) : '',
+    bboxE: row.bbox_e != null ? String(row.bbox_e) : '',
+    lonOrigin: row.lon_origin != null ? String(row.lon_origin) : '',
+    isFlippedInY: row.is_flipped_in_y === 1,
+    celestialBody: row.celestial_body ?? '',
+    radiusMi: row.radius_mi != null ? String(row.radius_mi) : '',
     keywords: [...initialKeywords],
     tags: [...initialTags],
     isSaving: false,
@@ -1436,6 +1994,9 @@ export function renderDatasetForm(
     options.initial,
     options.initialKeywords ?? [],
     options.initialTags ?? [],
+    options.dataUrl,
+    options.thumbnailUrl,
+    options.legendUrl,
   )
   // One lifecycle token per form mount, shared across every
   // renderForm call (internal re-renders included). Flipped to

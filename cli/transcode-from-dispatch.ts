@@ -80,20 +80,39 @@
 import { createHash } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import {
+  copyFileSync,
   createWriteStream,
   existsSync,
   mkdirSync,
+  mkdtempSync,
+  readFileSync,
   rmSync,
 } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { AwsClient } from 'aws4fetch'
-import { encodeHls, OUTPUT_FRAME_RATE } from './lib/ffmpeg-hls'
+import { DEFAULT_RENDITIONS, encodeHls, OUTPUT_FRAME_RATE } from './lib/ffmpeg-hls'
 import { MAX_IMAGE_SEQUENCE_FRAMES } from '../src/types/image-sequence-constants'
 import {
+  deleteR2Object,
+  getR2ObjectText,
+  listR2KeysPaginated,
+  r2ObjectExists,
   uploadHlsBundle,
+  uploadR2Object,
   loadR2ConfigFromEnv,
   type R2UploadConfig,
 } from './lib/r2-upload'
+import { isoDurationToSeconds } from './lib/r2-frames'
+import {
+  DEFAULT_RENDITION_DESCRIPTORS,
+  gridOffset,
+  segmentKey,
+  type FrameEntry,
+  type SegmentManifest,
+} from './lib/hls-incremental'
+import { runIncremental, type IncrementalDeps } from './lib/hls-incremental-runner'
+import { frameContentKey } from './lib/frame-store'
 
 const R2_REGION = 'auto'
 
@@ -357,21 +376,28 @@ async function downloadFrames(
       const i = cursor++
       if (i >= args.frameCount) return
       const padded = String(i).padStart(5, '0')
-      const key = `uploads/${args.datasetId}/${args.uploadId}/frames/${padded}.${args.frameExtension}`
+      // `verifySourceFilenamesBlob` enforces `entry.index === i` for
+      // every entry, so positional lookup is the entry for frame `i`.
+      const entry = manifest[i]
+      // Content-addressed source: resolve each frame to its shared
+      // `videos/{ds}/frames/sha256/{hex}.{ext}` key from the manifest
+      // digest, not a per-upload index key
+      // (`docs/INCREMENTAL_FRAME_UPLOAD_PLAN.md`).
+      const key = frameContentKey(args.datasetId, entry.digest, args.frameExtension)
       const destPath = join(framesDir, `${padded}.${args.frameExtension}`)
       try {
-        const result = await downloadFromR2(config, key, destPath)
-        // `verifySourceFilenamesBlob` enforces `entry.index === i`
-        // for every entry, so positional lookup is the entry
-        // for frame `i`. Re-assert here so a future refactor
-        // that loosens the verify step can't silently desync
-        // the digest check from the frame being downloaded.
-        const entry = manifest[i]
+        // Re-assert the index↔position invariant so a future refactor
+        // that loosens the verify step can't silently desync the
+        // digest check from the frame being downloaded.
         if (entry.index !== i) {
           throw new Error(
             `manifest entry index ${entry.index} does not match frame position ${i}`,
           )
         }
+        const result = await downloadFromR2(config, key, destPath)
+        // The key is content-addressed, so a digest mismatch here means
+        // R2 served the wrong bytes for this hash (corruption) — fail
+        // the encode loudly rather than build a bad bundle.
         if (result.digest !== entry.digest) {
           throw new Error(
             `digest mismatch (expected=${entry.digest} actual=${result.digest})`,
@@ -555,6 +581,347 @@ export async function postTranscodeComplete(
   }
 }
 
+/**
+ * Report a FAILED transcode so the dataset row's `transcoding` lock is
+ * released — it would otherwise stick forever, blocking re-uploads and
+ * showing a perpetual in-progress state. Called from the transcode-hls
+ * workflow's failure/cancellation step, which covers the job timeout
+ * that SIGKILLs the main runner before it can post `transcode-complete`.
+ * Best-effort, but surfaces real problems (auth, wrong deploy) the same
+ * way `postTranscodeComplete` does so the operator sees a stuck row.
+ */
+export async function postTranscodeFailed(
+  server: ServerEnv,
+  datasetId: string,
+  uploadId: string,
+  errorSummary: string,
+): Promise<void> {
+  const url = `${server.server}/api/v1/publish/datasets/${datasetId}/transcode-failed`
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+      'CF-Access-Client-Id': server.accessClientId,
+      'CF-Access-Client-Secret': server.accessClientSecret,
+    },
+    body: JSON.stringify({ upload_id: uploadId, error_summary: errorSummary }),
+  })
+  if (!res.ok) {
+    const body = await res.text().catch(() => '')
+    if (isCloudflareChallenge(res.headers.get('content-type'), body)) {
+      throw new Error(
+        `transcode-failed blocked by Cloudflare's WAF managed challenge (status ${res.status}). ` +
+          `Access service tokens bypass Access but not Bot Fight Mode / WAF managed rules — see ` +
+          `docs/SELF_HOSTING.md §8e for the WAF skip rule.`,
+      )
+    }
+    throw new Error(`transcode-failed returned ${res.status}: ${body}`)
+  }
+  // Same wrong-deploy guard as transcode-complete: an SPA index.html
+  // served with 200 for an unmatched API path would otherwise read as
+  // a successful lock release.
+  const contentType = res.headers.get('content-type') ?? ''
+  if (!contentType.toLowerCase().includes('application/json')) {
+    const snippet = (await res.text().catch(() => '')).slice(0, 200).replace(/\s+/g, ' ').trim()
+    throw new Error(
+      `transcode-failed returned 2xx with non-JSON content-type "${contentType}" — the route ` +
+        `handler did not run (deploy predates /transcode-failed?). Body preview: ${snippet}`,
+    )
+  }
+}
+
+/** The dataset's time-coverage grid, the basis for absolute-grid
+ *  chunking (`docs/INCREMENTAL_HLS_PLAN.md` §1). */
+interface DatasetGrid {
+  startTime: string
+  period: string
+  startTimeMs: number
+  periodMs: number
+}
+
+/**
+ * Fetch the dataset row's `start_time` + `period` for incremental
+ * chunking. The runner already holds the CF-Access service token, so
+ * this GET works for draft rows too; the metadata sidecar PATCHed
+ * these fields earlier in the same workflow run, so the row is
+ * current.
+ *
+ * Returns null — selecting the full-encode fallback — when the row is
+ * missing, lacks a start_time/period, or carries an unparseable
+ * timestamp/duration. Incremental is best-effort: any gap in the grid
+ * inputs degrades gracefully.
+ */
+async function fetchDatasetGrid(
+  server: ServerEnv,
+  datasetId: string,
+): Promise<DatasetGrid | null> {
+  const url = `${server.server}/api/v1/publish/datasets/${datasetId}`
+  let res: Response
+  try {
+    res = await fetch(url, {
+      method: 'GET',
+      headers: {
+        Accept: 'application/json',
+        'CF-Access-Client-Id': server.accessClientId,
+        'CF-Access-Client-Secret': server.accessClientSecret,
+      },
+    })
+  } catch (err) {
+    console.error(
+      `[transcode] dataset grid fetch failed (network) — full encode: ${err instanceof Error ? err.message : String(err)}`,
+    )
+    return null
+  }
+  if (!res.ok) {
+    console.error(`[transcode] dataset grid fetch returned ${res.status} — full encode`)
+    return null
+  }
+  let parsed: unknown
+  try {
+    parsed = await res.json()
+  } catch {
+    return null
+  }
+  const dataset =
+    typeof parsed === 'object' && parsed !== null
+      ? (parsed as { dataset?: unknown }).dataset
+      : null
+  if (typeof dataset !== 'object' || dataset === null) return null
+  const row = dataset as Record<string, unknown>
+  const startTime = typeof row.start_time === 'string' ? row.start_time : null
+  const period = typeof row.period === 'string' ? row.period : null
+  if (!startTime || !period) {
+    console.error('[transcode] dataset has no start_time/period — full encode')
+    return null
+  }
+  const startTimeMs = Date.parse(startTime)
+  const periodSeconds = isoDurationToSeconds(period)
+  if (!Number.isFinite(startTimeMs) || periodSeconds === null || periodSeconds <= 0) {
+    console.error('[transcode] dataset start_time/period unparseable — full encode')
+    return null
+  }
+  return { startTime, period, startTimeMs, periodMs: periodSeconds * 1000 }
+}
+
+/**
+ * Encode one ≤180-frame chunk into exactly one `.ts` segment per
+ * rendition. The chunk's frames are copied (renumbered 0..N-1) into a
+ * temp input dir so the image-sequence demuxer reads a contiguous
+ * `%05d` run, then `encodeHls` produces `stream_<i>/segment_000.ts`
+ * for each rendition (≤180 frames < the 6 s `hls_time` ⇒ one
+ * segment). Returns the segment bytes keyed by `stream_<i>` (matching
+ * `DEFAULT_RENDITION_DESCRIPTORS[i].id`) plus the measured `extinf`
+ * read verbatim from ffmpeg's emitted variant playlist — identical
+ * across renditions, so the runner writes the muxer's real duration
+ * rather than assuming frames/30.
+ */
+async function encodeChunkSegments(
+  args: { frameExtension: string; ffmpegBin: string | null },
+  framesDir: string,
+  chunkFrames: readonly FrameEntry[],
+): Promise<{ segments: Record<string, Uint8Array>; extinf: number; codecs?: Record<string, string> }> {
+  const ext = args.frameExtension
+  const tmpIn = mkdtempSync(join(tmpdir(), 'tvchunk-in-'))
+  const tmpOut = mkdtempSync(join(tmpdir(), 'tvchunk-out-'))
+  try {
+    chunkFrames.forEach((frame, i) => {
+      const src = join(framesDir, `${String(frame.index).padStart(5, '0')}.${ext}`)
+      const dst = join(tmpIn, `${String(i).padStart(5, '0')}.${ext}`)
+      copyFileSync(src, dst)
+    })
+    await encodeHls({
+      inputPath: join(tmpIn, `%05d.${ext}`),
+      outputDir: tmpOut,
+      ffmpegBin: args.ffmpegBin ?? undefined,
+      inputArgs: ['-framerate', String(OUTPUT_FRAME_RATE)],
+      hasAudio: false,
+    })
+    const segments: Record<string, Uint8Array> = {}
+    for (let i = 0; i < DEFAULT_RENDITIONS.length; i++) {
+      const streamDir = join(tmpOut, `stream_${i}`)
+      // A ≤180-frame chunk must encode to exactly one segment for the
+      // content-addressed model to hold. If ffmpeg split it (an
+      // unexpected extra keyframe at the chunk seam), bail so the
+      // caller falls back to a full encode rather than silently
+      // dropping the trailing segment's bytes.
+      if (existsSync(join(streamDir, 'segment_001.ts'))) {
+        throw new Error(
+          `chunk encode produced >1 segment for stream_${i} (frames=${chunkFrames.length})`,
+        )
+      }
+      segments[`stream_${i}`] = new Uint8Array(readFileSync(join(streamDir, 'segment_000.ts')))
+    }
+    // EXTINF is identical across renditions (same frame count + fps);
+    // read it from stream_0's emitted variant playlist so muxer
+    // rounding on partial chunks is preserved verbatim.
+    const playlist = readFileSync(join(tmpOut, 'stream_0', 'playlist.m3u8'), 'utf-8')
+    const extinfMatch = /#EXTINF:([0-9]+(?:\.[0-9]+)?)/.exec(playlist)
+    if (!extinfMatch) {
+      throw new Error('chunk encode produced no #EXTINF in stream_0/playlist.m3u8')
+    }
+    // Parse ffmpeg's own master for the per-rendition CODECS strings
+    // (e.g. stream_0 → avc1.4d4033). hls.js needs CODECS in the master
+    // to set up MSE; the hand-built incremental master must carry the
+    // exact values ffmpeg computed, matching the full-encode bundles.
+    const codecs = parseMasterCodecs(readFileSync(join(tmpOut, 'master.m3u8'), 'utf-8'))
+    return { segments, extinf: Number(extinfMatch[1]), codecs }
+  } finally {
+    rmSync(tmpIn, { recursive: true, force: true })
+    rmSync(tmpOut, { recursive: true, force: true })
+  }
+}
+
+/**
+ * Map each `stream_N` to its `CODECS` string from an ffmpeg-emitted
+ * master playlist. ffmpeg lists, per rendition, an
+ * `#EXT-X-STREAM-INF:...,CODECS="avc1.4d4033"` line immediately
+ * followed by the `stream_N/playlist.m3u8` URI; pair them. Returns
+ * undefined when no CODECS were found (so the caller can fall back to
+ * the prior manifest's values).
+ */
+function parseMasterCodecs(masterText: string): Record<string, string> | undefined {
+  const lines = masterText.split('\n')
+  const codecs: Record<string, string> = {}
+  for (let i = 0; i < lines.length; i++) {
+    if (!lines[i].startsWith('#EXT-X-STREAM-INF')) continue
+    const codecMatch = /CODECS="([^"]+)"/.exec(lines[i])
+    const uri = (lines[i + 1] ?? '').trim()
+    const idMatch = /^(stream_\d+)\//.exec(uri)
+    if (codecMatch && idMatch) codecs[idMatch[1]] = codecMatch[1]
+  }
+  return Object.keys(codecs).length > 0 ? codecs : undefined
+}
+
+/** GET + parse the prior segment manifest, or null on 404 (cold
+ *  start). Uses the shared retrying `getR2ObjectText`, so a transient
+ *  R2 blip on the manifest read doesn't needlessly drop the run to a
+ *  full re-encode. */
+async function loadSegmentManifest(
+  config: R2UploadConfig,
+  key: string,
+): Promise<SegmentManifest | null> {
+  const text = await getR2ObjectText(config, key)
+  if (text === null) return null
+  try {
+    return JSON.parse(text) as SegmentManifest
+  } catch (err) {
+    throw new Error(
+      `segment-manifest.json is not valid JSON: ${err instanceof Error ? err.message : String(err)}`,
+    )
+  }
+}
+
+/**
+ * List the shared segment store's hexes via the shared paginated
+ * `listR2KeysPaginated`. Keys look like
+ * `videos/{ds}/segments/sha256/{hex}.ts`; strip the prefix + `.ts` to
+ * recover the hex. Used by GC to find orphans.
+ */
+async function listSegmentHexesR2(config: R2UploadConfig, prefix: string): Promise<string[]> {
+  const keys = await listR2KeysPaginated(config, prefix)
+  return keys
+    .filter(key => key.startsWith(prefix) && key.endsWith('.ts'))
+    .map(key => key.slice(prefix.length, -'.ts'.length))
+}
+
+/**
+ * Attempt an incremental frame-sequence transcode (the default path
+ * for frames). Returns true when the dataset was published
+ * incrementally — the per-upload playlists, shared segment store, and
+ * manifest are all written, satisfying the same
+ * `r2:videos/{ds}/{up}/master.m3u8` `data_ref` contract as the full
+ * encode. Returns false when the precondition isn't met (no derivable
+ * grid) so the caller falls back. Throws on a hard mid-flight failure
+ * — the caller catches it and falls back, so incremental can only
+ * ever degrade to today's behavior.
+ */
+async function runFramesIncremental(
+  args: { datasetId: string; uploadId: string; frameExtension: string; ffmpegBin: string | null },
+  r2Config: R2UploadConfig,
+  serverEnv: ServerEnv,
+  framesDir: string,
+  frames: readonly FrameEntry[],
+): Promise<boolean> {
+  const grid = await fetchDatasetGrid(serverEnv, args.datasetId)
+  if (!grid) return false
+
+  const manifestKey = `videos/${args.datasetId}/segment-manifest.json`
+  const prevManifest = await loadSegmentManifest(r2Config, manifestKey)
+
+  // EPOCH is frozen on the first run (the cold-start manifest records
+  // it) and carried over unchanged thereafter, so a given real frame
+  // keeps the same grid cell as the window slides. frame[0]'s absolute
+  // time is the row's `start_time` (the sidecar PATCHes it to the
+  // window's earliest frame each run).
+  const epoch = prevManifest?.epoch ?? grid.startTime
+  const epochMs = Date.parse(epoch)
+  if (!Number.isFinite(epochMs)) {
+    console.error('[transcode] segment manifest epoch unparseable — full encode')
+    return false
+  }
+  const offset = gridOffset(grid.startTimeMs, epochMs, grid.periodMs)
+  if (offset === null) {
+    console.error('[transcode] frame[0] does not land on the cadence grid — full encode')
+    return false
+  }
+
+  const datasetPrefix = `videos/${args.datasetId}`
+  const deps: IncrementalDeps = {
+    loadManifest: async () => prevManifest,
+    saveManifest: async manifest => {
+      await uploadR2Object(
+        r2Config,
+        manifestKey,
+        new TextEncoder().encode(JSON.stringify(manifest)),
+        'application/json',
+      )
+    },
+    encodeChunk: chunkFrames => encodeChunkSegments(args, framesDir, chunkFrames),
+    segmentExists: hex => r2ObjectExists(r2Config, `${datasetPrefix}/${segmentKey(hex)}`),
+    putSegment: async (hex, body) => {
+      await uploadR2Object(r2Config, `${datasetPrefix}/${segmentKey(hex)}`, body, 'video/mp2t')
+    },
+    uploadPlaylists: async files => {
+      const base = `${datasetPrefix}/${args.uploadId}`
+      for (const [rel, content] of Object.entries(files)) {
+        await uploadR2Object(
+          r2Config,
+          `${base}/${rel}`,
+          new TextEncoder().encode(content),
+          'application/vnd.apple.mpegurl',
+        )
+      }
+    },
+    listSegmentHexes: () => listSegmentHexesR2(r2Config, `${datasetPrefix}/segments/sha256/`),
+    deleteSegments: async hexes => {
+      for (const hex of hexes) {
+        await deleteR2Object(r2Config, `${datasetPrefix}/${segmentKey(hex)}`)
+      }
+    },
+    log: line => console.error(`[transcode] ${line}`),
+  }
+
+  const bandwidthByRendition = new Map(
+    DEFAULT_RENDITION_DESCRIPTORS.map((d, i) => [d.id, DEFAULT_RENDITIONS[i].maxBitrateKbps * 1000]),
+  )
+
+  const result = await runIncremental(deps, {
+    frames,
+    renditions: DEFAULT_RENDITION_DESCRIPTORS,
+    offset,
+    epoch,
+    period: grid.period,
+    bandwidthByRendition,
+  })
+  console.error(
+    `[transcode] incremental: ${result.totalChunks} chunks — encoded ${result.encodedChunks}, ` +
+      `reused ${result.reusedChunks}, uploaded ${result.uploadedSegments} segment(s), ` +
+      `pruned ${result.prunedSegments}`,
+  )
+  return true
+}
+
 async function main(): Promise<number> {
   const argv = process.argv.slice(2)
   const parsedArgs = parseArgs(argv)
@@ -589,6 +956,11 @@ async function main(): Promise<number> {
   let exitCode = 0
   let ffmpegInputPath: string
   let ffmpegInputArgs: readonly string[] = []
+  // Set true when the frames path published via the incremental
+  // encoder; the full-encode + bundle-upload block below is then
+  // skipped. Stays false for MP4 sources and for any incremental
+  // fallback, so those take the legacy path.
+  let publishedIncrementally = false
   try {
     if (args.sourceKind === 'video') {
       // MP4 source — single GET, single digest verify.
@@ -614,6 +986,7 @@ async function main(): Promise<number> {
       // against `--source-digest` before encoding.
       const framesDir = join(args.workdir, 'frames')
       mkdirSync(framesDir, { recursive: true })
+      let frameManifest: FrameEntry[]
       try {
         // Fetch + verify the manifest FIRST so we have the
         // per-frame digests to compare against during each frame
@@ -625,8 +998,8 @@ async function main(): Promise<number> {
         // API extracted from the asset_uploads row's
         // claimed_digest) gives us a trusted set of claims to
         // compare against.
-        const manifest = await verifySourceFilenamesBlob(r2Config, args)
-        await downloadFrames(r2Config, framesDir, args, manifest)
+        frameManifest = await verifySourceFilenamesBlob(r2Config, args)
+        await downloadFrames(r2Config, framesDir, args, frameManifest)
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
         console.error(`error: ${message}`)
@@ -636,6 +1009,28 @@ async function main(): Promise<number> {
         exitCode = 6
         return exitCode
       }
+
+      // Incremental is the default for frame sequences: encode only
+      // the changed chunks and recycle the rest. Any failure — or a
+      // missing prior manifest / un-derivable grid — falls through to
+      // the full-encode path below, so a bug can at worst reproduce
+      // today's behavior.
+      try {
+        publishedIncrementally = await runFramesIncremental(
+          args,
+          r2Config,
+          serverEnv,
+          framesDir,
+          frameManifest,
+        )
+      } catch (err) {
+        console.error(
+          `[transcode] incremental encode failed — falling back to full encode: ` +
+            `${err instanceof Error ? err.message : String(err)}`,
+        )
+        publishedIncrementally = false
+      }
+
       // ffmpeg's image-sequence demuxer reads `framesDir/%05d.png`
       // (or .jpg / .webp) and treats each numbered frame as one
       // input frame at the declared `-framerate`. The `-r 30` on
@@ -645,40 +1040,45 @@ async function main(): Promise<number> {
       ffmpegInputArgs = ['-framerate', String(OUTPUT_FRAME_RATE)]
     }
 
-    console.error(`[transcode] encoding ${ffmpegInputPath} → ${outputDir}`)
-    const encodeStart = Date.now()
-    const encoded = await encodeHls({
-      inputPath: ffmpegInputPath,
-      outputDir,
-      ffmpegBin: args.ffmpegBin ?? undefined,
-      onProgress: line => process.stderr.write(`[ffmpeg] ${line}\n`),
-      inputArgs: ffmpegInputArgs,
-      // Image sequences are silent — skip the audio probe (which
-      // would fail against the image-sequence pattern anyway) and
-      // tell `buildFfmpegArgs` to omit the audio mapping. MP4
-      // sources keep the auto-detect default.
-      hasAudio: args.sourceKind === 'frames' ? false : undefined,
-    })
-    console.error(
-      `[transcode] encode done in ${Date.now() - encodeStart} ms; ${encoded.files.length} files`,
-    )
+    // Full-encode path. Skipped when the frames branch already
+    // published incrementally (it wrote the same per-upload
+    // `master.m3u8`, so the `data_ref` contract below is identical).
+    if (!publishedIncrementally) {
+      console.error(`[transcode] encoding ${ffmpegInputPath} → ${outputDir}`)
+      const encodeStart = Date.now()
+      const encoded = await encodeHls({
+        inputPath: ffmpegInputPath,
+        outputDir,
+        ffmpegBin: args.ffmpegBin ?? undefined,
+        onProgress: line => process.stderr.write(`[ffmpeg] ${line}\n`),
+        inputArgs: ffmpegInputArgs,
+        // Image sequences are silent — skip the audio probe (which
+        // would fail against the image-sequence pattern anyway) and
+        // tell `buildFfmpegArgs` to omit the audio mapping. MP4
+        // sources keep the auto-detect default.
+        hasAudio: args.sourceKind === 'frames' ? false : undefined,
+      })
+      console.error(
+        `[transcode] encode done in ${Date.now() - encodeStart} ms; ${encoded.files.length} files`,
+      )
 
-    // 4. Upload bundle to a per-upload-id prefix. Scoping by
-    //    upload_id means a re-upload to an already-published row
-    //    lands in a fresh prefix without overwriting the bundle
-    //    the public manifest is still serving — the
-    //    `/transcode-complete` route swaps `data_ref` atomically
-    //    when this script finishes. Fix for PR #112 Copilot #15.
-    const bundlePrefix = `videos/${args.datasetId}/${args.uploadId}`
-    console.error(`[transcode] uploading bundle → r2://${bundlePrefix}/`)
-    const uploadStart = Date.now()
-    const uploaded = await uploadHlsBundle(r2Config, outputDir, bundlePrefix, {
-      onProgress: info =>
-        console.error(`[r2] PUT ${info.key} (${info.bytes} B; ${info.done}/${info.total})`),
-    })
-    console.error(
-      `[transcode] upload done in ${Date.now() - uploadStart} ms; ${uploaded.totalBytes} bytes total`,
-    )
+      // 4. Upload bundle to a per-upload-id prefix. Scoping by
+      //    upload_id means a re-upload to an already-published row
+      //    lands in a fresh prefix without overwriting the bundle
+      //    the public manifest is still serving — the
+      //    `/transcode-complete` route swaps `data_ref` atomically
+      //    when this script finishes. Fix for PR #112 Copilot #15.
+      const bundlePrefix = `videos/${args.datasetId}/${args.uploadId}`
+      console.error(`[transcode] uploading bundle → r2://${bundlePrefix}/`)
+      const uploadStart = Date.now()
+      const uploaded = await uploadHlsBundle(r2Config, outputDir, bundlePrefix, {
+        onProgress: info =>
+          console.error(`[r2] PUT ${info.key} (${info.bytes} B; ${info.done}/${info.total})`),
+      })
+      console.error(
+        `[transcode] upload done in ${Date.now() - uploadStart} ms; ${uploaded.totalBytes} bytes total`,
+      )
+    }
 
     // 5. POST transcode-complete. The server constructs the
     //    expected data_ref from (route id + upload id) and

@@ -133,6 +133,10 @@ describe('renderDatasetNewPage', () => {
           title: 'My Dataset',
           format: 'image/png',
           visibility: 'private',
+          // The flip flag is always sent (a checkbox is explicitly
+          // on/off so it can be toggled back off on edit); false is a
+          // no-op the serializer treats the same as null.
+          is_flipped_in_y: false,
         }),
       }),
     )
@@ -492,6 +496,44 @@ describe('renderDatasetNewPage', () => {
     expect(body.citation_text).toBe('NOAA PMEL, 2026.')
   })
 
+  it('renders a per-corner bounding-box validation error inline', async () => {
+    const errors = {
+      errors: [
+        {
+          field: 'bounding_box.n',
+          code: 'invalid_value',
+          message: 'bounding_box.n must be in [-90, 90] (got 200).',
+        },
+      ],
+    }
+    const fetchFn = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(errors), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+    renderDatasetNewPage(mount, {
+      fetchFn: fetchFn as unknown as typeof fetch,
+      routerNavigate: vi.fn(),
+    })
+
+    setInput(mount, '#dataset-title', 'A title')
+    setInput(mount, '#dataset-bbox-n', '200')
+    setInput(mount, '#dataset-bbox-s', '20')
+    setInput(mount, '#dataset-bbox-w', '-10')
+    setInput(mount, '#dataset-bbox-e', '30')
+    submitForm(mount)
+    await new Promise(r => setTimeout(r, 0))
+    await new Promise(r => setTimeout(r, 0))
+
+    const nInput = mount.querySelector<HTMLInputElement>('#dataset-bbox-n')
+    expect(nInput?.getAttribute('aria-invalid')).toBe('true')
+    expect(nInput?.getAttribute('aria-describedby')).toBe('dataset-bbox-n-err')
+    expect(mount.querySelector('#dataset-bbox-n-err')?.textContent).toContain(
+      'must be in [-90, 90]',
+    )
+  })
+
   it('renders per-field validation error on the licensing fields', async () => {
     const errors = {
       errors: [
@@ -663,6 +705,114 @@ describe('renderDatasetNewPage', () => {
     >
     expect(body.keywords).toEqual(['climate', 'sst'])
     expect(body.tags).toEqual(['featured'])
+  })
+
+  it('renders the media card with thumbnail + legend manual inputs but no uploaders in create mode', () => {
+    // The guided uploader needs a saved row to scope its /asset
+    // endpoint against, so create mode (no id yet) shows only the
+    // manual ref inputs. The uploader appears on the edit page.
+    renderDatasetNewPage(mount)
+    expect(mount.querySelector('#dataset-thumbnail-ref')).not.toBeNull()
+    expect(mount.querySelector('#dataset-legend-ref')).not.toBeNull()
+    expect(mount.querySelector('.publisher-asset-uploader')).toBeNull()
+  })
+
+  it('omits thumbnail_ref + legend_ref from the body when blank', async () => {
+    const fetchFn = vi.fn().mockResolvedValue(jsonResponse({ dataset: { id: 'X' } }))
+    renderDatasetNewPage(mount, {
+      fetchFn: fetchFn as unknown as typeof fetch,
+      routerNavigate: vi.fn(),
+    })
+
+    setInput(mount, '#dataset-title', 'A title')
+    submitForm(mount)
+    await new Promise(r => setTimeout(r, 0))
+
+    const body = JSON.parse(fetchFn.mock.calls[0][1].body as string) as Record<
+      string,
+      unknown
+    >
+    expect(body.thumbnail_ref).toBeUndefined()
+    expect(body.legend_ref).toBeUndefined()
+  })
+
+  it('includes trimmed thumbnail_ref + legend_ref in the body when set', async () => {
+    const fetchFn = vi.fn().mockResolvedValue(jsonResponse({ dataset: { id: 'X' } }))
+    renderDatasetNewPage(mount, {
+      fetchFn: fetchFn as unknown as typeof fetch,
+      routerNavigate: vi.fn(),
+    })
+
+    setInput(mount, '#dataset-title', 'A title')
+    setInput(mount, '#dataset-thumbnail-ref', '  r2:datasets/X/thumbnail.png  ')
+    setInput(mount, '#dataset-legend-ref', '  r2:datasets/X/legend.png  ')
+    submitForm(mount)
+    await new Promise(r => setTimeout(r, 0))
+
+    const body = JSON.parse(fetchFn.mock.calls[0][1].body as string) as Record<
+      string,
+      unknown
+    >
+    expect(body.thumbnail_ref).toBe('r2:datasets/X/thumbnail.png')
+    expect(body.legend_ref).toBe('r2:datasets/X/legend.png')
+  })
+
+  it('renders the geography & projection card fields', () => {
+    renderDatasetNewPage(mount)
+    expect(mount.querySelector('#dataset-bbox-n')).not.toBeNull()
+    expect(mount.querySelector('#dataset-bbox-s')).not.toBeNull()
+    expect(mount.querySelector('#dataset-bbox-w')).not.toBeNull()
+    expect(mount.querySelector('#dataset-bbox-e')).not.toBeNull()
+    expect(mount.querySelector('#dataset-lon-origin')).not.toBeNull()
+    expect(mount.querySelector('#dataset-flipped-y')).not.toBeNull()
+    expect(mount.querySelector('#dataset-celestial-body')).not.toBeNull()
+    expect(mount.querySelector('#dataset-radius-mi')).not.toBeNull()
+  })
+
+  it('sends bounding_box + projection fields when set', async () => {
+    const fetchFn = vi.fn().mockResolvedValue(jsonResponse({ dataset: { id: 'X' } }))
+    renderDatasetNewPage(mount, {
+      fetchFn: fetchFn as unknown as typeof fetch,
+      routerNavigate: vi.fn(),
+    })
+
+    setInput(mount, '#dataset-title', 'Regional Mars set')
+    setInput(mount, '#dataset-bbox-n', '60')
+    setInput(mount, '#dataset-bbox-s', '20')
+    setInput(mount, '#dataset-bbox-w', '-10')
+    setInput(mount, '#dataset-bbox-e', '30')
+    setInput(mount, '#dataset-lon-origin', '180')
+    mount.querySelector<HTMLInputElement>('#dataset-flipped-y')!.click()
+    setInput(mount, '#dataset-celestial-body', 'Mars')
+    setInput(mount, '#dataset-radius-mi', '2106')
+    submitForm(mount)
+    await new Promise(r => setTimeout(r, 0))
+
+    const body = JSON.parse(fetchFn.mock.calls[0][1].body as string) as Record<string, unknown>
+    expect(body.bounding_box).toEqual({ n: 60, s: 20, w: -10, e: 30 })
+    expect(body.lon_origin).toBe(180)
+    expect(body.is_flipped_in_y).toBe(true)
+    expect(body.celestial_body).toBe('Mars')
+    expect(body.radius_mi).toBe(2106)
+  })
+
+  it('omits bounding_box when not all four corners are filled', async () => {
+    const fetchFn = vi.fn().mockResolvedValue(jsonResponse({ dataset: { id: 'X' } }))
+    renderDatasetNewPage(mount, {
+      fetchFn: fetchFn as unknown as typeof fetch,
+      routerNavigate: vi.fn(),
+    })
+
+    setInput(mount, '#dataset-title', 'Partial box')
+    setInput(mount, '#dataset-bbox-n', '60')
+    setInput(mount, '#dataset-bbox-s', '20')
+    setInput(mount, '#dataset-bbox-w', '-10')
+    // East left blank.
+    submitForm(mount)
+    await new Promise(r => setTimeout(r, 0))
+
+    const body = JSON.parse(fetchFn.mock.calls[0][1].body as string) as Record<string, unknown>
+    expect(body.bounding_box).toBeUndefined()
   })
 
   it('Cancel link routes back to /publish/datasets via SPA navigation', () => {

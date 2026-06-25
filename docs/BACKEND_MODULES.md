@@ -27,7 +27,12 @@ design rationale in the `docs/CATALOG_*` plan docs.
 | `cli/lib/client.ts` | Thin HTTP client wrapping fetch + the Access auth headers |
 | `cli/lib/config.ts` | Resolve the CLI's runtime configuration: server URL + auth |
 | `cli/lib/ffmpeg-hls.ts` | FFmpeg HLS encoder wrapper — multi-rendition equirectangular |
+| `cli/lib/hls-incremental.ts` | Pure core of incremental HLS re-encoding — absolute-grid chunking, content-addressed segment hashing, reuse-vs-encode diff, playlist assembly (`docs/INCREMENTAL_HLS_PLAN.md`) |
+| `cli/lib/hls-incremental-runner.ts` | Incremental transcode orchestration over an injectable I/O seam — load manifest → diff → encode changed chunks → recycle the rest → publish playlists → persist manifest → mark-and-sweep segment GC (`docs/INCREMENTAL_HLS_PLAN.md` Stages 2-3) |
 | `cli/lib/migration-telemetry.ts` | Operator-side telemetry emitter for the migration CLIs |
+| `cli/lib/frames-publish.ts` | Publish a runner's padded frame directory as an image-sequence asset (hash → init → PUT frames + `source_filenames.json` → complete) so the Zyra recall path reuses the existing `/frames` surface (`docs/ZYRA_INTEGRATION_PLAN.md` §Real-time frame store). HEAD-skips frames already in the content-addressed store when an `exists` gate is supplied (`docs/INCREMENTAL_FRAME_UPLOAD_PLAN.md`) |
+| `cli/lib/frame-store.ts` | Runner-side content-addressed frame store helpers — `videos/{dataset}/frames/sha256/{hex}.{ext}` key/prefix builders + the pure mark-and-sweep orphan selection; shared by the transcode read path, the publish HEAD-skip, and the frame GC (`docs/INCREMENTAL_FRAME_UPLOAD_PLAN.md`) |
+| `cli/lib/r2-frames.ts` | R2-backed frame cache for real-time Zyra workflow runs — restore/save a dataset's frames under `workflow-frames/{dataset_id}/` with window-only prune (`docs/ZYRA_INTEGRATION_PLAN.md` §Real-time frame store) |
 | `cli/lib/r2-upload.ts` | R2 S3-API bulk uploader for HLS bundles |
 | `cli/lib/realtime-title.ts` | Heuristic to detect "real-time" SOS rows by title — the rows whose Vimeo source is re-uploaded on a recurring (typically daily) cadence by NOAA's automation |
 | `cli/lib/snapshot-import.ts` | Pure row-mapping helpers for the SOS catalog snapshot importer |
@@ -37,6 +42,7 @@ design rationale in the `docs/CATALOG_*` plan docs.
 | `cli/lib/verify-checks.ts` | Production-deploy verification checks for `terraviz verify-deploy` |
 | `cli/lib/vimeo-source.ts` | Resolve a `vimeo:<id>` reference to a source MP4 download URL |
 | `cli/lib/workflow-sidecar.ts` | Metadata-sidecar rendering for the Zyra runner — template interpolation, frames-meta range reader, error-summary sanitizer |
+| `cli/lib/zyra-acquire-softpass.ts` | Pure soft-pass decision for a transient NOAA-FTP `acquire` failure in a scheduled Zyra run — classify the `zyra run` log (FTP/network transient vs real failure), assess published-bundle freshness, and decide soft-pass (no-op `succeeded`, GREEN) vs escalate (fail loudly). Consumed by `zyra-publish-from-dispatch.ts --phase=acquire-softpass` |
 | `cli/list-realtime-r2.ts` | `terraviz list-realtime-r2` — find migrated rows whose Vimeo source is on a daily re-upload cadence, and recover the original Vimeo id so they can be rolled back |
 | `cli/migrate-r2-assets.ts` | `terraviz migrate-r2-assets` — migrate auxiliary asset URLs (thumbnail / legend / caption / color-table) from NOAA-hosted CloudFront URLs to R2-hosted URLs under … |
 | `cli/migrate-r2-hls.ts` | `terraviz migrate-r2-hls` — migrate legacy `vimeo:<id>` data_refs to R2-hosted HLS bundles for 4K spherical streaming |
@@ -46,8 +52,9 @@ design rationale in the `docs/CATALOG_*` plan docs.
 | `cli/rollback-r2-tours.ts` | `terraviz rollback-r2-tours` — undo a migrated tour |
 | `cli/terraviz.ts` | `terraviz` CLI entry point |
 | `cli/transcode-from-dispatch.ts` | `transcode-from-dispatch` — invoked by the `transcode-hls` GitHub Actions workflow when the publisher portal fires a `repository_dispatch` after a video upload lands in R2 |
+| `cli/report-transcode-failure.ts` | `report-transcode-failure` — the `transcode-hls` workflow's failure/cancellation step; POSTs `/transcode-failed` to release a dataset's stuck `transcoding` lock when the encode errors or the job times out (the timeout SIGKILLs the main runner before it can self-report) |
 | `cli/verify-deploy.ts` | `terraviz verify-deploy` — operator-friendly post-deploy smoke-test command |
-| `cli/zyra-publish-from-dispatch.ts` | `zyra-publish-from-dispatch` — Phase Z1 runner CLI (fetch / publish / report-failure phases) invoked by the `zyra-run` GitHub Actions workflow |
+| `cli/zyra-publish-from-dispatch.ts` | `zyra-publish-from-dispatch` — Phase Z1 runner CLI (fetch / restore-frames / save-frames / publish / report-failure / acquire-softpass phases) invoked by the `zyra-run` GitHub Actions workflow |
 | `cli/zyra-spike-publish.ts` | `zyra-spike-publish` — Phase Z0 spike (see `docs/ZYRA_INTEGRATION_PLAN.md`): ffprobe SOS-spec assertion + publish-API leg for an MP4 a Zyra pipeline rendered on the runner; invoked by the manual `zyra-spike` GitHub Actions workflow |
 
 ## Platform & feedback Pages Functions (`functions/api/`)
@@ -68,6 +75,10 @@ design rationale in the `docs/CATALOG_*` plan docs.
 | `functions/api/ingest.ts` | Route: /api/ingest |
 | `functions/api/legend.ts` | Route: /api/legend |
 | `functions/api/models.ts` | Route: /api/models |
+| `functions/api/voice/_voice-lib.ts` | Shared helpers for the voice Pages Functions — Workers AI model IDs, `KILL_VOICE` kill switch, CORS/origin, per-IP rate limiter, base64 (`docs/ORBIT_VOICE_PLAN.md` §7) |
+| `functions/api/voice/synthesize.ts` | Route: POST /api/voice/synthesize — text-to-speech via Workers AI (MeloTTS default, Aura opt-in) |
+| `functions/api/voice/transcribe.ts` | Route: POST /api/voice/transcribe — speech-to-text via Workers AI (Whisper large v3 turbo) |
+| `functions/api/voice/stream.ts` | Route: WS /api/voice/stream — realtime STT proxy; pipes linear16 PCM to Cloudflare's AI Gateway realtime endpoint (Deepgram Nova-3/Flux) with the `cf-aig-authorization` secret, JSON transcripts back. Config: `CF_ACCOUNT_ID` / `CF_AI_GATEWAY` / `CF_AIG_TOKEN`. When unset, `KILL_VOICE` is on, or over the per-IP cap, it accepts the socket and sends a JSON error frame (`{type:"error",code}`) before closing — a browser WS can't read an HTTP status — so the client cools down and the streaming resolver falls back to batch Whisper (`docs/ORBIT_VOICE_PLAN.md` §3) |
 | `functions/api/tile/[[path]].ts` | Route: /api/tile/[...path] |
 
 ## Catalog read API (`functions/api/v1/`)
@@ -103,6 +114,7 @@ design rationale in the `docs/CATALOG_*` plan docs.
 | `functions/api/v1/publish/datasets/[id]/reindex.ts` | POST /api/v1/publish/datasets/{id}/reindex |
 | `functions/api/v1/publish/datasets/[id]/retract.ts` | POST /api/v1/publish/datasets/{id}/retract |
 | `functions/api/v1/publish/datasets/[id]/transcode-complete.ts` | POST /api/v1/publish/datasets/{id}/transcode-complete |
+| `functions/api/v1/publish/datasets/[id]/transcode-failed.ts` | POST /api/v1/publish/datasets/{id}/transcode-failed — failure counterpart; releases the `transcoding` lock (leaves `data_ref` on the prior bundle) when the transcode job errors or times out |
 | `functions/api/v1/publish/featured-hero.ts` | /api/v1/publish/featured-hero — the "Right now" hero admin write API (Phase B of `docs/HERO_ADMIN_SCOPING.md`) |
 | `functions/api/v1/publish/featured.ts` | /api/v1/publish/featured |
 | `functions/api/v1/publish/featured/[dataset_id].ts` | /api/v1/publish/featured/{dataset_id} |

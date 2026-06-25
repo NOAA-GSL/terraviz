@@ -26,6 +26,7 @@ import type { Browser, Page } from 'playwright'
 import { gotoApp, launchBrowser, withScenePage } from './core/browser'
 import { installFixtures, type FixtureRule } from './core/fixtures'
 import { attachSignalCollectors } from './core/signals'
+import { catalogFixtures } from './fixtures/catalog'
 import { publisherFixtures } from './fixtures/publisher'
 
 const BASE_URL = process.env.SCREENSHOT_BASE_URL ?? 'http://localhost:4173'
@@ -70,6 +71,7 @@ interface Check {
 const checks: Check[] = [
   {
     name: 'catalog search narrows the result grid',
+    fixtures: catalogFixtures(),
     async run(page) {
       await gotoApp(page, '/?catalog=true')
       await page.locator('#browse-overlay').waitFor({ state: 'visible' })
@@ -90,6 +92,7 @@ const checks: Check[] = [
   },
   {
     name: 'Orbit local engine answers a chat message',
+    fixtures: catalogFixtures(),
     async run(page) {
       await gotoApp(page, '/?catalog=true')
       await page.locator('#browse-overlay').waitFor({ state: 'visible' })
@@ -135,6 +138,87 @@ const checks: Check[] = [
       await page
         .locator('#publisher-root', { hasText: 'Global Sea Surface Temperature' })
         .waitFor({ timeout: 15_000 })
+    },
+  },
+  {
+    name: 'workflow template picker fills the drought recall pipeline',
+    fixtures: publisherFixtures(),
+    async run(page) {
+      await gotoApp(page, '/publish/workflows/new')
+      await page.locator('#publisher-root .publisher-topbar').waitFor({ state: 'visible' })
+
+      // Pick the curated drought template via the template <select>,
+      // identified by its option value (the visible label is i18n).
+      const templatePicker = page.locator('select', {
+        has: page.locator('option[value="ftp-frames-sos"]'),
+      })
+      await templatePicker.waitFor({ state: 'visible' })
+      await templatePicker.selectOption('ftp-frames-sos')
+
+      // The pipeline textarea (first of the two) now holds the
+      // recall-enabled drought pipeline: a basemap pad-missing stage
+      // and NO compose-video (it publishes frames, not an MP4).
+      const pipeline = page.locator('.publisher-form-textarea').first()
+      const yaml = await pipeline.inputValue()
+      assert(yaml.includes('command: pad-missing'), 'pipeline should include the pad-missing stage')
+      assert(
+        yaml.includes('fill-mode: basemap'),
+        'drought pad-missing should fill gaps from the basemap',
+      )
+      assert(
+        !yaml.includes('compose-video'),
+        'recall-enabled drought template should not compose a video',
+      )
+
+      // The metadata template textarea (the second) is seeded too.
+      const meta = page.locator('.publisher-form-textarea').nth(1)
+      assert(
+        (await meta.inputValue()).includes('{{data_start}}'),
+        'metadata template should be seeded with the data-range placeholders',
+      )
+    },
+  },
+  {
+    name: 'globe-thumbnail generator renders a preview and re-renders on rotation',
+    fixtures: publisherFixtures(),
+    async run(page) {
+      await gotoApp(page, '/publish/datasets/01HEXAMPLEDATASET00000001/edit')
+      await page.locator('#publisher-root .publisher-topbar').waitFor({ state: 'visible' })
+      // The thumbnail uploader's globe-thumbnail generator block.
+      await page
+        .locator('.publisher-asset-uploader-generate')
+        .first()
+        .waitFor({ timeout: 15_000 })
+      // Pick a 2:1 equirectangular frame; the in-browser WebGL globe
+      // render must produce a preview.
+      await page
+        .locator('input[type="file"][id^="dataset-asset-generate-"]')
+        .first()
+        .setInputFiles('scripts/screenshots/fixtures/equirect-sample.png')
+      const preview = page.locator('.publisher-asset-uploader-generate-preview')
+      await preview.waitFor({ state: 'visible', timeout: 20_000 })
+      const before = await preview.getAttribute('src')
+      assert(
+        !!before && before.startsWith('blob:'),
+        'generated preview should be a blob-URL image',
+      )
+      // Rotating must re-render: moving the longitude slider swaps the
+      // preview to a freshly captured image (a new object URL).
+      await page
+        .locator('input[type="range"][id$="-lon"]')
+        .evaluate((el: HTMLInputElement) => {
+          el.value = '120'
+          el.dispatchEvent(new Event('input', { bubbles: true }))
+          el.dispatchEvent(new Event('change', { bubbles: true }))
+        })
+      await page.waitForFunction(
+        (prev) => {
+          const img = document.querySelector('.publisher-asset-uploader-generate-preview')
+          return img instanceof HTMLImageElement && img.getAttribute('src') !== prev
+        },
+        before,
+        { timeout: 20_000 },
+      )
     },
   },
 ]

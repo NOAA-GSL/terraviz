@@ -24,6 +24,9 @@ import {
   buildObjectUrl,
   contentTypeForFile,
   deleteR2Object,
+  getR2ObjectText,
+  listR2KeysPaginated,
+  r2ObjectExists,
   deleteR2Prefix,
   loadR2ConfigFromEnv,
   parseListKeys,
@@ -488,7 +491,7 @@ describe('uploadR2Object (3b/F)', () => {
       'datasets/DS001/caption.vtt',
       new Uint8Array(10),
       'text/vtt',
-      { fetchImpl },
+      { fetchImpl, retryDelayMs: 0 },
     ).catch(e => e) as R2UploadError
     expect(err).toBeInstanceOf(R2UploadError)
     expect(err.status).toBeNull()
@@ -585,7 +588,7 @@ describe('deleteR2Object (3b/I)', () => {
     const err = await deleteR2Object(
       CONFIG,
       'datasets/DS001/legend.png',
-      { fetchImpl },
+      { fetchImpl, retryDelayMs: 0 },
     ).catch(e => e) as R2UploadError
     expect(err).toBeInstanceOf(R2UploadError)
     expect(err.status).toBeNull()
@@ -602,5 +605,136 @@ describe('deleteR2Object (3b/I)', () => {
     expect(err).toBeInstanceOf(R2UploadError)
     expect(err.message).toContain('R2_SECRET_ACCESS_KEY')
     expect(fetchImpl).not.toHaveBeenCalled()
+  })
+})
+
+describe('r2ObjectExists', () => {
+  it('returns true on 2xx, false on 404', async () => {
+    const ok = vi.fn(async () => new Response(null, { status: 200 }))
+    expect(await r2ObjectExists(CONFIG, 'videos/x/frames/sha256/a.png', { fetchImpl: ok as unknown as typeof fetch })).toBe(
+      true,
+    )
+    const missing = vi.fn(async () => new Response(null, { status: 404 }))
+    expect(
+      await r2ObjectExists(CONFIG, 'videos/x/frames/sha256/a.png', { fetchImpl: missing as unknown as typeof fetch }),
+    ).toBe(false)
+  })
+
+  it('throws on a persistent unexpected error status (not 404), after retrying', async () => {
+    const err = vi.fn(async () => new Response(null, { status: 500 }))
+    await expect(
+      r2ObjectExists(CONFIG, 'videos/x/frames/sha256/a.png', {
+        fetchImpl: err as unknown as typeof fetch,
+        attempts: 3,
+        retryDelayMs: 0,
+      }),
+    ).rejects.toBeInstanceOf(R2UploadError)
+    expect(err).toHaveBeenCalledTimes(3) // 5xx is retried
+  })
+
+  it('retries a transient 429 then returns true (R2 read-rate throttle)', async () => {
+    let n = 0
+    const flaky = vi.fn(async () => (++n < 2 ? new Response(null, { status: 429 }) : new Response(null, { status: 200 })))
+    expect(
+      await r2ObjectExists(CONFIG, 'videos/x/frames/sha256/a.png', {
+        fetchImpl: flaky as unknown as typeof fetch,
+        retryDelayMs: 0,
+      }),
+    ).toBe(true)
+    expect(flaky).toHaveBeenCalledTimes(2)
+  })
+
+  it('falls back to the default attempts on a non-finite attempts (no infinite loop)', async () => {
+    // A NaN attempts (e.g. from a parsed env/flag) must not make
+    // `attempt >= attempts` never trip — retryBudget falls back to the
+    // default 4 attempts.
+    const err = vi.fn(async () => new Response(null, { status: 500 }))
+    await expect(
+      r2ObjectExists(CONFIG, 'videos/x/frames/sha256/a.png', {
+        fetchImpl: err as unknown as typeof fetch,
+        attempts: Number.NaN,
+        retryDelayMs: 0,
+      }),
+    ).rejects.toBeInstanceOf(R2UploadError)
+    expect(err).toHaveBeenCalledTimes(4) // default, not infinite
+  })
+
+  it('does NOT retry a deterministic 4xx (403 fails fast — only 429/5xx are retried)', async () => {
+    const forbidden = vi.fn(async () => new Response(null, { status: 403 }))
+    await expect(
+      r2ObjectExists(CONFIG, 'videos/x/frames/sha256/a.png', {
+        fetchImpl: forbidden as unknown as typeof fetch,
+        retryDelayMs: 0,
+      }),
+    ).rejects.toBeInstanceOf(R2UploadError)
+    expect(forbidden).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('getR2ObjectText', () => {
+  it('returns the body on 2xx, null on 404', async () => {
+    const ok = vi.fn(async () => new Response('[{"index":0}]', { status: 200 }))
+    expect(await getR2ObjectText(CONFIG, 'k.json', { fetchImpl: ok as unknown as typeof fetch })).toBe('[{"index":0}]')
+    const missing = vi.fn(async () => new Response(null, { status: 404 }))
+    expect(await getR2ObjectText(CONFIG, 'k.json', { fetchImpl: missing as unknown as typeof fetch })).toBeNull()
+  })
+})
+
+describe('listR2KeysPaginated', () => {
+  function page(keys: string[], nextToken?: string): string {
+    const contents = keys.map(k => `<Contents><Key>${k}</Key></Contents>`).join('')
+    const truncated = nextToken
+      ? `<IsTruncated>true</IsTruncated><NextContinuationToken>${nextToken}</NextContinuationToken>`
+      : '<IsTruncated>false</IsTruncated>'
+    return `<?xml version="1.0"?><ListBucketResult>${truncated}${contents}</ListBucketResult>`
+  }
+
+  it('follows NextContinuationToken across pages', async () => {
+    const calls: string[] = []
+    const fetchImpl = vi.fn(async (req: Request) => {
+      const url = typeof req === 'string' ? req : req.url
+      calls.push(url)
+      if (url.includes('continuation-token=PAGE2')) {
+        return new Response(page(['videos/d/frames/sha256/c.png']), { status: 200 })
+      }
+      return new Response(page(['videos/d/frames/sha256/a.png', 'videos/d/frames/sha256/b.png'], 'PAGE2'), {
+        status: 200,
+      })
+    })
+    const keys = await listR2KeysPaginated(CONFIG, 'videos/d/frames/sha256/', {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    })
+    expect(keys).toEqual([
+      'videos/d/frames/sha256/a.png',
+      'videos/d/frames/sha256/b.png',
+      'videos/d/frames/sha256/c.png',
+    ])
+    expect(calls).toHaveLength(2)
+  })
+
+  it('throws R2UploadError on a persistent non-2xx list, after retrying the 5xx', async () => {
+    const fetchImpl = vi.fn(async () => new Response('nope', { status: 503 }))
+    await expect(
+      listR2KeysPaginated(CONFIG, 'videos/d/frames/sha256/', {
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+        attempts: 3,
+        retryDelayMs: 0,
+      }),
+    ).rejects.toBeInstanceOf(R2UploadError)
+    expect(fetchImpl).toHaveBeenCalledTimes(3)
+  })
+
+  it('retries a transient 500 on the first page then succeeds', async () => {
+    let n = 0
+    const fetchImpl = vi.fn(async () => {
+      if (++n === 1) return new Response('err', { status: 500 })
+      return new Response(page(['videos/d/frames/sha256/a.png']), { status: 200 })
+    })
+    const keys = await listR2KeysPaginated(CONFIG, 'videos/d/frames/sha256/', {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      retryDelayMs: 0,
+    })
+    expect(keys).toEqual(['videos/d/frames/sha256/a.png'])
+    expect(fetchImpl).toHaveBeenCalledTimes(2)
   })
 })

@@ -7,6 +7,9 @@ import {
   calculateFrameIndex,
   videoTimeToDate,
   dateToVideoTime,
+  computeSiblingSyncCorrection,
+  MIN_PLAYBACK_RATE,
+  MAX_PLAYBACK_RATE,
   inferDisplayInterval,
   getSunPosition,
 } from './time'
@@ -290,6 +293,278 @@ describe('dateToVideoTime', () => {
     expect(position).toBe('inside')
     expect(videoTime).toBeGreaterThan(24)
     expect(videoTime).toBeLessThan(26)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// computeSiblingSyncCorrection — multi-viewport drift correction (#132)
+// ---------------------------------------------------------------------------
+describe('computeSiblingSyncCorrection', () => {
+  // The Climate Futures tour: all panels share 2015–2100 (85y) coverage.
+  const start = new Date('2015-12-31T00:00:00Z')
+  const end = new Date('2100-12-31T00:00:00Z')
+  const rangeMs = end.getTime() - start.getTime()
+
+  it('identical-range sibling of equal duration tracks the primary 1:1', () => {
+    // Primary at the midpoint of a 30s video → date ≈ 2058.
+    const mid = new Date((start.getTime() + end.getTime()) / 2)
+    const c = computeSiblingSyncCorrection({
+      date: mid,
+      sibCurrentTime: 15, // already at the midpoint of its own 30s video
+      sibDuration: 30,
+      sibStart: start,
+      sibEnd: end,
+      primaryDuration: 30,
+      primaryRangeMs: rangeMs,
+      hardSeekThresholdS: 0.15,
+    })
+    expect(c.position).toBe('inside')
+    expect(c.rate).toBeCloseTo(1, 5)
+    expect(c.targetTime).toBeCloseTo(15, 5)
+    expect(c.shouldSeek).toBe(false)
+  })
+
+  it('flags a seek once drift exceeds the threshold', () => {
+    const mid = new Date((start.getTime() + end.getTime()) / 2)
+    // Sibling has drifted to 15.5s while the target is 15s → 0.5s > 0.15s.
+    const c = computeSiblingSyncCorrection({
+      date: mid,
+      sibCurrentTime: 15.5,
+      sibDuration: 30,
+      sibStart: start,
+      sibEnd: end,
+      primaryDuration: 30,
+      primaryRangeMs: rangeMs,
+      hardSeekThresholdS: 0.15,
+    })
+    expect(c.shouldSeek).toBe(true)
+    expect(c.targetTime).toBeCloseTo(15, 5)
+  })
+
+  it('does not flag a seek for sub-threshold drift', () => {
+    const mid = new Date((start.getTime() + end.getTime()) / 2)
+    const c = computeSiblingSyncCorrection({
+      date: mid,
+      sibCurrentTime: 15.1, // 0.1s < 0.15s
+      sibDuration: 30,
+      sibStart: start,
+      sibEnd: end,
+      primaryDuration: 30,
+      primaryRangeMs: rangeMs,
+      hardSeekThresholdS: 0.15,
+    })
+    expect(c.shouldSeek).toBe(false)
+  })
+
+  it('maps to a fractional target when sibling duration differs from primary', () => {
+    // Same date range, but the sibling video is encoded at 60s vs 30s.
+    // The correct target is fraction-based (midpoint → 30s), not a raw
+    // currentTime copy — this is why issue #132 option 3 ("copy
+    // currentTime") is only safe when durations match.
+    const mid = new Date((start.getTime() + end.getTime()) / 2)
+    const c = computeSiblingSyncCorrection({
+      date: mid,
+      sibCurrentTime: 0,
+      sibDuration: 60,
+      sibStart: start,
+      sibEnd: end,
+      primaryDuration: 30,
+      primaryRangeMs: rangeMs,
+      hardSeekThresholdS: 0.15,
+    })
+    expect(c.targetTime).toBeCloseTo(30, 5)
+    expect(c.rate).toBeCloseTo(2, 5) // 60s sib / 30s primary over equal range
+    expect(c.shouldSeek).toBe(true)
+  })
+
+  it('paces a shorter-range sibling faster than the primary', () => {
+    // Sibling covers half the real-world span in the same video seconds.
+    const sibStart = new Date('2015-12-31T00:00:00Z')
+    const sibEnd = new Date('2058-06-30T00:00:00Z') // ~half of 85y
+    const dateInBoth = new Date('2030-01-01T00:00:00Z')
+    const c = computeSiblingSyncCorrection({
+      date: dateInBoth,
+      sibCurrentTime: 0,
+      sibDuration: 30,
+      sibStart,
+      sibEnd,
+      primaryDuration: 30,
+      primaryRangeMs: rangeMs,
+      hardSeekThresholdS: 0.15,
+    })
+    expect(c.position).toBe('inside')
+    // sibRange ≈ rangeMs/2 → rate ≈ 2× so it advances through its
+    // (shorter) timeline at the primary's real-world pace.
+    expect(c.rate).toBeGreaterThan(1.9)
+    expect(c.rate).toBeLessThan(2.1)
+  })
+
+  it('reports position before/after when the primary date is outside the sibling range', () => {
+    const sibStart = new Date('2050-01-01T00:00:00Z')
+    const sibEnd = new Date('2100-12-31T00:00:00Z')
+    const before = computeSiblingSyncCorrection({
+      date: new Date('2030-01-01T00:00:00Z'),
+      sibCurrentTime: 5,
+      sibDuration: 30,
+      sibStart,
+      sibEnd,
+      primaryDuration: 30,
+      primaryRangeMs: rangeMs,
+      hardSeekThresholdS: 0.15,
+    })
+    expect(before.position).toBe('before')
+    expect(before.targetTime).toBe(0)
+    expect(before.shouldSeek).toBe(true) // currentTime 5 → boundary 0
+
+    const after = computeSiblingSyncCorrection({
+      date: new Date('2100-12-31T00:00:00Z'),
+      sibCurrentTime: 30,
+      sibDuration: 30,
+      sibStart: new Date('2015-12-31T00:00:00Z'),
+      sibEnd: new Date('2058-06-30T00:00:00Z'),
+      primaryDuration: 30,
+      primaryRangeMs: rangeMs,
+      hardSeekThresholdS: 0.15,
+    })
+    expect(after.position).toBe('after')
+    expect(after.targetTime).toBe(30) // clamped to sibling duration
+  })
+
+  it('clamps an extreme high rate to the browser-honoured range', () => {
+    // A sibling covering a tiny real-world window in a full-length video
+    // would have to race through its timeline to keep the primary's
+    // real-world pace; the unclamped rate is absurd, so clamp to MAX.
+    const sibStart = new Date('2015-12-31T00:00:00Z')
+    const sibEnd = new Date('2016-01-01T00:00:00Z') // 1 day in 30s
+    const c = computeSiblingSyncCorrection({
+      date: new Date('2015-12-31T12:00:00Z'),
+      sibCurrentTime: 0,
+      sibDuration: 30,
+      sibStart,
+      sibEnd,
+      primaryDuration: 30,
+      primaryRangeMs: rangeMs,
+      hardSeekThresholdS: 0.15,
+    })
+    expect(c.rate).toBe(MAX_PLAYBACK_RATE)
+    expect(c.rate).toBeGreaterThanOrEqual(MIN_PLAYBACK_RATE)
+    expect(c.rate).toBeLessThanOrEqual(MAX_PLAYBACK_RATE)
+  })
+
+  it('falls back to rate 1 when a duration or range is degenerate', () => {
+    const c = computeSiblingSyncCorrection({
+      date: start,
+      sibCurrentTime: 0,
+      sibDuration: 0,
+      sibStart: start,
+      sibEnd: end,
+      primaryDuration: 30,
+      primaryRangeMs: rangeMs,
+      hardSeekThresholdS: 0.15,
+    })
+    expect(c.rate).toBe(1)
+  })
+
+  // --- soft-sync controller (terraviz#229 flicker fix) ---
+
+  const mid = () => new Date((start.getTime() + end.getTime()) / 2) // → target ≈ 15s of a 30s video
+
+  it('eases a slightly-ahead sibling by trimming the rate down, without seeking', () => {
+    const c = computeSiblingSyncCorrection({
+      date: mid(),
+      sibCurrentTime: 15.1, // 0.1s ahead of the 15s target
+      sibDuration: 30,
+      sibStart: start,
+      sibEnd: end,
+      primaryDuration: 30,
+      primaryRangeMs: rangeMs,
+      hardSeekThresholdS: 0.5,
+    })
+    expect(c.shouldSeek).toBe(false)
+    expect(c.rate).toBeLessThan(1)
+    // base 1 × (1 − 0.5·0.1) = 0.95
+    expect(c.rate).toBeCloseTo(0.95, 5)
+  })
+
+  it('eases a slightly-behind sibling by trimming the rate up, without seeking', () => {
+    const c = computeSiblingSyncCorrection({
+      date: mid(),
+      sibCurrentTime: 14.9, // 0.1s behind
+      sibDuration: 30,
+      sibStart: start,
+      sibEnd: end,
+      primaryDuration: 30,
+      primaryRangeMs: rangeMs,
+      hardSeekThresholdS: 0.5,
+    })
+    expect(c.shouldSeek).toBe(false)
+    expect(c.rate).toBeGreaterThan(1)
+    expect(c.rate).toBeCloseTo(1.05, 5)
+  })
+
+  it('caps the rate trim for a large-but-sub-hard-seek error', () => {
+    const c = computeSiblingSyncCorrection({
+      date: mid(),
+      sibCurrentTime: 20, // 5s ahead, but under a generous hard-seek threshold
+      sibDuration: 30,
+      sibStart: start,
+      sibEnd: end,
+      primaryDuration: 30,
+      primaryRangeMs: rangeMs,
+      hardSeekThresholdS: 10,
+    })
+    expect(c.shouldSeek).toBe(false)
+    // trim capped at 25% → rate = 1 × (1 − 0.25) = 0.75
+    expect(c.rate).toBeCloseTo(0.75, 5)
+  })
+
+  it('scales the rate by the primary playback speed (tour 5fps → 0.167x)', () => {
+    // Identical range/duration siblings: pacing ratio is 1, so the
+    // sibling must run at the primary's actual speed, not 1x — otherwise
+    // it races ahead and the hard-seek snaps it back (the #229 flicker).
+    const c = computeSiblingSyncCorrection({
+      date: mid(),
+      sibCurrentTime: 15, // aligned, no drift
+      sibDuration: 30,
+      sibStart: start,
+      sibEnd: end,
+      primaryDuration: 30,
+      primaryRangeMs: rangeMs,
+      primaryPlaybackRate: 5 / 30, // ≈ 0.167x
+      hardSeekThresholdS: 0.5,
+    })
+    expect(c.shouldSeek).toBe(false)
+    expect(c.rate).toBeCloseTo(5 / 30, 5)
+  })
+
+  it('defaults primaryPlaybackRate to 1x when omitted', () => {
+    const c = computeSiblingSyncCorrection({
+      date: mid(),
+      sibCurrentTime: 15,
+      sibDuration: 30,
+      sibStart: start,
+      sibEnd: end,
+      primaryDuration: 30,
+      primaryRangeMs: rangeMs,
+      hardSeekThresholdS: 0.5,
+    })
+    expect(c.rate).toBeCloseTo(1, 5)
+  })
+
+  it('hard-seeks (no trim) once in-range drift exceeds the hard-seek threshold', () => {
+    const c = computeSiblingSyncCorrection({
+      date: mid(),
+      sibCurrentTime: 16, // 1s ahead of target, over the 0.5s hard threshold
+      sibDuration: 30,
+      sibStart: start,
+      sibEnd: end,
+      primaryDuration: 30,
+      primaryRangeMs: rangeMs,
+      hardSeekThresholdS: 0.5,
+    })
+    expect(c.shouldSeek).toBe(true)
+    expect(c.targetTime).toBeCloseTo(15, 5)
+    expect(c.rate).toBeCloseTo(1, 5) // untrimmed pacing rate
   })
 })
 

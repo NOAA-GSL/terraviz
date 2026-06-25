@@ -266,6 +266,16 @@ export const EVENT_LAYOUTS = {
     blobs: ['code', 'field'],
     doubles: ['client_offset_ms'],
   },
+  voice_interaction: {
+    // `interrupted` is optional (TTS barge-in only) and sorts first, so
+    // it's the optional-blob: present → blob5, absent → everything
+    // shifts up one and the last slot (`trigger`, a never-empty enum)
+    // reads empty. Keeps existing blob positions for the common case.
+    blobs: ['interrupted', 'lang', 'mode', 'provider', 'success', 'trigger'],
+    doubles: ['client_offset_ms', 'duration_ms'],
+    booleans: ['interrupted', 'success'],
+    optionalBlob: 'interrupted',
+  },
 } as const satisfies {
   [K in TelemetryEventType]: {
     blobs: readonly BlobKeys<EventFor<K>>[]

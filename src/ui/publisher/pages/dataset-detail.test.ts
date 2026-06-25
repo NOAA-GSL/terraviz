@@ -41,11 +41,18 @@ function dataset(
 
 function detailResponse(
   d: PublisherDatasetDetail,
-  extras: { keywords?: string[]; tags?: string[] } = {},
+  extras: {
+    keywords?: string[]
+    tags?: string[]
+    thumbnail_url?: string | null
+    legend_url?: string | null
+  } = {},
 ): Response {
   return new Response(
     JSON.stringify({
       dataset: d,
+      thumbnail_url: extras.thumbnail_url ?? null,
+      legend_url: extras.legend_url ?? null,
       keywords: extras.keywords ?? [],
       tags: extras.tags ?? [],
     }),
@@ -74,6 +81,31 @@ describe('renderDatasetDetailPage', () => {
       '/api/v1/publish/datasets/has%2Fslash',
       expect.anything(),
     )
+  })
+
+  it('renders image previews of the thumbnail + legend when resolved', async () => {
+    const fetchFn = vi.fn().mockResolvedValue(
+      detailResponse(dataset(), {
+        thumbnail_url: 'https://assets.example/thumbnail.webp',
+        legend_url: 'https://assets.example/legend.png',
+      }),
+    )
+    await renderDatasetDetailPage(mount, '01ABC', {
+      fetchFn: fetchFn as unknown as typeof fetch,
+    })
+    const imgs = Array.from(
+      mount.querySelectorAll<HTMLImageElement>('img.publisher-detail-media-img'),
+    ).map(i => i.src)
+    expect(imgs).toContain('https://assets.example/thumbnail.webp')
+    expect(imgs).toContain('https://assets.example/legend.png')
+  })
+
+  it('omits the preview card when no thumbnail/legend resolved', async () => {
+    const fetchFn = vi.fn().mockResolvedValue(detailResponse(dataset()))
+    await renderDatasetDetailPage(mount, '01ABC', {
+      fetchFn: fetchFn as unknown as typeof fetch,
+    })
+    expect(mount.querySelector('.publisher-detail-media')).toBeNull()
   })
 
   it('renders the title, slug, and status badge in the header', async () => {

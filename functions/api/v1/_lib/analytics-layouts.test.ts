@@ -383,6 +383,16 @@ const FIXTURES: { [K in TelemetryEventType]: EventFor<K> } = {
     code: 'slug_too_short',
     client_offset_ms: 100,
   },
+  voice_interaction: {
+    event_type: 'voice_interaction',
+    mode: 'tts',
+    provider: 'browser',
+    trigger: 'replay',
+    duration_ms: 0,
+    lang: 'en',
+    success: true,
+    client_offset_ms: 100,
+  },
 }
 
 const ENVELOPE = {
@@ -447,6 +457,22 @@ describe('EVENT_LAYOUTS', () => {
     expect(decoded.fields.resumed).toBeUndefined()
     expect(decoded.fields.schema_version).toBe('1')
     expect(decoded.fields.vr_capable).toBe('none')
+  })
+
+  it('round-trips voice_interaction with a barge-in (interrupted present)', () => {
+    const event = { ...FIXTURES.voice_interaction, interrupted: true } as TelemetryEvent
+    const decoded = decodeAeRow(toAeSqlRow(event))
+    expect(decoded.layout).toBe('named')
+    expect(decoded.fields.interrupted).toBe(true)
+    // Later fields must not be mis-shifted when the optional is present.
+    expect(decoded.fields.trigger).toBe('replay')
+    expect(decoded.fields.lang).toBe('en')
+  })
+
+  it('voice_interaction optional-blob precondition: last blob is the never-empty trigger enum', () => {
+    const layout = EVENT_LAYOUTS.voice_interaction
+    expect(layout.blobs[layout.blobs.length - 1]).toBe('trigger')
+    expect(FIXTURES.voice_interaction.trigger).not.toBe('')
   })
 
   it('asserts the optional-blob detection precondition: the last blob field is never empty', () => {

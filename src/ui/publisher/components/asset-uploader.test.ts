@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { hashFileSha256, renderAssetUploader } from './asset-uploader'
+import { ROUTE_CHANGE_START_EVENT } from '../router'
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -287,6 +288,772 @@ describe('renderAssetUploader', () => {
 
     expect(xhrFactory).not.toHaveBeenCalled()
     expect(onUploaded).toHaveBeenCalled()
+  })
+})
+
+describe('renderAssetUploader — auxiliary kinds (thumbnail / legend)', () => {
+  let mount: HTMLDivElement
+
+  beforeEach(() => {
+    mount = document.createElement('div')
+    document.body.appendChild(mount)
+    sessionStorage.clear()
+  })
+
+  it('never mounts the frames tab strip for an aux kind, even on a video dataset', () => {
+    mount.appendChild(
+      renderAssetUploader({
+        datasetId: '01AAAAAAAAAAAAAAAAAAAAAAAA',
+        kind: 'thumbnail',
+        // A thumbnail can ride on a video dataset — the tab strip
+        // must still stay hidden (image-sequence input is data-only).
+        format: 'video/mp4',
+        onUploaded: () => {},
+      }),
+    )
+    expect(mount.querySelector('.publisher-asset-uploader-tabs')).toBeNull()
+    expect(mount.querySelector('input[id^="dataset-asset-file-"]')).not.toBeNull()
+  })
+
+  it('accepts an image regardless of the dataset format and reports an aux outcome', async () => {
+    const onUploaded = vi.fn()
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse(
+          {
+            upload_id: 'UP-THUMB',
+            kind: 'thumbnail',
+            target: 'r2',
+            r2: { method: 'PUT', url: 'https://r2.example/put', headers: {}, key: 'k' },
+            expires_at: 'soon',
+            mock: false,
+          },
+          201,
+        ),
+      )
+      // /complete stamps thumbnail_ref (no data_ref, no transcoding).
+      .mockResolvedValueOnce(
+        jsonResponse({ dataset: { thumbnail_ref: 'r2:datasets/X/by-digest/aa/thumbnail.png' } }),
+      )
+
+    mount.appendChild(
+      renderAssetUploader({
+        datasetId: '01AAAAAAAAAAAAAAAAAAAAAAAA',
+        kind: 'thumbnail',
+        // Dataset's primary format is video — the thumbnail upload
+        // must still accept a PNG.
+        format: 'video/mp4',
+        onUploaded,
+        hashFn: async () => 'sha256:' + 'd'.repeat(64),
+        fetchFn: fetchFn as unknown as typeof fetch,
+        xhrFactory: fakeXhrFactory(),
+      }),
+    )
+
+    pickFile(mount, 'image/png', 'mock-png-bytes')
+    for (let i = 0; i < 8; i++) await new Promise(r => setTimeout(r, 0))
+
+    // The mint body carried kind=thumbnail, not data.
+    const mintBody = JSON.parse(fetchFn.mock.calls[0][1].body as string) as { kind: string }
+    expect(mintBody.kind).toBe('thumbnail')
+    expect(onUploaded).toHaveBeenCalledWith({
+      mode: 'aux',
+      kind: 'thumbnail',
+      ref: 'r2:datasets/X/by-digest/aa/thumbnail.png',
+    })
+  })
+
+  it('reads legend_ref from the complete response for a legend upload', async () => {
+    const onUploaded = vi.fn()
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse(
+          {
+            upload_id: 'UP-LEGEND',
+            kind: 'legend',
+            target: 'r2',
+            r2: { method: 'PUT', url: 'https://r2.example/put', headers: {}, key: 'k' },
+            expires_at: 'soon',
+            mock: false,
+          },
+          201,
+        ),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({ dataset: { legend_ref: 'r2:datasets/X/by-digest/bb/legend.webp' } }),
+      )
+
+    mount.appendChild(
+      renderAssetUploader({
+        datasetId: '01AAAAAAAAAAAAAAAAAAAAAAAA',
+        kind: 'legend',
+        format: 'image/png',
+        onUploaded,
+        hashFn: async () => 'sha256:' + 'e'.repeat(64),
+        fetchFn: fetchFn as unknown as typeof fetch,
+        xhrFactory: fakeXhrFactory(),
+      }),
+    )
+
+    pickFile(mount, 'image/webp', 'mock-webp-bytes')
+    for (let i = 0; i < 8; i++) await new Promise(r => setTimeout(r, 0))
+
+    expect(onUploaded).toHaveBeenCalledWith({
+      mode: 'aux',
+      kind: 'legend',
+      ref: 'r2:datasets/X/by-digest/bb/legend.webp',
+    })
+  })
+
+  it('errors instead of reporting success when the complete response omits the ref', async () => {
+    // PR #207 Copilot review — a 200 complete with no stamped ref
+    // must surface as a failure, not a false success that sets the
+    // form ref to an empty string.
+    const onUploaded = vi.fn()
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse(
+          {
+            upload_id: 'UP-NOREF',
+            kind: 'thumbnail',
+            target: 'r2',
+            r2: { method: 'PUT', url: 'https://r2.example/put', headers: {}, key: 'k' },
+            expires_at: 'soon',
+            mock: false,
+          },
+          201,
+        ),
+      )
+      // /complete returns 200 but without thumbnail_ref.
+      .mockResolvedValueOnce(jsonResponse({ dataset: {} }))
+
+    mount.appendChild(
+      renderAssetUploader({
+        datasetId: '01AAAAAAAAAAAAAAAAAAAAAAAA',
+        kind: 'thumbnail',
+        format: 'image/png',
+        onUploaded,
+        hashFn: async () => 'sha256:' + 'a'.repeat(64),
+        fetchFn: fetchFn as unknown as typeof fetch,
+        xhrFactory: fakeXhrFactory(),
+      }),
+    )
+
+    pickFile(mount, 'image/png', 'mock-png-bytes')
+    for (let i = 0; i < 8; i++) await new Promise(r => setTimeout(r, 0))
+
+    expect(onUploaded).not.toHaveBeenCalled()
+    expect(mount.querySelector('.publisher-asset-uploader-status-error')).not.toBeNull()
+    expect(mount.textContent).toContain("didn't return a saved reference")
+  })
+
+  it('renders the globe-thumbnail generator only for the thumbnail kind', () => {
+    // Legend uploader: no generator block.
+    mount.appendChild(
+      renderAssetUploader({
+        datasetId: '01AAAAAAAAAAAAAAAAAAAAAAAA',
+        kind: 'legend',
+        format: 'image/png',
+        onUploaded: () => {},
+      }),
+    )
+    expect(mount.querySelector('.publisher-asset-uploader-generate')).toBeNull()
+    // Thumbnail uploader: generator block present.
+    mount.replaceChildren(
+      renderAssetUploader({
+        datasetId: '01AAAAAAAAAAAAAAAAAAAAAAAA',
+        kind: 'thumbnail',
+        format: 'image/png',
+        onUploaded: () => {},
+      }),
+    )
+    expect(mount.querySelector('.publisher-asset-uploader-generate')).not.toBeNull()
+  })
+
+  it('hides the "from this dataset’s data" button unless a data URL is supplied', () => {
+    mount.appendChild(
+      renderAssetUploader({
+        datasetId: '01AAAAAAAAAAAAAAAAAAAAAAAA',
+        kind: 'thumbnail',
+        format: 'image/png',
+        onUploaded: () => {},
+      }),
+    )
+    expect(mount.textContent).not.toContain('Generate from this dataset')
+    // Manual 2:1 frame picker is always offered.
+    expect(mount.querySelector('input[id^="dataset-asset-generate-"]')).not.toBeNull()
+
+    mount.replaceChildren(
+      renderAssetUploader({
+        datasetId: '01AAAAAAAAAAAAAAAAAAAAAAAA',
+        kind: 'thumbnail',
+        format: 'image/png',
+        dataAssetUrl: 'https://cdn.example/data.png',
+        onUploaded: () => {},
+      }),
+    )
+    expect(mount.textContent).toContain('Generate from this dataset')
+  })
+
+  it('generates a preview from a picked 2:1 frame, then uploads it on confirm', async () => {
+    const onUploaded = vi.fn()
+    const generated = new Blob(['globe'], { type: 'image/webp' })
+    const generateThumbnail = vi.fn().mockResolvedValue(generated)
+    const decodeImage = vi
+      .fn()
+      .mockResolvedValue({ width: 2048, height: 1024 } as unknown as HTMLImageElement)
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse(
+          {
+            upload_id: 'UP-GEN',
+            kind: 'thumbnail',
+            target: 'r2',
+            r2: { method: 'PUT', url: 'https://r2.example/put', headers: {}, key: 'k' },
+            expires_at: 'soon',
+            mock: false,
+          },
+          201,
+        ),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({ dataset: { thumbnail_ref: 'r2:datasets/X/by-digest/cc/thumbnail.webp' } }),
+      )
+
+    mount.appendChild(
+      renderAssetUploader({
+        datasetId: '01AAAAAAAAAAAAAAAAAAAAAAAA',
+        kind: 'thumbnail',
+        format: 'image/png',
+        onUploaded,
+        hashFn: async () => 'sha256:' + 'a'.repeat(64),
+        fetchFn: fetchFn as unknown as typeof fetch,
+        xhrFactory: fakeXhrFactory(),
+        generateThumbnail,
+        decodeImage,
+      }),
+    )
+
+    // Pick a frame in the generator's file input.
+    const genInput = mount.querySelector<HTMLInputElement>(
+      'input[id^="dataset-asset-generate-"]',
+    )!
+    const frame = new File(['frame'], 'frame.png', { type: 'image/png' })
+    Object.defineProperty(genInput, 'files', {
+      value: { 0: frame, length: 1, item: (i: number) => (i === 0 ? frame : null) },
+      configurable: true,
+    })
+    genInput.dispatchEvent(new Event('change', { bubbles: true }))
+    for (let i = 0; i < 6; i++) await new Promise(r => setTimeout(r, 0))
+
+    // Decode + render ran; a preview is shown.
+    expect(decodeImage).toHaveBeenCalledOnce()
+    expect(generateThumbnail).toHaveBeenCalledOnce()
+    expect(mount.querySelector('.publisher-asset-uploader-generate-preview')).not.toBeNull()
+    // No upload yet — the publisher hasn't confirmed.
+    expect(fetchFn).not.toHaveBeenCalled()
+
+    // Confirm — "Use this thumbnail" uploads the generated capture
+    // through the normal aux path.
+    const useBtn = Array.from(mount.querySelectorAll('button')).find(
+      b => b.textContent === 'Use this thumbnail',
+    )!
+    useBtn.click()
+    for (let i = 0; i < 8; i++) await new Promise(r => setTimeout(r, 0))
+
+    const mintBody = JSON.parse(fetchFn.mock.calls[0][1].body as string) as { kind: string }
+    expect(mintBody.kind).toBe('thumbnail')
+    expect(onUploaded).toHaveBeenCalledWith({
+      mode: 'aux',
+      kind: 'thumbnail',
+      ref: 'r2:datasets/X/by-digest/cc/thumbnail.webp',
+    })
+  })
+
+  it('re-renders the preview with the new rotation when a slider is moved', async () => {
+    const generated = new Blob(['globe'], { type: 'image/webp' })
+    const generateThumbnail = vi.fn().mockResolvedValue(generated)
+    const decodeImage = vi
+      .fn()
+      .mockResolvedValue({ width: 2048, height: 1024 } as unknown as HTMLImageElement)
+
+    mount.appendChild(
+      renderAssetUploader({
+        datasetId: '01AAAAAAAAAAAAAAAAAAAAAAAA',
+        kind: 'thumbnail',
+        format: 'image/png',
+        onUploaded: () => {},
+        generateThumbnail,
+        decodeImage,
+      }),
+    )
+
+    // Generate an initial preview.
+    const genInput = mount.querySelector<HTMLInputElement>(
+      'input[id^="dataset-asset-generate-"][type="file"]',
+    )!
+    const frame = new File(['frame'], 'frame.png', { type: 'image/png' })
+    Object.defineProperty(genInput, 'files', {
+      value: { 0: frame, length: 1, item: (i: number) => (i === 0 ? frame : null) },
+      configurable: true,
+    })
+    genInput.dispatchEvent(new Event('change', { bubbles: true }))
+    for (let i = 0; i < 6; i++) await new Promise(r => setTimeout(r, 0))
+
+    expect(generateThumbnail).toHaveBeenCalledTimes(1)
+    // First render is at the default orientation.
+    expect(generateThumbnail.mock.calls[0][1]).toMatchObject({ lonOrigin: 0, latOrigin: 0 })
+
+    // Drag the longitude slider and release.
+    const lonSlider = mount.querySelector<HTMLInputElement>(
+      'input[type="range"][id$="-lon"]',
+    )!
+    lonSlider.value = '120'
+    lonSlider.dispatchEvent(new Event('input', { bubbles: true }))
+    lonSlider.dispatchEvent(new Event('change', { bubbles: true }))
+    for (let i = 0; i < 6; i++) await new Promise(r => setTimeout(r, 0))
+
+    // Re-rendered at the new longitude, reusing the decoded source
+    // (no second decode).
+    expect(generateThumbnail).toHaveBeenCalledTimes(2)
+    expect(generateThumbnail.mock.calls[1][1]).toMatchObject({ lonOrigin: 120, latOrigin: 0 })
+    expect(decodeImage).toHaveBeenCalledTimes(1)
+  })
+
+  it('generates from the dataset data URL when the one-click button is used', async () => {
+    const generated = new Blob(['globe'], { type: 'image/webp' })
+    const generateThumbnail = vi.fn().mockResolvedValue(generated)
+    const decodeImage = vi
+      .fn()
+      .mockResolvedValue({ width: 2048, height: 1024 } as unknown as HTMLImageElement)
+    const fetchImageBlob = vi
+      .fn()
+      .mockResolvedValue(new Blob(['data'], { type: 'image/png' }))
+
+    mount.appendChild(
+      renderAssetUploader({
+        datasetId: '01AAAAAAAAAAAAAAAAAAAAAAAA',
+        kind: 'thumbnail',
+        format: 'image/png',
+        dataAssetUrl: 'https://cdn.example/data.png',
+        onUploaded: () => {},
+        generateThumbnail,
+        decodeImage,
+        fetchImageBlob,
+      }),
+    )
+
+    const fromDataBtn = Array.from(mount.querySelectorAll('button')).find(b =>
+      b.textContent?.includes('Generate from this dataset'),
+    )!
+    fromDataBtn.click()
+    for (let i = 0; i < 6; i++) await new Promise(r => setTimeout(r, 0))
+
+    expect(fetchImageBlob).toHaveBeenCalledWith('https://cdn.example/data.png')
+    expect(generateThumbnail).toHaveBeenCalledOnce()
+    expect(mount.querySelector('.publisher-asset-uploader-generate-preview')).not.toBeNull()
+  })
+
+  it('lets a video dataset capture a frame from its own stream and renders a thumbnail', async () => {
+    const generated = new Blob(['globe'], { type: 'image/webp' })
+    const generateThumbnail = vi.fn().mockResolvedValue(generated)
+    const capturedCanvas = document.createElement('canvas')
+    const dispose = vi.fn()
+    const fakeVideo = document.createElement('video')
+    const loadVideoScrub = vi.fn().mockResolvedValue({
+      video: fakeVideo,
+      capture: () => capturedCanvas,
+      dispose,
+    })
+
+    mount.appendChild(
+      renderAssetUploader({
+        datasetId: '01AAAAAAAAAAAAAAAAAAAAAAAA',
+        kind: 'thumbnail',
+        format: 'video/mp4',
+        dataAssetUrl: 'https://assets.example/master.m3u8',
+        onUploaded: () => {},
+        generateThumbnail,
+        loadVideoScrub,
+      }),
+    )
+
+    // One-click "Generate from this dataset's data" → loads the stream.
+    Array.from(mount.querySelectorAll('button'))
+      .find(b => b.textContent?.includes('Generate from this dataset'))!
+      .click()
+    for (let i = 0; i < 6; i++) await new Promise(r => setTimeout(r, 0))
+
+    expect(loadVideoScrub).toHaveBeenCalledWith('https://assets.example/master.m3u8')
+    // The scrub UI mounts the video + a Capture button.
+    expect(mount.contains(fakeVideo)).toBe(true)
+    const captureBtn = Array.from(mount.querySelectorAll('button')).find(
+      b => b.textContent === 'Capture this frame',
+    )!
+    expect(captureBtn).toBeTruthy()
+
+    // Capturing renders a globe thumbnail from the grabbed frame and
+    // tears the stream down.
+    captureBtn.click()
+    for (let i = 0; i < 6; i++) await new Promise(r => setTimeout(r, 0))
+
+    expect(generateThumbnail).toHaveBeenCalledOnce()
+    expect(generateThumbnail.mock.calls[0][0]).toBe(capturedCanvas)
+    expect(dispose).toHaveBeenCalled()
+    expect(mount.querySelector('.publisher-asset-uploader-generate-preview')).not.toBeNull()
+  })
+
+  it('disposes a video stream that finishes loading after a route change', async () => {
+    // A slow HLS load that resolves only after the publisher has
+    // navigated away must NOT re-attach a live stream — it should be
+    // disposed. PR #208 Copilot review (in-flight scrub load).
+    const dispose = vi.fn()
+    let resolveLoad: (h: unknown) => void = () => {}
+    const loadVideoScrub = vi.fn(
+      () => new Promise(res => { resolveLoad = res }),
+    ) as unknown as (url: string) => Promise<never>
+
+    mount.appendChild(
+      renderAssetUploader({
+        datasetId: '01AAAAAAAAAAAAAAAAAAAAAAAA',
+        kind: 'thumbnail',
+        format: 'video/mp4',
+        dataAssetUrl: 'https://assets.example/master.m3u8',
+        onUploaded: () => {},
+        loadVideoScrub,
+      }),
+    )
+    Array.from(mount.querySelectorAll('button'))
+      .find(b => b.textContent?.includes('Generate from this dataset'))!
+      .click()
+    for (let i = 0; i < 4; i++) await new Promise(r => setTimeout(r, 0))
+
+    // Navigate away while still "Loading video…".
+    window.dispatchEvent(new Event(ROUTE_CHANGE_START_EVENT))
+    // Now the load resolves — too late.
+    resolveLoad({ video: document.createElement('video'), capture: () => document.createElement('canvas'), dispose })
+    for (let i = 0; i < 4; i++) await new Promise(r => setTimeout(r, 0))
+
+    expect(dispose).toHaveBeenCalled()
+    expect(mount.querySelector('.publisher-asset-uploader-generate-video')).toBeNull()
+  })
+
+  it('disposes the video stream when the scrub is cancelled', async () => {
+    const dispose = vi.fn()
+    const loadVideoScrub = vi.fn().mockResolvedValue({
+      video: document.createElement('video'),
+      capture: () => document.createElement('canvas'),
+      dispose,
+    })
+    mount.appendChild(
+      renderAssetUploader({
+        datasetId: '01AAAAAAAAAAAAAAAAAAAAAAAA',
+        kind: 'thumbnail',
+        format: 'video/mp4',
+        dataAssetUrl: 'https://assets.example/master.m3u8',
+        onUploaded: () => {},
+        loadVideoScrub,
+      }),
+    )
+    Array.from(mount.querySelectorAll('button'))
+      .find(b => b.textContent?.includes('Generate from this dataset'))!
+      .click()
+    for (let i = 0; i < 6; i++) await new Promise(r => setTimeout(r, 0))
+    Array.from(mount.querySelectorAll('button'))
+      .find(b => b.textContent === 'Cancel')!
+      .click()
+    expect(dispose).toHaveBeenCalled()
+    expect(mount.querySelector('.publisher-asset-uploader-generate-video')).toBeNull()
+  })
+
+  it('forwards the dataset render hints (overlay) when generating from its own data', async () => {
+    const generated = new Blob(['globe'], { type: 'image/webp' })
+    const generateThumbnail = vi.fn().mockResolvedValue(generated)
+    const decodeImage = vi
+      .fn()
+      .mockResolvedValue({ width: 2048, height: 1024 } as unknown as HTMLImageElement)
+    const fetchImageBlob = vi.fn().mockResolvedValue(new Blob(['data'], { type: 'image/png' }))
+    const overlay = { boundingBox: { n: 60, s: 20, w: -10, e: 30 }, isFlippedInY: true }
+
+    mount.appendChild(
+      renderAssetUploader({
+        datasetId: '01AAAAAAAAAAAAAAAAAAAAAAAA',
+        kind: 'thumbnail',
+        format: 'image/png',
+        dataAssetUrl: 'https://cdn.example/data.png',
+        dataAssetOverlay: overlay,
+        onUploaded: () => {},
+        generateThumbnail,
+        decodeImage,
+        fetchImageBlob,
+      }),
+    )
+
+    Array.from(mount.querySelectorAll('button'))
+      .find(b => b.textContent?.includes('Generate from this dataset'))!
+      .click()
+    for (let i = 0; i < 6; i++) await new Promise(r => setTimeout(r, 0))
+
+    expect(generateThumbnail).toHaveBeenCalled()
+    expect(generateThumbnail.mock.calls[0][1]).toMatchObject({ overlay })
+  })
+
+  it('does NOT apply the dataset overlay to a hand-picked frame', async () => {
+    const generated = new Blob(['globe'], { type: 'image/webp' })
+    const generateThumbnail = vi.fn().mockResolvedValue(generated)
+    const decodeImage = vi
+      .fn()
+      .mockResolvedValue({ width: 2048, height: 1024 } as unknown as HTMLImageElement)
+
+    mount.appendChild(
+      renderAssetUploader({
+        datasetId: '01AAAAAAAAAAAAAAAAAAAAAAAA',
+        kind: 'thumbnail',
+        format: 'image/png',
+        // A regional overlay exists on the dataset, but the publisher
+        // picks an arbitrary frame — its projection is unknown, so the
+        // overlay must NOT be applied.
+        dataAssetOverlay: { boundingBox: { n: 60, s: 20, w: -10, e: 30 } },
+        onUploaded: () => {},
+        generateThumbnail,
+        decodeImage,
+      }),
+    )
+
+    const genInput = mount.querySelector<HTMLInputElement>(
+      'input[id^="dataset-asset-generate-"][type="file"]',
+    )!
+    const frame = new File(['frame'], 'frame.png', { type: 'image/png' })
+    Object.defineProperty(genInput, 'files', {
+      value: { 0: frame, length: 1, item: (i: number) => (i === 0 ? frame : null) },
+      configurable: true,
+    })
+    genInput.dispatchEvent(new Event('change', { bubbles: true }))
+    for (let i = 0; i < 6; i++) await new Promise(r => setTimeout(r, 0))
+
+    expect(generateThumbnail).toHaveBeenCalled()
+    expect(generateThumbnail.mock.calls[0][1]?.overlay).toBeUndefined()
+  })
+
+  it('surfaces a generator error without uploading', async () => {
+    const generateThumbnail = vi.fn().mockRejectedValue(new Error('render failed'))
+    const decodeImage = vi
+      .fn()
+      .mockResolvedValue({ width: 2048, height: 1024 } as unknown as HTMLImageElement)
+    const fetchFn = vi.fn()
+
+    mount.appendChild(
+      renderAssetUploader({
+        datasetId: '01AAAAAAAAAAAAAAAAAAAAAAAA',
+        kind: 'thumbnail',
+        format: 'image/png',
+        onUploaded: () => {},
+        fetchFn: fetchFn as unknown as typeof fetch,
+        generateThumbnail,
+        decodeImage,
+      }),
+    )
+
+    const genInput = mount.querySelector<HTMLInputElement>(
+      'input[id^="dataset-asset-generate-"]',
+    )!
+    const frame = new File(['frame'], 'frame.png', { type: 'image/png' })
+    Object.defineProperty(genInput, 'files', {
+      value: { 0: frame, length: 1, item: (i: number) => (i === 0 ? frame : null) },
+      configurable: true,
+    })
+    genInput.dispatchEvent(new Event('change', { bubbles: true }))
+    for (let i = 0; i < 6; i++) await new Promise(r => setTimeout(r, 0))
+
+    expect(mount.querySelector('.publisher-asset-uploader-generate .publisher-asset-uploader-status-error')).not.toBeNull()
+    expect(fetchFn).not.toHaveBeenCalled()
+  })
+
+  it('disables "Use this thumbnail" while a rotation re-render is in flight', async () => {
+    const g1 = new Blob(['g1'], { type: 'image/webp' })
+    const g2 = new Blob(['g2'], { type: 'image/webp' })
+    let resolveSecond!: (b: Blob) => void
+    const generateThumbnail = vi
+      .fn()
+      .mockResolvedValueOnce(g1)
+      // The rotation re-render hangs until we resolve it, so we can
+      // observe the in-flight state.
+      .mockImplementationOnce(
+        () =>
+          new Promise<Blob>(r => {
+            resolveSecond = r
+          }),
+      )
+    const decodeImage = vi
+      .fn()
+      .mockResolvedValue({ width: 2048, height: 1024 } as unknown as HTMLImageElement)
+
+    mount.appendChild(
+      renderAssetUploader({
+        datasetId: '01AAAAAAAAAAAAAAAAAAAAAAAA',
+        kind: 'thumbnail',
+        format: 'image/png',
+        onUploaded: () => {},
+        generateThumbnail,
+        decodeImage,
+      }),
+    )
+
+    const useBtn = (): HTMLButtonElement | undefined =>
+      Array.from(mount.querySelectorAll('button')).find(
+        b => b.textContent === 'Use this thumbnail',
+      ) as HTMLButtonElement | undefined
+    const discardBtn = (): HTMLButtonElement | undefined =>
+      Array.from(mount.querySelectorAll('button')).find(
+        b => b.textContent === 'Discard',
+      ) as HTMLButtonElement | undefined
+
+    // Initial generate → preview, Use enabled.
+    const genInput = mount.querySelector<HTMLInputElement>(
+      'input[id^="dataset-asset-generate-"][type="file"]',
+    )!
+    const frame = new File(['frame'], 'frame.png', { type: 'image/png' })
+    Object.defineProperty(genInput, 'files', {
+      value: { 0: frame, length: 1, item: (i: number) => (i === 0 ? frame : null) },
+      configurable: true,
+    })
+    genInput.dispatchEvent(new Event('change', { bubbles: true }))
+    for (let i = 0; i < 6; i++) await new Promise(r => setTimeout(r, 0))
+    expect(useBtn()?.disabled).toBe(false)
+    expect(discardBtn()?.disabled).toBe(false)
+
+    // Move the longitude slider → re-render starts but hangs.
+    const lon = mount.querySelector<HTMLInputElement>('input[type="range"][id$="-lon"]')!
+    lon.value = '90'
+    lon.dispatchEvent(new Event('input', { bubbles: true }))
+    lon.dispatchEvent(new Event('change', { bubbles: true }))
+    for (let i = 0; i < 2; i++) await new Promise(r => setTimeout(r, 0))
+    // Use + Discard are inert while the re-render is in flight — Use
+    // can't upload a stale capture, and Discard can't be undone by a
+    // late render repainting the preview.
+    expect(useBtn()?.disabled).toBe(true)
+    expect(discardBtn()?.disabled).toBe(true)
+
+    // Let the re-render settle → both re-enable.
+    resolveSecond(g2)
+    for (let i = 0; i < 6; i++) await new Promise(r => setTimeout(r, 0))
+    expect(useBtn()?.disabled).toBe(false)
+    expect(discardBtn()?.disabled).toBe(false)
+  })
+
+  it('surfaces an error + disposes the stream if capturing the video frame throws', async () => {
+    const dispose = vi.fn()
+    const loadVideoScrub = vi.fn().mockResolvedValue({
+      video: document.createElement('video'),
+      capture: () => {
+        // e.g. drawImage on a not-yet-decodable frame (videoWidth=0).
+        throw new Error('InvalidStateError')
+      },
+      dispose,
+    })
+
+    mount.appendChild(
+      renderAssetUploader({
+        datasetId: '01AAAAAAAAAAAAAAAAAAAAAAAA',
+        kind: 'thumbnail',
+        format: 'video/mp4',
+        dataAssetUrl: 'https://assets.example/master.m3u8',
+        onUploaded: () => {},
+        loadVideoScrub,
+      }),
+    )
+    Array.from(mount.querySelectorAll('button'))
+      .find(b => b.textContent?.includes('Generate from this dataset'))!
+      .click()
+    for (let i = 0; i < 4; i++) await new Promise(r => setTimeout(r, 0))
+
+    Array.from(mount.querySelectorAll('button'))
+      .find(b => b.textContent === 'Capture this frame')!
+      .click()
+    for (let i = 0; i < 4; i++) await new Promise(r => setTimeout(r, 0))
+
+    expect(dispose).toHaveBeenCalled()
+    expect(
+      mount.querySelector('.publisher-asset-uploader-generate .publisher-asset-uploader-status-error'),
+    ).not.toBeNull()
+    expect(mount.querySelector('.publisher-asset-uploader-generate-video')).toBeNull()
+  })
+
+  it('moves to the error state (no unhandled rejection) when a rotation re-render fails', async () => {
+    const generated = new Blob(['globe'], { type: 'image/webp' })
+    // First render (the initial preview) succeeds; the rotation
+    // re-render rejects.
+    const generateThumbnail = vi
+      .fn()
+      .mockResolvedValueOnce(generated)
+      .mockRejectedValueOnce(new Error('context lost'))
+    const decodeImage = vi
+      .fn()
+      .mockResolvedValue({ width: 2048, height: 1024 } as unknown as HTMLImageElement)
+
+    mount.appendChild(
+      renderAssetUploader({
+        datasetId: '01AAAAAAAAAAAAAAAAAAAAAAAA',
+        kind: 'thumbnail',
+        format: 'image/png',
+        onUploaded: () => {},
+        generateThumbnail,
+        decodeImage,
+      }),
+    )
+
+    const genInput = mount.querySelector<HTMLInputElement>(
+      'input[id^="dataset-asset-generate-"][type="file"]',
+    )!
+    const frame = new File(['frame'], 'frame.png', { type: 'image/png' })
+    Object.defineProperty(genInput, 'files', {
+      value: { 0: frame, length: 1, item: (i: number) => (i === 0 ? frame : null) },
+      configurable: true,
+    })
+    genInput.dispatchEvent(new Event('change', { bubbles: true }))
+    for (let i = 0; i < 6; i++) await new Promise(r => setTimeout(r, 0))
+    expect(mount.querySelector('.publisher-asset-uploader-generate-preview')).not.toBeNull()
+
+    // Move the longitude slider — the re-render rejects.
+    const lonSlider = mount.querySelector<HTMLInputElement>(
+      'input[type="range"][id$="-lon"]',
+    )!
+    lonSlider.value = '90'
+    lonSlider.dispatchEvent(new Event('input', { bubbles: true }))
+    lonSlider.dispatchEvent(new Event('change', { bubbles: true }))
+    for (let i = 0; i < 6; i++) await new Promise(r => setTimeout(r, 0))
+
+    // The generator surfaces the error rather than throwing into the void.
+    expect(
+      mount.querySelector('.publisher-asset-uploader-generate .publisher-asset-uploader-status-error'),
+    ).not.toBeNull()
+    expect(mount.querySelector('.publisher-asset-uploader-generate-preview')).toBeNull()
+  })
+
+  it('rejects a non-image file for an aux kind before any network call', async () => {
+    const fetchFn = vi.fn()
+    mount.appendChild(
+      renderAssetUploader({
+        datasetId: '01AAAAAAAAAAAAAAAAAAAAAAAA',
+        kind: 'thumbnail',
+        format: 'image/png',
+        onUploaded: () => {},
+        hashFn: async () => 'sha256:' + 'f'.repeat(64),
+        fetchFn: fetchFn as unknown as typeof fetch,
+      }),
+    )
+    // An MP4 is a valid `data` asset but not a valid thumbnail.
+    pickFile(mount, 'video/mp4')
+    await new Promise(r => setTimeout(r, 0))
+    expect(mount.querySelector('.publisher-asset-uploader-status-error')?.textContent).toBe(
+      'Upload failed.',
+    )
+    expect(mount.textContent).toContain("isn't a supported image")
+    expect(fetchFn).not.toHaveBeenCalled()
   })
 })
 

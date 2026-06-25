@@ -2,7 +2,12 @@ import { describe, it, expect } from 'vitest'
 import { mkdtemp, mkdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { findFramesMeta, parseArgs } from './zyra-publish-from-dispatch'
+import {
+  expectedOutputKind,
+  findFramesMeta,
+  parseArgs,
+  readPaddedFrameNames,
+} from './zyra-publish-from-dispatch'
 
 const ULID = '01HX0000000000000000000000'
 
@@ -32,6 +37,104 @@ describe('parseArgs', () => {
     expect(
       parseArgs([`--phase=publish`, `--workflow-id=${ULID}`, `--run-id=${ULID}`, `--wait-seconds=999999`]),
     ).toHaveProperty('error')
+  })
+
+  it('accepts the frame-cache phases', () => {
+    for (const phase of ['restore-frames', 'save-frames']) {
+      expect(
+        parseArgs([`--phase=${phase}`, `--workflow-id=${ULID}`, `--run-id=${ULID}`]),
+      ).toMatchObject({ phase, workdir: '_work' })
+    }
+  })
+
+  it('accepts the acquire-softpass phase with a default staleness threshold', () => {
+    expect(
+      parseArgs([
+        `--phase=acquire-softpass`,
+        `--workflow-id=${ULID}`,
+        `--run-id=${ULID}`,
+        `--zyra-log=_work/zyra-run.log`,
+      ]),
+    ).toMatchObject({ phase: 'acquire-softpass', zyraLog: '_work/zyra-run.log', staleAfterSeconds: 172_800 })
+  })
+
+  it('bounds --stale-after-seconds', () => {
+    expect(
+      parseArgs([`--phase=acquire-softpass`, `--workflow-id=${ULID}`, `--run-id=${ULID}`, `--stale-after-seconds=99999999`]),
+    ).toHaveProperty('error')
+    expect(
+      parseArgs([`--phase=acquire-softpass`, `--workflow-id=${ULID}`, `--run-id=${ULID}`, `--stale-after-seconds=3600`]),
+    ).toMatchObject({ staleAfterSeconds: 3600 })
+  })
+})
+
+describe('expectedOutputKind', () => {
+  it('detects a video pipeline by its WORKFLOW_OUTPUT_PATH arg', () => {
+    const video = JSON.stringify({
+      stages: [
+        {
+          stage: 'visualize',
+          command: 'compose-video',
+          args: { frames: '/work/images/frames', output: '/work/output/dataset.mp4' },
+        },
+      ],
+    })
+    expect(expectedOutputKind(video)).toBe('video')
+  })
+
+  it('treats a frames-output pipeline (no MP4 path) as frames', () => {
+    const frames = JSON.stringify({
+      stages: [
+        {
+          stage: 'process',
+          command: 'scan-frames',
+          args: { 'frames-dir': '/work/images/frames', output: '/work/frames-meta.json' },
+        },
+      ],
+    })
+    expect(expectedOutputKind(frames)).toBe('frames')
+  })
+
+  it('falls back to frames on unparseable pipeline JSON', () => {
+    expect(expectedOutputKind('not json')).toBe('frames')
+  })
+})
+
+describe('readPaddedFrameNames', () => {
+  it('extracts the basenames of pad-missing created_files', async () => {
+    const workdir = await mkdtemp(join(tmpdir(), 'zyra-pad-'))
+    const reportPath = join(workdir, 'pad-missing-report.json')
+    // Shape mirrors a real pad-missing report (absolute paths).
+    await writeFile(
+      reportPath,
+      JSON.stringify({
+        status: 'completed',
+        fill_mode: 'nearest',
+        created_count: 2,
+        created_files: [
+          '/builds/x/_work/images/clouds/linear_rgb_cyl_20260611_1910.jpg',
+          '/builds/x/_work/images/clouds/linear_rgb_cyl_20260611_1920.jpg',
+        ],
+        dry_run: false,
+      }),
+    )
+    expect(await readPaddedFrameNames(reportPath)).toEqual([
+      'linear_rgb_cyl_20260611_1910.jpg',
+      'linear_rgb_cyl_20260611_1920.jpg',
+    ])
+  })
+
+  it('returns [] for a dry run, a missing file, or no created_files', async () => {
+    const workdir = await mkdtemp(join(tmpdir(), 'zyra-pad-'))
+    expect(await readPaddedFrameNames(join(workdir, 'absent.json'))).toEqual([])
+
+    const dryPath = join(workdir, 'dry.json')
+    await writeFile(dryPath, JSON.stringify({ dry_run: true, created_files: ['/x/a.png'] }))
+    expect(await readPaddedFrameNames(dryPath)).toEqual([])
+
+    const emptyPath = join(workdir, 'empty.json')
+    await writeFile(emptyPath, JSON.stringify({ status: 'completed', missing_count: 0 }))
+    expect(await readPaddedFrameNames(emptyPath)).toEqual([])
   })
 })
 

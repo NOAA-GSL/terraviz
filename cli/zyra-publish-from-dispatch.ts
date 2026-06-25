@@ -26,6 +26,14 @@
  *                    error summary. The workflow calls this from an
  *                    `if: failure()` step so any broken step still
  *                    lands a terminal status in `workflow_runs`.
+ *   --phase=acquire-softpass
+ *                    After `zyra run` failed: decide whether it was a
+ *                    transient NOAA-FTP `acquire` hiccup over a still-
+ *                    fresh published bundle. If so, POST a no-op
+ *                    `succeeded` (the run lands GREEN, no false-
+ *                    positive notification); otherwise exit non-zero
+ *                    and let the `if: failure()` step report `failed`.
+ *                    See `cli/lib/zyra-acquire-softpass.ts`.
  *
  * Environment (same resolution as every `terraviz` command — see
  * `cli/lib/config.ts`): TERRAVIZ_SERVER,
@@ -40,13 +48,17 @@
  *   2 — publisher API call failed (fetch / status / PATCH)
  *   3 — SOS spec preflight failed (hard failures)
  *   4 — asset init / PUT / complete failed
- *   5 — transcode wait timeout (upload landed; encode didn't finish)
+ *
+ * (A transcode that outlasts the --wait-seconds window is NOT a
+ * failure: the asset published and the encode finalizes
+ * asynchronously, so the publish phase reports success. The former
+ * exit code 5 is retired.)
  */
 
 import { createHash } from 'node:crypto'
 import { readFile, writeFile, stat, mkdir, readdir } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { resolveConfig } from './lib/config'
 import { TerravizClient } from './lib/client'
 import { assessSosSpec, runFfprobe } from './lib/sos-spec'
@@ -55,10 +67,49 @@ import {
   renderSidecar,
   sanitizeErrorSummary,
 } from './lib/workflow-sidecar'
+import {
+  deleteR2Object,
+  getR2ObjectText,
+  listR2KeysPaginated,
+  loadR2ConfigFromEnv,
+  r2ObjectExists,
+  type R2UploadConfig,
+} from './lib/r2-upload'
+import { frameHexFromKey, frameStorePrefix, selectFrameOrphans } from './lib/frame-store'
+import {
+  isoDurationToSeconds,
+  restoreFramesFromR2,
+  saveFramesToR2,
+  windowFrameBudget,
+} from './lib/r2-frames'
+import { publishFrameSequence } from './lib/frames-publish'
+import {
+  assessBundleFreshness,
+  classifyZyraFailure,
+  decideAcquireSoftPass,
+} from './lib/zyra-acquire-softpass'
+import { WORKFLOW_OUTPUT_PATH } from '../src/types/zyra-workflow-constants'
 
 const ULID_RE = /^[0-9A-HJKMNP-TV-Z]{26}$/
 
-export type Phase = 'fetch' | 'publish' | 'report-failure'
+/** Default staleness threshold for the acquire soft-pass (2 days):
+ *  how long the published bundle's trailing edge may fall behind real
+ *  time before a transient acquire failure escalates instead of
+ *  soft-passing. Overridable per node via the workflow's
+ *  ZYRA_STALE_AFTER_SECONDS repo variable. */
+const DEFAULT_STALE_AFTER_SECONDS = 172_800
+/** Upper bound on --stale-after-seconds (30 days) — a guard against a
+ *  fat-fingered repo variable that would let an indefinite outage
+ *  soft-pass forever. */
+const MAX_STALE_AFTER_SECONDS = 2_592_000
+
+export type Phase =
+  | 'fetch'
+  | 'publish'
+  | 'report-failure'
+  | 'acquire-softpass'
+  | 'restore-frames'
+  | 'save-frames'
 
 export interface Args {
   phase: Phase
@@ -70,6 +121,11 @@ export interface Args {
   waitSeconds: number
   errorSummary: string
   ffprobeBin: string
+  /** Path to the captured `zyra run` combined output — the
+   *  acquire-softpass classifier's input. */
+  zyraLog: string | null
+  /** Staleness threshold (seconds) for the acquire soft-pass. */
+  staleAfterSeconds: number
 }
 
 export function parseArgs(argv: readonly string[]): Args | { error: string } {
@@ -80,8 +136,17 @@ export function parseArgs(argv: readonly string[]): Args | { error: string } {
   }
 
   const phase = get('phase')
-  if (phase !== 'fetch' && phase !== 'publish' && phase !== 'report-failure') {
-    return { error: `--phase must be fetch, publish, or report-failure; got ${phase ?? '(missing)'}` }
+  if (
+    phase !== 'fetch' &&
+    phase !== 'publish' &&
+    phase !== 'report-failure' &&
+    phase !== 'acquire-softpass' &&
+    phase !== 'restore-frames' &&
+    phase !== 'save-frames'
+  ) {
+    return {
+      error: `--phase must be fetch, publish, report-failure, acquire-softpass, restore-frames, or save-frames; got ${phase ?? '(missing)'}`,
+    }
   }
   const workflowId = get('workflow-id')
   if (!workflowId || !ULID_RE.test(workflowId)) {
@@ -97,6 +162,17 @@ export function parseArgs(argv: readonly string[]): Args | { error: string } {
   if (!Number.isInteger(waitSeconds) || waitSeconds < 0 || waitSeconds > 21_600) {
     return { error: `--wait-seconds must be an integer 0..21600; got ${waitRaw}` }
   }
+  const staleRaw = get('stale-after-seconds')
+  const staleAfterSeconds = staleRaw === null ? DEFAULT_STALE_AFTER_SECONDS : Number(staleRaw)
+  if (
+    !Number.isInteger(staleAfterSeconds) ||
+    staleAfterSeconds < 0 ||
+    staleAfterSeconds > MAX_STALE_AFTER_SECONDS
+  ) {
+    return {
+      error: `--stale-after-seconds must be an integer 0..${MAX_STALE_AFTER_SECONDS}; got ${staleRaw}`,
+    }
+  }
   return {
     phase,
     workflowId,
@@ -107,6 +183,8 @@ export function parseArgs(argv: readonly string[]): Args | { error: string } {
     waitSeconds,
     errorSummary: get('error-summary') ?? 'Workflow run failed (no detail provided).',
     ffprobeBin: get('ffprobe-bin') ?? 'ffprobe',
+    zyraLog: get('zyra-log'),
+    staleAfterSeconds,
   }
 }
 
@@ -122,7 +200,14 @@ interface WorkflowEnvelope {
 }
 
 interface DatasetEnvelope {
-  dataset: { id: string; data_ref?: string | null; transcoding?: number | null }
+  dataset: {
+    id: string
+    data_ref?: string | null
+    transcoding?: number | null
+    end_time?: string | null
+    updated_at?: string | null
+    frame_source_filenames_ref?: string | null
+  }
 }
 
 interface AssetInitResponse {
@@ -203,21 +288,18 @@ async function phaseFetch(client: TerravizClient, args: Args): Promise<number> {
   return 0
 }
 
-async function phasePublish(client: TerravizClient, args: Args): Promise<number> {
-  const workflow = JSON.parse(
-    await readFile(join(args.workdir, 'workflow.json'), 'utf-8'),
-  ) as WorkflowEnvelope['workflow']
-  const datasetId = workflow.target_dataset_id
-
-  // 1. Preflight (the Verify-stage stand-in).
-  const probe = await runFfprobe(args.ffprobeBin, args.video)
-  const spec = assessSosSpec(probe)
-  log(`ffprobe: ${spec.summary}`)
-  for (const w of spec.warnings) log(`WARN: ${w}`)
-  for (const f of spec.failures) log(`FAIL: ${f}`)
-  if (spec.failures.length > 0) return 3
-
-  // 2. Sidecar → dataset PATCH.
+/**
+ * Render the metadata sidecar from the workflow template +
+ * frames-meta and PATCH the dataset. Shared by the video and
+ * frame-sequence publish paths (the frame path needs it for the
+ * `start_time` / `period` the `/frames` surface reads). Returns an
+ * exit code on failure, or null on success.
+ */
+async function applyMetadataSidecar(
+  client: TerravizClient,
+  args: Args,
+  workflow: WorkflowEnvelope['workflow'],
+): Promise<number | null> {
   let framesMeta: unknown
   const metaPath = await findFramesMeta(args.workdir)
   if (metaPath) {
@@ -232,13 +314,138 @@ async function phasePublish(client: TerravizClient, args: Args): Promise<number>
   const sidecar = renderSidecar(template, buildRunVars({ runId: args.runId, framesMeta }))
   for (const w of sidecar.warnings) log(`WARN: ${w}`)
   if (Object.keys(sidecar.fields).length > 0) {
-    const patched = await client.updateDataset(datasetId, sidecar.fields)
+    const patched = await client.updateDataset(workflow.target_dataset_id, sidecar.fields)
     if (!patched.ok) {
       log(`FAIL: dataset PATCH → ${patched.status} ${patched.error}`)
       return 2
     }
-    log(`dataset ${datasetId} metadata updated (${Object.keys(sidecar.fields).join(', ')})`)
+    log(`dataset ${workflow.target_dataset_id} metadata updated (${Object.keys(sidecar.fields).join(', ')})`)
   }
+  return null
+}
+
+/**
+ * Poll until the transcode flips `data_ref` to the expected bundle,
+ * then POST the succeeded status. The expected ref is identical for
+ * the MP4 and frame-sequence paths — both transcode to
+ * `videos/{dataset}/{upload}/master.m3u8`.
+ */
+async function waitAndReportSucceeded(
+  client: TerravizClient,
+  args: Args,
+  datasetId: string,
+  uploadId: string,
+): Promise<number> {
+  if (args.waitSeconds > 0) {
+    const started = Date.now()
+    const deadline = started + args.waitSeconds * 1000
+    const expectedRef = `r2:videos/${datasetId}/${uploadId}/master.m3u8`
+    // Heartbeat so the step doesn't look dead while the (silent)
+    // transcode runs — throttled to ~once a minute.
+    let lastHeartbeat = 0
+    for (;;) {
+      if (Date.now() > deadline) {
+        // The wait is a best-effort confirmation window, not a gate:
+        // the asset upload + metadata PATCH already succeeded and the
+        // transcode was dispatched, so a slow encode (a large
+        // frame-sequence transcode can run 30+ min) must not
+        // false-fail the run. Report success; the transcode finalizes
+        // `data_ref` asynchronously and reports its own status. Tune
+        // the window via --wait-seconds (0 = fire-and-forget).
+        log(
+          `transcode still running after ${args.waitSeconds}s — asset published and transcode dispatched; reporting success (it finalizes asynchronously)`,
+        )
+        break
+      }
+      await sleep(15_000)
+      const row = await client.get<DatasetEnvelope>(datasetId)
+      if (!row.ok) {
+        log(`WARN: poll → ${row.status} ${row.error}`)
+        continue
+      }
+      if (row.body.dataset.data_ref === expectedRef && !row.body.dataset.transcoding) {
+        log(`transcode landed — data_ref=${expectedRef}`)
+        break
+      }
+      const elapsed = Math.round((Date.now() - started) / 1000)
+      if (elapsed - lastHeartbeat >= 60) {
+        lastHeartbeat = elapsed
+        log(`waiting on transcode… (${elapsed}s elapsed, transcoding=${row.body.dataset.transcoding ? 1 : 0})`)
+      }
+    }
+  }
+
+  const status = await client.postWorkflowRunStatus(args.workflowId, args.runId, {
+    status: 'succeeded',
+    gha_run_id: args.ghaRunId,
+    upload_id: uploadId,
+  })
+  if (!status.ok) {
+    log(`FAIL: succeeded callback → ${status.status} ${status.error}`)
+    return 2
+  }
+  log(`done — run ${args.runId} succeeded`)
+  return 0
+}
+
+async function phasePublish(client: TerravizClient, args: Args): Promise<number> {
+  const workflow = JSON.parse(
+    await readFile(join(args.workdir, 'workflow.json'), 'utf-8'),
+  ) as WorkflowEnvelope['workflow']
+  // Branch on what the pipeline *declares* it produces, not on which
+  // files happen to be present: with the frame cache, restored frames
+  // almost always exist, so a video pipeline whose compose-video
+  // silently failed must NOT fall through to publishing stale frames
+  // and reporting success — it has to fail.
+  if (expectedOutputKind(workflow.pipeline_json) === 'video') {
+    if (!existsSync(args.video)) {
+      log(`FAIL: pipeline declares MP4 output but ${args.video} is missing — compose-video did not produce it`)
+      return 4
+    }
+    return await publishVideo(client, args, workflow)
+  }
+  return await publishFrames(client, args, workflow)
+}
+
+/** What artifact the pipeline declares: an MP4 (a stage writes
+ *  `WORKFLOW_OUTPUT_PATH`) or a frame sequence (anything else — the
+ *  recall-enabled shape). Mirrors the server-side validator's
+ *  output check. */
+export function expectedOutputKind(pipelineJson: string): 'video' | 'frames' {
+  try {
+    const parsed = JSON.parse(pipelineJson) as {
+      stages?: Array<{ args?: Record<string, unknown> }>
+    }
+    for (const stage of parsed.stages ?? []) {
+      for (const value of Object.values(stage.args ?? {})) {
+        if (value === WORKFLOW_OUTPUT_PATH) return 'video'
+      }
+    }
+  } catch {
+    /* unparseable — treat as frames-output; the publish leg will
+       surface a real error if there's nothing to publish */
+  }
+  return 'frames'
+}
+
+async function publishVideo(
+  client: TerravizClient,
+  args: Args,
+  workflow: WorkflowEnvelope['workflow'],
+): Promise<number> {
+  const datasetId = workflow.target_dataset_id
+
+  // 1. Preflight (the Verify-stage stand-in).
+  const probe = await runFfprobe(args.ffprobeBin, args.video)
+  const spec = assessSosSpec(probe)
+  log(`ffprobe: ${spec.summary}`)
+  for (const w of spec.warnings) log(`WARN: ${w}`)
+  for (const f of spec.failures) log(`FAIL: ${f}`)
+  if (spec.failures.length > 0) return 3
+
+  // 2. Sidecar → dataset PATCH.
+  const sidecarCode = await applyMetadataSidecar(client, args, workflow)
+  if (sidecarCode !== null) return sidecarCode
 
   // 3. Asset init → PUT → complete (overwrite-in-place: same
   //    dataset, fresh upload_id; the transcoding guard 409s if a
@@ -289,37 +496,327 @@ async function phasePublish(client: TerravizClient, args: Args): Promise<number>
   log('complete ok — transcode dispatch fired')
 
   // 4. Wait for the transcode to flip data_ref, then report.
-  if (args.waitSeconds > 0) {
-    const deadline = Date.now() + args.waitSeconds * 1000
-    const expectedRef = `r2:videos/${datasetId}/${uploadId}/master.m3u8`
-    for (;;) {
-      if (Date.now() > deadline) {
-        log(`TIMEOUT: transcode did not finish within ${args.waitSeconds}s`)
-        return 5
-      }
-      await sleep(15_000)
-      const row = await client.get<DatasetEnvelope>(datasetId)
-      if (!row.ok) {
-        log(`WARN: poll → ${row.status} ${row.error}`)
-        continue
-      }
-      if (row.body.dataset.data_ref === expectedRef && !row.body.dataset.transcoding) {
-        log(`transcode landed — data_ref=${expectedRef}`)
-        break
-      }
-    }
+  return await waitAndReportSucceeded(client, args, datasetId, uploadId)
+}
+
+/**
+ * Publish the run's padded frame sequence via the image-sequence
+ * asset path (`docs/ZYRA_INTEGRATION_PLAN.md` §Real-time frame store
+ * stage 3). The transcode builds the same HLS bundle the MP4 path
+ * would AND sets the frame columns that light up `/frames`, so
+ * recall comes for free. No ffprobe preflight here — there's no MP4
+ * to probe; the transcode enforces the output spec.
+ */
+async function publishFrames(
+  client: TerravizClient,
+  args: Args,
+  workflow: WorkflowEnvelope['workflow'],
+): Promise<number> {
+  const datasetId = workflow.target_dataset_id
+  const { framesDir } = deriveFrameParams(workflow.pipeline_json, args.workdir)
+  log(`no MP4 at ${args.video} — publishing frame sequence from ${framesDir}`)
+
+  // 1. Sidecar first — sets the start_time / period the /frames
+  //    surface needs to render per-frame timestamps.
+  const sidecarCode = await applyMetadataSidecar(client, args, workflow)
+  if (sidecarCode !== null) return sidecarCode
+
+  // 2. Hash → init → PUT frames + manifest → complete (fires the
+  //    transcode). Frames are content-addressed
+  //    (`docs/INCREMENTAL_FRAME_UPLOAD_PLAN.md`), so when R2 creds are
+  //    present we HEAD-skip frames already in the shared store and PUT
+  //    only the delta — a scheduled re-publish uploads the day's new
+  //    frames, not the whole window.
+  const r2 = frameCacheConfig()
+  // Capture the digests of the manifest the row advertises RIGHT NOW —
+  // before this run's transcode swaps it — as the GC grace set. This is
+  // the prior window the live `/frames` recall is still serving; reading
+  // it up front (rather than at GC time) makes the prune race-proof:
+  // even if the transcode completes during the publish wait below, the
+  // prior frames are already pinned for a one-run grace window.
+  const priorDigests = r2 ? await fetchAdvertisedFrameDigests(client, r2, datasetId) : []
+
+  let uploadId: string
+  let currentDigests: string[] = []
+  try {
+    const result = await publishFrameSequence(client, datasetId, framesDir, {
+      log,
+      exists: r2 ? key => r2ObjectExists(r2, key) : undefined,
+    })
+    uploadId = result.uploadId
+    currentDigests = result.digests
+    log(
+      `frame sequence upload ${uploadId} (${result.frameCount} frames: ` +
+        `${result.uploaded} uploaded, ${result.reused} reused, mock=${result.mock}) — transcode dispatch fired`,
+    )
+  } catch (err) {
+    log(`FAIL: frame-sequence publish → ${err instanceof Error ? err.message : String(err)}`)
+    return 4
   }
 
-  const status = await client.postWorkflowRunStatus(args.workflowId, args.runId, {
-    status: 'succeeded',
-    gha_run_id: args.ghaRunId,
-    upload_id: uploadId,
-  })
-  if (!status.ok) {
-    log(`FAIL: succeeded callback → ${status.status} ${status.error}`)
-    return 2
+  // 3. Wait for the transcode to flip data_ref, then report.
+  const code = await waitAndReportSucceeded(client, args, datasetId, uploadId)
+
+  // 4. GC the content-addressed frame store (best-effort — never
+  //    changes the run's outcome). Keep this run's frames ∪ the prior
+  //    window captured above (the one-run grace window).
+  if (code === 0 && r2) {
+    await gcFrameStore(r2, datasetId, [...currentDigests, ...priorDigests])
   }
-  log(`done — run ${args.runId} succeeded`)
+  return code
+}
+
+/**
+ * Read the digests of whatever frame manifest the dataset row currently
+ * advertises (`frame_source_filenames_ref`). Called at publish start so
+ * the value is the PRIOR window (the bundle `/frames` recall is serving
+ * before this run's transcode swaps it in) — the grace set the frame GC
+ * must keep so an in-flight reader on the prior manifest doesn't lose
+ * frames mid-enumeration.
+ *
+ * Best-effort: returns [] (no grace contribution) on any miss — a
+ * missing row, no prior frames, an unreadable or unparseable manifest.
+ * This run's own digests still protect the just-published frames.
+ */
+async function fetchAdvertisedFrameDigests(
+  client: TerravizClient,
+  r2: R2UploadConfig,
+  datasetId: string,
+): Promise<string[]> {
+  try {
+    const row = await client.get<DatasetEnvelope>(datasetId)
+    const ref = row.ok ? row.body.dataset.frame_source_filenames_ref : null
+    if (!ref) return []
+    const manifestKey = ref.startsWith('r2:') ? ref.slice('r2:'.length) : ref
+    const blob = await getR2ObjectText(r2, manifestKey)
+    if (!blob) return []
+    const entries = JSON.parse(blob) as Array<{ digest?: unknown }>
+    return entries
+      .filter((e): e is { digest: string } => typeof e.digest === 'string')
+      .map(e => e.digest)
+  } catch (err) {
+    log(`WARN: frame GC — could not read the prior manifest for the grace set (${err instanceof Error ? err.message : String(err)})`)
+    return []
+  }
+}
+
+/**
+ * Mark-and-sweep the shared content-addressed frame store
+ * (`docs/INCREMENTAL_FRAME_UPLOAD_PLAN.md` §GC). `keepDigests` is this
+ * run's frames ∪ the prior window captured at publish start, so every
+ * frame either the new bundle or the still-serving prior bundle
+ * references survives; the rest (frames that slid off ≥2 windows ago)
+ * is reclaimed. Fully best-effort: any failure logs and returns without
+ * affecting the run, exactly like `pruneSegments` in the HLS path.
+ */
+async function gcFrameStore(
+  r2: R2UploadConfig,
+  datasetId: string,
+  keepDigests: string[],
+): Promise<void> {
+  try {
+    const keys = await listR2KeysPaginated(r2, frameStorePrefix(datasetId))
+    const hexToKey = new Map<string, string>()
+    for (const k of keys) {
+      const hex = frameHexFromKey(k)
+      if (hex) hexToKey.set(hex, k)
+    }
+    const orphanHexes = selectFrameOrphans([...hexToKey.keys()], keepDigests)
+    if (orphanHexes.length === 0) {
+      log(`frame GC: nothing to prune (${hexToKey.size} frame(s) all referenced)`)
+      return
+    }
+    let deleted = 0
+    for (const hex of orphanHexes) {
+      const key = hexToKey.get(hex)
+      if (!key) continue
+      try {
+        await deleteR2Object(r2, key)
+        deleted++
+      } catch (err) {
+        log(`WARN: frame GC delete ${key} failed (continuing) — ${err instanceof Error ? err.message : String(err)}`)
+      }
+    }
+    log(`frame GC: pruned ${deleted}/${orphanHexes.length} orphaned frame(s), kept ${hexToKey.size - deleted}`)
+  } catch (err) {
+    log(`WARN: frame GC failed (continuing) — ${err instanceof Error ? err.message : String(err)}`)
+  }
+}
+
+/** R2 frame-cache config from the runner env, or null when the
+ *  operator hasn't wired the credential trio — in which case the
+ *  cache is simply disabled and the run proceeds uncached. */
+function frameCacheConfig(): R2UploadConfig | null {
+  const cfg = loadR2ConfigFromEnv()
+  if (!cfg.endpoint || !cfg.accessKeyId || !cfg.secretAccessKey) return null
+  return cfg
+}
+
+/** Translate a pipeline `/work/...` path (the container's view of
+ *  the mounted workdir) to the host path the CLI sees. */
+function mapWorkPath(pipelinePath: string | null, workdir: string): string {
+  if (!pipelinePath) return join(workdir, 'images', 'frames')
+  if (pipelinePath === '/work') return workdir
+  if (pipelinePath.startsWith('/work/')) return join(workdir, pipelinePath.slice('/work/'.length))
+  return join(workdir, 'images', 'frames')
+}
+
+/** Like `mapWorkPath` but for an arbitrary `/work/...` file path —
+ *  returns null (rather than a frames-dir fallback) when the path
+ *  isn't under the mounted workdir, so a caller can tell "absent"
+ *  from "defaulted". */
+function mapWorkFile(pipelinePath: string | null, workdir: string): string | null {
+  if (!pipelinePath) return null
+  if (pipelinePath === '/work') return workdir
+  if (pipelinePath.startsWith('/work/')) return join(workdir, pipelinePath.slice('/work/'.length))
+  return null
+}
+
+interface FrameParams {
+  framesDir: string
+  /** Window budget for the prune, or null to keep everything. */
+  keepFrames: number | null
+  /** Host path to the pad-missing JSON report, or null when the
+   *  pipeline has no pad-missing stage with a `json-report` arg. */
+  padReportPath: string | null
+}
+
+/** Derive the frames directory + window budget + pad-report path
+ *  from the stored pipeline definition: the acquire stage's
+ *  `sync-dir` + `since-period`, a scan-frames/metadata stage's
+ *  `period-seconds`, and the pad-missing stage's `json-report`. */
+function deriveFrameParams(pipelineJson: string, workdir: string): FrameParams {
+  let stages: Array<Record<string, unknown>> = []
+  try {
+    const parsed = JSON.parse(pipelineJson) as { stages?: unknown }
+    if (Array.isArray(parsed.stages)) stages = parsed.stages as Array<Record<string, unknown>>
+  } catch {
+    /* unparseable pipeline — fall back to defaults below */
+  }
+  let syncDir: string | null = null
+  let sincePeriod: string | null = null
+  let periodSeconds: number | null = null
+  let padReport: string | null = null
+  for (const stage of stages) {
+    const args = (stage.args ?? {}) as Record<string, unknown>
+    if (stage.stage === 'acquire') {
+      if (typeof args['sync-dir'] === 'string') syncDir = args['sync-dir']
+      if (typeof args['since-period'] === 'string') sincePeriod = args['since-period']
+    }
+    if (stage.command === 'scan-frames' || stage.command === 'metadata') {
+      const ps = args['period-seconds']
+      if (typeof ps === 'number') periodSeconds = ps
+      else if (typeof ps === 'string' && /^\d+$/.test(ps)) periodSeconds = Number(ps)
+    }
+    if (stage.command === 'pad-missing' && typeof args['json-report'] === 'string') {
+      padReport = args['json-report']
+    }
+  }
+  return {
+    framesDir: mapWorkPath(syncDir, workdir),
+    keepFrames: windowFrameBudget(
+      sincePeriod ? isoDurationToSeconds(sincePeriod) : null,
+      periodSeconds,
+    ),
+    padReportPath: mapWorkFile(padReport, workdir),
+  }
+}
+
+/**
+ * Read the synthetic-frame filenames from a `pad-missing` JSON
+ * report (`created_files` — absolute paths whose basenames are the
+ * frame filenames). Returns [] when the report is absent, malformed,
+ * or a dry run — fail-open so a missing report never deletes real
+ * cache data.
+ */
+export async function readPaddedFrameNames(reportPath: string): Promise<string[]> {
+  try {
+    const report = JSON.parse(await readFile(reportPath, 'utf-8')) as {
+      created_files?: unknown
+      dry_run?: unknown
+    }
+    if (report.dry_run === true || !Array.isArray(report.created_files)) return []
+    return report.created_files
+      .filter((f): f is string => typeof f === 'string')
+      .map(f => basename(f))
+  } catch {
+    return []
+  }
+}
+
+/** Read the dataset id + pipeline definition the fetch phase wrote.
+ *  Returns null (logging a warning) when the file is absent or
+ *  malformed — the frame-cache phases treat that as "skip", never
+ *  as a run failure. */
+async function readWorkflowForFrames(
+  workdir: string,
+): Promise<{ datasetId: string; pipelineJson: string } | null> {
+  try {
+    const wf = JSON.parse(await readFile(join(workdir, 'workflow.json'), 'utf-8')) as {
+      target_dataset_id?: unknown
+      pipeline_json?: unknown
+    }
+    if (typeof wf.target_dataset_id !== 'string' || typeof wf.pipeline_json !== 'string') {
+      log('WARN: workflow.json missing target_dataset_id / pipeline_json — skipping frame cache')
+      return null
+    }
+    return { datasetId: wf.target_dataset_id, pipelineJson: wf.pipeline_json }
+  } catch (err) {
+    log(`WARN: cannot read workflow.json — skipping frame cache (${err instanceof Error ? err.message : String(err)})`)
+    return null
+  }
+}
+
+/** restore-frames: pull the dataset's cached frames into the
+ *  workdir before the Zyra container runs. Best-effort — a cache
+ *  miss or R2 error logs and returns 0 so the run continues. */
+async function phaseRestoreFrames(args: Args): Promise<number> {
+  const cfg = frameCacheConfig()
+  if (!cfg) {
+    log('frame cache disabled (R2 not configured) — skipping restore')
+    return 0
+  }
+  const wf = await readWorkflowForFrames(args.workdir)
+  if (!wf) return 0
+  const { framesDir } = deriveFrameParams(wf.pipelineJson, args.workdir)
+  try {
+    const result = await restoreFramesFromR2(cfg, wf.datasetId, framesDir, { log })
+    log(`frame cache: restored ${result.restored}, ${result.skipped} already present → ${framesDir}`)
+  } catch (err) {
+    log(`WARN: frame restore failed (continuing uncached) — ${err instanceof Error ? err.message : String(err)}`)
+  }
+  return 0
+}
+
+/** save-frames: push new frames back to the cache after compose and
+ *  prune the cache to the active window. Best-effort — failing to
+ *  cache must not fail a run that already produced a video. */
+async function phaseSaveFrames(args: Args): Promise<number> {
+  const cfg = frameCacheConfig()
+  if (!cfg) {
+    log('frame cache disabled (R2 not configured) — skipping save')
+    return 0
+  }
+  const wf = await readWorkflowForFrames(args.workdir)
+  if (!wf) return 0
+  const { framesDir, keepFrames, padReportPath } = deriveFrameParams(wf.pipelineJson, args.workdir)
+  // Synthetic frames (pad-missing's created_files) stay out of the
+  // cache so the next run's acquire can replace them with real ones.
+  const excludeNames = padReportPath ? await readPaddedFrameNames(padReportPath) : []
+  try {
+    const result = await saveFramesToR2(cfg, wf.datasetId, framesDir, {
+      log,
+      keepFrames: keepFrames ?? undefined,
+      excludeNames,
+    })
+    log(
+      `frame cache: ${result.uploaded} uploaded, ${result.pruned} pruned, ${result.kept} kept` +
+        (keepFrames ? ` (window ${keepFrames})` : ' (no window prune)') +
+        (excludeNames.length ? ` (${excludeNames.length} synthetic kept out)` : ''),
+    )
+  } catch (err) {
+    log(`WARN: frame save failed (continuing) — ${err instanceof Error ? err.message : String(err)}`)
+  }
   return 0
 }
 
@@ -343,12 +840,119 @@ async function phaseReportFailure(client: TerravizClient, args: Args): Promise<n
   return 0
 }
 
+/** Read the target dataset id the fetch phase stored in
+ *  workflow.json. Returns null (not an error) when the file is absent
+ *  or malformed — the soft-pass then can't confirm a published bundle
+ *  and escalates. */
+async function readTargetDatasetId(workdir: string): Promise<string | null> {
+  try {
+    const wf = JSON.parse(await readFile(join(workdir, 'workflow.json'), 'utf-8')) as {
+      target_dataset_id?: unknown
+    }
+    return typeof wf.target_dataset_id === 'string' ? wf.target_dataset_id : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * acquire-softpass: the workflow calls this after `zyra run` has
+ * failed (and exhausted its retries) to decide whether the failure is
+ * a soft-passable transient NOAA-FTP `acquire` hiccup. See
+ * `cli/lib/zyra-acquire-softpass.ts` for the decision logic.
+ *
+ *   - Soft-pass (transient acquire failure + fresh published bundle):
+ *     POST a no-op `succeeded` and exit 0, so the run finishes GREEN
+ *     with no false-positive failure notification. The workflow gates
+ *     its publish steps off this outcome (no new data was produced).
+ *   - Escalate (anything else — a non-acquire failure, a
+ *     never-published dataset, or a stale bundle = sustained outage):
+ *     exit non-zero WITHOUT posting, so the workflow's `if: failure()`
+ *     step posts `failed` and the operator is notified.
+ */
+async function phaseAcquireSoftpass(client: TerravizClient, args: Args): Promise<number> {
+  // 1. Classify the captured `zyra run` output.
+  let logText = ''
+  if (args.zyraLog) {
+    try {
+      logText = await readFile(args.zyraLog, 'utf-8')
+    } catch (err) {
+      log(
+        `WARN: cannot read zyra log ${args.zyraLog} — cannot confirm an acquire failure (${err instanceof Error ? err.message : String(err)})`,
+      )
+    }
+  } else {
+    log('WARN: no --zyra-log provided — cannot confirm an acquire failure')
+  }
+  const classification = classifyZyraFailure(logText)
+
+  // 2. Resolve the dataset's published-bundle state for the freshness
+  //    check.
+  const datasetId = await readTargetDatasetId(args.workdir)
+  let dataRef: string | null | undefined
+  let endTime: string | null | undefined
+  let updatedAt: string | null | undefined
+  if (datasetId) {
+    const row = await client.get<DatasetEnvelope>(datasetId)
+    if (row.ok) {
+      dataRef = row.body.dataset.data_ref
+      endTime = row.body.dataset.end_time
+      updatedAt = row.body.dataset.updated_at
+    } else {
+      log(`WARN: dataset GET → ${row.status} ${row.error} — treating as unpublished (will escalate)`)
+    }
+  } else {
+    log('WARN: no target_dataset_id in workflow.json — treating as unpublished (will escalate)')
+  }
+
+  const freshness = assessBundleFreshness({
+    dataRef,
+    endTime,
+    updatedAt,
+    nowMs: Date.now(),
+    staleAfterSeconds: args.staleAfterSeconds,
+  })
+  const decision = decideAcquireSoftPass({ classification, freshness })
+  log(decision.reason)
+
+  if (!decision.softPass) {
+    // Escalate: leave the `failed` callback to the workflow's
+    // if: failure() step. Non-zero exit fails the job.
+    log(`run ${args.runId} NOT soft-passed — failing the job`)
+    return 2
+  }
+
+  // Soft-pass: land a terminal `succeeded` (no upload_id — nothing was
+  // published this tick).
+  const status = await client.postWorkflowRunStatus(args.workflowId, args.runId, {
+    status: 'succeeded',
+    gha_run_id: args.ghaRunId,
+  })
+  if (!status.ok) {
+    // A 409 means the run already reached a terminal status — fine.
+    if (status.status === 409) {
+      log('soft-pass callback skipped — run already terminal')
+      return 0
+    }
+    log(`FAIL: soft-pass succeeded callback → ${status.status} ${status.error}`)
+    return 2
+  }
+  log(`run ${args.runId} soft-passed (no new data this tick; prior bundle preserved)`)
+  return 0
+}
+
 async function main(): Promise<number> {
   const parsed = parseArgs(process.argv.slice(2))
   if ('error' in parsed) {
     console.error(`error: ${parsed.error}`)
     return 1
   }
+  // The frame-cache phases talk only to R2, not the publisher API,
+  // so they don't need (and shouldn't require) the TerravizClient
+  // config to be present.
+  if (parsed.phase === 'restore-frames') return await phaseRestoreFrames(parsed)
+  if (parsed.phase === 'save-frames') return await phaseSaveFrames(parsed)
+
   const client = new TerravizClient(resolveConfig())
   try {
     switch (parsed.phase) {
@@ -358,6 +962,8 @@ async function main(): Promise<number> {
         return await phasePublish(client, parsed)
       case 'report-failure':
         return await phaseReportFailure(client, parsed)
+      case 'acquire-softpass':
+        return await phaseAcquireSoftpass(client, parsed)
     }
   } catch (err) {
     console.error(`error: ${err instanceof Error ? err.message : String(err)}`)

@@ -109,6 +109,46 @@ gap needs a tool on our side (or an upstream contribution).
 | 7 | **Verify** | Conceptual (checksums, schema validation, provenance) | Pre-upload QA | v1 implements the preflight in our runner CLI: ffprobe dimensions / codec / fps / duration against the SOS spec, SHA-256 digests (the publish API requires them anyway), frame-count match for sequences. Track upstream Verify for provenance manifests later. |
 | 8 | **Export** (disseminate, decimate) | Implemented — `zyra export local\|s3\|ftp\|post\|vimeo` | Hand off to TerraViz | **Deliberately unused for the upload.** Zyra exports to the runner's local disk; our publish CLI carries the bytes the rest of the way (rationale in §Integration principle). Upstream candidate once the contract is stable: a `zyra export terraviz` connector wrapping the same API flow. |
 
+### Reprojection lives in Zyra, not the portal
+
+**Decision.** The globe + thumbnail render stack assumes
+**equirectangular** (plate carrée, EPSG:4326) imagery — the sphere
+shader, `photorealEarth`, and the globe-thumbnail generator all map a
+2:1 equirectangular texture onto the sphere. Reprojecting data from
+other CRSs (polar-stereographic sea ice, geostationary full-disk,
+Mercator, …) into that form is a **Zyra responsibility, not a
+TerraViz one** — and explicitly *not* an in-browser feature nor a
+bespoke step in our own runner.
+
+Two cases, only one of which is a gap:
+
+- **Native scientific data** (GRIB2 / NetCDF carrying its own grid /
+  CRS). Already covered: Zyra's **Process** stage subsets + reprojects
+  and **Visualize** renders equirectangular frames (rows 2 & 5 above).
+  This is Zyra's core competency; nothing new is needed on our side.
+- **An already-rendered raster in a non-equirectangular projection**
+  (e.g. a polar-stereographic PNG someone produced offline). This is
+  the genuinely missing capability — a `process` `reproject`
+  (warp-to-EPSG:4326) command. It belongs **upstream in
+  `NOAA-GSL/zyra`**, where the Python geospatial stack (GDAL / pyproj /
+  rasterio) already lives, so every Zyra consumer benefits and it's
+  maintained once rather than reinvented per node.
+
+**TerraViz's footprint is an allowlist entry + a curated template,**
+once that command lands: add the subcommand to `ZYRA_STAGE_ALLOWLIST`
+(`src/types/zyra-workflow-constants.ts`) and ship a
+"reproject → visualize → publish" template. We **deliberately do not
+whitelist it yet** — the allowlist is coupled to a pinned Zyra runner
+container digest, so the entry waits until the upstream command set
+has solidified.
+
+**Manual-upload boundary.** The one-off asset/upload form has no Zyra
+in the loop, so it can't reproject. Source imagery there must already
+be equirectangular (EPSG:4326); the form says so and points at
+`gdalwarp -t_srs EPSG:4326`. Supporting arbitrary projections on the
+manual path would require a server-side warp step — out of scope and
+demand-gated.
+
 ### Integration principle: everything through the publish API
 
 Zyra's S3 export could conceivably write into R2 directly (R2 is
@@ -520,6 +560,130 @@ exists (§Open questions).
 
 ---
 
+## Real-time frame store: cache + recall
+
+**Status: draft for review.** Closes two gaps between the v1 runner
+and the scheduler's GitLab pipeline: a cross-run **frame cache** (so
+a re-run doesn't re-fetch the whole window from FTP — the concern
+that grows with frame count) and **frame recall** (the acquired and
+padded frames exposed for individual download). They share one R2
+footprint but answer to different lifecycles, so the design keeps
+them as two prefixes, not one.
+
+### Why R2, not the Actions cache
+
+| | `actions/cache` | R2 frame store |
+|---|---|---|
+| Size | 10 GB per-repo, evicted after 7 days idle | effectively uncapped, durable |
+| "A lot of files" | tars the whole set each run | sync only the delta |
+| Mutability | keys immutable; needs rolling-key hacks to update | overwrite / prune in place |
+| Individual recall | no — opaque archive | yes — each frame its own object |
+| Padded→real replacement | awkward | natural (re-enables `--prefer-remote-if-meta-newer`) |
+
+The cache fights you on exactly the datasets this is for (many
+files), and can't deliver recall — so the store is R2, doubling as
+cache and durable archive.
+
+### Two prefixes, two lifecycles
+
+| Concern | R2 prefix | Lifecycle | Read by |
+|---|---|---|---|
+| **Cache** (working set) | `workflow-frames/{dataset_id}/` (mutable) | restored at run start, saved at run end, **pruned to the active window** | the runner only (private) |
+| **Recall** (published snapshot) | `uploads/{dataset_id}/{upload_id}/frames/{NNNNN}.{ext}` (immutable) | one snapshot per run, GC'd by the upload-retention rule (§Open questions #1) | public `/frames` + `/frames/{index}` |
+
+Recall is **not a new surface.** The image-sequence asset path
+(Phase 3pf/3pg) already uploads a frame sequence, transcodes it to
+the playable HLS bundle **and** sets the row's `frame_count` /
+`frame_extension` / `frame_source_filenames_ref` columns that
+`/frames` serves. So a real-time workflow gets recall by publishing
+its run's padded frames through the frames `asset` flow — the same
+flow a portal frame-upload uses — rather than a pre-composed MP4.
+`renderFrameDisplayName` reconstructs each frame's timestamp from
+`start_time + period × index`, which stays correct run-to-run
+precisely because `pad-missing` guarantees a contiguous,
+cadence-complete sequence to re-index against.
+
+### Cache: restore → acquire-delta → save → prune
+
+The runner gains two phases on either side of `zyra run`, siblings
+of the existing publish phases and reusing `cli/lib/r2-upload.ts`
+(`AwsClient`, `parseListKeys`, `uploadR2Object`, `deleteR2Object`)
+with the `R2_S3_ENDPOINT` / `R2_ACCESS_KEY_ID` /
+`R2_SECRET_ACCESS_KEY` secrets `transcode-from-dispatch.ts` already
+consumes:
+
+- `--phase=restore-frames` — list `workflow-frames/{dataset_id}/`,
+  download into the workdir's frames dir **before** the container
+  runs. `acquire --sync-dir` then only pulls FTP deltas.
+- `--phase=save-frames` — upload new/changed frames back **after**
+  compose, then **prune**: delete any cache object whose timestamp
+  falls outside the active window (`since-period` back from the
+  run — the same span the video shows). The cache is bounded by
+  cadence × window, never by how long the workflow has run.
+
+Persisting frames across runs is also what makes
+**padded→real freshening** possible — the capability the scheduler
+gets from `acquire --prefer-remote-if-meta-newer`. We do it
+runner-side rather than via that static flag (a static pipeline
+can't condition the flag on a frames-meta that doesn't exist on the
+first, cold-cache run), and more simply than a restore-side marker:
+**synthetic frames are kept out of the cache.** `save-frames` reads
+the `pad-missing` report's `created_files`, excludes those frames
+from the upload, and prunes any stale synthetic copy already in the
+cache. So the next run restores only real frames, `acquire
+--sync-dir` re-fetches a frame that has since landed upstream, and
+`pad-missing` re-creates the ones still genuinely missing.
+
+This is the *enabler* of replacement, not a removal from the
+dataset — and the distinction matters for TerraViz, where a frame
+sequence must have **no time gaps** or the playback time label
+desyncs. Two invariants make that safe:
+
+- **The published output is always the full, contiguous post-pad
+  set.** `pad-missing` runs inside the pipeline, and the publish
+  step reads `/work/images/frames` *after* it; `save-frames` only
+  reads that directory and writes the R2 cache, never mutating the
+  local frames the publish step uploads. Padded frames are always in
+  the published dataset.
+- **Caching a padded frame would *block* its replacement.** A padded
+  frame occupies the exact filename (timestamp) the real frame would
+  have, and `acquire --sync-dir` skips filenames already present —
+  so a cached padding would be skipped forever. Keeping it out of
+  the cache is what lets `acquire` fetch the real frame the first run
+  it exists.
+
+No marker, no restore-side change — a refinement on top of the plain
+cache, sequenced after it.
+
+### Non-goals
+
+- **No new public route** — recall reuses `/frames`; the only new
+  HTTP work is the runner publishing frames instead of an MP4.
+- **No second bucket** — both prefixes live in `terraviz-assets`.
+- **Not a general object cache** — frames only, keyed per dataset.
+- Restricted-row presigned frame GETs stay a Phase 4 concern.
+
+### Staging
+
+1. **Cache + prune** (runner-only; no API/DB change) — the R2 frame
+   sync helper (`cli/lib/r2-frames.ts`), the two runner phases
+   (`restore-frames` / `save-frames`), the `zyra-run.yml` wiring,
+   window-prune to keep only the active window. Best-effort: a cache
+   miss or R2 hiccup logs a warning and the run proceeds, so the
+   cache can never break a workflow.
+2. **Padded→real freshening** — `save-frames` keeps the
+   `pad-missing` report's synthetic frames out of the cache, so the
+   next run's acquire can replace them with the real frames once
+   they land (runner-side, no zyra flag — see above).
+3. **Recall** — publish the run's padded frames via the
+   image-sequence asset path so `/frames` lights up. The one
+   behavioural shift to confirm at this step: a recall-enabled
+   workflow publishes a **frame sequence** (which transcodes to the
+   same HLS video) rather than a pre-composed MP4 — `compose-video`
+   becomes redundant in those templates.
+
+---
+
 ## Open questions
 
 1. **Stale upload garbage collection.** Each run strands the
@@ -527,7 +691,9 @@ exists (§Open questions).
    prefixes. A retention rule (keep last N, delete older on
    `transcode-complete`) wants to live in the existing pipeline,
    not the workflow layer — but it changes behaviour for manual
-   re-uploads too. Decide there.
+   re-uploads too. Decide there. (This is the **recall snapshot**
+   retention; the **frame cache**'s window-prune is separate and
+   runner-local — see §Real-time frame store.)
 2. **`zyra export s3` against R2.** Unverified whether Zyra's S3
    connector honors a custom endpoint URL. Moot for v1 (the
    publish CLI carries the bytes) but worth confirming upstream
