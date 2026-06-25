@@ -46,10 +46,16 @@ export function startPlaybackLoop(
   appState: AppState,
   updateVideoTimeLabel: (time: number) => void,
   triggerRepaint?: () => void,
+  onTick?: () => void,
 ): void {
   stopPlaybackLoop(state)
 
   const loop = () => {
+    // Fires every frame regardless of primary play/pause state. Used
+    // by multi-viewport sync to keep sibling panels locked to the
+    // primary's date; self-guards when there is nothing to correct.
+    if (onTick) onTick()
+
     if (hlsService) {
       const video = hlsService.getVideo()
       if (video && video.readyState >= 2) {

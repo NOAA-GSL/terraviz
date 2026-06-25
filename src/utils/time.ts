@@ -188,6 +188,70 @@ export function dateToVideoTime(
   return { videoTime: fraction * videoDuration, position: 'inside' }
 }
 
+/**
+ * Browser `HTMLMediaElement.playbackRate` is only honoured within a
+ * limited range (commonly ~0.0625×–16×); values outside are clamped or
+ * ignored. We clamp ourselves so the computed sibling rate stays in a
+ * range the element will actually apply.
+ */
+export const MIN_PLAYBACK_RATE = 0.0625
+export const MAX_PLAYBACK_RATE = 16
+
+export interface SiblingSyncCorrection {
+  /** Where the primary's date falls relative to the sibling's range. */
+  position: 'before' | 'inside' | 'after'
+  /** Video time (seconds) the sibling should be at to show the date. */
+  targetTime: number
+  /** Playback rate that paces the sibling to the primary, clamped. */
+  rate: number
+  /** True when the sibling has drifted past `thresholdS` and needs a seek. */
+  shouldSeek: boolean
+}
+
+/**
+ * Pure decision for a single sibling viewport in multi-panel playback
+ * sync: given the primary's real-world `date` and both videos' temporal
+ * ranges + durations, compute where the sibling *should* be, the
+ * playback rate that paces it to the primary, and whether it has
+ * drifted far enough to warrant a corrective seek.
+ *
+ * Extracted from `correctSiblingDrift` (terraviz#132) so the threshold
+ * and rate math are unit-testable in isolation. The caller owns the
+ * actual `currentTime` / `playbackRate` writes and play/pause state.
+ *
+ * The `rate` exists only to keep the sibling *approximately* tracking
+ * between seeks (so we don't seek every frame); correctness comes from
+ * re-deriving `targetTime` from the date each frame and snapping when
+ * `shouldSeek`. That makes drift bounded by `thresholdS` rather than
+ * integrating the rate's error over time.
+ */
+export function computeSiblingSyncCorrection(params: {
+  date: Date
+  sibCurrentTime: number
+  sibDuration: number
+  sibStart: Date
+  sibEnd: Date
+  primaryDuration: number
+  primaryRangeMs: number
+  thresholdS: number
+}): SiblingSyncCorrection {
+  const { date, sibCurrentTime, sibDuration, sibStart, sibEnd, primaryDuration, primaryRangeMs, thresholdS } = params
+
+  const { videoTime: targetTime, position } = dateToVideoTime(date, sibDuration, sibStart, sibEnd)
+
+  const sibRangeMs = sibEnd.getTime() - sibStart.getTime()
+  let rate = 1
+  if (primaryRangeMs > 0 && sibRangeMs > 0 && primaryDuration > 0 && sibDuration > 0) {
+    // rate = (sib video seconds per real-world ms) / (primary video seconds per real-world ms)
+    rate = (sibDuration / sibRangeMs) / (primaryDuration / primaryRangeMs)
+    rate = Math.max(MIN_PLAYBACK_RATE, Math.min(MAX_PLAYBACK_RATE, rate))
+  }
+
+  const shouldSeek = Math.abs(sibCurrentTime - targetTime) > thresholdS
+
+  return { position, targetTime, rate, shouldSeek }
+}
+
 /** Standard snap intervals in ascending order of size. The list
  *  extends past 1 month into seasonal and yearly steps — Phase 3
  *  fix for the climate-dataset bug Beth + Hilary flagged, where

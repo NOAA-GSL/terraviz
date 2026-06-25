@@ -14,7 +14,7 @@ import './styles/index.css'
 
 import { HLSService } from './services/hlsService'
 import { dataService, PreviewFetchError } from './services/dataService'
-import { formatDate, videoTimeToDate, dateToVideoTime, isSubDailyPeriod, getSunPosition, inferDisplayInterval } from './utils/time'
+import { formatDate, videoTimeToDate, dateToVideoTime, computeSiblingSyncCorrection, isSubDailyPeriod, getSunPosition, inferDisplayInterval } from './utils/time'
 import { logger } from './utils/logger'
 import type { AppState, VideoTextureHandle, TourFile, Dataset } from './types'
 
@@ -124,6 +124,17 @@ const CLOUD_TEXTURE_WEIGHT = 0.2
 const LOADING_BASE_PROGRESS = 20
 const LOADING_TEXTURE_RANGE = 70
 const LOADING_HIDE_DELAY_MS = 300
+
+/**
+ * Maximum tolerated drift between a sibling viewport and the primary's
+ * date-mapped position before `correctSiblingDrift` snaps it back, in
+ * seconds of video time. Checked every frame off the playback rAF loop.
+ * Tight enough that drift never becomes visible (on the Climate Futures
+ * 4-globe tour, 85 years compressed into ~30 s means 0.15 s ≈ 0.4 model
+ * years — corrected within one frame), while the rate-smoothing keeps
+ * us from seeking every frame on slower devices. See terraviz#132.
+ */
+const SIBLING_DRIFT_THRESHOLD_S = 0.15
 
 /**
  * Root application class that boots the WebGL globe, loads datasets,
@@ -240,8 +251,12 @@ class InteractiveSphere {
   /** Listener attached to the primary video for sibling sync. */
   private primaryVideoSyncListeners: Array<{ event: string; handler: EventListener }> = []
   private primaryVideoSyncTarget: HTMLVideoElement | null = null
-  /** Interval ID for the periodic drift-correction timer. */
-  private driftCheckInterval: ReturnType<typeof setInterval> | null = null
+  /**
+   * True while sibling sync is wired to a primary video. Gates the
+   * per-frame drift correction driven off the playback rAF loop — see
+   * `correctSiblingDrift()`.
+   */
+  private primaryVideoSyncActive = false
 
   /**
    * Convenience getter returning the primary viewport's renderer.
@@ -948,6 +963,11 @@ class InteractiveSphere {
       this.appState,
       (time) => this.updateVideoTimeLabel(time),
       () => this.renderer?.getMap()?.triggerRepaint(),
+      // Per-frame sibling drift correction. The primary video is the
+      // master clock; siblings are kept in temporal lockstep here
+      // rather than free-running on a once-set playbackRate (which
+      // integrates duration-imprecision error into visible drift).
+      () => this.correctSiblingDrift(),
     )
   }
 
@@ -2616,55 +2636,6 @@ class InteractiveSphere {
       }
     }
 
-    /**
-     * Periodic drift correction — only seeks siblings that have
-     * drifted beyond the threshold. Much cheaper than constant-seek
-     * because most of the time no sibling needs correction.
-     */
-    const DRIFT_THRESHOLD_S = 1.0
-    const DRIFT_CHECK_MS = 5000
-
-    const driftCheck = () => {
-      if (primaryVideo.paused) return
-
-      const pIdx = this.viewports.getPrimaryIndex()
-      const pPanel = this.panelStates[pIdx]
-      const pDataset = pPanel?.dataset
-
-      let primaryDate: Date | null = null
-      if (pDataset?.startTime && pDataset.endTime && primaryVideo.duration > 0) {
-        primaryDate = videoTimeToDate(
-          primaryVideo.currentTime,
-          primaryVideo.duration,
-          new Date(pDataset.startTime),
-          new Date(pDataset.endTime),
-        )
-      }
-      if (!primaryDate) return
-
-      for (let i = 0; i < this.panelStates.length; i++) {
-        if (i === pIdx) continue
-        const sibPanel = this.panelStates[i]
-        const sibVideo = sibPanel?.hlsService?.getVideo?.() ?? null
-        if (!sibVideo || sibVideo.readyState < 2 || sibVideo.paused) continue
-
-        const sibDataset = sibPanel?.dataset
-        if (!sibDataset?.startTime || !sibDataset.endTime || sibVideo.duration <= 0) continue
-
-        const { videoTime: targetTime, position } = dateToVideoTime(
-          primaryDate,
-          sibVideo.duration,
-          new Date(sibDataset.startTime),
-          new Date(sibDataset.endTime),
-        )
-
-        if (position === 'inside' && Math.abs(sibVideo.currentTime - targetTime) > DRIFT_THRESHOLD_S) {
-          logger.debug(`[App] Drift correction: panel ${i} off by ${(sibVideo.currentTime - targetTime).toFixed(1)}s`)
-          sibVideo.currentTime = targetTime
-        }
-      }
-    }
-
     // --- Wire event listeners ---
 
     const onPlay = () => seekSiblingsToDate(true)
@@ -2687,24 +2658,103 @@ class InteractiveSphere {
     )
     this.primaryVideoSyncTarget = primaryVideo
 
-    // Start the periodic drift checker
-    this.driftCheckInterval = setInterval(driftCheck, DRIFT_CHECK_MS)
-
-    // Run once immediately so siblings reflect the primary's current
-    // state without waiting for a user action.
+    // Arm per-frame drift correction (driven from the playback rAF
+    // loop via `correctSiblingDrift`) and run a full resync once now so
+    // siblings reflect the primary's current state immediately.
+    this.primaryVideoSyncActive = true
     seekSiblingsToDate(true)
   }
 
   /**
+   * Per-frame sibling drift correction, invoked from the playback rAF
+   * loop (`startPlaybackLoop`'s `onTick`). The primary video is the
+   * master clock: every frame we re-derive each sibling's target
+   * position from the primary's real-world date and snap it back if it
+   * has drifted past {@link SIBLING_DRIFT_THRESHOLD_S}.
+   *
+   * This replaces the old once-set-`playbackRate` + 5 s/1 s interval
+   * scheme (terraviz#132). The rate is kept only as a smoothing aid so
+   * we don't seek every frame — it's re-derived continuously here so it
+   * tracks `video.duration` as HLS segments buffer and the reported
+   * duration firms up (the original failure mode: an imprecise duration
+   * froze a slightly-wrong rate whose error integrated into visible
+   * drift — ~2.83 years per second of video on the Climate Futures
+   * tour). The threshold-gated seek is the closed loop that bounds it.
+   */
+  private correctSiblingDrift(): void {
+    if (!this.primaryVideoSyncActive) return
+
+    const pIdx = this.viewports.getPrimaryIndex()
+    const pPanel = this.panelStates[pIdx]
+    const pDataset = pPanel?.dataset
+    const primaryVideo = pPanel?.hlsService?.getVideo?.() ?? null
+    // Only correct while the primary is actively playing; paused state
+    // is handled by the `pause` event handler in attachPrimaryVideoSync.
+    if (!primaryVideo || primaryVideo.paused || primaryVideo.readyState < 2) return
+    if (!pDataset?.startTime || !pDataset.endTime || primaryVideo.duration <= 0) return
+
+    const primaryDate = videoTimeToDate(
+      primaryVideo.currentTime,
+      primaryVideo.duration,
+      new Date(pDataset.startTime),
+      new Date(pDataset.endTime),
+    )
+
+    const primaryRangeMs = new Date(pDataset.endTime).getTime() - new Date(pDataset.startTime).getTime()
+
+    for (let i = 0; i < this.panelStates.length; i++) {
+      if (i === pIdx) continue
+      const sibPanel = this.panelStates[i]
+      const sibVideo = sibPanel?.hlsService?.getVideo?.() ?? null
+      if (!sibVideo || sibVideo.readyState < 2) continue
+
+      const sibDataset = sibPanel?.dataset
+      if (!sibDataset?.startTime || !sibDataset.endTime || sibVideo.duration <= 0) continue
+
+      // Re-derive target/rate/drift every frame so the rate tracks
+      // `video.duration` as HLS firms it up. For identical-range
+      // siblings the rate resolves to ~1× and the seek rarely fires;
+      // for mismatched cadences (daily vs weekly) it does the pacing.
+      const { position, targetTime, rate, shouldSeek } = computeSiblingSyncCorrection({
+        date: primaryDate,
+        sibCurrentTime: sibVideo.currentTime,
+        sibDuration: sibVideo.duration,
+        sibStart: new Date(sibDataset.startTime),
+        sibEnd: new Date(sibDataset.endTime),
+        primaryDuration: primaryVideo.duration,
+        primaryRangeMs,
+        thresholdS: SIBLING_DRIFT_THRESHOLD_S,
+      })
+
+      sibVideo.playbackRate = rate
+
+      if (shouldSeek) {
+        sibVideo.currentTime = targetTime
+        const sibTex = sibPanel?.videoTexture
+        if (sibTex) sibTex.needsUpdate = true
+      }
+
+      if (position === 'inside') {
+        this.viewports.setOutOfRange(i, false)
+        // Resume a sibling that was frozen out-of-range and has now
+        // re-entered its window as the primary advanced.
+        if (sibVideo.paused) sibVideo.play().catch(() => { /* autoplay blocked */ })
+      } else {
+        // Primary date is outside this sibling's range — it's been
+        // seeked to the nearest boundary frame above; freeze + mark it.
+        this.viewports.setOutOfRange(i, true)
+        if (!sibVideo.paused) sibVideo.pause()
+      }
+    }
+  }
+
+  /**
    * Detach all sibling-sync listeners from the previous primary video,
-   * stop the drift-check timer, and clear any lingering out-of-range
-   * state from siblings.
+   * disarm per-frame drift correction, and clear any lingering
+   * out-of-range state from siblings.
    */
   private detachPrimaryVideoSync(): void {
-    if (this.driftCheckInterval !== null) {
-      clearInterval(this.driftCheckInterval)
-      this.driftCheckInterval = null
-    }
+    this.primaryVideoSyncActive = false
     const target = this.primaryVideoSyncTarget
     if (target) {
       for (const { event, handler } of this.primaryVideoSyncListeners) {
