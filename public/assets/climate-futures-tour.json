@@ -1,5 +1,5 @@
 {
-  "_comment": "Climate Futures — Three Paths to 2100. A tour that highlights the multi-viewport setEnvView capability by showing SSP climate scenarios side-by-side. Exercises 1-globe, 2h, and 4-globe layouts with worldIndex routing, datasetID handles, and unloadDataset. All six SSP datasets used cover the same 2015-2100 window so they animate in temporal lockstep.",
+  "_comment": "Climate Futures — Three Paths to 2100. A tour that highlights the multi-viewport setEnvView capability by showing SSP climate scenarios side-by-side. Exercises 1-globe, 2h, and 4-globe layouts with worldIndex routing, datasetID handles, and unloadDataset. All nine SSP datasets used share the same 2015-2100 / P1Y temporal coverage, and multi-viewport playback keeps sibling panels locked to the primary's date every frame (see correctSiblingDrift in src/main.ts), so they animate in temporal lockstep.",
   "tourTasks": [
     { "envShowDayNightLighting": "on" },
     { "envShowClouds": "on" },
