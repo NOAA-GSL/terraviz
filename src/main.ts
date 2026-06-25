@@ -126,24 +126,17 @@ const LOADING_TEXTURE_RANGE = 70
 const LOADING_HIDE_DELAY_MS = 300
 
 /**
- * Maximum tolerated drift between a sibling viewport and the primary's
- * date-mapped position before `correctSiblingDrift` snaps it back, in
- * seconds of video time. Checked every frame off the playback rAF loop.
- * Tight enough that drift never becomes visible (on the Climate Futures
- * 4-globe tour, 85 years compressed into ~30 s means 0.15 s ≈ 0.4 model
- * years — corrected within one frame), while the rate-smoothing keeps
- * us from seeking every frame on slower devices. See terraviz#132.
+ * Drift (seconds of video time) beyond which `correctSiblingDrift`
+ * hard-seeks a sibling instead of easing it back via a rate trim.
+ * Smaller drift is corrected smoothly through `playbackRate` (see
+ * `computeSiblingSyncCorrection`), so a hard seek — which interrupts
+ * decode and flickers the panel (terraviz#229) — fires only for a real
+ * desync (re-entry from out-of-range, a stall, or a scrub). The soft
+ * rate trim keeps steady-state drift far below this, so on the Climate
+ * Futures tour (≈2.8 model years per video second) the panels stay
+ * visibly locked without per-frame seeking.
  */
-const SIBLING_DRIFT_THRESHOLD_S = 0.15
-
-/**
- * Epsilon (seconds) for pinning an out-of-range sibling to its boundary
- * frame in `correctSiblingDrift`. Smaller than a typical video frame, so
- * a frozen out-of-range panel sits exactly on its first/last available
- * frame — but non-zero so we don't rewrite `currentTime` every frame once
- * it's already pinned there.
- */
-const BOUNDARY_PIN_EPS_S = 0.02
+const SIBLING_HARD_SEEK_THRESHOLD_S = 0.5
 
 /**
  * Root application class that boots the WebGL globe, loads datasets,
@@ -2531,8 +2524,7 @@ class InteractiveSphere {
    * than set a once-off `playbackRate` and let siblings free-run (which
    * integrates `video.duration` imprecision into visible drift — see
    * terraviz#132), we re-derive each sibling's target position from the
-   * primary's date and snap it back whenever it drifts past the
-   * threshold.
+   * primary's date every frame and steer it back into alignment.
    *
    *   - **On play / seeked** (`seekSiblingsToDate`): exact-align every
    *     sibling to the primary's date and mirror its play/pause state.
@@ -2545,10 +2537,12 @@ class InteractiveSphere {
    *
    *   - **Per-frame drift correction** (`correctSiblingDrift`, driven
    *     from the playback rAF loop while the primary is playing): every
-   *     frame, re-derive each sibling's target/rate and snap it back if
-   *     it has drifted past {@link SIBLING_DRIFT_THRESHOLD_S}. The rate
-   *     is kept only as a smoothing aid so we don't seek every frame;
-   *     correctness comes from the threshold-gated re-seek.
+   *     frame, re-derive each sibling's target/rate. Small drift is
+   *     eased out by gently trimming `playbackRate` (no seek — a
+   *     `currentTime` write on a playing video interrupts decode and
+   *     flickers the panel; terraviz#229). A hard seek fires only for a
+   *     large desync past {@link SIBLING_HARD_SEEK_THRESHOLD_S}, or to
+   *     pin an out-of-range sibling to its boundary frame.
    *
    * Net: drift is bounded by the threshold (one frame to correct) rather
    * than by an interval, and seeking stays near-zero in steady state
@@ -2729,9 +2723,11 @@ class InteractiveSphere {
       if (!sibDataset?.startTime || !sibDataset.endTime || sibVideo.duration <= 0) continue
 
       // Re-derive target/rate/drift every frame so the rate tracks
-      // `video.duration` as HLS firms it up. For identical-range
-      // siblings the rate resolves to ~1× and the seek rarely fires;
-      // for mismatched cadences (daily vs weekly) it does the pacing.
+      // `video.duration` as HLS firms it up. Small in-range drift is
+      // eased out via the returned (gently trimmed) rate; `shouldSeek`
+      // is true only for a large desync or to pin an out-of-range
+      // sibling to its boundary frame (terraviz#229 — per-frame seeking
+      // interrupted decode and flickered the sibling).
       const { position, targetTime, rate, shouldSeek } = computeSiblingSyncCorrection({
         date: primaryDate,
         sibCurrentTime: sibVideo.currentTime,
@@ -2740,20 +2736,19 @@ class InteractiveSphere {
         sibEnd: new Date(sibDataset.endTime),
         primaryDuration: primaryVideo.duration,
         primaryRangeMs,
-        thresholdS: SIBLING_DRIFT_THRESHOLD_S,
+        hardSeekThresholdS: SIBLING_HARD_SEEK_THRESHOLD_S,
       })
 
       sibVideo.playbackRate = rate
 
+      if (shouldSeek) {
+        sibVideo.currentTime = targetTime
+        const sibTex = sibPanel?.videoTexture
+        if (sibTex) sibTex.needsUpdate = true
+      }
+
       if (position === 'inside') {
         this.viewports.setOutOfRange(i, false)
-        // Threshold-gated seek: smooths over small drift without seeking
-        // every frame (the smoothing rate keeps it close between snaps).
-        if (shouldSeek) {
-          sibVideo.currentTime = targetTime
-          const sibTex = sibPanel?.videoTexture
-          if (sibTex) sibTex.needsUpdate = true
-        }
         const wasOutOfRange = this.siblingOutOfRange[i] === true
         this.siblingOutOfRange[i] = false
         // Resume a sibling that was frozen out-of-range and has now
@@ -2764,18 +2759,10 @@ class InteractiveSphere {
           sibVideo.play().catch(() => { /* autoplay blocked */ })
         }
       } else {
-        // Primary date is outside this sibling's range — pin it exactly
-        // to the nearest boundary frame (first/last available data) so a
-        // frozen panel never sits on a slightly-in-range frame. Done
-        // independent of the in-range smoothing threshold, but epsilon-
-        // guarded so we don't rewrite currentTime once already pinned.
+        // Primary date is outside this sibling's range — it's been
+        // pinned to its boundary frame above; freeze + mark it.
         this.viewports.setOutOfRange(i, true)
         this.siblingOutOfRange[i] = true
-        if (Math.abs(sibVideo.currentTime - targetTime) > BOUNDARY_PIN_EPS_S) {
-          sibVideo.currentTime = targetTime
-          const sibTex = sibPanel?.videoTexture
-          if (sibTex) sibTex.needsUpdate = true
-        }
         if (!sibVideo.paused) sibVideo.pause()
       }
     }

@@ -197,14 +197,51 @@ export function dateToVideoTime(
 export const MIN_PLAYBACK_RATE = 0.0625
 export const MAX_PLAYBACK_RATE = 16
 
+/**
+ * Soft-sync controller gains for in-range siblings. Small drift is
+ * corrected by gently trimming `playbackRate` rather than seeking —
+ * a `currentTime` write on a *playing* video forces a decoder seek
+ * (readyState dips, decode flushes) which is visible as a flicker when
+ * it fires every frame. Easing the rate instead is imperceptible.
+ *
+ * - `SYNC_RATE_GAIN`: fraction of rate trim applied per second of drift
+ *   error (0.5 ⇒ a 0.1 s lag → 5 % faster, closing in ~2 s).
+ * - `SYNC_MAX_RATE_TRIM`: cap on that trim so a transient large error
+ *   can't swing the rate wildly (±25 %).
+ *
+ * Errors larger than the caller's `hardSeekThresholdS` skip the trim and
+ * hard-seek instead — a jump is unavoidable there (re-entry from
+ * out-of-range, post-stall, scrub) and acceptable because it's rare.
+ */
+const SYNC_RATE_GAIN = 0.5
+const SYNC_MAX_RATE_TRIM = 0.25
+
+/**
+ * How close (seconds) an out-of-range sibling must already be to its
+ * boundary frame before we stop re-issuing the pinning seek. Smaller
+ * than a video frame, so the frozen panel sits on its exact first/last
+ * available frame, but non-zero so we don't rewrite `currentTime` every
+ * frame once pinned.
+ */
+const BOUNDARY_PIN_EPS_S = 0.02
+
 export interface SiblingSyncCorrection {
   /** Where the primary's date falls relative to the sibling's range. */
   position: 'before' | 'inside' | 'after'
   /** Video time (seconds) the sibling should be at to show the date. */
   targetTime: number
-  /** Playback rate that paces the sibling to the primary, clamped. */
+  /**
+   * Playback rate to apply this frame. For an in-range sibling within
+   * the hard-seek threshold this is the pacing rate gently trimmed to
+   * ease out residual drift; otherwise it's the untrimmed pacing rate.
+   * Clamped to the browser-honoured range.
+   */
   rate: number
-  /** True when the sibling has drifted past `thresholdS` and needs a seek. */
+  /**
+   * True when the sibling should be hard-seeked to `targetTime` this
+   * frame: in-range drift beyond `hardSeekThresholdS`, or an
+   * out-of-range sibling not yet pinned to its boundary frame.
+   */
   shouldSeek: boolean
 }
 
@@ -212,18 +249,17 @@ export interface SiblingSyncCorrection {
  * Pure decision for a single sibling viewport in multi-panel playback
  * sync: given the primary's real-world `date` and both videos' temporal
  * ranges + durations, compute where the sibling *should* be, the
- * playback rate that paces it to the primary, and whether it has
- * drifted far enough to warrant a corrective seek.
+ * playback rate to apply, and whether to hard-seek this frame.
  *
- * Extracted from `correctSiblingDrift` (terraviz#132) so the threshold
- * and rate math are unit-testable in isolation. The caller owns the
- * actual `currentTime` / `playbackRate` writes and play/pause state.
+ * Extracted from `correctSiblingDrift` (terraviz#132) so the control law
+ * is unit-testable in isolation. The caller owns the actual
+ * `currentTime` / `playbackRate` writes and play/pause state.
  *
- * The `rate` exists only to keep the sibling *approximately* tracking
- * between seeks (so we don't seek every frame); correctness comes from
- * re-deriving `targetTime` from the date each frame and snapping when
- * `shouldSeek`. That makes drift bounded by `thresholdS` rather than
- * integrating the rate's error over time.
+ * Control strategy (terraviz#229 flicker fix): for an in-range sibling,
+ * small drift is eased out by trimming the pacing rate (no seek, no
+ * flicker); only drift beyond `hardSeekThresholdS` triggers a corrective
+ * seek. Out-of-range siblings are pinned to their nearest boundary frame
+ * (seek when not already within `BOUNDARY_PIN_EPS_S` of it).
  */
 export function computeSiblingSyncCorrection(params: {
   date: Date
@@ -233,23 +269,41 @@ export function computeSiblingSyncCorrection(params: {
   sibEnd: Date
   primaryDuration: number
   primaryRangeMs: number
-  thresholdS: number
+  hardSeekThresholdS: number
 }): SiblingSyncCorrection {
-  const { date, sibCurrentTime, sibDuration, sibStart, sibEnd, primaryDuration, primaryRangeMs, thresholdS } = params
+  const { date, sibCurrentTime, sibDuration, sibStart, sibEnd, primaryDuration, primaryRangeMs, hardSeekThresholdS } = params
 
   const { videoTime: targetTime, position } = dateToVideoTime(date, sibDuration, sibStart, sibEnd)
 
+  // Base pacing rate: makes the sibling advance through real-world time
+  // at the primary's pace even when ranges/durations differ.
   const sibRangeMs = sibEnd.getTime() - sibStart.getTime()
-  let rate = 1
+  let baseRate = 1
   if (primaryRangeMs > 0 && sibRangeMs > 0 && primaryDuration > 0 && sibDuration > 0) {
     // rate = (sib video seconds per real-world ms) / (primary video seconds per real-world ms)
-    rate = (sibDuration / sibRangeMs) / (primaryDuration / primaryRangeMs)
-    rate = Math.max(MIN_PLAYBACK_RATE, Math.min(MAX_PLAYBACK_RATE, rate))
+    baseRate = (sibDuration / sibRangeMs) / (primaryDuration / primaryRangeMs)
+  }
+  const clamp = (r: number) => Math.max(MIN_PLAYBACK_RATE, Math.min(MAX_PLAYBACK_RATE, r))
+
+  if (position !== 'inside') {
+    // Out-of-range: pin to the boundary frame; rate is moot (the caller
+    // pauses out-of-range siblings) so leave it at the pacing rate.
+    const shouldSeek = Math.abs(sibCurrentTime - targetTime) > BOUNDARY_PIN_EPS_S
+    return { position, targetTime, rate: clamp(baseRate), shouldSeek }
   }
 
-  const shouldSeek = Math.abs(sibCurrentTime - targetTime) > thresholdS
+  // In-range. error > 0 ⇒ sibling is ahead of where it should be.
+  const error = sibCurrentTime - targetTime
 
-  return { position, targetTime, rate, shouldSeek }
+  if (Math.abs(error) > hardSeekThresholdS) {
+    // Large desync — a jump is unavoidable; seek and run at the pacing rate.
+    return { position, targetTime, rate: clamp(baseRate), shouldSeek: true }
+  }
+
+  // Small drift — ease it out by trimming the rate, no seek. Ahead →
+  // slow down (rate < base); behind → speed up.
+  const trim = Math.max(-SYNC_MAX_RATE_TRIM, Math.min(SYNC_MAX_RATE_TRIM, error * SYNC_RATE_GAIN))
+  return { position, targetTime, rate: clamp(baseRate * (1 - trim)), shouldSeek: false }
 }
 
 /** Standard snap intervals in ascending order of size. The list

@@ -316,7 +316,7 @@ describe('computeSiblingSyncCorrection', () => {
       sibEnd: end,
       primaryDuration: 30,
       primaryRangeMs: rangeMs,
-      thresholdS: 0.15,
+      hardSeekThresholdS: 0.15,
     })
     expect(c.position).toBe('inside')
     expect(c.rate).toBeCloseTo(1, 5)
@@ -335,7 +335,7 @@ describe('computeSiblingSyncCorrection', () => {
       sibEnd: end,
       primaryDuration: 30,
       primaryRangeMs: rangeMs,
-      thresholdS: 0.15,
+      hardSeekThresholdS: 0.15,
     })
     expect(c.shouldSeek).toBe(true)
     expect(c.targetTime).toBeCloseTo(15, 5)
@@ -351,7 +351,7 @@ describe('computeSiblingSyncCorrection', () => {
       sibEnd: end,
       primaryDuration: 30,
       primaryRangeMs: rangeMs,
-      thresholdS: 0.15,
+      hardSeekThresholdS: 0.15,
     })
     expect(c.shouldSeek).toBe(false)
   })
@@ -370,7 +370,7 @@ describe('computeSiblingSyncCorrection', () => {
       sibEnd: end,
       primaryDuration: 30,
       primaryRangeMs: rangeMs,
-      thresholdS: 0.15,
+      hardSeekThresholdS: 0.15,
     })
     expect(c.targetTime).toBeCloseTo(30, 5)
     expect(c.rate).toBeCloseTo(2, 5) // 60s sib / 30s primary over equal range
@@ -390,7 +390,7 @@ describe('computeSiblingSyncCorrection', () => {
       sibEnd,
       primaryDuration: 30,
       primaryRangeMs: rangeMs,
-      thresholdS: 0.15,
+      hardSeekThresholdS: 0.15,
     })
     expect(c.position).toBe('inside')
     // sibRange ≈ rangeMs/2 → rate ≈ 2× so it advances through its
@@ -410,7 +410,7 @@ describe('computeSiblingSyncCorrection', () => {
       sibEnd,
       primaryDuration: 30,
       primaryRangeMs: rangeMs,
-      thresholdS: 0.15,
+      hardSeekThresholdS: 0.15,
     })
     expect(before.position).toBe('before')
     expect(before.targetTime).toBe(0)
@@ -424,7 +424,7 @@ describe('computeSiblingSyncCorrection', () => {
       sibEnd: new Date('2058-06-30T00:00:00Z'),
       primaryDuration: 30,
       primaryRangeMs: rangeMs,
-      thresholdS: 0.15,
+      hardSeekThresholdS: 0.15,
     })
     expect(after.position).toBe('after')
     expect(after.targetTime).toBe(30) // clamped to sibling duration
@@ -444,7 +444,7 @@ describe('computeSiblingSyncCorrection', () => {
       sibEnd,
       primaryDuration: 30,
       primaryRangeMs: rangeMs,
-      thresholdS: 0.15,
+      hardSeekThresholdS: 0.15,
     })
     expect(c.rate).toBe(MAX_PLAYBACK_RATE)
     expect(c.rate).toBeGreaterThanOrEqual(MIN_PLAYBACK_RATE)
@@ -460,9 +460,78 @@ describe('computeSiblingSyncCorrection', () => {
       sibEnd: end,
       primaryDuration: 30,
       primaryRangeMs: rangeMs,
-      thresholdS: 0.15,
+      hardSeekThresholdS: 0.15,
     })
     expect(c.rate).toBe(1)
+  })
+
+  // --- soft-sync controller (terraviz#229 flicker fix) ---
+
+  const mid = () => new Date((start.getTime() + end.getTime()) / 2) // → target ≈ 15s of a 30s video
+
+  it('eases a slightly-ahead sibling by trimming the rate down, without seeking', () => {
+    const c = computeSiblingSyncCorrection({
+      date: mid(),
+      sibCurrentTime: 15.1, // 0.1s ahead of the 15s target
+      sibDuration: 30,
+      sibStart: start,
+      sibEnd: end,
+      primaryDuration: 30,
+      primaryRangeMs: rangeMs,
+      hardSeekThresholdS: 0.5,
+    })
+    expect(c.shouldSeek).toBe(false)
+    expect(c.rate).toBeLessThan(1)
+    // base 1 × (1 − 0.5·0.1) = 0.95
+    expect(c.rate).toBeCloseTo(0.95, 5)
+  })
+
+  it('eases a slightly-behind sibling by trimming the rate up, without seeking', () => {
+    const c = computeSiblingSyncCorrection({
+      date: mid(),
+      sibCurrentTime: 14.9, // 0.1s behind
+      sibDuration: 30,
+      sibStart: start,
+      sibEnd: end,
+      primaryDuration: 30,
+      primaryRangeMs: rangeMs,
+      hardSeekThresholdS: 0.5,
+    })
+    expect(c.shouldSeek).toBe(false)
+    expect(c.rate).toBeGreaterThan(1)
+    expect(c.rate).toBeCloseTo(1.05, 5)
+  })
+
+  it('caps the rate trim for a large-but-sub-hard-seek error', () => {
+    const c = computeSiblingSyncCorrection({
+      date: mid(),
+      sibCurrentTime: 20, // 5s ahead, but under a generous hard-seek threshold
+      sibDuration: 30,
+      sibStart: start,
+      sibEnd: end,
+      primaryDuration: 30,
+      primaryRangeMs: rangeMs,
+      hardSeekThresholdS: 10,
+    })
+    expect(c.shouldSeek).toBe(false)
+    // trim capped at 25% → rate = 1 × (1 − 0.25) = 0.75
+    expect(c.rate).toBeCloseTo(0.75, 5)
+  })
+
+  it('hard-seeks (no trim) once in-range drift exceeds the hard-seek threshold', () => {
+    const c = computeSiblingSyncCorrection({
+      date: mid(),
+      sibCurrentTime: 16, // 1s ahead of target, over the 0.5s hard threshold
+      sibDuration: 30,
+      sibStart: start,
+      sibEnd: end,
+      primaryDuration: 30,
+      primaryRangeMs: rangeMs,
+      hardSeekThresholdS: 0.5,
+    })
+    expect(c.shouldSeek).toBe(true)
+    expect(c.targetTime).toBeCloseTo(15, 5)
+    expect(c.rate).toBeCloseTo(1, 5) // untrimmed pacing rate
   })
 })
 
