@@ -42,6 +42,7 @@ import {
   type CatalogMap,
   type MapBboxOverlay,
 } from '../services/catalogMap'
+import type { EventOverlay } from '../services/catalogEvents'
 import { type FilterState } from '../services/datasetFilter'
 import type { Dataset } from '../types'
 import { emit } from '../analytics'
@@ -105,6 +106,12 @@ export interface CatalogMapUpdate {
   /** Free-text portion of the search query (prefix tokens are
    *  already merged into filterState by the caller). */
   searchQuery: string
+  /** Approved current-event overlays narrowed to the currently-visible
+   *  dataset set (see `catalogEvents.buildCatalogEvents`). Rendered as
+   *  amber markers/footprints; click previews the first linked dataset.
+   *  Optional — absent until `browseUI` resolves the events fetch
+   *  (degrades to no markers). */
+  events?: readonly EventOverlay[]
 }
 
 export interface CatalogMapController {
