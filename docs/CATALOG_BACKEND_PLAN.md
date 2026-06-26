@@ -9,6 +9,14 @@ other while keeping data at home.
 have been added yet. This document exists to align on architecture
 and phasing before anything ships.
 
+> **Follow-on:** [`CURRENT_EVENTS_PLAN.md`](CURRENT_EVENTS_PLAN.md)
+> proposes layering reputable current-events context (news /
+> authoritative-org reporting) onto this catalog so visitors can be
+> drawn from a headline to the matching real-time dataset. It reuses
+> this backend's D1 catalog, the embedding/Vectorize search, and the
+> job queue, and adds a `current_events` table plus a curator review
+> queue. It is designed to land before Phase 4 federation.
+
 ---
 
 ## Goals
