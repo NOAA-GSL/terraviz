@@ -840,7 +840,7 @@
   "publisher.events.noLinks": "No proposed dataset links.",
   "publisher.events.occurred": "When",
   "publisher.events.reject": "Reject",
-  "publisher.events.restricted": "Reviewing events is restricted to staff and admin publishers.",
+  "publisher.events.restricted": "Reviewing events is restricted to admin publishers.",
   "publisher.events.saved": "Saved.",
   "publisher.events.signal.geo": "Geo",
   "publisher.events.signal.temporal": "Time",

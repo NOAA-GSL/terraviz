@@ -22,6 +22,8 @@ import {
   toPublicEvent,
   getFeaturedEvent,
   toPublicFeaturedEvent,
+  listLinksForEvents,
+  getDecorationsForEvents,
   type NewCurrentEvent,
 } from './events-store'
 
@@ -208,6 +210,24 @@ describe('event_dataset_links', () => {
     expect(links[0].match_score).toBeCloseTo(0.95)
   })
 
+  it('upsert preserves a curator decision while refreshing the score (re-ingest)', async () => {
+    const { db } = freshDb()
+    const { id: eventId } = await insertCurrentEvent(db, sampleEvent())
+    const datasetId = seededDatasetId(0)
+
+    await upsertEventDatasetLink(db, { eventId, datasetId, matchScore: 0.4 })
+    await setLinkStatus(db, eventId, datasetId, 'approved', 'PUB1', '2026-06-11T00:00:00.000Z')
+
+    // Matcher re-run on an ingest refresh: same status argument the
+    // matcher passes ('proposed'), a new score.
+    await upsertEventDatasetLink(db, { eventId, datasetId, matchScore: 0.95, status: 'proposed' })
+
+    const [link] = await listLinksForEvent(db, eventId)
+    expect(link.status).toBe('approved') // curator decision survived
+    expect(link.approved_by).toBe('PUB1') // audit intact
+    expect(link.match_score).toBeCloseTo(0.95) // score refreshed
+  })
+
   it('filters the reverse lookup by status (the "In the news" read path)', async () => {
     const { db } = freshDb()
     const { id: eventId } = await insertCurrentEvent(db, sampleEvent())
@@ -317,6 +337,25 @@ describe('toPublicEvent', () => {
     expect(pub.feedId).toBeUndefined()
     expect(pub.source.publishedAt).toBeUndefined()
     expect(pub.reviewedAt).toBeUndefined()
+  })
+})
+
+describe('bulk review-queue reads', () => {
+  it('listLinksForEvents / getDecorationsForEvents group by event id', async () => {
+    const { db } = freshDb()
+    const a = await insertCurrentEvent(db, { ...sampleEvent(), title: 'A', keywords: ['hurricane'] })
+    const b = await insertCurrentEvent(db, { ...sampleEvent(), title: 'B', categories: {}, keywords: [] })
+    await upsertEventDatasetLink(db, { eventId: a.id, datasetId: seededDatasetId(0), matchScore: 0.9 })
+    await upsertEventDatasetLink(db, { eventId: a.id, datasetId: seededDatasetId(1), matchScore: 0.5 })
+
+    const links = await listLinksForEvents(db, [a.id, b.id])
+    expect(links.get(a.id)!.map(l => l.dataset_id)).toEqual([seededDatasetId(0), seededDatasetId(1)]) // score order
+    expect(links.get(b.id)).toEqual([]) // present, empty
+
+    const dec = await getDecorationsForEvents(db, [a.id, b.id])
+    expect(dec.get(a.id)!.keywords).toEqual(['hurricane'])
+    expect(dec.get(a.id)!.categories).toEqual({ Theme: ['Hazards', 'Storms'], Region: ['Atlantic'] })
+    expect(dec.get(b.id)).toEqual({ categories: {}, keywords: [] })
   })
 })
 

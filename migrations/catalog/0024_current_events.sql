@@ -60,8 +60,12 @@ CREATE TABLE current_events (
 
   created_at     TEXT NOT NULL,                 -- ISO 8601
   updated_at     TEXT NOT NULL,                 -- ISO 8601
-  reviewed_at    TEXT,                          -- ISO 8601, when a curator last acted
-  reviewed_by    TEXT,                          -- publishers.id (audit), null until reviewed
+  -- Review audit: reviewed_at is when a curator last acted (ISO 8601);
+  -- reviewed_by is the publishers.id, null until reviewed. (Kept off the
+  -- column line so a later ALTER ADD COLUMN doesn't splice a new column
+  -- after it and inherit this comment in the schema snapshot.)
+  reviewed_at    TEXT,
+  reviewed_by    TEXT,
   FOREIGN KEY (reviewed_by) REFERENCES publishers(id)
 );
 

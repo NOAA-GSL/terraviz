@@ -16,6 +16,7 @@ import {
   setEventStatus,
   listCurrentEvents,
   listLinksForEvent,
+  getEventDecorations,
 } from '../_lib/events-store'
 import type { PublisherRow } from '../_lib/publisher-store'
 
@@ -206,5 +207,21 @@ describe('POST /api/v1/publish/events', () => {
     const all = await listCurrentEvents(env.CATALOG_DB)
     expect(all).toHaveLength(1)
     expect(all[0].title).toBe('Hurricane Lena (updated)')
+  })
+
+  it('drops malformed categories instead of persisting garbage', async () => {
+    const { env } = setupEnv()
+    const res = await eventsPost(
+      postCtx({
+        env,
+        body: { ...CREATE, categories: { Theme: 'oops', Region: ['Atlantic', 7] }, keywords: ['hurricane', 9] },
+      }),
+    )
+    expect(res.status).toBe(201)
+    const body = JSON.parse(await res.text()) as { event: { id: string } }
+    const dec = await getEventDecorations(env.CATALOG_DB, body.event.id)
+    // "Theme: 'oops'" (non-array) dropped; "Region" keeps only the string.
+    expect(dec.categories).toEqual({ Region: ['Atlantic'] })
+    expect(dec.keywords).toEqual(['hurricane'])
   })
 })

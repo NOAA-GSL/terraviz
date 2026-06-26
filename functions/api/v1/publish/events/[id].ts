@@ -2,7 +2,7 @@
  * POST /api/v1/publish/events/:id — submit a curator review for one
  * current event (`docs/CURRENT_EVENTS_PLAN.md` §5).
  *
- * Privileged-only (staff / admin / service). Carries the curator's
+ * Privileged-only (admin / service). Carries the curator's
  * decisions in a single body so an event verdict and per-link verdicts
  * land together:
  *
@@ -125,7 +125,7 @@ export const onRequestPost: PagesFunction<CatalogEnv, 'id'> = async context => {
   }
   const publisher = (context.data as unknown as PublisherData).publisher
   if (!isPrivileged(publisher)) {
-    return jsonError(403, 'forbidden_role', 'Reviewing events is restricted to staff, admin, and service callers.')
+    return jsonError(403, 'forbidden_role', 'Reviewing events is restricted to admin and service callers.')
   }
 
   const idParam = context.params.id
@@ -146,7 +146,9 @@ export const onRequestPost: PagesFunction<CatalogEnv, 'id'> = async context => {
   const event = await getCurrentEvent(db, id)
   if (!event) return jsonError(404, 'not_found', `Event ${id} not found.`)
 
-  // Every link decision must target a real proposed link of this event.
+  // Every link decision must target a real link of this event. A link of
+  // any status is fair game — a curator may revise an earlier decision —
+  // so we check existence, not status.
   const existingLinks = await listLinksForEvent(db, id)
   const linkIds = new Set(existingLinks.map(l => l.dataset_id))
   const unknownLinks = parsed.value.links.filter(l => !linkIds.has(l.datasetId))
@@ -155,7 +157,7 @@ export const onRequestPost: PagesFunction<CatalogEnv, 'id'> = async context => {
       unknownLinks.map(l => ({
         field: 'links',
         code: 'unknown_link',
-        message: `Dataset ${l.datasetId} is not a proposed link of event ${id}.`,
+        message: `Dataset ${l.datasetId} is not a link of event ${id}.`,
       })),
     )
   }

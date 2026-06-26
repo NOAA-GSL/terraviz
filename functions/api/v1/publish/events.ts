@@ -25,7 +25,9 @@ import { runMatcherForEvent } from '../_lib/events-matcher'
 import {
   listCurrentEvents,
   listLinksForEvent,
+  listLinksForEvents,
   getEventDecorations,
+  getDecorationsForEvents,
   getCurrentEvent,
   insertCurrentEvent,
   findEventByExternal,
@@ -87,7 +89,7 @@ export const onRequestGet: PagesFunction<CatalogEnv> = async context => {
   }
   const publisher = (context.data as unknown as PublisherData).publisher
   if (!isPrivileged(publisher)) {
-    return jsonError(403, 'forbidden_role', 'The events review queue is restricted to staff, admin, and service callers.')
+    return jsonError(403, 'forbidden_role', 'The events review queue is restricted to admin and service callers.')
   }
 
   const statusParam = new URL(context.request.url).searchParams.get('status')
@@ -99,22 +101,24 @@ export const onRequestGet: PagesFunction<CatalogEnv> = async context => {
   const db = context.env.CATALOG_DB
   const eventRows = await listCurrentEvents(db, { status })
 
-  // Gather links + decorations per event, then resolve all referenced
-  // dataset titles in a single query.
-  const perEvent = await Promise.all(
-    eventRows.map(async row => ({
-      row,
-      links: await listLinksForEvent(db, row.id),
-      decorations: await getEventDecorations(db, row.id),
-    })),
-  )
-  const datasetIds = [...new Set(perEvent.flatMap(e => e.links.map(l => l.dataset_id)))]
+  // Bulk-fetch links + decorations for the whole page (chunked IN
+  // queries) rather than two per event, then resolve all referenced
+  // dataset titles in one more query — keeps the queue O(1) round-trips
+  // as events accumulate, not O(N).
+  const eventIds = eventRows.map(e => e.id)
+  const linksByEvent = await listLinksForEvents(db, eventIds)
+  const decorationsByEvent = await getDecorationsForEvents(db, eventIds)
+  const datasetIds = [...new Set([...linksByEvent.values()].flat().map(l => l.dataset_id))]
   const titles = await fetchDatasetTitles(db, datasetIds)
 
-  const events = perEvent.map(({ row, links, decorations }) => ({
-    ...toPublicEvent(row, decorations),
-    links: links.map(l => toPublicLink(l, titles.get(l.dataset_id) ?? null)),
-  }))
+  const events = eventRows.map(row => {
+    const links = linksByEvent.get(row.id) ?? []
+    const decorations = decorationsByEvent.get(row.id) ?? { categories: {}, keywords: [] }
+    return {
+      ...toPublicEvent(row, decorations),
+      links: links.map(l => toPublicLink(l, titles.get(l.dataset_id) ?? null)),
+    }
+  })
 
   return new Response(JSON.stringify({ events }), {
     status: 200,
@@ -143,6 +147,21 @@ function asString(v: unknown): string | undefined {
 
 function asNumber(v: unknown): number | undefined {
   return typeof v === 'number' && Number.isFinite(v) ? v : undefined
+}
+
+/** Coerce an untrusted `categories` value to `Record<string, string[]>`,
+ *  dropping non-array facets and non-string entries. An ingestion
+ *  surface should persist a clean shape (or nothing) rather than let a
+ *  malformed payload write garbage decoration rows. */
+function sanitizeCategories(raw: unknown): Record<string, string[]> | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined
+  const out: Record<string, string[]> = {}
+  for (const [facet, values] of Object.entries(raw as Record<string, unknown>)) {
+    if (!Array.isArray(values)) continue
+    const strs = values.filter((v): v is string => typeof v === 'string' && v.length > 0)
+    if (strs.length > 0) out[facet] = strs
+  }
+  return Object.keys(out).length > 0 ? out : undefined
 }
 
 /** Parse the create body into a {@link NewCurrentEvent}. Provenance
@@ -180,9 +199,10 @@ function parseCreate(
   const regionName = asString(geomRaw.regionName)
   if (regionName) geometry.regionName = regionName
 
-  const categories =
-    b.categories && typeof b.categories === 'object' ? (b.categories as Record<string, string[]>) : undefined
-  const keywords = Array.isArray(b.keywords) ? (b.keywords as string[]).filter(k => typeof k === 'string') : undefined
+  const categories = sanitizeCategories(b.categories)
+  const keywords = Array.isArray(b.keywords)
+    ? (b.keywords as unknown[]).filter((k): k is string => typeof k === 'string' && k.length > 0)
+    : undefined
 
   if (errors.length > 0) return { ok: false, errors }
   return {
@@ -218,7 +238,7 @@ export const onRequestPost: PagesFunction<CatalogEnv> = async context => {
   }
   const publisher = (context.data as unknown as PublisherData).publisher
   if (!isPrivileged(publisher)) {
-    return jsonError(403, 'forbidden_role', 'Creating events is restricted to staff, admin, and service callers.')
+    return jsonError(403, 'forbidden_role', 'Creating events is restricted to admin and service callers.')
   }
 
   let body: unknown

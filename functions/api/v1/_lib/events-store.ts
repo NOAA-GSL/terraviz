@@ -179,6 +179,10 @@ const EVENT_COLUMNS = `id, origin_node, title, summary, source_name, source_url,
 const LINK_COLUMNS = `event_id, dataset_id, match_score, signals_json,
   status, created_at, approved_at, approved_by`
 
+/** Max bind variables per chunked `IN (…)` query — mirrors
+ *  `catalog-store.ts`'s `D1_BIND_BATCH`. */
+const EVENT_BIND_BATCH = 80
+
 /**
  * Insert a new current event (plus its category/keyword decorations).
  * Mints a ULID and the created/updated timestamps; defaults `status` to
@@ -413,9 +417,13 @@ export async function getEventDecorations(
 
 /**
  * Insert or update an event→dataset link. The matcher writes `proposed`
- * links with a score + per-signal breakdown; re-running it is
- * last-write-wins on (event_id, dataset_id) without disturbing the
- * approval audit on an already-approved link.
+ * links with a score + per-signal breakdown; re-running it on an ingest
+ * refresh refreshes `match_score` / `signals_json` but **preserves the
+ * existing `status`** (and its approval audit) — a curator's
+ * approve/reject decision survives the 6-hourly re-run rather than being
+ * demoted back to `proposed`. The `status` argument therefore only
+ * applies to a brand-new link (insert), which defaults to `proposed`;
+ * status transitions go through {@link setLinkStatus}.
  */
 export async function upsertEventDatasetLink(
   db: D1Database,
@@ -428,8 +436,7 @@ export async function upsertEventDatasetLink(
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(event_id, dataset_id) DO UPDATE SET
          match_score  = excluded.match_score,
-         signals_json = excluded.signals_json,
-         status       = excluded.status`,
+         signals_json = excluded.signals_json`,
     )
     .bind(
       input.eventId,
@@ -457,6 +464,72 @@ export async function listLinksForEvent(
   const bound = opts.status ? stmt.bind(eventId, opts.status) : stmt.bind(eventId)
   const res = await bound.all<EventDatasetLinkRow>()
   return res.results ?? []
+}
+
+/**
+ * Bulk version of {@link listLinksForEvent} for the review queue: fetch
+ * the links for many events in a few chunked `IN (…)` queries instead of
+ * one per event (avoids an N+1 over the queue). Returns a map keyed by
+ * event id; each list is score-ordered.
+ */
+export async function listLinksForEvents(
+  db: D1Database,
+  eventIds: readonly string[],
+): Promise<Map<string, EventDatasetLinkRow[]>> {
+  const out = new Map<string, EventDatasetLinkRow[]>()
+  for (const id of eventIds) out.set(id, [])
+  for (let i = 0; i < eventIds.length; i += EVENT_BIND_BATCH) {
+    const chunk = eventIds.slice(i, i + EVENT_BIND_BATCH)
+    const ph = chunk.map(() => '?').join(', ')
+    const res = await db
+      .prepare(
+        `SELECT ${LINK_COLUMNS} FROM event_dataset_links
+          WHERE event_id IN (${ph}) ORDER BY match_score DESC`,
+      )
+      .bind(...chunk)
+      .all<EventDatasetLinkRow>()
+    for (const row of res.results ?? []) out.get(row.event_id)?.push(row)
+  }
+  return out
+}
+
+/**
+ * Bulk version of {@link getEventDecorations} for the review queue —
+ * category + keyword decorations for many events in two chunked queries
+ * each, keyed by event id.
+ */
+export async function getDecorationsForEvents(
+  db: D1Database,
+  eventIds: readonly string[],
+): Promise<Map<string, EventDecorations>> {
+  const out = new Map<string, EventDecorations>()
+  for (const id of eventIds) out.set(id, { categories: {}, keywords: [] })
+  for (let i = 0; i < eventIds.length; i += EVENT_BIND_BATCH) {
+    const chunk = eventIds.slice(i, i + EVENT_BIND_BATCH)
+    const ph = chunk.map(() => '?').join(', ')
+    const catRes = await db
+      .prepare(
+        `SELECT event_id, facet, value FROM event_categories
+          WHERE event_id IN (${ph}) ORDER BY facet, value`,
+      )
+      .bind(...chunk)
+      .all<{ event_id: string; facet: string; value: string }>()
+    for (const { event_id, facet, value } of catRes.results ?? []) {
+      const dec = out.get(event_id)
+      if (dec) (dec.categories[facet] ??= []).push(value)
+    }
+    const kwRes = await db
+      .prepare(
+        `SELECT event_id, keyword FROM event_keywords
+          WHERE event_id IN (${ph}) ORDER BY keyword`,
+      )
+      .bind(...chunk)
+      .all<{ event_id: string; keyword: string }>()
+    for (const { event_id, keyword } of kwRes.results ?? []) {
+      out.get(event_id)?.keywords.push(keyword)
+    }
+  }
+  return out
 }
 
 /**
