@@ -1,0 +1,152 @@
+/**
+ * Wire-level tests for POST /api/v1/publish/events/:id — the curator
+ * review-submit.
+ *
+ * Coverage: privileged gate (403), 404 unknown event, 400 empty body,
+ * 400 unknown link, event approve, per-link approve/reject, and the
+ * `event.reviewed` audit row.
+ */
+
+import { describe, expect, it } from 'vitest'
+import { onRequestPost as reviewPost } from './[id]'
+import { asD1, seedFixtures } from '../../_lib/test-helpers'
+import {
+  insertCurrentEvent,
+  upsertEventDatasetLink,
+  getCurrentEvent,
+  listLinksForEvent,
+} from '../../_lib/events-store'
+import type { PublisherRow } from '../../_lib/publisher-store'
+
+const ADMIN: PublisherRow = {
+  id: 'PUB-ADMIN',
+  email: 'admin@example.com',
+  display_name: 'Admin',
+  affiliation: null,
+  org_id: null,
+  role: 'admin',
+  is_admin: 1,
+  status: 'active',
+  created_at: '2026-01-01T00:00:00.000Z',
+}
+const PUBLISHER: PublisherRow = { ...ADMIN, id: 'PUB-PUBLISHER', email: 'c@e', role: 'publisher', is_admin: 0 }
+
+const DS_0 = 'DS000' + 'A'.repeat(21)
+const DS_1 = 'DS001' + 'A'.repeat(21)
+
+function setupEnv() {
+  const sqlite = seedFixtures({ count: 2 })
+  sqlite
+    .prepare(
+      `INSERT INTO publishers (id, email, display_name, role, is_admin, status, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(ADMIN.id, ADMIN.email, ADMIN.display_name, ADMIN.role, ADMIN.is_admin, ADMIN.status, ADMIN.created_at)
+  return { sqlite, env: { CATALOG_DB: asD1(sqlite) } }
+}
+
+function ctx(opts: { env: Record<string, unknown>; id: string; publisher?: PublisherRow; body?: unknown; bodyText?: string }) {
+  const init: RequestInit = { method: 'POST', headers: new Headers({ 'Content-Type': 'application/json' }) }
+  if (opts.bodyText !== undefined) init.body = opts.bodyText
+  else if (opts.body !== undefined) init.body = JSON.stringify(opts.body)
+  return {
+    request: new Request(`https://localhost/api/v1/publish/events/${opts.id}`, init),
+    env: opts.env,
+    params: { id: opts.id },
+    data: { publisher: opts.publisher ?? ADMIN },
+    waitUntil: () => {},
+    passThroughOnException: () => {},
+    next: async () => new Response(null),
+    functionPath: `/api/v1/publish/events/${opts.id}`,
+  } as unknown as Parameters<typeof reviewPost>[0]
+}
+
+function auditCount(sqlite: ReturnType<typeof seedFixtures>, action: string): number {
+  const row = sqlite.prepare(`SELECT COUNT(*) AS n FROM audit_events WHERE action = ?`).get(action) as { n: number }
+  return row.n
+}
+
+const SAMPLE = {
+  originNode: 'NODE000',
+  title: 'Storm now',
+  sourceName: 'NOAA',
+  sourceUrl: 'https://example.gov/storm',
+  occurredStart: '2026-06-25T12:00:00Z',
+}
+
+async function seedEventWithLink(env: { CATALOG_DB: D1Database }) {
+  const id = (await insertCurrentEvent(env.CATALOG_DB, SAMPLE)).id
+  await upsertEventDatasetLink(env.CATALOG_DB, { eventId: id, datasetId: DS_0, matchScore: 0.9 })
+  return id
+}
+
+describe('POST /api/v1/publish/events/:id', () => {
+  it('403 for a publisher-role account', async () => {
+    const { env } = setupEnv()
+    const id = await seedEventWithLink(env)
+    const res = await reviewPost(ctx({ env, id, publisher: PUBLISHER, body: { event: 'approve' } }))
+    expect(res.status).toBe(403)
+  })
+
+  it('404 for an unknown event', async () => {
+    const { env } = setupEnv()
+    const res = await reviewPost(ctx({ env, id: 'NOPE000000000000000000000A', body: { event: 'approve' } }))
+    expect(res.status).toBe(404)
+  })
+
+  it('400 for an empty review', async () => {
+    const { env } = setupEnv()
+    const id = await seedEventWithLink(env)
+    const res = await reviewPost(ctx({ env, id, body: {} }))
+    expect(res.status).toBe(400)
+  })
+
+  it('400 for a link that is not proposed on the event', async () => {
+    const { env } = setupEnv()
+    const id = await seedEventWithLink(env)
+    const res = await reviewPost(ctx({ env, id, body: { links: [{ datasetId: DS_1, decision: 'approve' }] } }))
+    expect(res.status).toBe(400)
+    const body = JSON.parse(await res.text()) as { errors: Array<{ code: string }> }
+    expect(body.errors[0].code).toBe('unknown_link')
+  })
+
+  it('approves the event and writes an audit row', async () => {
+    const { env, sqlite } = setupEnv()
+    const id = await seedEventWithLink(env)
+    const res = await reviewPost(ctx({ env, id, body: { event: 'approve' } }))
+    expect(res.status).toBe(200)
+
+    const row = await getCurrentEvent(env.CATALOG_DB, id)
+    expect(row!.status).toBe('approved')
+    expect(row!.reviewed_by).toBe('PUB-ADMIN')
+    expect(auditCount(sqlite, 'event.reviewed')).toBe(1)
+  })
+
+  it('applies per-link decisions in the same submit', async () => {
+    const { env } = setupEnv()
+    const id = await seedEventWithLink(env)
+    await upsertEventDatasetLink(env.CATALOG_DB, { eventId: id, datasetId: DS_1, matchScore: 0.6 })
+
+    const res = await reviewPost(
+      ctx({
+        env,
+        id,
+        body: {
+          event: 'approve',
+          links: [
+            { datasetId: DS_0, decision: 'approve' },
+            { datasetId: DS_1, decision: 'reject' },
+          ],
+        },
+      }),
+    )
+    expect(res.status).toBe(200)
+
+    const links = await listLinksForEvent(env.CATALOG_DB, id)
+    const byId = Object.fromEntries(links.map(l => [l.dataset_id, l]))
+    expect(byId[DS_0].status).toBe('approved')
+    expect(byId[DS_0].approved_by).toBe('PUB-ADMIN')
+    expect(byId[DS_1].status).toBe('rejected')
+    expect(byId[DS_1].approved_at).toBeNull()
+  })
+})

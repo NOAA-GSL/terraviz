@@ -115,6 +115,8 @@ design rationale in the `docs/CATALOG_*` plan docs.
 | `functions/api/v1/publish/datasets/[id]/retract.ts` | POST /api/v1/publish/datasets/{id}/retract |
 | `functions/api/v1/publish/datasets/[id]/transcode-complete.ts` | POST /api/v1/publish/datasets/{id}/transcode-complete |
 | `functions/api/v1/publish/datasets/[id]/transcode-failed.ts` | POST /api/v1/publish/datasets/{id}/transcode-failed — failure counterpart; releases the `transcoding` lock (leaves `data_ref` on the prior bundle) when the transcode job errors or times out |
+| `functions/api/v1/publish/events.ts` | GET /api/v1/publish/events — privileged current-events review queue (proposed events + their links; `docs/CURRENT_EVENTS_PLAN.md` §5) |
+| `functions/api/v1/publish/events/[id].ts` | POST /api/v1/publish/events/{id} — curator review-submit (event + per-link approve/reject) |
 | `functions/api/v1/publish/featured-hero.ts` | /api/v1/publish/featured-hero — the "Right now" hero admin write API (Phase B of `docs/HERO_ADMIN_SCOPING.md`) |
 | `functions/api/v1/publish/featured.ts` | /api/v1/publish/featured |
 | `functions/api/v1/publish/featured/[dataset_id].ts` | /api/v1/publish/featured/{dataset_id} |
