@@ -88,37 +88,46 @@ function toGeometry(coordinates: unknown): EventCreateBody['geometry'] | undefin
   return { boundingBox: { n, s, w, e } }
 }
 
-/** Hosts whose pages are public + human-readable. EONET frequently
+/** Domains whose pages are public + human-readable. EONET frequently
  *  cites internal/auth-walled systems instead — IRWIN (`irwin.doi.gov`,
  *  most wildfires) and JTWC (`metoc.navy.mil`, storms) — which read as
  *  dead links to the public; those fall through to a Worldview imagery
- *  link. Suffix match, so subdomains (`nhc.noaa.gov`) are covered. */
+ *  link. Matched as the exact host or a true subdomain (see
+ *  `hostIsPublic`). */
 const PUBLIC_SOURCE_HOSTS = [
-  '.noaa.gov',
-  '.usgs.gov',
-  '.si.edu', // Smithsonian — SIVolcano (volcano.si.edu)
+  'noaa.gov',
+  'usgs.gov',
+  'si.edu', // Smithsonian — SIVolcano (volcano.si.edu)
   'gdacs.org',
   'pdc.org',
   'inciweb.nwcg.gov',
   'inciweb.wildfire.gov',
 ]
 
+/** Exact host or a true subdomain of an allowlisted domain. The `.${h}`
+ *  guard means `nhc.noaa.gov` matches `noaa.gov` but `evilgdacs.org`
+ *  does NOT match `gdacs.org`. */
 function hostIsPublic(host: string): boolean {
-  return PUBLIC_SOURCE_HOSTS.some(h => host === h || host.endsWith(h))
+  return PUBLIC_SOURCE_HOSTS.some(h => host === h || host.endsWith(`.${h}`))
 }
 
-/** First source URL whose host is public + human-readable, else undefined. */
+/** First **http(s)** source URL whose host is public + human-readable,
+ *  else undefined. The protocol guard matters: the ingest layer rejects a
+ *  non-http(s) `source.url`, so returning an `ftp:`/`mailto:` URL from an
+ *  allowlisted host would drop the event instead of falling back to the
+ *  Worldview link. */
 function pickPublicSourceUrl(sources: EonetEvent['sources']): string | undefined {
   for (const s of sources ?? []) {
     const url = asStr(s?.url)
     if (!url) continue
-    let host: string
+    let parsed: URL
     try {
-      host = new URL(url).hostname.toLowerCase()
+      parsed = new URL(url)
     } catch {
       continue
     }
-    if (hostIsPublic(host)) return url
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') continue
+    if (hostIsPublic(parsed.hostname.toLowerCase())) return url
   }
   return undefined
 }

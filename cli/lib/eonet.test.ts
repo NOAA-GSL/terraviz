@@ -52,6 +52,22 @@ describe('mapEonetEvent', () => {
     expect(body.source.url).toBe('https://volcano.si.edu/volcano.cfm?vn=357070')
   })
 
+  it('does not treat a look-alike host as public (evilgdacs.org ≠ gdacs.org)', () => {
+    const body = mapEonetEvent({
+      ...POINT_EVENT,
+      sources: [{ id: 'spoof', url: 'https://evilgdacs.org/report' }],
+    })!
+    expect(body.source.url).toContain('worldview.earthdata.nasa.gov')
+  })
+
+  it('skips a non-http(s) source on an allowlisted host and falls back to Worldview', () => {
+    const body = mapEonetEvent({
+      ...POINT_EVENT,
+      sources: [{ id: 'GDACS', url: 'ftp://gdacs.org/report' }],
+    })!
+    expect(body.source.url).toContain('worldview.earthdata.nasa.gov')
+  })
+
   it('synthesizes a summary from structure when EONET gives no description', () => {
     const body = mapEonetEvent({
       ...POINT_EVENT,
