@@ -184,7 +184,7 @@ function renderQueue(
   }
 
   const list = el('div', { className: 'publisher-events-list' })
-  for (const event of events) list.append(renderEventCard(event, state))
+  for (const event of events) list.append(renderEventCard(mount, event, state, status))
   mount.replaceChildren(shell(header, list))
 }
 
@@ -262,7 +262,8 @@ function renderFilterBar(mount: HTMLElement, state: EventsPageOptions, active: Q
       className: `publisher-events-filter${f === active ? ' publisher-events-filter-active' : ''}`,
       textContent: filterLabel(f),
     })
-    if (f === active) btn.setAttribute('aria-pressed', 'true')
+    // Toggle semantics: set the pressed state explicitly on every button.
+    btn.setAttribute('aria-pressed', f === active ? 'true' : 'false')
     btn.addEventListener('click', () => {
       if (f !== active) void loadAndRenderQueue(mount, state, undefined, f)
     })
@@ -382,7 +383,7 @@ function formatScore(score: number | null): string {
   return `${Math.round(score * 100)}%`
 }
 
-function renderEventCard(event: ReviewEvent, state: EventsPageOptions): HTMLElement {
+function renderEventCard(mount: HTMLElement, event: ReviewEvent, state: EventsPageOptions, filter: QueueFilter): HTMLElement {
   const statusEl = el('div', { className: 'publisher-events-status', role: 'status' })
   const badgeEl = badge(event.status)
 
@@ -407,6 +408,14 @@ function renderEventCard(event: ReviewEvent, state: EventsPageOptions): HTMLElem
       setBusy(false, eventButtons)
       if (res.ok) {
         const next: EventStatus = res.data.event?.status ?? (decision === 'approve' ? 'approved' : 'rejected')
+        // If the event no longer matches the active filter, reload so it
+        // leaves the view (e.g. a Reject in the Approved view) and the
+        // empty state shows if it was the last one. In the `all` view —
+        // or when the status still matches — reflect it in place.
+        if (filter !== 'all' && next !== filter) {
+          void loadAndRenderQueue(mount, state, t('publisher.events.saved'), filter)
+          return
+        }
         badgeEl.className = `publisher-events-badge publisher-events-badge-${next}`
         badgeEl.textContent = statusLabel(next)
         statusEl.textContent = t('publisher.events.saved')

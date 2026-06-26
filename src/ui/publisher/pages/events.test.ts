@@ -107,7 +107,7 @@ describe('renderEventsPage', () => {
     expect(mount.querySelector('.publisher-events-actions .publisher-btn')).not.toBeNull()
   })
 
-  it('approves the event via POST and updates the badge', async () => {
+  it('approves the event via POST and reloads (it leaves the proposed view)', async () => {
     const routes = baseRoutes()
     routes[`POST /api/v1/publish/events/${EVT}`] = { body: { event: { status: 'approved' }, links: [] } }
     const fetchFn = mockFetch(routes)
@@ -115,13 +115,37 @@ describe('renderEventsPage', () => {
 
     const approve = mount.querySelector('.publisher-events-actions .publisher-btn-primary') as HTMLButtonElement
     approve.click()
-    await flush()
+    await settle()
 
     const post = fetchFn.mock.calls.find(c => (c[1] as RequestInit)?.method === 'POST')
     expect(post).toBeTruthy()
     expect(String(post![0])).toBe(`/api/v1/publish/events/${EVT}`)
     expect(JSON.parse((post![1] as RequestInit).body as string)).toEqual({ event: 'approve' })
+    // approved no longer matches the active `proposed` filter, so the
+    // queue re-fetches to stay consistent (the card leaves the view).
+    const eventsGets = fetchFn.mock.calls.filter(
+      c => String(c[0]).split('?')[0].endsWith('/publish/events') && (c[1]?.method ?? 'GET') === 'GET',
+    )
+    expect(eventsGets.length).toBeGreaterThanOrEqual(2)
+  })
 
+  it('updates the badge in place when the new status still matches the view (All)', async () => {
+    const routes = baseRoutes()
+    routes[`POST /api/v1/publish/events/${EVT}`] = { body: { event: { status: 'approved' }, links: [] } }
+    const fetchFn = mockFetch(routes)
+    await renderEventsPage(mount, { fetchFn })
+
+    const allBtn = Array.from(mount.querySelectorAll<HTMLButtonElement>('.publisher-events-filters button')).find(
+      b => b.textContent === 'All',
+    )!
+    allBtn.click()
+    await settle()
+
+    const approve = mount.querySelector('.publisher-events-actions .publisher-btn-primary') as HTMLButtonElement
+    approve.click()
+    await settle()
+
+    // 'approved' still matches the All view → no reload, badge flips in place.
     const badge = mount.querySelector('.publisher-events-header .publisher-events-badge')
     expect(badge?.classList.contains('publisher-events-badge-approved')).toBe(true)
   })
