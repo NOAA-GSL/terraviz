@@ -20,6 +20,7 @@
 import type { CatalogEnv } from '../_lib/env'
 import type { PublisherData } from './_middleware'
 import { isPrivileged } from '../_lib/publisher-store'
+import { looksLikeUrl } from '../_lib/validators'
 import { writeAuditEvent } from '../_lib/audit-store'
 import { runMatcherForEvent } from '../_lib/events-matcher'
 import {
@@ -180,7 +181,13 @@ function parseCreate(
   const sourceName = asString(src.name)
   const sourceUrl = asString(src.url)
   if (!sourceName) errors.push({ field: 'source.name', code: 'required', message: '`source.name` is required.' })
-  if (!sourceUrl) errors.push({ field: 'source.url', code: 'required', message: '`source.url` is required.' })
+  if (!sourceUrl) {
+    errors.push({ field: 'source.url', code: 'required', message: '`source.url` is required.' })
+  } else if (!looksLikeUrl(sourceUrl)) {
+    // The citation is rendered as a clickable link on public surfaces;
+    // refuse non-http(s) schemes (javascript: / data:) at the door.
+    errors.push({ field: 'source.url', code: 'invalid', message: '`source.url` must be an http(s) URL.' })
+  }
 
   const geomRaw = (b.geometry && typeof b.geometry === 'object' ? b.geometry : {}) as Record<string, unknown>
   const geometry: EventGeometry = {}
@@ -213,7 +220,7 @@ function parseCreate(
       summary: asString(b.summary) ?? null,
       sourceName: sourceName as string,
       sourceUrl: sourceUrl as string,
-      publishedAt: asString(b.publishedAt) ?? null,
+      publishedAt: asString(src.publishedAt) ?? null,
       feedId: asString(b.feedId) ?? null,
       externalId: asString(b.externalId) ?? null,
       occurredStart: asString(b.occurredStart) ?? null,

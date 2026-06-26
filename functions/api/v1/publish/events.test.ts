@@ -209,6 +209,24 @@ describe('POST /api/v1/publish/events', () => {
     expect(all[0].title).toBe('Hurricane Lena (updated)')
   })
 
+  it('persists published_at from source.publishedAt', async () => {
+    const { env } = setupEnv()
+    const res = await eventsPost(postCtx({ env, body: CREATE }))
+    expect(res.status).toBe(201)
+    const body = JSON.parse(await res.text()) as { event: { source: { publishedAt?: string } } }
+    expect(body.event.source.publishedAt).toBe('2026-06-25T00:00:00Z')
+  })
+
+  it('400 for a non-http(s) source.url (no javascript:/data: citations)', async () => {
+    const { env } = setupEnv()
+    const res = await eventsPost(
+      postCtx({ env, body: { ...CREATE, source: { name: 'X', url: 'javascript:alert(1)' } } }),
+    )
+    expect(res.status).toBe(400)
+    const body = JSON.parse(await res.text()) as { errors: Array<{ field: string }> }
+    expect(body.errors.some(e => e.field === 'source.url')).toBe(true)
+  })
+
   it('drops malformed categories instead of persisting garbage', async () => {
     const { env } = setupEnv()
     const res = await eventsPost(

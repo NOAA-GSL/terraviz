@@ -277,4 +277,14 @@ describe('getHeroCandidate — approved event source', () => {
     const res = await getHeroCandidate([ds('feat'), realtime], { now: NOW })
     expect(res?.source).toBe('auto')
   })
+
+  it('rejects a non-http(s) source url (XSS defense) and falls through', async () => {
+    stubHero({
+      hero: { hero: null },
+      file: {},
+      event: { event: { ...eventBody.event, source: { name: 'NOAA', url: 'javascript:alert(1)' } } },
+    })
+    const res = await getHeroCandidate([ds('feat'), realtime], { now: NOW })
+    expect(res?.source).toBe('auto') // not 'event' — the bad-url event was dropped
+  })
 })

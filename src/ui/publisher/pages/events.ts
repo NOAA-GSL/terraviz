@@ -95,24 +95,21 @@ export async function renderEventsPage(
   const fetchFn = options.fetchFn
   mount.replaceChildren(shell(el('p', { className: 'publisher-loading', textContent: t('publisher.events.loading') })))
 
-  const [meRes, eventsRes] = await Promise.all([
-    publisherGet<MeResponse>(ME_ENDPOINT, { fetchFn }),
-    publisherGet<EventsResponse>(EVENTS_ENDPOINT, { fetchFn }),
-  ])
-
-  for (const res of [meRes, eventsRes]) {
-    if (res.ok) continue
-    if (res.kind === 'session') {
+  // Resolve identity + gate BEFORE fetching the events queue: the events
+  // endpoint 403s a non-privileged caller, which would otherwise surface
+  // as a generic server-error card instead of the intended restricted
+  // card.
+  const meRes = await publisherGet<MeResponse>(ME_ENDPOINT, { fetchFn })
+  if (!meRes.ok) {
+    if (meRes.kind === 'session') {
       if (handleSessionError({ navigate: options.navigate }) === 'navigating') return
       mount.replaceChildren(shell(buildErrorCard('session')))
       return
     }
-    const details = res.kind === 'server' ? { status: res.status, body: res.body } : {}
-    mount.replaceChildren(shell(buildErrorCard(res.kind, details)))
+    const details = meRes.kind === 'server' ? { status: meRes.status, body: meRes.body } : {}
+    mount.replaceChildren(shell(buildErrorCard(meRes.kind, details)))
     return
   }
-  if (!meRes.ok || !eventsRes.ok) return
-
   if (!clientIsPrivileged(meRes.data)) {
     mount.replaceChildren(
       shell(
@@ -122,6 +119,18 @@ export async function renderEventsPage(
         ),
       ),
     )
+    return
+  }
+
+  const eventsRes = await publisherGet<EventsResponse>(EVENTS_ENDPOINT, { fetchFn })
+  if (!eventsRes.ok) {
+    if (eventsRes.kind === 'session') {
+      if (handleSessionError({ navigate: options.navigate }) === 'navigating') return
+      mount.replaceChildren(shell(buildErrorCard('session')))
+      return
+    }
+    const details = eventsRes.kind === 'server' ? { status: eventsRes.status, body: eventsRes.body } : {}
+    mount.replaceChildren(shell(buildErrorCard(eventsRes.kind, details)))
     return
   }
 

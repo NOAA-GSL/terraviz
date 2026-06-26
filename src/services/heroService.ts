@@ -202,6 +202,19 @@ export async function getHeroCandidate(
   return auto ? { dataset: auto, source: 'auto' } : null
 }
 
+/** True for an http(s) URL. The hero card renders `source.url` as an
+ *  `<a href>`, so a `javascript:`/`data:` URL would be a clickable XSS
+ *  vector — reject anything but http(s) (defense-in-depth; the backend
+ *  also validates on ingest). */
+function isHttpUrl(s: string): boolean {
+  try {
+    const u = new URL(s)
+    return u.protocol === 'http:' || u.protocol === 'https:'
+  } catch {
+    return false
+  }
+}
+
 /** Validate + coerce a raw featured-event payload, or null when it
  *  isn't usable. Exported for testing. */
 export function sanitizeFeaturedEvent(raw: unknown): FeaturedEvent | null {
@@ -213,6 +226,7 @@ export function sanitizeFeaturedEvent(raw: unknown): FeaturedEvent | null {
   if (!s || typeof s !== 'object') return null
   const src = s as Record<string, unknown>
   if (typeof src.name !== 'string' || typeof src.url !== 'string') return null
+  if (!isHttpUrl(src.url)) return null
   const out: FeaturedEvent = {
     title: r.title,
     datasetId: r.datasetId,

@@ -54,12 +54,16 @@ beforeEach(() => {
 })
 
 describe('renderEventsPage', () => {
-  it('shows a restricted card for a non-privileged publisher', async () => {
+  it('shows the restricted card for a non-privileged publisher without hitting the events API', async () => {
     const routes = baseRoutes()
     routes['/api/v1/publish/me'] = { body: { role: 'publisher', is_admin: false } }
-    await renderEventsPage(mount, { fetchFn: mockFetch(routes) })
+    const fetchFn = mockFetch(routes)
+    await renderEventsPage(mount, { fetchFn })
     expect(mount.querySelector('.publisher-events-restricted')).not.toBeNull()
     expect(mount.querySelector('.publisher-events-card')).toBeNull()
+    // Gate happens before the events fetch — a 403 there must not surface
+    // as a generic error card.
+    expect(fetchFn.mock.calls.some(c => String(c[0]).includes('/publish/events'))).toBe(false)
   })
 
   it('renders an event card with its source, title, and link row', async () => {
