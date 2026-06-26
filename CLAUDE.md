@@ -227,6 +227,7 @@ npm run screenshots:smoke   # gating interaction tests (search, Orbit, nav)
 | `src/ui/publisher/pages/workflow-detail.ts` | `/publish/workflows/:id` — workflow summary + run history + Run now |
 | `src/ui/publisher/pages/workflow-edit.ts` | `/publish/workflows/new` + `…/:id/edit` — workflow form (YAML→JSON client-side, server-side Validate) |
 | `src/ui/publisher/pages/featured-hero.ts` | `/publish/featured-hero` — set the "Right now" hero override (`docs/HERO_ADMIN_SCOPING.md`) |
+| `src/ui/publisher/pages/events.ts` | `/publish/events` — current-events review queue: curator approve/reject of proposed events + their dataset links (`docs/CURRENT_EVENTS_PLAN.md` §5) |
 | `src/ui/publisher/pages/analytics.ts` | `/publish/analytics` — privileged analytics dashboard over the D1 rollups, incl. the MapLibre spatial-attention heatmap (Phase B of `docs/ANALYTICS_STORAGE_AND_ADMIN_PLAN.md`) |
 | `src/ui/publisher/pages/feedback.ts` | `/publish/feedback` — privileged feedback review (AI thumbs + bug/feature reports) over the D1 feedback tables; replaces the feedback-admin HTML dashboard (Phase C of `docs/ANALYTICS_STORAGE_AND_ADMIN_PLAN.md`) |
 | `src/ui/publisher/pages/me.ts` | `/publish/me` — current-user identity + role display |

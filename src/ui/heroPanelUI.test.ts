@@ -100,4 +100,31 @@ describe('renderHeroPanel', () => {
     expect(host.classList.contains('hidden')).toBe(true)
     expect(host.innerHTML).toBe('')
   })
+
+  it('renders a cited source link for an event-sourced hero', async () => {
+    // Route featured-event to an approved event whose datasetId is in
+    // the catalog; the hero + static-file sources stay empty.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: unknown) => {
+        const u = String(url)
+        if (u.includes('featured-event')) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              event: { title: 'Hurricane Lena', datasetId: 'feat', source: { name: 'NOAA', url: 'https://example.gov/storm' } },
+            }),
+          })
+        }
+        return Promise.resolve({ ok: true, json: async () => ({}) })
+      }),
+    )
+    await renderHeroPanel({ datasets: [ds('feat', { title: 'Live Storm' })], onSelect: vi.fn(), isCatalogMode: true })
+    const host = document.getElementById('hero-panel')!
+    expect(host.querySelector('.hero-panel-card')?.getAttribute('data-id')).toBe('feat')
+    expect(host.querySelector('.hero-panel-title')?.textContent).toBe('Hurricane Lena')
+    const link = host.querySelector('.hero-panel-source-link') as HTMLAnchorElement | null
+    expect(link?.textContent).toBe('NOAA')
+    expect(link?.getAttribute('href')).toBe('https://example.gov/storm')
+  })
 })

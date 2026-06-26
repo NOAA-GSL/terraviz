@@ -32,6 +32,7 @@ export type AuditSubjectKind =
   | 'workflow'
   | 'analytics_day'
   | 'publisher'
+  | 'event'
 
 /**
  * `action` is a free-form, dotted token recording *what happened*.
@@ -57,6 +58,9 @@ export type AuditAction =
   | 'publisher.suspend'
   | 'publisher.reactivate'
   | 'publisher.role_change'
+  | 'event.reviewed'
+  | 'event.ingested'
+  | 'event.refreshed'
 
 export interface AuditEventInput {
   actor_kind: AuditActorKind

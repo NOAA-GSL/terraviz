@@ -20,12 +20,14 @@ design rationale in the `docs/CATALOG_*` plan docs.
 | File | Responsibility |
 |---|---|
 | `cli/commands.ts` | Command implementations for the `terraviz` CLI |
+| `cli/import-events.ts` | `terraviz import-events` — ingest current events from NASA EONET into the catalog as proposed events (`docs/CURRENT_EVENTS_PLAN.md` §9) |
 | `cli/import-snapshot.ts` | `terraviz import-snapshot` — one-shot bulk importer for the legacy SOS catalog snapshot |
 | `cli/init-node.ts` | `terraviz init-node` — provision (or update) this node's identity |
 | `cli/lib/args.ts` | Hand-rolled argv parser for the `terraviz` CLI |
 | `cli/lib/asset-fetch.ts` | HTTP fetch helper for the Phase 3b asset migration |
 | `cli/lib/client.ts` | Thin HTTP client wrapping fetch + the Access auth headers |
 | `cli/lib/config.ts` | Resolve the CLI's runtime configuration: server URL + auth |
+| `cli/lib/eonet.ts` | Pure NASA EONET → current-event mapper for `terraviz import-events` (`docs/CURRENT_EVENTS_PLAN.md` §9) |
 | `cli/lib/ffmpeg-hls.ts` | FFmpeg HLS encoder wrapper — multi-rendition equirectangular |
 | `cli/lib/hls-incremental.ts` | Pure core of incremental HLS re-encoding — absolute-grid chunking, content-addressed segment hashing, reuse-vs-encode diff, playlist assembly (`docs/INCREMENTAL_HLS_PLAN.md`) |
 | `cli/lib/hls-incremental-runner.ts` | Incremental transcode orchestration over an injectable I/O seam — load manifest → diff → encode changed chunks → recycle the rest → publish playlists → persist manifest → mark-and-sweep segment GC (`docs/INCREMENTAL_HLS_PLAN.md` Stages 2-3) |
@@ -92,6 +94,7 @@ design rationale in the `docs/CATALOG_*` plan docs.
 | `functions/api/v1/datasets/[id]/manifest.ts` | Route: GET /api/v1/datasets/{id}/manifest |
 | `functions/api/v1/datasets/[id]/preview/[token].ts` | GET /api/v1/datasets/{id}/preview/{token} |
 | `functions/api/v1/datasets/[id]/preview/[token]/manifest.ts` | GET /api/v1/datasets/{id}/preview/{token}/manifest |
+| `functions/api/v1/featured-event.ts` | GET /api/v1/featured-event — public read of the current event that headlines the "Right now" hero (`docs/CURRENT_EVENTS_PLAN.md` §6.1) |
 | `functions/api/v1/featured-hero.ts` | Route: GET /api/v1/featured-hero |
 | `functions/api/v1/featured.ts` | Route: GET /api/v1/featured |
 | `functions/api/v1/logout.ts` | GET /api/v1/logout |
@@ -115,6 +118,9 @@ design rationale in the `docs/CATALOG_*` plan docs.
 | `functions/api/v1/publish/datasets/[id]/retract.ts` | POST /api/v1/publish/datasets/{id}/retract |
 | `functions/api/v1/publish/datasets/[id]/transcode-complete.ts` | POST /api/v1/publish/datasets/{id}/transcode-complete |
 | `functions/api/v1/publish/datasets/[id]/transcode-failed.ts` | POST /api/v1/publish/datasets/{id}/transcode-failed — failure counterpart; releases the `transcoding` lock (leaves `data_ref` on the prior bundle) when the transcode job errors or times out |
+| `functions/api/v1/publish/events.ts` | GET (privileged current-events review queue) + POST (privileged create / ingest: idempotent on `(feed_id, external_id)`, runs the matcher on create; `docs/CURRENT_EVENTS_PLAN.md` §5, §9) |
+| `functions/api/v1/publish/events/[id].ts` | POST /api/v1/publish/events/{id} — curator review-submit (event + per-link approve/reject) |
+| `functions/api/v1/publish/events/refresh.ts` | POST /api/v1/publish/events/refresh — privileged on-demand ingestion pull: fetches the node's configured feed (EONET) server-side and runs the shared upsert+match path, so a curator can refresh the queue without waiting for the cron (`docs/CURRENT_EVENTS_PLAN.md` §9) |
 | `functions/api/v1/publish/featured-hero.ts` | /api/v1/publish/featured-hero — the "Right now" hero admin write API (Phase B of `docs/HERO_ADMIN_SCOPING.md`) |
 | `functions/api/v1/publish/featured.ts` | /api/v1/publish/featured |
 | `functions/api/v1/publish/featured/[dataset_id].ts` | /api/v1/publish/featured/{dataset_id} |
@@ -160,6 +166,9 @@ design rationale in the `docs/CATALOG_*` plan docs.
 | `functions/api/v1/_lib/embeddings.ts` | Workers AI embedding helpers — Phase 1c |
 | `functions/api/v1/_lib/env.ts` | Shared `Env` type for catalog-backend Pages Functions |
 | `functions/api/v1/_lib/errors.ts` | Typed errors used by the storage helpers (`r2-store.ts`, `stream-store.ts`) so the route handlers can distinguish "operator forgot to set credentials" from "the upstream service … |
+| `functions/api/v1/_lib/events-ingest.ts` | Shared current-events ingestion core — `parseCreate` (source-agnostic create-body validation), `resolveOriginNode`, and the idempotent `ingestEvent` (upsert + matcher run); reused by the create route and the refresh route (`docs/CURRENT_EVENTS_PLAN.md` §9) |
+| `functions/api/v1/_lib/events-matcher.ts` | Geo + temporal scoring for current events — pure bbox-IoU / liveness-overlap signals + `runMatcherForEvent` proposing `event_dataset_links` (`docs/CURRENT_EVENTS_PLAN.md` §4) |
+| `functions/api/v1/_lib/events-store.ts` | `current_events` + `event_dataset_links` data access — storage layer for the source-agnostic current-events feature (`docs/CURRENT_EVENTS_PLAN.md`) |
 | `functions/api/v1/_lib/featured-datasets.ts` | `featured_datasets` row helpers |
 | `functions/api/v1/_lib/frames-manifest.ts` | Helpers shared by the Phase 3pg/B `/frames` endpoints |
 | `functions/api/v1/_lib/github-dispatch.ts` | GitHub repository_dispatch helper — Phase 3pd |
