@@ -1,0 +1,80 @@
+# Current-events ingestion (docs/CURRENT_EVENTS_PLAN.md §9). Every 6
+# hours: pull NASA EONET open events and POST them to the catalog as
+# proposed events via `terraviz import-events`. The endpoint is
+# idempotent on (feed_id, external_id) — re-runs refresh open events
+# instead of duplicating — and runs the matcher to propose dataset
+# links, so the curator review queue arrives pre-populated. Every
+# ingested event lands `proposed`; nothing reaches users until a curator
+# approves it in /publish/events.
+#
+# EONET is the first, node-appropriate connector for this Earth-science
+# node; a node covering a different subject would wire a different feed
+# (or none). The feed is source-agnostic on the backend.
+#
+# Required repo secrets (the transcode-hls / zyra-scheduler set):
+#   TERRAVIZ_SERVER, CF_ACCESS_CLIENT_ID, CF_ACCESS_CLIENT_SECRET
+# When TERRAVIZ_SERVER is unset the run exits quietly — a fork without
+# publisher infrastructure shouldn't collect red runs.
+name: Import Current Events
+
+on:
+  schedule:
+    # Off-minute, every 6 hours (EONET updates a few times daily).
+    - cron: '23 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Print the plan without writing'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  # The keepalive step PUTs .../actions/workflows/{id}/enable.
+  actions: write
+
+concurrency:
+  group: import-events
+  cancel-in-progress: false
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - name: Ingest EONET events
+        env:
+          TERRAVIZ_SERVER: ${{ secrets.TERRAVIZ_SERVER }}
+          TERRAVIZ_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          TERRAVIZ_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+          DRY_RUN: ${{ github.event.inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${TERRAVIZ_SERVER:-}" ]]; then
+            echo "TERRAVIZ_SERVER secret is not configured — nothing to ingest."
+            exit 0
+          fi
+          ARGS=(import-events --server="${TERRAVIZ_SERVER}")
+          if [[ "${DRY_RUN:-false}" == "true" ]]; then ARGS+=(--dry-run); fi
+          npx tsx cli/terraviz.ts "${ARGS[@]}"
+
+      # Reset the 60-day scheduled-workflow inactivity timer (same
+      # pattern as zyra-scheduler.yml).
+      - name: Keepalive
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --method PUT \
+            "repos/${{ github.repository }}/actions/workflows/import-events.yml/enable" \
+            && echo "keepalive ok" \
+            || echo "::warning::keepalive failed — the 60-day disable timer was not reset"

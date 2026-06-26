@@ -299,6 +299,16 @@ export class TerravizClient {
     return this.request<T>('POST', '/api/v1/publish/tours', body)
   }
 
+  /**
+   * Create / ingest a current event (`terraviz import-events`). The
+   * endpoint is idempotent on `(feed_id, external_id)`, so re-runs
+   * refresh rather than duplicate, and runs the matcher to propose
+   * dataset links. Returns `{ created, event, links }`.
+   */
+  createEvent<T = unknown>(body: Record<string, unknown>): Promise<Result<T>> {
+    return this.request<T>('POST', '/api/v1/publish/events', body)
+  }
+
   updateTour<T = unknown>(
     id: string,
     body: Record<string, unknown>,

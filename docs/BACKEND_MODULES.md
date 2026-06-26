@@ -20,12 +20,14 @@ design rationale in the `docs/CATALOG_*` plan docs.
 | File | Responsibility |
 |---|---|
 | `cli/commands.ts` | Command implementations for the `terraviz` CLI |
+| `cli/import-events.ts` | `terraviz import-events` — ingest current events from NASA EONET into the catalog as proposed events (`docs/CURRENT_EVENTS_PLAN.md` §9) |
 | `cli/import-snapshot.ts` | `terraviz import-snapshot` — one-shot bulk importer for the legacy SOS catalog snapshot |
 | `cli/init-node.ts` | `terraviz init-node` — provision (or update) this node's identity |
 | `cli/lib/args.ts` | Hand-rolled argv parser for the `terraviz` CLI |
 | `cli/lib/asset-fetch.ts` | HTTP fetch helper for the Phase 3b asset migration |
 | `cli/lib/client.ts` | Thin HTTP client wrapping fetch + the Access auth headers |
 | `cli/lib/config.ts` | Resolve the CLI's runtime configuration: server URL + auth |
+| `cli/lib/eonet.ts` | Pure NASA EONET → current-event mapper for `terraviz import-events` (`docs/CURRENT_EVENTS_PLAN.md` §9) |
 | `cli/lib/ffmpeg-hls.ts` | FFmpeg HLS encoder wrapper — multi-rendition equirectangular |
 | `cli/lib/hls-incremental.ts` | Pure core of incremental HLS re-encoding — absolute-grid chunking, content-addressed segment hashing, reuse-vs-encode diff, playlist assembly (`docs/INCREMENTAL_HLS_PLAN.md`) |
 | `cli/lib/hls-incremental-runner.ts` | Incremental transcode orchestration over an injectable I/O seam — load manifest → diff → encode changed chunks → recycle the rest → publish playlists → persist manifest → mark-and-sweep segment GC (`docs/INCREMENTAL_HLS_PLAN.md` Stages 2-3) |
