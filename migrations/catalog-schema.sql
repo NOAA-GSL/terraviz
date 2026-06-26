@@ -181,7 +181,7 @@ CREATE TABLE current_events (
   created_at     TEXT NOT NULL,                 -- ISO 8601
   updated_at     TEXT NOT NULL,                 -- ISO 8601
   reviewed_at    TEXT,                          -- ISO 8601, when a curator last acted
-  reviewed_by    TEXT,                          -- publishers.id (audit), null until reviewed
+  reviewed_by    TEXT, external_id TEXT,                          -- publishers.id (audit), null until reviewed
   FOREIGN KEY (reviewed_by) REFERENCES publishers(id)
 );
 
@@ -465,6 +465,9 @@ CREATE INDEX idx_analytics_spatial_daily_layer
   ON analytics_spatial_daily (event_type, layer_id, day);
 CREATE INDEX idx_asset_uploads_dataset ON asset_uploads(dataset_id, created_at);
 CREATE INDEX idx_audit_subject ON audit_events(subject_kind, subject_id, created_at);
+CREATE UNIQUE INDEX idx_current_events_feed_external
+  ON current_events(feed_id, external_id)
+  WHERE feed_id IS NOT NULL AND external_id IS NOT NULL;
 CREATE INDEX idx_current_events_origin_node ON current_events(origin_node);
 CREATE INDEX idx_current_events_status      ON current_events(status, created_at);
 CREATE UNIQUE INDEX idx_datasets_legacy_id

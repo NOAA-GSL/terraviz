@@ -296,6 +296,7 @@ describe('toPublicEvent', () => {
       source_url: 'https://example.gov/x',
       published_at: null,
       feed_id: null,
+      external_id: null,
       occurred_start: null,
       occurred_end: null,
       bbox_n: null,

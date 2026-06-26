@@ -59,6 +59,7 @@ export type AuditAction =
   | 'publisher.reactivate'
   | 'publisher.role_change'
   | 'event.reviewed'
+  | 'event.ingested'
 
 export interface AuditEventInput {
   actor_kind: AuditActorKind

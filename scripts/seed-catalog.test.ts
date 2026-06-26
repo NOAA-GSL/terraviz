@@ -73,6 +73,7 @@ const EXPECTED_INDEXES = [
   'idx_analytics_spatial_daily_layer',
   'idx_asset_uploads_dataset',
   'idx_audit_subject',
+  'idx_current_events_feed_external',
   'idx_current_events_origin_node',
   'idx_current_events_status',
   'idx_datasets_legacy_id',

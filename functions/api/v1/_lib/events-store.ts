@@ -83,6 +83,7 @@ export interface CurrentEventRow {
   source_url: string
   published_at: string | null
   feed_id: string | null
+  external_id: string | null
   occurred_start: string | null
   occurred_end: string | null
   bbox_n: number | null
@@ -148,6 +149,8 @@ export interface NewCurrentEvent {
   sourceUrl: string
   publishedAt?: string | null
   feedId?: string | null
+  /** The feed item's stable id; with `feedId`, the dedupe key. */
+  externalId?: string | null
   occurredStart?: string | null
   occurredEnd?: string | null
   geometry?: EventGeometry
@@ -169,7 +172,7 @@ export interface NewEventDatasetLink {
 }
 
 const EVENT_COLUMNS = `id, origin_node, title, summary, source_name, source_url,
-  published_at, feed_id, occurred_start, occurred_end,
+  published_at, feed_id, external_id, occurred_start, occurred_end,
   bbox_n, bbox_s, bbox_w, bbox_e, point_lat, point_lon, region_name,
   status, created_at, updated_at, reviewed_at, reviewed_by`
 
@@ -198,6 +201,7 @@ export async function insertCurrentEvent(
     source_url: input.sourceUrl,
     published_at: input.publishedAt ?? null,
     feed_id: input.feedId ?? null,
+    external_id: input.externalId ?? null,
     occurred_start: input.occurredStart ?? null,
     occurred_end: input.occurredEnd ?? null,
     bbox_n: bbox?.n ?? null,
@@ -217,7 +221,7 @@ export async function insertCurrentEvent(
   await db
     .prepare(
       `INSERT INTO current_events (${EVENT_COLUMNS})
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .bind(
       row.id,
@@ -228,6 +232,7 @@ export async function insertCurrentEvent(
       row.source_url,
       row.published_at,
       row.feed_id,
+      row.external_id,
       row.occurred_start,
       row.occurred_end,
       row.bbox_n,
@@ -282,6 +287,67 @@ export async function getCurrentEvent(
     .bind(id)
     .first<CurrentEventRow>()
   return row ?? null
+}
+
+/** Find an ingested event by its feed dedupe key, or null. */
+export async function findEventByExternal(
+  db: D1Database,
+  feedId: string,
+  externalId: string,
+): Promise<CurrentEventRow | null> {
+  const row = await db
+    .prepare(`SELECT ${EVENT_COLUMNS} FROM current_events WHERE feed_id = ? AND external_id = ? LIMIT 1`)
+    .bind(feedId, externalId)
+    .first<CurrentEventRow>()
+  return row ?? null
+}
+
+/**
+ * Refresh a previously-ingested event's content (title / summary /
+ * provenance / time / geometry / decorations) without touching its
+ * curator status, review audit, or dedupe key. Lets a feed re-run
+ * update an open event without resurrecting a rejected one.
+ */
+export async function updateCurrentEventContent(
+  db: D1Database,
+  id: string,
+  input: NewCurrentEvent,
+  now: string = new Date().toISOString(),
+): Promise<void> {
+  const bbox = input.geometry?.boundingBox
+  const point = input.geometry?.point
+  await db
+    .prepare(
+      `UPDATE current_events
+          SET title = ?, summary = ?, source_name = ?, source_url = ?, published_at = ?,
+              occurred_start = ?, occurred_end = ?,
+              bbox_n = ?, bbox_s = ?, bbox_w = ?, bbox_e = ?, point_lat = ?, point_lon = ?,
+              region_name = ?, updated_at = ?
+        WHERE id = ?`,
+    )
+    .bind(
+      input.title,
+      input.summary ?? null,
+      input.sourceName,
+      input.sourceUrl,
+      input.publishedAt ?? null,
+      input.occurredStart ?? null,
+      input.occurredEnd ?? null,
+      bbox?.n ?? null,
+      bbox?.s ?? null,
+      bbox?.w ?? null,
+      bbox?.e ?? null,
+      point?.lat ?? null,
+      point?.lon ?? null,
+      input.geometry?.regionName ?? null,
+      now,
+      id,
+    )
+    .run()
+
+  await db.prepare(`DELETE FROM event_categories WHERE event_id = ?`).bind(id).run()
+  await db.prepare(`DELETE FROM event_keywords WHERE event_id = ?`).bind(id).run()
+  await writeEventDecorations(db, id, input.categories, input.keywords)
 }
 
 /** List events, newest first, optionally filtered by status. */
