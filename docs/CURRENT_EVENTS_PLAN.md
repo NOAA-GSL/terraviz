@@ -1,7 +1,7 @@
 # Current Events ↔ Real-Time Data Plan
 
 A way for a Terraviz node to collect **reputable** current-events
-information — news stories and authoritative-organisation reporting —
+information — news stories and reporting from authoritative organisations —
 about things happening *right now* that relate to the node's real-time
 datasets, and to use that information to **draw** visitors to notable
 features and **guide** them from a headline into the data that explains
@@ -38,7 +38,8 @@ The goal is to build that bridge. Two distinct jobs:
   explanation of how the two connect.
 
 Success looks like: a visitor who read about Hurricane season lands on
-the matching live satellite loop, positioned and time-seeked, beside a
+the matching live satellite loop, framed on the right place and scrubbed
+to the relevant time, beside a
 one-line "why this matters" that links out to the reputable source it
 came from.
 
@@ -225,7 +226,8 @@ extends, to keep the work bounded.
    `src/services/docentContext.ts` (same JSON-Schema function-calling
    shape as `search_datasets`), inject approved in-window events into the
    `[RELEVANT DATASETS]` block, and add an `<<EVENT:ID>>` marker handled
-   by `docentService.extractActionsFromText()` so Orbit can narrate a
+   by `docentService.validateAndCleanText()` (the existing marker
+   parse/validate entry point) so Orbit can narrate a
    headline and one-tap load the dataset that explains it. This honours
    the existing anti-hallucination rule — Orbit may only name an event or
    dataset whose ID came from a tool result or an injected block — so the
