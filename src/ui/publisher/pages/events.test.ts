@@ -46,6 +46,10 @@ const baseRoutes = (): Record<string, RouteSpec> => ({
 })
 
 const flush = () => new Promise<void>(r => setTimeout(r, 0))
+/** Drain the chained async hops (send → reload-fetch → re-render). */
+const settle = async () => {
+  for (let i = 0; i < 6; i++) await flush()
+}
 
 let mount: HTMLElement
 beforeEach(() => {
@@ -100,6 +104,58 @@ describe('renderEventsPage', () => {
 
     const badge = mount.querySelector('.publisher-events-header .publisher-events-badge')
     expect(badge?.classList.contains('publisher-events-badge-approved')).toBe(true)
+  })
+
+  it('refreshes the feed via POST and reloads the queue with a result notice', async () => {
+    const routes = baseRoutes()
+    routes['POST /api/v1/publish/events/refresh'] = { body: { created: 2, refreshed: 1, failed: 0 } }
+    const fetchFn = mockFetch(routes)
+    await renderEventsPage(mount, { fetchFn })
+
+    const toolbarButtons = mount.querySelectorAll<HTMLButtonElement>('.publisher-events-toolbar button')
+    const refreshBtn = toolbarButtons[0] // Refresh feed (non-primary) precedes New event
+    refreshBtn.click()
+    await settle()
+
+    const refreshPost = fetchFn.mock.calls.find(
+      c => String(c[0]).includes('/events/refresh') && (c[1] as RequestInit)?.method === 'POST',
+    )
+    expect(refreshPost).toBeTruthy()
+    // The queue is re-fetched after a successful pull.
+    const eventsGets = fetchFn.mock.calls.filter(
+      c => String(c[0]).split('?')[0].endsWith('/publish/events') && (c[1]?.method ?? 'GET') === 'GET',
+    )
+    expect(eventsGets.length).toBeGreaterThanOrEqual(2)
+    // The result summary survives the re-render.
+    expect(mount.querySelector('.publisher-events-actions-status')?.textContent).toContain('2')
+  })
+
+  it('reveals the new-event form and creates a manual event via POST', async () => {
+    const routes = baseRoutes()
+    routes['POST /api/v1/publish/events'] = { status: 201, body: { created: true, event: { id: EVT, status: 'proposed' }, links: [] } }
+    const fetchFn = mockFetch(routes)
+    await renderEventsPage(mount, { fetchFn })
+
+    const toolbarButtons = mount.querySelectorAll<HTMLButtonElement>('.publisher-events-toolbar button')
+    toolbarButtons[1].click() // New event
+    const form = mount.querySelector('.publisher-events-form') as HTMLFormElement
+    expect(form).not.toBeNull()
+
+    const inputs = form.querySelectorAll<HTMLInputElement>('input')
+    inputs[0].value = 'Manual storm' // title
+    inputs[1].value = 'NOAA' // source name
+    inputs[2].value = 'https://example.gov/manual' // source url
+    form.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }))
+    await settle()
+
+    const createPost = fetchFn.mock.calls.find(
+      c => String(c[0]).split('?')[0].endsWith('/publish/events') && (c[1] as RequestInit)?.method === 'POST',
+    )
+    expect(createPost).toBeTruthy()
+    const sent = JSON.parse((createPost![1] as RequestInit).body as string)
+    expect(sent).toMatchObject({ title: 'Manual storm', source: { name: 'NOAA', url: 'https://example.gov/manual' } })
+    // No feed key — this is a hand-authored event.
+    expect(sent.feedId).toBeUndefined()
   })
 
   it('approves a single link via POST with the link decision', async () => {

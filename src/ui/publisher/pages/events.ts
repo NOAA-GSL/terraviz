@@ -2,13 +2,20 @@
  * /publish/events — the current-events review queue
  * (`docs/CURRENT_EVENTS_PLAN.md` §5).
  *
- * Privileged-only (staff / admin / service). Fetches the caller's role
+ * Privileged-only (admin / service). Fetches the caller's role
  * (`/api/v1/publish/me`) and the proposed events
  * (`GET /api/v1/publish/events`), then renders one card per event: its
  * source citation, summary, status, and the proposed event→dataset
  * links with their match score + per-signal breakdown. The curator
  * vets the event itself (Approve / Reject) and each dataset link
  * independently; both post to `POST /api/v1/publish/events/:id`.
+ *
+ * The queue header also carries two authoring actions: "Refresh feed"
+ * pulls the node's configured feed on demand
+ * (`POST /api/v1/publish/events/refresh`) instead of waiting for the
+ * cron, and "New event" reveals an inline form that hand-authors a
+ * one-off event (`POST /api/v1/publish/events`, no feed) for a breaking
+ * story no feed carries.
  *
  * Non-privileged callers get a restricted card (the API also enforces
  * 403, but gating here avoids a fetch-then-reject round-trip).
@@ -51,6 +58,13 @@ interface EventsResponse {
 
 const ME_ENDPOINT = '/api/v1/publish/me'
 const EVENTS_ENDPOINT = '/api/v1/publish/events'
+const REFRESH_ENDPOINT = '/api/v1/publish/events/refresh'
+
+interface RefreshResult {
+  created: number
+  refreshed: number
+  failed: number
+}
 
 export interface EventsPageOptions {
   fetchFn?: typeof fetch
@@ -122,10 +136,18 @@ export async function renderEventsPage(
     return
   }
 
-  const eventsRes = await publisherGet<EventsResponse>(EVENTS_ENDPOINT, { fetchFn })
+  await loadAndRenderQueue(mount, { fetchFn, navigate: options.navigate })
+}
+
+/** Fetch the queue and (re)render it. Reused by the initial load and by
+ *  the Refresh / New-event actions, which want the freshly-pulled state.
+ *  An optional `notice` is surfaced in the header's status line so a
+ *  message ("Imported 3 new…") survives the re-render. */
+async function loadAndRenderQueue(mount: HTMLElement, state: EventsPageOptions, notice?: string): Promise<void> {
+  const eventsRes = await publisherGet<EventsResponse>(EVENTS_ENDPOINT, { fetchFn: state.fetchFn })
   if (!eventsRes.ok) {
     if (eventsRes.kind === 'session') {
-      if (handleSessionError({ navigate: options.navigate }) === 'navigating') return
+      if (handleSessionError({ navigate: state.navigate }) === 'navigating') return
       mount.replaceChildren(shell(buildErrorCard('session')))
       return
     }
@@ -133,23 +155,152 @@ export async function renderEventsPage(
     mount.replaceChildren(shell(buildErrorCard(eventsRes.kind, details)))
     return
   }
-
-  renderQueue(mount, eventsRes.data.events, { fetchFn, navigate: options.navigate })
+  renderQueue(mount, eventsRes.data.events, state, notice)
 }
 
-function renderQueue(mount: HTMLElement, events: ReviewEvent[], state: EventsPageOptions): void {
-  const intro = el('p', { className: 'publisher-events-intro', textContent: t('publisher.events.intro') })
+function renderQueue(mount: HTMLElement, events: ReviewEvent[], state: EventsPageOptions, notice?: string): void {
+  const header = renderHeader(mount, state, notice)
 
   if (events.length === 0) {
-    mount.replaceChildren(
-      shell(card(heading(t('publisher.events.title')), intro, el('p', { className: 'publisher-empty-message', textContent: t('publisher.events.empty') }))),
-    )
+    mount.replaceChildren(shell(header, el('p', { className: 'publisher-empty-message', textContent: t('publisher.events.empty') })))
     return
   }
 
   const list = el('div', { className: 'publisher-events-list' })
   for (const event of events) list.append(renderEventCard(event, state))
-  mount.replaceChildren(shell(card(heading(t('publisher.events.title')), intro), list))
+  mount.replaceChildren(shell(header, list))
+}
+
+/** The queue header card: title, intro, the Refresh / New-event actions,
+ *  a status line, and a host slot the inline form mounts into. */
+function renderHeader(mount: HTMLElement, state: EventsPageOptions, notice?: string): HTMLElement {
+  const status = el('p', { className: 'publisher-events-actions-status', role: 'status' })
+  if (notice) status.textContent = notice
+  const formHost = el('div', { className: 'publisher-events-form-host' })
+
+  const refreshBtn = el('button', { type: 'button', className: 'publisher-btn', textContent: t('publisher.events.refresh') })
+  const newBtn = el('button', { type: 'button', className: 'publisher-btn publisher-btn-primary', textContent: t('publisher.events.new') })
+
+  refreshBtn.addEventListener('click', () => {
+    refreshBtn.disabled = true
+    status.classList.remove('publisher-events-status-error')
+    status.textContent = t('publisher.events.refreshing')
+    void publisherSend<RefreshResult>(REFRESH_ENDPOINT, {}, { method: 'POST', fetchFn: state.fetchFn }).then(res => {
+      if (res.ok) {
+        // Re-render with the freshly-pulled queue, carrying the result
+        // summary into the new header's status line.
+        void loadAndRenderQueue(
+          mount,
+          state,
+          t('publisher.events.refreshResult', {
+            created: String(res.data.created),
+            refreshed: String(res.data.refreshed),
+            failed: String(res.data.failed),
+          }),
+        )
+        return
+      }
+      refreshBtn.disabled = false
+      if (res.kind === 'session' && handleSessionError({ navigate: state.navigate }) === 'navigating') return
+      status.textContent = t('publisher.events.refreshError')
+      status.classList.add('publisher-events-status-error')
+    })
+  })
+
+  newBtn.addEventListener('click', () => {
+    if (formHost.childElementCount > 0) {
+      formHost.replaceChildren() // toggle closed
+      return
+    }
+    formHost.replaceChildren(renderNewEventForm(mount, state, formHost))
+  })
+
+  const actions = el('div', { className: 'publisher-events-toolbar' }, [refreshBtn, newBtn])
+  return card(
+    heading(t('publisher.events.title')),
+    el('p', { className: 'publisher-events-intro', textContent: t('publisher.events.intro') }),
+    actions,
+    status,
+    formHost,
+  )
+}
+
+/** A labelled form control. */
+function field(labelText: string, control: HTMLElement): HTMLElement {
+  return el('label', { className: 'publisher-events-field' }, [
+    el('span', { className: 'publisher-field-label', textContent: labelText }),
+    control,
+  ])
+}
+
+/** The inline hand-authoring form. Posts to the create endpoint with no
+ *  feed key (a manual event); on success it reloads the queue. */
+function renderNewEventForm(mount: HTMLElement, state: EventsPageOptions, formHost: HTMLElement): HTMLElement {
+  const titleInput = el('input', { type: 'text', required: true, className: 'publisher-form-input' })
+  const summaryInput = el('textarea', { className: 'publisher-form-textarea', rows: 2 })
+  const sourceNameInput = el('input', { type: 'text', required: true, className: 'publisher-form-input' })
+  const sourceUrlInput = el('input', { type: 'url', required: true, className: 'publisher-form-input', placeholder: 'https://' })
+  const startInput = el('input', { type: 'text', className: 'publisher-form-input', placeholder: '2026-06-26T12:00:00Z' })
+  const endInput = el('input', { type: 'text', className: 'publisher-form-input' })
+  const regionInput = el('input', { type: 'text', className: 'publisher-form-input' })
+  const keywordsInput = el('input', { type: 'text', className: 'publisher-form-input' })
+
+  const status = el('p', { className: 'publisher-events-form-status', role: 'status' })
+  const submitBtn = el('button', { type: 'submit', className: 'publisher-btn publisher-btn-primary', textContent: t('publisher.events.form.submit') })
+  const cancelBtn = el('button', { type: 'button', className: 'publisher-btn', textContent: t('publisher.events.form.cancel') })
+  cancelBtn.addEventListener('click', () => formHost.replaceChildren())
+
+  const form = el('form', { className: 'publisher-events-form' }, [
+    el('h3', { className: 'publisher-events-form-heading', textContent: t('publisher.events.form.heading') }),
+    field(t('publisher.events.form.title'), titleInput),
+    field(t('publisher.events.form.summary'), summaryInput),
+    field(t('publisher.events.form.sourceName'), sourceNameInput),
+    field(t('publisher.events.form.sourceUrl'), sourceUrlInput),
+    field(t('publisher.events.form.occurredStart'), startInput),
+    field(t('publisher.events.form.occurredEnd'), endInput),
+    field(t('publisher.events.form.region'), regionInput),
+    field(t('publisher.events.form.keywords'), keywordsInput),
+    el('div', { className: 'publisher-events-form-actions' }, [submitBtn, cancelBtn]),
+    status,
+  ])
+
+  form.addEventListener('submit', ev => {
+    ev.preventDefault()
+    const trimmed = (v: string): string | undefined => {
+      const s = v.trim()
+      return s.length > 0 ? s : undefined
+    }
+    const region = trimmed(regionInput.value)
+    const keywords = keywordsInput.value
+      .split(',')
+      .map(k => k.trim())
+      .filter(k => k.length > 0)
+    const body = {
+      title: titleInput.value.trim(),
+      summary: trimmed(summaryInput.value),
+      source: { name: sourceNameInput.value.trim(), url: sourceUrlInput.value.trim() },
+      occurredStart: trimmed(startInput.value),
+      occurredEnd: trimmed(endInput.value),
+      geometry: region ? { regionName: region } : undefined,
+      keywords: keywords.length > 0 ? keywords : undefined,
+    }
+
+    status.classList.remove('publisher-events-status-error')
+    submitBtn.disabled = true
+    void publisherSend<unknown>(EVENTS_ENDPOINT, body, { method: 'POST', fetchFn: state.fetchFn }).then(res => {
+      submitBtn.disabled = false
+      if (res.ok) {
+        void loadAndRenderQueue(mount, state, t('publisher.events.form.created'))
+        return
+      }
+      if (res.kind === 'session' && handleSessionError({ navigate: state.navigate }) === 'navigating') return
+      status.textContent =
+        res.kind === 'validation' && res.errors.length > 0 ? res.errors[0].message : t('publisher.events.form.error')
+      status.classList.add('publisher-events-status-error')
+    })
+  })
+
+  return form
 }
 
 /** Translated status label (literal keys so the MessageKey union

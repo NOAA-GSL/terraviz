@@ -154,6 +154,12 @@ const checks: Check[] = [
       // The proposed dataset link rows render under the event.
       const links = page.locator('.publisher-events-link')
       assert((await links.count()) >= 1, 'event should render at least one proposed dataset link')
+      // The authoring toolbar exposes Refresh + New event; clicking New
+      // reveals the inline hand-authoring form.
+      const toolbarButtons = page.locator('.publisher-events-toolbar button')
+      assert((await toolbarButtons.count()) >= 2, 'queue header should expose the Refresh + New-event actions')
+      await toolbarButtons.nth(1).click()
+      await page.locator('.publisher-events-form').first().waitFor({ timeout: 5_000 })
     },
   },
   {
