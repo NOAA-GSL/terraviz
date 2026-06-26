@@ -87,6 +87,26 @@ describe('renderEventsPage', () => {
     expect(mount.querySelector('.publisher-events-card')).toBeNull()
   })
 
+  it('defaults to the proposed filter and re-fetches at the chosen status', async () => {
+    const fetchFn = mockFetch(baseRoutes())
+    await renderEventsPage(mount, { fetchFn })
+    // Initial load requests the proposed backlog.
+    expect(fetchFn.mock.calls.some(c => String(c[0]).includes('/publish/events?status=proposed'))).toBe(true)
+    expect(mount.querySelector('.publisher-events-filter-active')?.textContent).toBe('Proposed')
+
+    // Switch to Approved (the route stubs ignore the query, but the
+    // request URL carries the status so the backend would filter).
+    const filterButtons = mount.querySelectorAll<HTMLButtonElement>('.publisher-events-filters button')
+    const approvedBtn = Array.from(filterButtons).find(b => b.textContent === 'Approved')!
+    approvedBtn.click()
+    await settle()
+
+    expect(fetchFn.mock.calls.some(c => String(c[0]).includes('/publish/events?status=approved'))).toBe(true)
+    expect(mount.querySelector('.publisher-events-filter-active')?.textContent).toBe('Approved')
+    // The existing per-event Reject control is reachable here to remove it.
+    expect(mount.querySelector('.publisher-events-actions .publisher-btn')).not.toBeNull()
+  })
+
   it('approves the event via POST and updates the badge', async () => {
     const routes = baseRoutes()
     routes[`POST /api/v1/publish/events/${EVT}`] = { body: { event: { status: 'approved' }, links: [] } }
