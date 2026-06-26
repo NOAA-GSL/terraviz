@@ -1572,6 +1572,7 @@ export interface PublisherPortalLoadedEvent extends TelemetryEventBase {
     | 'datasets'
     | 'tours'
     | 'featured_hero'
+    | 'events'
     | 'import'
     | 'workflows'
     | 'analytics'

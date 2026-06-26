@@ -141,6 +141,22 @@ const checks: Check[] = [
     },
   },
   {
+    name: 'publisher events review queue renders proposed events + links',
+    fixtures: publisherFixtures({ admin: true }),
+    async run(page) {
+      await gotoApp(page, '/publish/events')
+      await page.locator('#publisher-root .publisher-topbar').waitFor({ state: 'visible' })
+      await page.locator('.publisher-events-list').first().waitFor({ timeout: 15_000 })
+      await page
+        .locator('.publisher-events-event-title', { hasText: 'Hurricane Lena makes landfall' })
+        .first()
+        .waitFor()
+      // The proposed dataset link rows render under the event.
+      const links = page.locator('.publisher-events-link')
+      assert((await links.count()) >= 1, 'event should render at least one proposed dataset link')
+    },
+  },
+  {
     name: 'workflow template picker fills the drought recall pipeline',
     fixtures: publisherFixtures(),
     async run(page) {

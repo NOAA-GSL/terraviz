@@ -214,6 +214,39 @@ const publishers: ListPublishersResponse = {
 
 const publishersEmpty: ListPublishersResponse = { publishers: [], next_cursor: null }
 
+/** The `/api/v1/publish/events` review-queue shape (mirrors the
+ *  page-local ReviewEvent in `pages/events.ts`). */
+const events = {
+  events: [
+    {
+      id: '01HEXAMPLEEVENT000000001',
+      title: 'Hurricane Lena makes landfall on the Gulf Coast',
+      summary: 'A category 4 hurricane reached the coast overnight, with sustained winds near 140 mph.',
+      source: { name: 'NOAA / National Hurricane Center', url: 'https://www.nhc.noaa.gov/', publishedAt: '2026-06-25T02:00:00.000Z' },
+      occurredStart: '2026-06-25T00:00:00.000Z',
+      occurredEnd: '2026-06-26T00:00:00.000Z',
+      status: 'proposed',
+      links: [
+        { datasetId: '01HEXAMPLEDATASET00000001', datasetTitle: 'Global Sea Surface Temperature', score: 0.93, signals: { geo: null, temporal: 1 }, status: 'proposed' },
+        { datasetId: '01HEXAMPLEDATASET00000003', datasetTitle: 'Global Precipitation (IMERG)', score: 0.71, signals: { geo: null, temporal: 0.71 }, status: 'proposed' },
+      ],
+    },
+    {
+      id: '01HEXAMPLEEVENT000000002',
+      title: 'Record wildfire smoke blankets the Pacific Northwest',
+      summary: 'Dense smoke pushed air-quality indices into hazardous ranges across the region.',
+      source: { name: 'USGS', url: 'https://www.usgs.gov/', publishedAt: '2026-06-24T18:00:00.000Z' },
+      occurredStart: '2026-06-24T12:00:00.000Z',
+      status: 'proposed',
+      links: [
+        { datasetId: '01HEXAMPLEDATASET00000004', datasetTitle: 'Global Vegetation Index (NDVI)', score: 0.64, signals: { geo: null, temporal: 0.64 }, status: 'proposed' },
+      ],
+    },
+  ],
+}
+
+const eventsEmpty = { events: [] }
+
 /** A forced server error (HTTP 500) so a list page renders the shared
  *  error card — the `publisher.me.error.*` / `publisher.error.*` strings
  *  that a successful response never surfaces for translators. */
@@ -237,6 +270,7 @@ export function publisherFixtures(
     datasets?: ListState
     workflows?: ListState
     publishers?: ListState
+    events?: ListState
   } = {},
 ): FixtureRule[] {
   const datasetsState = opts.datasets ?? 'populated'
@@ -258,5 +292,6 @@ export function publisherFixtures(
     list(datasetsState, '/api/v1/publish/datasets', datasets, datasetsEmpty),
     list(opts.workflows ?? 'populated', '/api/v1/publish/workflows', workflows, workflowsEmpty),
     list(opts.publishers ?? 'populated', '/api/v1/publish/publishers', publishers, publishersEmpty),
+    list(opts.events ?? 'populated', '/api/v1/publish/events', events, eventsEmpty),
   ]
 }

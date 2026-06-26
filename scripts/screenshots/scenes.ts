@@ -395,6 +395,15 @@ export const scenes: Scene[] = [
     },
   },
   {
+    name: 'publish-events',
+    description: 'Publisher portal — current-events review queue (populated via fixtures)',
+    fixtures: publisherFixtures({ admin: true }),
+    async setup(page) {
+      await openPublish(page, '/publish/events')
+      await page.locator('.publisher-events-list').first().waitFor()
+    },
+  },
+  {
     name: 'publish-me',
     description: 'Publisher portal — current-user identity & role (populated)',
     fixtures: publisherFixtures(),
