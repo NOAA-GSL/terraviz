@@ -451,7 +451,17 @@ function renderRelatedDatasetsHtml(
   }
 
   const algorithmic = algorithmicOverride
-    ? algorithmicOverride.filter(d => d.id !== target.id && !manualIds.has(d.id) && !d.isHidden)
+    ? algorithmicOverride.filter(
+        d =>
+          d.id !== target.id &&
+          !manualIds.has(d.id) &&
+          // Same title-based exclusion the lexical path applies, so a
+          // semantic candidate whose title matches a manual entry
+          // (including an off-catalog one with a different id) doesn't
+          // duplicate it — keeps the swap apples-to-apples.
+          !manualTitles.has(normalizeRelatedTitle(d.title)) &&
+          !d.isHidden,
+      )
     : recommendRelated(target, datasets, manualIds, manualTitles)
 
   if (manualLinks.length === 0 && algorithmic.length === 0) return ''
