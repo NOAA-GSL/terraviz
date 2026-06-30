@@ -218,6 +218,7 @@ npm run screenshots:smoke   # gating interaction tests (search, Orbit, nav)
 | `src/ui/publisher/components/markdown-toolbar.ts` | GitHub-issue-style markdown toolbar over a `<textarea>` |
 | `src/ui/publisher/components/topbar.ts` | Glass-surface top bar with section tabs |
 | `src/ui/publisher/components/error-card.ts` | Shared error-card renderer used by every portal page |
+| `src/ui/publisher/components/events/match-badge.ts` | Events-tab **Match Badge** primitive — Topic/Time/Geo facet tags + composite %, threshold-toned (`docs/events-tab-handoff/EVENTS_TAB_IMPLEMENTATION_BRIEF.md` §5) |
 | `src/ui/publisher/pages/datasets.ts` | `/publish/datasets` — dataset list visible to the caller |
 | `src/ui/publisher/pages/dataset-detail.ts` | `/publish/datasets/:id` — read-only dataset detail |
 | `src/ui/publisher/pages/dataset-edit.ts` | `/publish/datasets/:id/edit` — edit an existing draft |
