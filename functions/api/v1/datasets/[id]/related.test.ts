@@ -88,7 +88,7 @@ async function readJson<T>(res: Response): Promise<T> {
 
 describe('GET /api/v1/datasets/:id/related', () => {
   it('503 when CATALOG_DB is unbound', async () => {
-    const ctx = makeCtx({ env: {}, url: 'https://t/api/v1/datasets/DS_HURR/related', params: { id: 'DS_HURR' } })
+    const ctx = makeCtx<'id'>({ env: {}, url: 'https://t/api/v1/datasets/DS_HURR/related', params: { id: 'DS_HURR' } })
     const res = await onRequestGet(ctx)
     expect(res.status).toBe(503)
     expect((await readJson<{ error: string }>(res)).error).toBe('binding_missing')
@@ -96,7 +96,7 @@ describe('GET /api/v1/datasets/:id/related', () => {
 
   it('404 when the seed dataset is not found', async () => {
     const { env } = setup()
-    const ctx = makeCtx({ env, url: 'https://t/api/v1/datasets/NOPE/related', params: { id: 'NOPE' } })
+    const ctx = makeCtx<'id'>({ env, url: 'https://t/api/v1/datasets/NOPE/related', params: { id: 'NOPE' } })
     const res = await onRequestGet(ctx)
     expect(res.status).toBe(404)
     expect((await readJson<{ error: string }>(res)).error).toBe('not_found')
@@ -105,7 +105,7 @@ describe('GET /api/v1/datasets/:id/related', () => {
   it('400 for an out-of-range limit', async () => {
     const { env } = setup()
     for (const bad of ['0', '21', '-1', 'abc', '2.5']) {
-      const ctx = makeCtx({
+      const ctx = makeCtx<'id'>({
         env,
         url: `https://t/api/v1/datasets/DS_HURR/related?limit=${bad}`,
         params: { id: 'DS_HURR' },
@@ -119,7 +119,7 @@ describe('GET /api/v1/datasets/:id/related', () => {
     const { env } = setup()
     await index(env, ['DS_HURR', 'DS_STORM', 'DS_VOLC'])
 
-    const ctx = makeCtx({
+    const ctx = makeCtx<'id'>({
       env,
       url: 'https://t/api/v1/datasets/DS_HURR/related',
       params: { id: 'DS_HURR' },
@@ -143,7 +143,7 @@ describe('GET /api/v1/datasets/:id/related', () => {
   it('caps the result count at `limit`', async () => {
     const { env } = setup()
     await index(env, ['DS_HURR', 'DS_STORM', 'DS_VOLC'])
-    const ctx = makeCtx({
+    const ctx = makeCtx<'id'>({
       env,
       url: 'https://t/api/v1/datasets/DS_HURR/related?limit=1',
       params: { id: 'DS_HURR' },
@@ -157,7 +157,7 @@ describe('GET /api/v1/datasets/:id/related', () => {
 
   it('does NOT cache degraded responses; stamps Warning header', async () => {
     const { env, kv } = setup({ withAi: false })
-    const ctx = makeCtx({
+    const ctx = makeCtx<'id'>({
       env,
       url: 'https://t/api/v1/datasets/DS_HURR/related',
       params: { id: 'DS_HURR' },
@@ -175,10 +175,10 @@ describe('GET /api/v1/datasets/:id/related', () => {
     const { env, kv } = setup()
     await index(env, ['DS_HURR', 'DS_STORM', 'DS_VOLC'])
     const url = 'https://t/api/v1/datasets/DS_HURR/related'
-    const first = await onRequestGet(makeCtx({ env, url, params: { id: 'DS_HURR' } }))
+    const first = await onRequestGet(makeCtx<'id'>({ env, url, params: { id: 'DS_HURR' } }))
     expect(first.headers.get('X-Cache')).toBe('MISS')
     expect(kv?._store.size).toBe(1)
-    const second = await onRequestGet(makeCtx({ env, url, params: { id: 'DS_HURR' } }))
+    const second = await onRequestGet(makeCtx<'id'>({ env, url, params: { id: 'DS_HURR' } }))
     expect(second.headers.get('X-Cache')).toBe('HIT')
     expect(await readJson<RelatedBody>(second)).toEqual(await readJson<RelatedBody>(first))
   })
