@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { displayDatasetInfo } from './datasetLoader'
 import type { Dataset } from '../types'
 
@@ -32,6 +32,18 @@ function setupInfoDOM(): void {
 describe('displayDatasetInfo', () => {
   beforeEach(() => {
     setupInfoDOM()
+    // `displayDatasetInfo` fires an async semantic-related fetch
+    // (Phase 3b progressive enhancement). Stub it to a degraded
+    // response so the enhancement no-ops on the lexical list these
+    // tests assert on — and so no real socket is opened in CI.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ datasets: [], degraded: 'unconfigured' }) }) as unknown as Response),
+    )
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
   })
 
   it('shows the info panel and sets the title', () => {
@@ -149,6 +161,43 @@ describe('displayDatasetInfo', () => {
     link.click()
 
     expect(onLoad).toHaveBeenCalledWith('related-1')
+  })
+
+  it('swaps in the semantic ordering and re-wires the new links when the endpoint returns matches', async () => {
+    // Non-degraded semantic response, deliberately reversed vs. the
+    // lexical (alphabetical) order so the assertion proves the SEMANTIC
+    // ordering won, not just that some list rendered.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({ datasets: [{ id: 'sem-B' }, { id: 'sem-A' }] }),
+      }) as unknown as Response),
+    )
+
+    const onLoad = vi.fn()
+    const target = makeDataset({ id: 'target', enriched: { categories: { Ocean: ['Temperature'] } } })
+    const catalog = [
+      target,
+      makeDataset({ id: 'sem-A', title: 'Aaa Semantic', enriched: { categories: { Ocean: ['Temperature'] } } }),
+      makeDataset({ id: 'sem-B', title: 'Bbb Semantic', enriched: { categories: { Ocean: ['Temperature'] } } }),
+    ]
+
+    displayDatasetInfo(target, catalog, onLoad)
+    // The lexical list renders synchronously in catalog order (A, B);
+    // drain the async semantic enhancement (fetch → json → re-render).
+    for (let i = 0; i < 6; i++) await new Promise(r => setTimeout(r, 0))
+
+    const ids = Array.from(document.querySelectorAll('.info-related a[data-dataset-id]')).map(
+      l => l.getAttribute('data-dataset-id'),
+    )
+    expect(ids).toEqual(['sem-B', 'sem-A']) // semantic ordering, replacing the lexical A,B
+
+    // The freshly-rendered links are wired to onLoadDataset.
+    const first = document.querySelector('.info-related a[data-dataset-id="sem-B"]') as HTMLAnchorElement
+    first.click()
+    expect(onLoad).toHaveBeenCalledWith('sem-B')
   })
 
   it('renders catalog link when available', () => {
