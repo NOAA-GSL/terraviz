@@ -396,7 +396,9 @@ export function renderEventDetail(event: ReviewEvent, cb: EventDetailCallbacks):
     addBtn.setAttribute('aria-expanded', open ? 'true' : 'false')
     if (!open) return
     renderAddCandidates()
-    addSearch.focus()
+    // Focus now only if the input is already enabled (re-open); on first
+    // open it's still disabled until the catalog loads — focus there.
+    if (!addSearch.disabled) addSearch.focus()
     if (addLoaded) return
     addLoaded = true
     void loadPublishedDatasets(cb.fetchFn, cb.navigate).then(list => {
@@ -404,6 +406,7 @@ export function renderEventDetail(event: ReviewEvent, cb: EventDetailCallbacks):
       addDatasets = list
       addSearch.disabled = false
       renderAddCandidates()
+      if (!addPanel.hidden) addSearch.focus()
     })
   })
 

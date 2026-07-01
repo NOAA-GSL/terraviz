@@ -37,7 +37,7 @@ import {
   getEventDecorations,
   setEventStatus,
   setLinkStatus,
-  upsertEventDatasetLink,
+  insertProposedLinkIfAbsent,
   toPublicEvent,
   bustFeaturedEventCache,
   type CurrentEventStatus,
@@ -158,19 +158,16 @@ export const onRequestPost: PagesFunction<CatalogEnv, 'id'> = async context => {
   if (!event) return jsonError(404, 'not_found', `Event ${id} not found.`)
 
   // Seed any hand-picked additions FIRST (so an add + approve can land in
-  // one submit). Skip ids already linked — re-`upsert`ing a matcher link
-  // with no score would clobber it — and drop hidden/retracted/unknown
-  // datasets via the shared visibility filter.
+  // one submit). Drop hidden/retracted/unknown datasets via the shared
+  // visibility filter, then insert atomically with DO-NOTHING-on-conflict:
+  // an already-linked dataset is left untouched (its matcher score is never
+  // clobbered), even under a concurrent add or matcher write.
   let addedCount = 0
   if (parsed.value.addDatasetIds.length > 0) {
-    const current = await listLinksForEvent(db, id)
-    const currentIds = new Set(current.map(l => l.dataset_id))
-    const fresh = parsed.value.addDatasetIds.filter(dsId => !currentIds.has(dsId))
-    const visible = await filterVisibleDatasetIds(db, fresh)
+    const visible = await filterVisibleDatasetIds(db, parsed.value.addDatasetIds)
     for (const datasetId of visible) {
-      await upsertEventDatasetLink(db, { eventId: id, datasetId, status: 'proposed' })
+      if (await insertProposedLinkIfAbsent(db, id, datasetId)) addedCount++
     }
-    addedCount = visible.length
   }
 
   // Every link decision must target a real link of this event. A link of
