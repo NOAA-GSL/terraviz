@@ -41,6 +41,9 @@ describe('toDisplayScore', () => {
 describe('renderMatchBadge', () => {
   it('renders three facet tags + a composite, toned per threshold', () => {
     const badge = renderMatchBadge({ topic: 98, time: 95, geo: 40, composite: 98 })
+    // The group carries an accessible name so screen readers announce it.
+    expect(badge.getAttribute('role')).toBe('group')
+    expect(badge.getAttribute('aria-label')).toBe('Match')
     const tags = badge.querySelectorAll('.publisher-events-match-tag')
     expect(tags).toHaveLength(3)
     // Topic 98 → strong, Geo 40 → weak.

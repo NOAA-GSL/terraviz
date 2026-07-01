@@ -82,6 +82,8 @@ export function renderMatchBadge(scores: MatchScores): HTMLElement {
   const badge = document.createElement('span')
   badge.className = 'publisher-events-match-badge'
   badge.setAttribute('role', 'group')
+  // Name the group so the facet tags read as belonging to "Match".
+  badge.setAttribute('aria-label', t('publisher.events.match'))
 
   badge.append(
     facetTag({ abbr: t('publisher.events.match.topicAbbr'), full: t('publisher.events.signal.topic'), value: scores.topic }),
