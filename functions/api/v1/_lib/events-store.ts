@@ -805,3 +805,57 @@ export async function listPublicEvents(
   }
   return out
 }
+
+/**
+ * The approved events that relate to ONE dataset — the "In the news"
+ * panel's data. Same gating as {@link listPublicEvents} (approved event +
+ * approved link + recency) but constrained to events with an `approved`
+ * link to `datasetId`. Each item carries its full visible linked-dataset
+ * set for consistency with the catalog list. Returns `[]` when the
+ * dataset has no surfaceable events.
+ */
+export async function listApprovedEventsForDataset(
+  db: D1Database,
+  datasetId: string,
+  opts: { now?: number; maxAgeMs?: number; limit?: number } = {},
+): Promise<PublicEventListItem[]> {
+  const now = opts.now ?? Date.now()
+  const cutoff = new Date(now - (opts.maxAgeMs ?? FEATURED_EVENT_MAX_AGE_MS)).toISOString()
+  const limit = Math.max(1, Math.min(opts.limit ?? 50, 200))
+
+  const res = await db
+    .prepare(
+      `SELECT ${EVENT_COLUMNS.split(',').map(c => `e.${c.trim()}`).join(', ')}
+         FROM current_events e
+         JOIN event_dataset_links l ON l.event_id = e.id
+        WHERE l.dataset_id = ?
+          AND l.status = 'approved'
+          AND e.status = 'approved'
+          AND COALESCE(e.published_at, e.occurred_start, e.created_at) >= ?
+        ORDER BY COALESCE(e.published_at, e.occurred_start, e.created_at) DESC
+        LIMIT ?`,
+    )
+    .bind(datasetId, cutoff, limit)
+    .all<CurrentEventRow>()
+  const rows = res.results ?? []
+  if (rows.length === 0) return []
+
+  const linksByEvent = await approvedVisibleLinksForEvents(db, rows.map(r => r.id))
+
+  const out: PublicEventListItem[] = []
+  for (const row of rows) {
+    const item: PublicEventListItem = {
+      id: row.id,
+      title: row.title,
+      source: { name: row.source_name, url: row.source_url },
+      geometry: geometryFromRow(row),
+      datasetIds: linksByEvent.get(row.id) ?? [datasetId],
+    }
+    if (row.summary) item.summary = row.summary
+    if (row.published_at) item.source.publishedAt = row.published_at
+    if (row.occurred_start) item.occurredStart = row.occurred_start
+    if (row.occurred_end) item.occurredEnd = row.occurred_end
+    out.push(item)
+  }
+  return out
+}
