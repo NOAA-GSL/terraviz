@@ -149,4 +149,57 @@ describe('POST /api/v1/publish/events/:id', () => {
     expect(byId[DS_1].status).toBe('rejected')
     expect(byId[DS_1].approved_at).toBeNull()
   })
+
+  describe('addDatasetIds — pairing a dataset the matcher missed', () => {
+    it('seeds a fresh dataset as a proposed link', async () => {
+      const { env } = setupEnv()
+      const id = await seedEventWithLink(env) // links DS_0 only
+      const res = await reviewPost(ctx({ env, id, body: { addDatasetIds: [DS_1] } }))
+      expect(res.status).toBe(200)
+
+      const links = await listLinksForEvent(env.CATALOG_DB, id)
+      const added = links.find(l => l.dataset_id === DS_1)
+      expect(added).toBeTruthy()
+      expect(added!.status).toBe('proposed')
+      expect(added!.match_score).toBeNull() // manual add carries no auto score
+    })
+
+    it('does not clobber an already-linked dataset\'s matcher score', async () => {
+      const { env } = setupEnv()
+      const id = await seedEventWithLink(env) // DS_0 @ score 0.9
+      await reviewPost(ctx({ env, id, body: { addDatasetIds: [DS_0] } }))
+      const links = await listLinksForEvent(env.CATALOG_DB, id)
+      expect(links.find(l => l.dataset_id === DS_0)!.match_score).toBe(0.9)
+    })
+
+    it('drops a hidden dataset (never creates a dangling link)', async () => {
+      const { sqlite, env } = setupEnv()
+      sqlite.prepare(`UPDATE datasets SET is_hidden = 1 WHERE id = ?`).run(DS_1)
+      const id = await seedEventWithLink(env)
+      await reviewPost(ctx({ env, id, body: { addDatasetIds: [DS_1] } }))
+      const links = await listLinksForEvent(env.CATALOG_DB, id)
+      expect(links.some(l => l.dataset_id === DS_1)).toBe(false)
+    })
+
+    it('add + approve in one submit', async () => {
+      const { env } = setupEnv()
+      const id = await seedEventWithLink(env)
+      const res = await reviewPost(
+        ctx({ env, id, body: { addDatasetIds: [DS_1], links: [{ datasetId: DS_1, decision: 'approve' }] } }),
+      )
+      expect(res.status).toBe(200)
+      const links = await listLinksForEvent(env.CATALOG_DB, id)
+      expect(links.find(l => l.dataset_id === DS_1)!.status).toBe('approved')
+    })
+
+    it('records the added-link count in the audit row', async () => {
+      const { sqlite, env } = setupEnv()
+      const id = await seedEventWithLink(env)
+      await reviewPost(ctx({ env, id, body: { addDatasetIds: [DS_1] } }))
+      const row = sqlite
+        .prepare(`SELECT metadata_json AS m FROM audit_events WHERE action = 'event.reviewed' ORDER BY rowid DESC LIMIT 1`)
+        .get() as { m: string }
+      expect(JSON.parse(row.m).added_links).toBe(1)
+    })
+  })
 })

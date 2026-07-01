@@ -8,8 +8,14 @@
  *
  *   {
  *     "event": "approve" | "reject",                 // optional: vet the event itself
- *     "links": [{ "datasetId": "...", "decision": "approve" | "reject" }]  // optional
+ *     "links": [{ "datasetId": "...", "decision": "approve" | "reject" }], // optional
+ *     "addDatasetIds": ["..."]                        // optional: pair extra datasets the matcher missed
  *   }
+ *
+ * `addDatasetIds` lets a curator pair a dataset the matcher never
+ * suggested: each is seeded as a fresh `proposed` link (visibility-
+ * filtered; ids already linked are skipped so a matcher score is never
+ * clobbered), ready to approve like any other.
  *
  * Event status (is this event reputable/relevant?) and link status
  * (is this dataset pairing good?) are independent dimensions — a curator
@@ -31,11 +37,13 @@ import {
   getEventDecorations,
   setEventStatus,
   setLinkStatus,
+  upsertEventDatasetLink,
   toPublicEvent,
   bustFeaturedEventCache,
   type CurrentEventStatus,
   type EventLinkStatus,
 } from '../../_lib/events-store'
+import { sanitizeDatasetIds, filterVisibleDatasetIds } from '../../_lib/events-ingest'
 
 const CONTENT_TYPE = 'application/json; charset=utf-8'
 
@@ -55,6 +63,7 @@ interface LinkDecision {
 interface ParsedReview {
   event?: Decision
   links: LinkDecision[]
+  addDatasetIds: string[]
 }
 
 function jsonError(status: number, error: string, message: string): Response {
@@ -111,12 +120,14 @@ function parseReview(
     }
   }
 
-  if (event === undefined && links.length === 0 && errors.length === 0) {
-    errors.push({ field: 'event', code: 'empty', message: 'Provide an `event` decision and/or one or more `links`.' })
+  const addDatasetIds = sanitizeDatasetIds(body.addDatasetIds)
+
+  if (event === undefined && links.length === 0 && addDatasetIds.length === 0 && errors.length === 0) {
+    errors.push({ field: 'event', code: 'empty', message: 'Provide an `event` decision, one or more `links`, or `addDatasetIds`.' })
   }
 
   if (errors.length > 0) return { ok: false, errors }
-  return { ok: true, value: { event, links } }
+  return { ok: true, value: { event, links, addDatasetIds } }
 }
 
 export const onRequestPost: PagesFunction<CatalogEnv, 'id'> = async context => {
@@ -145,6 +156,22 @@ export const onRequestPost: PagesFunction<CatalogEnv, 'id'> = async context => {
   const db = context.env.CATALOG_DB
   const event = await getCurrentEvent(db, id)
   if (!event) return jsonError(404, 'not_found', `Event ${id} not found.`)
+
+  // Seed any hand-picked additions FIRST (so an add + approve can land in
+  // one submit). Skip ids already linked — re-`upsert`ing a matcher link
+  // with no score would clobber it — and drop hidden/retracted/unknown
+  // datasets via the shared visibility filter.
+  let addedCount = 0
+  if (parsed.value.addDatasetIds.length > 0) {
+    const current = await listLinksForEvent(db, id)
+    const currentIds = new Set(current.map(l => l.dataset_id))
+    const fresh = parsed.value.addDatasetIds.filter(dsId => !currentIds.has(dsId))
+    const visible = await filterVisibleDatasetIds(db, fresh)
+    for (const datasetId of visible) {
+      await upsertEventDatasetLink(db, { eventId: id, datasetId, status: 'proposed' })
+    }
+    addedCount = visible.length
+  }
 
   // Every link decision must target a real link of this event. A link of
   // any status is fair game — a curator may revise an earlier decision —
@@ -178,6 +205,7 @@ export const onRequestPost: PagesFunction<CatalogEnv, 'id'> = async context => {
     metadata_json: JSON.stringify({
       event: parsed.value.event ?? null,
       links: parsed.value.links,
+      added_links: addedCount,
     }),
   })
 
