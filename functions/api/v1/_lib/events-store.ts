@@ -456,6 +456,31 @@ export async function upsertEventDatasetLink(
     .run()
 }
 
+/**
+ * Insert a brand-new `proposed` link, doing nothing if one already
+ * exists (`ON CONFLICT … DO NOTHING`). Unlike {@link upsertEventDatasetLink}
+ * this NEVER touches an existing link's `match_score` / `signals_json`, so
+ * a curator "add dataset" action can't null out a matcher score under a
+ * race (two concurrent adds, or the matcher writing between a caller's
+ * read and write). Returns `true` when it actually inserted.
+ */
+export async function insertProposedLinkIfAbsent(
+  db: D1Database,
+  eventId: string,
+  datasetId: string,
+  now: string = new Date().toISOString(),
+): Promise<boolean> {
+  const res = await db
+    .prepare(
+      `INSERT INTO event_dataset_links (${LINK_COLUMNS})
+       VALUES (?, ?, NULL, NULL, 'proposed', ?, NULL, NULL)
+       ON CONFLICT(event_id, dataset_id) DO NOTHING`,
+    )
+    .bind(eventId, datasetId, now)
+    .run()
+  return (res.meta?.changes ?? 0) > 0
+}
+
 /** List the links for an event, optionally filtered by status. */
 export async function listLinksForEvent(
   db: D1Database,

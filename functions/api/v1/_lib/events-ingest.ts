@@ -176,8 +176,10 @@ export interface IngestOptions {
 
 /** Restrict an id list to datasets that exist and are publicly visible
  *  (mirrors the matcher's candidate filter). Guards the link FK and stops
- *  a manual pairing from pointing at a hidden/retracted dataset. */
-async function filterVisibleDatasetIds(
+ *  a manual pairing from pointing at a hidden/retracted dataset. Shared by
+ *  the create path (`ingestEvent`) and the review route's "add dataset to
+ *  an existing event" action. */
+export async function filterVisibleDatasetIds(
   db: D1Database,
   ids: readonly string[],
 ): Promise<string[]> {
