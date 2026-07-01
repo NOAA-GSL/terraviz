@@ -67,7 +67,11 @@ export function sanitizeDatasetIds(raw: unknown): string[] {
   if (!Array.isArray(raw)) return []
   const seen = new Set<string>()
   for (const v of raw) {
-    if (typeof v === 'string' && v.length > 0) seen.add(v)
+    // Trim so whitespace-padded ids can't slip past dedupe / the FK check.
+    if (typeof v === 'string') {
+      const id = v.trim()
+      if (id.length > 0) seen.add(id)
+    }
     if (seen.size >= MAX_MANUAL_DATASET_IDS) break
   }
   return [...seen]
@@ -156,6 +160,11 @@ export interface IngestOutcome {
   id: string
   created: boolean
   proposedLinks: number
+  /** How many hand-picked pairings were actually inserted — i.e. after
+   *  dropping ids that don't resolve to a visible, published dataset.
+   *  May be fewer than the requested `datasetIds` if one was hidden /
+   *  retracted between drawer load and save. */
+  manualLinks: number
 }
 
 export interface IngestOptions {
@@ -237,5 +246,5 @@ export async function ingestEvent(
   const matches = await runMatcherForEvent(db, id)
   const matchedIds = new Set(matches.map(m => m.datasetId))
   const manualOnly = manualIds.filter(dsId => !matchedIds.has(dsId)).length
-  return { id, created, proposedLinks: matches.length + manualOnly }
+  return { id, created, proposedLinks: matches.length + manualOnly, manualLinks: manualIds.length }
 }

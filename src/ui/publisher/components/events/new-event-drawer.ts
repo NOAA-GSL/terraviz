@@ -77,8 +77,13 @@ async function loadPublishedDatasets(
     const listUrl: string = `${DATASETS_ENDPOINT}?status=published${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`
     const res: PublisherApiResult<ListDatasetsResponse> = await publisherGet<ListDatasetsResponse>(listUrl, { fetchFn })
     if (!res.ok) {
-      if (res.kind === 'session') handleSessionError({ navigate })
-      // A partial list is still useful for pairing; stop on error.
+      if (res.kind === 'session') {
+        // Session redirect in flight — bail so the caller leaves the
+        // search UI disabled rather than enabling it mid-navigation.
+        handleSessionError({ navigate })
+        return null
+      }
+      // A partial list is still useful for pairing; stop on other errors.
       break
     }
     all.push(...res.data.datasets)

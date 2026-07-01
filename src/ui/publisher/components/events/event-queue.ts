@@ -31,7 +31,9 @@ function renderRow(event: ReviewEvent, selected: boolean, cb: EventQueueCallback
 
   const sub = document.createElement('span')
   sub.className = 'publisher-events-queue-sub'
-  const count = event.links.length
+  // "…datasets to review" counts only the pairings still awaiting a
+  // decision, so it shrinks as the curator resolves them.
+  const count = event.links.filter(l => l.status === 'proposed').length
   sub.textContent = `${sourceLabel(event)} · ${t('publisher.events.queue.toReview', { count: String(count) })}`
 
   const row = document.createElement('button')
@@ -59,11 +61,15 @@ function el(tag: string, className: string, children: HTMLElement[]): HTMLElemen
   return node
 }
 
-/** Build the left queue list for `events`, highlighting `selectedId`. */
+/** Build the left queue list for `events`, highlighting `selectedId`.
+ *  `eyebrowText` labels the list for the active filter (the queue is
+ *  reused across Proposed / Approved / … / All views); it defaults to the
+ *  generic "events" label. */
 export function renderEventQueue(
   events: readonly ReviewEvent[],
   selectedId: string | null,
   cb: EventQueueCallbacks,
+  eyebrowText?: string,
 ): HTMLElement {
   const nav = document.createElement('nav')
   nav.className = 'publisher-events-queue'
@@ -71,7 +77,7 @@ export function renderEventQueue(
 
   const eyebrow = document.createElement('p')
   eyebrow.className = 'publisher-events-eyebrow'
-  eyebrow.textContent = t('publisher.events.queue.eyebrow')
+  eyebrow.textContent = eyebrowText ?? t('publisher.events.queue.eyebrow')
   nav.append(eyebrow)
 
   const list = document.createElement('div')

@@ -49,6 +49,18 @@ export interface EventsPageOptions {
   navigate?: (url: string) => void
 }
 
+/** Holds the currently-mounted locator's disposer so it can be torn down
+ *  before ANY re-render — not just a selection swap. Filter/refresh/reload
+ *  paths call `mount.replaceChildren(...)`, which would otherwise orphan a
+ *  live MapLibre WebGL context. */
+interface LocatorHolder {
+  dispose: (() => void) | null
+}
+
+/** Internal page state: the public options plus the locator holder that
+ *  survives across re-renders within one page session. */
+type TriageState = EventsPageOptions & { locator: LocatorHolder }
+
 function clientIsPrivileged(me: MeResponse): boolean {
   return me.is_admin === true || me.role === 'admin' || me.role === 'service'
 }
@@ -93,7 +105,7 @@ export async function renderEventsPage(mount: HTMLElement, options: EventsPageOp
     return
   }
 
-  await loadAndRenderQueue(mount, { fetchFn, navigate: options.navigate })
+  await loadAndRenderQueue(mount, { fetchFn, navigate: options.navigate, locator: { dispose: null } })
 }
 
 /** Fetch the queue at `status` and render the triage view. `selectId`
@@ -101,11 +113,15 @@ export async function renderEventsPage(mount: HTMLElement, options: EventsPageOp
  *  one) when it's present in the returned list. */
 async function loadAndRenderQueue(
   mount: HTMLElement,
-  state: EventsPageOptions,
+  state: TriageState,
   notice?: string,
   status: QueueFilter = 'proposed',
   selectId?: string,
 ): Promise<void> {
+  // Tear down any live locator before this render replaces the DOM, so a
+  // filter/refresh/reload can't orphan its WebGL context.
+  state.locator.dispose?.()
+  state.locator.dispose = null
   const res = await publisherGet<EventsResponse>(`${EVENTS_ENDPOINT}?status=${status}`, { fetchFn: state.fetchFn })
   if (!res.ok) {
     if (res.kind === 'session') {
@@ -124,7 +140,7 @@ async function loadAndRenderQueue(
 function renderTriage(
   mount: HTMLElement,
   events: ReviewEvent[],
-  state: EventsPageOptions,
+  state: TriageState,
   notice: string | undefined,
   filter: QueueFilter,
   selectId?: string,
@@ -139,10 +155,9 @@ function renderTriage(
   // locator map is disposed before each rebuild so its WebGL context
   // doesn't leak across selections.
   const body = el('div', 'publisher-events-body')
-  let locatorDispose: (() => void) | null = null
   const rebuildBody = (): void => {
-    locatorDispose?.()
-    locatorDispose = null
+    state.locator.dispose?.()
+    state.locator.dispose = null
     body.replaceChildren()
     if (events.length === 0) {
       body.append(el('p', 'publisher-empty-message', [t('publisher.events.empty')]))
@@ -153,13 +168,13 @@ function renderTriage(
         selectedId = id
         rebuildBody()
       },
-    })
+    }, filter === 'all' ? t('publisher.events.filter.all') : statusLabel(filter))
     const selected = events.find(e => e.id === selectedId) ?? events[0]
     const detail = renderEventDetail(selected, {
       fetchFn: state.fetchFn,
       navigate: state.navigate,
       mountLocator: (slot, point) => {
-        locatorDispose = mountEventLocator(slot, point)
+        state.locator.dispose = mountEventLocator(slot, point)
       },
       onEventStatusChange: (_id, next) => {
         // If the event no longer matches the active filter, reload so it
@@ -179,11 +194,11 @@ function renderTriage(
   mount.replaceChildren(shell(topbar, card(body)))
 }
 
-/** Top bar: heading, status-filter pills, Refresh / New-event actions,
- *  a status line, and a host the inline new-event form mounts into. */
+/** Top bar: heading, status-filter pills, Refresh / New-event actions
+ *  (New event opens the slide-in drawer), and a status line. */
 function renderTopbar(
   mount: HTMLElement,
-  state: EventsPageOptions,
+  state: TriageState,
   notice: string | undefined,
   filter: QueueFilter,
 ): HTMLElement {

@@ -51,6 +51,10 @@ describe('sanitizeDatasetIds', () => {
     const many = Array.from({ length: MAX_MANUAL_DATASET_IDS + 10 }, (_, i) => `ds-${i}`)
     expect(sanitizeDatasetIds(many)).toHaveLength(MAX_MANUAL_DATASET_IDS)
   })
+
+  it('trims entries and dedupes across whitespace differences', () => {
+    expect(sanitizeDatasetIds(['  DS1  ', 'DS1', '   ', 'DS2'])).toEqual(['DS1', 'DS2'])
+  })
 })
 
 describe('parseCreate — datasetIds', () => {
@@ -72,7 +76,7 @@ describe('ingestEvent — manual pairings', () => {
     db: D1Database,
     manualDatasetIds: string[],
     overrides: Partial<NewCurrentEvent> = {},
-  ): Promise<{ id: string; proposedLinks: number }> {
+  ): Promise<{ id: string; proposedLinks: number; manualLinks: number }> {
     const input: NewCurrentEvent = {
       originNode: await resolveOriginNode(db),
       title: 'Manual storm',
@@ -89,8 +93,8 @@ describe('ingestEvent — manual pairings', () => {
       keywords: undefined,
       ...overrides,
     }
-    const { id, proposedLinks } = await ingestEvent(db, input, { manualDatasetIds })
-    return { id, proposedLinks }
+    const { id, proposedLinks, manualLinks } = await ingestEvent(db, input, { manualDatasetIds })
+    return { id, proposedLinks, manualLinks }
   }
 
   it('inserts hand-picked datasets as proposed links', async () => {
@@ -111,7 +115,7 @@ describe('ingestEvent — manual pairings', () => {
     // Hide DS001 so it fails the visibility filter.
     sqlite.prepare(`UPDATE datasets SET is_hidden = 1 WHERE id = ?`).run(seededDatasetId(1))
 
-    const { id } = await ingest(db, [
+    const { id, manualLinks } = await ingest(db, [
       seededDatasetId(0), // visible → kept
       seededDatasetId(1), // hidden → dropped
       'DS999' + 'A'.repeat(21), // unknown → dropped
@@ -121,6 +125,8 @@ describe('ingestEvent — manual pairings', () => {
     expect(linkIds).toContain(seededDatasetId(0))
     expect(linkIds).not.toContain(seededDatasetId(1))
     expect(linkIds.some(x => x.startsWith('DS999'))).toBe(false)
+    // manualLinks reflects what was actually inserted, not what was requested.
+    expect(manualLinks).toBe(1)
   })
 
   it('counts a manual-only pairing toward proposedLinks', async () => {

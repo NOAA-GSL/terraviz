@@ -162,7 +162,7 @@ export const onRequestPost: PagesFunction<CatalogEnv> = async context => {
   // review queue is pre-populated — shared with the refresh route. The
   // drawer's hand-picked pairings (`datasetIds`) are seeded as proposed
   // links alongside the matcher's output.
-  const { id, created, proposedLinks } = await ingestEvent(db, input, {
+  const { id, created, proposedLinks, manualLinks } = await ingestEvent(db, input, {
     manualDatasetIds: parsed.manualDatasetIds,
   })
 
@@ -177,7 +177,8 @@ export const onRequestPost: PagesFunction<CatalogEnv> = async context => {
       feed_id: input.feedId ?? null,
       external_id: input.externalId ?? null,
       proposed_links: proposedLinks,
-      manual_links: parsed.manualDatasetIds.length,
+      // The count actually inserted (visibility-filtered), not merely requested.
+      manual_links: manualLinks,
     }),
   })
   // A new approved event can't appear yet (lands proposed), but a

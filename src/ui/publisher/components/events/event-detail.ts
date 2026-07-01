@@ -252,22 +252,29 @@ export function renderEventDetail(event: ReviewEvent, cb: EventDetailCallbacks):
     bulkBtn.className = 'publisher-btn publisher-btn-small publisher-events-bulk-btn'
     bulkBtn.textContent = t('publisher.events.bulkApprove', { count: String(targets.length) })
     bulkBtn.addEventListener('click', () => {
+      // Recompute against the live link statuses: a curator may have
+      // rejected a ≥90% link since render, and that decision must win.
+      const current = autoPairTargets(event)
+      if (current.length === 0) {
+        bulkBtn.remove()
+        return
+      }
       bulkBtn.disabled = true
       bulkStatus.textContent = ''
       bulkStatus.classList.remove('publisher-events-status-error')
       void publisherSend<unknown>(
         `${EVENTS_ENDPOINT}/${event.id}`,
-        { links: targets.map(datasetId => ({ datasetId, decision: 'approve' as const })) },
+        { links: current.map(datasetId => ({ datasetId, decision: 'approve' as const })) },
         { method: 'POST', fetchFn: cb.fetchFn },
       ).then(res => {
         if (res.ok) {
           // Re-render the pairings so each approved row reflects its new state.
           for (const link of event.links) {
-            if (targets.includes(link.datasetId)) link.status = 'approved'
+            if (current.includes(link.datasetId)) link.status = 'approved'
           }
           rebuildRows()
           bulkBtn.remove()
-          bulkStatus.textContent = t('publisher.events.bulkApproved', { count: String(targets.length) })
+          bulkStatus.textContent = t('publisher.events.bulkApproved', { count: String(current.length) })
           return
         }
         bulkBtn.disabled = false
