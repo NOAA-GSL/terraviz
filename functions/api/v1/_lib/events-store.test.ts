@@ -16,6 +16,7 @@ import {
   setEventStatus,
   getEventDecorations,
   upsertEventDatasetLink,
+  insertProposedLinkIfAbsent,
   listLinksForEvent,
   listLinksForDataset,
   setLinkStatus,
@@ -171,6 +172,27 @@ describe('setEventStatus', () => {
     expect(row!.reviewed_at).toBe('2026-06-10T00:00:00.000Z')
     expect(row!.reviewed_by).toBe('PUB1')
     expect(row!.updated_at).toBe('2026-06-10T00:00:00.000Z')
+  })
+})
+
+describe('insertProposedLinkIfAbsent', () => {
+  it('inserts a fresh proposed link (returns true) and no-ops on conflict without clobbering the score', async () => {
+    const { db } = freshDb()
+    const { id: eventId } = await insertCurrentEvent(db, sampleEvent())
+    const datasetId = seededDatasetId(0)
+
+    // A matcher link already exists with a real score.
+    await upsertEventDatasetLink(db, { eventId, datasetId, matchScore: 0.9 })
+    // Adding the same dataset again does nothing (returns false) and keeps the score.
+    expect(await insertProposedLinkIfAbsent(db, eventId, datasetId)).toBe(false)
+    expect((await listLinksForEvent(db, eventId))[0].match_score).toBeCloseTo(0.9)
+
+    // A brand-new dataset inserts as proposed with no score (returns true).
+    const fresh = seededDatasetId(1)
+    expect(await insertProposedLinkIfAbsent(db, eventId, fresh)).toBe(true)
+    const link = (await listLinksForEvent(db, eventId)).find(l => l.dataset_id === fresh)!
+    expect(link.status).toBe('proposed')
+    expect(link.match_score).toBeNull()
   })
 })
 
