@@ -52,9 +52,15 @@ export const onRequestGet: PagesFunction<CatalogEnv, 'id'> = async context => {
         'Cache-Control': `public, max-age=${CACHE_TTL_SECONDS}`,
       },
     })
-  } catch {
+  } catch (err) {
     // Graceful absence — the client treats any non-{events:[…]} shape or a
     // read failure as "no panel", so an un-migrated table shows nothing.
+    // Log first so an operator can tell a genuine D1 error apart from the
+    // expected pre-migration case (mirrors `events.ts` / `featured-event.ts`).
+    console.warn(
+      `[dataset-events] read failed for dataset ${id} — returning empty list (table missing / D1 error):`,
+      err instanceof Error ? err.message : String(err),
+    )
     return new Response(JSON.stringify({ events: [] }), {
       status: 200,
       headers: { 'Content-Type': CONTENT_TYPE, 'Cache-Control': 'no-store' },
