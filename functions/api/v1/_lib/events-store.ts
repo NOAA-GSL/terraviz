@@ -850,12 +850,17 @@ export async function listApprovedEventsForDataset(
 
   const res = await db
     .prepare(
+      // The `datasets d` join gates on the REQUESTED dataset's visibility:
+      // probing a hidden / unpublished / retracted dataset id must return
+      // nothing (this is a public endpoint), not leak its linked events.
       `SELECT ${EVENT_COLUMNS.split(',').map(c => `e.${c.trim()}`).join(', ')}
          FROM current_events e
          JOIN event_dataset_links l ON l.event_id = e.id
+         JOIN datasets d ON d.id = l.dataset_id
         WHERE l.dataset_id = ?
           AND l.status = 'approved'
           AND e.status = 'approved'
+          AND d.published_at IS NOT NULL AND d.is_hidden = 0 AND d.retracted_at IS NULL
           AND COALESCE(e.published_at, e.occurred_start, e.created_at) >= ?
         ORDER BY COALESCE(e.published_at, e.occurred_start, e.created_at) DESC
         LIMIT ?`,
@@ -869,12 +874,17 @@ export async function listApprovedEventsForDataset(
 
   const out: PublicEventListItem[] = []
   for (const row of rows) {
+    const datasetIds = linksByEvent.get(row.id) ?? []
+    // Defense-in-depth: never surface an event with no visible approved
+    // link (mirrors `listPublicEvents`; also satisfies the client sanitize
+    // contract, which drops events with an empty `datasetIds`).
+    if (datasetIds.length === 0) continue
     const item: PublicEventListItem = {
       id: row.id,
       title: row.title,
       source: { name: row.source_name, url: row.source_url },
       geometry: geometryFromRow(row),
-      datasetIds: linksByEvent.get(row.id) ?? [datasetId],
+      datasetIds,
     }
     if (row.summary) item.summary = row.summary
     if (row.published_at) item.source.publishedAt = row.published_at

@@ -550,5 +550,14 @@ describe('listPublicEvents', () => {
       await seedApprovedEvent(db, { datasetIndex: 1 }) // linked to DS001
       expect(await listApprovedEventsForDataset(db, seededDatasetId(0), { now: NOW })).toEqual([])
     })
+
+    it('returns nothing when the requested dataset is hidden (no info leak)', async () => {
+      const { sqlite, db } = freshDb()
+      await seedApprovedEvent(db, { datasetIndex: 0 })
+      // The dataset the caller is asking about is hidden — a public probe
+      // of its id must not surface its linked events.
+      sqlite.prepare('UPDATE datasets SET is_hidden = 1 WHERE id = ?').run(seededDatasetId(0))
+      expect(await listApprovedEventsForDataset(db, seededDatasetId(0), { now: NOW })).toEqual([])
+    })
   })
 })
