@@ -96,8 +96,15 @@ async function loadPublishedDatasets(
 /**
  * Mount the new-event drawer onto `document.body`. Returns a disposer
  * that removes it (also called internally on close / successful save).
+ * A no-op (focusing the existing drawer) if one is already open — clicking
+ * "New event" repeatedly must not stack backdrops / keydown listeners.
  */
 export function openNewEventDrawer(options: NewEventDrawerOptions): () => void {
+  const existing = document.querySelector<HTMLElement>('.publisher-events-drawer')
+  if (existing) {
+    existing.focus()
+    return () => {}
+  }
   const previouslyFocused = document.activeElement as HTMLElement | null
 
   // --- Compose fields (left) ---
@@ -263,7 +270,20 @@ export function openNewEventDrawer(options: NewEventDrawerOptions): () => void {
   closeBtn.addEventListener('click', dispose)
   cancelBtn.addEventListener('click', dispose)
 
+  /** Required inputs, in tab order, for up-front native validation. */
+  const requiredInputs = [titleInput, sourceNameInput, sourceUrlInput]
+
   saveBtn.addEventListener('click', () => {
+    // Save is a button (not a form submit), so trim in place and run the
+    // native validity checks ourselves — otherwise whitespace-only values
+    // slip through to the backend and keyboard users get no feedback.
+    for (const el of requiredInputs) el.value = el.value.trim()
+    const invalid = requiredInputs.find(el => !el.checkValidity())
+    if (invalid) {
+      invalid.reportValidity()
+      return
+    }
+
     const trimmed = (v: string): string | undefined => {
       const s = v.trim()
       return s.length > 0 ? s : undefined

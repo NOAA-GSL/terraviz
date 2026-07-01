@@ -184,7 +184,7 @@ export function renderEventDetail(event: ReviewEvent, cb: EventDetailCallbacks):
     const slot = el('div', 'publisher-events-detail-map')
     slot.setAttribute('data-events-locator', '')
     const coords = el('span', 'publisher-events-detail-coords')
-    coords.textContent = `${point.lat.toFixed(1)}°${point.lat >= 0 ? 'N' : 'S'}, ${Math.abs(point.lon).toFixed(1)}°${point.lon >= 0 ? 'E' : 'W'}`
+    coords.textContent = `${Math.abs(point.lat).toFixed(1)}°${point.lat >= 0 ? 'N' : 'S'}, ${Math.abs(point.lon).toFixed(1)}°${point.lon >= 0 ? 'E' : 'W'}`
     slot.append(coords)
     pane.append(slot)
     if (cb.mountLocator) cb.mountLocator(slot, point)
@@ -269,8 +269,9 @@ export function renderEventDetail(event: ReviewEvent, cb: EventDetailCallbacks):
       ).then(res => {
         if (res.ok) {
           // Re-render the pairings so each approved row reflects its new state.
+          const approved = new Set(current)
           for (const link of event.links) {
-            if (current.includes(link.datasetId)) link.status = 'approved'
+            if (approved.has(link.datasetId)) link.status = 'approved'
           }
           rebuildRows()
           bulkBtn.remove()

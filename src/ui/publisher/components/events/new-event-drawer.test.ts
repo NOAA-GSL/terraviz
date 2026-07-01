@@ -118,4 +118,28 @@ describe('openNewEventDrawer', () => {
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
     expect(document.querySelector('.publisher-events-drawer')).toBeNull()
   })
+
+  it('does not stack a second drawer when opened again', async () => {
+    openNewEventDrawer({ fetchFn: mockFetch(baseRoutes()), onCreated: () => {} })
+    openNewEventDrawer({ fetchFn: mockFetch(baseRoutes()), onCreated: () => {} })
+    expect(document.querySelectorAll('.publisher-events-drawer')).toHaveLength(1)
+    expect(document.querySelectorAll('.publisher-events-drawer-backdrop')).toHaveLength(1)
+  })
+
+  it('blocks save (no POST) when a required field is empty', async () => {
+    const fetchFn = mockFetch(baseRoutes())
+    openNewEventDrawer({ fetchFn, onCreated: () => {} })
+    await settle()
+    // Leave title/source empty; click Save.
+    const saveBtn = Array.from(document.querySelectorAll<HTMLButtonElement>('.publisher-events-drawer-actions button'))
+      .find(b => b.classList.contains('publisher-btn-primary'))!
+    saveBtn.click()
+    await settle()
+    const createPost = fetchFn.mock.calls.find(
+      c => String(c[0]).split('?')[0].endsWith('/publish/events') && (c[1] as RequestInit)?.method === 'POST',
+    )
+    expect(createPost).toBeUndefined()
+    // Drawer stays open for correction.
+    expect(document.querySelector('.publisher-events-drawer')).not.toBeNull()
+  })
 })
