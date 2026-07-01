@@ -23,6 +23,7 @@
 
 import { t } from '../../../../i18n'
 import { publisherGet, publisherSend, handleSessionError, type PublisherApiResult } from '../../api'
+import { dateTimeToIso } from '../dataset-form'
 import type { ListDatasetsResponse, PublisherDataset } from '../../types'
 
 const EVENTS_ENDPOINT = '/api/v1/publish/events'
@@ -63,6 +64,28 @@ function field(labelText: string, control: HTMLElement): HTMLElement {
     el('span', 'publisher-field-label', [labelText]),
     control,
   ])
+}
+
+/** A split date + time picker (mirrors the dataset form / featured-hero
+ *  pattern — separate `<input type="date">` + `<input type="time">`, since
+ *  some browsers collapse `datetime-local` into a hard-to-use scrubber).
+ *  `getIso()` composes the pair into ISO 8601 UTC via the shared
+ *  `dateTimeToIso`, or '' when the date is blank. */
+function dateTimeField(labelText: string): { root: HTMLElement; getIso: () => string } {
+  const dateInput = input('date')
+  const timeInput = input('time')
+  const row = el('div', 'publisher-form-datetime-row', [
+    el('div', 'publisher-form-datetime-date', [
+      el('span', 'publisher-form-datetime-sublabel', [t('publisher.datasetForm.datetime.date')]),
+      dateInput,
+    ]),
+    el('div', 'publisher-form-datetime-time', [
+      el('span', 'publisher-form-datetime-sublabel', [t('publisher.datasetForm.datetime.time')]),
+      timeInput,
+    ]),
+  ])
+  const root = el('div', 'publisher-events-field', [el('span', 'publisher-field-label', [labelText]), row])
+  return { root, getIso: () => dateTimeToIso(dateInput.value, timeInput.value) }
 }
 
 /** Fetch published datasets into a flat `{id,title}` index (paginated,
@@ -112,8 +135,8 @@ export function openNewEventDrawer(options: NewEventDrawerOptions): () => void {
   const summaryInput = Object.assign(document.createElement('textarea'), { className: 'publisher-form-textarea', rows: 2 })
   const sourceNameInput = input('text', { required: true })
   const sourceUrlInput = input('url', { required: true, placeholder: 'https://' })
-  const startInput = input('text', { placeholder: '2026-06-26T12:00:00Z' })
-  const endInput = input('text')
+  const startAt = dateTimeField(t('publisher.events.form.occurredStart'))
+  const endAt = dateTimeField(t('publisher.events.form.occurredEnd'))
   const regionInput = input('text')
   const keywordsInput = input('text')
 
@@ -123,8 +146,8 @@ export function openNewEventDrawer(options: NewEventDrawerOptions): () => void {
     field(t('publisher.events.form.summary'), summaryInput),
     field(t('publisher.events.form.sourceName'), sourceNameInput),
     field(t('publisher.events.form.sourceUrl'), sourceUrlInput),
-    field(t('publisher.events.form.occurredStart'), startInput),
-    field(t('publisher.events.form.occurredEnd'), endInput),
+    startAt.root,
+    endAt.root,
     field(t('publisher.events.form.region'), regionInput),
     field(t('publisher.events.form.keywords'), keywordsInput),
   ])
@@ -297,8 +320,8 @@ export function openNewEventDrawer(options: NewEventDrawerOptions): () => void {
       title: titleInput.value.trim(),
       summary: trimmed(summaryInput.value),
       source: { name: sourceNameInput.value.trim(), url: sourceUrlInput.value.trim() },
-      occurredStart: trimmed(startInput.value),
-      occurredEnd: trimmed(endInput.value),
+      occurredStart: startAt.getIso() || undefined,
+      occurredEnd: endAt.getIso() || undefined,
       geometry: region ? { regionName: region } : undefined,
       keywords: keywords.length > 0 ? keywords : undefined,
       datasetIds: [...selected.keys()],

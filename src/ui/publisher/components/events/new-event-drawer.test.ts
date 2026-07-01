@@ -112,6 +112,33 @@ describe('openNewEventDrawer', () => {
     expect(document.querySelector('.publisher-events-drawer')).toBeNull()
   })
 
+  it('composes the date + time pickers into an ISO occurredStart', async () => {
+    const fetchFn = mockFetch(baseRoutes())
+    openNewEventDrawer({ fetchFn, onCreated: () => {} })
+    await settle()
+
+    const inputs = document.querySelectorAll<HTMLInputElement>('.publisher-events-drawer-compose input')
+    inputs[0].value = 'Manual storm'
+    inputs[1].value = 'NOAA'
+    inputs[2].value = 'https://example.gov/manual'
+    // First date + time inputs belong to the Start-time picker.
+    const dateInput = document.querySelector<HTMLInputElement>('.publisher-events-drawer-compose input[type="date"]')!
+    const timeInput = document.querySelector<HTMLInputElement>('.publisher-events-drawer-compose input[type="time"]')!
+    dateInput.value = '2026-06-26'
+    timeInput.value = '12:00'
+
+    ;(Array.from(document.querySelectorAll<HTMLButtonElement>('.publisher-events-drawer-actions button'))
+      .find(b => b.classList.contains('publisher-btn-primary')) as HTMLButtonElement).click()
+    await settle()
+
+    const createPost = fetchFn.mock.calls.find(
+      c => String(c[0]).split('?')[0].endsWith('/publish/events') && (c[1] as RequestInit)?.method === 'POST',
+    )
+    const sent = JSON.parse((createPost![1] as RequestInit).body as string)
+    // Composed to ISO 8601 UTC (local 2026-06-26T12:00 → toISOString()).
+    expect(sent.occurredStart).toBe(new Date('2026-06-26T12:00:00').toISOString())
+  })
+
   it('closes on Escape', async () => {
     openNewEventDrawer({ fetchFn: mockFetch(baseRoutes()), onCreated: () => {} })
     expect(document.querySelector('.publisher-events-drawer')).not.toBeNull()

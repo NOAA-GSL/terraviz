@@ -2145,7 +2145,22 @@
 }
 
 @media (max-width: 720px) {
-  .publisher-events-drawer-body { grid-template-columns: minmax(0, 1fr); }
+  /* Stack the two panes with flex (not a single-column grid): grid rows
+     were compressing under the scroll container and letting the compose
+     pane's content overlap the pair pane. Flex items size to content and
+     the body scrolls. */
+  .publisher-events-drawer-body {
+    display: flex;
+    flex-direction: column;
+  }
+  /* Size each pane to its content and don't let the scroll container shrink
+     them (which caused the compose pane to overlap the pair pane). */
+  .publisher-events-drawer-compose,
+  .publisher-events-drawer-pair {
+    flex: 0 0 auto;
+  }
+  /* Let the whole drawer body scroll rather than a nested candidate list. */
+  .publisher-events-drawer-candidates { overflow-y: visible; }
 }
 
 .publisher-events-drawer-compose,
