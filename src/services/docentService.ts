@@ -1202,7 +1202,15 @@ export function validateAndCleanText(
       const region = resolveRegion(g.regionName)
       if (region) globeActions.push({ type: 'fit-bounds', bounds: region.bounds, label: region.name })
     }
-    if (ev.occurredStart && !isNaN(new Date(ev.occurredStart).getTime())) {
+    // Seek to the event's time only when the explaining dataset is actually
+    // seekable: `set-time` runs `seekToDate`, which needs an HLS <video>, so
+    // it only works on a video dataset with a time range. Image / sequence
+    // datasets (e.g. real-time clouds) have no seekable video — emitting a
+    // set-time there just surfaces a "no video dataset loaded" failure — so
+    // for those we fly to the place and leave the time control alone.
+    const dataset = datasets.find(x => x.id === datasetId)
+    const seekable = dataset?.format === 'video/mp4' && !!dataset.startTime && !!dataset.endTime
+    if (seekable && ev.occurredStart && !isNaN(new Date(ev.occurredStart).getTime())) {
       globeActions.push({ type: 'set-time', isoDate: ev.occurredStart })
     }
   }

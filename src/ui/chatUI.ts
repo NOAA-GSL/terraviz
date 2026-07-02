@@ -1341,10 +1341,28 @@ async function handleSend(): Promise<void> {
           // happens later via executeGlobeAction. If the host
           // doesn't expose canSetTime, we fall through to the
           // optimistic render as before.
+          //
+          // But suppress the eager failure when this same message
+          // carries a Load button for a dataset that isn't on the
+          // globe yet: the seek is deferred and re-evaluates (and
+          // succeeds, or fails with a real reason) once the user taps
+          // Load. Flagging "no dataset loaded" before they've had the
+          // chance to load one is misleading — e.g. an Orbit
+          // current-event card streams Load + Fly + Seek together, so
+          // at app-start nothing is loaded yet but the seek will work
+          // right after the Load tap. The load-dataset action always
+          // streams before its sibling set-time, so it is already in
+          // `docentMsg.actions` here.
           if (action.type === 'set-time' && callbacks.canSetTime) {
-            const probe = callbacks.canSetTime(action.isoDate)
-            if (!probe.ok) {
-              action = { ...action, error: probe.message }
+            const currentId = callbacks.getCurrentDataset()?.id
+            const pendingLoad = docentMsg.actions.some(
+              a => a.type === 'load-dataset' && a.datasetId !== currentId,
+            )
+            if (!pendingLoad) {
+              const probe = callbacks.canSetTime(action.isoDate)
+              if (!probe.ok) {
+                action = { ...action, error: probe.message }
+              }
             }
           }
           docentMsg.actions.push(action)

@@ -1899,10 +1899,14 @@ describe('validateAndCleanText — <<EVENT:ID>> markers', () => {
       ...overrides,
     }
   }
+  // TEST_001 as a seekable video dataset (format video/mp4 + a time range),
+  // so the time-seek path emits. The module-level `datasets` fixture is a
+  // video with no range, which is intentionally NOT seekable.
+  const seekable = [makeDataset({ startTime: '2026-01-01T00:00:00Z', endTime: '2026-12-31T23:59:59Z' })]
 
   it('expands a valid <<EVENT:ID>> into citation + load + fly + seek', () => {
     const text = 'Big news.\n<<EVENT:EVT_0001>>\nWorth a look.'
-    const { cleanedText, validIds, globeActions } = validateAndCleanText(text, datasets, [makeEvent()])
+    const { cleanedText, validIds, globeActions } = validateAndCleanText(text, seekable, [makeEvent()])
     // The explaining dataset loads.
     expect(validIds.has('TEST_001')).toBe(true)
     // A cited card is emitted.
@@ -1943,9 +1947,21 @@ describe('validateAndCleanText — <<EVENT:ID>> markers', () => {
 
   it('omits the seek when the event has no time', () => {
     const ev = makeEvent({ occurredStart: undefined })
-    const { globeActions } = validateAndCleanText('<<EVENT:EVT_0001>>', datasets, [ev])
+    const { globeActions } = validateAndCleanText('<<EVENT:EVT_0001>>', seekable, [ev])
     expect(globeActions.some(g => g.type === 'set-time')).toBe(false)
     expect(globeActions.some(g => g.type === 'event-citation')).toBe(true)
+  })
+
+  it('omits the seek when the explaining dataset is not seekable video', () => {
+    // Real-time image / sequence datasets (e.g. clouds) have no HLS video —
+    // a set-time there would only surface "no video dataset loaded". Still
+    // load + fly, just no time action.
+    const imageDs = [makeDataset({ id: 'TEST_001', format: 'image/png', startTime: '2026-01-01T00:00:00Z', endTime: '2026-12-31T00:00:00Z' })]
+    const { validIds, globeActions } = validateAndCleanText('<<EVENT:EVT_0001>>', imageDs, [makeEvent()])
+    expect(validIds.has('TEST_001')).toBe(true)
+    expect(globeActions.some(g => g.type === 'event-citation')).toBe(true)
+    expect(globeActions.some(g => g.type === 'fly-to')).toBe(true)
+    expect(globeActions.some(g => g.type === 'set-time')).toBe(false)
   })
 
   it('drops the whole event when its dataset is not in the client catalog', () => {

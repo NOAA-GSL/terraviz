@@ -466,6 +466,47 @@ describe('handleSend streaming', () => {
     })
   })
 
+  it('suppresses the eager set-time error when a Load is pending in the same message', async () => {
+    // An Orbit current-event card streams Load + Fly + Seek together at app
+    // start; the seek is deferred until the Load tap, so flagging "no video
+    // dataset loaded" before then is misleading.
+    const { processMessage } = await import('../services/docentService')
+    vi.mocked(processMessage).mockImplementation(async function* () {
+      yield { type: 'action' as const, action: { type: 'load-dataset' as const, datasetId: 'DS_NEW', datasetTitle: 'Clouds' } }
+      yield { type: 'action' as const, action: { type: 'set-time' as const, isoDate: '2026-08-01' } }
+      yield { type: 'done' as const, fallback: false }
+    })
+    const cb = makeCallbacks()
+    cb.getDatasets.mockReturnValue([])
+    cb.getCurrentDataset.mockReturnValue(null)
+    cb.canSetTime = vi.fn().mockReturnValue({ ok: false, message: 'No video dataset loaded' })
+    initChatUI(cb)
+    openChat()
+    ;(document.getElementById('chat-input') as HTMLTextAreaElement).value = 'x'
+    ;(document.getElementById('chat-send') as HTMLButtonElement).click()
+
+    await vi.waitFor(() => expect(document.querySelector('.chat-action-status')).not.toBeNull())
+    expect(document.querySelector('.chat-action-status-err')).toBeNull()
+  })
+
+  it('still flags a set-time error when no Load is pending', async () => {
+    const { processMessage } = await import('../services/docentService')
+    vi.mocked(processMessage).mockImplementation(async function* () {
+      yield { type: 'action' as const, action: { type: 'set-time' as const, isoDate: '2026-08-01' } }
+      yield { type: 'done' as const, fallback: false }
+    })
+    const cb = makeCallbacks()
+    cb.getDatasets.mockReturnValue([])
+    cb.getCurrentDataset.mockReturnValue(null)
+    cb.canSetTime = vi.fn().mockReturnValue({ ok: false, message: 'No video dataset loaded' })
+    initChatUI(cb)
+    openChat()
+    ;(document.getElementById('chat-input') as HTMLTextAreaElement).value = 'x'
+    ;(document.getElementById('chat-send') as HTMLButtonElement).click()
+
+    await vi.waitFor(() => expect(document.querySelector('.chat-action-status-err')).not.toBeNull())
+  })
+
   it('disables send button while streaming', async () => {
     const { processMessage } = await import('../services/docentService')
     const mockedProcessMessage = vi.mocked(processMessage)
