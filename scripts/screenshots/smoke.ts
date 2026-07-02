@@ -221,6 +221,18 @@ const checks: Check[] = [
       )
       // The bring-your-own form is present.
       await page.locator('#feeds-custom-url').waitFor()
+      // Preview dry-runs the feed and lists the latest mapped items
+      // inline (fixture-backed `/feeds/preview` response).
+      await page
+        .locator('.publisher-feeds-row', { hasText: 'NASA EONET' })
+        .locator('button[aria-expanded]')
+        .first()
+        .click()
+      await page.locator('.publisher-feeds-preview-item').first().waitFor({ timeout: 5_000 })
+      assert(
+        (await page.locator('.publisher-feeds-preview-item').count()) >= 3,
+        'the feed preview should list the fixture items',
+      )
     },
   },
   {

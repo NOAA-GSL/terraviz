@@ -2795,6 +2795,59 @@
     color: var(--color-warning, #e0a23c);
 }
 
+/* Preview — the inline latest-items panel under a feed / preset row. */
+.publisher-feeds-entry {
+    display: flex;
+    flex-direction: column;
+}
+
+.publisher-feeds-preview {
+    margin: 0.25rem 0 0.15rem;
+    padding: 0.45rem 0.65rem;
+    border-inline-start: 2px solid var(--white-o08, rgba(255, 255, 255, 0.08));
+}
+
+.publisher-feeds-preview-note {
+    margin: 0;
+    font-size: 0.78rem;
+    color: var(--color-text-secondary, #b8c0cc);
+}
+
+.publisher-feeds-preview-list {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+}
+
+.publisher-feeds-preview-item {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+    min-width: 0;
+    font-size: 0.8rem;
+}
+
+.publisher-feeds-preview-title {
+    color: var(--color-text, #eef1f5);
+    text-decoration: none;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.publisher-feeds-preview-title:hover {
+    text-decoration: underline;
+}
+
+.publisher-feeds-preview-date {
+    flex: 0 0 auto;
+    font-size: 0.72rem;
+    color: var(--color-text-dim, #8a93a3);
+    font-variant-numeric: tabular-nums;
+}
+
 @media (max-width: 720px) {
     .publisher-feeds-row,
     .publisher-feeds-preset {

@@ -14,6 +14,12 @@
  *   3. **Add your own** — label + RSS/Atom URL + category for any feed
  *      not in the catalog.
  *
+ * Every feed — registered, preset, or a pasted custom URL — carries a
+ * **Preview** toggle that dry-runs the URL through the server-side
+ * preview endpoint (`GET /api/v1/publish/feeds/preview`) and lists the
+ * latest mapped items inline, so the operator can see what a feed
+ * would ingest before (or after) adding it.
+ *
  * Every mutation re-renders the page from the server state (the queue
  * pattern `events.ts` uses). Feeds only change what lands in the
  * curator review queue — nothing surfaces publicly without approval.
@@ -26,6 +32,7 @@ import { FEED_PRESET_CATEGORIES, presetsForCategory, type FeedPresetCategory } f
 
 const ME_ENDPOINT = '/api/v1/publish/me'
 const FEEDS_ENDPOINT = '/api/v1/publish/feeds'
+const PREVIEW_ENDPOINT = '/api/v1/publish/feeds/preview'
 const REFRESH_ENDPOINT = '/api/v1/publish/events/refresh'
 
 interface MeResponse {
@@ -53,6 +60,10 @@ interface RefreshResponse {
   created: number
   refreshed: number
   failed: number
+}
+
+interface PreviewResponse {
+  items: Array<{ title: string; publishedAt: string | null; url: string }>
 }
 
 export interface FeedsPageOptions {
@@ -177,6 +188,79 @@ function renderConsole(mount: HTMLElement, feeds: FeedRow[], options: FeedsPageO
     return false
   }
 
+  /**
+   * A Preview toggle + its inline result panel. Clicking dry-runs the
+   * feed URL through the server-side preview endpoint and lists the
+   * latest mapped items (title, date, link); clicking again collapses.
+   * `getUrl` is lazy so the custom form can preview whatever is typed.
+   */
+  const previewControl = (kind: string, getUrl: () => string): { button: HTMLButtonElement; panel: HTMLElement } => {
+    const panel = el('div', { className: 'publisher-feeds-preview', hidden: true })
+    const button = el('button', {
+      type: 'button',
+      className: 'publisher-btn publisher-btn-small',
+      textContent: t('publisher.feeds.preview'),
+    })
+    button.setAttribute('aria-expanded', 'false')
+    button.addEventListener('click', () => {
+      if (!panel.hidden) {
+        panel.hidden = true
+        panel.replaceChildren()
+        button.textContent = t('publisher.feeds.preview')
+        button.setAttribute('aria-expanded', 'false')
+        return
+      }
+      const url = getUrl()
+      if (!/^https?:\/\//i.test(url)) {
+        showError(t('publisher.feeds.custom.invalid'))
+        return
+      }
+      panel.hidden = false
+      button.textContent = t('publisher.feeds.preview.hide')
+      button.setAttribute('aria-expanded', 'true')
+      panel.replaceChildren(
+        el('p', { className: 'publisher-feeds-preview-note', textContent: t('publisher.feeds.preview.loading') }),
+      )
+      const query = `${PREVIEW_ENDPOINT}?kind=${encodeURIComponent(kind)}&url=${encodeURIComponent(url)}`
+      void publisherGet<PreviewResponse>(query, { fetchFn: options.fetchFn }).then(res => {
+        if (panel.hidden) return // collapsed while loading
+        if (!res.ok) {
+          panel.replaceChildren(
+            el('p', {
+              className: 'publisher-feeds-preview-note publisher-feeds-status-error',
+              textContent: t('publisher.feeds.preview.error'),
+            }),
+          )
+          return
+        }
+        const items = Array.isArray(res.data.items) ? res.data.items : []
+        if (items.length === 0) {
+          panel.replaceChildren(
+            el('p', { className: 'publisher-feeds-preview-note', textContent: t('publisher.feeds.preview.empty') }),
+          )
+          return
+        }
+        const list = el('ul', { className: 'publisher-feeds-preview-list' })
+        for (const item of items) {
+          const link = el('a', {
+            className: 'publisher-feeds-preview-title',
+            textContent: item.title,
+            href: item.url,
+            target: '_blank',
+            rel: 'noopener noreferrer',
+          })
+          const li = el('li', { className: 'publisher-feeds-preview-item' }, [link])
+          if (item.publishedAt) {
+            li.append(el('span', { className: 'publisher-feeds-preview-date', textContent: item.publishedAt.slice(0, 10) }))
+          }
+          list.append(li)
+        }
+        panel.replaceChildren(list)
+      })
+    })
+    return { button, panel }
+  }
+
   // ── Card 1: your feeds ─────────────────────────────────────────
   const runBtn = el('button', {
     type: 'button',
@@ -253,13 +337,17 @@ function renderConsole(mount: HTMLElement, feeds: FeedRow[], options: FeedsPageO
       })
     })
 
-    return el('div', { className: 'publisher-feeds-row' }, [
-      dot,
-      el('span', { className: 'publisher-feeds-row-main' }, [
-        el('span', { className: 'publisher-feeds-row-label', textContent: feed.label }),
-        meta,
+    const preview = previewControl(feed.kind, () => feed.url)
+    return el('div', { className: 'publisher-feeds-entry' }, [
+      el('div', { className: 'publisher-feeds-row' }, [
+        dot,
+        el('span', { className: 'publisher-feeds-row-main' }, [
+          el('span', { className: 'publisher-feeds-row-label', textContent: feed.label }),
+          meta,
+        ]),
+        el('span', { className: 'publisher-feeds-row-actions' }, [preview.button, toggleBtn, removeBtn]),
       ]),
-      el('span', { className: 'publisher-feeds-row-actions' }, [toggleBtn, removeBtn]),
+      preview.panel,
     ])
   }
 
@@ -297,13 +385,17 @@ function renderConsole(mount: HTMLElement, feeds: FeedRow[], options: FeedsPageO
           else addBtn.disabled = false
         })
       })
+      const preview = previewControl(preset.kind, () => preset.url)
       suggested.append(
-        el('div', { className: 'publisher-feeds-preset' }, [
-          el('span', { className: 'publisher-feeds-row-main' }, [
-            el('span', { className: 'publisher-feeds-row-label', textContent: preset.label }),
-            el('span', { className: 'publisher-feeds-row-meta', textContent: t(preset.descriptionKey) }),
+        el('div', { className: 'publisher-feeds-entry' }, [
+          el('div', { className: 'publisher-feeds-preset' }, [
+            el('span', { className: 'publisher-feeds-row-main' }, [
+              el('span', { className: 'publisher-feeds-row-label', textContent: preset.label }),
+              el('span', { className: 'publisher-feeds-row-meta', textContent: t(preset.descriptionKey) }),
+            ]),
+            el('span', { className: 'publisher-feeds-row-actions' }, [preview.button, addBtn]),
           ]),
-          addBtn,
+          preview.panel,
         ]),
       )
     }
@@ -358,13 +450,15 @@ function renderConsole(mount: HTMLElement, feeds: FeedRow[], options: FeedsPageO
     return wrap
   }
 
+  const customPreview = previewControl('rss', () => urlInput.value.trim())
   const custom = card(
     heading(t('publisher.feeds.custom.title')),
     el('p', { className: 'publisher-feeds-intro', textContent: t('publisher.feeds.custom.intro') }),
     labelled(t('publisher.feeds.custom.label'), labelInput),
     labelled(t('publisher.feeds.custom.url'), urlInput),
     labelled(t('publisher.feeds.custom.category'), categorySelect),
-    el('div', { className: 'publisher-feeds-actions' }, [addCustomBtn]),
+    el('div', { className: 'publisher-feeds-actions' }, [customPreview.button, addCustomBtn]),
+    customPreview.panel,
   )
 
   mount.replaceChildren(shell(yourFeeds, suggested, custom))

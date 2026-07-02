@@ -87,8 +87,9 @@ describe('renderFeedsPage', () => {
     await renderFeedsPage(mount, { fetchFn: mockFetch(baseRoutes()) })
     const presets = mount.querySelectorAll('.publisher-feeds-preset')
     expect(presets).toHaveLength(FEED_PRESETS.length)
-    // EONET (same URL as the registered row) shows as added; others don't.
-    const buttons = [...presets].map(p => p.querySelector('button')!)
+    // EONET (same URL as the registered row) shows as added; others
+    // don't. Skip each row's Preview toggle (marked aria-expanded).
+    const buttons = [...presets].map(p => p.querySelector<HTMLButtonElement>('button:not([aria-expanded])')!)
     const disabled = buttons.filter(b => b.disabled)
     expect(disabled).toHaveLength(1)
   })
@@ -98,7 +99,7 @@ describe('renderFeedsPage', () => {
     routes['POST /api/v1/publish/feeds'] = { status: 201, body: { feed: {} } }
     const fetchFn = mockFetch(routes)
     await renderFeedsPage(mount, { fetchFn })
-    const enabledBtn = [...mount.querySelectorAll('.publisher-feeds-preset button')].find(
+    const enabledBtn = [...mount.querySelectorAll('.publisher-feeds-preset button:not([aria-expanded])')].find(
       b => !(b as HTMLButtonElement).disabled,
     ) as HTMLButtonElement
     enabledBtn.click()
@@ -115,7 +116,9 @@ describe('renderFeedsPage', () => {
     routes['POST /api/v1/publish/feeds/FEED_EONET_DEFAULT'] = { body: { feed: {} } }
     const fetchFn = mockFetch(routes)
     await renderFeedsPage(mount, { fetchFn })
-    const pauseBtn = mount.querySelector('.publisher-feeds-row-actions button') as HTMLButtonElement
+    const pauseBtn = [...mount.querySelectorAll('.publisher-feeds-row-actions button')].find(
+      b => b.textContent === 'Pause',
+    ) as HTMLButtonElement
     pauseBtn.click()
     await flush()
     const post = fetchFn.mock.calls.find(c => String(c[0]).includes('/feeds/FEED_EONET_DEFAULT'))
@@ -149,6 +152,46 @@ describe('renderFeedsPage', () => {
       label: 'My Feed',
       url: 'https://my.example/feed.xml',
     })
+  })
+
+  it('preview toggles an inline latest-items panel on a feed row', async () => {
+    const routes = baseRoutes()
+    routes['/api/v1/publish/feeds/preview'] = {
+      body: {
+        fetched: 2,
+        mappable: 2,
+        items: [
+          { title: 'Story A', publishedAt: '2026-07-01T10:00:00.000Z', url: 'https://example.org/a' },
+          { title: 'Story B', publishedAt: null, url: 'https://example.org/b' },
+        ],
+      },
+    }
+    const fetchFn = mockFetch(routes)
+    await renderFeedsPage(mount, { fetchFn })
+
+    const previewBtn = [...mount.querySelectorAll('.publisher-feeds-row-actions button')].find(
+      b => b.textContent === 'Preview',
+    ) as HTMLButtonElement
+    previewBtn.click()
+    await flush()
+
+    // The dry-run call carries the connector's kind + url.
+    const call = fetchFn.mock.calls.find(c => String(c[0]).includes('/feeds/preview'))
+    expect(call).toBeTruthy()
+    expect(String(call![0])).toContain('kind=eonet')
+    expect(String(call![0])).toContain(encodeURIComponent(EONET_FEED.url))
+
+    const panel = mount.querySelector('.publisher-feeds-preview') as HTMLElement
+    expect(panel.hidden).toBe(false)
+    const titles = [...panel.querySelectorAll('.publisher-feeds-preview-title')].map(a => a.textContent)
+    expect(titles).toEqual(['Story A', 'Story B'])
+    expect(panel.querySelector('.publisher-feeds-preview-date')?.textContent).toBe('2026-07-01')
+    expect(previewBtn.getAttribute('aria-expanded')).toBe('true')
+
+    // Second click collapses.
+    previewBtn.click()
+    expect(panel.hidden).toBe(true)
+    expect(previewBtn.getAttribute('aria-expanded')).toBe('false')
   })
 
   it('Run now hits the refresh endpoint and reports the summary', async () => {

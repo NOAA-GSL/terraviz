@@ -127,6 +127,7 @@ design rationale in the `docs/CATALOG_*` plan docs.
 | `functions/api/v1/publish/events/refresh.ts` | POST /api/v1/publish/events/refresh — privileged on-demand ingestion pull: fetches the node's configured feed (EONET) server-side and runs the shared upsert+match path, so a curator can refresh the queue without waiting for the cron (`docs/CURRENT_EVENTS_PLAN.md` §9) |
 | `functions/api/v1/publish/feeds.ts` | GET (privileged connector list for the portal feeds page) + POST (add a connector — a curated preset or a bring-your-own RSS/Atom URL; validated kind/label/http(s) url, audit-logged; `docs/CURRENT_EVENTS_PLAN.md` §9) |
 | `functions/api/v1/publish/feeds/[id].ts` | POST (patch a connector — label/url/category/**enable-disable**) + DELETE (remove; already-ingested events untouched) — privileged, audit-logged (`docs/CURRENT_EVENTS_PLAN.md` §9) |
+| `functions/api/v1/publish/feeds/preview.ts` | GET /api/v1/publish/feeds/preview?url=&kind= — privileged dry-run of a feed URL through the same pure mapper the refresh route uses; returns the first few mapped items (title/publishedAt/link) so an operator can see what a preset or pasted URL would ingest before adding it. Writes nothing (`docs/CURRENT_EVENTS_PLAN.md` §9) |
 | `functions/api/v1/publish/featured-hero.ts` | /api/v1/publish/featured-hero — the "Right now" hero admin write API (Phase B of `docs/HERO_ADMIN_SCOPING.md`) |
 | `functions/api/v1/publish/featured.ts` | /api/v1/publish/featured |
 | `functions/api/v1/publish/featured/[dataset_id].ts` | /api/v1/publish/featured/{dataset_id} |
