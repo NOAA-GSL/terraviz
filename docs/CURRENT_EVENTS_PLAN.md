@@ -336,7 +336,10 @@ model, on the safest source, before investing in breadth.
 
 ### Phase 2 — breadth
 
-- Add the **semantic (Vectorize) matcher** for fuzzier topical matches.
+- ~~Add the **semantic (Vectorize) matcher** for fuzzier topical matches.~~
+  **Shipped** — `events-matcher.ts` embeds the event and blends a Vectorize
+  cosine signal with the lexical one (`SEMANTIC_WEIGHT`), env-gated and
+  degrading to pure lexical/temporal when Workers AI / Vectorize aren't wired.
 - Light up the remaining surfaces: **Orbit**, **Map + Timeline
   overlays**, and the **per-dataset "In the news" panel**.
 - Add **news-API / GDELT** ingestion behind the same allow-list +

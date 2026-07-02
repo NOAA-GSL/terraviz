@@ -14,7 +14,7 @@
  */
 
 import { looksLikeUrl } from './validators'
-import { runMatcherForEvent } from './events-matcher'
+import { runMatcherForEvent, type MatcherEnv } from './events-matcher'
 import {
   findEventByExternal,
   updateCurrentEventContent,
@@ -172,6 +172,10 @@ export interface IngestOptions {
    *  `proposed` links before the matcher runs. Filtered to real, visible
    *  datasets; unknown / hidden ids are silently dropped. */
   manualDatasetIds?: readonly string[]
+  /** Workers AI + Vectorize bindings for the matcher's semantic signal.
+   *  Optional: when unconfigured the matcher runs pure lexical/temporal.
+   *  Callers pass `context.env`. */
+  env?: MatcherEnv
 }
 
 /** Restrict an id list to datasets that exist and are publicly visible
@@ -245,7 +249,7 @@ export async function ingestEvent(
     await upsertEventDatasetLink(db, { eventId: id, datasetId, status: 'proposed' })
   }
 
-  const matches = await runMatcherForEvent(db, id)
+  const matches = await runMatcherForEvent(db, id, { env: opts.env })
   const matchedIds = new Set(matches.map(m => m.datasetId))
   const manualOnly = manualIds.filter(dsId => !matchedIds.has(dsId)).length
   return { id, created, proposedLinks: matches.length + manualOnly, manualLinks: manualIds.length }

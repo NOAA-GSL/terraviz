@@ -142,7 +142,9 @@ export const onRequestPost: PagesFunction<CatalogEnv> = async context => {
         continue
       }
       try {
-        const outcome = await ingestEvent(db, { ...parsed.value, originNode })
+        // `env` enables the matcher's semantic (Vectorize) signal when the
+        // AI bindings are configured; it degrades to lexical/temporal when not.
+        const outcome = await ingestEvent(db, { ...parsed.value, originNode }, { env: context.env })
         if (outcome.created) summary.created++
         else summary.refreshed++
       } catch {
