@@ -1441,6 +1441,21 @@ async function handleSend(): Promise<void> {
             && loadActions.every(a => a.type === 'load-dataset' && a.datasetId === currentDataset?.id)
           if (loadActions.length === 0 || allAlreadyLoaded) {
             flushPendingGlobeActions()
+          } else {
+            // A load is pending, so the deferred set-time seek hasn't run —
+            // it flushes once the user taps Load. Any set-time error stamped
+            // by the streaming eager dry-check is therefore premature (the
+            // seek will re-evaluate post-load). This also catches the case
+            // the stream-time check can't: an inline `set_time` tool call
+            // arrives *before* the turn-end load-dataset, so its eager check
+            // saw no pending load. Clear those premature errors now that the
+            // full action set is known; a genuine failure re-stamps after
+            // load via executeGlobeAction.
+            let cleared = false
+            for (const a of docentMsg.actions ?? []) {
+              if (a.type === 'set-time' && a.error) { delete a.error; cleared = true }
+            }
+            if (cleared) updateStreamingMessage(docentMsg)
           }
           break
         }

@@ -489,6 +489,31 @@ describe('handleSend streaming', () => {
     expect(document.querySelector('.chat-action-status-err')).toBeNull()
   })
 
+  it('clears a premature set-time error at done when a Load arrives after it', async () => {
+    // An inline set_time tool call streams BEFORE the turn-end load-dataset,
+    // so the stream-time eager check saw no pending load and stamped the
+    // error. The done handler must clear it once the full action set is known.
+    const { processMessage } = await import('../services/docentService')
+    vi.mocked(processMessage).mockImplementation(async function* () {
+      yield { type: 'action' as const, action: { type: 'set-time' as const, isoDate: '2026-08-01' } }
+      yield { type: 'action' as const, action: { type: 'load-dataset' as const, datasetId: 'DS_LATE', datasetTitle: 'Clouds' } }
+      yield { type: 'done' as const, fallback: false }
+    })
+    const cb = makeCallbacks()
+    cb.getDatasets.mockReturnValue([])
+    cb.getCurrentDataset.mockReturnValue(null)
+    cb.canSetTime = vi.fn().mockReturnValue({ ok: false, message: 'No video dataset loaded' })
+    initChatUI(cb)
+    openChat()
+    ;(document.getElementById('chat-input') as HTMLTextAreaElement).value = 'x'
+    ;(document.getElementById('chat-send') as HTMLButtonElement).click()
+
+    // After the stream completes, the premature error must be gone.
+    await vi.waitFor(() => expect(document.querySelector('.chat-action-status')).not.toBeNull())
+    await flush()
+    expect(document.querySelector('.chat-action-status-err')).toBeNull()
+  })
+
   it('still flags a set-time error when no Load is pending', async () => {
     const { processMessage } = await import('../services/docentService')
     vi.mocked(processMessage).mockImplementation(async function* () {
