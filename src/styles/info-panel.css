@@ -208,8 +208,9 @@
     color: var(--color-text-muted);
 }
 
-/* "View on globe" — flies the globe to the event's place + time. Subtle
-   text button so it doesn't compete with the cited source link above it. */
+/* "View on globe" — navigates the globe to the event: flies to its
+   location and/or seeks the dataset to its time, whichever the event has.
+   Subtle text button so it doesn't compete with the cited source link. */
 .info-news-locate {
     display: inline-flex;
     align-items: center;

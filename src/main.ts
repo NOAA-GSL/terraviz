@@ -1392,15 +1392,6 @@ class InteractiveSphere {
   }
 
   /**
-   * Render the info panel for whichever slot `getInfoDisplayIndex`
-   * points at, repopulate the picker dropdown with all loaded
-   * datasets, and show/hide the picker based on how many are loaded.
-   *
-   * Call after: dataset load/unload, primary change, layout change,
-   * info-panel-visibility toggle. Idempotent — safe to call
-   * repeatedly.
-   */
-  /**
    * Fly the primary globe to a related current event's place and seek the
    * loaded dataset to its time — the "In the news" card's "View on globe"
    * action (`docs/CURRENT_EVENTS_PLAN.md` §6). Reuses the same primitives
@@ -1453,6 +1444,15 @@ class InteractiveSphere {
     return { navigated, time }
   }
 
+  /**
+   * Render the info panel for whichever slot `getInfoDisplayIndex`
+   * points at, repopulate the picker dropdown with all loaded
+   * datasets, and show/hide the picker based on how many are loaded.
+   *
+   * Call after: dataset load/unload, primary change, layout change,
+   * info-panel-visibility toggle. Idempotent — safe to call
+   * repeatedly.
+   */
   private renderInfoPanel(): void {
     const idx = this.getInfoDisplayIndex()
     const dataset = idx >= 0 ? this.panelStates[idx]?.dataset ?? null : null
