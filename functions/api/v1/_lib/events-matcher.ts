@@ -93,9 +93,13 @@ export const SEMANTIC_WEIGHT = 0.5
 /**
  * Fold the lexical (curated topic-overlap) and semantic (embedding cosine)
  * signals into a single topical driver in [0, 1]:
- *   - both present  → weighted blend by {@link SEMANTIC_WEIGHT}
- *   - only one      → that one
- *   - neither       → `null` (caller falls back to temporal/geo)
+ *   - both present, lexical > 0 → weighted blend by {@link SEMANTIC_WEIGHT}
+ *   - both present, lexical = 0 → semantic stands alone. A lexical 0 means
+ *     "the curated map has no evidence", not counter-evidence — blending it
+ *     in would halve a strong embedding neighbour and cap it below the
+ *     `DEFAULT_MIN_SCORE` gate, defeating the point of the semantic signal.
+ *   - only one present → that one
+ *   - neither → `null` (caller falls back to temporal/geo)
  * Semantic thus *augments* lexical: it can surface a subject-related
  * dataset the curated map missed (lexical 0, semantic > 0), and it lifts
  * datasets where both agree. Weak semantic-only matches still fall below
@@ -103,6 +107,7 @@ export const SEMANTIC_WEIGHT = 0.5
  */
 export function blendTopical(lexical: number | null, semantic: number | null): number | null {
   if (lexical !== null && semantic !== null) {
+    if (lexical === 0) return semantic
     return (1 - SEMANTIC_WEIGHT) * lexical + SEMANTIC_WEIGHT * semantic
   }
   return lexical ?? semantic
@@ -532,8 +537,10 @@ async function computeSemanticScores(
     const matches = await queryEmbedding(env, vector, { limit: VECTORIZE_MAX_TOP_K })
     for (const m of matches) {
       if (!candidateSet.has(m.dataset_id)) continue
-      // Vectorize cosine is already in [-1, 1]; clamp to [0, 1] so it blends
-      // cleanly with the other [0, 1] signals (a negative cosine is "unrelated").
+      // Per vectorize-store's contract the score is a cosine similarity
+      // (1 = identical, 0 = orthogonal). Clamp defensively to [0, 1] so it
+      // blends cleanly with the other [0, 1] signals — the mock (and a raw
+      // cosine) can yield a negative value, which just means "unrelated".
       scores.set(m.dataset_id, Math.max(0, Math.min(1, m.score)))
     }
   } catch {

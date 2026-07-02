@@ -169,6 +169,13 @@ describe('semantic signal (blendTopical + scoreMatch)', () => {
     expect(blendTopical(null, null)).toBeNull()
   })
 
+  it('lets semantic stand alone when lexical is 0 (no evidence, not counter-evidence)', () => {
+    // Blending a lexical 0 in would halve the semantic score and cap a
+    // semantic-only neighbour below the DEFAULT_MIN_SCORE gate.
+    expect(blendTopical(0, 0.9)).toBe(0.9)
+    expect(blendTopical(0, 0)).toBe(0)
+  })
+
   it('surfaces a dataset on semantic alone when it has no lexical overlap', () => {
     // Event has topic terms; the dataset shares none of them (lexical 0) but
     // is a strong embedding neighbour → topical is driven by semantic.
@@ -187,6 +194,28 @@ describe('semantic signal (blendTopical + scoreMatch)', () => {
     expect(m.signals.lexical).toBe(0)
     expect(m.signals.semantic).toBe(0.9)
     expect(m.score).toBeGreaterThan(0.5)
+  })
+
+  it('a strong semantic-only match clears the gate even for a non-live dataset', () => {
+    // The Copilot-flagged case: no lexical overlap, no LIVE_BONUS to rescue
+    // it. Semantic must stand alone (not be halved by the blend) so the
+    // 0.9 neighbour scores 0.9 · (0.75 + 0.25·1) = 0.9 ≥ DEFAULT_MIN_SCORE.
+    const event = {
+      occurredStart: '2026-06-25T00:00:00Z',
+      terms: buildEventTerms({ title: 'coral bleaching' }),
+    }
+    const ds: MatchDataset = {
+      id: 'd',
+      startTime: '2026-01-01T00:00:00Z',
+      endTime: '2026-12-31T00:00:00Z', // static coverage window, NOT live
+      subjectTerms: buildDatasetTerms({ title: 'reef stress index' }),
+      semantic: 0.9,
+    }
+    const m = scoreMatch(event, ds, NOW)
+    expect(isLiveDataset(ds, NOW)).toBe(false)
+    expect(m.score).toBeGreaterThanOrEqual(0.5)
+    const proposed = proposeMatches(event, [ds], { nowMs: NOW })
+    expect(proposed.map(p => p.datasetId)).toEqual(['d'])
   })
 
   it('a weak semantic-only match stays below the default gate', () => {
