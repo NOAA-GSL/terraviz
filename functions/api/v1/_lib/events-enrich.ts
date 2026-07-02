@@ -133,18 +133,23 @@ export async function enrichEventFields(
 
   const { system, user } = buildEnrichPrompt(input)
   let text: string
+  let timer: ReturnType<typeof setTimeout> | undefined
   try {
+    const modelCall = env.AI.run(ENRICH_MODEL_ID, {
+      messages: [
+        { role: 'system', content: system },
+        { role: 'user', content: user },
+      ],
+      max_tokens: 128,
+    })
+    // A late rejection from the losing branch must never surface as an
+    // unhandled rejection in the Workers runtime.
+    void modelCall.catch(() => {})
     const raced = await Promise.race([
-      env.AI.run(ENRICH_MODEL_ID, {
-        messages: [
-          { role: 'system', content: system },
-          { role: 'user', content: user },
-        ],
-        max_tokens: 128,
+      modelCall,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error('enrich timeout')), ENRICH_TIMEOUT_MS)
       }),
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('enrich timeout')), ENRICH_TIMEOUT_MS),
-      ),
     ])
     const r = (raced ?? {}) as { response?: unknown }
     if (typeof r.response !== 'string' || r.response.length === 0) {
@@ -158,6 +163,8 @@ export async function enrichEventFields(
   } catch (e) {
     console.warn('[events-enrich] model call failed:', e instanceof Error ? e.message : String(e))
     return null
+  } finally {
+    clearTimeout(timer)
   }
 
   const parsed = extractJsonObject(text)
