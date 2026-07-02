@@ -1,20 +1,27 @@
 /**
- * `terraviz import-events` — ingest current events from an authoritative
- * feed (NASA EONET, the first connector) into the catalog
+ * `terraviz import-events` — ingest current events into the catalog
  * (`docs/CURRENT_EVENTS_PLAN.md` §9).
  *
- * Fetches the feed, maps each item to a `POST /api/v1/publish/events`
- * create body via the pure `lib/eonet.ts` mapper, and posts each. The
- * endpoint is idempotent on `(feed_id, external_id)` — a re-run refreshes
- * open events instead of duplicating them — and runs the matcher on
- * create, so the curator review queue arrives pre-populated. Every
- * ingested event lands `proposed`; nothing reaches end-users until a
- * curator approves it.
+ * **Default mode: registry-driven.** One `POST
+ * /api/v1/publish/events/refresh` has the backend iterate its enabled
+ * feed connectors (EONET + any operator-added RSS feeds from the
+ * `/publish/feeds` console), fetch each feed server-side, and run the
+ * shared upsert + match (+ AI enrichment) path. The cron therefore
+ * ingests whatever the node is *configured* for, not a hardcoded feed.
+ *
+ * **Direct mode** (`--file` / `--source-url`): fetch/read one EONET
+ * feed locally, map it with the pure `lib/eonet.ts` mapper, and POST
+ * each body to the create endpoint — offline runs, tests, and one-off
+ * backfills of a specific feed.
+ *
+ * Both paths are idempotent on `(feed_id, external_id)` — re-runs
+ * refresh open events instead of duplicating them — and every ingested
+ * event lands `proposed`; nothing reaches end-users until a curator
+ * approves it.
  *
  * Typically run on a schedule (see `.github/workflows/import-events.yml`)
- * with a Cloudflare Access service token. `--file` reads a local EONET
- * JSON instead of fetching (offline runs / tests); `--dry-run` prints the
- * plan without writing.
+ * with a Cloudflare Access service token. `--dry-run` prints the plan
+ * without writing.
  */
 
 import { readFileSync } from 'node:fs'
@@ -31,6 +38,16 @@ interface CreateEnvelope {
   event: { id: string; title: string } | null
 }
 
+/** The refresh endpoint's aggregate + per-connector summary. */
+interface RefreshEnvelope {
+  fetched: number
+  mappable: number
+  created: number
+  refreshed: number
+  failed: number
+  feeds: Array<{ id: string; kind: string; label: string; created: number; refreshed: number; failed: number; error?: string }>
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise(r => setTimeout(r, ms))
 }
@@ -45,12 +62,55 @@ async function loadFeed(ctx: CommandContext, file: string | undefined, sourceUrl
   return (await res.json()) as EonetFeed
 }
 
+/** Registry-driven default: one server-side pull over every enabled
+ *  connector. The per-feed outcomes come back in the response. */
+async function runRefreshMode(ctx: CommandContext, dryRun: boolean): Promise<number> {
+  if (dryRun) {
+    ctx.stdout.write(
+      'Dry run — would trigger POST /api/v1/publish/events/refresh (the ' +
+        'server pulls every enabled feed connector). Re-run without ' +
+        '--dry-run to apply.\n',
+    )
+    return 0
+  }
+  const result = await ctx.client.refreshEvents<RefreshEnvelope>()
+  if (!result.ok) {
+    ctx.stderr.write(
+      `refresh failed (${result.status}): ${result.error}` +
+        (result.message ? ` — ${result.message}` : '') +
+        '\n',
+    )
+    return 1
+  }
+  const r = result.body
+  ctx.stdout.write(
+    `Registry refresh complete (${r.feeds.length} enabled connector(s)):\n` +
+      `  fetched:               ${r.fetched}\n` +
+      `  mappable:              ${r.mappable}\n` +
+      `  created:               ${r.created}\n` +
+      `  refreshed (existing):  ${r.refreshed}\n` +
+      `  failed:                ${r.failed}\n`,
+  )
+  for (const f of r.feeds) {
+    ctx.stdout.write(
+      `  - ${f.label} [${f.kind}]: +${f.created} / ~${f.refreshed} / !${f.failed}` +
+        (f.error ? ` — ${f.error}` : '') +
+        '\n',
+    )
+  }
+  return r.failed > 0 || r.feeds.some(f => f.error) ? 1 : 0
+}
+
 export async function runImportEvents(ctx: CommandContext): Promise<number> {
   const file = getString(ctx.args.options, 'file')
-  const sourceUrl = getString(ctx.args.options, 'source-url') ?? EONET_DEFAULT_URL
+  const sourceUrlOpt = getString(ctx.args.options, 'source-url')
   const dryRun = getBool(ctx.args.options, 'dry-run')
   const paceMs = getNumber(ctx.args.options, 'pace-ms') ?? DEFAULT_PACE_MS
 
+  // No explicit feed → the registry-driven server-side pull.
+  if (!file && !sourceUrlOpt) return runRefreshMode(ctx, dryRun)
+
+  const sourceUrl = sourceUrlOpt ?? EONET_DEFAULT_URL
   let feed: EonetFeed
   try {
     feed = await loadFeed(ctx, file, sourceUrl)

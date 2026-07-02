@@ -73,3 +73,68 @@ describe('runImportEvents', () => {
     expect(await runImportEvents(ctx)).toBe(1)
   })
 })
+
+describe('runImportEvents — registry-driven refresh (default mode)', () => {
+  function makeRefreshCtx(opts: {
+    options?: Record<string, string | boolean>
+    refreshEvents?: ReturnType<typeof vi.fn>
+  }) {
+    const out: string[] = []
+    const err: string[] = []
+    const refreshEvents =
+      opts.refreshEvents ??
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        body: {
+          fetched: 12,
+          mappable: 10,
+          created: 3,
+          refreshed: 7,
+          failed: 0,
+          feeds: [
+            { id: 'FEED_EONET_DEFAULT', kind: 'eonet', label: 'NASA EONET', created: 3, refreshed: 7, failed: 0 },
+          ],
+        },
+      }))
+    const client = { refreshEvents } as unknown as TerravizClient
+    const ctx: CommandContext = {
+      client,
+      args: { positional: [], options: { ...opts.options } },
+      stdout: { write: (c: string) => (out.push(c), true) },
+      stderr: { write: (c: string) => (err.push(c), true) },
+    }
+    return { ctx, out, err, refreshEvents }
+  }
+
+  it('with no --file/--source-url it calls the refresh endpoint once', async () => {
+    const { ctx, out, refreshEvents } = makeRefreshCtx({})
+    const code = await runImportEvents(ctx)
+    expect(code).toBe(0)
+    expect(refreshEvents).toHaveBeenCalledTimes(1)
+    expect(out.join('')).toContain('Registry refresh complete')
+    expect(out.join('')).toContain('NASA EONET [eonet]: +3 / ~7 / !0')
+  })
+
+  it('dry-run skips the call', async () => {
+    const { ctx, out, refreshEvents } = makeRefreshCtx({ options: { 'dry-run': true } })
+    expect(await runImportEvents(ctx)).toBe(0)
+    expect(refreshEvents).not.toHaveBeenCalled()
+    expect(out.join('')).toContain('Dry run')
+  })
+
+  it('exits 1 on a failed request or a connector error', async () => {
+    const failing = vi.fn(async () => ({ ok: false, status: 502, error: 'feed_unavailable' }))
+    expect(await runImportEvents(makeRefreshCtx({ refreshEvents: failing }).ctx)).toBe(1)
+
+    const connectorError = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      body: {
+        fetched: 0, mappable: 0, created: 0, refreshed: 0, failed: 0,
+        feeds: [{ id: 'F1', kind: 'rss', label: 'Broken Feed', created: 0, refreshed: 0, failed: 0, error: 'feed responded 502' }],
+      },
+    }))
+    expect(await runImportEvents(makeRefreshCtx({ refreshEvents: connectorError }).ctx)).toBe(1)
+  })
+})
