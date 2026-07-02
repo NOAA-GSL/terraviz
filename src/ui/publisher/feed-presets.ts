@@ -72,6 +72,46 @@ export const FEED_PRESETS: readonly FeedPreset[] = [
     category: 'hazards',
     descriptionKey: 'publisher.feeds.preset.gvp',
   },
+  {
+    id: 'nhc-atlantic',
+    kind: 'rss',
+    label: 'NOAA NHC Atlantic tropical cyclones', // i18n-exempt: proper name
+    url: 'https://www.nhc.noaa.gov/index-at.xml',
+    category: 'hazards',
+    descriptionKey: 'publisher.feeds.preset.nhcAtlantic',
+  },
+  {
+    id: 'nhc-epacific',
+    kind: 'rss',
+    label: 'NOAA NHC East Pacific tropical cyclones', // i18n-exempt: proper name
+    url: 'https://www.nhc.noaa.gov/index-ep.xml',
+    category: 'hazards',
+    descriptionKey: 'publisher.feeds.preset.nhcEpacific',
+  },
+  {
+    id: 'nws-severe',
+    kind: 'rss',
+    label: 'NWS severe & extreme weather alerts', // i18n-exempt: proper name
+    url: 'https://api.weather.gov/alerts/active.atom?severity=Extreme,Severe',
+    category: 'hazards',
+    descriptionKey: 'publisher.feeds.preset.nwsSevere',
+  },
+  {
+    id: 'ptwc-tsunami',
+    kind: 'rss',
+    label: 'NOAA PTWC Pacific tsunami messages', // i18n-exempt: proper name
+    url: 'https://www.tsunami.gov/events/xml/PHEBAtom.xml',
+    category: 'hazards',
+    descriptionKey: 'publisher.feeds.preset.ptwc',
+  },
+  {
+    id: 'reliefweb-disasters',
+    kind: 'rss',
+    label: 'ReliefWeb disasters (UN OCHA)', // i18n-exempt: proper name
+    url: 'https://reliefweb.int/disasters/rss.xml',
+    category: 'hazards',
+    descriptionKey: 'publisher.feeds.preset.reliefweb',
+  },
   // ── Science-org newsrooms ─────────────────────────────────────────
   {
     id: 'nasa-earth-observatory',
@@ -96,6 +136,38 @@ export const FEED_PRESETS: readonly FeedPreset[] = [
     url: 'https://www.esa.int/rssfeed/Our_Activities/Observing_the_Earth',
     category: 'science-news',
     descriptionKey: 'publisher.feeds.preset.esaEarth',
+  },
+  {
+    id: 'noaa-news',
+    kind: 'rss',
+    label: 'NOAA newsroom', // i18n-exempt: proper name
+    url: 'https://www.noaa.gov/rss.xml',
+    category: 'science-news',
+    descriptionKey: 'publisher.feeds.preset.noaaNews',
+  },
+  {
+    id: 'copernicus-news',
+    kind: 'rss',
+    label: 'Copernicus programme news', // i18n-exempt: proper name
+    url: 'https://www.copernicus.eu/en/rss.xml',
+    category: 'science-news',
+    descriptionKey: 'publisher.feeds.preset.copernicus',
+  },
+  {
+    id: 'cams-news',
+    kind: 'rss',
+    label: 'Copernicus Atmosphere (CAMS)', // i18n-exempt: proper name
+    url: 'https://atmosphere.copernicus.eu/rss.xml',
+    category: 'science-news',
+    descriptionKey: 'publisher.feeds.preset.cams',
+  },
+  {
+    id: 'eumetsat-news',
+    kind: 'rss',
+    label: 'EUMETSAT news', // i18n-exempt: proper name
+    url: 'https://www.eumetsat.int/rss.xml',
+    category: 'science-news',
+    descriptionKey: 'publisher.feeds.preset.eumetsat',
   },
   {
     id: 'physorg-earth',
