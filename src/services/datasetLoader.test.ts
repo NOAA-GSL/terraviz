@@ -460,7 +460,7 @@ describe('displayDatasetInfo — "In the news"', () => {
     await flush()
     ;(document.querySelector('.info-news-locate') as HTMLButtonElement).click()
     expect(onNav).toHaveBeenCalledTimes(1)
-    expect(onNav.mock.calls[0][0]).toMatchObject({ id: 'E1' })
+    expect(onNav).toHaveBeenCalledWith(expect.objectContaining({ id: 'E1' }))
   })
 
   it('reveals the note only when the seek reports out-of-range', async () => {
