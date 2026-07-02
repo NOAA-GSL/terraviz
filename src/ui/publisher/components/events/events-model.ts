@@ -46,6 +46,10 @@ export interface ReviewEvent {
   /** Facet group → values, e.g. `{ "Wildfires": ["Fire"] }`. */
   categories?: Record<string, string[]>
   keywords?: string[]
+  /** Fields the ingest layer AI-inferred ('occurredStart' / 'geometry')
+   *  — the detail pane badges these so the curator double-checks them
+   *  before approving (feeds slice C). */
+  inferredFields?: string[]
   links: ReviewLink[]
 }
 

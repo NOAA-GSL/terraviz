@@ -120,3 +120,20 @@ describe('renderEventDetail — onLinksChanged', () => {
     expect(onLinksChanged).toHaveBeenCalled()
   })
 })
+
+describe('renderEventDetail — AI-inferred badge (slice C)', () => {
+  it('badges inferred fields with readable names', () => {
+    const pane = renderEventDetail(
+      event({ inferredFields: ['occurredStart', 'geometry'] }),
+      { onEventStatusChange: vi.fn() },
+    )
+    const badge = pane.querySelector('.publisher-events-inferred-badge')
+    expect(badge?.textContent).toBe('date, location')
+    expect(badge?.getAttribute('title')).toBeTruthy()
+  })
+
+  it('renders no badge when nothing was inferred', () => {
+    const pane = renderEventDetail(event(), { onEventStatusChange: vi.fn() })
+    expect(pane.querySelector('.publisher-events-inferred-badge')).toBeNull()
+  })
+})

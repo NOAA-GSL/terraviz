@@ -2472,6 +2472,17 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* AI-inferred provenance chip (feeds slice C) — warning-toned so a
+   curator's eye lands on it before approving. */
+.publisher-events-inferred-badge {
+  display: inline-block;
+  padding: calc(0.1rem * var(--ui-scale)) calc(0.45rem * var(--ui-scale));
+  border: 1px solid var(--color-warning, #e0a23c);
+  border-radius: var(--radius-full, 999px);
+  color: var(--color-warning, #e0a23c);
+  font-size: calc(0.75rem * var(--ui-scale));
+}
+
 /* Locator map */
 .publisher-events-detail-map {
   position: relative;

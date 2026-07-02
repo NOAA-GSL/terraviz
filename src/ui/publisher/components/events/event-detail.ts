@@ -185,6 +185,20 @@ export function renderEventDetail(event: ReviewEvent, cb: EventDetailCallbacks):
     meta.append(metaField(t('publisher.events.occurred'), event.occurredStart ?? event.source.publishedAt ?? ''))
   }
   if (event.summary) meta.append(metaField(t('publisher.events.detailLabel'), event.summary))
+  // AI-inferred provenance (slice C): the ingest layer filled these
+  // fields from the headline/summary — flag them for a closer look.
+  if (event.inferredFields && event.inferredFields.length > 0) {
+    const parts = event.inferredFields.map(f =>
+      f === 'occurredStart'
+        ? t('publisher.events.inferred.date')
+        : f === 'geometry'
+          ? t('publisher.events.inferred.location')
+          : f,
+    )
+    const chip = el('span', 'publisher-events-inferred-badge', [parts.join(', ')])
+    chip.title = t('publisher.events.inferred.tooltip')
+    meta.append(metaField(t('publisher.events.inferred.label'), chip))
+  }
   pane.append(meta)
 
   // --- Locator: live map slot, coordinates as text fallback ---
