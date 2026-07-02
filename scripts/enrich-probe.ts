@@ -22,10 +22,12 @@ import { parseRssFeed } from '../cli/lib/rss'
 import {
   buildEnrichPrompt,
   extractJsonObject,
+  extractModelText,
   isPlausibleDate,
   ENRICH_MODEL_ID,
   MIN_CONFIDENCE,
 } from '../functions/api/v1/_lib/events-enrich'
+import { feedRequestHeaders } from '../functions/api/v1/_lib/feed-connectors-store'
 import { resolveRegion } from '../src/data/regions'
 
 /** Plain-news defaults — no GeoRSS, no structured dates, so every item
@@ -59,8 +61,10 @@ async function runModel(
     },
   )
   if (!res.ok) throw new Error(`Workers AI responded ${res.status}: ${(await res.text()).slice(0, 300)}`)
-  const body = (await res.json()) as { result?: { response?: string } }
-  return body.result?.response ?? ''
+  // The REST envelope wraps the binding's reply in `result`; the reply
+  // itself varies by model generation — reuse the production extractor.
+  const body = (await res.json()) as { result?: unknown }
+  return extractModelText(body.result) ?? ''
 }
 
 async function main(): Promise<number> {
@@ -81,7 +85,9 @@ async function main(): Promise<number> {
     console.log(`\n━━ ${url}`)
     let xml: string
     try {
-      const res = await fetch(url)
+      // Same bot headers the production refresh route sends — several
+      // news CDNs (The Guardian) 406 a bare fetch.
+      const res = await fetch(url, { headers: feedRequestHeaders('rss') })
       if (!res.ok) throw new Error(`feed responded ${res.status}`)
       xml = await res.text()
     } catch (e) {
