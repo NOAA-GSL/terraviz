@@ -38,9 +38,14 @@ export interface RssItem {
 /** Cap summaries so a full-article description doesn't bloat the row. */
 const SUMMARY_MAX_CHARS = 500
 
-/** Cap items mapped from one feed — mirrors the refresh route's budget
- *  spirit; a firehose feed shouldn't flood the review queue. */
-export const RSS_MAX_ITEMS = 50
+/** Cap items mapped from one feed to the NEWEST 25 (feeds list newest
+ *  first). A firehose feed can't flood the review queue, the tail of a
+ *  first pull — old stories nobody will triage — never ingests at all,
+ *  and one new feed's first page aligns exactly with the refresh
+ *  route's per-run AI-enrichment budget, so a freshly added feed
+ *  arrives fully enriched. The 6-hourly cron only misses items if a
+ *  feed posts more than 25 between runs. */
+export const RSS_MAX_ITEMS = 25
 
 /** The HTML named entities that routinely appear in feed prose beyond
  *  XML's own five. Anything not listed decodes numerically or stays

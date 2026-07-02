@@ -103,6 +103,9 @@ export interface CurrentEventRow {
   updated_at: string
   reviewed_at: string | null
   reviewed_by: string | null
+  /** JSON array of AI-filled field names ('["occurredStart","geometry"]');
+   *  NULL when everything came from the source (slice C provenance). */
+  inferred_fields: string | null
 }
 
 /** The `event_dataset_links` row as stored (snake_case). */
@@ -142,6 +145,9 @@ export interface CurrentEventPublic {
   updatedAt: string
   reviewedAt?: string
   reviewedBy?: string
+  /** Which fields were AI-inferred at ingest ('occurredStart' /
+   *  'geometry') — the review queue badges these for the curator. */
+  inferredFields?: string[]
 }
 
 /** Fields a caller supplies to {@link insertCurrentEvent}. The store
@@ -163,6 +169,9 @@ export interface NewCurrentEvent {
   keywords?: string[]
   /** Initial status; defaults to `proposed` (the ingestion path). */
   status?: CurrentEventStatus
+  /** Which fields the ingest layer AI-inferred (slice C). Stored as a
+   *  JSON array so the curator queue can badge them. */
+  inferredFields?: string[] | null
 }
 
 /** Fields a caller supplies to {@link upsertEventDatasetLink}. */
@@ -179,7 +188,7 @@ export interface NewEventDatasetLink {
 const EVENT_COLUMNS = `id, origin_node, title, summary, source_name, source_url,
   published_at, feed_id, external_id, occurred_start, occurred_end,
   bbox_n, bbox_s, bbox_w, bbox_e, point_lat, point_lon, region_name,
-  status, created_at, updated_at, reviewed_at, reviewed_by`
+  status, created_at, updated_at, reviewed_at, reviewed_by, inferred_fields`
 
 const LINK_COLUMNS = `event_id, dataset_id, match_score, signals_json,
   status, created_at, approved_at, approved_by`
@@ -225,12 +234,13 @@ export async function insertCurrentEvent(
     updated_at: now,
     reviewed_at: null,
     reviewed_by: null,
+    inferred_fields: input.inferredFields?.length ? JSON.stringify(input.inferredFields) : null,
   }
 
   await db
     .prepare(
       `INSERT INTO current_events (${EVENT_COLUMNS})
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .bind(
       row.id,
@@ -256,6 +266,7 @@ export async function insertCurrentEvent(
       row.updated_at,
       row.reviewed_at,
       row.reviewed_by,
+      row.inferred_fields,
     )
     .run()
 
@@ -331,7 +342,7 @@ export async function updateCurrentEventContent(
           SET title = ?, summary = ?, source_name = ?, source_url = ?, published_at = ?,
               occurred_start = ?, occurred_end = ?,
               bbox_n = ?, bbox_s = ?, bbox_w = ?, bbox_e = ?, point_lat = ?, point_lon = ?,
-              region_name = ?, updated_at = ?
+              region_name = ?, inferred_fields = ?, updated_at = ?
         WHERE id = ?`,
     )
     .bind(
@@ -349,6 +360,7 @@ export async function updateCurrentEventContent(
       point?.lat ?? null,
       point?.lon ?? null,
       input.geometry?.regionName ?? null,
+      input.inferredFields?.length ? JSON.stringify(input.inferredFields) : null,
       now,
       id,
     )
@@ -359,7 +371,12 @@ export async function updateCurrentEventContent(
   await writeEventDecorations(db, id, input.categories, input.keywords)
 }
 
-/** List events, newest first, optionally filtered by status. */
+/** List events, newest first by the event's *own* time — when it
+ *  occurred, else when its source published it, else when we ingested
+ *  it. Ordering by `created_at` alone made one refresh run's batch come
+ *  out in reverse feed order (feeds list newest articles first, so the
+ *  newest got the earliest insert timestamps), which is exactly
+ *  backwards for a curator triaging the queue. */
 export async function listCurrentEvents(
   db: D1Database,
   opts: { status?: CurrentEventStatus; limit?: number } = {},
@@ -369,12 +386,85 @@ export async function listCurrentEvents(
   const stmt = db.prepare(
     `SELECT ${EVENT_COLUMNS} FROM current_events
      ${where}
-     ORDER BY created_at DESC
+     ORDER BY COALESCE(occurred_start, published_at, created_at) DESC
      LIMIT ?`,
   )
   const bound = opts.status ? stmt.bind(opts.status, limit) : stmt.bind(limit)
   const res = await bound.all<CurrentEventRow>()
   return res.results ?? []
+}
+
+/**
+ * Apply curator edits to an event's occurred time / location. A field
+ * edited by a human stops being AI provenance: its entry is removed
+ * from `inferred_fields` (the badge disappears for that field). A
+ * location edit replaces the whole geometry — bbox + region name from
+ * the resolved region, any stale point cleared — so the matcher's geo
+ * signal scores against exactly what the curator chose.
+ */
+export async function applyEventEdits(
+  db: D1Database,
+  id: string,
+  edits: { occurredStart?: string; geometry?: EventGeometry },
+  now: string = new Date().toISOString(),
+): Promise<void> {
+  const existing = await getCurrentEvent(db, id)
+  if (!existing) return
+
+  let inferred: string[] = []
+  try {
+    const parsed: unknown = existing.inferred_fields ? JSON.parse(existing.inferred_fields) : []
+    if (Array.isArray(parsed)) inferred = parsed.filter((f): f is string => typeof f === 'string')
+  } catch {
+    inferred = []
+  }
+
+  const sets: string[] = ['updated_at = ?']
+  const binds: unknown[] = [now]
+  if (edits.occurredStart !== undefined) {
+    sets.push('occurred_start = ?')
+    binds.push(edits.occurredStart)
+    inferred = inferred.filter(f => f !== 'occurredStart')
+  }
+  if (edits.geometry !== undefined) {
+    const bbox = edits.geometry.boundingBox
+    const point = edits.geometry.point
+    sets.push('bbox_n = ?', 'bbox_s = ?', 'bbox_w = ?', 'bbox_e = ?', 'point_lat = ?', 'point_lon = ?', 'region_name = ?')
+    binds.push(bbox?.n ?? null, bbox?.s ?? null, bbox?.w ?? null, bbox?.e ?? null, point?.lat ?? null, point?.lon ?? null, edits.geometry.regionName ?? null)
+    inferred = inferred.filter(f => f !== 'geometry')
+  }
+  sets.push('inferred_fields = ?')
+  binds.push(inferred.length > 0 ? JSON.stringify(inferred) : null)
+
+  await db
+    .prepare(`UPDATE current_events SET ${sets.join(', ')} WHERE id = ?`)
+    .bind(...binds, id)
+    .run()
+}
+
+/**
+ * Age still-`proposed` events out of the review queue: anything neither
+ * the feeds nor a curator has touched since `cutoffIso` flips to
+ * `expired`. Staleness is judged on `updated_at` — a re-ingest bumps it,
+ * so an *ongoing* event (an open EONET wildfire) stays proposed for as
+ * long as its feed keeps carrying it, while news items that rolled out
+ * of their feed's window quietly age off. Only `proposed` rows are
+ * touched: curator decisions (approved/rejected) are never aged.
+ * Returns the number of rows expired.
+ */
+export async function expireStaleProposedEvents(
+  db: D1Database,
+  cutoffIso: string,
+  now: string = new Date().toISOString(),
+): Promise<number> {
+  const res = await db
+    .prepare(
+      `UPDATE current_events SET status = 'expired', updated_at = ?
+        WHERE status = 'proposed' AND updated_at < ?`,
+    )
+    .bind(now, cutoffIso)
+    .run()
+  return res.meta?.changes ?? 0
 }
 
 /**
@@ -651,6 +741,17 @@ export function toPublicEvent(
   if (row.occurred_end) out.occurredEnd = row.occurred_end
   if (row.reviewed_at) out.reviewedAt = row.reviewed_at
   if (row.reviewed_by) out.reviewedBy = row.reviewed_by
+  if (row.inferred_fields) {
+    try {
+      const parsed: unknown = JSON.parse(row.inferred_fields)
+      if (Array.isArray(parsed)) {
+        const fields = parsed.filter((f): f is string => typeof f === 'string')
+        if (fields.length > 0) out.inferredFields = fields
+      }
+    } catch {
+      /* malformed provenance JSON — omit rather than throw */
+    }
+  }
   return out
 }
 

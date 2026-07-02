@@ -15,11 +15,13 @@
 
 import { looksLikeUrl } from './validators'
 import { runMatcherForEvent, type MatcherEnv } from './events-matcher'
+import { enrichEventFields, type EnrichEnv, type InferredField } from './events-enrich'
 import {
   findEventByExternal,
   updateCurrentEventContent,
   insertCurrentEvent,
   upsertEventDatasetLink,
+  type CurrentEventRow,
   type EventGeometry,
   type NewCurrentEvent,
 } from './events-store'
@@ -165,6 +167,10 @@ export interface IngestOutcome {
    *  May be fewer than the requested `datasetIds` if one was hidden /
    *  retracted between drawer load and save. */
   manualLinks: number
+  /** True when slice-C enrichment filled at least one field on this
+   *  event — surfaces in the refresh summary so an operator can tell
+   *  "AI unbound/erroring" from "nothing needed filling". */
+  enriched: boolean
 }
 
 export interface IngestOptions {
@@ -172,10 +178,16 @@ export interface IngestOptions {
    *  `proposed` links before the matcher runs. Filtered to real, visible
    *  datasets; unknown / hidden ids are silently dropped. */
   manualDatasetIds?: readonly string[]
-  /** Workers AI + Vectorize bindings for the matcher's semantic signal.
-   *  Optional: when unconfigured the matcher runs pure lexical/temporal.
-   *  Callers pass `context.env`. */
-  env?: MatcherEnv
+  /** Workers AI + Vectorize bindings for the matcher's semantic signal
+   *  and the slice-C date/location enrichment. Optional: when
+   *  unconfigured the matcher runs pure lexical/temporal and enrichment
+   *  is skipped. Callers pass `context.env`. */
+  env?: MatcherEnv & EnrichEnv
+  /** Shared mutable budget of AI enrichment calls across one caller's
+   *  loop (the refresh route ingests up to 100 events per request; a
+   *  bound keeps one refresh from stacking that many model calls).
+   *  Omitted → each ingest may enrich (the single-event create path). */
+  enrichBudget?: { remaining: number }
 }
 
 /** Restrict an id list to datasets that exist and are publicly visible
@@ -200,6 +212,68 @@ export async function filterVisibleDatasetIds(
     .bind(...ids)
     .all<{ id: string }>()
   return (res.results ?? []).map(r => r.id)
+}
+
+/** Fill a new event's missing occurred-date / location via Workers AI
+ *  (slice C) — only when the AI binding is configured and the shared
+ *  budget (if any) has headroom. Returns the input untouched on skip. */
+async function withEnrichment(input: NewCurrentEvent, opts: IngestOptions): Promise<NewCurrentEvent> {
+  if (!opts.env?.AI) return input
+  if (opts.enrichBudget) {
+    if (opts.enrichBudget.remaining <= 0) return input
+    // Only spend budget when there is actually something to fill.
+    if (input.occurredStart && (input.geometry?.boundingBox || input.geometry?.point || input.geometry?.regionName)) {
+      return input
+    }
+    opts.enrichBudget.remaining--
+  }
+  const enriched = await enrichEventFields(opts.env, input)
+  if (!enriched) return input
+  const out: NewCurrentEvent = { ...input, inferredFields: enriched.inferred }
+  if (enriched.occurredStart) out.occurredStart = enriched.occurredStart
+  if (enriched.geometry) out.geometry = { ...input.geometry, ...enriched.geometry }
+  return out
+}
+
+/** On a feed re-ingest, keep previously AI-inferred values for fields
+ *  the incoming body still lacks — otherwise the content refresh would
+ *  null them out and the queue badge would lie. Source-provided values
+ *  always win: a field the feed now supplies drops its inferred flag. */
+function mergeInferred(input: NewCurrentEvent, existing: CurrentEventRow): NewCurrentEvent {
+  let prior: string[] = []
+  try {
+    const parsed: unknown = existing.inferred_fields ? JSON.parse(existing.inferred_fields) : []
+    if (Array.isArray(parsed)) prior = parsed.filter((f): f is string => typeof f === 'string')
+  } catch {
+    prior = []
+  }
+  if (prior.length === 0) return input
+
+  const out: NewCurrentEvent = { ...input }
+  const kept: InferredField[] = []
+  if (prior.includes('occurredStart') && !input.occurredStart && existing.occurred_start) {
+    out.occurredStart = existing.occurred_start
+    kept.push('occurredStart')
+  }
+  const incomingHasGeometry = Boolean(
+    input.geometry?.boundingBox || input.geometry?.point || input.geometry?.regionName,
+  )
+  if (prior.includes('geometry') && !incomingHasGeometry) {
+    const geometry: EventGeometry = {}
+    if (existing.bbox_n !== null && existing.bbox_s !== null && existing.bbox_w !== null && existing.bbox_e !== null) {
+      geometry.boundingBox = { n: existing.bbox_n, s: existing.bbox_s, w: existing.bbox_w, e: existing.bbox_e }
+    }
+    if (existing.point_lat !== null && existing.point_lon !== null) {
+      geometry.point = { lat: existing.point_lat, lon: existing.point_lon }
+    }
+    if (existing.region_name) geometry.regionName = existing.region_name
+    if (geometry.boundingBox || geometry.point || geometry.regionName) {
+      out.geometry = geometry
+      kept.push('geometry')
+    }
+  }
+  if (kept.length > 0) out.inferredFields = kept
+  return out
 }
 
 /**
@@ -227,18 +301,26 @@ export async function ingestEvent(
 ): Promise<IngestOutcome> {
   let id: string
   let created: boolean
+  let enriched = false
   if (input.feedId && input.externalId) {
     const existing = await findEventByExternal(db, input.feedId, input.externalId)
     if (existing) {
-      await updateCurrentEventContent(db, existing.id, input)
+      // Re-ingest: carry previously-inferred fields the source still
+      // doesn't provide, so a 6-hourly refresh can't erase enrichment
+      // (and doesn't pay for a fresh model call every cycle).
+      await updateCurrentEventContent(db, existing.id, mergeInferred(input, existing))
       id = existing.id
       created = false
     } else {
-      id = (await insertCurrentEvent(db, input)).id
+      const prepared = await withEnrichment(input, opts)
+      enriched = prepared !== input
+      id = (await insertCurrentEvent(db, prepared)).id
       created = true
     }
   } else {
-    id = (await insertCurrentEvent(db, input)).id
+    const prepared = await withEnrichment(input, opts)
+    enriched = prepared !== input
+    id = (await insertCurrentEvent(db, prepared)).id
     created = true
   }
 
@@ -252,5 +334,5 @@ export async function ingestEvent(
   const matches = await runMatcherForEvent(db, id, { env: opts.env })
   const matchedIds = new Set(matches.map(m => m.datasetId))
   const manualOnly = manualIds.filter(dsId => !matchedIds.has(dsId)).length
-  return { id, created, proposedLinks: matches.length + manualOnly, manualLinks: manualIds.length }
+  return { id, created, proposedLinks: matches.length + manualOnly, manualLinks: manualIds.length, enriched }
 }

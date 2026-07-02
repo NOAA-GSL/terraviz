@@ -13,6 +13,8 @@ import {
   insertCurrentEvent,
   getCurrentEvent,
   listCurrentEvents,
+  updateCurrentEventContent,
+  expireStaleProposedEvents,
   setEventStatus,
   getEventDecorations,
   upsertEventDatasetLink,
@@ -129,9 +131,13 @@ describe('insertCurrentEvent + getCurrentEvent', () => {
 })
 
 describe('listCurrentEvents', () => {
-  it('orders newest-first and filters by status', async () => {
+  it('orders newest-first by event time and filters by status', async () => {
     const { db } = freshDb()
-    await insertCurrentEvent(db, sampleEvent({ title: 'older' }), '2026-06-01T00:00:00.000Z')
+    await insertCurrentEvent(
+      db,
+      sampleEvent({ title: 'older', occurredStart: '2026-05-20T06:00:00.000Z' }),
+      '2026-06-01T00:00:00.000Z',
+    )
     const approved = await insertCurrentEvent(
       db,
       sampleEvent({ title: 'newer' }),
@@ -147,6 +153,40 @@ describe('listCurrentEvents', () => {
 
     const onlyProposed = await listCurrentEvents(db, { status: 'proposed' })
     expect(onlyProposed.map(e => e.title)).toEqual(['older'])
+  })
+
+  it("orders by the event's own time, not insertion order", async () => {
+    const { db } = freshDb()
+    // A feed lists newest articles first, so within one refresh run the
+    // newest event gets the EARLIEST insert timestamp. The queue must
+    // still put it on top.
+    await insertCurrentEvent(
+      db,
+      sampleEvent({ title: 'newest article', occurredStart: '2026-06-24T00:00:00.000Z' }),
+      '2026-06-25T10:00:00.000Z',
+    )
+    await insertCurrentEvent(
+      db,
+      sampleEvent({ title: 'oldest article', occurredStart: '2026-06-10T00:00:00.000Z' }),
+      '2026-06-25T10:00:01.000Z',
+    )
+    // No occurred time → falls back to the source publish date.
+    await insertCurrentEvent(
+      db,
+      sampleEvent({
+        title: 'middle (publish-date fallback)',
+        occurredStart: null,
+        occurredEnd: null,
+        publishedAt: '2026-06-17T00:00:00.000Z',
+      }),
+      '2026-06-25T10:00:02.000Z',
+    )
+    const all = await listCurrentEvents(db)
+    expect(all.map(e => e.title)).toEqual([
+      'newest article',
+      'middle (publish-date fallback)',
+      'oldest article',
+    ])
   })
 
   it('honours the limit (clamped)', async () => {
@@ -355,6 +395,7 @@ describe('toPublicEvent', () => {
       updated_at: '2026-06-01T00:00:00.000Z',
       reviewed_at: null,
       reviewed_by: null,
+      inferred_fields: null,
     })
     expect(pub.geometry).toEqual({})
     expect(pub.summary).toBeUndefined()
@@ -559,5 +600,36 @@ describe('listPublicEvents', () => {
       sqlite.prepare('UPDATE datasets SET is_hidden = 1 WHERE id = ?').run(seededDatasetId(0))
       expect(await listApprovedEventsForDataset(db, seededDatasetId(0), { now: NOW })).toEqual([])
     })
+  })
+})
+
+describe('expireStaleProposedEvents', () => {
+  it('expires only untouched proposed events past the cutoff', async () => {
+    const { db } = freshDb()
+    const stale = await insertCurrentEvent(db, sampleEvent({ title: 'stale' }), '2026-06-01T00:00:00.000Z')
+    const fresh = await insertCurrentEvent(db, sampleEvent({ title: 'fresh' }), '2026-06-20T00:00:00.000Z')
+    // A curator-approved event past the cutoff must never be aged.
+    const approved = await insertCurrentEvent(db, sampleEvent({ title: 'approved' }), '2026-05-01T00:00:00.000Z')
+    await setEventStatus(db, approved.id, 'approved', 'PUB1', '2026-05-02T00:00:00.000Z')
+
+    const n = await expireStaleProposedEvents(db, '2026-06-15T00:00:00.000Z', '2026-06-29T00:00:00.000Z')
+    expect(n).toBe(1)
+    expect((await getCurrentEvent(db, stale.id))!.status).toBe('expired')
+    expect((await getCurrentEvent(db, fresh.id))!.status).toBe('proposed')
+    expect((await getCurrentEvent(db, approved.id))!.status).toBe('approved')
+  })
+
+  it('a re-ingested (still-carried) event survives the sweep', async () => {
+    const { db } = freshDb()
+    const ev = await insertCurrentEvent(
+      db,
+      sampleEvent({ title: 'ongoing', externalId: 'ext-1' }),
+      '2026-06-01T00:00:00.000Z',
+    )
+    // The feed still carries it: a content refresh bumps updated_at.
+    await updateCurrentEventContent(db, ev.id, sampleEvent({ externalId: 'ext-1' }), '2026-06-28T00:00:00.000Z')
+    const n = await expireStaleProposedEvents(db, '2026-06-15T00:00:00.000Z', '2026-06-29T00:00:00.000Z')
+    expect(n).toBe(0)
+    expect((await getCurrentEvent(db, ev.id))!.status).toBe('proposed')
   })
 })

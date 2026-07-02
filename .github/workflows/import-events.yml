@@ -1,15 +1,16 @@
 # Current-events ingestion (docs/CURRENT_EVENTS_PLAN.md §9). Every 6
-# hours: pull NASA EONET open events and POST them to the catalog as
-# proposed events via `terraviz import-events`. The endpoint is
-# idempotent on (feed_id, external_id) — re-runs refresh open events
-# instead of duplicating — and runs the matcher to propose dataset
-# links, so the curator review queue arrives pre-populated. Every
-# ingested event lands `proposed`; nothing reaches users until a curator
-# approves it in /publish/events.
+# hours `terraviz import-events` triggers the backend's registry-driven
+# refresh (POST /api/v1/publish/events/refresh): the server iterates its
+# **enabled feed connectors** — the EONET seed plus whatever the
+# operator added in /publish/feeds — fetches each feed itself, and runs
+# the shared upsert + match (+ AI date/location enrichment) path. The
+# path is idempotent on (feed_id, external_id) — re-runs refresh open
+# events instead of duplicating — and the matcher pre-populates the
+# curator review queue. Every ingested event lands `proposed`; nothing
+# reaches users until a curator approves it in /publish/events.
 #
-# EONET is the first, node-appropriate connector for this Earth-science
-# node; a node covering a different subject would wire a different feed
-# (or none). The feed is source-agnostic on the backend.
+# Which feeds run is an operator decision made in the feeds console, not
+# something this workflow hardcodes.
 #
 # Required repo secrets (the transcode-hls / zyra-scheduler set):
 #   TERRAVIZ_SERVER, CF_ACCESS_CLIENT_ID, CF_ACCESS_CLIENT_SECRET
@@ -51,7 +52,7 @@ jobs:
 
       - run: npm ci
 
-      - name: Ingest EONET events
+      - name: Ingest current events (registry-driven refresh)
         env:
           TERRAVIZ_SERVER: ${{ secrets.TERRAVIZ_SERVER }}
           TERRAVIZ_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}

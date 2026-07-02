@@ -192,6 +192,93 @@ describe('POST /api/v1/publish/events/:id', () => {
       expect(links.find(l => l.dataset_id === DS_1)!.status).toBe('approved')
     })
 
+  describe('edits — curator metadata override (slice C)', () => {
+    async function seedInferredEvent(env: { CATALOG_DB: D1Database }) {
+      return (
+        await insertCurrentEvent(env.CATALOG_DB, {
+          ...SAMPLE,
+          occurredStart: '2026-06-20T00:00:00.000Z',
+          geometry: { boundingBox: { n: 60, s: 30, w: -30, e: 40 }, regionName: 'Europe' },
+          inferredFields: ['occurredStart', 'geometry'],
+        })
+      ).id
+    }
+
+    it('applies a date + region override, clears the inferred flags, resolves the bbox', async () => {
+      const { env } = setupEnv()
+      const id = await seedInferredEvent(env)
+      const res = await reviewPost(
+        ctx({ env, id, body: { edits: { occurredStart: '2026-06-18', regionName: 'Caribbean' } } }),
+      )
+      expect(res.status).toBe(200)
+      const row = await getCurrentEvent(env.CATALOG_DB, id)
+      expect(row!.occurred_start).toBe('2026-06-18T00:00:00.000Z')
+      expect(row!.region_name).toBe('Caribbean Sea') // canonical name via regions.ts
+      expect(row!.bbox_n).not.toBe(60) // bbox replaced, not kept
+      expect(row!.inferred_fields).toBeNull() // human values are not AI provenance
+    })
+
+    it('editing only the date keeps the geometry inferred flag', async () => {
+      const { env } = setupEnv()
+      const id = await seedInferredEvent(env)
+      await reviewPost(ctx({ env, id, body: { edits: { occurredStart: '2026-06-18' } } }))
+      const row = await getCurrentEvent(env.CATALOG_DB, id)
+      expect(JSON.parse(row!.inferred_fields!)).toEqual(['geometry'])
+      expect(row!.region_name).toBe('Europe')
+    })
+
+    it('a point edit pins the spot; point-only keeps the surrounding region', async () => {
+      const { env } = setupEnv()
+      const id = await seedInferredEvent(env)
+      // Point-only: bbox + region preserved, pin added.
+      const res = await reviewPost(
+        ctx({ env, id, body: { edits: { point: { lat: 37.2, lon: -76.8 } } } }),
+      )
+      expect(res.status).toBe(200)
+      let row = await getCurrentEvent(env.CATALOG_DB, id)
+      expect(row!.point_lat).toBe(37.2)
+      expect(row!.region_name).toBe('Europe')
+      expect(row!.bbox_n).toBe(60)
+      // Region edit without a new point clears the stale pin.
+      await reviewPost(ctx({ env, id, body: { edits: { regionName: 'Caribbean' } } }))
+      row = await getCurrentEvent(env.CATALOG_DB, id)
+      expect(row!.point_lat).toBeNull()
+      expect(row!.region_name).toBe('Caribbean Sea')
+    })
+
+    it('400 for out-of-range coordinates', async () => {
+      const { env } = setupEnv()
+      const id = await seedInferredEvent(env)
+      const res = await reviewPost(ctx({ env, id, body: { edits: { point: { lat: 118, lon: 0 } } } }))
+      expect(res.status).toBe(400)
+    })
+
+    it('400 for an unresolvable region or unparseable date', async () => {
+      const { env } = setupEnv()
+      const id = await seedInferredEvent(env)
+      const bad = await reviewPost(ctx({ env, id, body: { edits: { regionName: 'Middle Earth' } } }))
+      expect(bad.status).toBe(400)
+      const badDate = await reviewPost(ctx({ env, id, body: { edits: { occurredStart: 'not a date' } } }))
+      expect(badDate.status).toBe(400)
+    })
+
+    it('records the edits in the audit row and supports edit + approve in one submit', async () => {
+      const { sqlite, env } = setupEnv()
+      const id = await seedInferredEvent(env)
+      const res = await reviewPost(
+        ctx({ env, id, body: { event: 'approve', edits: { occurredStart: '2026-06-18' } } }),
+      )
+      expect(res.status).toBe(200)
+      const row = await getCurrentEvent(env.CATALOG_DB, id)
+      expect(row!.status).toBe('approved')
+      expect(row!.occurred_start).toBe('2026-06-18T00:00:00.000Z')
+      const audit = sqlite
+        .prepare(`SELECT metadata_json AS m FROM audit_events WHERE action = 'event.reviewed' ORDER BY rowid DESC LIMIT 1`)
+        .get() as { m: string }
+      expect(JSON.parse(audit.m).edits.occurredStart).toBe('2026-06-18T00:00:00.000Z')
+    })
+  })
+
     it('records the added-link count in the audit row', async () => {
       const { sqlite, env } = setupEnv()
       const id = await seedEventWithLink(env)

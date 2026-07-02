@@ -184,6 +184,13 @@ const checks: Check[] = [
         (await page.locator('.publisher-events-match-badge').count()) >= 1,
         'each pairing should render a Match Badge',
       )
+      // Selecting the AI-enriched fixture event surfaces the slice-C
+      // "AI-inferred" provenance badge in the meta strip.
+      await page
+        .locator('.publisher-events-queue-row', { hasText: 'wildfire smoke' })
+        .first()
+        .click()
+      await page.locator('.publisher-events-inferred-badge').first().waitFor({ timeout: 5_000 })
       // The status filter row lets a curator reach reviewed events.
       const filters = page.locator('.publisher-events-filters button')
       assert((await filters.count()) >= 5, 'queue header should expose the status filter (incl. All)')

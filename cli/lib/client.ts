@@ -309,6 +309,18 @@ export class TerravizClient {
     return this.request<T>('POST', '/api/v1/publish/events', body)
   }
 
+  /**
+   * Server-side registry-driven ingestion pull
+   * (`terraviz import-events`, the default mode): the backend iterates
+   * its **enabled feed connectors** (EONET + any operator-added RSS
+   * feeds), fetches each feed itself, and runs the shared upsert +
+   * match (+ slice-C AI enrichment) path. One call ingests everything
+   * the node is configured for.
+   */
+  refreshEvents<T = unknown>(): Promise<Result<T>> {
+    return this.request<T>('POST', '/api/v1/publish/events/refresh', {})
+  }
+
   updateTour<T = unknown>(
     id: string,
     body: Record<string, unknown>,

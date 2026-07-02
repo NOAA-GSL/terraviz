@@ -15,6 +15,7 @@
  */
 
 import { t } from '../../../../i18n'
+import { getRegionNames } from '../../../../data/regions'
 import { publisherSend, handleSessionError } from '../../api'
 import { renderMatchBadge, toDisplayScore } from './match-badge'
 import { loadPublishedDatasets, filterDatasetsByTitle } from './dataset-search'
@@ -90,6 +91,130 @@ function handleWriteError(
     status.textContent = t('publisher.events.error.generic')
   }
   status.classList.add('publisher-events-status-error')
+}
+
+/** The "Edit date / location" disclosure under the meta strip. Saving
+ *  POSTs `{ edits }` to the review endpoint, updates the in-memory
+ *  event from the response, and asks the orchestrator to re-render. */
+function renderMetadataEdit(event: ReviewEvent, cb: EventDetailCallbacks): HTMLElement {
+  const wrap = el('div', 'publisher-events-edit')
+  const form = el('div', 'publisher-events-edit-form')
+  form.hidden = true
+
+  const toggle = document.createElement('button')
+  toggle.type = 'button'
+  toggle.className = 'publisher-events-edit-toggle'
+  toggle.textContent = t('publisher.events.edit')
+  toggle.setAttribute('aria-expanded', 'false')
+  toggle.addEventListener('click', () => {
+    form.hidden = !form.hidden
+    toggle.setAttribute('aria-expanded', String(!form.hidden))
+  })
+
+  const dateInput = document.createElement('input')
+  dateInput.type = 'date'
+  dateInput.className = 'publisher-events-edit-input'
+  if (event.occurredStart) dateInput.value = event.occurredStart.slice(0, 10)
+
+  const regionInput = document.createElement('input')
+  regionInput.type = 'text'
+  regionInput.className = 'publisher-events-edit-input'
+  regionInput.placeholder = t('publisher.events.edit.locationHint')
+  if (event.geometry?.regionName) regionInput.value = event.geometry.regionName
+  const listId = `events-edit-regions-${event.id}`
+  const datalist = document.createElement('datalist')
+  datalist.id = listId
+  for (const name of getRegionNames()) {
+    const opt = document.createElement('option')
+    opt.value = name
+    datalist.append(opt)
+  }
+  regionInput.setAttribute('list', listId)
+
+  // Exact coordinates — for events more specific than any region
+  // (a town, a volcano). "lat, lon" as one field; parsed client-side.
+  const pointInput = document.createElement('input')
+  pointInput.type = 'text'
+  pointInput.className = 'publisher-events-edit-input'
+  pointInput.placeholder = '37.2, -76.8' // i18n-exempt: numeric format hint, not prose
+  const prevPoint = event.geometry?.point ? `${event.geometry.point.lat}, ${event.geometry.point.lon}` : ''
+  pointInput.value = prevPoint
+
+  const labelled = (label: string, control: HTMLElement): HTMLElement => {
+    const field = el('label', 'publisher-events-edit-field')
+    field.append(el('span', 'publisher-events-edit-label', [label]), control)
+    return field
+  }
+
+  const status = el('span', 'publisher-events-edit-status')
+  const save = document.createElement('button')
+  save.type = 'button'
+  save.className = 'publisher-btn publisher-btn-small publisher-btn-primary'
+  save.textContent = t('publisher.events.edit.save')
+  save.addEventListener('click', () => {
+    const edits: { occurredStart?: string; regionName?: string; point?: { lat: number; lon: number } } = {}
+    const date = dateInput.value.trim()
+    if (date && date !== (event.occurredStart ?? '').slice(0, 10)) {
+      edits.occurredStart = `${date}T00:00:00.000Z`
+    }
+    const region = regionInput.value.trim()
+    if (region && region !== (event.geometry?.regionName ?? '')) {
+      edits.regionName = region
+    }
+    const pointRaw = pointInput.value.trim()
+    if (pointRaw && pointRaw !== prevPoint) {
+      const m = /^(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)$/.exec(pointRaw)
+      const lat = m ? Number(m[1]) : NaN
+      const lon = m ? Number(m[2]) : NaN
+      if (!m || lat < -90 || lat > 90 || lon < -180 || lon > 180) {
+        status.textContent = t('publisher.events.edit.invalidPoint')
+        status.classList.add('publisher-events-status-error')
+        return
+      }
+      edits.point = { lat, lon }
+    }
+    if (Object.keys(edits).length === 0) {
+      form.hidden = true
+      toggle.setAttribute('aria-expanded', 'false')
+      return
+    }
+    save.disabled = true
+    status.textContent = ''
+    status.classList.remove('publisher-events-status-error')
+    void publisherSend<{ event?: Partial<ReviewEvent> }>(
+      `${EVENTS_ENDPOINT}/${encodeURIComponent(event.id)}`,
+      { edits },
+      { fetchFn: cb.fetchFn },
+    ).then(res => {
+      save.disabled = false
+      if (!res.ok) {
+        handleWriteError(res, status, cb.navigate)
+        return
+      }
+      // Reflect the correction in the in-memory event, then let the
+      // orchestrator re-render (same status → body rebuild).
+      const updated = res.data?.event
+      if (updated) {
+        event.occurredStart = updated.occurredStart
+        event.geometry = updated.geometry
+        event.inferredFields = updated.inferredFields
+      } else {
+        if (edits.occurredStart) event.occurredStart = edits.occurredStart
+        if (edits.regionName) event.geometry = { ...event.geometry, regionName: edits.regionName }
+      }
+      cb.onEventStatusChange(event.id, event.status)
+    })
+  })
+
+  form.append(
+    labelled(t('publisher.events.edit.date'), dateInput),
+    labelled(t('publisher.events.edit.location'), regionInput),
+    labelled(t('publisher.events.edit.point'), pointInput),
+    datalist,
+    el('span', 'publisher-events-edit-actions', [save, status]),
+  )
+  wrap.append(toggle, form)
+  return wrap
 }
 
 /** One dataset pairing row: name · Match Badge · ✓ / ✕ icon buttons. */
@@ -185,7 +310,28 @@ export function renderEventDetail(event: ReviewEvent, cb: EventDetailCallbacks):
     meta.append(metaField(t('publisher.events.occurred'), event.occurredStart ?? event.source.publishedAt ?? ''))
   }
   if (event.summary) meta.append(metaField(t('publisher.events.detailLabel'), event.summary))
+  // AI-inferred provenance (slice C): the ingest layer filled these
+  // fields from the headline/summary — flag them for a closer look.
+  if (event.inferredFields && event.inferredFields.length > 0) {
+    const parts = event.inferredFields.map(f =>
+      f === 'occurredStart'
+        ? t('publisher.events.inferred.date')
+        : f === 'geometry'
+          ? t('publisher.events.inferred.location')
+          : f,
+    )
+    const chip = el('span', 'publisher-events-inferred-badge', [parts.join(', ')])
+    chip.title = t('publisher.events.inferred.tooltip')
+    meta.append(metaField(t('publisher.events.inferred.label'), chip))
+  }
   pane.append(meta)
+
+  // --- Curator metadata override (slice C): correct the occurred date
+  // and/or location when the feed's — or the AI's — value is wrong.
+  // Location is constrained to the same regions.ts vocabulary the
+  // enrichment uses (offered via a datalist); the backend re-runs the
+  // matcher so the pairing signals score the corrected values.
+  pane.append(renderMetadataEdit(event, cb))
 
   // --- Locator: live map slot, coordinates as text fallback ---
   const point = locatorPoint(event.geometry)

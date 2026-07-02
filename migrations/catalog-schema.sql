@@ -185,7 +185,7 @@ CREATE TABLE current_events (
   -- column line so a later ALTER ADD COLUMN doesn't splice a new column
   -- after it and inherit this comment in the schema snapshot.)
   reviewed_at    TEXT,
-  reviewed_by    TEXT, external_id TEXT,
+  reviewed_by    TEXT, external_id TEXT, inferred_fields TEXT,
   FOREIGN KEY (reviewed_by) REFERENCES publishers(id)
 );
 

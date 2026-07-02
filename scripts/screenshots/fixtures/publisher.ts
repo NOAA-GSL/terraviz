@@ -242,6 +242,10 @@ const events = {
       summary: 'Dense smoke pushed air-quality indices into hazardous ranges across the region.',
       source: { name: 'USGS', url: 'https://www.usgs.gov/', publishedAt: '2026-06-24T18:00:00.000Z' },
       occurredStart: '2026-06-24T12:00:00.000Z',
+      // Slice C: this plain-news item arrived without date/location; the
+      // ingest AI filled both — the detail pane badges them.
+      geometry: { boundingBox: { n: 52, s: 40, w: -130, e: -110 }, regionName: 'Pacific Northwest' },
+      inferredFields: ['occurredStart', 'geometry'],
       status: 'proposed',
       links: [
         { datasetId: '01HEXAMPLEDATASET00000004', datasetTitle: 'Global Vegetation Index (NDVI)', score: 0.64, signals: { geo: null, temporal: 0.64 }, status: 'proposed' },
