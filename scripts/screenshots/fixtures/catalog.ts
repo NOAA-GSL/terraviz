@@ -16,6 +16,9 @@
  */
 
 import type { FixtureRule } from '../core/fixtures'
+// Type-only import — erased at runtime, so no SPA runtime code (i18n,
+// logger) is pulled into the node capture scripts.
+import type { PublicEvent } from '../../../src/services/eventsService'
 
 /** Minimal subset of the `/api/v1/catalog` wire shape the SPA consumes. */
 interface WireDatasetFixture {
@@ -82,10 +85,11 @@ export function catalogFixtures(): FixtureRule[] {
   ]
 }
 
-/** One approved current event linked to a fixture dataset — a valid
- *  `sanitizePublicEvent` shape, so the catalog Map / Timeline event
- *  overlays render (and diff) deterministically. */
-const EVENT = {
+/** One approved current event linked to a fixture dataset — typed
+ *  against the SPA's own wire shape so drift is caught at type-check,
+ *  and the catalog Map / Timeline event overlays render (and diff)
+ *  deterministically. */
+const EVENT: PublicEvent = {
   id: '01HFIXTUREEVENT000000001',
   title: 'Marine heatwave develops in the North Pacific',
   summary: 'Sea surface temperatures are running well above average across the basin.',
@@ -110,6 +114,9 @@ export function catalogReportFixtures(): FixtureRule[] {
   return [
     ...catalogFixtures(),
     { url: '/api/v1/featured-event', json: { event: null } },
+    // The hero's operator-override read (`heroService.backendUrl()`) —
+    // `{ hero: null }` is the endpoint's documented no-override shape.
+    { url: '/api/v1/featured-hero', json: { hero: null } },
     { url: '/api/v1/events', json: { events: [EVENT] } },
     // Orbit settings' model dropdown — a fixed list, not the live
     // provider's.
