@@ -81,7 +81,7 @@ export const onRequestPost: PagesFunction<CatalogEnv> = async context => {
       continue
     }
     try {
-      const outcome = await ingestEvent(db, { ...parsed.value, originNode })
+      const outcome = await ingestEvent(db, { ...parsed.value, originNode }, { env: context.env })
       if (outcome.created) created++
       else refreshed++
     } catch {

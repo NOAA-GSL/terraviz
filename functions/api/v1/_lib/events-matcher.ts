@@ -12,7 +12,15 @@
  *     tags). This is what makes different events match different,
  *     subject-relevant datasets instead of every recent event matching
  *     the same live ones. The curated topic map is the explainable
- *     alternative to semantic embeddings (deferred to Phase 2).
+ *     baseline; the semantic signal below augments it.
+ *   - **semantic** — event↔dataset embedding cosine from Vectorize (the
+ *     same `@cf/baai/bge-base-en-v1.5` + `terraviz-datasets` index the
+ *     docent's `search-datasets` uses). It catches subject relatedness the
+ *     curated topic map misses and blends with the lexical signal via
+ *     {@link SEMANTIC_WEIGHT}. Best-effort and env-gated: when Workers AI /
+ *     Vectorize aren't wired the matcher runs pure lexical/temporal, exactly
+ *     as before. The event is embedded on demand; datasets are already
+ *     indexed by the publish-time `embed-dataset-job` (no backfill).
  *   - **temporal** — how well the event's time aligns with a dataset's
  *     coverage + liveness. This is the active signal today: the
  *     `datasets` table carries `start_time` / `end_time` / `period`, and
@@ -28,9 +36,8 @@
  *     moment dataset coverage lands, or when a caller supplies a box to
  *     the pure {@link scoreGeo} / {@link scoreMatch} helpers.
  *
- * Output is always `status: 'proposed'` — the curator gate (a later
- * slice) decides what an end-user ever sees. Semantic (Vectorize)
- * matching is deferred to Phase 2.
+ * Output is always `status: 'proposed'` — the curator gate decides what an
+ * end-user ever sees.
  *
  * The scoring functions are pure; {@link runMatcherForEvent} is the thin
  * D1 orchestration that reads candidates, scores, and upserts proposed
@@ -46,6 +53,15 @@ import {
   type EventBoundingBox,
 } from './events-store'
 import { getDecorations } from './catalog-store'
+import { embedDatasetText, type EmbeddingEnv } from './embeddings'
+import { queryEmbedding, VECTORIZE_MAX_TOP_K, type VectorizeEnv } from './vectorize-store'
+
+/** Env surface the semantic signal needs — Workers AI to embed the event
+ *  and Vectorize to find nearest datasets. Both optional: when either is
+ *  unconfigured the matcher silently skips semantic and runs pure
+ *  lexical/temporal, exactly as before Phase 2. Mirrors
+ *  `search-datasets.ts`'s `SearchDatasetsEnv`. */
+export type MatcherEnv = EmbeddingEnv & VectorizeEnv
 
 /** Default minimum combined score for a proposed link. */
 export const DEFAULT_MIN_SCORE = 0.5
@@ -63,6 +79,39 @@ const TOPICAL_BASE = 0.75
 /** Extra nudge for an overlapping real-time (live) dataset, so live data
  *  surfaces above an equally-topical static dataset. */
 const LIVE_BONUS = 0.1
+
+/** How much the semantic (embedding) signal contributes to the topical
+ *  driver when both semantic and lexical are present: `topical =
+ *  (1 - w)·lexical + w·semantic`. When only one is present it stands
+ *  alone. 0 disables semantic entirely (pure lexical, the pre-Phase-2
+ *  behaviour); 1 makes it purely semantic. 0.5 is an even blend — the
+ *  curated topic map and the embedding neighbourhood each get half a say,
+ *  so an obvious keyword match and an embedding-only relation both surface,
+ *  and agreement between them ranks highest. */
+export const SEMANTIC_WEIGHT = 0.5
+
+/**
+ * Fold the lexical (curated topic-overlap) and semantic (embedding cosine)
+ * signals into a single topical driver in [0, 1]:
+ *   - both present, lexical > 0 → weighted blend by {@link SEMANTIC_WEIGHT}
+ *   - both present, lexical = 0 → semantic stands alone. A lexical 0 means
+ *     "the curated map has no evidence", not counter-evidence — blending it
+ *     in would halve a strong embedding neighbour and cap it below the
+ *     `DEFAULT_MIN_SCORE` gate, defeating the point of the semantic signal.
+ *   - only one present → that one
+ *   - neither → `null` (caller falls back to temporal/geo)
+ * Semantic thus *augments* lexical: it can surface a subject-related
+ * dataset the curated map missed (lexical 0, semantic > 0), and it lifts
+ * datasets where both agree. Weak semantic-only matches still fall below
+ * the min-score gate downstream, so this doesn't add noise.
+ */
+export function blendTopical(lexical: number | null, semantic: number | null): number | null {
+  if (lexical !== null && semantic !== null) {
+    if (lexical === 0) return semantic
+    return (1 - SEMANTIC_WEIGHT) * lexical + SEMANTIC_WEIGHT * semantic
+  }
+  return lexical ?? semantic
+}
 
 const EMPTY_TERMS: ReadonlySet<string> = new Set()
 
@@ -86,7 +135,10 @@ export interface MatchEvent {
 /** The dataset coverage + subject the matcher reads. `boundingBox` is
  *  optional and absent from the catalog today (see module header);
  *  `subjectTerms` is the dataset's subject vocabulary (see
- *  {@link buildDatasetTerms}). */
+ *  {@link buildDatasetTerms}); `semantic` is the event↔dataset cosine
+ *  similarity from Vectorize (0..1), present only for datasets that came
+ *  back as a nearest-neighbour of the event embedding and `null` (or
+ *  absent) otherwise. */
 export interface MatchDataset {
   id: string
   boundingBox?: EventBoundingBox | null
@@ -94,6 +146,7 @@ export interface MatchDataset {
   endTime?: string | null
   period?: string | null
   subjectTerms?: ReadonlySet<string>
+  semantic?: number | null
 }
 
 /** Per-signal scores; `null` means "this signal had nothing to read". */
@@ -103,6 +156,10 @@ export interface MatchSignals {
   /** Topical relevance — overlap of the event's (expanded) topic terms
    *  with the dataset's subject terms. */
   lexical: number | null
+  /** Semantic relevance — event↔dataset embedding cosine similarity from
+   *  Vectorize (0..1), or `null` when semantic matching is unconfigured or
+   *  the dataset wasn't a nearest-neighbour of the event. */
+  semantic: number | null
 }
 
 export interface MatchResult {
@@ -289,6 +346,31 @@ export function buildEventTerms(parts: {
   return set
 }
 
+/**
+ * Canonical text to embed for an event's semantic signal — its headline,
+ * summary, category values and keywords joined into one blob. This is the
+ * event-side counterpart of `embeddings.buildDatasetEmbeddingText`: it
+ * needn't be byte-identical in shape (the model maps both into the same
+ * space), only capture the event's subject so the cosine to a subject-
+ * relevant dataset is high. Returns `''` when there's nothing to embed.
+ */
+export function buildEventEmbeddingText(parts: {
+  title?: string | null
+  summary?: string | null
+  categoryValues?: readonly string[]
+  keywords?: readonly string[]
+}): string {
+  return [
+    parts.title ?? '',
+    parts.summary ?? '',
+    (parts.categoryValues ?? []).join(' '),
+    (parts.keywords ?? []).join(' '),
+  ]
+    .map(s => s.trim())
+    .filter(Boolean)
+    .join('\n')
+}
+
 /** Build a dataset's subject-term set from its title + abstract +
  *  keywords + category values + tags. No expansion — a dataset describes
  *  its own subject directly. */
@@ -349,23 +431,27 @@ export function scoreMatch(
     event.terms && event.terms.size > 0
       ? scoreLexical(event.terms, dataset.subjectTerms ?? EMPTY_TERMS)
       : null
+  const semantic = dataset.semantic ?? null
+  // Topical relevance drives the score; it's the blend of the curated
+  // lexical overlap and the embedding cosine (either may stand alone).
+  const topical = blendTopical(lexical, semantic)
 
-  if (lexical !== null) {
-    // No shared subject → not a topical match, so no temporal/liveness
+  if (topical !== null) {
+    // No topical relevance at all → not a match, so no temporal/liveness
     // boost rescues it. (Geo, when dataset boxes land, can fold in here
     // as a separate spatial rescue path.)
-    if (lexical === 0) {
-      return { datasetId: dataset.id, score: 0, signals: { geo, temporal, lexical } }
+    if (topical === 0) {
+      return { datasetId: dataset.id, score: 0, signals: { geo, temporal, lexical, semantic } }
     }
-    let score = lexical * (TOPICAL_BASE + (1 - TOPICAL_BASE) * (temporal ?? 0))
+    let score = topical * (TOPICAL_BASE + (1 - TOPICAL_BASE) * (temporal ?? 0))
     if (isLiveDataset(dataset, nowMs)) score = Math.min(1, score + LIVE_BONUS)
     if (geo !== null) score = (score + geo) / 2
-    return { datasetId: dataset.id, score, signals: { geo, temporal, lexical } }
+    return { datasetId: dataset.id, score, signals: { geo, temporal, lexical, semantic } }
   }
 
   const present = [geo, temporal].filter((v): v is number => v !== null)
   const score = present.length ? present.reduce((a, b) => a + b, 0) / present.length : 0
-  return { datasetId: dataset.id, score, signals: { geo, temporal, lexical: null } }
+  return { datasetId: dataset.id, score, signals: { geo, temporal, lexical: null, semantic: null } }
 }
 
 /**
@@ -423,10 +509,51 @@ function toMatchEvent(row: CurrentEventRow, terms: ReadonlySet<string>): MatchEv
  * dataset's subject) boosted by temporal coverage/liveness; geo lights
  * up when dataset bounding boxes land.
  */
+/**
+ * Best-effort semantic scores: embed the event and ask Vectorize for the
+ * nearest datasets, returning a `datasetId → cosine (0..1)` map restricted
+ * to the supplied candidate ids. Returns an empty map (never throws) when
+ * the AI/Vectorize bindings are unconfigured or any call fails — the
+ * matcher then runs pure lexical/temporal, exactly as before. Embed-on-
+ * demand: the event is embedded here per run; datasets are already indexed
+ * by the publish-time `embed-dataset-job`, so there's no backfill.
+ */
+async function computeSemanticScores(
+  env: MatcherEnv | undefined,
+  embedText: string,
+  candidateIds: readonly string[],
+): Promise<Map<string, number>> {
+  const scores = new Map<string, number>()
+  if (!env || !embedText || candidateIds.length === 0) return scores
+  const haveAi = env.AI != null || env.MOCK_AI === 'true'
+  const haveVec = env.CATALOG_VECTORIZE != null || env.MOCK_VECTORIZE === 'true'
+  if (!haveAi || !haveVec) return scores
+  try {
+    const vector = await embedDatasetText(env, embedText)
+    const candidateSet = new Set(candidateIds)
+    // Query broadly (max top-K) since the nearest neighbours may include
+    // datasets outside this event's candidate set (other peers / unpublished);
+    // we keep only those that are candidates here.
+    const matches = await queryEmbedding(env, vector, { limit: VECTORIZE_MAX_TOP_K })
+    for (const m of matches) {
+      if (!candidateSet.has(m.dataset_id)) continue
+      // Per vectorize-store's contract the score is a cosine similarity
+      // (1 = identical, 0 = orthogonal). Clamp defensively to [0, 1] so it
+      // blends cleanly with the other [0, 1] signals — the mock (and a raw
+      // cosine) can yield a negative value, which just means "unrelated".
+      scores.set(m.dataset_id, Math.max(0, Math.min(1, m.score)))
+    }
+  } catch {
+    // Soft-degrade: any embed/query failure → no semantic signal this run.
+    return new Map()
+  }
+  return scores
+}
+
 export async function runMatcherForEvent(
   db: D1Database,
   eventId: string,
-  opts: { now?: number; minScore?: number; limit?: number } = {},
+  opts: { now?: number; minScore?: number; limit?: number; env?: MatcherEnv } = {},
 ): Promise<MatchResult[]> {
   const nowMs = opts.now ?? Date.now()
   const event = await getCurrentEvent(db, eventId)
@@ -435,10 +562,11 @@ export async function runMatcherForEvent(
   // The event's topic vocabulary (title + summary + curated categories +
   // keywords, expanded with related topics).
   const decorations = await getEventDecorations(db, eventId)
+  const categoryValues = Object.values(decorations.categories).flat()
   const eventTerms = buildEventTerms({
     title: event.title,
     summary: event.summary,
-    categoryValues: Object.values(decorations.categories).flat(),
+    categoryValues,
     keywords: decorations.keywords,
   })
 
@@ -459,12 +587,27 @@ export async function runMatcherForEvent(
   // falls back to temporal(+geo) and ignores `subjectTerms`, so skip the
   // decoration queries + term building entirely.
   const datasetDecorations = eventTerms.size > 0 ? await getDecorations(db, rows.map(r => r.id)) : null
+
+  // Semantic signal (best-effort): embed the event and find its nearest
+  // datasets in Vectorize. Empty map when unconfigured → pure lexical/temporal.
+  const semanticScores = await computeSemanticScores(
+    opts.env,
+    buildEventEmbeddingText({
+      title: event.title,
+      summary: event.summary,
+      categoryValues,
+      keywords: decorations.keywords,
+    }),
+    rows.map(r => r.id),
+  )
+
   const candidates: MatchDataset[] = rows.map(r => {
     const base: MatchDataset = {
       id: r.id,
       startTime: r.start_time,
       endTime: r.end_time,
       period: r.period,
+      semantic: semanticScores.get(r.id) ?? null,
     }
     if (!datasetDecorations) return base
     const deco = datasetDecorations.get(r.id)
