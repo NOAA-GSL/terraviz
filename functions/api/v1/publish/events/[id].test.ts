@@ -227,6 +227,32 @@ describe('POST /api/v1/publish/events/:id', () => {
       expect(row!.region_name).toBe('Europe')
     })
 
+    it('a point edit pins the spot; point-only keeps the surrounding region', async () => {
+      const { env } = setupEnv()
+      const id = await seedInferredEvent(env)
+      // Point-only: bbox + region preserved, pin added.
+      const res = await reviewPost(
+        ctx({ env, id, body: { edits: { point: { lat: 37.2, lon: -76.8 } } } }),
+      )
+      expect(res.status).toBe(200)
+      let row = await getCurrentEvent(env.CATALOG_DB, id)
+      expect(row!.point_lat).toBe(37.2)
+      expect(row!.region_name).toBe('Europe')
+      expect(row!.bbox_n).toBe(60)
+      // Region edit without a new point clears the stale pin.
+      await reviewPost(ctx({ env, id, body: { edits: { regionName: 'Caribbean' } } }))
+      row = await getCurrentEvent(env.CATALOG_DB, id)
+      expect(row!.point_lat).toBeNull()
+      expect(row!.region_name).toBe('Caribbean Sea')
+    })
+
+    it('400 for out-of-range coordinates', async () => {
+      const { env } = setupEnv()
+      const id = await seedInferredEvent(env)
+      const res = await reviewPost(ctx({ env, id, body: { edits: { point: { lat: 118, lon: 0 } } } }))
+      expect(res.status).toBe(400)
+    })
+
     it('400 for an unresolvable region or unparseable date', async () => {
       const { env } = setupEnv()
       const id = await seedInferredEvent(env)

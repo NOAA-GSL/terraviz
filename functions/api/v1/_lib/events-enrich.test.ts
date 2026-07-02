@@ -15,6 +15,7 @@ import {
   extractJsonObject,
   extractModelText,
   isPlausibleDate,
+  pointInBounds,
   MIN_CONFIDENCE,
 } from './events-enrich'
 
@@ -169,5 +170,52 @@ describe('extractModelText', () => {
     expect(extractModelText({ something: 'else' })).toBeNull()
     expect(extractModelText({ choices: [] })).toBeNull()
     expect(extractModelText({ response: '' })).toBeNull()
+  })
+})
+
+describe('model-supplied point (option 1: region-caged coordinates)', () => {
+  const reply = (point: unknown) =>
+    JSON.stringify({ date: null, place: 'Caribbean', point, confidence: 0.9 })
+
+  it('accepts a point inside the chosen region', async () => {
+    const { env } = aiStub(reply({ lat: 18.5, lon: -72.3 })) // Port-au-Prince
+    const out = await enrichEventFields(env, PLAIN_NEWS)
+    expect(out!.geometry?.point).toEqual({ lat: 18.5, lon: -72.3 })
+    expect(out!.geometry?.regionName).toBe('Caribbean Sea')
+    expect(out!.inferred).toContain('geometry')
+  })
+
+  it('drops a point that contradicts the region (and keeps the region)', async () => {
+    const { env } = aiStub(reply({ lat: 48.8, lon: 2.3 })) // Paris, not the Caribbean
+    const out = await enrichEventFields(env, PLAIN_NEWS)
+    expect(out!.geometry?.point).toBeUndefined()
+    expect(out!.geometry?.regionName).toBe('Caribbean Sea')
+  })
+
+  it('drops malformed or out-of-range points', async () => {
+    for (const bad of [{ lat: '18', lon: -72 }, { lat: 118, lon: -72 }, { lat: 18 }, 'x', null]) {
+      const { env } = aiStub(reply(bad))
+      const out = await enrichEventFields(env, PLAIN_NEWS)
+      expect(out!.geometry?.point, JSON.stringify(bad)).toBeUndefined()
+    }
+  })
+
+  it('a point without a resolvable region is dropped entirely', async () => {
+    const { env } = aiStub(
+      JSON.stringify({ date: null, place: 'Middle Earth', point: { lat: 18.5, lon: -72.3 }, confidence: 0.9 }),
+    )
+    expect(await enrichEventFields(env, PLAIN_NEWS)).toBeNull()
+  })
+})
+
+describe('pointInBounds', () => {
+  it('handles plain and antimeridian-crossing bounds with margin', () => {
+    expect(pointInBounds(10, 20, [0, 0, 40, 40])).toBe(true)
+    expect(pointInBounds(41.5, 20, [0, 0, 40, 40])).toBe(false)
+    expect(pointInBounds(40.5, 20, [0, 0, 40, 40])).toBe(true) // 1° margin
+    // Wraps ±180°: w=170, e=-170 covers the dateline.
+    expect(pointInBounds(0, 175, [170, -10, -170, 10])).toBe(true)
+    expect(pointInBounds(0, -175, [170, -10, -170, 10])).toBe(true)
+    expect(pointInBounds(0, 0, [170, -10, -170, 10])).toBe(false)
   })
 })

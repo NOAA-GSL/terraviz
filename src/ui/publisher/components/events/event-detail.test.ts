@@ -187,3 +187,34 @@ describe('renderEventDetail — curator metadata override', () => {
     expect(options.length).toBeGreaterThan(50)
   })
 })
+
+describe('renderEventDetail — coordinate override', () => {
+  it('posts a parsed point and rejects malformed input client-side', async () => {
+    const fetchFn = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => ({
+      ok: true,
+      status: 200,
+      type: 'basic',
+      json: async () => ({ event: {}, links: [] }),
+      text: async () => '{}',
+    }) as unknown as Response)
+    const pane = renderEventDetail(event(), { onEventStatusChange: vi.fn(), fetchFn })
+    ;(pane.querySelector('.publisher-events-edit-toggle') as HTMLButtonElement).click()
+    const form = pane.querySelector('.publisher-events-edit-form') as HTMLElement
+    const inputs = [...form.querySelectorAll('input')]
+    const pointInput = inputs[2]
+    const save = form.querySelector('button') as HTMLButtonElement
+
+    // Malformed → client-side error, no POST.
+    pointInput.value = 'not coords'
+    save.click()
+    await flush()
+    expect(fetchFn).not.toHaveBeenCalled()
+    expect(form.querySelector('.publisher-events-edit-status')?.textContent).toBeTruthy()
+
+    pointInput.value = '37.2, -76.8'
+    save.click()
+    await flush()
+    const body = JSON.parse(String(fetchFn.mock.calls[0][1]!.body)) as { edits: { point: unknown } }
+    expect(body.edits.point).toEqual({ lat: 37.2, lon: -76.8 })
+  })
+})

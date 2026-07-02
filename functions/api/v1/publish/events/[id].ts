@@ -10,14 +10,17 @@
  *     "event": "approve" | "reject",                 // optional: vet the event itself
  *     "links": [{ "datasetId": "...", "decision": "approve" | "reject" }], // optional
  *     "addDatasetIds": ["..."],                       // optional: pair extra datasets the matcher missed
- *     "edits": { "occurredStart": "...", "regionName": "..." } // optional: correct the event's own metadata
+ *     "edits": { "occurredStart": "...", "regionName": "...", "point": { "lat": 37.2, "lon": -76.8 } } // optional
  *   }
  *
  * `edits` lets a curator override the occurred time and/or location —
  * the fix for a wrong or missing AI-inferred value (slice C). The
  * region name resolves through the same `regions.ts` vocabulary the
- * enrichment uses; an edited field sheds its "AI-inferred" flag and the
- * matcher re-runs so the pairing signals score the corrected values.
+ * enrichment uses; `point` pins an exact spot (a region edit clears a
+ * stale point unless a new one accompanies it; a point-only edit keeps
+ * the surrounding bbox/region). An edited field sheds its "AI-inferred"
+ * flag and the matcher re-runs so the pairing signals score the
+ * corrected values.
  *
  * `addDatasetIds` lets a curator pair a dataset the matcher never
  * suggested: each is seeded as a fresh `proposed` link (visibility-
@@ -77,8 +80,10 @@ interface ParsedReview {
   addDatasetIds: string[]
   /** Curator corrections to the event's own metadata (slice C: the fix
    *  for a wrong or missing AI-inferred value). `geometry` arrives
-   *  resolved from `edits.regionName` via `regions.ts`. */
-  edits?: { occurredStart?: string; geometry?: EventGeometry }
+   *  resolved from `edits.regionName` via `regions.ts` and/or a raw
+   *  `edits.point`; `pointOnly` marks a point-without-region edit so the
+   *  handler can preserve the event's existing bbox/region. */
+  edits?: { occurredStart?: string; geometry?: EventGeometry; pointOnly?: boolean }
 }
 
 function jsonError(status: number, error: string, message: string): Response {
@@ -151,16 +156,38 @@ function parseReview(
         out.occurredStart = new Date(ms).toISOString()
       }
     }
+    let regionGeometry: EventGeometry | undefined
     if (e.regionName != null) {
       const region = typeof e.regionName === 'string' ? resolveRegion(e.regionName) : null
       if (!region) {
         errors.push({ field: 'edits.regionName', code: 'invalid', message: '`edits.regionName` must be a known region name.' })
       } else {
         const [w, s, eb, n] = region.bounds
-        out.geometry = { boundingBox: { n, s, w, e: eb }, regionName: region.name }
+        regionGeometry = { boundingBox: { n, s, w, e: eb }, regionName: region.name }
       }
     }
-    if (Object.keys(out).length > 0) edits = out
+    let point: { lat: number; lon: number } | undefined
+    if (e.point != null) {
+      const p = (typeof e.point === 'object' ? e.point : {}) as Record<string, unknown>
+      const lat = typeof p.lat === 'number' && Number.isFinite(p.lat) ? p.lat : NaN
+      const lon = typeof p.lon === 'number' && Number.isFinite(p.lon) ? p.lon : NaN
+      if (!Number.isFinite(lat) || !Number.isFinite(lon) || lat < -90 || lat > 90 || lon < -180 || lon > 180) {
+        errors.push({ field: 'edits.point', code: 'invalid', message: '`edits.point` must be { lat: -90..90, lon: -180..180 }.' })
+      } else {
+        point = { lat, lon }
+      }
+    }
+    // Compose the geometry edit. A region edit replaces bbox + name and
+    // clears any stale point unless a point edit accompanies it; a
+    // point-only edit is completed by the caller against the existing
+    // geometry (see the handler), so bbox/region are preserved.
+    if (regionGeometry) {
+      out.geometry = point ? { ...regionGeometry, point } : regionGeometry
+    } else if (point) {
+      out.geometry = { point }
+      out.pointOnly = true
+    }
+    if (out.occurredStart !== undefined || out.geometry !== undefined) edits = out
   }
 
   if (event === undefined && links.length === 0 && addDatasetIds.length === 0 && edits === undefined && errors.length === 0) {
@@ -203,7 +230,18 @@ export const onRequestPost: PagesFunction<CatalogEnv, 'id'> = async context => {
   // T/Ti/G signals score against the curator's values (statuses are
   // preserved; scores refresh, new candidates may propose).
   if (parsed.value.edits) {
-    await applyEventEdits(db, id, parsed.value.edits)
+    const edits = { ...parsed.value.edits }
+    if (edits.pointOnly && edits.geometry) {
+      // A point-only edit refines, not replaces: keep the event's
+      // existing bbox / region name around the new pin.
+      const existing: EventGeometry = {}
+      if (event.bbox_n !== null && event.bbox_s !== null && event.bbox_w !== null && event.bbox_e !== null) {
+        existing.boundingBox = { n: event.bbox_n, s: event.bbox_s, w: event.bbox_w, e: event.bbox_e }
+      }
+      if (event.region_name) existing.regionName = event.region_name
+      edits.geometry = { ...existing, point: edits.geometry.point }
+    }
+    await applyEventEdits(db, id, { occurredStart: edits.occurredStart, geometry: edits.geometry })
     await runMatcherForEvent(db, id, { env: context.env })
   }
 

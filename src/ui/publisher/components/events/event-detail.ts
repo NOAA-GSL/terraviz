@@ -131,6 +131,15 @@ function renderMetadataEdit(event: ReviewEvent, cb: EventDetailCallbacks): HTMLE
   }
   regionInput.setAttribute('list', listId)
 
+  // Exact coordinates — for events more specific than any region
+  // (a town, a volcano). "lat, lon" as one field; parsed client-side.
+  const pointInput = document.createElement('input')
+  pointInput.type = 'text'
+  pointInput.className = 'publisher-events-edit-input'
+  pointInput.placeholder = '37.2, -76.8' // i18n-exempt: numeric format hint, not prose
+  const prevPoint = event.geometry?.point ? `${event.geometry.point.lat}, ${event.geometry.point.lon}` : ''
+  pointInput.value = prevPoint
+
   const labelled = (label: string, control: HTMLElement): HTMLElement => {
     const field = el('label', 'publisher-events-edit-field')
     field.append(el('span', 'publisher-events-edit-label', [label]), control)
@@ -143,7 +152,7 @@ function renderMetadataEdit(event: ReviewEvent, cb: EventDetailCallbacks): HTMLE
   save.className = 'publisher-btn publisher-btn-small publisher-btn-primary'
   save.textContent = t('publisher.events.edit.save')
   save.addEventListener('click', () => {
-    const edits: { occurredStart?: string; regionName?: string } = {}
+    const edits: { occurredStart?: string; regionName?: string; point?: { lat: number; lon: number } } = {}
     const date = dateInput.value.trim()
     if (date && date !== (event.occurredStart ?? '').slice(0, 10)) {
       edits.occurredStart = `${date}T00:00:00.000Z`
@@ -151,6 +160,18 @@ function renderMetadataEdit(event: ReviewEvent, cb: EventDetailCallbacks): HTMLE
     const region = regionInput.value.trim()
     if (region && region !== (event.geometry?.regionName ?? '')) {
       edits.regionName = region
+    }
+    const pointRaw = pointInput.value.trim()
+    if (pointRaw && pointRaw !== prevPoint) {
+      const m = /^(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)$/.exec(pointRaw)
+      const lat = m ? Number(m[1]) : NaN
+      const lon = m ? Number(m[2]) : NaN
+      if (!m || lat < -90 || lat > 90 || lon < -180 || lon > 180) {
+        status.textContent = t('publisher.events.edit.invalidPoint')
+        status.classList.add('publisher-events-status-error')
+        return
+      }
+      edits.point = { lat, lon }
     }
     if (Object.keys(edits).length === 0) {
       form.hidden = true
@@ -188,6 +209,7 @@ function renderMetadataEdit(event: ReviewEvent, cb: EventDetailCallbacks): HTMLE
   form.append(
     labelled(t('publisher.events.edit.date'), dateInput),
     labelled(t('publisher.events.edit.location'), regionInput),
+    labelled(t('publisher.events.edit.point'), pointInput),
     datalist,
     el('span', 'publisher-events-edit-actions', [save, status]),
   )

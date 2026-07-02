@@ -130,6 +130,35 @@ export function isPlausibleDate(iso: string, publishedAt: string | null | undefi
   return ms <= anchorMs + 24 * 60 * 60 * 1000
 }
 
+/** True when `(lat, lon)` falls inside `[w, s, e, n]` bounds (plus a
+ *  small margin for coastal spots), handling antimeridian-crossing
+ *  regions (`w > e`). The containment check is the anti-hallucination
+ *  cage for model-supplied coordinates: a point that contradicts the
+ *  model's own region choice is dropped. */
+export function pointInBounds(
+  lat: number,
+  lon: number,
+  bounds: readonly [number, number, number, number],
+  marginDeg = 1,
+): boolean {
+  const [w, s, e, n] = bounds
+  if (lat < s - marginDeg || lat > n + marginDeg) return false
+  if (w <= e) return lon >= w - marginDeg && lon <= e + marginDeg
+  // Antimeridian crossing: the box wraps around ±180°.
+  return lon >= w - marginDeg || lon <= e + marginDeg
+}
+
+/** Coerce an untrusted point value to valid coordinates, or null. */
+function asPoint(raw: unknown): { lat: number; lon: number } | null {
+  if (!raw || typeof raw !== 'object') return null
+  const p = raw as Record<string, unknown>
+  const lat = typeof p.lat === 'number' && Number.isFinite(p.lat) ? p.lat : NaN
+  const lon = typeof p.lon === 'number' && Number.isFinite(p.lon) ? p.lon : NaN
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null
+  if (lat < -90 || lat > 90 || lon < -180 || lon > 180) return null
+  return { lat, lon }
+}
+
 /** Build the extraction prompt. Exported for tests. */
 export function buildEnrichPrompt(input: {
   title: string
@@ -140,12 +169,15 @@ export function buildEnrichPrompt(input: {
   const system =
     'You extract structured metadata from a news headline and summary. ' +
     'Respond with ONLY a JSON object, no prose, of the shape ' +
-    '{"date": "YYYY-MM-DD" | null, "place": string | null, "confidence": number}. ' +
+    '{"date": "YYYY-MM-DD" | null, "place": string | null, "point": {"lat": number, "lon": number} | null, "confidence": number}. ' +
     '"date" is the day the described event occurred (resolve relative phrases ' +
     'like "yesterday" or "on Tuesday" against the publication date given); null if the text does not say. ' +
     '"place" must be EXACTLY one name from the list below — the SMALLEST listed region that ' +
     'clearly contains the specific location the text names. If no listed region clearly contains ' +
     `it, use null; a wrong region is worse than none. The list: ${regionNames}. ` +
+    '"point" is the coordinates of the SPECIFIC location the text names (a town, a volcano, a ' +
+    'river) when you are certain of them; it must lie inside the chosen "place" region. ' +
+    'Use null when the text names no more specific spot than the region, or you are unsure. ' +
     '"confidence" is 0-1 for how certain you are about the extracted values. ' +
     'Never guess — prefer null over a doubtful value.'
   const publishedLine = input.publishedAt ? `Published: ${input.publishedAt}\n` : ''
@@ -224,6 +256,13 @@ export async function enrichEventFields(
     if (region) {
       const [w, s, e, n] = region.bounds
       out.geometry = { boundingBox: { n, s, w, e }, regionName: region.name }
+      // A model-supplied point is accepted only when it agrees with the
+      // model's own region choice — the region is the sanity cage. A
+      // point without a resolvable region is always dropped.
+      const point = asPoint(parsed.point)
+      if (point && pointInBounds(point.lat, point.lon, region.bounds)) {
+        out.geometry.point = point
+      }
       out.inferred.push('geometry')
     }
   }
