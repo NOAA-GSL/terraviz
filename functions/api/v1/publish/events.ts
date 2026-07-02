@@ -164,6 +164,7 @@ export const onRequestPost: PagesFunction<CatalogEnv> = async context => {
   // links alongside the matcher's output.
   const { id, created, proposedLinks, manualLinks } = await ingestEvent(db, input, {
     manualDatasetIds: parsed.manualDatasetIds,
+    env: context.env,
   })
 
   await writeAuditEvent(db, {

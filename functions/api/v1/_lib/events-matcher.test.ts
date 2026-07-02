@@ -18,10 +18,16 @@ import {
   tokenize,
   buildEventTerms,
   buildDatasetTerms,
+  buildEventEmbeddingText,
+  blendTopical,
   scoreLexical,
+  SEMANTIC_WEIGHT,
   TEMPORAL_HORIZON_MS,
   type MatchDataset,
+  type MatcherEnv,
 } from './events-matcher'
+import { embedDatasetText } from './embeddings'
+import { upsertEmbedding, __clearMockStore } from './vectorize-store'
 
 const NOW = Date.parse('2026-06-26T00:00:00.000Z')
 const DAY = 86_400_000
@@ -133,7 +139,7 @@ describe('scoreMatch', () => {
       period: 'PT15M', // live → temporal = 1
     }
     const m = scoreMatch(event, ds, NOW)
-    expect(m.signals).toEqual({ geo: 1, temporal: 1, lexical: null })
+    expect(m.signals).toEqual({ geo: 1, temporal: 1, lexical: null, semantic: null })
     expect(m.score).toBeCloseTo(1)
   })
 
@@ -148,7 +154,56 @@ describe('scoreMatch', () => {
 
   it('scores 0 with all signals null when nothing is readable', () => {
     const m = scoreMatch({}, { id: 'd' }, NOW)
-    expect(m).toEqual({ datasetId: 'd', score: 0, signals: { geo: null, temporal: null, lexical: null } })
+    expect(m).toEqual({ datasetId: 'd', score: 0, signals: { geo: null, temporal: null, lexical: null, semantic: null } })
+  })
+})
+
+describe('semantic signal (blendTopical + scoreMatch)', () => {
+  it('blends lexical and semantic by SEMANTIC_WEIGHT when both present', () => {
+    expect(blendTopical(0.5, 0.8)).toBeCloseTo((1 - SEMANTIC_WEIGHT) * 0.5 + SEMANTIC_WEIGHT * 0.8)
+  })
+
+  it('uses whichever signal is present when only one is', () => {
+    expect(blendTopical(0.6, null)).toBe(0.6)
+    expect(blendTopical(null, 0.9)).toBe(0.9)
+    expect(blendTopical(null, null)).toBeNull()
+  })
+
+  it('surfaces a dataset on semantic alone when it has no lexical overlap', () => {
+    // Event has topic terms; the dataset shares none of them (lexical 0) but
+    // is a strong embedding neighbour → topical is driven by semantic.
+    const event = {
+      occurredStart: '2026-06-25T00:00:00Z',
+      terms: buildEventTerms({ title: 'coral bleaching' }),
+    }
+    const ds: MatchDataset = {
+      id: 'd',
+      startTime: '2026-01-01T00:00:00Z',
+      period: 'PT15M',
+      subjectTerms: buildDatasetTerms({ title: 'reef stress index' }), // no shared tokens
+      semantic: 0.9,
+    }
+    const m = scoreMatch(event, ds, NOW)
+    expect(m.signals.lexical).toBe(0)
+    expect(m.signals.semantic).toBe(0.9)
+    expect(m.score).toBeGreaterThan(0.5)
+  })
+
+  it('a weak semantic-only match stays below the default gate', () => {
+    const event = { occurredStart: '2026-06-25T00:00:00Z', terms: buildEventTerms({ title: 'coral bleaching' }) }
+    const ds: MatchDataset = {
+      id: 'd',
+      subjectTerms: buildDatasetTerms({ title: 'reef stress index' }),
+      semantic: 0.2, // faint neighbour
+    }
+    // 0.2 · TOPICAL_BASE(0.75) = 0.15 — below DEFAULT_MIN_SCORE, so it won't propose.
+    expect(scoreMatch(event, ds, NOW).score).toBeLessThan(0.5)
+  })
+
+  it('buildEventEmbeddingText joins the event fields, skipping blanks', () => {
+    expect(buildEventEmbeddingText({ title: 'Storm', summary: '', categoryValues: ['Severe'], keywords: ['wind'] }))
+      .toBe('Storm\nSevere\nwind')
+    expect(buildEventEmbeddingText({})).toBe('')
   })
 })
 
@@ -274,6 +329,73 @@ describe('runMatcherForEvent', () => {
   it('returns an empty list for an unknown event', async () => {
     const db = asD1(seedFixtures({ count: 1 }))
     expect(await runMatcherForEvent(db, 'NOPE000000000000000000000A', { now: NOW })).toEqual([])
+  })
+
+  it('attaches a semantic signal from Vectorize when the env is configured', async () => {
+    const sqlite = seedFixtures({ count: 2 })
+    const db = asD1(sqlite)
+    // DS000 is topically + temporally matching (as in the first test); DS001
+    // is a plain live dataset with NO lexical overlap with the event.
+    sqlite
+      .prepare(`UPDATE datasets SET start_time = ?, end_time = NULL, period = ?, title = ? WHERE id = ?`)
+      .run('2026-01-01T00:00:00Z', 'PT15M', 'Cloud cover (real-time)', seededDatasetId(0))
+    sqlite
+      .prepare(`UPDATE datasets SET start_time = ?, end_time = NULL, period = ?, title = ? WHERE id = ?`)
+      .run('2026-01-01T00:00:00Z', 'PT15M', 'Ocean salinity climatology', seededDatasetId(1))
+
+    const env: MatcherEnv = { MOCK_AI: 'true', MOCK_VECTORIZE: 'true' }
+    __clearMockStore(env)
+    // Seed DS001's vector so it is the event's nearest neighbour even though
+    // it shares no keywords: embed the exact text runMatcherForEvent will
+    // build for this event and store it as DS001's vector (cosine → 1).
+    const eventText = buildEventEmbeddingText({ title: 'Severe storm now' })
+    const eventVector = await embedDatasetText(env, eventText)
+    await upsertEmbedding(env, {
+      dataset_id: seededDatasetId(1),
+      values: eventVector,
+      metadata: { peer_id: 'local', category: 'oceans', visibility: 'public', embedding_version: 1 },
+    })
+
+    const { id: eventId } = await insertCurrentEvent(db, {
+      originNode: 'NODE000',
+      title: 'Severe storm now',
+      sourceName: 'NOAA',
+      sourceUrl: 'https://example.gov/x',
+      occurredStart: '2026-06-25T12:00:00Z',
+    })
+
+    const matches = await runMatcherForEvent(db, eventId, { now: NOW, env })
+    const byId = new Map(matches.map(m => [m.datasetId, m]))
+
+    // DS000 still matches lexically; DS001 — no lexical overlap — now surfaces
+    // purely on the seeded semantic neighbour.
+    const ds1 = byId.get(seededDatasetId(1))
+    expect(ds1).toBeDefined()
+    expect(ds1!.signals.lexical).toBe(0)
+    expect(ds1!.signals.semantic).toBeGreaterThan(0.9)
+    // Persisted with the semantic signal in signals_json.
+    const links = await listLinksForEvent(db, eventId)
+    const link1 = links.find(l => l.dataset_id === seededDatasetId(1))
+    expect(JSON.parse(link1!.signals_json!).semantic).toBeGreaterThan(0.9)
+  })
+
+  it('runs pure lexical/temporal (semantic null) when the env is unconfigured', async () => {
+    const sqlite = seedFixtures({ count: 1 })
+    const db = asD1(sqlite)
+    sqlite
+      .prepare(`UPDATE datasets SET start_time = ?, end_time = NULL, period = ?, title = ? WHERE id = ?`)
+      .run('2026-01-01T00:00:00Z', 'PT15M', 'Cloud cover (real-time)', seededDatasetId(0))
+    const { id: eventId } = await insertCurrentEvent(db, {
+      originNode: 'NODE000',
+      title: 'Severe storm now',
+      sourceName: 'NOAA',
+      sourceUrl: 'https://example.gov/x',
+      occurredStart: '2026-06-25T12:00:00Z',
+    })
+    // No env → semantic stays null; the lexical/temporal match is unchanged.
+    const matches = await runMatcherForEvent(db, eventId, { now: NOW })
+    expect(matches[0].signals.semantic).toBeNull()
+    expect(matches[0].signals.lexical).toBeGreaterThan(0)
   })
 
   it('skips hidden / unpublished / retracted datasets', async () => {
