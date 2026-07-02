@@ -53,6 +53,13 @@ const MAX_REFRESH_EVENTS = 100
 /** Give up on a slow feed rather than hang the request. */
 const FEED_TIMEOUT_MS = 10_000
 
+/** Max AI date/location-enrichment calls per refresh request (slice C).
+ *  Only *new* events missing both fields spend from this, so steady
+ *  state (mostly re-ingests) costs nothing; a first pull of a busy
+ *  plain-news feed enriches the newest items and leaves the rest for
+ *  the next cycle. */
+const MAX_ENRICH_CALLS = 25
+
 /** Per-connector outcome reported in the response + run bookkeeping. */
 interface ConnectorSummary {
   id: string
@@ -153,6 +160,10 @@ export const onRequestPost: PagesFunction<CatalogEnv> = async context => {
 
   const feeds: ConnectorSummary[] = []
   let budget = MAX_REFRESH_EVENTS
+  // Shared AI-enrichment budget across the whole request — new events
+  // missing date/location spend from it (slice C); the rest of the run
+  // ingests unenriched once it's dry, rather than stacking model calls.
+  const enrichBudget = { remaining: MAX_ENRICH_CALLS }
   let anyFetched = false
   // Network fetches actually attempted (supported kind + valid URL) —
   // the denominator for the all-feeds-down 502 below. Configuration
@@ -190,9 +201,10 @@ export const onRequestPost: PagesFunction<CatalogEnv> = async context => {
         continue
       }
       try {
-        // `env` enables the matcher's semantic (Vectorize) signal when the
-        // AI bindings are configured; it degrades to lexical/temporal when not.
-        const outcome = await ingestEvent(db, { ...parsed.value, originNode }, { env: context.env })
+        // `env` enables the matcher's semantic (Vectorize) signal and the
+        // slice-C date/location enrichment when the AI bindings are
+        // configured; both degrade gracefully when not.
+        const outcome = await ingestEvent(db, { ...parsed.value, originNode }, { env: context.env, enrichBudget })
         if (outcome.created) summary.created++
         else summary.refreshed++
       } catch {

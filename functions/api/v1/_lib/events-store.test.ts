@@ -355,6 +355,7 @@ describe('toPublicEvent', () => {
       updated_at: '2026-06-01T00:00:00.000Z',
       reviewed_at: null,
       reviewed_by: null,
+      inferred_fields: null,
     })
     expect(pub.geometry).toEqual({})
     expect(pub.summary).toBeUndefined()

@@ -137,3 +137,92 @@ describe('ingestEvent — manual pairings', () => {
     expect((await listLinksForEvent(db, id)).length).toBeGreaterThanOrEqual(1)
   })
 })
+
+describe('ingestEvent — slice-C AI enrichment', () => {
+  const AI_REPLY = JSON.stringify({ date: '2026-06-23', place: 'Caribbean', confidence: 0.9 })
+  const aiEnv = (reply = AI_REPLY) => ({
+    AI: { run: async () => ({ response: reply }) },
+  })
+
+  function plainNewsInput(overrides: Partial<NewCurrentEvent> = {}): NewCurrentEvent {
+    return {
+      originNode: 'local',
+      title: 'Storm floods coastal towns',
+      summary: 'Heavy rain on Tuesday flooded several towns, officials said.',
+      sourceName: 'Example Desk',
+      sourceUrl: 'https://news.example.org/floods',
+      publishedAt: '2026-06-25T09:00:00.000Z',
+      feedId: 'FEED_X',
+      externalId: 'item-1',
+      geometry: {},
+      ...overrides,
+    }
+  }
+
+  async function eventRow(db: D1Database, id: string) {
+    return db
+      .prepare(`SELECT occurred_start, region_name, bbox_n, inferred_fields FROM current_events WHERE id = ?`)
+      .bind(id)
+      .first<{ occurred_start: string | null; region_name: string | null; bbox_n: number | null; inferred_fields: string | null }>()
+  }
+
+  it('fills missing date + location on create and stamps provenance', async () => {
+    const { db } = freshDb()
+    const { id, created } = await ingestEvent(db, plainNewsInput(), { env: aiEnv() as never })
+    expect(created).toBe(true)
+    const row = await eventRow(db, id)
+    expect(row!.occurred_start).toBe('2026-06-23T00:00:00.000Z')
+    expect(row!.region_name).toBe('Caribbean Sea')
+    expect(row!.bbox_n).not.toBeNull()
+    expect(JSON.parse(row!.inferred_fields!)).toEqual(['occurredStart', 'geometry'])
+  })
+
+  it('skips gracefully when the AI binding is absent', async () => {
+    const { db } = freshDb()
+    const { id } = await ingestEvent(db, plainNewsInput(), {})
+    const row = await eventRow(db, id)
+    expect(row!.occurred_start).toBeNull()
+    expect(row!.inferred_fields).toBeNull()
+  })
+
+  it('re-ingest keeps inferred values the feed still lacks, without a new model call', async () => {
+    const { db } = freshDb()
+    let calls = 0
+    const env = { AI: { run: async () => { calls++; return { response: AI_REPLY } } } }
+    const first = await ingestEvent(db, plainNewsInput(), { env: env as never })
+    expect(calls).toBe(1)
+
+    const second = await ingestEvent(db, plainNewsInput(), { env: env as never })
+    expect(second.created).toBe(false)
+    expect(second.id).toBe(first.id)
+    expect(calls).toBe(1) // update path never re-enriches
+    const row = await eventRow(db, second.id)
+    expect(row!.occurred_start).toBe('2026-06-23T00:00:00.000Z')
+    expect(row!.region_name).toBe('Caribbean Sea')
+    expect(JSON.parse(row!.inferred_fields!)).toEqual(['occurredStart', 'geometry'])
+  })
+
+  it('a source-provided field on re-ingest wins and drops its inferred flag', async () => {
+    const { db } = freshDb()
+    const first = await ingestEvent(db, plainNewsInput(), { env: aiEnv() as never })
+    // The feed starts carrying its own occurred time; geometry stays absent.
+    await ingestEvent(db, plainNewsInput({ occurredStart: '2026-06-24T12:00:00.000Z' }), {
+      env: aiEnv() as never,
+    })
+    const row = await eventRow(db, first.id)
+    expect(row!.occurred_start).toBe('2026-06-24T12:00:00.000Z')
+    expect(row!.region_name).toBe('Caribbean Sea') // still-inferred geometry kept
+    expect(JSON.parse(row!.inferred_fields!)).toEqual(['geometry'])
+  })
+
+  it('honours a shared enrichment budget across a loop', async () => {
+    const { db } = freshDb()
+    let calls = 0
+    const env = { AI: { run: async () => { calls++; return { response: AI_REPLY } } } }
+    const enrichBudget = { remaining: 1 }
+    await ingestEvent(db, plainNewsInput({ externalId: 'a' }), { env: env as never, enrichBudget })
+    await ingestEvent(db, plainNewsInput({ externalId: 'b' }), { env: env as never, enrichBudget })
+    expect(calls).toBe(1)
+    expect(enrichBudget.remaining).toBe(0)
+  })
+})
