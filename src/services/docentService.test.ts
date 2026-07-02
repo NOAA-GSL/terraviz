@@ -1994,15 +1994,15 @@ describe('executeSearchEvents', () => {
     expect(executeSearchEvents({ query: 'tropical' }, events).events[0].id).toBe('E2')
   })
 
-  it('returns the compact tool shape', () => {
+  it('returns the compact tool shape (no dataset id exposed)', () => {
     const [hit] = executeSearchEvents({ query: 'wildfire' }, events).events
     expect(hit).toEqual({
       id: 'E1',
       title: 'Wildfire outbreak in the Sierra',
       source_name: 'InciWeb',
       occurred: '2026-06-20',
-      dataset_id: 'D1',
     })
+    expect(hit).not.toHaveProperty('dataset_id')
   })
 
   it('returns an empty list when nothing matches', () => {

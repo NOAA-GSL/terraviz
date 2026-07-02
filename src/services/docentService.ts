@@ -420,13 +420,14 @@ export function executeSearchCatalog(
   })
 }
 
-/** One approved event as the `search_events` tool returns it to the LLM. */
+/** One approved event as the `search_events` tool returns it to the LLM.
+ *  No dataset id is exposed — the `<<EVENT:ID>>` marker resolves the dataset
+ *  client-side, so the model can't parrot an id into prose. */
 export interface EventSearchResult {
   id: string
   title: string
   source_name: string
   occurred: string
-  dataset_id: string
 }
 
 /** Default / max events `search_events` returns in one call. */
@@ -460,7 +461,6 @@ export function executeSearchEvents(
       title: ev.title,
       source_name: ev.source.name,
       occurred: (ev.occurredStart ?? ev.source.publishedAt ?? '').slice(0, 10),
-      dataset_id: ev.datasetIds[0] ?? '',
     })),
   }
 }
@@ -1673,11 +1673,12 @@ export async function* processMessage(
     if (approvedEvents.length > 0) {
       const eventLines = approvedEvents.slice(0, CURRENT_EVENTS_INJECTION_CAP).map(ev => {
         const when = (ev.occurredStart ?? ev.source.publishedAt ?? '').slice(0, 10)
-        const datasetId = ev.datasetIds[0] ?? ''
-        return `- ${ev.id} | ${ev.title} | ${ev.source.name}${when ? ' | ' + when : ''}${datasetId ? ' | dataset_id: ' + datasetId : ''}`
+        // No dataset id here — the <<EVENT:ID>> marker resolves the dataset
+        // client-side, and exposing an id invites the model to print it.
+        return `- ${ev.id} | ${ev.title} | ${ev.source.name}${when ? ' | ' + when : ''}`
       })
       preSearchContext +=
-        `[CURRENT EVENTS — reputable, curator-approved current events relevant to this node's data. Surface one with an <<EVENT:ID>> marker on its own line: it shows a cited card AND loads the dataset that explains it, flying the globe to where and when it happened. Only the ids below are valid; never invent an event, headline, or source:\n${eventLines.join('\n')}]\n`
+        `[CURRENT EVENTS — reputable, curator-approved current events relevant to this node's data. This is INTERNAL context: never name this block or write any id in your reply — refer to an event by its headline. Surface one with an <<EVENT:ID>> marker on its own line: it shows a cited card AND loads the dataset that explains it, flying the globe to where and when it happened. Only the ids below are valid; never invent an event, headline, or source:\n${eventLines.join('\n')}]\n`
     }
 
     const userMessage: LLMMessage = visionActive

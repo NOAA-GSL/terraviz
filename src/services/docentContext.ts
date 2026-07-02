@@ -237,12 +237,13 @@ Additional globe markers:
 - <<REGION:name>> — Highlight a well-known geographic region and navigate to it. Supported regions include countries (e.g. <<REGION:Brazil>>), continents (<<REGION:Africa>>), oceans (<<REGION:Pacific Ocean>>), and geographic features (<<REGION:Amazon Basin>>, <<REGION:Ring of Fire>>, <<REGION:Sahara Desert>>).
 
 ## Current Events
-When the user's message includes a [CURRENT EVENTS] block, it lists reputable, curator-approved current events relevant to this node's data — each with an \`id\`, a headline, its source, a date, and the \`dataset_id\` that best explains it. Surface one by placing a marker on its own line:
+When the user's message includes a [CURRENT EVENTS] block, it lists reputable, curator-approved current events relevant to this node's data — each with an \`id\`, a headline, its source, and a date. It is INTERNAL context. Surface one by placing a marker on its own line:
 - <<EVENT:ID>> — Show a cited card for that event AND load the dataset that explains it, flying the globe to where and when it happened. The client fills in the location, time, source, and dataset from the approved event — you supply ONLY the ID.
 
 Rules for events:
+- NEVER mention the "[CURRENT EVENTS]" block (or any bracketed [...] block) in your reply, and NEVER write an event id or a dataset id in your prose. Those are internal — the user must never see a block name or a raw id. Talk about the event by its **headline** and the dataset by its **title**; the <<EVENT:ID>> marker silently carries the id.
 - ONLY use an ID that appears verbatim in a [CURRENT EVENTS] block or a \`search_events\` tool result. NEVER invent an event, headline, source, date, or ID — the only current events that exist are the curator-approved ones in those sources. If none fits the user's question, don't mention one.
-- When a headline directly answers the user (e.g. "what's happening with wildfires right now?"), lead with <<EVENT:ID>> — you do NOT also need a <<LOAD:...>> or <<FLY:...>>; the event marker loads its dataset and moves the globe for you.
+- When a headline directly answers the user (e.g. "what's happening with wildfires right now?"), lead with a one-sentence plain-language summary then the <<EVENT:ID>> marker — you do NOT also need a <<LOAD:...>> or <<FLY:...>>; the event marker loads its dataset and moves the globe for you.
 - Refer to the event naturally in prose (e.g. "there's an active wildfire outbreak") but let the marker carry the citation; do not paste the source URL into your text.
 
 IMPORTANT rules for globe markers:
@@ -558,16 +559,18 @@ export function getListFeaturedDatasetsTool(): LLMTool {
  * cold-start case; this tool is for follow-up queries where the block is
  * absent or a different topic than what's injected.
  *
- * Result shape: `{ events: [{ id, title, source_name, occurred, dataset_id }] }`.
- * Only IDs returned here (or present in a [CURRENT EVENTS] block) are valid
- * `<<EVENT:ID>>` payloads — the anti-hallucination rule for events.
+ * Result shape: `{ events: [{ id, title, source_name, occurred }] }` — no
+ * dataset id is exposed to the model (the marker resolves the dataset
+ * client-side), so it can't leak one into prose. Only IDs returned here (or
+ * present in a [CURRENT EVENTS] block) are valid `<<EVENT:ID>>` payloads —
+ * the anti-hallucination rule for events.
  */
 export function getSearchEventsTool(): LLMTool {
   return {
     type: 'function',
     function: {
       name: 'search_events',
-      description: 'Search reputable, curator-approved current events relevant to this node\'s data (recent news / authoritative-org reporting tied to a dataset). Use this when the user asks what is happening "right now", references a news story, or wants the current real-world context behind the data — and the [CURRENT EVENTS] block is absent or does not cover their topic. Returns matching approved events, each with `id`, `title`, `source_name`, `occurred` (date), and `dataset_id` (the dataset that explains it). Surface a result with an `<<EVENT:ID>>` marker. Returns an empty `events` array when nothing matches or no events are approved — never invent one.',
+      description: 'Search reputable, curator-approved current events relevant to this node\'s data (recent news / authoritative-org reporting tied to a dataset). Use this when the user asks what is happening "right now", references a news story, or wants the current real-world context behind the data — and the [CURRENT EVENTS] block is absent or does not cover their topic. Returns matching approved events, each with `id`, `title`, `source_name`, and `occurred` (date). Surface a result with an `<<EVENT:ID>>` marker — the client loads the explaining dataset for you (never write the id or a dataset id in your reply). Returns an empty `events` array when nothing matches or no events are approved — never invent one.',
       parameters: {
         type: 'object',
         properties: {
