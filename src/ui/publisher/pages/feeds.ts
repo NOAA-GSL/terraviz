@@ -27,7 +27,7 @@
 
 import { t } from '../../../i18n'
 import { publisherGet, publisherSend, handleSessionError } from '../api'
-import { buildErrorCard } from '../components/error-card'
+import { buildErrorCard, type ErrorKind } from '../components/error-card'
 import { FEED_PRESET_CATEGORIES, presetsForCategory, type FeedPresetCategory } from '../feed-presets'
 
 const ME_ENDPOINT = '/api/v1/publish/me'
@@ -124,8 +124,7 @@ export async function renderFeedsPage(mount: HTMLElement, options: FeedsPageOpti
     publisherGet<FeedsResponse>(FEEDS_ENDPOINT, { fetchFn }),
   ])
 
-  for (const res of [meRes, feedsRes]) {
-    if (res.ok) continue
+  const renderFailure = (res: { kind: ErrorKind; status?: number; body?: string }): void => {
     if (res.kind === 'session') {
       if (handleSessionError({ navigate: options.navigate }) === 'navigating') return
       mount.replaceChildren(shell(buildErrorCard('session')))
@@ -133,10 +132,16 @@ export async function renderFeedsPage(mount: HTMLElement, options: FeedsPageOpti
     }
     const details = res.kind === 'server' ? { status: res.status, body: res.body } : {}
     mount.replaceChildren(shell(buildErrorCard(res.kind, details)))
+  }
+
+  if (!meRes.ok) {
+    renderFailure(meRes)
     return
   }
-  if (!meRes.ok || !feedsRes.ok) return
 
+  // Gate on role before looking at the feeds response — for a
+  // non-privileged caller the feeds fetch legitimately 403s, and the
+  // restricted card (not a generic error card) is the right surface.
   if (!clientIsPrivileged(meRes.data)) {
     mount.replaceChildren(
       shell(
@@ -146,6 +151,11 @@ export async function renderFeedsPage(mount: HTMLElement, options: FeedsPageOpti
         ),
       ),
     )
+    return
+  }
+
+  if (!feedsRes.ok) {
+    renderFailure(feedsRes)
     return
   }
 
@@ -184,6 +194,20 @@ function renderConsole(mount: HTMLElement, feeds: FeedRow[], options: FeedsPageO
       showError(res.errors[0].message)
       return false
     }
+    // Surface the server's own `{ error, message }` when it sent one
+    // (the users-page pattern) — far more debuggable than the generic
+    // label for operator mistakes like a rejected URL.
+    if (res.kind === 'server' && res.body) {
+      try {
+        const parsed = JSON.parse(res.body) as { message?: unknown }
+        if (typeof parsed.message === 'string' && parsed.message) {
+          showError(parsed.message)
+          return false
+        }
+      } catch {
+        /* non-JSON body — fall through to the generic label */
+      }
+    }
     showError(t('publisher.feeds.error.generic'))
     return false
   }
@@ -208,6 +232,9 @@ function renderConsole(mount: HTMLElement, feeds: FeedRow[], options: FeedsPageO
     })
     button.setAttribute('aria-expanded', 'false')
     button.setAttribute('aria-controls', panel.id)
+    // Monotonic token per request — a stale in-flight response (rapid
+    // collapse → reopen) must not overwrite a newer panel state.
+    let requestToken = 0
     button.addEventListener('click', () => {
       if (!panel.hidden) {
         panel.hidden = true
@@ -227,9 +254,10 @@ function renderConsole(mount: HTMLElement, feeds: FeedRow[], options: FeedsPageO
       panel.replaceChildren(
         el('p', { className: 'publisher-feeds-preview-note', textContent: t('publisher.feeds.preview.loading') }),
       )
+      const token = ++requestToken
       const query = `${PREVIEW_ENDPOINT}?kind=${encodeURIComponent(kind)}&url=${encodeURIComponent(url)}`
       void publisherGet<PreviewResponse>(query, { fetchFn: options.fetchFn }).then(res => {
-        if (panel.hidden) return // collapsed while loading
+        if (panel.hidden || token !== requestToken) return // collapsed or superseded while loading
         if (!res.ok) {
           panel.replaceChildren(
             el('p', {

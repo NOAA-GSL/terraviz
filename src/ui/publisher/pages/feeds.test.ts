@@ -57,6 +57,9 @@ describe('renderFeedsPage', () => {
   it('shows a restricted card for a non-privileged publisher', async () => {
     const routes = baseRoutes()
     routes['/api/v1/publish/me'] = { body: { role: 'publisher', is_admin: false } }
+    // The feeds list legitimately 403s for this caller — the role gate
+    // must win over the generic error card.
+    routes['/api/v1/publish/feeds'] = { status: 403, body: { error: 'forbidden_role' } }
     await renderFeedsPage(mount, { fetchFn: mockFetch(routes) })
     expect(mount.querySelector('.publisher-feeds-restricted')).not.toBeNull()
     expect(mount.querySelector('.publisher-feeds-row')).toBeNull()
@@ -152,6 +155,21 @@ describe('renderFeedsPage', () => {
       label: 'My Feed',
       url: 'https://my.example/feed.xml',
     })
+  })
+
+  it("surfaces the server's own error message on a failed mutation", async () => {
+    const routes = baseRoutes()
+    routes['POST /api/v1/publish/feeds/FEED_EONET_DEFAULT'] = {
+      status: 502,
+      body: { error: 'feed_unavailable', message: 'The feed responded 502.' },
+    }
+    await renderFeedsPage(mount, { fetchFn: mockFetch(routes) })
+    const pauseBtn = [...mount.querySelectorAll('.publisher-feeds-row-actions button')].find(
+      b => b.textContent === 'Pause',
+    ) as HTMLButtonElement
+    pauseBtn.click()
+    await flush()
+    expect(mount.querySelector('.publisher-feeds-status')?.textContent).toBe('The feed responded 502.')
   })
 
   it('preview toggles an inline latest-items panel on a feed row', async () => {
