@@ -13,6 +13,8 @@ import {
   insertCurrentEvent,
   getCurrentEvent,
   listCurrentEvents,
+  updateCurrentEventContent,
+  expireStaleProposedEvents,
   setEventStatus,
   getEventDecorations,
   upsertEventDatasetLink,
@@ -598,5 +600,36 @@ describe('listPublicEvents', () => {
       sqlite.prepare('UPDATE datasets SET is_hidden = 1 WHERE id = ?').run(seededDatasetId(0))
       expect(await listApprovedEventsForDataset(db, seededDatasetId(0), { now: NOW })).toEqual([])
     })
+  })
+})
+
+describe('expireStaleProposedEvents', () => {
+  it('expires only untouched proposed events past the cutoff', async () => {
+    const { db } = freshDb()
+    const stale = await insertCurrentEvent(db, sampleEvent({ title: 'stale' }), '2026-06-01T00:00:00.000Z')
+    const fresh = await insertCurrentEvent(db, sampleEvent({ title: 'fresh' }), '2026-06-20T00:00:00.000Z')
+    // A curator-approved event past the cutoff must never be aged.
+    const approved = await insertCurrentEvent(db, sampleEvent({ title: 'approved' }), '2026-05-01T00:00:00.000Z')
+    await setEventStatus(db, approved.id, 'approved', 'PUB1', '2026-05-02T00:00:00.000Z')
+
+    const n = await expireStaleProposedEvents(db, '2026-06-15T00:00:00.000Z', '2026-06-29T00:00:00.000Z')
+    expect(n).toBe(1)
+    expect((await getCurrentEvent(db, stale.id))!.status).toBe('expired')
+    expect((await getCurrentEvent(db, fresh.id))!.status).toBe('proposed')
+    expect((await getCurrentEvent(db, approved.id))!.status).toBe('approved')
+  })
+
+  it('a re-ingested (still-carried) event survives the sweep', async () => {
+    const { db } = freshDb()
+    const ev = await insertCurrentEvent(
+      db,
+      sampleEvent({ title: 'ongoing', externalId: 'ext-1' }),
+      '2026-06-01T00:00:00.000Z',
+    )
+    // The feed still carries it: a content refresh bumps updated_at.
+    await updateCurrentEventContent(db, ev.id, sampleEvent({ externalId: 'ext-1' }), '2026-06-28T00:00:00.000Z')
+    const n = await expireStaleProposedEvents(db, '2026-06-15T00:00:00.000Z', '2026-06-29T00:00:00.000Z')
+    expect(n).toBe(0)
+    expect((await getCurrentEvent(db, ev.id))!.status).toBe('proposed')
   })
 })

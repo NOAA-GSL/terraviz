@@ -395,6 +395,31 @@ export async function listCurrentEvents(
 }
 
 /**
+ * Age still-`proposed` events out of the review queue: anything neither
+ * the feeds nor a curator has touched since `cutoffIso` flips to
+ * `expired`. Staleness is judged on `updated_at` — a re-ingest bumps it,
+ * so an *ongoing* event (an open EONET wildfire) stays proposed for as
+ * long as its feed keeps carrying it, while news items that rolled out
+ * of their feed's window quietly age off. Only `proposed` rows are
+ * touched: curator decisions (approved/rejected) are never aged.
+ * Returns the number of rows expired.
+ */
+export async function expireStaleProposedEvents(
+  db: D1Database,
+  cutoffIso: string,
+  now: string = new Date().toISOString(),
+): Promise<number> {
+  const res = await db
+    .prepare(
+      `UPDATE current_events SET status = 'expired', updated_at = ?
+        WHERE status = 'proposed' AND updated_at < ?`,
+    )
+    .bind(now, cutoffIso)
+    .run()
+  return res.meta?.changes ?? 0
+}
+
+/**
  * Transition an event's curator status, stamping the audit fields
  * (`reviewed_at` / `reviewed_by`) and `updated_at`. No-op result is the
  * caller's concern; this issues the UPDATE unconditionally.
