@@ -137,3 +137,53 @@ describe('renderEventDetail — AI-inferred badge (slice C)', () => {
     expect(pane.querySelector('.publisher-events-inferred-badge')).toBeNull()
   })
 })
+
+describe('renderEventDetail — curator metadata override', () => {
+  it('save posts { edits } with only the changed fields and updates the event', async () => {
+    const fetchFn = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => ({
+      ok: true,
+      status: 200,
+      type: 'basic',
+      json: async () => ({
+        event: {
+          occurredStart: '2026-06-18T00:00:00.000Z',
+          geometry: { boundingBox: { n: 30, s: 8, w: -90, e: -58 }, regionName: 'Caribbean Sea' },
+        },
+        links: [],
+      }),
+      text: async () => '{}',
+    }) as unknown as Response)
+    const evt = event({
+      occurredStart: '2026-06-20T00:00:00.000Z',
+      inferredFields: ['geometry'],
+      geometry: { regionName: 'Europe' },
+    })
+    const onEventStatusChange = vi.fn()
+    const pane = renderEventDetail(evt, { onEventStatusChange, fetchFn })
+
+    const toggle = pane.querySelector('.publisher-events-edit-toggle') as HTMLButtonElement
+    toggle.click()
+    const form = pane.querySelector('.publisher-events-edit-form') as HTMLElement
+    expect(form.hidden).toBe(false)
+
+    const [dateInput, regionInput] = [...form.querySelectorAll('input')]
+    expect(dateInput.value).toBe('2026-06-20') // prefilled
+    regionInput.value = 'Caribbean'
+    ;(form.querySelector('button') as HTMLButtonElement).click()
+    await flush()
+
+    const body = JSON.parse(String(fetchFn.mock.calls[0][1]!.body)) as { edits: Record<string, string> }
+    expect(body.edits).toEqual({ regionName: 'Caribbean' }) // date unchanged → omitted
+    // In-memory event reflects the server's resolved values; the
+    // orchestrator is asked to re-render.
+    expect(evt.geometry?.regionName).toBe('Caribbean Sea')
+    expect(evt.inferredFields).toBeUndefined()
+    expect(onEventStatusChange).toHaveBeenCalledWith('EVT1', 'proposed')
+  })
+
+  it('offers the region vocabulary as a datalist', () => {
+    const pane = renderEventDetail(event(), { onEventStatusChange: vi.fn() })
+    const options = pane.querySelectorAll('datalist option')
+    expect(options.length).toBeGreaterThan(50)
+  })
+})

@@ -143,7 +143,9 @@ export function buildEnrichPrompt(input: {
     '{"date": "YYYY-MM-DD" | null, "place": string | null, "confidence": number}. ' +
     '"date" is the day the described event occurred (resolve relative phrases ' +
     'like "yesterday" or "on Tuesday" against the publication date given); null if the text does not say. ' +
-    `"place" must be EXACTLY one name from this list (or null if none fits): ${regionNames}. ` +
+    '"place" must be EXACTLY one name from the list below — the SMALLEST listed region that ' +
+    'clearly contains the specific location the text names. If no listed region clearly contains ' +
+    `it, use null; a wrong region is worse than none. The list: ${regionNames}. ` +
     '"confidence" is 0-1 for how certain you are about the extracted values. ' +
     'Never guess — prefer null over a doubtful value.'
   const publishedLine = input.publishedAt ? `Published: ${input.publishedAt}\n` : ''

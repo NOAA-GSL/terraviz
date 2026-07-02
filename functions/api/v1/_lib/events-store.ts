@@ -395,6 +395,54 @@ export async function listCurrentEvents(
 }
 
 /**
+ * Apply curator edits to an event's occurred time / location. A field
+ * edited by a human stops being AI provenance: its entry is removed
+ * from `inferred_fields` (the badge disappears for that field). A
+ * location edit replaces the whole geometry — bbox + region name from
+ * the resolved region, any stale point cleared — so the matcher's geo
+ * signal scores against exactly what the curator chose.
+ */
+export async function applyEventEdits(
+  db: D1Database,
+  id: string,
+  edits: { occurredStart?: string; geometry?: EventGeometry },
+  now: string = new Date().toISOString(),
+): Promise<void> {
+  const existing = await getCurrentEvent(db, id)
+  if (!existing) return
+
+  let inferred: string[] = []
+  try {
+    const parsed: unknown = existing.inferred_fields ? JSON.parse(existing.inferred_fields) : []
+    if (Array.isArray(parsed)) inferred = parsed.filter((f): f is string => typeof f === 'string')
+  } catch {
+    inferred = []
+  }
+
+  const sets: string[] = ['updated_at = ?']
+  const binds: unknown[] = [now]
+  if (edits.occurredStart !== undefined) {
+    sets.push('occurred_start = ?')
+    binds.push(edits.occurredStart)
+    inferred = inferred.filter(f => f !== 'occurredStart')
+  }
+  if (edits.geometry !== undefined) {
+    const bbox = edits.geometry.boundingBox
+    const point = edits.geometry.point
+    sets.push('bbox_n = ?', 'bbox_s = ?', 'bbox_w = ?', 'bbox_e = ?', 'point_lat = ?', 'point_lon = ?', 'region_name = ?')
+    binds.push(bbox?.n ?? null, bbox?.s ?? null, bbox?.w ?? null, bbox?.e ?? null, point?.lat ?? null, point?.lon ?? null, edits.geometry.regionName ?? null)
+    inferred = inferred.filter(f => f !== 'geometry')
+  }
+  sets.push('inferred_fields = ?')
+  binds.push(inferred.length > 0 ? JSON.stringify(inferred) : null)
+
+  await db
+    .prepare(`UPDATE current_events SET ${sets.join(', ')} WHERE id = ?`)
+    .bind(...binds, id)
+    .run()
+}
+
+/**
  * Age still-`proposed` events out of the review queue: anything neither
  * the feeds nor a curator has touched since `cutoffIso` flips to
  * `expired`. Staleness is judged on `updated_at` — a re-ingest bumps it,

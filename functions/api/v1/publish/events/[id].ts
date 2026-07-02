@@ -9,8 +9,15 @@
  *   {
  *     "event": "approve" | "reject",                 // optional: vet the event itself
  *     "links": [{ "datasetId": "...", "decision": "approve" | "reject" }], // optional
- *     "addDatasetIds": ["..."]                        // optional: pair extra datasets the matcher missed
+ *     "addDatasetIds": ["..."],                       // optional: pair extra datasets the matcher missed
+ *     "edits": { "occurredStart": "...", "regionName": "..." } // optional: correct the event's own metadata
  *   }
+ *
+ * `edits` lets a curator override the occurred time and/or location —
+ * the fix for a wrong or missing AI-inferred value (slice C). The
+ * region name resolves through the same `regions.ts` vocabulary the
+ * enrichment uses; an edited field sheds its "AI-inferred" flag and the
+ * matcher re-runs so the pairing signals score the corrected values.
  *
  * `addDatasetIds` lets a curator pair a dataset the matcher never
  * suggested: each is seeded as a fresh `proposed` link (visibility-
@@ -38,12 +45,16 @@ import {
   setEventStatus,
   setLinkStatus,
   insertProposedLinkIfAbsent,
+  applyEventEdits,
   toPublicEvent,
   bustFeaturedEventCache,
   type CurrentEventStatus,
+  type EventGeometry,
   type EventLinkStatus,
 } from '../../_lib/events-store'
 import { sanitizeDatasetIds, filterVisibleDatasetIds } from '../../_lib/events-ingest'
+import { runMatcherForEvent } from '../../_lib/events-matcher'
+import { resolveRegion } from '../../../../../src/data/regions'
 
 const CONTENT_TYPE = 'application/json; charset=utf-8'
 
@@ -64,6 +75,10 @@ interface ParsedReview {
   event?: Decision
   links: LinkDecision[]
   addDatasetIds: string[]
+  /** Curator corrections to the event's own metadata (slice C: the fix
+   *  for a wrong or missing AI-inferred value). `geometry` arrives
+   *  resolved from `edits.regionName` via `regions.ts`. */
+  edits?: { occurredStart?: string; geometry?: EventGeometry }
 }
 
 function jsonError(status: number, error: string, message: string): Response {
@@ -122,12 +137,38 @@ function parseReview(
 
   const addDatasetIds = sanitizeDatasetIds(body.addDatasetIds)
 
-  if (event === undefined && links.length === 0 && addDatasetIds.length === 0 && errors.length === 0) {
-    errors.push({ field: 'event', code: 'empty', message: 'Provide an `event` decision, one or more `links`, or `addDatasetIds`.' })
+  // Curator metadata corrections — a date and/or a place constrained to
+  // the same regions.ts vocabulary the AI enrichment uses.
+  let edits: ParsedReview['edits']
+  if (body.edits != null) {
+    const e = (body.edits && typeof body.edits === 'object' ? body.edits : {}) as Record<string, unknown>
+    const out: NonNullable<ParsedReview['edits']> = {}
+    if (e.occurredStart != null) {
+      const ms = typeof e.occurredStart === 'string' ? Date.parse(e.occurredStart) : NaN
+      if (!Number.isFinite(ms)) {
+        errors.push({ field: 'edits.occurredStart', code: 'invalid', message: '`edits.occurredStart` must be a parseable date.' })
+      } else {
+        out.occurredStart = new Date(ms).toISOString()
+      }
+    }
+    if (e.regionName != null) {
+      const region = typeof e.regionName === 'string' ? resolveRegion(e.regionName) : null
+      if (!region) {
+        errors.push({ field: 'edits.regionName', code: 'invalid', message: '`edits.regionName` must be a known region name.' })
+      } else {
+        const [w, s, eb, n] = region.bounds
+        out.geometry = { boundingBox: { n, s, w, e: eb }, regionName: region.name }
+      }
+    }
+    if (Object.keys(out).length > 0) edits = out
+  }
+
+  if (event === undefined && links.length === 0 && addDatasetIds.length === 0 && edits === undefined && errors.length === 0) {
+    errors.push({ field: 'event', code: 'empty', message: 'Provide an `event` decision, one or more `links`, `addDatasetIds`, or `edits`.' })
   }
 
   if (errors.length > 0) return { ok: false, errors }
-  return { ok: true, value: { event, links, addDatasetIds } }
+  return { ok: true, value: { event, links, addDatasetIds, edits } }
 }
 
 export const onRequestPost: PagesFunction<CatalogEnv, 'id'> = async context => {
@@ -156,6 +197,15 @@ export const onRequestPost: PagesFunction<CatalogEnv, 'id'> = async context => {
   const db = context.env.CATALOG_DB
   const event = await getCurrentEvent(db, id)
   if (!event) return jsonError(404, 'not_found', `Event ${id} not found.`)
+
+  // Apply metadata corrections before anything else, so a same-submit
+  // approve acts on the corrected event, and re-run the matcher so the
+  // T/Ti/G signals score against the curator's values (statuses are
+  // preserved; scores refresh, new candidates may propose).
+  if (parsed.value.edits) {
+    await applyEventEdits(db, id, parsed.value.edits)
+    await runMatcherForEvent(db, id, { env: context.env })
+  }
 
   // Seed any hand-picked additions FIRST (so an add + approve can land in
   // one submit). Drop hidden/retracted/unknown datasets via the shared
@@ -203,6 +253,7 @@ export const onRequestPost: PagesFunction<CatalogEnv, 'id'> = async context => {
       event: parsed.value.event ?? null,
       links: parsed.value.links,
       added_links: addedCount,
+      edits: parsed.value.edits ?? null,
     }),
   })
 
