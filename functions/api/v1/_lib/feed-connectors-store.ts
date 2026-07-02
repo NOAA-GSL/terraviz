@@ -17,6 +17,12 @@
 
 import { newUlid } from './ulid'
 
+/** The connector implementations this deployment can run. Rows of any
+ *  other kind are skippable data (the refresh route records an error),
+ *  but the create/update routes only accept these. */
+export const FEED_CONNECTOR_KINDS = ['eonet', 'rss'] as const
+export type FeedConnectorKind = (typeof FEED_CONNECTOR_KINDS)[number]
+
 /** One `feed_connectors` row, column-for-column. */
 export interface FeedConnectorRow {
   id: string

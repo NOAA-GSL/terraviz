@@ -41,6 +41,7 @@ import {
   type FeedConnectorRow,
 } from '../../_lib/feed-connectors-store'
 import { mapEonetFeed, type EonetFeed, type EventCreateBody } from '../../../../../cli/lib/eonet'
+import { countFeedItems, mapRssFeed } from '../../../../../cli/lib/rss'
 
 const CONTENT_TYPE = 'application/json; charset=utf-8'
 
@@ -98,25 +99,43 @@ async function fetchAndMap(
   | { ok: true; fetched: number; bodies: EventCreateBody[] }
   | { ok: false; error: string; config?: boolean }
 > {
-  if (connector.kind !== 'eonet') {
+  if (connector.kind !== 'eonet' && connector.kind !== 'rss') {
     return { ok: false, error: `unknown connector kind "${connector.kind}"`, config: true }
   }
   if (!isFetchableUrl(connector.url)) {
     return { ok: false, error: 'invalid feed URL (must be http(s))', config: true }
   }
-  let feed: EonetFeed
+  if (connector.kind === 'eonet') {
+    let feed: EonetFeed
+    try {
+      const res = await fetch(connector.url, { signal: AbortSignal.timeout(FEED_TIMEOUT_MS) })
+      if (!res.ok) return { ok: false, error: `feed responded ${res.status}` }
+      feed = (await res.json()) as EonetFeed
+    } catch {
+      return { ok: false, error: 'could not reach the feed' }
+    }
+    return {
+      ok: true,
+      fetched: Array.isArray(feed.events) ? feed.events.length : 0,
+      bodies: mapEonetFeed(feed),
+    }
+  }
+  // Generic RSS 2.0 / Atom — the bring-your-own-feed kind. The
+  // connector's registry id namespaces the dedupe key and its label is
+  // the provenance on every event it produces.
+  let xml: string
   try {
     const res = await fetch(connector.url, { signal: AbortSignal.timeout(FEED_TIMEOUT_MS) })
     if (!res.ok) return { ok: false, error: `feed responded ${res.status}` }
-    feed = (await res.json()) as EonetFeed
+    xml = await res.text()
   } catch {
     return { ok: false, error: 'could not reach the feed' }
   }
-  return {
-    ok: true,
-    fetched: Array.isArray(feed.events) ? feed.events.length : 0,
-    bodies: mapEonetFeed(feed),
-  }
+  const bodies = mapRssFeed(xml, { feedId: connector.id, sourceName: connector.label })
+  // `fetched` is the raw item count in the document (the RSS analogue of
+  // EONET's `feed.events.length`); `mappable` downstream is the mapped,
+  // capped body count — the split shows skips + the RSS_MAX_ITEMS cap.
+  return { ok: true, fetched: countFeedItems(xml), bodies }
 }
 
 export const onRequestPost: PagesFunction<CatalogEnv> = async context => {

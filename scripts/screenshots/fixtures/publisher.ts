@@ -252,6 +252,64 @@ const events = {
 
 const eventsEmpty = { events: [] }
 
+/** The `/api/v1/publish/feeds` connector registry — the seeded EONET
+ *  row plus one bring-your-own RSS feed so the console shows both an
+ *  enabled and a paused connector with run bookkeeping. */
+const feeds = {
+  feeds: [
+    {
+      id: 'FEED_EONET_DEFAULT',
+      kind: 'eonet',
+      label: 'NASA EONET',
+      url: 'https://eonet.gsfc.nasa.gov/api/v3/events?status=open&days=14',
+      category: 'hazards',
+      enabled: true,
+      createdAt: '2026-07-01T00:00:00.000Z',
+      updatedAt: '2026-07-01T00:00:00.000Z',
+      lastRunAt: '2026-07-02T06:00:00.000Z',
+      lastRunStatus: 'ok',
+      lastRunError: null,
+    },
+    {
+      id: '01HFEEDRSSAAAAAAAAAAAAAAAA',
+      kind: 'rss',
+      label: 'Example Environment Desk',
+      url: 'https://news.example.org/environment/rss',
+      category: 'news',
+      enabled: false,
+      createdAt: '2026-07-01T12:00:00.000Z',
+      updatedAt: '2026-07-02T08:00:00.000Z',
+      lastRunAt: '2026-07-02T06:00:00.000Z',
+      lastRunStatus: 'error',
+      lastRunError: 'feed responded 502',
+    },
+  ],
+}
+
+/** The `/api/v1/publish/feeds/preview` dry-run — the latest-items list
+ *  the console shows under a feed row's Preview toggle. */
+const feedPreview = {
+  fetched: 3,
+  mappable: 3,
+  items: [
+    {
+      title: 'Hurricane advisory 12 issued for the central Atlantic',
+      publishedAt: '2026-07-01T15:00:00.000Z',
+      url: 'https://news.example.org/hurricane-advisory-12',
+    },
+    {
+      title: 'Wildfire smoke reaches the coastal cities',
+      publishedAt: '2026-06-30T09:00:00.000Z',
+      url: 'https://news.example.org/wildfire-smoke',
+    },
+    {
+      title: 'Monsoon flooding displaces thousands',
+      publishedAt: null,
+      url: 'https://news.example.org/monsoon-flooding',
+    },
+  ],
+}
+
 /** A forced server error (HTTP 500) so a list page renders the shared
  *  error card — the `publisher.me.error.*` / `publisher.error.*` strings
  *  that a successful response never surfaces for translators. */
@@ -298,5 +356,8 @@ export function publisherFixtures(
     list(opts.workflows ?? 'populated', '/api/v1/publish/workflows', workflows, workflowsEmpty),
     list(opts.publishers ?? 'populated', '/api/v1/publish/publishers', publishers, publishersEmpty),
     list(opts.events ?? 'populated', '/api/v1/publish/events', events, eventsEmpty),
+    // Preview before the registry list — rules substring-match in order.
+    { url: '/api/v1/publish/feeds/preview', json: feedPreview },
+    { url: '/api/v1/publish/feeds', json: feeds },
   ]
 }

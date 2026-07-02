@@ -33,6 +33,7 @@ export type AuditSubjectKind =
   | 'analytics_day'
   | 'publisher'
   | 'event'
+  | 'feed'
 
 /**
  * `action` is a free-form, dotted token recording *what happened*.
@@ -61,6 +62,9 @@ export type AuditAction =
   | 'event.reviewed'
   | 'event.ingested'
   | 'event.refreshed'
+  | 'feed.created'
+  | 'feed.updated'
+  | 'feed.deleted'
 
 export interface AuditEventInput {
   actor_kind: AuditActorKind

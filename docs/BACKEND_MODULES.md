@@ -29,6 +29,7 @@ design rationale in the `docs/CATALOG_*` plan docs.
 | `cli/lib/config.ts` | Resolve the CLI's runtime configuration: server URL + auth |
 | `cli/lib/eonet.ts` | Pure NASA EONET → current-event mapper for `terraviz import-events` + the refresh route. Synthesizes a readable summary (category + coords + time) when EONET gives none, and picks a public source page — falling back to a public NASA Worldview imagery deep-link when the only source is auth-walled (IRWIN/JTWC) (`docs/CURRENT_EVENTS_PLAN.md` §9) |
 | `cli/lib/ffmpeg-hls.ts` | FFmpeg HLS encoder wrapper — multi-rendition equirectangular |
+| `cli/lib/rss.ts` | Pure generic RSS 2.0 / Atom → current-event mapper — the bring-your-own-feed connector kind. Zero-dependency tolerant XML scan (Workers has no DOMParser); carries GeoRSS points through as event geometry; the connector's registry id namespaces the `(feed_id, external_id)` dedupe key (`docs/CURRENT_EVENTS_PLAN.md` §9) |
 | `cli/lib/hls-incremental.ts` | Pure core of incremental HLS re-encoding — absolute-grid chunking, content-addressed segment hashing, reuse-vs-encode diff, playlist assembly (`docs/INCREMENTAL_HLS_PLAN.md`) |
 | `cli/lib/hls-incremental-runner.ts` | Incremental transcode orchestration over an injectable I/O seam — load manifest → diff → encode changed chunks → recycle the rest → publish playlists → persist manifest → mark-and-sweep segment GC (`docs/INCREMENTAL_HLS_PLAN.md` Stages 2-3) |
 | `cli/lib/migration-telemetry.ts` | Operator-side telemetry emitter for the migration CLIs |
@@ -124,6 +125,9 @@ design rationale in the `docs/CATALOG_*` plan docs.
 | `functions/api/v1/publish/events.ts` | GET (privileged current-events review queue) + POST (privileged create / ingest: idempotent on `(feed_id, external_id)`, runs the matcher on create; `docs/CURRENT_EVENTS_PLAN.md` §5, §9) |
 | `functions/api/v1/publish/events/[id].ts` | POST /api/v1/publish/events/{id} — curator review-submit (event + per-link approve/reject) |
 | `functions/api/v1/publish/events/refresh.ts` | POST /api/v1/publish/events/refresh — privileged on-demand ingestion pull: fetches the node's configured feed (EONET) server-side and runs the shared upsert+match path, so a curator can refresh the queue without waiting for the cron (`docs/CURRENT_EVENTS_PLAN.md` §9) |
+| `functions/api/v1/publish/feeds.ts` | GET (privileged connector list for the portal feeds page) + POST (add a connector — a curated preset or a bring-your-own RSS/Atom URL; validated kind/label/http(s) url, audit-logged; `docs/CURRENT_EVENTS_PLAN.md` §9) |
+| `functions/api/v1/publish/feeds/[id].ts` | POST (patch a connector — label/url/category/**enable-disable**) + DELETE (remove; already-ingested events untouched) — privileged, audit-logged (`docs/CURRENT_EVENTS_PLAN.md` §9) |
+| `functions/api/v1/publish/feeds/preview.ts` | GET /api/v1/publish/feeds/preview?url=&kind= — privileged dry-run of a feed URL through the same pure mapper the refresh route uses; returns the first few mapped items (title/publishedAt/link) so an operator can see what a preset or pasted URL would ingest before adding it. Writes nothing (`docs/CURRENT_EVENTS_PLAN.md` §9) |
 | `functions/api/v1/publish/featured-hero.ts` | /api/v1/publish/featured-hero — the "Right now" hero admin write API (Phase B of `docs/HERO_ADMIN_SCOPING.md`) |
 | `functions/api/v1/publish/featured.ts` | /api/v1/publish/featured |
 | `functions/api/v1/publish/featured/[dataset_id].ts` | /api/v1/publish/featured/{dataset_id} |

@@ -419,6 +419,15 @@ export const scenes: Scene[] = [
     },
   },
   {
+    name: 'publish-feeds',
+    description: 'Publisher portal — current-events feed console (connectors + preset gallery)',
+    fixtures: publisherFixtures({ admin: true }),
+    async setup(page) {
+      await openPublish(page, '/publish/feeds')
+      await page.locator('.publisher-feeds-row').first().waitFor()
+    },
+  },
+  {
     name: 'publish-me',
     description: 'Publisher portal — current-user identity & role (populated)',
     fixtures: publisherFixtures(),
