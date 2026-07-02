@@ -197,6 +197,33 @@ const checks: Check[] = [
     },
   },
   {
+    name: 'publisher feeds console renders connectors + preset gallery',
+    fixtures: publisherFixtures({ admin: true }),
+    async run(page) {
+      await gotoApp(page, '/publish/feeds')
+      await page.locator('#publisher-root .publisher-topbar').waitFor({ state: 'visible' })
+      // The registered connectors render with state dots + bookkeeping.
+      await page
+        .locator('.publisher-feeds-row', { hasText: 'NASA EONET' })
+        .first()
+        .waitFor({ timeout: 15_000 })
+      assert(
+        (await page.locator('.publisher-feeds-dot-off').count()) >= 1,
+        'the paused fixture connector should render a paused dot',
+      )
+      // The curated preset gallery renders grouped suggestions; the
+      // already-registered EONET preset shows as added (disabled).
+      const presets = page.locator('.publisher-feeds-preset')
+      assert((await presets.count()) >= 10, 'the preset gallery should list the curated feeds')
+      assert(
+        (await page.locator('.publisher-feeds-preset button[disabled]').count()) >= 1,
+        'an already-registered preset should show as added',
+      )
+      // The bring-your-own form is present.
+      await page.locator('#feeds-custom-url').waitFor()
+    },
+  },
+  {
     name: 'workflow template picker fills the drought recall pipeline',
     fixtures: publisherFixtures(),
     async run(page) {
