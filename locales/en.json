@@ -1004,6 +1004,7 @@
   "publisher.feeds.preview.empty": "No items found in this feed.",
   "publisher.feeds.preview.error": "Could not fetch this feed.",
   "publisher.feeds.preview.hide": "Hide preview",
+  "publisher.feeds.preview.invalidUrl": "Enter an http(s) feed URL to preview.",
   "publisher.feeds.preview.loading": "Fetching the latest items…",
   "publisher.feeds.remove": "Remove",
   "publisher.feeds.restricted": "Managing feeds is restricted to admin publishers.",

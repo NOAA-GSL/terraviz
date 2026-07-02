@@ -96,7 +96,9 @@ export const onRequestPost: PagesFunction<CatalogEnv, 'id'> = async context => {
     }
     patch.url = url
   }
-  if (typeof b.category === 'string') patch.category = b.category.trim().slice(0, MAX_CATEGORY_CHARS) || null
+  // An explicit `category: null` clears it; a string sets it (bounded).
+  if (b.category === null) patch.category = null
+  else if (typeof b.category === 'string') patch.category = b.category.trim().slice(0, MAX_CATEGORY_CHARS) || null
   if (typeof b.enabled === 'boolean') patch.enabled = b.enabled
   if (Object.keys(patch).length === 0) {
     return jsonError(400, 'empty_patch', 'Provide at least one of: label, url, category, enabled.')

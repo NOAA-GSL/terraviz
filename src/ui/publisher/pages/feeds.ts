@@ -245,7 +245,7 @@ function renderConsole(mount: HTMLElement, feeds: FeedRow[], options: FeedsPageO
       }
       const url = getUrl()
       if (!/^https?:\/\//i.test(url)) {
-        showError(t('publisher.feeds.custom.invalid'))
+        showError(t('publisher.feeds.preview.invalidUrl'))
         return
       }
       panel.hidden = false

@@ -58,13 +58,24 @@ const NAMED_ENTITIES: Record<string, string> = {
   deg: '°',
 }
 
+/** `String.fromCodePoint` throws on out-of-range values (> U+10FFFF) —
+ *  a malformed numeric reference must stay literal text, never a throw
+ *  (this module's contract is "skip bad input, don't fail the feed"). */
+function safeCodePoint(code: number, literal: string): string {
+  try {
+    return String.fromCodePoint(code)
+  } catch {
+    return literal
+  }
+}
+
 /** Decode the XML/HTML entities that actually occur in feeds
  *  (numeric + common named). `&amp;` decodes last so a double-escaped
  *  sequence doesn't cascade. */
 function decodeEntities(text: string): string {
   return text
-    .replace(/&#x([0-9a-fA-F]+);/g, (_, hex: string) => String.fromCodePoint(parseInt(hex, 16)))
-    .replace(/&#(\d+);/g, (_, dec: string) => String.fromCodePoint(parseInt(dec, 10)))
+    .replace(/&#x([0-9a-fA-F]+);/g, (whole, hex: string) => safeCodePoint(parseInt(hex, 16), whole))
+    .replace(/&#(\d+);/g, (whole, dec: string) => safeCodePoint(parseInt(dec, 10), whole))
     .replace(/&([a-z]+);/g, (whole, name: string) => NAMED_ENTITIES[name] ?? whole)
     .replace(/&lt;/gi, '<')
     .replace(/&gt;/gi, '>')

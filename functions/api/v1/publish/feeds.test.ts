@@ -138,6 +138,13 @@ describe('POST /api/v1/publish/feeds/:id', () => {
     expect((await feedPatch(ctx({ env, method: 'POST', id: 'NOPE', body: { enabled: false } }))).status).toBe(404)
   })
 
+  it('an explicit category: null clears the category', async () => {
+    const { env } = setupEnv()
+    const res = await feedPatch(ctx({ env, method: 'POST', id: 'FEED_EONET_DEFAULT', body: { category: null } }))
+    expect(res.status).toBe(200)
+    expect((JSON.parse(await res.text()) as { feed: { category: string | null } }).feed.category).toBeNull()
+  })
+
   it('enforces the create route\'s length bounds on patch', async () => {
     const { env } = setupEnv()
     const longLabel = 'x'.repeat(121)

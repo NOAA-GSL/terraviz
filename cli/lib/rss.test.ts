@@ -110,6 +110,16 @@ describe('parseRssFeed', () => {
     expect(parseRssFeed('not xml at all')).toEqual([])
     expect(parseRssFeed('<html><body>a web page</body></html>')).toEqual([])
   })
+
+  it('leaves an out-of-range numeric entity literal instead of throwing', () => {
+    const xml = `<rss><channel><item>
+      <title>Bad &#x110000; entity &#1114112; here</title>
+      <link>https://x.example/bad-entity</link>
+    </item></channel></rss>`
+    const items = parseRssFeed(xml)
+    expect(items).toHaveLength(1)
+    expect(items[0].title).toBe('Bad &#x110000; entity &#1114112; here')
+  })
 })
 
 describe('countFeedItems', () => {
