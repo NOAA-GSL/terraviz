@@ -147,9 +147,16 @@ export async function enrichEventFields(
       ),
     ])
     const r = (raced ?? {}) as { response?: unknown }
-    if (typeof r.response !== 'string' || r.response.length === 0) return null
+    if (typeof r.response !== 'string' || r.response.length === 0) {
+      // Visible in the deployment's real-time logs — distinguishes "the
+      // model answered garbage" from "the binding is missing" (which
+      // never reaches this function).
+      console.warn('[events-enrich] model returned an empty/non-text response')
+      return null
+    }
     text = r.response
-  } catch {
+  } catch (e) {
+    console.warn('[events-enrich] model call failed:', e instanceof Error ? e.message : String(e))
     return null
   }
 

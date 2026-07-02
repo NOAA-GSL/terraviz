@@ -71,6 +71,10 @@ interface ConnectorSummary {
   created: number
   refreshed: number
   failed: number
+  /** New events on which slice-C enrichment filled at least one field —
+   *  0 with events created is the operator's signal that AI is unbound
+   *  (or every item already carried date + location). */
+  enriched: number
   error?: string
 }
 
@@ -189,6 +193,7 @@ export const onRequestPost: PagesFunction<CatalogEnv> = async context => {
       created: 0,
       refreshed: 0,
       failed: 0,
+      enriched: 0,
     }
     const result = await fetchAndMap(connector)
     if (!result.ok) {
@@ -216,6 +221,7 @@ export const onRequestPost: PagesFunction<CatalogEnv> = async context => {
         const outcome = await ingestEvent(db, { ...parsed.value, originNode }, { env: context.env, enrichBudget })
         if (outcome.created) summary.created++
         else summary.refreshed++
+        if (outcome.enriched) summary.enriched++
       } catch {
         summary.failed++
       }
@@ -241,8 +247,9 @@ export const onRequestPost: PagesFunction<CatalogEnv> = async context => {
       created: acc.created + f.created,
       refreshed: acc.refreshed + f.refreshed,
       failed: acc.failed + f.failed,
+      enriched: acc.enriched + f.enriched,
     }),
-    { fetched: 0, mappable: 0, created: 0, refreshed: 0, failed: 0 },
+    { fetched: 0, mappable: 0, created: 0, refreshed: 0, failed: 0, enriched: 0 },
   )
   const summary = { ...totals, feeds }
 

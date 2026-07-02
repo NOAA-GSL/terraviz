@@ -167,6 +167,10 @@ export interface IngestOutcome {
    *  May be fewer than the requested `datasetIds` if one was hidden /
    *  retracted between drawer load and save. */
   manualLinks: number
+  /** True when slice-C enrichment filled at least one field on this
+   *  event — surfaces in the refresh summary so an operator can tell
+   *  "AI unbound/erroring" from "nothing needed filling". */
+  enriched: boolean
 }
 
 export interface IngestOptions {
@@ -297,6 +301,7 @@ export async function ingestEvent(
 ): Promise<IngestOutcome> {
   let id: string
   let created: boolean
+  let enriched = false
   if (input.feedId && input.externalId) {
     const existing = await findEventByExternal(db, input.feedId, input.externalId)
     if (existing) {
@@ -307,11 +312,15 @@ export async function ingestEvent(
       id = existing.id
       created = false
     } else {
-      id = (await insertCurrentEvent(db, await withEnrichment(input, opts))).id
+      const prepared = await withEnrichment(input, opts)
+      enriched = prepared !== input
+      id = (await insertCurrentEvent(db, prepared)).id
       created = true
     }
   } else {
-    id = (await insertCurrentEvent(db, await withEnrichment(input, opts))).id
+    const prepared = await withEnrichment(input, opts)
+    enriched = prepared !== input
+    id = (await insertCurrentEvent(db, prepared)).id
     created = true
   }
 
@@ -325,5 +334,5 @@ export async function ingestEvent(
   const matches = await runMatcherForEvent(db, id, { env: opts.env })
   const matchedIds = new Set(matches.map(m => m.datasetId))
   const manualOnly = manualIds.filter(dsId => !matchedIds.has(dsId)).length
-  return { id, created, proposedLinks: matches.length + manualOnly, manualLinks: manualIds.length }
+  return { id, created, proposedLinks: matches.length + manualOnly, manualLinks: manualIds.length, enriched }
 }
