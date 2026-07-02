@@ -29,6 +29,7 @@ import type { Page } from 'playwright'
 import { gotoApp } from './core/browser'
 import type { FixtureRule } from './core/fixtures'
 import { analyticsFixtures, feedbackFixtures } from './fixtures/admin'
+import { catalogReportFixtures } from './fixtures/catalog'
 import { publisherFixtures } from './fixtures/publisher'
 
 export interface Scene {
@@ -181,6 +182,7 @@ export const scenes: Scene[] = [
     // fresh capture, so its thumbnail/title differ run-to-run — mask it
     // out of the diff (it's prominent on mobile and flapped the gate).
     masks: ['#hero-panel'],
+    fixtures: catalogReportFixtures(),
     async setup(page) {
       await openCatalog(page)
     },
@@ -189,6 +191,7 @@ export const scenes: Scene[] = [
     name: 'browse-filters-open',
     description:
       'Browse overlay with the inline filter rail and an active facet filter applied',
+    fixtures: catalogReportFixtures(),
     async setup(page) {
       await openCatalog(page)
       // At the capturer's 1440px desktop viewport the Cards view shows
@@ -206,6 +209,7 @@ export const scenes: Scene[] = [
   {
     name: 'browse-search-active',
     description: 'Browse overlay with an active search query and the clear button shown',
+    fixtures: catalogReportFixtures(),
     async setup(page) {
       await openCatalog(page)
       await page.locator('#browse-search').fill('ocean')
@@ -216,6 +220,7 @@ export const scenes: Scene[] = [
   {
     name: 'orbit-chat-open',
     description: 'Orbit (digital docent) chat panel opened from the browser',
+    fixtures: catalogReportFixtures(),
     async setup(page) {
       await openCatalog(page)
       await page.locator('#browse-chat-btn').click()
@@ -225,6 +230,7 @@ export const scenes: Scene[] = [
   {
     name: 'help-panel',
     description: 'Help & feedback panel (Guide tab + feedback form)',
+    fixtures: catalogReportFixtures(),
     async setup(page) {
       await openCatalog(page)
       await page.locator('#help-trigger-browse').click()
@@ -237,6 +243,7 @@ export const scenes: Scene[] = [
     // The cytoscape force layout settles to slightly different pixel
     // positions per run; mask it so the diff doesn't flap.
     masks: ['#browse-graph'],
+    fixtures: catalogReportFixtures(),
     // The Graph toggle is dropped on portrait phones (Cards + Map only),
     // so only capture this on wider viewports.
     minWidth: 769,
@@ -249,6 +256,7 @@ export const scenes: Scene[] = [
   {
     name: 'browse-timeline-view',
     description: 'Browse overlay switched to the Timeline view',
+    fixtures: catalogReportFixtures(),
     // Like Graph, the Timeline toggle is absent on portrait phones.
     minWidth: 769,
     async setup(page) {
@@ -263,6 +271,7 @@ export const scenes: Scene[] = [
     // MapLibre renders tiles asynchronously and non-deterministically;
     // mask the map canvas so only the surrounding chrome is diffed.
     masks: ['#browse-map'],
+    fixtures: catalogReportFixtures(),
     async setup(page) {
       await openCatalog(page)
       await page.locator('#browse-view-mode [data-view-mode="map"]').click()
@@ -287,6 +296,7 @@ export const scenes: Scene[] = [
     // The popover is the focus; emit a tight crop of it alongside the
     // full-viewport shot.
     crop: '#tools-menu-popover',
+    fixtures: catalogReportFixtures(),
     // The full globe renders behind the popover. In the Weblate
     // capturer (long-lived shared browser, full-page screenshots) that
     // GPU load makes the *following* scenes' captures fail, so opt this
@@ -302,6 +312,7 @@ export const scenes: Scene[] = [
     name: 'orbit-settings',
     description:
       'Orbit chat — settings form (LLM endpoint, model, reading level)',
+    fixtures: catalogReportFixtures(),
     async setup(page) {
       await openCatalog(page)
       await page.locator('#browse-chat-btn').click()

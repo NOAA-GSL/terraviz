@@ -16,6 +16,9 @@
  */
 
 import type { FixtureRule } from '../core/fixtures'
+// Type-only import — erased at runtime, so no SPA runtime code (i18n,
+// logger) is pulled into the node capture scripts.
+import type { PublicEvent } from '../../../src/services/eventsService'
 
 /** Minimal subset of the `/api/v1/catalog` wire shape the SPA consumes. */
 interface WireDatasetFixture {
@@ -79,5 +82,45 @@ export function catalogFixtures(): FixtureRule[] {
   return [
     { url: '/api/v1/catalog', json: { datasets: DATASETS } },
     { url: '/api/v1/tours', json: { tours: [] } },
+  ]
+}
+
+/** One approved current event linked to a fixture dataset — typed
+ *  against the SPA's own wire shape so drift is caught at type-check,
+ *  and the catalog Map / Timeline event overlays render (and diff)
+ *  deterministically. */
+const EVENT: PublicEvent = {
+  id: '01HFIXTUREEVENT000000001',
+  title: 'Marine heatwave develops in the North Pacific',
+  summary: 'Sea surface temperatures are running well above average across the basin.',
+  source: { name: 'Example Science Desk', url: 'https://news.example.org/heatwave', publishedAt: '2026-06-20T12:00:00.000Z' },
+  occurredStart: '2026-06-18T00:00:00.000Z',
+  geometry: { point: { lat: 40, lon: -150 } },
+  datasetIds: ['INTERNAL_OCEAN_SST'],
+}
+
+/**
+ * The full fixture set for **visual-report** SPA scenes.
+ *
+ * The catalog scenes used to capture the *live* production catalog
+ * (the dev server proxies `/api` upstream), so every content change or
+ * slow thumbnail diffed against the baseline — the report's residual
+ * churn after the globe backdrop was stabilised. This pins every
+ * content endpoint the SPA reads on boot; the trailing catch-all lets
+ * everything else (the GIBS tile proxy, telemetry ingest) through so
+ * those behave exactly as before.
+ */
+export function catalogReportFixtures(): FixtureRule[] {
+  return [
+    ...catalogFixtures(),
+    { url: '/api/v1/featured-event', json: { event: null } },
+    // The hero's operator-override read (`heroService.backendUrl()`) —
+    // `{ hero: null }` is the endpoint's documented no-override shape.
+    { url: '/api/v1/featured-hero', json: { hero: null } },
+    { url: '/api/v1/events', json: { events: [EVENT] } },
+    // Orbit settings' model dropdown — a fixed list, not the live
+    // provider's.
+    { url: '/api/models', json: { data: [{ id: 'llama-3.1-70b' }] } },
+    { url: '/api/', passthrough: true },
   ]
 }
