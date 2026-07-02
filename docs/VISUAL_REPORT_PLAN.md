@@ -159,6 +159,18 @@ reader knows the path not taken.
   fixtures can drift from the real API shape — keeping them typed catches
   the structural half of that drift at `type-check`.
 
+- **Catalog scenes are fixtured too (`catalogReportFixtures`).** The dev
+  server proxies `/api` to the production deployment, so the catalog /
+  browse / Orbit scenes used to capture the **live** catalog — every
+  content change or slow thumbnail diffed against the baseline, which
+  was the report's residual churn after the globe backdrop was hidden.
+  The report scenes now pin every content endpoint the SPA reads on
+  boot (catalog, tours, events, featured-event, models); a trailing
+  `{ url: '/api/', passthrough: true }` rule lets everything else (the
+  GIBS tile proxy, telemetry ingest) through unchanged, so problem
+  badges stay honest. Verified by running the report twice back-to-back
+  and diffing: 0 of 52 shots changed.
+
 - **Orbit smoke scope: local engine only.** Orbit's hybrid architecture
   falls back to the deterministic local engine
   ([`docentEngine.ts`](../src/services/docentEngine.ts)) whenever the LLM
