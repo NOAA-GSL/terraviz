@@ -165,6 +165,41 @@ describe('POST /api/v1/publish/events/refresh', () => {
     expect(body.feeds).toHaveLength(0)
   })
 
+  it('200 (not 502) when every enabled row is an unknown kind — config, not outage', async () => {
+    const { env, sqlite } = setupEnv()
+    sqlite.prepare(`UPDATE feed_connectors SET enabled = 0 WHERE id = 'FEED_EONET_DEFAULT'`).run()
+    sqlite
+      .prepare(
+        `INSERT INTO feed_connectors (id, kind, label, url, category, enabled, created_at, updated_at)
+         VALUES ('FEED_AHEAD', 'from-the-future', 'Ahead of the code', 'https://example.org/f', 'news', 1,
+                 '2026-07-01T00:00:00.000Z', '2026-07-01T00:00:00.000Z')`,
+      )
+      .run()
+    stubFeed(EONET_FEED)
+    const res = await refreshPost(ctx({ env }))
+    expect(res.status).toBe(200)
+    const body = JSON.parse(await res.text()) as { feeds: Array<{ error?: string }> }
+    expect(body.feeds[0].error).toContain('unknown connector kind')
+  })
+
+  it('rejects a non-http(s) connector URL without fetching it', async () => {
+    const { env, sqlite } = setupEnv()
+    sqlite
+      .prepare(`UPDATE feed_connectors SET url = 'file:///etc/passwd' WHERE id = 'FEED_EONET_DEFAULT'`)
+      .run()
+    const fetchSpy = vi.fn()
+    vi.stubGlobal('fetch', fetchSpy)
+    const res = await refreshPost(ctx({ env }))
+    // Config error, not an outage → 200 with the error recorded.
+    expect(res.status).toBe(200)
+    expect(fetchSpy).not.toHaveBeenCalled()
+    const row = sqlite
+      .prepare(`SELECT last_run_status, last_run_error FROM feed_connectors WHERE id = 'FEED_EONET_DEFAULT'`)
+      .get() as { last_run_status: string; last_run_error: string }
+    expect(row.last_run_status).toBe('error')
+    expect(row.last_run_error).toContain('invalid feed URL')
+  })
+
   it('skips a connector of unknown kind with a recorded error, without failing the run', async () => {
     const { env, sqlite } = setupEnv()
     sqlite

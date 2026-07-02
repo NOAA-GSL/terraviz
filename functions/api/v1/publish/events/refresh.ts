@@ -19,8 +19,11 @@
  *
  * One connector's outage shouldn't hide another's events: fetch
  * failures are recorded per-connector (`recordFeedRun`) and the run
- * continues. The route only answers 502 when every enabled connector
- * failed to fetch — preserving the old single-feed behaviour.
+ * continues. The route only answers 502 when at least one supported,
+ * validly-configured connector was actually fetched and none could be
+ * reached — preserving the old single-feed behaviour. Configuration
+ * problems (unknown kind, invalid URL) are recorded errors, never a
+ * 502: a registry ahead of the code must not break refresh.
  *
  * Privileged-only (admin / service). Static `refresh` segment, so Pages
  * routes it ahead of the sibling `[id]` review-submit handler.
@@ -70,15 +73,38 @@ function jsonError(status: number, error: string, message: string): Response {
   })
 }
 
+/** True only for the http(s) URLs a connector may fetch. Registry rows
+ *  are operator data, not code — a `javascript:`/`file:`/malformed URL
+ *  must surface as a recorded connector error, never reach `fetch`. */
+function isFetchableUrl(value: string): boolean {
+  try {
+    const u = new URL(value)
+    return u.protocol === 'http:' || u.protocol === 'https:'
+  } catch {
+    return false
+  }
+}
+
 /**
  * Fetch + map one connector's feed into create bodies. Returns the raw
  * item count alongside the mapped bodies, or a human-readable error
  * string for the run bookkeeping. Dispatches on `kind` — the only place
- * connector implementations are enumerated.
+ * connector implementations are enumerated. `config: true` marks a
+ * configuration problem (unknown kind, invalid URL) as opposed to a
+ * network outage — the 502 guard downstream only counts outages.
  */
 async function fetchAndMap(
   connector: FeedConnectorRow,
-): Promise<{ ok: true; fetched: number; bodies: EventCreateBody[] } | { ok: false; error: string }> {
+): Promise<
+  | { ok: true; fetched: number; bodies: EventCreateBody[] }
+  | { ok: false; error: string; config?: boolean }
+> {
+  if (connector.kind !== 'eonet' && connector.kind !== 'rss') {
+    return { ok: false, error: `unknown connector kind "${connector.kind}"`, config: true }
+  }
+  if (!isFetchableUrl(connector.url)) {
+    return { ok: false, error: 'invalid feed URL (must be http(s))', config: true }
+  }
   if (connector.kind === 'eonet') {
     let feed: EonetFeed
     try {
@@ -94,22 +120,19 @@ async function fetchAndMap(
       bodies: mapEonetFeed(feed),
     }
   }
-  if (connector.kind === 'rss') {
-    // Generic RSS 2.0 / Atom — the bring-your-own-feed kind. The
-    // connector's registry id namespaces the dedupe key and its label is
-    // the provenance on every event it produces.
-    let xml: string
-    try {
-      const res = await fetch(connector.url, { signal: AbortSignal.timeout(FEED_TIMEOUT_MS) })
-      if (!res.ok) return { ok: false, error: `feed responded ${res.status}` }
-      xml = await res.text()
-    } catch {
-      return { ok: false, error: 'could not reach the feed' }
-    }
-    const bodies = mapRssFeed(xml, { feedId: connector.id, sourceName: connector.label })
-    return { ok: true, fetched: bodies.length, bodies }
+  // Generic RSS 2.0 / Atom — the bring-your-own-feed kind. The
+  // connector's registry id namespaces the dedupe key and its label is
+  // the provenance on every event it produces.
+  let xml: string
+  try {
+    const res = await fetch(connector.url, { signal: AbortSignal.timeout(FEED_TIMEOUT_MS) })
+    if (!res.ok) return { ok: false, error: `feed responded ${res.status}` }
+    xml = await res.text()
+  } catch {
+    return { ok: false, error: 'could not reach the feed' }
   }
-  return { ok: false, error: `unknown connector kind "${connector.kind}"` }
+  const bodies = mapRssFeed(xml, { feedId: connector.id, sourceName: connector.label })
+  return { ok: true, fetched: bodies.length, bodies }
 }
 
 export const onRequestPost: PagesFunction<CatalogEnv> = async context => {
@@ -128,6 +151,10 @@ export const onRequestPost: PagesFunction<CatalogEnv> = async context => {
   const feeds: ConnectorSummary[] = []
   let budget = MAX_REFRESH_EVENTS
   let anyFetched = false
+  // Network fetches actually attempted (supported kind + valid URL) —
+  // the denominator for the all-feeds-down 502 below. Configuration
+  // failures don't count: they can't succeed on retry either.
+  let networkAttempts = 0
 
   for (const connector of connectors) {
     const summary: ConnectorSummary = {
@@ -142,11 +169,13 @@ export const onRequestPost: PagesFunction<CatalogEnv> = async context => {
     }
     const result = await fetchAndMap(connector)
     if (!result.ok) {
+      if (!result.config) networkAttempts++
       summary.error = result.error
       await recordFeedRun(db, connector.id, { status: 'error', error: result.error })
       feeds.push(summary)
       continue
     }
+    networkAttempts++
     anyFetched = true
     summary.fetched = result.fetched
     summary.mappable = result.bodies.length
@@ -173,9 +202,11 @@ export const onRequestPost: PagesFunction<CatalogEnv> = async context => {
   }
 
   // Preserve the old single-feed contract: a total feed outage is a 502
-  // the UI explains, not a silent all-zeros success. (No enabled
-  // connectors at all is a legitimate configuration → 200 with zeros.)
-  if (connectors.length > 0 && !anyFetched) {
+  // the UI explains, not a silent all-zeros success. Only network
+  // outages count — no enabled connectors, or enabled rows that are all
+  // configuration problems (unknown kind / invalid URL), are legitimate
+  // states that answer 200 with their per-connector errors recorded.
+  if (networkAttempts > 0 && !anyFetched) {
     return jsonError(502, 'feed_unavailable', 'Could not reach any enabled events feed.')
   }
 
