@@ -194,14 +194,20 @@ function renderConsole(mount: HTMLElement, feeds: FeedRow[], options: FeedsPageO
    * latest mapped items (title, date, link); clicking again collapses.
    * `getUrl` is lazy so the custom form can preview whatever is typed.
    */
+  let previewSeq = 0
   const previewControl = (kind: string, getUrl: () => string): { button: HTMLButtonElement; panel: HTMLElement } => {
-    const panel = el('div', { className: 'publisher-feeds-preview', hidden: true })
+    const panel = el('div', {
+      className: 'publisher-feeds-preview',
+      id: `feeds-preview-${++previewSeq}`,
+      hidden: true,
+    })
     const button = el('button', {
       type: 'button',
       className: 'publisher-btn publisher-btn-small',
       textContent: t('publisher.feeds.preview'),
     })
     button.setAttribute('aria-expanded', 'false')
+    button.setAttribute('aria-controls', panel.id)
     button.addEventListener('click', () => {
       if (!panel.hidden) {
         panel.hidden = true

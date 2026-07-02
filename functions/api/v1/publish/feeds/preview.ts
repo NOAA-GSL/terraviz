@@ -20,7 +20,7 @@ import type { PublisherData } from '../_middleware'
 import { isPrivileged } from '../../_lib/publisher-store'
 import { FEED_CONNECTOR_KINDS, type FeedConnectorKind } from '../../_lib/feed-connectors-store'
 import { mapEonetFeed, type EonetFeed, type EventCreateBody } from '../../../../../cli/lib/eonet'
-import { mapRssFeed } from '../../../../../cli/lib/rss'
+import { countFeedItems, mapRssFeed } from '../../../../../cli/lib/rss'
 
 const CONTENT_TYPE = 'application/json; charset=utf-8'
 
@@ -104,7 +104,8 @@ export const onRequestGet: PagesFunction<CatalogEnv> = async context => {
     // source name only shape the mapped bodies we discard afterwards.
     const sourceName = new URL(url).hostname
     bodies = mapRssFeed(xml, { feedId: 'preview', sourceName })
-    fetched = bodies.length
+    // Raw item count, so fetched vs mappable shows skips + the cap.
+    fetched = countFeedItems(xml)
   }
 
   return new Response(

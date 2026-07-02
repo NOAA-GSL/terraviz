@@ -41,7 +41,7 @@ import {
   type FeedConnectorRow,
 } from '../../_lib/feed-connectors-store'
 import { mapEonetFeed, type EonetFeed, type EventCreateBody } from '../../../../../cli/lib/eonet'
-import { mapRssFeed } from '../../../../../cli/lib/rss'
+import { countFeedItems, mapRssFeed } from '../../../../../cli/lib/rss'
 
 const CONTENT_TYPE = 'application/json; charset=utf-8'
 
@@ -132,7 +132,10 @@ async function fetchAndMap(
     return { ok: false, error: 'could not reach the feed' }
   }
   const bodies = mapRssFeed(xml, { feedId: connector.id, sourceName: connector.label })
-  return { ok: true, fetched: bodies.length, bodies }
+  // `fetched` is the raw item count in the document (the RSS analogue of
+  // EONET's `feed.events.length`); `mappable` downstream is the mapped,
+  // capped body count — the split shows skips + the RSS_MAX_ITEMS cap.
+  return { ok: true, fetched: countFeedItems(xml), bodies }
 }
 
 export const onRequestPost: PagesFunction<CatalogEnv> = async context => {

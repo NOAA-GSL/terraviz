@@ -137,6 +137,18 @@ describe('POST /api/v1/publish/feeds/:id', () => {
     ).toBe(400)
     expect((await feedPatch(ctx({ env, method: 'POST', id: 'NOPE', body: { enabled: false } }))).status).toBe(404)
   })
+
+  it('enforces the create route\'s length bounds on patch', async () => {
+    const { env } = setupEnv()
+    const longLabel = 'x'.repeat(121)
+    expect(
+      (await feedPatch(ctx({ env, method: 'POST', id: 'FEED_EONET_DEFAULT', body: { label: longLabel } }))).status,
+    ).toBe(400)
+    const longUrl = `https://example.org/${'x'.repeat(2100)}`
+    expect(
+      (await feedPatch(ctx({ env, method: 'POST', id: 'FEED_EONET_DEFAULT', body: { url: longUrl } }))).status,
+    ).toBe(400)
+  })
 })
 
 describe('DELETE /api/v1/publish/feeds/:id', () => {

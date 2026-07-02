@@ -25,6 +25,12 @@ import {
 
 const CONTENT_TYPE = 'application/json; charset=utf-8'
 
+/** Same operator-text bounds as the create route (`../feeds.ts`) — a
+ *  patch must not be a back door past them. */
+const MAX_LABEL_CHARS = 120
+const MAX_URL_CHARS = 2048
+const MAX_CATEGORY_CHARS = 60
+
 function jsonError(status: number, error: string, message: string): Response {
   return new Response(JSON.stringify({ error, message }), {
     status,
@@ -75,13 +81,22 @@ export const onRequestPost: PagesFunction<CatalogEnv, 'id'> = async context => {
   const b = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
 
   const patch: { label?: string; url?: string; category?: string | null; enabled?: boolean } = {}
-  if (typeof b.label === 'string' && b.label.trim()) patch.label = b.label.trim()
+  if (typeof b.label === 'string' && b.label.trim()) {
+    const label = b.label.trim()
+    if (label.length > MAX_LABEL_CHARS) {
+      return jsonError(400, 'invalid_label', `\`label\` must be ≤ ${MAX_LABEL_CHARS} characters.`)
+    }
+    patch.label = label
+  }
   if (typeof b.url === 'string') {
     const url = b.url.trim()
     if (!isHttpUrl(url)) return jsonError(400, 'invalid_url', '`url` must be an http(s) URL.')
+    if (url.length > MAX_URL_CHARS) {
+      return jsonError(400, 'invalid_url', `\`url\` must be ≤ ${MAX_URL_CHARS} characters.`)
+    }
     patch.url = url
   }
-  if (typeof b.category === 'string') patch.category = b.category.trim() || null
+  if (typeof b.category === 'string') patch.category = b.category.trim().slice(0, MAX_CATEGORY_CHARS) || null
   if (typeof b.enabled === 'boolean') patch.enabled = b.enabled
   if (Object.keys(patch).length === 0) {
     return jsonError(400, 'empty_patch', 'Provide at least one of: label, url, category, enabled.')

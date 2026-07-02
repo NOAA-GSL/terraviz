@@ -114,7 +114,10 @@ describe('GET /api/v1/publish/feeds/preview', () => {
   })
 
   it('200 RSS preview: items carry title/publishedAt/url, capped at the max', async () => {
-    stubFetch(rssXml(PREVIEW_MAX_ITEMS + 3))
+    // One extra linkless item the mapper skips — `fetched` counts it
+    // (raw document items), `mappable` doesn't.
+    const skipped = '<item><title>No link — unmappable</title></item>'
+    stubFetch(rssXml(PREVIEW_MAX_ITEMS + 3).replace('</channel>', `${skipped}</channel>`))
     const res = await previewGet(ctx('?kind=rss&url=https%3A%2F%2Fexample.org%2Ffeed'))
     expect(res.status).toBe(200)
     const body = JSON.parse(await res.text()) as {
@@ -122,7 +125,8 @@ describe('GET /api/v1/publish/feeds/preview', () => {
       mappable: number
       items: Array<{ title: string; publishedAt: string | null; url: string }>
     }
-    expect(body.fetched).toBe(PREVIEW_MAX_ITEMS + 3)
+    expect(body.fetched).toBe(PREVIEW_MAX_ITEMS + 4)
+    expect(body.mappable).toBe(PREVIEW_MAX_ITEMS + 3)
     expect(body.items).toHaveLength(PREVIEW_MAX_ITEMS)
     expect(body.items[0]).toMatchObject({ title: 'Story 1', url: 'https://example.org/story-1' })
     expect(body.items[0].publishedAt).toContain('2026-07-01')

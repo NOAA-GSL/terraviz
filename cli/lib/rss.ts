@@ -126,10 +126,14 @@ function parsePoint(block: string): { lat: number; lon: number } | undefined {
       return { lat: parts[0], lon: parts[1] }
     }
   }
-  const lat = Number(toPlainText(tagText(block, 'geo:lat') ?? ''))
-  const lon = Number(toPlainText(tagText(block, 'geo:long') ?? ''))
-  if (Number.isFinite(lat) && Number.isFinite(lon) && (lat !== 0 || lon !== 0)) {
-    return { lat, lon }
+  // Presence is judged on the tag text, not the parsed number —
+  // `Number('')` is 0, and (0, 0) is a real coordinate off West Africa.
+  const latText = toPlainText(tagText(block, 'geo:lat') ?? '')
+  const lonText = toPlainText(tagText(block, 'geo:long') ?? '')
+  if (latText && lonText) {
+    const lat = Number(latText)
+    const lon = Number(lonText)
+    if (Number.isFinite(lat) && Number.isFinite(lon)) return { lat, lon }
   }
   return undefined
 }
@@ -188,6 +192,17 @@ function parseAtomEntry(block: string): RssItem | null {
     point: parsePoint(block),
     keywords: keywords.length ? keywords : undefined,
   }
+}
+
+/** Raw `<item>`/`<entry>` count in the document — how many items the
+ *  feed carries *before* the mapper's skip rules and `RSS_MAX_ITEMS`
+ *  cap, so callers can report an honest fetched-vs-mappable split
+ *  (the RSS analogue of EONET's `feed.events.length`). */
+export function countFeedItems(xml: string): number {
+  if (typeof xml !== 'string' || xml.length === 0) return 0
+  const rss = xml.match(/<item(?:\s[^>]*)?>/gi)?.length ?? 0
+  if (rss > 0) return rss
+  return xml.match(/<entry(?:\s[^>]*)?>/gi)?.length ?? 0
 }
 
 /** Parse an RSS 2.0 or Atom document into items. Unrecognisable

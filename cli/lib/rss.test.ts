@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { parseRssFeed, mapRssFeed, RSS_MAX_ITEMS } from './rss'
+import { countFeedItems, parseRssFeed, mapRssFeed, RSS_MAX_ITEMS } from './rss'
 
 const RSS_NEWS = `<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0"><channel>
@@ -93,6 +93,13 @@ describe('parseRssFeed', () => {
     expect(items[0].point).toEqual({ lat: -12.5, lon: 130.9 })
   })
 
+  it('accepts a genuine (0, 0) geo pair and still drops missing tags', () => {
+    const zero = RSS_GEO_PAIR.replace('-12.5', '0').replace('130.9', '0')
+    expect(parseRssFeed(zero)[0].point).toEqual({ lat: 0, lon: 0 })
+    const none = `<rss><channel><item><title>T</title><link>https://x.example/a</link></item></channel></rss>`
+    expect(parseRssFeed(none)[0].point).toBeUndefined()
+  })
+
   it('falls back to the link as the id when there is no guid', () => {
     const xml = `<rss><channel><item><title>T</title><link>https://x.example/a</link></item></channel></rss>`
     expect(parseRssFeed(xml)[0].id).toBe('https://x.example/a')
@@ -102,6 +109,15 @@ describe('parseRssFeed', () => {
     expect(parseRssFeed('')).toEqual([])
     expect(parseRssFeed('not xml at all')).toEqual([])
     expect(parseRssFeed('<html><body>a web page</body></html>')).toEqual([])
+  })
+})
+
+describe('countFeedItems', () => {
+  it('counts raw items including ones the mapper skips', () => {
+    expect(countFeedItems(RSS_NEWS)).toBe(3) // one mappable + two skipped
+    expect(countFeedItems(ATOM_QUAKES)).toBe(1)
+    expect(countFeedItems('')).toBe(0)
+    expect(countFeedItems('not xml')).toBe(0)
   })
 })
 
