@@ -14,16 +14,32 @@ const DATASETS = {
   ],
   next_cursor: null,
 }
-const EVENTS = { events: [{ id: 'EVT1', title: 'Gulf marine heatwave' }] }
+const EVENTS = {
+  events: [
+    {
+      id: 'EVT1',
+      title: 'Gulf marine heatwave',
+      links: [
+        // Approved link to the dataset the tests pick manually — the
+        // seed dedupes against it; the proposed link must NOT seed.
+        { datasetId: 'DS_SST', datasetTitle: 'Sea Surface Temperature', status: 'approved' },
+        { datasetId: 'DS_PROPOSED', datasetTitle: 'Unvetted pairing', status: 'proposed' },
+      ],
+    },
+  ],
+}
 const DRAFT = { draft: { title: 'AI Title', summary: 'AI summary.', bodyMd: '## AI body' }, tour: null, tourError: null }
 
 interface Captured {
   posts: Array<{ url: string; body: unknown }>
+  /** Every requested URL, in order — for asserting query params. */
+  urls?: string[]
 }
 
 function mockFetch(capture: Captured, overrides: Record<string, unknown> = {}) {
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : (input as Request).url
+    ;(capture.urls ??= []).push(url)
     const method = init?.method ?? 'GET'
     let body: unknown = {}
     if (method === 'POST' || method === 'PUT') {
@@ -74,6 +90,11 @@ describe('renderBlogEditPage', () => {
       length: 'medium',
       includeTour: true,
     })
+    // The event picker offers curator-approved events only — a cited
+    // proposed event would generate from unvetted text and its public
+    // citation would silently never render.
+    const eventsCall = capture.urls?.find(u => u.includes('/publish/events'))
+    expect(eventsCall).toContain('status=approved')
     expect((mount.querySelector('#blog-title') as HTMLInputElement).value).toBe('AI Title')
     expect((mount.querySelector('#blog-body') as HTMLTextAreaElement).value).toBe('## AI body')
   })
@@ -94,6 +115,112 @@ describe('renderBlogEditPage', () => {
     // The visible preview must reflect the generated markdown, not the
     // pre-generate empty state.
     expect(preview.querySelector('h2')?.textContent).toBe('AI body')
+  })
+
+  it('a generate-with-tour reveals the tour-preview link into the authoring dock', async () => {
+    const capture: Captured = { posts: [] }
+    const mount = document.createElement('div')
+    await renderBlogEditPage(mount, {
+      fetchFn: mockFetch(capture, {
+        generate: { draft: DRAFT.draft, tour: { id: 'TOUR1' }, tourError: null },
+      }),
+      navigate: vi.fn(),
+    })
+    await flush()
+
+    const link = mount.querySelector('.publisher-blog-tour-link') as HTMLAnchorElement
+    expect(link.hidden).toBe(true)
+
+    pickDataset(mount)
+    ;(mount.querySelector('.publisher-blog-generate-btn') as HTMLButtonElement).click()
+    await flush()
+
+    expect(link.hidden).toBe(false)
+    expect(link.getAttribute('href')).toBe('/?tourEdit=TOUR1')
+  })
+
+  it('a failed regenerate hides the previous attempt\'s tour link', async () => {
+    const capture: Captured = { posts: [] }
+    const mount = document.createElement('div')
+    let failNext = false
+    const failure = { error: 'generation_failed', message: 'The model call failed or timed out — try again.' }
+    const fetchFn = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : (input as Request).url
+      const method = init?.method ?? 'GET'
+      if (method === 'POST' && url.includes('/blog/generate')) {
+        if (failNext) {
+          return { ok: false, status: 502, type: 'basic', json: async () => failure, text: async () => JSON.stringify(failure) } as unknown as Response
+        }
+        const body = { draft: DRAFT.draft, tour: { id: 'TOUR1' }, tourError: null }
+        return { ok: true, status: 200, type: 'basic', json: async () => body, text: async () => JSON.stringify(body) } as unknown as Response
+      }
+      let body: unknown = {}
+      if (url.includes('/publish/me')) body = ADMIN_ME
+      else if (url.includes('/publish/datasets')) body = DATASETS
+      else if (url.includes('/publish/events')) body = EVENTS
+      return { ok: true, status: 200, type: 'basic', json: async () => body, text: async () => JSON.stringify(body) } as unknown as Response
+    })
+    await renderBlogEditPage(mount, { fetchFn, navigate: vi.fn() })
+    await flush()
+    void capture
+
+    pickDataset(mount)
+    const genBtn = mount.querySelector('.publisher-blog-generate-btn') as HTMLButtonElement
+    const link = mount.querySelector('.publisher-blog-tour-link') as HTMLAnchorElement
+    genBtn.click()
+    await flush()
+    expect(link.hidden).toBe(false)
+
+    failNext = true
+    genBtn.click()
+    await flush()
+    expect(link.hidden).toBe(true)
+  })
+
+  it('citing an event seeds its APPROVED dataset links as chips (proposed excluded)', async () => {
+    const capture: Captured = { posts: [] }
+    const mount = await mountEditor(capture)
+
+    // No chips yet; select the event.
+    const evSelect = mount.querySelector('.publisher-blog-event-select') as HTMLSelectElement
+    evSelect.value = 'EVT1'
+    evSelect.dispatchEvent(new Event('change'))
+
+    const chips = Array.from(mount.querySelectorAll('.publisher-blog-chip')).map(c => c.textContent)
+    expect(chips.some(c => c?.includes('Sea Surface Temperature'))).toBe(true)
+    // The unvetted pairing must not be seeded.
+    expect(chips.some(c => c?.includes('Unvetted pairing'))).toBe(false)
+    expect(chips).toHaveLength(1)
+  })
+
+  it('Generate surfaces the server\'s typed failure message (503 ai_unavailable)', async () => {
+    const capture: Captured = { posts: [] }
+    const mount = document.createElement('div')
+    const failure = { error: 'ai_unavailable', message: 'Workers AI is not bound on this deployment.' }
+    const fetchFn = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : (input as Request).url
+      const method = init?.method ?? 'GET'
+      if (method === 'POST' && url.includes('/blog/generate')) {
+        capture.posts.push({ url, body: JSON.parse(String(init?.body)) })
+        return { ok: false, status: 503, type: 'basic', json: async () => failure, text: async () => JSON.stringify(failure) } as unknown as Response
+      }
+      let body: unknown = {}
+      if (url.includes('/publish/me')) body = ADMIN_ME
+      else if (url.includes('/publish/datasets')) body = DATASETS
+      else if (url.includes('/publish/events')) body = EVENTS
+      return { ok: true, status: 200, type: 'basic', json: async () => body, text: async () => JSON.stringify(body) } as unknown as Response
+    })
+    await renderBlogEditPage(mount, { fetchFn, navigate: vi.fn() })
+    await flush()
+
+    pickDataset(mount)
+    ;(mount.querySelector('.publisher-blog-generate-btn') as HTMLButtonElement).click()
+    await flush()
+
+    // The route's curator-facing message must reach the status line —
+    // not the generic "Something went wrong."
+    const statuses = Array.from(mount.querySelectorAll('.publisher-blog-status'))
+    expect(statuses.some(s => s.textContent === 'Workers AI is not bound on this deployment.')).toBe(true)
   })
 
   it('Generate without datasets is blocked client-side', async () => {

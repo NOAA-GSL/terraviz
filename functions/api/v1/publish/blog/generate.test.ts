@@ -12,7 +12,7 @@
 
 import { describe, expect, it, vi } from 'vitest'
 import { onRequestPost as generate } from './generate'
-import { buildBlogPrompt, parseDraftReply } from '../../_lib/blog-generate'
+import { buildBlogPrompt, parseDraftReply, stripUngroundedUrls } from '../../_lib/blog-generate'
 import { asD1, makeKV, seedFixtures } from '../../_lib/test-helpers'
 import { insertCurrentEvent } from '../../_lib/events-store'
 import type { PublisherRow } from '../../_lib/publisher-store'
@@ -232,5 +232,90 @@ describe('buildBlogPrompt / parseDraftReply', () => {
     expect(parsed?.title).toHaveLength(200)
     expect(parseDraftReply('no json at all')).toBeNull()
     expect(parseDraftReply(JSON.stringify({ title: 'x', summary: 's' }))).toBeNull() // no body
+  })
+
+  it('repairs literal newlines inside JSON strings — the multi-paragraph bodyMd case', () => {
+    // Models asked to put markdown in a JSON value routinely emit raw
+    // newlines inside the string — invalid JSON. This exact shape
+    // produced "The model reply could not be parsed into a draft."
+    const raw =
+      '{"title": "Rising seas", "summary": "A look at the data.", ' +
+      '"bodyMd": "## The data\n\nSea level has risen.\n\n- Buoys agree\n- Satellites agree"}'
+    const parsed = parseDraftReply(raw)
+    expect(parsed).not.toBeNull()
+    expect(parsed?.title).toBe('Rising seas')
+    expect(parsed?.bodyMd).toContain('## The data\n\nSea level has risen.')
+    expect(parsed?.bodyMd).toContain('- Buoys agree')
+  })
+
+  it('includes the profile links in the prompt so real URLs are copyable', () => {
+    const { user } = buildBlogPrompt({
+      profile: {
+        org_name: 'The Zyra Project',
+        mission: null,
+        about_md: null,
+        region_focus: null,
+        default_tone: null,
+        links_json: JSON.stringify([{ label: 'TerraViz', url: 'https://terraviz.zyra-project.org/' }]),
+        logo_ref: null,
+        updated_by: 'P1',
+        updated_at: '2026-07-01T00:00:00.000Z',
+      },
+      event: null,
+      datasets: [{ id: 'x', title: 'T', abstract: null }],
+    })
+    expect(user).toContain('Official links:')
+    expect(user).toContain('https://terraviz.zyra-project.org/')
+  })
+
+  it('strips URLs the facts never contained; keeps grounded ones', () => {
+    const facts =
+      'Official links:\n- TerraViz: https://terraviz.zyra-project.org/\n' +
+      'Source: NOAA (https://example.gov/story)'
+    const body =
+      'Explore [TerraViz](https://terraviz.zyraproject.org/) today. ' + // fabricated: dash dropped
+      'Read the [story](https://example.gov/story). ' +
+      'Also see https://terraviz.zyra-project.org/ and https://made-up.example.com/page.'
+    const out = stripUngroundedUrls(body, facts)
+    // The fabricated markdown link collapses to its text.
+    expect(out).toContain('Explore TerraViz today.')
+    expect(out).not.toContain('zyraproject.org')
+    // Grounded links survive in both forms.
+    expect(out).toContain('[story](https://example.gov/story)')
+    expect(out).toContain('https://terraviz.zyra-project.org/')
+    // The bare fabricated URL is dropped.
+    expect(out).not.toContain('made-up.example.com')
+  })
+
+  it('URL grounding is path-case-sensitive but host-case-insensitive', () => {
+    const facts = 'Link: https://Example.org/Docs/Page'
+    const body = 'See https://example.org/Docs/Page and https://example.org/docs/page.'
+    const out = stripUngroundedUrls(body, facts)
+    expect(out).toContain('https://example.org/Docs/Page')
+    // Same host, different path casing — NOT the grounded URL.
+    expect(out).not.toContain('/docs/page')
+  })
+
+  it('leaves indentation untouched when nothing was stripped', () => {
+    const body = '## H\n\n- item\n  - nested item\n\n    indented code'
+    expect(stripUngroundedUrls(body, 'no urls here')).toBe(body)
+  })
+
+  it('repairs the full control-char range, not just \\n/\\r/\\t', () => {
+    const raw = '{"title": "T", "summary": "s", "bodyMd": "page\fbreak and bellend"}'
+    const parsed = parseDraftReply(raw)
+    expect(parsed).not.toBeNull()
+    expect(parsed?.bodyMd).toBe('page\fbreak and bellend')
+  })
+
+  it('repair leaves valid JSON (escaped newlines, escaped quotes) untouched', () => {
+    const valid = JSON.stringify({
+      title: 'A "quoted" title',
+      summary: 's',
+      bodyMd: 'line one\nline two with \\n literal and a tab\there',
+    })
+    const parsed = parseDraftReply(valid)
+    expect(parsed?.title).toBe('A "quoted" title')
+    expect(parsed?.bodyMd).toBe('line one\nline two with \\n literal and a tab\there')
   })
 })

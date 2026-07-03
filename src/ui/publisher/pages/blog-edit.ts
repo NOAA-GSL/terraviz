@@ -48,11 +48,17 @@ interface PostWire {
 interface ReviewEventLite {
   id: string
   title: string
+  /** The event's dataset pairings from the review queue — approved
+   *  ones seed the grounding chips when the event is cited. */
+  links?: Array<{ datasetId: string; datasetTitle: string; status: string }>
 }
 
 const ME_ENDPOINT = '/api/v1/publish/me'
 const BLOG_ENDPOINT = '/api/v1/publish/blog'
-const EVENTS_ENDPOINT = '/api/v1/publish/events?status=all'
+// Approved only: the public post drops a citation whose event isn't
+// approved, and generation grounds itself in the event's text — the
+// picker must not offer anything that hasn't passed the curator gate.
+const EVENTS_ENDPOINT = '/api/v1/publish/events?status=approved'
 const GENERATE_ENDPOINT = '/api/v1/publish/blog/generate'
 
 /** Cap on candidate rows in the pickers. */
@@ -104,7 +110,7 @@ function setStatus(node: HTMLElement, message: string, isError: boolean): void {
 }
 
 function handleWriteError(
-  res: { ok: false; kind: string; errors?: Array<{ message: string }> },
+  res: { ok: false; kind: string; errors?: Array<{ message: string }>; body?: string },
   status: HTMLElement,
   navigate?: (url: string) => void,
 ): void {
@@ -116,6 +122,22 @@ function handleWriteError(
   if (res.kind === 'validation' && res.errors && res.errors.length > 0) {
     setStatus(status, res.errors[0].message, true)
     return
+  }
+  if (res.kind === 'server' && res.body) {
+    // The blog routes return typed `{ error, message }` failures whose
+    // message is written for the curator ("Workers AI is not bound on
+    // this deployment", "The model call failed or timed out — try
+    // again") — show it instead of a generic shrug, same policy as
+    // the validation branch above.
+    try {
+      const parsed = JSON.parse(res.body) as { message?: unknown }
+      if (typeof parsed.message === 'string' && parsed.message.trim()) {
+        setStatus(status, parsed.message, true)
+        return
+      }
+    } catch {
+      // Not JSON — fall through to the generic message.
+    }
   }
   setStatus(status, t('publisher.blog.error.generic'), true)
 }
@@ -257,6 +279,22 @@ export async function renderBlogEditPage(mount: HTMLElement, options: BlogEditPa
   }
   evSelect.addEventListener('change', () => {
     citedEventId = evSelect.value || null
+    // The event's approved dataset pairings were already vetted on
+    // the Events tab — seed them as grounding chips so the curator
+    // doesn't re-pick them by hand. Additive merge: existing chips
+    // stay, seeded ones are removable like any other.
+    if (!citedEventId) return
+    const ev = events.find(e => e.id === citedEventId)
+    let added = false
+    for (const link of ev?.links ?? []) {
+      if (link.status !== 'approved' || selected.has(link.datasetId)) continue
+      selected.set(link.datasetId, link.datasetTitle)
+      added = true
+    }
+    if (added) {
+      renderChips()
+      renderDsCandidates()
+    }
   })
 
   // ----- Generate controls -----
@@ -277,6 +315,16 @@ export async function renderBlogEditPage(mount: HTMLElement, options: BlogEditPa
   const tourWrap = el('label', { className: 'publisher-blog-check' }, [tourCheck, t('publisher.blog.generate.includeTour')])
   const genStatus = el('span', { className: 'publisher-blog-status' })
   genStatus.setAttribute('role', 'status')
+  // Appears after a generate-with-tour: the companion tour is a draft
+  // on the Tours tab; this deep-links its authoring dock, where
+  // "Preview from start" plays it without publishing anything.
+  const genTourLink = el('a', {
+    className: 'publisher-blog-tour-link',
+    textContent: t('publisher.blog.generate.previewTour'),
+  })
+  genTourLink.target = '_blank'
+  genTourLink.rel = 'noopener'
+  genTourLink.hidden = true
   const genBtn = el('button', {
     type: 'button', className: 'publisher-btn publisher-btn-primary publisher-blog-generate-btn',
     textContent: t('publisher.blog.generate.run'),
@@ -287,6 +335,9 @@ export async function renderBlogEditPage(mount: HTMLElement, options: BlogEditPa
       return
     }
     genBtn.disabled = true
+    // Only ever reflect the latest attempt — a stale link from an
+    // earlier success must not survive a failed regenerate.
+    genTourLink.hidden = true
     setStatus(genStatus, t('publisher.blog.generate.working'), false)
     void publisherSend<{ draft: { title: string; summary: string; bodyMd: string }; tour: { id: string } | null; tourError: string | null }>(
       GENERATE_ENDPOINT,
@@ -309,7 +360,9 @@ export async function renderBlogEditPage(mount: HTMLElement, options: BlogEditPa
         bodyInput.value = res.data.draft.bodyMd
         // Keep an open Preview pane in sync with the drafted body.
         if (!preview.hidden) renderPreview()
+        genTourLink.hidden = !res.data.tour
         if (res.data.tour) {
+          genTourLink.href = `/?tourEdit=${encodeURIComponent(res.data.tour.id)}`
           setStatus(genStatus, t('publisher.blog.generate.doneWithTour'), false)
         } else if (res.data.tourError) {
           setStatus(genStatus, t('publisher.blog.generate.doneTourFailed', { reason: res.data.tourError }), false)
@@ -420,6 +473,7 @@ export async function renderBlogEditPage(mount: HTMLElement, options: BlogEditPa
     tourWrap,
     el('div', { className: 'publisher-blog-actions' }, [genBtn]),
     genStatus,
+    genTourLink,
   )
   const bodyField = el('div', { className: 'publisher-blog-field' })
   const bodyLabelRow = el('div', { className: 'publisher-form-label-row' }, [
@@ -453,14 +507,14 @@ export async function renderBlogEditPage(mount: HTMLElement, options: BlogEditPa
       renderChips()
     }
   })
-  void publisherGet<{ events: Array<{ id: string; title: string }> }>(EVENTS_ENDPOINT, { fetchFn }).then(res => {
+  void publisherGet<{ events: ReviewEventLite[] }>(EVENTS_ENDPOINT, { fetchFn }).then(res => {
     if (!res.ok) {
       // Mirror loadPublishedDatasets: route a session error through the
       // shared recovery flow; other failures leave the picker disabled.
       if (res.kind === 'session') handleSessionError({ navigate: options.navigate })
       return
     }
-    events = res.data.events.map(e => ({ id: e.id, title: e.title }))
+    events = res.data.events.map(e => ({ id: e.id, title: e.title, links: e.links }))
     evSelect.disabled = false
     renderEventOptions()
   })
