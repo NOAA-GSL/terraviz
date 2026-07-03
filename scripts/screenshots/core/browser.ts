@@ -191,13 +191,11 @@ export async function screenshotWithRetry(
     : ({ path, animations: 'disabled', timeout: 20_000 } as const)
   // Escalating quiet-down before each retry. The short first pause
   // absorbs the common compositor stall; the later, longer waits ride
-  // out a wedged renderer — `Protocol error (Page.captureScreenshot)`,
-  // which CDP throws instantly (no 20 s timeout is paid) and which the
-  // failing main visual-report runs showed clearing within a few
-  // seconds: the same two desktop scenes failed every 750 ms-spaced
-  // attempt, then the very next scene captured fine ~7 s later
-  // (runs 28625110273 / 28632081351). Total retry window ≈ 9 s,
-  // spanning the observed recovery; the happy path is unchanged.
+  // out a wedged renderer (`Protocol error (Page.captureScreenshot)`,
+  // which CDP throws instantly, so no per-attempt timeout is paid) —
+  // observed on CI to clear on its own within a few seconds, longer
+  // than a run of short retries can span. Total retry window ≈ 9 s;
+  // the happy path is unchanged.
   const RETRY_DELAYS_MS = [750, 2_500, 6_000] as const
   const attempts = RETRY_DELAYS_MS.length + 1
   let lastErr: unknown
