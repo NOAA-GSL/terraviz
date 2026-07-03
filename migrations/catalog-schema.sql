@@ -513,7 +513,7 @@ CREATE INDEX idx_analytics_spatial_daily_layer
   ON analytics_spatial_daily (event_type, layer_id, day);
 CREATE INDEX idx_asset_uploads_dataset ON asset_uploads(dataset_id, created_at);
 CREATE INDEX idx_audit_subject ON audit_events(subject_kind, subject_id, created_at);
-CREATE INDEX idx_blog_posts_status ON blog_posts(status);
+CREATE INDEX idx_blog_posts_status ON blog_posts(status, published_at DESC);
 CREATE UNIQUE INDEX idx_current_events_feed_external
   ON current_events(feed_id, external_id)
   WHERE feed_id IS NOT NULL AND external_id IS NOT NULL;

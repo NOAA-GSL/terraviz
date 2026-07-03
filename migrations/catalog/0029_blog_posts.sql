@@ -38,4 +38,6 @@ CREATE TABLE blog_posts (
   FOREIGN KEY (event_id)  REFERENCES current_events(id) ON DELETE SET NULL
 );
 
-CREATE INDEX idx_blog_posts_status ON blog_posts(status);
+-- Composite: the public list filters status = 'published' AND orders
+-- by published_at DESC — this index satisfies both without a sort.
+CREATE INDEX idx_blog_posts_status ON blog_posts(status, published_at DESC);

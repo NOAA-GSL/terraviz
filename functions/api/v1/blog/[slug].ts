@@ -21,6 +21,12 @@ import { getCurrentEvent } from '../_lib/events-store'
 
 const CONTENT_TYPE = 'application/json; charset=utf-8'
 const CACHE_TTL_SECONDS = 60
+
+/** Generated-slug shape (see blog-store's deriveBlogSlug): lowercase
+ *  alphanumerics + hyphens, ≤64 chars. Anything else can't be a real
+ *  post, so it 404s before touching KV or D1 — and can't feed an
+ *  arbitrary/oversized string into a KV key. */
+const SLUG_RE = /^[a-z0-9-]{1,64}$/
 /** D1 bind-variable budget for the dataset-title hydration (mirrors
  *  D1_BIND_BATCH in catalog-store.ts; POST_MAX_DATASETS is 20, so one
  *  chunk always suffices). */
@@ -53,12 +59,16 @@ export const onRequestGet: PagesFunction<CatalogEnv, 'slug'> = async context => 
   }
   const raw = context.params.slug
   const slug = Array.isArray(raw) ? raw[0] : raw
-  if (!slug) return notFound()
+  if (!slug || !SLUG_RE.test(slug)) return notFound()
 
   const cacheKey = blogPostCacheKey(slug)
   if (context.env.CATALOG_KV) {
-    const cached = await context.env.CATALOG_KV.get(cacheKey)
-    if (cached) return ok(cached, 'HIT')
+    try {
+      const cached = await context.env.CATALOG_KV.get(cacheKey)
+      if (cached) return ok(cached, 'HIT')
+    } catch {
+      // KV failure = cache miss; D1 is the source of truth.
+    }
   }
 
   // One degrade guard around EVERY read — the post lookup and both

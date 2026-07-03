@@ -47,8 +47,12 @@ export const onRequestGet: PagesFunction<CatalogEnv> = async context => {
   }
 
   if (context.env.CATALOG_KV) {
-    const cached = await context.env.CATALOG_KV.get(BLOG_LIST_CACHE_KEY)
-    if (cached) return ok(cached, 'HIT')
+    try {
+      const cached = await context.env.CATALOG_KV.get(BLOG_LIST_CACHE_KEY)
+      if (cached) return ok(cached, 'HIT')
+    } catch {
+      // KV failure = cache miss; D1 is the source of truth.
+    }
   }
 
   let rows

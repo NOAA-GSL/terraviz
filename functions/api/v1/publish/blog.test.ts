@@ -236,6 +236,33 @@ describe('publish transition + public reads', () => {
   })
 })
 
+describe('public route hardening', () => {
+  it('404s malformed slugs before touching KV or D1', async () => {
+    const { env } = setupEnv()
+    for (const bad of ['UPPER-case', 'x'.repeat(65), 'semi;colon', '..%2F..']) {
+      const res = await publicPost(ctx({ env, path: '/api/v1/blog/x', params: { slug: bad } }))
+      expect(res.status).toBe(404)
+    }
+  })
+
+  it('treats a throwing KV as a cache miss and still serves from D1', async () => {
+    const { env } = setupEnv()
+    const post = await createDraft(env)
+    await transition(ctx({ env, method: 'POST', params: { id: post.id }, body: { action: 'publish' } }))
+    const throwingKv = {
+      get: async () => { throw new Error('kv down') },
+      put: async () => { throw new Error('kv down') },
+      delete: async () => { throw new Error('kv down') },
+    }
+    const brokenEnv = { ...env, CATALOG_KV: throwingKv }
+    const one = await publicPost(ctx({ env: brokenEnv, path: `/api/v1/blog/${post.slug}`, params: { slug: post.slug } }))
+    expect(one.status).toBe(200)
+    const list = await publicList(ctx({ env: brokenEnv, path: '/api/v1/blog' }))
+    expect(list.status).toBe(200)
+    expect((await readJson<{ posts: unknown[] }>(list)).posts).toHaveLength(1)
+  })
+})
+
 describe('deriveBlogSlug', () => {
   it('slugs titles and falls back safely', () => {
     expect(deriveBlogSlug('Watching the Gulf warm!')).toBe('watching-the-gulf-warm')
