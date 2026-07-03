@@ -233,4 +233,29 @@ describe('buildBlogPrompt / parseDraftReply', () => {
     expect(parseDraftReply('no json at all')).toBeNull()
     expect(parseDraftReply(JSON.stringify({ title: 'x', summary: 's' }))).toBeNull() // no body
   })
+
+  it('repairs literal newlines inside JSON strings — the multi-paragraph bodyMd case', () => {
+    // Models asked to put markdown in a JSON value routinely emit raw
+    // newlines inside the string — invalid JSON. This exact shape
+    // produced "The model reply could not be parsed into a draft."
+    const raw =
+      '{"title": "Rising seas", "summary": "A look at the data.", ' +
+      '"bodyMd": "## The data\n\nSea level has risen.\n\n- Buoys agree\n- Satellites agree"}'
+    const parsed = parseDraftReply(raw)
+    expect(parsed).not.toBeNull()
+    expect(parsed?.title).toBe('Rising seas')
+    expect(parsed?.bodyMd).toContain('## The data\n\nSea level has risen.')
+    expect(parsed?.bodyMd).toContain('- Buoys agree')
+  })
+
+  it('repair leaves valid JSON (escaped newlines, escaped quotes) untouched', () => {
+    const valid = JSON.stringify({
+      title: 'A "quoted" title',
+      summary: 's',
+      bodyMd: 'line one\nline two with \\n literal and a tab\there',
+    })
+    const parsed = parseDraftReply(valid)
+    expect(parsed?.title).toBe('A "quoted" title')
+    expect(parsed?.bodyMd).toBe('line one\nline two with \\n literal and a tab\there')
+  })
 })

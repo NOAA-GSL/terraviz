@@ -88,6 +88,7 @@ export function buildBlogPrompt(inputs: GenerateInputs): { system: string; user:
     '"summary" is a one-to-two sentence standfirst. ' +
     '"bodyMd" is the post in markdown (headings, short paragraphs, a bullet list where it helps), ' +
     `about ${words} words, in this tone: ${tone}. ` +
+    'The reply must be valid JSON — escape newlines inside strings as \\n. ' +
     'Ground EVERY claim in the facts provided — never invent numbers, dates, places, quotes, or ' +
     'findings that are not in the given text. Where the post draws on a dataset, name it. ' +
     'If a news event is given, cite its source by name and link to its URL in the body. ' +
@@ -120,9 +121,58 @@ export function buildBlogPrompt(inputs: GenerateInputs): { system: string; user:
   return { system, user: parts.join('\n\n') }
 }
 
+/**
+ * Escape raw control characters inside JSON string literals.
+ *
+ * Models asked for a JSON object whose value is multi-paragraph
+ * markdown routinely emit *literal* newlines inside the string —
+ * invalid JSON (`JSON.parse` rejects unescaped control chars), and
+ * the single most common reason a well-formed draft reply failed to
+ * parse. The walker only rewrites characters while inside a string
+ * literal (tracking escape state), so valid JSON passes through
+ * unchanged.
+ */
+export function repairJsonStringNewlines(text: string): string {
+  const start = text.indexOf('{')
+  const end = text.lastIndexOf('}')
+  if (start === -1 || end <= start) return text
+  const slice = text.slice(start, end + 1)
+  let out = ''
+  let inString = false
+  let escaped = false
+  for (const ch of slice) {
+    if (!inString) {
+      if (ch === '"') inString = true
+      out += ch
+      continue
+    }
+    if (escaped) {
+      out += ch
+      escaped = false
+      continue
+    }
+    if (ch === '\\') {
+      out += ch
+      escaped = true
+    } else if (ch === '"') {
+      inString = false
+      out += ch
+    } else if (ch === '\n') {
+      out += '\\n'
+    } else if (ch === '\r') {
+      out += '\\r'
+    } else if (ch === '\t') {
+      out += '\\t'
+    } else {
+      out += ch
+    }
+  }
+  return out
+}
+
 /** Parse the model reply into a draft; null when unusable. */
 export function parseDraftReply(text: string): BlogDraft | null {
-  const parsed = extractJsonObject(text)
+  const parsed = extractJsonObject(text) ?? extractJsonObject(repairJsonStringNewlines(text))
   if (!parsed) return null
   const title = typeof parsed.title === 'string' ? parsed.title.trim() : ''
   const summary = typeof parsed.summary === 'string' ? parsed.summary.trim() : ''
@@ -144,7 +194,10 @@ export async function generateBlogDraft(env: EnrichEnv, inputs: GenerateInputs):
         { role: 'system', content: system },
         { role: 'user', content: user },
       ],
-      max_tokens: 2_000,
+      // Headroom over the requested word count: ~900 words of body is
+      // already ~1,300 tokens before JSON overhead — a 2,000 cap
+      // truncated Long drafts mid-string, which parses as garbage.
+      max_tokens: 4_096,
     })
     // A late rejection from the losing branch must never surface as an
     // unhandled rejection in the Workers runtime.
