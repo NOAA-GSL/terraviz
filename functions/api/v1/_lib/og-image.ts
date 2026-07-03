@@ -64,11 +64,56 @@ export function extractOgImage(html: string): string | null {
   return twitter
 }
 
+/** IPv4 literal in a private / loopback / link-local / unspecified
+ *  range. */
+function isPrivateIpv4(host: string): boolean {
+  const m = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/)
+  if (!m) return false
+  const [a, b] = [Number(m[1]), Number(m[2])]
+  return (
+    a === 0 || // 0.0.0.0/8
+    a === 10 || // 10/8
+    a === 127 || // loopback
+    (a === 172 && b >= 16 && b <= 31) || // 172.16/12
+    (a === 192 && b === 168) || // 192.168/16
+    (a === 169 && b === 254) // link-local
+  )
+}
+
+/**
+ * SSRF guard for the article fetch: refuse loopback / private /
+ * link-local targets a malicious feed item could point `sourceUrl`
+ * at. Hostname-shaped private DNS (rebinding) can't be resolved from
+ * a Worker, so this is scheme/host defense-in-depth on top of the
+ * runtime's own egress restrictions. Exported for tests.
+ */
+export function isSafePublicUrl(raw: string): boolean {
+  let u: URL
+  try {
+    u = new URL(raw)
+  } catch {
+    return false
+  }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') return false
+  if (u.username || u.password) return false
+  const host = u.hostname.toLowerCase().replace(/\.$/, '')
+  if (!host) return false
+  if (host === 'localhost' || host.endsWith('.localhost')) return false
+  if (host.endsWith('.local') || host.endsWith('.internal')) return false
+  if (isPrivateIpv4(host)) return false
+  // IPv6 literals arrive bracket-stripped from URL.hostname… except
+  // they don't — keep both forms out: loopback, link-local, unique-local.
+  const v6 = host.replace(/^\[|\]$/g, '')
+  if (v6 === '::1' || v6 === '::' || /^fe80:/i.test(v6) || /^f[cd][0-9a-f]{2}:/i.test(v6)) return false
+  return true
+}
+
 /**
  * Fetch `url` and extract its preview image. `fetchFn` is injectable
  * so tests never touch the network; callers pass the runtime fetch.
  */
 export async function fetchOgImage(url: string, fetchFn: typeof fetch): Promise<string | null> {
+  if (!isSafePublicUrl(url)) return null
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), OG_FETCH_TIMEOUT_MS)
   try {

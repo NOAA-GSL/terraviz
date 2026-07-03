@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, it, vi } from 'vitest'
-import { extractOgImage, fetchOgImage } from './og-image'
+import { extractOgImage, fetchOgImage, isSafePublicUrl } from './og-image'
 
 describe('extractOgImage', () => {
   it('reads og:image regardless of attribute order and decodes &amp;', () => {
@@ -50,6 +50,34 @@ function htmlResponse(body: string, contentType = 'text/html; charset=utf-8', ok
     text: async () => body,
   } as unknown as Response
 }
+
+describe('isSafePublicUrl (SSRF guard)', () => {
+  it('refuses loopback / private / link-local targets and credentials', () => {
+    for (const bad of [
+      'http://localhost/x',
+      'http://foo.localhost/x',
+      'http://127.0.0.1/x',
+      'http://10.1.2.3/x',
+      'http://172.16.0.1/x',
+      'http://192.168.1.1/x',
+      'http://169.254.169.254/latest/meta-data',
+      'http://0.0.0.0/x',
+      'http://[::1]/x',
+      'http://internal.service.internal/x',
+      'https://user:pass@example.org/x',
+      'ftp://example.org/x',
+    ]) {
+      expect(isSafePublicUrl(bad)).toBe(false)
+    }
+    expect(isSafePublicUrl('https://example.org/story')).toBe(true)
+  })
+
+  it('fetchOgImage never issues the request for an unsafe target', async () => {
+    const fetchFn = vi.fn()
+    expect(await fetchOgImage('http://169.254.169.254/latest', fetchFn as unknown as typeof fetch)).toBeNull()
+    expect(fetchFn).not.toHaveBeenCalled()
+  })
+})
 
 describe('fetchOgImage', () => {
   it('extracts from an HTML response', async () => {
