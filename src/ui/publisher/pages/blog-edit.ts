@@ -43,6 +43,7 @@ interface PostWire {
   eventId: string | null
   status: 'draft' | 'published'
   publishedAt: string | null
+  tourId: string | null
 }
 
 interface ReviewEventLite {
@@ -181,6 +182,10 @@ export async function renderBlogEditPage(mount: HTMLElement, options: BlogEditPa
   const existing = postRes?.ok ? postRes.data.post : null
   let postId = existing?.id ?? null
   let postStatus: 'draft' | 'published' = existing?.status ?? 'draft'
+  // The AI-generated companion tour (tours-row id). Set by a
+  // generate-with-tour, persisted with the post so the public page
+  // can offer "Play the companion tour" once the tour is published.
+  let companionTourId: string | null = existing?.tourId ?? null
 
   // ----- Grounding state -----
   const selected = new Map<string, string>() // dataset id → title
@@ -325,6 +330,10 @@ export async function renderBlogEditPage(mount: HTMLElement, options: BlogEditPa
   genTourLink.target = '_blank'
   genTourLink.rel = 'noopener'
   genTourLink.hidden = true
+  if (companionTourId) {
+    genTourLink.href = `/?tourEdit=${encodeURIComponent(companionTourId)}`
+    genTourLink.hidden = false
+  }
   const genBtn = el('button', {
     type: 'button', className: 'publisher-btn publisher-btn-primary publisher-blog-generate-btn',
     textContent: t('publisher.blog.generate.run'),
@@ -362,6 +371,7 @@ export async function renderBlogEditPage(mount: HTMLElement, options: BlogEditPa
         if (!preview.hidden) renderPreview()
         genTourLink.hidden = !res.data.tour
         if (res.data.tour) {
+          companionTourId = res.data.tour.id
           genTourLink.href = `/?tourEdit=${encodeURIComponent(res.data.tour.id)}`
           setStatus(genStatus, t('publisher.blog.generate.doneWithTour'), false)
         } else if (res.data.tourError) {
@@ -398,6 +408,7 @@ export async function renderBlogEditPage(mount: HTMLElement, options: BlogEditPa
     bodyMd: bodyInput.value,
     datasetIds: [...selected.keys()],
     eventId: citedEventId,
+    tourId: companionTourId,
   })
 
   saveBtn.addEventListener('click', () => {

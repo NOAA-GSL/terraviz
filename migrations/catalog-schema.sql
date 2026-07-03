@@ -161,7 +161,7 @@ CREATE TABLE blog_posts (
   status       TEXT NOT NULL DEFAULT 'draft',
   created_at   TEXT NOT NULL,            -- ISO 8601
   updated_at   TEXT NOT NULL,            -- ISO 8601
-  published_at TEXT,                     -- ISO 8601; set on publish
+  published_at TEXT, tour_id TEXT,                     -- ISO 8601; set on publish
   FOREIGN KEY (author_id) REFERENCES publishers(id),
   FOREIGN KEY (event_id)  REFERENCES current_events(id) ON DELETE SET NULL
 );

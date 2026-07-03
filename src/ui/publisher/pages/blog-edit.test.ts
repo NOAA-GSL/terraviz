@@ -45,7 +45,7 @@ function mockFetch(capture: Captured, overrides: Record<string, unknown> = {}) {
     if (method === 'POST' || method === 'PUT') {
       capture.posts.push({ url, body: JSON.parse(String(init?.body)) })
       if (url.includes('/blog/generate')) body = overrides['generate'] ?? DRAFT
-      else body = { post: { id: 'POST1', slug: 'ai-title', title: 'AI Title', summary: null, bodyMd: '## AI body', datasetIds: ['DS_SST'], eventId: null, status: url.includes('POST1') ? 'published' : 'draft', publishedAt: null } }
+      else body = { post: { id: 'POST1', slug: 'ai-title', title: 'AI Title', summary: null, bodyMd: '## AI body', datasetIds: ['DS_SST'], eventId: null, status: url.includes('POST1') ? 'published' : 'draft', publishedAt: null, tourId: null } }
     } else if (url.includes('/publish/me')) body = ADMIN_ME
     else if (url.includes('/publish/datasets')) body = DATASETS
     else if (url.includes('/publish/events')) body = EVENTS
@@ -137,6 +137,47 @@ describe('renderBlogEditPage', () => {
 
     expect(link.hidden).toBe(false)
     expect(link.getAttribute('href')).toBe('/?tourEdit=TOUR1')
+  })
+
+  it('a generated tour id is persisted with Save and shown on an existing post', async () => {
+    const capture: Captured = { posts: [] }
+    const mount = document.createElement('div')
+    await renderBlogEditPage(mount, {
+      fetchFn: mockFetch(capture, {
+        generate: { draft: DRAFT.draft, tour: { id: 'TR000AAAAAAAAAAAAAAAAAAAAA' }, tourError: null },
+      }),
+      navigate: vi.fn(),
+    })
+    await flush()
+
+    pickDataset(mount)
+    ;(mount.querySelector('.publisher-blog-generate-btn') as HTMLButtonElement).click()
+    await flush()
+    ;(mount.querySelector('.publisher-blog-save-btn') as HTMLButtonElement).click()
+    await flush()
+
+    const save = capture.posts.find(p => p.url.endsWith('/publish/blog'))!
+    expect((save.body as { tourId: string | null }).tourId).toBe('TR000AAAAAAAAAAAAAAAAAAAAA')
+  })
+
+  it('editing a post that has a saved companion tour shows the preview link at once', async () => {
+    const mount = document.createElement('div')
+    const withTour = { post: { id: 'POST1', slug: 's', title: 'T', summary: null, bodyMd: 'b', datasetIds: [], eventId: null, status: 'draft', publishedAt: null, tourId: 'TR000AAAAAAAAAAAAAAAAAAAAA' } }
+    const fetchFn = vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : (input as Request).url
+      let body: unknown = {}
+      if (url.includes('/publish/me')) body = ADMIN_ME
+      else if (url.includes('/publish/blog/POST1')) body = withTour
+      else if (url.includes('/publish/datasets')) body = DATASETS
+      else if (url.includes('/publish/events')) body = EVENTS
+      return { ok: true, status: 200, type: 'basic', json: async () => body, text: async () => JSON.stringify(body) } as unknown as Response
+    })
+    await renderBlogEditPage(mount, { fetchFn, navigate: vi.fn(), postId: 'POST1' })
+    await flush()
+
+    const link = mount.querySelector('.publisher-blog-tour-link') as HTMLAnchorElement
+    expect(link.hidden).toBe(false)
+    expect(link.getAttribute('href')).toBe('/?tourEdit=TR000AAAAAAAAAAAAAAAAAAAAA')
   })
 
   it('a failed regenerate hides the previous attempt\'s tour link', async () => {
@@ -246,6 +287,7 @@ describe('renderBlogEditPage', () => {
       bodyMd: 'Body text',
       datasetIds: ['DS_SST'],
       eventId: null,
+      tourId: null,
     })
   })
 
