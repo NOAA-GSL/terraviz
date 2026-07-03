@@ -68,19 +68,28 @@ export async function getNodeProfile(db: D1Database): Promise<NodeProfileRow | n
 }
 
 /** Shape a stored row into the wire payload. A corrupt `links_json`
- *  degrades to an empty list rather than failing the read. */
+ *  degrades to an empty list rather than failing the read, and every
+ *  stored link is re-validated on the way out (non-empty bounded
+ *  label, http(s)-only url, clamped to {@link PROFILE_MAX_LINKS}) —
+ *  legacy or hand-edited rows must not let a `javascript:` url reach
+ *  a surface that renders these as anchors. */
 export function toPublicProfile(row: NodeProfileRow): NodeProfilePublic {
   let links: NodeProfileLink[] = []
   if (row.links_json) {
     try {
       const parsed: unknown = JSON.parse(row.links_json)
       if (Array.isArray(parsed)) {
-        links = parsed.filter(
-          (l): l is NodeProfileLink =>
-            !!l && typeof l === 'object'
-            && typeof (l as NodeProfileLink).label === 'string'
-            && typeof (l as NodeProfileLink).url === 'string',
-        )
+        links = parsed
+          .map(l => {
+            if (!l || typeof l !== 'object') return null
+            const rec = l as Record<string, unknown>
+            const label = typeof rec.label === 'string' ? rec.label.trim() : ''
+            const url = typeof rec.url === 'string' ? rec.url.trim() : ''
+            if (!label || label.length > PROFILE_LINK_LABEL_MAX_LEN || !isHttpUrl(url)) return null
+            return { label, url }
+          })
+          .filter((l): l is NodeProfileLink => l !== null)
+          .slice(0, PROFILE_MAX_LINKS)
       }
     } catch {
       // Corrupt JSON — treat as no links.

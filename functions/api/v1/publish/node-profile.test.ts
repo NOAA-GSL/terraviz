@@ -161,4 +161,20 @@ describe('toPublicProfile', () => {
     expect(toPublicProfile({ ...base, links_json: '{oops' }).links).toEqual([])
     expect(toPublicProfile({ ...base, links_json: '[{"label":1}]' }).links).toEqual([])
   })
+
+  it('re-validates stored links on read — non-http schemes dropped, list clamped', () => {
+    // Legacy or hand-edited rows must not smuggle a javascript: url
+    // past the http(s)-only contract, and an oversized list is clamped.
+    const stored = [
+      { label: 'ok', url: 'https://example.org' },
+      { label: 'xss', url: 'javascript:alert(1)' }, // eslint-disable-line no-script-url
+      { label: 'ftp', url: 'ftp://example.org' },
+      { label: '', url: 'https://empty-label.example.org' },
+      ...Array.from({ length: 15 }, (_, i) => ({ label: `l${i}`, url: `https://l${i}.example.org` })),
+    ]
+    const links = toPublicProfile({ ...base, links_json: JSON.stringify(stored) }).links
+    expect(links[0]).toEqual({ label: 'ok', url: 'https://example.org' })
+    expect(links.every(l => l.url.startsWith('http'))).toBe(true)
+    expect(links).toHaveLength(10)
+  })
 })

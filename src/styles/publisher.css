@@ -2974,7 +2974,7 @@
   align-items: center;
 }
 .publisher-nodeprofile-links-wrap .publisher-btn {
-  align-self: start;
+  align-self: flex-start;
 }
 .publisher-nodeprofile-actions {
   margin-block-start: calc(0.5rem * var(--ui-scale));
