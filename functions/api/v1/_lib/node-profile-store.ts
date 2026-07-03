@@ -27,13 +27,10 @@ export const PROFILE_LINK_LABEL_MAX_LEN = 100
 /** Logo upload bounds (`POST /api/v1/publish/node-profile/logo`).
  *  Raster only — SVG is deliberately excluded (scriptable content on
  *  a public surface). The cap keeps the base64 JSON body and the
- *  in-Worker digest buffer small. */
+ *  in-Worker digest buffer small. The allowlist itself lives in the
+ *  shared `image-upload.ts` helpers (also used by tour media). */
 export const LOGO_MAX_BYTES = 512 * 1024
-export const LOGO_CONTENT_TYPES: Readonly<Record<string, string>> = {
-  'image/png': 'png',
-  'image/jpeg': 'jpg',
-  'image/webp': 'webp',
-}
+export { IMAGE_CONTENT_TYPES as LOGO_CONTENT_TYPES } from './image-upload'
 
 /** KV key for the public `GET /api/v1/node-profile` payload. */
 export const NODE_PROFILE_CACHE_KEY = 'node-profile:v1'

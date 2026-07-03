@@ -33,12 +33,12 @@
 import type { CatalogEnv } from '../../_lib/env'
 import type { PublisherData } from '../_middleware'
 import {
-  LOGO_CONTENT_TYPES,
   LOGO_MAX_BYTES,
   bustNodeProfileCache,
   getNodeProfile,
   setNodeProfileLogo,
 } from '../../_lib/node-profile-store'
+import { sha256Hex, validateImagePayload } from '../../_lib/image-upload'
 import { isPrivileged } from '../../_lib/publisher-store'
 import { resolveHttpAssetUrl } from '../../_lib/r2-public-url'
 import { writeAuditEvent } from '../../_lib/audit-store'
@@ -66,48 +66,6 @@ function ok(logoUrl: string | null): Response {
   })
 }
 
-/** Decode standard base64 into bytes; null on malformed input. */
-function decodeBase64(b64: string): Uint8Array | null {
-  try {
-    const bin = atob(b64)
-    const bytes = new Uint8Array(bin.length)
-    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
-    return bytes
-  } catch {
-    return null
-  }
-}
-
-/** Identify the image type from magic bytes — the source of truth
- *  the claimed `contentType` must agree with. */
-function sniffImageType(bytes: Uint8Array): keyof typeof LOGO_CONTENT_TYPES | null {
-  if (
-    bytes.length >= 8 &&
-    bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47 &&
-    bytes[4] === 0x0d && bytes[5] === 0x0a && bytes[6] === 0x1a && bytes[7] === 0x0a
-  ) {
-    return 'image/png'
-  }
-  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
-    return 'image/jpeg'
-  }
-  if (
-    bytes.length >= 12 &&
-    bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46 &&
-    bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50
-  ) {
-    return 'image/webp'
-  }
-  return null
-}
-
-async function sha256Hex(bytes: Uint8Array): Promise<string> {
-  const hash = await crypto.subtle.digest('SHA-256', bytes.buffer as ArrayBuffer)
-  let out = ''
-  for (const b of new Uint8Array(hash)) out += b.toString(16).padStart(2, '0')
-  return out
-}
-
 export const onRequestPost: PagesFunction<CatalogEnv> = async context => {
   if (!context.env.CATALOG_DB) {
     return jsonError(503, 'binding_missing', 'CATALOG_DB binding is not configured on this deployment.')
@@ -127,48 +85,15 @@ export const onRequestPost: PagesFunction<CatalogEnv> = async context => {
     return jsonError(400, 'invalid_json', 'Request body is not valid JSON.')
   }
 
-  const contentType = typeof body.contentType === 'string' ? body.contentType : ''
-  const ext = LOGO_CONTENT_TYPES[contentType]
-  if (!ext) {
-    return fieldErrors([{
-      field: 'contentType',
-      code: 'unsupported',
-      message: 'Logo must be a PNG, JPEG, or WebP image.',
-    }])
+  const payload = validateImagePayload(body, LOGO_MAX_BYTES)
+  if (!payload.ok) {
+    // The shared validator speaks about "Image …"; this surface is
+    // specifically the logo, so keep the route's original wording.
+    return fieldErrors([
+      { ...payload.error, message: payload.error.message.replace(/^Image /, 'Logo ') },
+    ])
   }
-
-  const b64 = typeof body.dataBase64 === 'string' ? body.dataBase64 : ''
-  // Length pre-check bounds the decode before allocating; 4/3 is the
-  // base64 expansion factor (+ padding slack).
-  if (!b64 || b64.length > Math.ceil((LOGO_MAX_BYTES * 4) / 3) + 8) {
-    return fieldErrors([{
-      field: 'dataBase64',
-      code: 'too_large',
-      message: `Logo must be at most ${Math.round(LOGO_MAX_BYTES / 1024)} KB.`,
-    }])
-  }
-  const bytes = decodeBase64(b64)
-  if (!bytes || bytes.length === 0) {
-    return fieldErrors([{
-      field: 'dataBase64',
-      code: 'invalid',
-      message: '`dataBase64` is not valid base64.',
-    }])
-  }
-  if (bytes.length > LOGO_MAX_BYTES) {
-    return fieldErrors([{
-      field: 'dataBase64',
-      code: 'too_large',
-      message: `Logo must be at most ${Math.round(LOGO_MAX_BYTES / 1024)} KB.`,
-    }])
-  }
-  if (sniffImageType(bytes) !== contentType) {
-    return fieldErrors([{
-      field: 'dataBase64',
-      code: 'type_mismatch',
-      message: 'The file bytes do not match the declared image type.',
-    }])
-  }
+  const { bytes, contentType, ext } = payload
 
   // Require a saved profile BEFORE writing to R2 so a premature
   // upload doesn't orphan an object it can never reference.

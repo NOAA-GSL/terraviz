@@ -149,6 +149,7 @@ design rationale in the `docs/CATALOG_*` plan docs.
 | `functions/api/v1/publish/tours.ts` | /api/v1/publish/tours — tour collection endpoint |
 | `functions/api/v1/publish/tours/[id].ts` | /api/v1/publish/tours/{id} |
 | `functions/api/v1/publish/tours/[id]/json.ts` | /api/v1/publish/tours/{id}/json |
+| `functions/api/v1/publish/tours/[id]/media.ts` | POST /api/v1/publish/tours/{id}/media — media-rail image upload for the authoring dock (shared image validation, 4 MB cap, content-addressed `tours/{id}/media/sha256/…`, owner-gated); returns the public URL the `showImage` task references |
 | `functions/api/v1/publish/tours/[id]/preview.ts` | POST /api/v1/publish/tours/{id}/preview |
 | `functions/api/v1/publish/tours/[id]/publish.ts` | POST /api/v1/publish/tours/{id}/publish |
 | `functions/api/v1/publish/tours/[id]/retract.ts` | POST /api/v1/publish/tours/{id}/retract |
@@ -203,6 +204,7 @@ design rationale in the `docs/CATALOG_*` plan docs.
 | `functions/api/v1/_lib/publisher-mutations.ts` | Admin user-administration store helper — list / get / update publishers, self-lockout + last-admin guardrails |
 | `functions/api/v1/_lib/publisher-store.ts` | D1 reader / writer for the `publishers` table |
 | `functions/api/v1/_lib/r2-public-url.ts` | Build a publicly-readable URL for an R2 object key |
+| `functions/api/v1/_lib/image-upload.ts` | Shared validation for small direct image uploads (base64-in-JSON): png/jpeg/webp allowlist, magic-byte check against the claimed type, bounded decode, sha256 for content-addressed keys — used by the node-profile logo and tour-media routes |
 | `functions/api/v1/_lib/r2-store.ts` | R2 storage helpers — Phase 1b |
 | `functions/api/v1/_lib/search-datasets.ts` | Vector search over the dataset catalog — Phase 1c |
 | `functions/api/v1/_lib/snapshot.ts` | KV-backed snapshot cache for the public catalog response |
