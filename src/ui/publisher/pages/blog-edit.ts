@@ -104,7 +104,7 @@ function setStatus(node: HTMLElement, message: string, isError: boolean): void {
 }
 
 function handleWriteError(
-  res: { ok: false; kind: string; errors?: Array<{ message: string }> },
+  res: { ok: false; kind: string; errors?: Array<{ message: string }>; body?: string },
   status: HTMLElement,
   navigate?: (url: string) => void,
 ): void {
@@ -116,6 +116,22 @@ function handleWriteError(
   if (res.kind === 'validation' && res.errors && res.errors.length > 0) {
     setStatus(status, res.errors[0].message, true)
     return
+  }
+  if (res.kind === 'server' && res.body) {
+    // The blog routes return typed `{ error, message }` failures whose
+    // message is written for the curator ("Workers AI is not bound on
+    // this deployment", "The model call failed or timed out — try
+    // again") — show it instead of a generic shrug, same policy as
+    // the validation branch above.
+    try {
+      const parsed = JSON.parse(res.body) as { message?: unknown }
+      if (typeof parsed.message === 'string' && parsed.message.trim()) {
+        setStatus(status, parsed.message, true)
+        return
+      }
+    } catch {
+      // Not JSON — fall through to the generic message.
+    }
   }
   setStatus(status, t('publisher.blog.error.generic'), true)
 }

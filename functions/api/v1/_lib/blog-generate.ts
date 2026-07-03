@@ -20,10 +20,16 @@ import { PROFILE_TONE_MAX_LEN, type NodeProfileRow } from './node-profile-store'
 import type { CurrentEventRow } from './events-store'
 import { extractModelText, extractJsonObject, ENRICH_MODEL_ID, type EnrichEnv } from './events-enrich'
 
-/** A long generation is still bounded — past this the route returns a
+/** A generation is still bounded — past this the route returns a
  *  typed failure and the curator retries (mirrors the enrichment /
- *  caption timeouts, sized up for a full post). */
-const GENERATE_TIMEOUT_MS = 30_000
+ *  caption timeouts, sized up for a full post). Scaled by requested
+ *  length: a ~900-word draft routinely needs more than 30 s of model
+ *  time, and the Workers runtime is happy to await I/O that long. */
+const GENERATE_TIMEOUT_MS: Record<BlogDraftLength, number> = {
+  short: 30_000,
+  medium: 30_000,
+  long: 60_000,
+}
 
 /** Word-count guidance per requested length. */
 export const LENGTH_WORDS: Record<BlogDraftLength, number> = {
@@ -146,7 +152,10 @@ export async function generateBlogDraft(env: EnrichEnv, inputs: GenerateInputs):
     const raced = await Promise.race([
       modelCall,
       new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error('generation timeout')), GENERATE_TIMEOUT_MS)
+        timer = setTimeout(
+          () => reject(new Error('generation timeout')),
+          GENERATE_TIMEOUT_MS[inputs.length ?? 'medium'],
+        )
       }),
     ])
     const text = extractModelText(raced)

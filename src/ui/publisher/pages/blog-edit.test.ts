@@ -96,6 +96,36 @@ describe('renderBlogEditPage', () => {
     expect(preview.querySelector('h2')?.textContent).toBe('AI body')
   })
 
+  it('Generate surfaces the server\'s typed failure message (503 ai_unavailable)', async () => {
+    const capture: Captured = { posts: [] }
+    const mount = document.createElement('div')
+    const failure = { error: 'ai_unavailable', message: 'Workers AI is not bound on this deployment.' }
+    const fetchFn = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : (input as Request).url
+      const method = init?.method ?? 'GET'
+      if (method === 'POST' && url.includes('/blog/generate')) {
+        capture.posts.push({ url, body: JSON.parse(String(init?.body)) })
+        return { ok: false, status: 503, type: 'basic', json: async () => failure, text: async () => JSON.stringify(failure) } as unknown as Response
+      }
+      let body: unknown = {}
+      if (url.includes('/publish/me')) body = ADMIN_ME
+      else if (url.includes('/publish/datasets')) body = DATASETS
+      else if (url.includes('/publish/events')) body = EVENTS
+      return { ok: true, status: 200, type: 'basic', json: async () => body, text: async () => JSON.stringify(body) } as unknown as Response
+    })
+    await renderBlogEditPage(mount, { fetchFn, navigate: vi.fn() })
+    await flush()
+
+    pickDataset(mount)
+    ;(mount.querySelector('.publisher-blog-generate-btn') as HTMLButtonElement).click()
+    await flush()
+
+    // The route's curator-facing message must reach the status line —
+    // not the generic "Something went wrong."
+    const statuses = Array.from(mount.querySelectorAll('.publisher-blog-status'))
+    expect(statuses.some(s => s.textContent === 'Workers AI is not bound on this deployment.')).toBe(true)
+  })
+
   it('Generate without datasets is blocked client-side', async () => {
     const capture: Captured = { posts: [] }
     const mount = await mountEditor(capture)
