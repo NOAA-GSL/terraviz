@@ -315,6 +315,16 @@ export async function renderBlogEditPage(mount: HTMLElement, options: BlogEditPa
   const tourWrap = el('label', { className: 'publisher-blog-check' }, [tourCheck, t('publisher.blog.generate.includeTour')])
   const genStatus = el('span', { className: 'publisher-blog-status' })
   genStatus.setAttribute('role', 'status')
+  // Appears after a generate-with-tour: the companion tour is a draft
+  // on the Tours tab; this deep-links its authoring dock, where
+  // "Preview from start" plays it without publishing anything.
+  const genTourLink = el('a', {
+    className: 'publisher-blog-tour-link',
+    textContent: t('publisher.blog.generate.previewTour'),
+  })
+  genTourLink.target = '_blank'
+  genTourLink.rel = 'noopener'
+  genTourLink.hidden = true
   const genBtn = el('button', {
     type: 'button', className: 'publisher-btn publisher-btn-primary publisher-blog-generate-btn',
     textContent: t('publisher.blog.generate.run'),
@@ -347,7 +357,9 @@ export async function renderBlogEditPage(mount: HTMLElement, options: BlogEditPa
         bodyInput.value = res.data.draft.bodyMd
         // Keep an open Preview pane in sync with the drafted body.
         if (!preview.hidden) renderPreview()
+        genTourLink.hidden = !res.data.tour
         if (res.data.tour) {
+          genTourLink.href = `/?tourEdit=${encodeURIComponent(res.data.tour.id)}`
           setStatus(genStatus, t('publisher.blog.generate.doneWithTour'), false)
         } else if (res.data.tourError) {
           setStatus(genStatus, t('publisher.blog.generate.doneTourFailed', { reason: res.data.tourError }), false)
@@ -458,6 +470,7 @@ export async function renderBlogEditPage(mount: HTMLElement, options: BlogEditPa
     tourWrap,
     el('div', { className: 'publisher-blog-actions' }, [genBtn]),
     genStatus,
+    genTourLink,
   )
   const bodyField = el('div', { className: 'publisher-blog-field' })
   const bodyLabelRow = el('div', { className: 'publisher-form-label-row' }, [

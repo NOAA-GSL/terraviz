@@ -118,7 +118,7 @@ export async function renderBlogPage(mount: HTMLElement, options: BlogPageOption
     const table = el('table', { className: 'publisher-table' })
     const thead = el('thead')
     const headRow = el('tr')
-    for (const key of ['publisher.blog.col.title', 'publisher.blog.col.status', 'publisher.blog.col.updated'] as const) {
+    for (const key of ['publisher.blog.col.title', 'publisher.blog.col.status', 'publisher.blog.col.updated', 'publisher.blog.col.link'] as const) {
       headRow.append(el('th', { textContent: t(key) }))
     }
     thead.append(headRow)
@@ -148,6 +148,20 @@ export async function renderBlogPage(mount: HTMLElement, options: BlogPageOption
         ]),
       )
       tr.append(el('td', { textContent: post.updatedAt.slice(0, 10) }))
+      // Published posts link straight to their public page; drafts
+      // have nothing public to link to.
+      const viewCell = el('td')
+      if (post.status === 'published') {
+        const view = el('a', {
+          className: 'publisher-row-link publisher-blog-view-link',
+          href: `/blog/${encodeURIComponent(post.slug)}`,
+          textContent: t('publisher.blog.list.view'),
+        })
+        view.target = '_blank'
+        view.rel = 'noopener'
+        viewCell.append(view)
+      }
+      tr.append(viewCell)
       tbody.append(tr)
     }
     table.append(tbody)

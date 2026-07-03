@@ -117,6 +117,28 @@ describe('renderBlogEditPage', () => {
     expect(preview.querySelector('h2')?.textContent).toBe('AI body')
   })
 
+  it('a generate-with-tour reveals the tour-preview link into the authoring dock', async () => {
+    const capture: Captured = { posts: [] }
+    const mount = document.createElement('div')
+    await renderBlogEditPage(mount, {
+      fetchFn: mockFetch(capture, {
+        generate: { draft: DRAFT.draft, tour: { id: 'TOUR1' }, tourError: null },
+      }),
+      navigate: vi.fn(),
+    })
+    await flush()
+
+    const link = mount.querySelector('.publisher-blog-tour-link') as HTMLAnchorElement
+    expect(link.hidden).toBe(true)
+
+    pickDataset(mount)
+    ;(mount.querySelector('.publisher-blog-generate-btn') as HTMLButtonElement).click()
+    await flush()
+
+    expect(link.hidden).toBe(false)
+    expect(link.getAttribute('href')).toBe('/?tourEdit=TOUR1')
+  })
+
   it('citing an event seeds its APPROVED dataset links as chips (proposed excluded)', async () => {
     const capture: Captured = { posts: [] }
     const mount = await mountEditor(capture)
