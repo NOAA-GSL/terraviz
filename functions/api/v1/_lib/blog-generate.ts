@@ -16,7 +16,7 @@
  * the route surfaces, not a silent fallback.
  */
 
-import { PROFILE_TONE_MAX_LEN, type NodeProfileRow } from './node-profile-store'
+import { PROFILE_TONE_MAX_LEN, toPublicProfile, type NodeProfileRow } from './node-profile-store'
 import type { CurrentEventRow } from './events-store'
 import { extractModelText, extractJsonObject, ENRICH_MODEL_ID, type EnrichEnv } from './events-enrich'
 
@@ -90,7 +90,9 @@ export function buildBlogPrompt(inputs: GenerateInputs): { system: string; user:
     `about ${words} words, in this tone: ${tone}. ` +
     'The reply must be valid JSON — escape newlines inside strings as \\n. ' +
     'Ground EVERY claim in the facts provided — never invent numbers, dates, places, quotes, or ' +
-    'findings that are not in the given text. Where the post draws on a dataset, name it. ' +
+    'findings that are not in the given text. ' +
+    'Include a URL only if it appears VERBATIM in the facts below — never guess, reconstruct, ' +
+    'or abbreviate one. Where the post draws on a dataset, name it. ' +
     'If a news event is given, cite its source by name and link to its URL in the body. ' +
     'Write in the organization\'s voice ("we") when the profile describes one.'
 
@@ -102,6 +104,14 @@ export function buildBlogPrompt(inputs: GenerateInputs): { system: string; user:
       + (inputs.profile.region_focus ? `\nGeographic focus: ${inputs.profile.region_focus}` : ''),
     )
     if (inputs.profile.about_md) parts.push(`About the organization:\n${inputs.profile.about_md.slice(0, 1_500)}`)
+    // The profile's validated links — without these the model has no
+    // verbatim URL to copy and reconstructs a plausible one from the
+    // org name instead (observed live: zyra-project.org came back
+    // with its dash dropped).
+    const links = toPublicProfile(inputs.profile).links
+    if (links.length > 0) {
+      parts.push(`Official links:\n${links.map(l => `- ${l.label}: ${l.url}`).join('\n')}`)
+    }
   }
   if (inputs.event) {
     const ev = inputs.event
@@ -174,6 +184,39 @@ export function repairJsonStringNewlines(text: string): string {
   return out
 }
 
+/** Match http(s) URLs; trailing sentence punctuation excluded. */
+const URL_RE = /https?:\/\/[^\s)\]}"'<>]+/g
+
+/** Comparison form: case-normalized host, trailing slash/punctuation
+ *  trimmed — `https://x.org/` and `https://x.org` are one URL. */
+function normalizeUrl(raw: string): string {
+  return raw.replace(/[.,;:!?]+$/, '').replace(/\/+$/, '').toLowerCase()
+}
+
+/**
+ * Remove URLs the grounding facts never contained — the deterministic
+ * backstop behind the prompt's "verbatim URLs only" instruction.
+ * Models asked to "link to our site" without the link available will
+ * reconstruct a plausible-looking domain (observed: the org's
+ * hyphenated domain came back with the hyphen dropped — a working
+ * link to someone else's domain). A markdown link with a fabricated
+ * target keeps its text; a bare fabricated URL is dropped.
+ */
+export function stripUngroundedUrls(bodyMd: string, groundedText: string): string {
+  const allowed = new Set<string>()
+  for (const url of groundedText.match(URL_RE) ?? []) allowed.add(normalizeUrl(url))
+
+  // Markdown links first, so a kept/stripped decision applies to the
+  // whole construct rather than its inner URL.
+  let out = bodyMd.replace(/\[([^\]]*)\]\((https?:\/\/[^\s)]+)\)/g, (whole, text: string, url: string) =>
+    allowed.has(normalizeUrl(url)) ? whole : text,
+  )
+  // Bare URLs (grounded ones survive the same check).
+  out = out.replace(URL_RE, m => (allowed.has(normalizeUrl(m)) ? m : ''))
+  // Tidy artifacts a dropped bare URL can leave: "( )" and doubled spaces.
+  return out.replace(/\(\s*\)/g, '').replace(/[^\S\n]{2,}/g, ' ')
+}
+
 /** Parse the model reply into a draft; null when unusable. */
 export function parseDraftReply(text: string): BlogDraft | null {
   const parsed = extractJsonObject(text) ?? extractJsonObject(repairJsonStringNewlines(text))
@@ -223,6 +266,9 @@ export async function generateBlogDraft(env: EnrichEnv, inputs: GenerateInputs):
     if (!draft) {
       return { ok: false, error: 'generation_failed', message: 'The model reply could not be parsed into a draft.' }
     }
+    // Deterministic URL grounding: only URLs present verbatim in the
+    // facts we supplied may survive into the draft.
+    draft.bodyMd = stripUngroundedUrls(draft.bodyMd, user)
     return { ok: true, draft }
   } catch (e) {
     // Same discipline: the real error goes to the deployment logs,

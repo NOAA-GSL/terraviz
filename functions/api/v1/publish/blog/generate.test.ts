@@ -12,7 +12,7 @@
 
 import { describe, expect, it, vi } from 'vitest'
 import { onRequestPost as generate } from './generate'
-import { buildBlogPrompt, parseDraftReply } from '../../_lib/blog-generate'
+import { buildBlogPrompt, parseDraftReply, stripUngroundedUrls } from '../../_lib/blog-generate'
 import { asD1, makeKV, seedFixtures } from '../../_lib/test-helpers'
 import { insertCurrentEvent } from '../../_lib/events-store'
 import type { PublisherRow } from '../../_lib/publisher-store'
@@ -246,6 +246,45 @@ describe('buildBlogPrompt / parseDraftReply', () => {
     expect(parsed?.title).toBe('Rising seas')
     expect(parsed?.bodyMd).toContain('## The data\n\nSea level has risen.')
     expect(parsed?.bodyMd).toContain('- Buoys agree')
+  })
+
+  it('includes the profile links in the prompt so real URLs are copyable', () => {
+    const { user } = buildBlogPrompt({
+      profile: {
+        org_name: 'The Zyra Project',
+        mission: null,
+        about_md: null,
+        region_focus: null,
+        default_tone: null,
+        links_json: JSON.stringify([{ label: 'TerraViz', url: 'https://terraviz.zyra-project.org/' }]),
+        logo_ref: null,
+        updated_by: 'P1',
+        updated_at: '2026-07-01T00:00:00.000Z',
+      },
+      event: null,
+      datasets: [{ id: 'x', title: 'T', abstract: null }],
+    })
+    expect(user).toContain('Official links:')
+    expect(user).toContain('https://terraviz.zyra-project.org/')
+  })
+
+  it('strips URLs the facts never contained; keeps grounded ones', () => {
+    const facts =
+      'Official links:\n- TerraViz: https://terraviz.zyra-project.org/\n' +
+      'Source: NOAA (https://example.gov/story)'
+    const body =
+      'Explore [TerraViz](https://terraviz.zyraproject.org/) today. ' + // fabricated: dash dropped
+      'Read the [story](https://example.gov/story). ' +
+      'Also see https://terraviz.zyra-project.org/ and https://made-up.example.com/page.'
+    const out = stripUngroundedUrls(body, facts)
+    // The fabricated markdown link collapses to its text.
+    expect(out).toContain('Explore TerraViz today.')
+    expect(out).not.toContain('zyraproject.org')
+    // Grounded links survive in both forms.
+    expect(out).toContain('[story](https://example.gov/story)')
+    expect(out).toContain('https://terraviz.zyra-project.org/')
+    // The bare fabricated URL is dropped.
+    expect(out).not.toContain('made-up.example.com')
   })
 
   it('repairs the full control-char range, not just \\n/\\r/\\t', () => {
