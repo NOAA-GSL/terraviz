@@ -14,7 +14,20 @@ const DATASETS = {
   ],
   next_cursor: null,
 }
-const EVENTS = { events: [{ id: 'EVT1', title: 'Gulf marine heatwave' }] }
+const EVENTS = {
+  events: [
+    {
+      id: 'EVT1',
+      title: 'Gulf marine heatwave',
+      links: [
+        // Approved link to the dataset the tests pick manually — the
+        // seed dedupes against it; the proposed link must NOT seed.
+        { datasetId: 'DS_SST', datasetTitle: 'Sea Surface Temperature', status: 'approved' },
+        { datasetId: 'DS_PROPOSED', datasetTitle: 'Unvetted pairing', status: 'proposed' },
+      ],
+    },
+  ],
+}
 const DRAFT = { draft: { title: 'AI Title', summary: 'AI summary.', bodyMd: '## AI body' }, tour: null, tourError: null }
 
 interface Captured {
@@ -102,6 +115,22 @@ describe('renderBlogEditPage', () => {
     // The visible preview must reflect the generated markdown, not the
     // pre-generate empty state.
     expect(preview.querySelector('h2')?.textContent).toBe('AI body')
+  })
+
+  it('citing an event seeds its APPROVED dataset links as chips (proposed excluded)', async () => {
+    const capture: Captured = { posts: [] }
+    const mount = await mountEditor(capture)
+
+    // No chips yet; select the event.
+    const evSelect = mount.querySelector('.publisher-blog-event-select') as HTMLSelectElement
+    evSelect.value = 'EVT1'
+    evSelect.dispatchEvent(new Event('change'))
+
+    const chips = Array.from(mount.querySelectorAll('.publisher-blog-chip')).map(c => c.textContent)
+    expect(chips.some(c => c?.includes('Sea Surface Temperature'))).toBe(true)
+    // The unvetted pairing must not be seeded.
+    expect(chips.some(c => c?.includes('Unvetted pairing'))).toBe(false)
+    expect(chips).toHaveLength(1)
   })
 
   it('Generate surfaces the server\'s typed failure message (503 ai_unavailable)', async () => {

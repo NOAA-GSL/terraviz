@@ -48,6 +48,9 @@ interface PostWire {
 interface ReviewEventLite {
   id: string
   title: string
+  /** The event's dataset pairings from the review queue — approved
+   *  ones seed the grounding chips when the event is cited. */
+  links?: Array<{ datasetId: string; datasetTitle: string; status: string }>
 }
 
 const ME_ENDPOINT = '/api/v1/publish/me'
@@ -276,6 +279,22 @@ export async function renderBlogEditPage(mount: HTMLElement, options: BlogEditPa
   }
   evSelect.addEventListener('change', () => {
     citedEventId = evSelect.value || null
+    // The event's approved dataset pairings were already vetted on
+    // the Events tab — seed them as grounding chips so the curator
+    // doesn't re-pick them by hand. Additive merge: existing chips
+    // stay, seeded ones are removable like any other.
+    if (!citedEventId) return
+    const ev = events.find(e => e.id === citedEventId)
+    let added = false
+    for (const link of ev?.links ?? []) {
+      if (link.status !== 'approved' || selected.has(link.datasetId)) continue
+      selected.set(link.datasetId, link.datasetTitle)
+      added = true
+    }
+    if (added) {
+      renderChips()
+      renderDsCandidates()
+    }
   })
 
   // ----- Generate controls -----
@@ -472,14 +491,14 @@ export async function renderBlogEditPage(mount: HTMLElement, options: BlogEditPa
       renderChips()
     }
   })
-  void publisherGet<{ events: Array<{ id: string; title: string }> }>(EVENTS_ENDPOINT, { fetchFn }).then(res => {
+  void publisherGet<{ events: ReviewEventLite[] }>(EVENTS_ENDPOINT, { fetchFn }).then(res => {
     if (!res.ok) {
       // Mirror loadPublishedDatasets: route a session error through the
       // shared recovery flow; other failures leave the picker disabled.
       if (res.kind === 'session') handleSessionError({ navigate: options.navigate })
       return
     }
-    events = res.data.events.map(e => ({ id: e.id, title: e.title }))
+    events = res.data.events.map(e => ({ id: e.id, title: e.title, links: e.links }))
     evSelect.disabled = false
     renderEventOptions()
   })
