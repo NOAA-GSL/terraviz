@@ -97,6 +97,7 @@ describe('POST /api/chat/completions — tool shim envelope handling', () => {
     const res = await onRequestPost(
       ctx({ body: { model: 'llama-4-scout', messages: MESSAGES, stream: true, tools: TOOLS }, run }),
     )
+    expect(res.status).toBe(200)
     const sse = await res.text()
     expect(sse).toContain('"content":"On it."')
     expect(sse).toContain('"arguments":"{\\"id\\":\\"DS2\\"}"')
