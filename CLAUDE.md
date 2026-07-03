@@ -252,6 +252,7 @@ npm run screenshots:smoke   # gating interaction tests (search, Orbit, nav)
 | `src/ui/tourAuthoring/dock.ts` | Floating tour-authoring dock — attaches to SPA chrome on `/?tourEdit=<id>` (or `=new`) |
 | `src/ui/tourAuthoring/state.ts` | In-memory tour-authoring state — dock reads/writes here; `autosave.ts` flushes it |
 | `src/ui/tourAuthoring/autosave.ts` | Debounced autosave for the tour-authoring dock |
+| `src/ui/tourAuthoring/mediaCapture.ts` | Pure capture helpers for the dock's Media group — positionless `showImage`/`showVideo` builders (→ the player's responsive media rail), `media{N}` ID minting, and the hide-latest pairing walk |
 | `src/ui/tourAuthoring/api.ts` | Publisher-side API client for the tour-authoring dock |
 | `src/utils/logger.ts` | Log-level gating so production builds stay silent |
 | `src/utils/debounce.ts` | Debounced-function wrapper |
