@@ -134,6 +134,7 @@ design rationale in the `docs/CATALOG_*` plan docs.
 | `functions/api/v1/publish/featured-hero.ts` | /api/v1/publish/featured-hero — the "Right now" hero admin write API (Phase B of `docs/HERO_ADMIN_SCOPING.md`) |
 | `functions/api/v1/publish/blog.ts` | GET (authoring list, drafts included, `?status=` filter) + POST (create a draft post — title/summary/markdown body/cited datasets/cited event; privileged, audit-logged `blog.create`) (`docs/CURRENT_EVENTS_PLAN.md` §7) |
 | `functions/api/v1/publish/blog/[id].ts` | GET (one post incl. drafts) + PUT (update content — the slug never changes, published URLs stay stable) + POST `{action: publish\|unpublish}` (the curator-gated status transition) — privileged writes, audit-logged, busts the public blog caches |
+| `functions/api/v1/publish/blog/generate.ts` | POST /api/v1/publish/blog/generate — AI-draft a post from the curator's selections (datasets + optional cited event + the node profile); the draft is returned, not persisted; `includeTour` additionally persists the §7 companion tour draft over the hand-picked datasets (best-effort — a tour failure never sinks the draft). Privileged, audit-logged (`blog.generate`) |
 | `functions/api/v1/publish/node-profile.ts` | GET + PUT /api/v1/publish/node-profile — the singleton host-organization profile (org name, mission, about, region focus, tone, links); any publisher reads, privileged writes, audit-logged (`node_profile.update`) — the "about the host" context Phase 3d blog generation grounds itself in |
 | `functions/api/v1/publish/featured.ts` | /api/v1/publish/featured |
 | `functions/api/v1/publish/featured/[dataset_id].ts` | /api/v1/publish/featured/{dataset_id} |
@@ -191,6 +192,7 @@ design rationale in the `docs/CATALOG_*` plan docs.
 | `functions/api/v1/_lib/github-dispatch.ts` | GitHub repository_dispatch helper — Phase 3pd |
 | `functions/api/v1/_lib/hero-override-store.ts` | `hero_override` singleton row helpers |
 | `functions/api/v1/_lib/blog-store.ts` | `blog_posts` data access (Phase 3d) — draft-born rows, stable slugs (allocated once, dataset-slug rules with a `post` fallback), publish/unpublish transitions keeping the first publish time, body validation with bounded fields, and the public KV cache keys + bust helper |
+| `functions/api/v1/_lib/blog-generate.ts` | AI blog-draft generation (Phase 3d) — grounded prompt builder over the node profile + cited event + dataset facts ('invent nothing beyond them'), Workers AI call with a 30 s timeout race via the shared reply-envelope extractor, JSON draft parsing with bounded fields; unbound AI / unusable replies are typed failures, not silent fallbacks |
 | `functions/api/v1/_lib/node-profile-store.ts` | `node_profile` singleton row helpers — read/upsert + body validation (bounded prose fields, http(s)-only links) for the host-organization profile (Phase 3d) |
 | `functions/api/v1/_lib/iso-duration.ts` | Minimal ISO 8601 duration parser scoped to the shapes the catalog's `period` column carries |
 | `functions/api/v1/_lib/job-queue.ts` | Asynchronous job queue interface — Phase 1b |

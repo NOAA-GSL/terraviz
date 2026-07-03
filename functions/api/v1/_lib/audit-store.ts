@@ -73,6 +73,7 @@ export type AuditAction =
   | 'blog.update'
   | 'blog.publish'
   | 'blog.unpublish'
+  | 'blog.generate'
 
 export interface AuditEventInput {
   actor_kind: AuditActorKind
