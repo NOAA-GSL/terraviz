@@ -329,11 +329,20 @@ export async function renderBlogEditPage(mount: HTMLElement, options: BlogEditPa
   })
   genTourLink.target = '_blank'
   genTourLink.rel = 'noopener'
-  genTourLink.hidden = true
-  if (companionTourId) {
-    genTourLink.href = `/?tourEdit=${encodeURIComponent(companionTourId)}`
-    genTourLink.hidden = false
+  // The link mirrors `companionTourId` at all times — it represents
+  // the post's PERSISTED tour linkage (saved with the post), not the
+  // last generate attempt. A failed regenerate, or a regenerate
+  // without the tour box, leaves the existing linkage (and so the
+  // link) in place.
+  const refreshTourLink = (): void => {
+    if (companionTourId) {
+      genTourLink.href = `/?tourEdit=${encodeURIComponent(companionTourId)}`
+      genTourLink.hidden = false
+    } else {
+      genTourLink.hidden = true
+    }
   }
+  refreshTourLink()
   const genBtn = el('button', {
     type: 'button', className: 'publisher-btn publisher-btn-primary publisher-blog-generate-btn',
     textContent: t('publisher.blog.generate.run'),
@@ -344,9 +353,6 @@ export async function renderBlogEditPage(mount: HTMLElement, options: BlogEditPa
       return
     }
     genBtn.disabled = true
-    // Only ever reflect the latest attempt — a stale link from an
-    // earlier success must not survive a failed regenerate.
-    genTourLink.hidden = true
     setStatus(genStatus, t('publisher.blog.generate.working'), false)
     void publisherSend<{ draft: { title: string; summary: string; bodyMd: string }; tour: { id: string } | null; tourError: string | null }>(
       GENERATE_ENDPOINT,
@@ -369,16 +375,15 @@ export async function renderBlogEditPage(mount: HTMLElement, options: BlogEditPa
         bodyInput.value = res.data.draft.bodyMd
         // Keep an open Preview pane in sync with the drafted body.
         if (!preview.hidden) renderPreview()
-        genTourLink.hidden = !res.data.tour
         if (res.data.tour) {
           companionTourId = res.data.tour.id
-          genTourLink.href = `/?tourEdit=${encodeURIComponent(res.data.tour.id)}`
           setStatus(genStatus, t('publisher.blog.generate.doneWithTour'), false)
         } else if (res.data.tourError) {
           setStatus(genStatus, t('publisher.blog.generate.doneTourFailed', { reason: res.data.tourError }), false)
         } else {
           setStatus(genStatus, t('publisher.blog.generate.done'), false)
         }
+        refreshTourLink()
       })
       .catch(() => setStatus(genStatus, t('publisher.blog.error.generic'), true))
       .finally(() => {

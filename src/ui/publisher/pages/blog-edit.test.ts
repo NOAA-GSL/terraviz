@@ -180,7 +180,7 @@ describe('renderBlogEditPage', () => {
     expect(link.getAttribute('href')).toBe('/?tourEdit=TR000AAAAAAAAAAAAAAAAAAAAA')
   })
 
-  it('a failed regenerate hides the previous attempt\'s tour link', async () => {
+  it('the tour link mirrors the persisted linkage — a failed regenerate keeps it', async () => {
     const capture: Captured = { posts: [] }
     const mount = document.createElement('div')
     let failNext = false
@@ -215,7 +215,11 @@ describe('renderBlogEditPage', () => {
     failNext = true
     genBtn.click()
     await flush()
-    expect(link.hidden).toBe(true)
+    // The linkage is persisted post state, not a per-attempt artifact:
+    // a failed regenerate does not remove the companion tour, so the
+    // link (and the tourId a later Save persists) both survive.
+    expect(link.hidden).toBe(false)
+    expect(link.getAttribute('href')).toBe('/?tourEdit=TOUR1')
   })
 
   it('citing an event seeds its APPROVED dataset links as chips (proposed excluded)', async () => {
