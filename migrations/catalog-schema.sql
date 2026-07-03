@@ -392,6 +392,19 @@ CREATE TABLE node_identity (
   created_at         TEXT NOT NULL
 , singleton INTEGER NOT NULL DEFAULT 1);
 
+CREATE TABLE node_profile (
+  id           INTEGER PRIMARY KEY CHECK (id = 1),  -- singleton row
+  org_name     TEXT NOT NULL,
+  mission      TEXT,
+  about_md     TEXT,
+  region_focus TEXT,
+  default_tone TEXT,
+  links_json   TEXT,                     -- JSON array of {label, url}
+  updated_by   TEXT NOT NULL,            -- publishers.id (audit)
+  updated_at   TEXT NOT NULL,            -- ISO 8601
+  FOREIGN KEY (updated_by) REFERENCES publishers(id)
+);
+
 CREATE TABLE publishers (
   id              TEXT PRIMARY KEY,           -- ULID
   email           TEXT NOT NULL UNIQUE,

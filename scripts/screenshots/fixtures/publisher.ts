@@ -256,6 +256,21 @@ const events = {
 
 const eventsEmpty = { events: [] }
 
+/** The `/api/v1/publish/node-profile` singleton — filled in so the
+ *  profile form renders populated. */
+const nodeProfile = {
+  profile: {
+    orgName: 'Coastal Science Center',
+    mission: 'We connect visitors with live ocean and atmosphere data.',
+    aboutMd: '## About us\nA science museum on the gulf coast.',
+    regionFocus: 'Gulf of Mexico coast',
+    defaultTone: 'educational, general public',
+    links: [{ label: 'Website', url: 'https://coastal.example.org' }],
+    updatedBy: 'PUB-ADMIN',
+    updatedAt: '2026-07-01T00:00:00.000Z',
+  },
+}
+
 /** The `/api/v1/publish/feeds` connector registry — the seeded EONET
  *  row plus one bring-your-own RSS feed so the console shows both an
  *  enabled and a paused connector with run bookkeeping. */
@@ -363,5 +378,6 @@ export function publisherFixtures(
     // Preview before the registry list — rules substring-match in order.
     { url: '/api/v1/publish/feeds/preview', json: feedPreview },
     { url: '/api/v1/publish/feeds', json: feeds },
+    { url: '/api/v1/publish/node-profile', json: nodeProfile },
   ]
 }

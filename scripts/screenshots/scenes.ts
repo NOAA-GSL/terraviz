@@ -428,6 +428,15 @@ export const scenes: Scene[] = [
     },
   },
   {
+    name: 'publish-node-profile',
+    description: 'Publisher portal — node / host-organization profile form (Phase 3d)',
+    fixtures: publisherFixtures({ admin: true }),
+    async setup(page) {
+      await openPublish(page, '/publish/node-profile')
+      await page.locator('#nodeprofile-org').waitFor()
+    },
+  },
+  {
     name: 'publish-me',
     description: 'Publisher portal — current-user identity & role (populated)',
     fixtures: publisherFixtures(),
