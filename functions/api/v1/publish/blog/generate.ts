@@ -149,7 +149,10 @@ export const onRequestPost: PagesFunction<CatalogEnv & EnrichEnv> = async contex
         else tour = { id: written.tour.id, slug: written.tour.slug, title: written.tour.title }
       }
     } catch (e) {
-      tourError = e instanceof Error ? e.message : String(e)
+      // Log the real failure server-side; the wire gets a generic
+      // message (CodeQL: no exception internals in responses).
+      console.warn('[blog-generate] companion tour failed:', e instanceof Error ? e.message : String(e))
+      tourError = 'Tour generation failed — see the deployment logs.'
     }
   } else if (includeTour && !event) {
     tourError = 'A companion tour needs a cited event for its fly-to and timing.'

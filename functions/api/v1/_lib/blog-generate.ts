@@ -156,9 +156,10 @@ export async function generateBlogDraft(env: EnrichEnv, inputs: GenerateInputs):
     }
     return { ok: true, draft }
   } catch (e) {
-    const message = e instanceof Error ? e.message : String(e)
-    console.warn('[blog-generate] model call failed:', message)
-    return { ok: false, error: 'generation_failed', message }
+    // Same discipline: the real error goes to the deployment logs,
+    // the wire gets a generic retryable message.
+    console.warn('[blog-generate] model call failed:', e instanceof Error ? e.message : String(e))
+    return { ok: false, error: 'generation_failed', message: 'The model call failed or timed out — try again.' }
   } finally {
     clearTimeout(timer)
   }
