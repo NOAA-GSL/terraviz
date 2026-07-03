@@ -208,6 +208,7 @@ npm run screenshots:smoke   # gating interaction tests (search, Orbit, nav)
 | `src/ui/orbitPostMessageBridge.ts` | postMessage bridge between the host SPA and the embedded Orbit page |
 | `src/ui/domUtils.ts` | Small DOM helpers shared across UI modules |
 | `src/ui/sanitizeHtml.ts` | Allowlist-based HTML sanitizer for untrusted input |
+| `src/ui/blog/index.ts` | Public blog surface — lazy-booted on `/blog` + `/blog/:slug` (same chunk gate as the portal): published-post cards, the sanitized-markdown post page, per-dataset `/dataset/:id` deep links, and the approved-event source citation (`docs/CURRENT_EVENTS_PLAN.md` §7) |
 | `src/ui/publisher/index.ts` | Publisher portal entry point — lazy-loaded on `/publish/*`; mounts the History-API router + pages |
 | `src/ui/publisher/router.ts` | Tiny History-API router for the publisher portal |
 | `src/ui/publisher/api.ts` | Shared HTTP client for the publisher portal |

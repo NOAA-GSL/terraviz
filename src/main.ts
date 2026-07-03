@@ -3313,6 +3313,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     return
   }
 
+  // Public blog route gate — same lazy-chunk shape as the portal:
+  // `/blog` and `/blog/:slug` render static content pages and skip
+  // the globe boot entirely (docs/CURRENT_EVENTS_PLAN.md §7).
+  if (location.pathname === '/blog' || location.pathname.startsWith('/blog/')) {
+    const { bootBlogPage } = await import('./ui/blog')
+    await bootBlogPage()
+    return
+  }
+
   const app = new InteractiveSphere()
   app.setupEventListeners()
   await app.initialize()
