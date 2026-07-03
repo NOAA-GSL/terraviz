@@ -630,11 +630,12 @@ export function mountTourAuthoringDock(
       // Chunked btoa — String.fromCharCode(...allBytes) overflows the
       // argument limit past ~100 KB.
       const bytes = new Uint8Array(buf)
-      let bin = ''
+      const chunks: string[] = []
       const CHUNK = 0x8000
       for (let i = 0; i < bytes.length; i += CHUNK) {
-        bin += String.fromCharCode(...bytes.subarray(i, i + CHUNK))
+        chunks.push(String.fromCharCode(...bytes.subarray(i, i + CHUNK)))
       }
+      const bin = chunks.join('')
       const result = await uploadTourMedia(id, {
         contentType: file.type,
         dataBase64: btoa(bin),

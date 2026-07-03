@@ -658,6 +658,14 @@ export function hideAllTourImages(): void {
  */
 function createTourVideoElement(params: PlayVideoTaskParams): HTMLVideoElement {
   const video = document.createElement('video')
+  // A live VR session wraps this element in a THREE.VideoTexture,
+  // and WebGL refuses cross-origin uploads unless the element is
+  // CORS-enabled — must be set BEFORE src. Scoped to sink-active so
+  // 2D-only playback keeps working against hosts that send no CORS
+  // headers (our R2 sends them; an external hot-link may not).
+  // Entering VR mid-playback replays the same element and inherits
+  // whatever mode it started with — a pre-existing limitation.
+  if (vrOverlaySink) video.crossOrigin = 'anonymous'
   video.src = params.filename
   video.playsInline = true
   // Don't set the autoplay attribute — we call play() explicitly so we can
