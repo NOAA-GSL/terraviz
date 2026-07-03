@@ -471,7 +471,7 @@ export function mountTourAuthoringDock(
         </div>
         <input id="${inputIds.mediaFile}" type="file" accept="image/png,image/jpeg,image/webp" hidden>
         ${mediaStatus
-          ? `<div class="tour-authoring-dock-media-status${mediaStatusIsError ? ' tour-authoring-dock-media-status-error' : ''}" role="status">${escapeHtml(mediaStatus)}</div>`
+          ? `<div class="tour-authoring-dock-media-status${mediaStatusIsError ? ' tour-authoring-dock-media-status-error' : ''}" role="${mediaStatusIsError ? 'alert' : 'status'}">${escapeHtml(mediaStatus)}</div>`
           : ''}
       </div>
       <div class="tour-authoring-dock-group">

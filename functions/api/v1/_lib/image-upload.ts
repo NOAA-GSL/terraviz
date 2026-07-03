@@ -77,6 +77,13 @@ export async function sha256Hex(bytes: Uint8Array): Promise<string> {
   return out
 }
 
+/** Human-readable cap for error copy — whole MiB reads as "4 MB",
+ *  anything else as KB, matching the UI's own wording. */
+function formatMaxBytes(maxBytes: number): string {
+  const mib = maxBytes / (1024 * 1024)
+  return Number.isInteger(mib) ? `${mib} MB` : `${Math.round(maxBytes / 1024)} KB`
+}
+
 /**
  * Validate a `{ contentType, dataBase64 }` body: allowlisted type,
  * bounded size (length pre-check before decode), well-formed base64,
@@ -103,7 +110,7 @@ export function validateImagePayload(
   const tooLarge: ImageFieldError = {
     field: 'dataBase64',
     code: 'too_large',
-    message: `Image must be at most ${Math.round(maxBytes / 1024)} KB.`,
+    message: `Image must be at most ${formatMaxBytes(maxBytes)}.`,
   }
   const b64 = typeof body.dataBase64 === 'string' ? body.dataBase64 : ''
   // 4/3 is the base64 expansion factor (+ padding slack).

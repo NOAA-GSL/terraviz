@@ -214,7 +214,13 @@
     gap: calc(0.6rem * var(--ui-scale));
     z-index: 5;
     pointer-events: none; /* cards re-enable */
-    overflow: hidden;
+    /* Scroll, don't clip: with several concurrent cards the older
+       ones must stay reachable (a clipped video would keep playing
+       with its close/pause controls unreachable). Wheel/touch over a
+       card scrolls the rail; the gaps stay click-through. */
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
 }
 
 .tour-media-card {
