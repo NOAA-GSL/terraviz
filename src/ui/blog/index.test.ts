@@ -72,4 +72,14 @@ describe('bootBlogPage', () => {
     expect(document.querySelector('.blog-missing')).toBeTruthy()
     expect((document.querySelector('.blog-missing a') as HTMLAnchorElement).getAttribute('href')).toBe('/blog')
   })
+
+  it('renders the missing view for a malformed percent-encoded slug', async () => {
+    history.pushState(null, '', '/blog/%E0%A4')
+    stubFetch(200, POST)
+    await bootBlogPage()
+    // decodeURIComponent throws on the truncated sequence — the page
+    // must land on the missing view, not stick in the loading state.
+    expect(document.querySelector('.blog-loading')).toBeNull()
+    expect(document.querySelector('.blog-missing')).toBeTruthy()
+  })
 })

@@ -183,6 +183,15 @@ export async function renderBlogEditPage(mount: HTMLElement, options: BlogEditPa
   attachToolbar(toolbar, bodyInput, { onChange: () => {} })
   const preview = el('div', { className: 'publisher-form-markdown-preview' })
   preview.hidden = true
+  const renderPreview = (): void => {
+    if (bodyInput.value.trim()) {
+      // renderMarkdown runs `marked` then sanitizeMarkdownHtml — safe
+      // to set as innerHTML (XSS-tested in markdownRenderer.test.ts).
+      preview.innerHTML = renderMarkdown(bodyInput.value)
+    } else {
+      preview.replaceChildren(el('p', { className: 'publisher-form-markdown-empty', textContent: t('publisher.datasetForm.preview.empty') }))
+    }
+  }
   const previewToggle = el('button', {
     type: 'button', className: 'publisher-form-toggle',
     textContent: t('publisher.datasetForm.action.preview'),
@@ -193,14 +202,7 @@ export async function renderBlogEditPage(mount: HTMLElement, options: BlogEditPa
     bodyInput.hidden = show
     toolbar.hidden = show
     previewToggle.textContent = show ? t('publisher.datasetForm.action.edit') : t('publisher.datasetForm.action.preview')
-    if (show) {
-      // renderMarkdown runs `marked` then sanitizeMarkdownHtml — safe
-      // to set as innerHTML (XSS-tested in markdownRenderer.test.ts).
-      preview.innerHTML = bodyInput.value.trim() ? renderMarkdown(bodyInput.value) : ''
-      if (!bodyInput.value.trim()) {
-        preview.replaceChildren(el('p', { className: 'publisher-form-markdown-empty', textContent: t('publisher.datasetForm.preview.empty') }))
-      }
-    }
+    if (show) renderPreview()
   })
 
   // ----- Dataset picker -----
@@ -305,6 +307,8 @@ export async function renderBlogEditPage(mount: HTMLElement, options: BlogEditPa
         titleInput.value = res.data.draft.title
         summaryInput.value = res.data.draft.summary
         bodyInput.value = res.data.draft.bodyMd
+        // Keep an open Preview pane in sync with the drafted body.
+        if (!preview.hidden) renderPreview()
         if (res.data.tour) {
           setStatus(genStatus, t('publisher.blog.generate.doneWithTour'), false)
         } else if (res.data.tourError) {
@@ -450,7 +454,12 @@ export async function renderBlogEditPage(mount: HTMLElement, options: BlogEditPa
     }
   })
   void publisherGet<{ events: Array<{ id: string; title: string }> }>(EVENTS_ENDPOINT, { fetchFn }).then(res => {
-    if (!res.ok) return
+    if (!res.ok) {
+      // Mirror loadPublishedDatasets: route a session error through the
+      // shared recovery flow; other failures leave the picker disabled.
+      if (res.kind === 'session') handleSessionError({ navigate: options.navigate })
+      return
+    }
     events = res.data.events.map(e => ({ id: e.id, title: e.title }))
     evSelect.disabled = false
     renderEventOptions()

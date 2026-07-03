@@ -143,9 +143,11 @@ export async function bootBlogPage(): Promise<void> {
   document.body.classList.add('blog-body')
 
   const path = location.pathname.replace(/\/+$/, '')
-  const slug = path === '/blog' ? null : decodeURIComponent(path.slice('/blog/'.length))
 
   try {
+    // Inside the try so a malformed percent-encoding (`/blog/%E0%A4`)
+    // renders the missing view instead of throwing out of the boot.
+    const slug = path === '/blog' ? null : decodeURIComponent(path.slice('/blog/'.length))
     if (!slug) {
       const res = await fetch('/api/v1/blog')
       const { posts } = (await res.json()) as { posts: PublicPostCard[] }

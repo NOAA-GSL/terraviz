@@ -78,6 +78,24 @@ describe('renderBlogEditPage', () => {
     expect((mount.querySelector('#blog-body') as HTMLTextAreaElement).value).toBe('## AI body')
   })
 
+  it('Generate refreshes an open Preview pane with the drafted body', async () => {
+    const capture: Captured = { posts: [] }
+    const mount = await mountEditor(capture)
+    pickDataset(mount)
+
+    // Open Preview first (empty body → empty-state hint).
+    ;(mount.querySelector('.publisher-form-toggle') as HTMLButtonElement).click()
+    const preview = mount.querySelector('.publisher-form-markdown-preview') as HTMLElement
+    expect(preview.hidden).toBe(false)
+
+    ;(mount.querySelector('.publisher-blog-generate-btn') as HTMLButtonElement).click()
+    await flush()
+
+    // The visible preview must reflect the generated markdown, not the
+    // pre-generate empty state.
+    expect(preview.querySelector('h2')?.textContent).toBe('AI body')
+  })
+
   it('Generate without datasets is blocked client-side', async () => {
     const capture: Captured = { posts: [] }
     const mount = await mountEditor(capture)
