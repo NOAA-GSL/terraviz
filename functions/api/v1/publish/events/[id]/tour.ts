@@ -42,13 +42,19 @@ function jsonError(status: number, error: string, message: string): Response {
 /** Resolve the event's stop datasets: approved pairings first (the
  *  curator's vetted story), top-scored proposed ones only as a fallback
  *  so a tour can be previewed pre-approval. Hidden/retracted/unpublished
- *  datasets never become stops. */
+ *  datasets never become stops — and the visibility filter runs over the
+ *  whole candidate pool BEFORE the stop cap, so a hidden top-scored link
+ *  yields the next visible one rather than a hole (or a spurious
+ *  `no_datasets`). */
 async function resolveStopDatasets(db: D1Database, eventId: string): Promise<EventTourDataset[]> {
   const links = await listLinksForEvent(db, eventId)
   const approved = links.filter(l => l.status === 'approved')
   const pool = (approved.length > 0 ? approved : links.filter(l => l.status === 'proposed'))
     .sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
-    .slice(0, MAX_TOUR_STOPS)
+    // Wide candidate window, bounded only by D1's bind-variable budget
+    // (mirrors D1_BIND_BATCH in catalog-store.ts); the stop cap is
+    // applied after the visibility filter below.
+    .slice(0, 80)
   if (pool.length === 0) return []
 
   const placeholders = pool.map(() => '?').join(', ')
@@ -63,12 +69,14 @@ async function resolveStopDatasets(db: D1Database, eventId: string): Promise<Eve
     .bind(...pool.map(l => l.dataset_id))
     .all<{ id: string; title: string; start_time: string | null; end_time: string | null; format: string | null }>()
   const byId = new Map((res.results ?? []).map(r => [r.id, r]))
-  // Preserve the score order the pool established.
+  // Preserve the score order the pool established; cap AFTER the
+  // visibility filter so the draft always gets the best visible stops.
   const out: EventTourDataset[] = []
   for (const link of pool) {
     const row = byId.get(link.dataset_id)
     if (row) {
       out.push({ id: row.id, title: row.title, startTime: row.start_time, endTime: row.end_time, format: row.format })
+      if (out.length === MAX_TOUR_STOPS) break
     }
   }
   return out

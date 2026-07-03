@@ -178,6 +178,24 @@ describe('POST /api/v1/publish/events/:id/tour', () => {
     expect(meta.stops).toEqual([DS_0, DS_1])
   })
 
+  it('falls through to lower-scored visible links when the top-scored dataset is hidden', async () => {
+    // Regression: the visibility filter must run over the whole candidate
+    // pool BEFORE the stop cap — a hidden top-scored link should yield
+    // the next visible one, not a hole or a spurious no_datasets.
+    const { env, bucket, sqlite } = setupEnv()
+    const id = (await insertCurrentEvent(env.CATALOG_DB, SAMPLE)).id
+    await upsertEventDatasetLink(env.CATALOG_DB, { eventId: id, datasetId: DS_0, matchScore: 0.99 })
+    await upsertEventDatasetLink(env.CATALOG_DB, { eventId: id, datasetId: DS_1, matchScore: 0.3 })
+    sqlite.prepare('UPDATE datasets SET is_hidden = 1 WHERE id = ?').run(DS_0)
+
+    const res = await tourPost(ctx({ env, id }))
+    expect(res.status).toBe(201)
+    const body = await readJson<{ tour: { id: string } }>(res)
+    const file = JSON.parse(bucket.puts.get(`tours/${body.tour.id}/draft.json`)!) as { tourTasks: TourTaskDef[] }
+    const loads = file.tourTasks.filter(t => 'loadDataset' in t) as Array<{ loadDataset: { id: string } }>
+    expect(loads.map(l => l.loadDataset.id)).toEqual([DS_1])
+  })
+
   it('prefers approved links over proposed ones', async () => {
     const { env, bucket } = setupEnv()
     const id = (await insertCurrentEvent(env.CATALOG_DB, SAMPLE)).id

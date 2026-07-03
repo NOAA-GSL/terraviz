@@ -463,7 +463,6 @@ export function renderEventDetail(event: ReviewEvent, cb: EventDetailCallbacks):
       {},
       { method: 'POST', fetchFn: cb.fetchFn },
     ).then(res => {
-      tourBtn.disabled = false
       if (res.ok) {
         tourStatus.textContent = ''
         const navigate = cb.navigate ?? ((url: string) => { window.location.href = url })
@@ -471,6 +470,14 @@ export function renderEventDetail(event: ReviewEvent, cb: EventDetailCallbacks):
         return
       }
       handleWriteError(res, tourStatus, cb.navigate)
+    }).catch(() => {
+      // publisherSend shouldn't reject (errors come back as result
+      // kinds), but a thrown navigate/unexpected failure must not
+      // leave the button dead or the rejection unhandled.
+      tourStatus.textContent = t('publisher.events.error.generic')
+      tourStatus.classList.add('publisher-events-status-error')
+    }).finally(() => {
+      tourBtn.disabled = false
     })
   })
   headActions.append(tourBtn)
