@@ -19,11 +19,14 @@ const DRAFT = { draft: { title: 'AI Title', summary: 'AI summary.', bodyMd: '## 
 
 interface Captured {
   posts: Array<{ url: string; body: unknown }>
+  /** Every requested URL, in order — for asserting query params. */
+  urls?: string[]
 }
 
 function mockFetch(capture: Captured, overrides: Record<string, unknown> = {}) {
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : (input as Request).url
+    ;(capture.urls ??= []).push(url)
     const method = init?.method ?? 'GET'
     let body: unknown = {}
     if (method === 'POST' || method === 'PUT') {
@@ -74,6 +77,11 @@ describe('renderBlogEditPage', () => {
       length: 'medium',
       includeTour: true,
     })
+    // The event picker offers curator-approved events only — a cited
+    // proposed event would generate from unvetted text and its public
+    // citation would silently never render.
+    const eventsCall = capture.urls?.find(u => u.includes('/publish/events'))
+    expect(eventsCall).toContain('status=approved')
     expect((mount.querySelector('#blog-title') as HTMLInputElement).value).toBe('AI Title')
     expect((mount.querySelector('#blog-body') as HTMLTextAreaElement).value).toBe('## AI body')
   })

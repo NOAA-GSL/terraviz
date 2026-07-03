@@ -52,7 +52,10 @@ interface ReviewEventLite {
 
 const ME_ENDPOINT = '/api/v1/publish/me'
 const BLOG_ENDPOINT = '/api/v1/publish/blog'
-const EVENTS_ENDPOINT = '/api/v1/publish/events?status=all'
+// Approved only: the public post drops a citation whose event isn't
+// approved, and generation grounds itself in the event's text — the
+// picker must not offer anything that hasn't passed the curator gate.
+const EVENTS_ENDPOINT = '/api/v1/publish/events?status=approved'
 const GENERATE_ENDPOINT = '/api/v1/publish/blog/generate'
 
 /** Cap on candidate rows in the pickers. */
