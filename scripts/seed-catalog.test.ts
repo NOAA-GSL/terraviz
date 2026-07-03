@@ -55,6 +55,7 @@ const EXPECTED_TABLES = [
   'feed_connectors',
   'hero_override',
   'node_identity',
+  'node_profile',
   'publishers',
   'tour_dataset_refs',
   'tours',

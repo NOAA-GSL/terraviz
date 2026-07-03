@@ -207,6 +207,24 @@ const checks: Check[] = [
     },
   },
   {
+    name: 'publisher node-profile form renders populated and pre-filled',
+    fixtures: publisherFixtures({ admin: true }),
+    async run(page) {
+      await gotoApp(page, '/publish/node-profile')
+      await page.locator('#publisher-root .publisher-topbar').waitFor({ state: 'visible' })
+      const org = page.locator('#nodeprofile-org')
+      await org.waitFor({ timeout: 15_000 })
+      assert(
+        (await org.inputValue()) === 'Coastal Science Center',
+        'org-name input should pre-fill from the stored profile',
+      )
+      assert(
+        (await page.locator('.publisher-nodeprofile-link-row').count()) >= 1,
+        'stored links should render as editable rows',
+      )
+    },
+  },
+  {
     name: 'publisher feeds console renders connectors + preset gallery',
     fixtures: publisherFixtures({ admin: true }),
     async run(page) {

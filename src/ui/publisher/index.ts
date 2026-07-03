@@ -32,6 +32,7 @@ import { renderWorkflowsPage } from './pages/workflows'
 import { renderWorkflowDetailPage } from './pages/workflow-detail'
 import { renderWorkflowEditPage } from './pages/workflow-edit'
 import { renderFeaturedHeroPage } from './pages/featured-hero'
+import { renderNodeProfilePage } from './pages/node-profile'
 import { renderFeedsPage } from './pages/feeds'
 import { renderEventsPage } from './pages/events'
 import { renderAnalyticsPage } from './pages/analytics'
@@ -60,6 +61,7 @@ export function routeForPath(
   | 'datasets'
   | 'tours'
   | 'featured_hero'
+  | 'node_profile'
   | 'events'
   | 'feeds'
   | 'import'
@@ -73,6 +75,7 @@ export function routeForPath(
   if (pathname.startsWith('/publish/tours')) return 'tours'
   if (pathname.startsWith('/publish/workflows')) return 'workflows'
   if (pathname.startsWith('/publish/featured-hero')) return 'featured_hero'
+  if (pathname.startsWith('/publish/node-profile')) return 'node_profile'
   if (pathname.startsWith('/publish/events')) return 'events'
   if (pathname.startsWith('/publish/feeds')) return 'feeds'
   if (pathname.startsWith('/publish/import')) return 'import'
@@ -273,6 +276,10 @@ function featuredHeroPage(mount: HTMLElement): RouteHandler {
   return () => void renderFeaturedHeroPage(mount)
 }
 
+function nodeProfilePage(mount: HTMLElement): RouteHandler {
+  return () => void renderNodeProfilePage(mount)
+}
+
 function eventsPage(mount: HTMLElement): RouteHandler {
   return () => void renderEventsPage(mount)
 }
@@ -354,6 +361,7 @@ export async function bootPublisherPortal(): Promise<void> {
       },
       { pattern: '/publish/workflows/:id', handler: workflowDetailPage(content, getRouter) },
       { pattern: '/publish/featured-hero', handler: featuredHeroPage(content) },
+      { pattern: '/publish/node-profile', handler: nodeProfilePage(content) },
       { pattern: '/publish/events', handler: eventsPage(content) },
       { pattern: '/publish/feeds', handler: feedsPage(content) },
       { pattern: '/publish/analytics', handler: analyticsPage(content) },
