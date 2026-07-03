@@ -9,9 +9,11 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   hideAllTourImages,
+  hideAllTourPopups,
   hideAllTourVideos,
   hideTourImage,
   showTourImage,
+  showTourPopup,
   showTourVideo,
   usesMediaRail,
 } from './tourUI'
@@ -19,6 +21,7 @@ import {
 afterEach(() => {
   hideAllTourImages()
   hideAllTourVideos()
+  hideAllTourPopups()
   document.body.replaceChildren()
 })
 
@@ -88,5 +91,30 @@ describe('showTourVideo', () => {
     showTourVideo({ filename: 'https://x/clip.mp4' })
     showTourImage({ imageID: 'ctx', filename: 'https://x/ctx.png' })
     expect(rail()!.querySelectorAll('.tour-media-card')).toHaveLength(2)
+  })
+})
+
+describe('showTourPopup', () => {
+  it('renders a positionless embed into the rail with the sandbox opt-in honored', () => {
+    showTourPopup({
+      popupID: 'embed1',
+      url: 'https://www.youtube-nocookie.com/embed/abc123',
+      allowScripts: true,
+    })
+    const frame = rail()!.querySelector('.tour-media-card iframe') as HTMLIFrameElement
+    expect(frame.getAttribute('src')).toBe('https://www.youtube-nocookie.com/embed/abc123')
+    expect(frame.getAttribute('sandbox')).toBe('allow-scripts')
+    expect(frame.getAttribute('referrerpolicy')).toBe('no-referrer')
+  })
+
+  it('keeps an untrusted embed fully sandboxed and the positioned path for coordinates', () => {
+    showTourPopup({ popupID: 'embed2', url: 'https://example.org/page' })
+    const frame = rail()!.querySelector('.tour-media-card iframe') as HTMLIFrameElement
+    expect(frame.getAttribute('sandbox')).toBe('')
+
+    showTourPopup({ popupID: 'legacy', url: 'https://example.org/x', xPct: 50, yPct: 50, widthPct: 50, heightPct: 50 })
+    // The positioned popup lands outside the rail with inline geometry.
+    const positioned = document.querySelector('.tour-popup-overlay:not(.tour-media-card)') as HTMLElement
+    expect(positioned.style.left).not.toBe('')
   })
 })

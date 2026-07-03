@@ -247,6 +247,17 @@
     border-radius: calc(6px * var(--ui-scale));
 }
 
+/* Embed cards (positionless showPopupHtml — YouTube/Vimeo/any page).
+   The iframe has no intrinsic size, so give it the player shape. */
+.tour-media-card iframe {
+    display: block;
+    inline-size: 100%;
+    aspect-ratio: 16 / 9;
+    border: none;
+    border-radius: calc(6px * var(--ui-scale));
+    background: #000;
+}
+
 .tour-media-card-caption {
     margin-block-start: calc(0.45rem * var(--ui-scale));
     font-size: clamp(0.75rem, 1.2vw, 0.9rem);

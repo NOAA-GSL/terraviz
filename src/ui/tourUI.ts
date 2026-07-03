@@ -816,8 +816,48 @@ export function hideAllTourVideos(): void {
 
 // ── Popup HTML overlays (showPopupHtml / hidePopupHtml) ──────────────
 
+/**
+ * Build the sandboxed iframe a popup task renders. URL popups default
+ * to the most restrictive sandbox — no scripts, no same-origin, no
+ * forms; `allowScripts` opts in for known-trusted targets (the dock's
+ * embed capture sets it for YouTube/Vimeo players, which can't run
+ * without it). Inline HTML renders via srcdoc with an empty sandbox.
+ */
+function buildPopupIframe(params: ShowPopupHtmlTaskParams): HTMLIFrameElement | null {
+  if (params.url) {
+    const iframe = document.createElement('iframe')
+    iframe.src = params.url
+    const sandboxFlags = params.allowScripts ? 'allow-scripts' : ''
+    iframe.setAttribute('sandbox', sandboxFlags)
+    iframe.setAttribute('referrerpolicy', 'no-referrer')
+    return iframe
+  }
+  if (params.html) {
+    const iframe = document.createElement('iframe')
+    iframe.setAttribute('sandbox', '')
+    iframe.srcdoc = `<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;padding:1rem;background:transparent;color:#ddd;font-size:0.85rem;line-height:1.5;font-family:system-ui,sans-serif;overflow:auto;height:100%;box-sizing:border-box;}</style></head><body>${params.html}</body></html>`
+    return iframe
+  }
+  return null
+}
+
 export function showTourPopup(params: ShowPopupHtmlTaskParams): void {
   hideTourPopup(params.popupID)
+
+  // Positionless (new-style) → an embed card in the media rail. The
+  // 16:9 sizing lives in CSS (.tour-media-card iframe).
+  if (usesMediaRail(params)) {
+    const card = document.createElement('div')
+    card.className = 'tour-media-card tour-popup-overlay'
+    const railFrame = buildPopupIframe(params)
+    if (railFrame) card.appendChild(railFrame)
+    addCloseButton(card, () => hideTourPopup(params.popupID))
+    getMediaRail().prepend(card)
+    popups.add(params.popupID, card)
+    activePopupOverlays.set(params.popupID, params)
+    vrOverlaySink?.showPopup(params)
+    return
+  }
 
   const container = getOverlayContainer()
   const wrapper = document.createElement('div')
@@ -831,23 +871,9 @@ export function showTourPopup(params: ShowPopupHtmlTaskParams): void {
   applyGlassPosition(wrapper, xPct, yPct, widthPct, heightPct)
   wrapper.style.padding = '0'
 
-  if (params.url) {
-    const iframe = document.createElement('iframe')
-    iframe.src = params.url
+  const iframe = buildPopupIframe(params)
+  if (iframe) {
     iframe.style.cssText = 'width:100%;height:100%;border:none;border-radius:10px;'
-    // Default to the most restrictive sandbox — no scripts, no same-origin,
-    // no forms. Tour authors can opt in to scripts via allowScripts on the
-    // task params when the target URL is known-trusted.
-    const sandboxFlags = params.allowScripts ? 'allow-scripts' : ''
-    iframe.setAttribute('sandbox', sandboxFlags)
-    iframe.setAttribute('referrerpolicy', 'no-referrer')
-    wrapper.appendChild(iframe)
-  } else if (params.html) {
-    // Render untrusted HTML in a sandboxed iframe via srcdoc
-    const iframe = document.createElement('iframe')
-    iframe.style.cssText = 'width:100%;height:100%;border:none;border-radius:10px;'
-    iframe.setAttribute('sandbox', '')
-    iframe.srcdoc = `<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;padding:1rem;background:transparent;color:#ddd;font-size:0.85rem;line-height:1.5;font-family:system-ui,sans-serif;overflow:auto;height:100%;box-sizing:border-box;}</style></head><body>${params.html}</body></html>`
     wrapper.appendChild(iframe)
   }
 

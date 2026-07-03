@@ -39,6 +39,7 @@ import {
 } from './state'
 import { fetchTourJson, publishTour, updateTourMetadata, uploadTourMedia } from './api'
 import {
+  buildEmbedTask,
   buildHideLatestMediaTask,
   buildShowImageTask,
   buildShowVideoTask,
@@ -467,6 +468,7 @@ export function mountTourAuthoringDock(
           <button type="button" class="tour-authoring-chip" data-action="capture-media-upload" ${mediaUploading ? 'disabled' : ''}>${escapeHtml(t('tour.dock.media.upload'))}</button>
           <button type="button" class="tour-authoring-chip" data-action="capture-media-image">${escapeHtml(t('tour.dock.media.addImage'))}</button>
           <button type="button" class="tour-authoring-chip" data-action="capture-media-video">${escapeHtml(t('tour.dock.media.addVideo'))}</button>
+          <button type="button" class="tour-authoring-chip" data-action="capture-media-embed">${escapeHtml(t('tour.dock.media.addEmbed'))}</button>
           <button type="button" class="tour-authoring-chip" data-action="capture-media-hide">${escapeHtml(t('tour.dock.media.hideLatest'))}</button>
         </div>
         <input id="${inputIds.mediaFile}" type="file" accept="image/png,image/jpeg,image/webp" hidden>
@@ -810,6 +812,20 @@ export function mountTourAuthoringDock(
           return
         }
         pushCaptured(buildShowVideoTask(url))
+        clearMediaFields()
+      })
+    root
+      .querySelector<HTMLButtonElement>('[data-action="capture-media-embed"]')
+      ?.addEventListener('click', () => {
+        // Embeds cover the big-video case: YouTube/Vimeo (page URLs
+        // are normalized to their embeddable player form) or any
+        // https page, framed fully sandboxed.
+        const task = buildEmbedTask(mediaUrlValue.trim(), state.tasks)
+        if (!task) {
+          setMediaStatus(t('tour.dock.media.error.embedUrl'), true)
+          return
+        }
+        pushCaptured(task)
         clearMediaFields()
       })
     root
