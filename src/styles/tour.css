@@ -193,6 +193,78 @@
     margin-top: calc(0.5rem * var(--ui-scale));
 }
 
+/* ── Media rail — positionless showImage / playVideo cards ─────────
+   New-style tours omit the SOS coordinate fields; their media renders
+   into this designed, responsive stack instead of absolutely-
+   positioned boxes (see tourUI.ts `usesMediaRail`). Desktop/tablet:
+   a docked column on the inline-end edge, sized to never collide
+   with the caption band or the tour control bar. Phone portrait: a
+   full-width strip near the top, above the bottom-sheet captions.
+   Cards stack newest-first; each show* adds one, hide* removes its
+   own. Logical properties throughout (RTL-safe). */
+.tour-media-rail {
+    position: absolute;
+    inset-block-start: calc(3rem * var(--ui-scale));
+    inset-inline-end: calc(0.75rem * var(--ui-scale));
+    inline-size: min(24rem, 30vw);
+    /* Leave the bottom ~40% free for the caption band + transport. */
+    max-block-size: 55vh;
+    display: flex;
+    flex-direction: column;
+    gap: calc(0.6rem * var(--ui-scale));
+    z-index: 5;
+    pointer-events: none; /* cards re-enable */
+    overflow: hidden;
+}
+
+.tour-media-card {
+    position: relative;
+    pointer-events: auto;
+    flex-shrink: 0;
+    background: var(--glass-bg-light);
+    backdrop-filter: var(--glass-blur);
+    -webkit-backdrop-filter: var(--glass-blur);
+    border: 1px solid var(--white-o08);
+    border-radius: var(--radius-xl);
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.5);
+    animation: tour-box-fadein 0.35s ease;
+    padding: calc(0.6rem * var(--ui-scale));
+    overflow: hidden;
+}
+
+.tour-media-card img,
+.tour-media-card video {
+    display: block;
+    inline-size: 100%;
+    max-block-size: 32vh;
+    object-fit: contain;
+    border-radius: calc(6px * var(--ui-scale));
+}
+
+.tour-media-card-caption {
+    margin-block-start: calc(0.45rem * var(--ui-scale));
+    font-size: clamp(0.75rem, 1.2vw, 0.9rem);
+    line-height: 1.4;
+    color: var(--color-text-muted);
+    text-align: center;
+}
+
+@media (max-width: 600px) and (orientation: portrait) {
+    .tour-media-rail {
+        inset-inline: 0.5rem;
+        inset-block-start: 2rem;
+        inline-size: auto;
+        /* The bottom sheet (captions) starts around 8rem from the
+           bottom — keep the rail clear of it. */
+        max-block-size: 42vh;
+    }
+
+    .tour-media-card img,
+    .tour-media-card video {
+        max-block-size: 26vh;
+    }
+}
+
 /** Tour legend floating thumbnail. */
 .tour-legend {
     position: absolute;
