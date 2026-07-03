@@ -1,0 +1,168 @@
+/**
+ * Public blog surface (Phase 3d; `docs/CURRENT_EVENTS_PLAN.md` §7).
+ *
+ * Booted by `main.ts` on `/blog` and `/blog/:slug` — the same
+ * lazy-chunk gate the publisher portal uses, so catalog visitors never
+ * pay this bundle's cost. Reads the public, KV-cached endpoints
+ * shipped in the blog data layer:
+ *
+ *   - `/blog`       → `GET /api/v1/blog` — published-post cards.
+ *   - `/blog/:slug` → `GET /api/v1/blog/:slug` — the full post:
+ *     markdown body rendered through the shared sanitized pipeline,
+ *     the "Explore the data" list linking each cited dataset into the
+ *     globe (`/dataset/:id` deep links), and the cited event's source
+ *     attribution (only present while that event is approved).
+ *
+ * Static content pages — no router; navigation is plain links.
+ */
+
+import { t } from '../../i18n'
+import { renderMarkdown } from '../../services/markdownRenderer'
+import '../../styles/blog.css'
+
+interface PublicPostCard {
+  slug: string
+  title: string
+  summary: string | null
+  publishedAt: string | null
+  datasetCount: number
+}
+
+interface PublicPost {
+  slug: string
+  title: string
+  summary: string | null
+  bodyMd: string
+  publishedAt: string | null
+  datasets: Array<{ id: string; title: string }>
+  event: { id: string; title: string; sourceName: string; sourceUrl: string } | null
+}
+
+function el<K extends keyof HTMLElementTagNameMap>(
+  tag: K,
+  props: Partial<HTMLElementTagNameMap[K]> & { className?: string } = {},
+  children: (HTMLElement | string)[] = [],
+): HTMLElementTagNameMap[K] {
+  const node = document.createElement(tag)
+  Object.assign(node, props)
+  for (const c of children) node.append(c)
+  return node
+}
+
+/** The shared page chrome: a header linking home + back to the list. */
+function chrome(content: HTMLElement): HTMLElement {
+  const root = el('div', { className: 'blog-root' })
+  const header = el('header', { className: 'blog-header' })
+  const home = el('a', { className: 'blog-home-link', href: '/', textContent: t('app.title') })
+  const index = el('a', { className: 'blog-index-link', href: '/blog', textContent: t('blog.public.indexLink') })
+  header.append(home, index)
+  const main = el('main', { className: 'blog-main' })
+  main.append(content)
+  root.append(header, main)
+  return root
+}
+
+function dateLabel(iso: string | null): string {
+  return iso ? iso.slice(0, 10) : ''
+}
+
+function renderList(posts: PublicPostCard[]): HTMLElement {
+  const wrap = el('div', { className: 'blog-list' })
+  wrap.append(el('h1', { className: 'blog-list-title', textContent: t('blog.public.title') }))
+  if (posts.length === 0) {
+    wrap.append(el('p', { className: 'blog-empty', textContent: t('blog.public.empty') }))
+    return wrap
+  }
+  for (const post of posts) {
+    const card = el('a', { className: 'blog-card', href: `/blog/${encodeURIComponent(post.slug)}` })
+    card.append(el('h2', { className: 'blog-card-title', textContent: post.title }))
+    if (post.summary) card.append(el('p', { className: 'blog-card-summary', textContent: post.summary }))
+    const meta = el('p', { className: 'blog-card-meta' })
+    meta.textContent = post.datasetCount > 0
+      ? t('blog.public.cardMeta', { date: dateLabel(post.publishedAt), count: String(post.datasetCount) })
+      : dateLabel(post.publishedAt)
+    card.append(meta)
+    wrap.append(card)
+  }
+  return wrap
+}
+
+function renderPost(post: PublicPost): HTMLElement {
+  const wrap = el('article', { className: 'blog-post' })
+  wrap.append(el('h1', { className: 'blog-post-title', textContent: post.title }))
+  const meta = el('p', { className: 'blog-post-meta', textContent: dateLabel(post.publishedAt) })
+  wrap.append(meta)
+  if (post.summary) wrap.append(el('p', { className: 'blog-post-summary', textContent: post.summary }))
+
+  const body = el('div', { className: 'blog-post-body' })
+  // renderMarkdown runs `marked` then sanitizeMarkdownHtml — safe to
+  // set as innerHTML (XSS-tested in markdownRenderer.test.ts).
+  body.innerHTML = renderMarkdown(post.bodyMd)
+  wrap.append(body)
+
+  if (post.event) {
+    const cite = el('p', { className: 'blog-post-citation' })
+    cite.append(t('blog.public.citation') + ' ')
+    const link = el('a', {
+      href: post.event.sourceUrl,
+      textContent: `${post.event.title} — ${post.event.sourceName}`,
+    })
+    link.target = '_blank'
+    link.rel = 'noopener noreferrer'
+    cite.append(link)
+    wrap.append(cite)
+  }
+
+  if (post.datasets.length > 0) {
+    const explore = el('section', { className: 'blog-post-explore' })
+    explore.append(el('h2', { className: 'blog-post-explore-title', textContent: t('blog.public.explore') }))
+    const list = el('ul', { className: 'blog-post-explore-list' })
+    for (const d of post.datasets) {
+      const li = el('li')
+      // `/dataset/:id` deep links boot the globe with the dataset
+      // loaded (deepLinkService handles the path on SPA start).
+      li.append(el('a', { href: `/dataset/${encodeURIComponent(d.id)}`, textContent: d.title }))
+      list.append(li)
+    }
+    explore.append(list)
+    wrap.append(explore)
+  }
+  return wrap
+}
+
+function renderMissing(): HTMLElement {
+  const wrap = el('div', { className: 'blog-missing' })
+  wrap.append(el('h1', { textContent: t('blog.public.missing.title') }))
+  wrap.append(el('p', {}, [el('a', { href: '/blog', textContent: t('blog.public.missing.back') })]))
+  return wrap
+}
+
+/** Entry point — called from main.ts's `/blog` route gate. */
+export async function bootBlogPage(): Promise<void> {
+  document.body.replaceChildren(chrome(el('p', { className: 'blog-loading', textContent: t('blog.public.loading') })))
+  document.body.classList.add('blog-body')
+
+  const path = location.pathname.replace(/\/+$/, '')
+
+  try {
+    // Inside the try so a malformed percent-encoding (`/blog/%E0%A4`)
+    // renders the missing view instead of throwing out of the boot.
+    const slug = path === '/blog' ? null : decodeURIComponent(path.slice('/blog/'.length))
+    if (!slug) {
+      const res = await fetch('/api/v1/blog')
+      const { posts } = (await res.json()) as { posts: PublicPostCard[] }
+      document.body.replaceChildren(chrome(renderList(posts)))
+      return
+    }
+    const res = await fetch(`/api/v1/blog/${encodeURIComponent(slug)}`)
+    if (!res.ok) {
+      document.body.replaceChildren(chrome(renderMissing()))
+      return
+    }
+    const { post } = (await res.json()) as { post: PublicPost }
+    document.title = post.title // i18n-exempt: the post's own title, already localized content
+    document.body.replaceChildren(chrome(renderPost(post)))
+  } catch {
+    document.body.replaceChildren(chrome(renderMissing()))
+  }
+}

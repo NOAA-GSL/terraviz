@@ -208,6 +208,7 @@ npm run screenshots:smoke   # gating interaction tests (search, Orbit, nav)
 | `src/ui/orbitPostMessageBridge.ts` | postMessage bridge between the host SPA and the embedded Orbit page |
 | `src/ui/domUtils.ts` | Small DOM helpers shared across UI modules |
 | `src/ui/sanitizeHtml.ts` | Allowlist-based HTML sanitizer for untrusted input |
+| `src/ui/blog/index.ts` | Public blog surface — lazy-booted on `/blog` + `/blog/:slug` (same chunk gate as the portal): published-post cards, the sanitized-markdown post page, per-dataset `/dataset/:id` deep links, and the approved-event source citation (`docs/CURRENT_EVENTS_PLAN.md` §7) |
 | `src/ui/publisher/index.ts` | Publisher portal entry point — lazy-loaded on `/publish/*`; mounts the History-API router + pages |
 | `src/ui/publisher/router.ts` | Tiny History-API router for the publisher portal |
 | `src/ui/publisher/api.ts` | Shared HTTP client for the publisher portal |
@@ -239,6 +240,8 @@ npm run screenshots:smoke   # gating interaction tests (search, Orbit, nav)
 | `src/ui/publisher/pages/workflow-edit.ts` | `/publish/workflows/new` + `…/:id/edit` — workflow form (YAML→JSON client-side, server-side Validate) |
 | `src/ui/publisher/pages/featured-hero.ts` | `/publish/featured-hero` — set the "Right now" hero override (`docs/HERO_ADMIN_SCOPING.md`) |
 | `src/ui/publisher/pages/node-profile.ts` | `/publish/node-profile` — edit the node / host-organization profile (org name, mission, about, region focus, tone, links) — the "about the host" context Phase 3d AI drafts ground themselves in |
+| `src/ui/publisher/pages/blog.ts` | `/publish/blog` — blog authoring list (drafts + published, status badges, New post) |
+| `src/ui/publisher/pages/blog-edit.ts` | `/publish/blog/new` + `…/:id/edit` — blog editor: dataset/event grounding pickers, the AI Generate panel (tone/length/companion-tour → `POST /publish/blog/generate`), markdown body with the shared toolbar + sanitized Preview, Save/Publish/Unpublish |
 | `src/ui/publisher/pages/feeds.ts` | `/publish/feeds` — the current-events feed console: registered connectors (pause/resume/remove, Run now, last-run status), the curated preset gallery, and the bring-your-own RSS/Atom form (`docs/CURRENT_EVENTS_PLAN.md` §9) |
 | `src/ui/publisher/pages/events.ts` | `/publish/events` — current-events review queue: curator approve/reject of proposed events + their dataset links (`docs/CURRENT_EVENTS_PLAN.md` §5) |
 | `src/ui/publisher/pages/analytics.ts` | `/publish/analytics` — privileged analytics dashboard over the D1 rollups, incl. the MapLibre spatial-attention heatmap (Phase B of `docs/ANALYTICS_STORAGE_AND_ADMIN_PLAN.md`) |
