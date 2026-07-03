@@ -192,6 +192,13 @@ export const onRequestPost: PagesFunction<CatalogEnv> = async context => {
   const ref = `r2:${key}`
   const result = await setNodeProfileLogo(context.env.CATALOG_DB, publisher, ref)
   if (result === 'missing') {
+    // Pre-check raced a profile delete — clean up the just-written
+    // object (best-effort) so the miss doesn't orphan it.
+    try {
+      await context.env.CATALOG_R2.delete(key)
+    } catch {
+      // Content-addressed and tiny; a failed cleanup is harmless.
+    }
     return fieldErrors([{
       field: 'profile',
       code: 'missing',
@@ -231,8 +238,10 @@ export const onRequestDelete: PagesFunction<CatalogEnv> = async context => {
       subject_id: null,
       metadata_json: JSON.stringify({ set: false }),
     })
-    await bustNodeProfileCache(context.env.CATALOG_KV)
   }
-  // Idempotent — clearing an absent profile/logo is still "no logo".
+  // Bust regardless of `result` — a missing profile row with a stale
+  // KV identity entry would otherwise keep serving the old header
+  // until TTL. Idempotent, like the clear itself.
+  await bustNodeProfileCache(context.env.CATALOG_KV)
   return ok(null)
 }

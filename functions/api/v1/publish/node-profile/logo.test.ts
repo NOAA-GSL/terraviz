@@ -217,10 +217,14 @@ describe('DELETE /api/v1/publish/node-profile/logo', () => {
     expect(audit).toHaveLength(1)
   })
 
-  it('is idempotent when no profile exists', async () => {
-    const { env } = setupEnv({ withProfile: false })
+  it('is idempotent when no profile exists — and still busts the public cache', async () => {
+    const { env, kv } = setupEnv({ withProfile: false })
+    // A stale identity entry must not outlive the delete just because
+    // the row is gone.
+    kv._store.set(NODE_PROFILE_CACHE_KEY, JSON.stringify({ profile: { orgName: 'Stale', logoUrl: 'https://x/y.png' } }))
     const res = await onRequestDelete(ctx({ env, method: 'DELETE' }))
     expect(res.status).toBe(200)
     expect((await readJson<{ logoUrl: string | null }>(res)).logoUrl).toBeNull()
+    expect(kv._store.has(NODE_PROFILE_CACHE_KEY)).toBe(false)
   })
 })

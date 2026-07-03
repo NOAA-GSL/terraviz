@@ -323,12 +323,17 @@ function renderForm(mount: HTMLElement, state: FormState): void {
  * API enforces that, and the card surfaces its field error verbatim.
  */
 function renderLogoCard(state: FormState): HTMLElement {
-  let logoUrl = state.profile?.logoUrl ?? null
+  // Normalize once at the boundary: anything non-http(s) is treated
+  // as "no logo" everywhere (preview AND the Remove button), so the
+  // two can't disagree about whether a logo exists.
+  const httpUrl = (u: string | null | undefined): string | null =>
+    u && /^https?:\/\//i.test(u) ? u : null
+  let logoUrl = httpUrl(state.profile?.logoUrl)
 
   const preview = el('div', { className: 'publisher-nodeprofile-logo-preview' })
   const renderPreview = (): void => {
     preview.replaceChildren(
-      logoUrl && /^https?:\/\//.test(logoUrl)
+      logoUrl
         ? el('img', { src: logoUrl, alt: t('publisher.nodeProfile.logo.alt'), className: 'publisher-nodeprofile-logo-img' })
         : el('p', { className: 'publisher-nodeprofile-logo-none', textContent: t('publisher.nodeProfile.logo.none') }),
     )
@@ -394,7 +399,7 @@ function renderLogoCard(state: FormState): HTMLElement {
       })
       .then(res => {
         if (res.ok) {
-          logoUrl = res.data.logoUrl
+          logoUrl = httpUrl(res.data.logoUrl)
           renderPreview()
           refreshRemove()
           setStatus(t('publisher.nodeProfile.logo.uploaded'), false)

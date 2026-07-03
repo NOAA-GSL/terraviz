@@ -173,6 +173,18 @@ describe('renderNodeProfilePage', () => {
     expect(img.getAttribute('src')).toBe('https://assets.example.org/new-logo.png')
   })
 
+  it('treats a non-http(s) logoUrl as no logo — placeholder shown, Remove hidden', async () => {
+    const mount = document.createElement('div')
+    const weird = { profile: { ...PROFILE.profile, logoUrl: 'javascript:alert(1)' } } // eslint-disable-line no-script-url
+    await renderNodeProfilePage(mount, {
+      fetchFn: mockFetch({ '/publish/me': ADMIN_ME, '/publish/node-profile': weird }),
+    })
+    expect(mount.querySelector('.publisher-nodeprofile-logo-img')).toBeNull()
+    expect(mount.querySelector('.publisher-nodeprofile-logo-none')).toBeTruthy()
+    const remove = Array.from(mount.querySelectorAll('button')).find(b => b.textContent === 'Remove logo')!
+    expect(remove.hidden).toBe(true)
+  })
+
   it('blocks an oversized file client-side', async () => {
     const mount = document.createElement('div')
     const fetchFn = mockFetch({ '/publish/me': ADMIN_ME, '/publish/node-profile': PROFILE })
