@@ -189,12 +189,20 @@ export async function screenshotWithRetry(
   const opts = isPage
     ? ({ path, animations: 'disabled', timeout: 20_000, ...extra } as const)
     : ({ path, animations: 'disabled', timeout: 20_000 } as const)
-  const attempts = 3
+  // Escalating quiet-down before each retry. The short first pause
+  // absorbs the common compositor stall; the later, longer waits ride
+  // out a wedged renderer — `Protocol error (Page.captureScreenshot)`,
+  // which CDP throws instantly (no 20 s timeout is paid) and which the
+  // failing main visual-report runs showed clearing within a few
+  // seconds: the same two desktop scenes failed every 750 ms-spaced
+  // attempt, then the very next scene captured fine ~7 s later
+  // (runs 28625110273 / 28632081351). Total retry window ≈ 9 s,
+  // spanning the observed recovery; the happy path is unchanged.
+  const RETRY_DELAYS_MS = [750, 2_500, 6_000] as const
+  const attempts = RETRY_DELAYS_MS.length + 1
   let lastErr: unknown
   for (let attempt = 1; attempt <= attempts; attempt++) {
-    // A short quiet-down pause before a retry gives the page a moment to
-    // settle (the previous attempt's stall often clears on its own).
-    if (attempt > 1) await page.waitForTimeout(750)
+    if (attempt > 1) await page.waitForTimeout(RETRY_DELAYS_MS[attempt - 2])
     try {
       return await target.screenshot(opts)
     } catch (err) {
