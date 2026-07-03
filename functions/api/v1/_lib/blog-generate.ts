@@ -163,6 +163,10 @@ export function repairJsonStringNewlines(text: string): string {
       out += '\\r'
     } else if (ch === '\t') {
       out += '\\t'
+    } else if (ch.charCodeAt(0) < 0x20) {
+      // JSON.parse rejects EVERY unescaped U+0000–U+001F in a string,
+      // not just the common three — \b, \f, vertical tab, etc.
+      out += `\\u${ch.charCodeAt(0).toString(16).padStart(4, '0')}`
     } else {
       out += ch
     }

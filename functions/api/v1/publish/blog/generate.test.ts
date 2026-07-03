@@ -248,6 +248,13 @@ describe('buildBlogPrompt / parseDraftReply', () => {
     expect(parsed?.bodyMd).toContain('- Buoys agree')
   })
 
+  it('repairs the full control-char range, not just \\n/\\r/\\t', () => {
+    const raw = '{"title": "T", "summary": "s", "bodyMd": "page\fbreak and bellend"}'
+    const parsed = parseDraftReply(raw)
+    expect(parsed).not.toBeNull()
+    expect(parsed?.bodyMd).toBe('page\fbreak and bellend')
+  })
+
   it('repair leaves valid JSON (escaped newlines, escaped quotes) untouched', () => {
     const valid = JSON.stringify({
       title: 'A "quoted" title',
