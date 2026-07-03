@@ -27,7 +27,7 @@ import { gotoApp, launchBrowser, withScenePage } from './core/browser'
 import { installFixtures, type FixtureRule } from './core/fixtures'
 import { attachSignalCollectors } from './core/signals'
 import { catalogFixtures } from './fixtures/catalog'
-import { publisherFixtures } from './fixtures/publisher'
+import { blogPublicFixtures, publisherFixtures } from './fixtures/publisher'
 
 const BASE_URL = process.env.SCREENSHOT_BASE_URL ?? 'http://localhost:4173'
 const VIEWPORT = { width: 1440, height: 900 }
@@ -222,6 +222,30 @@ const checks: Check[] = [
         (await page.locator('.publisher-nodeprofile-link-row').count()) >= 1,
         'stored links should render as editable rows',
       )
+    },
+  },
+  {
+    name: 'blog editor renders grounding pickers + Generate; public post renders sanitized markdown',
+    fixtures: [...publisherFixtures({ admin: true }), ...blogPublicFixtures()],
+    async run(page) {
+      // Authoring: the editor's three sections mount, with the picker
+      // enabled once the catalog fixture loads.
+      await gotoApp(page, '/publish/blog/new')
+      await page.locator('#publisher-root .publisher-topbar').waitFor({ state: 'visible' })
+      await page.locator('#blog-title').waitFor({ timeout: 15_000 })
+      await page.locator('.publisher-blog-generate-btn').waitFor()
+      await page.locator('#publisher-root input[type="search"]:not([disabled])').first().waitFor({ timeout: 10_000 })
+
+      // Public: the post page renders the sanitized body, the dataset
+      // deep link, and the event citation.
+      await gotoApp(page, '/blog/city-lights-spread')
+      await page.locator('.blog-post-body h2').waitFor({ timeout: 15_000 })
+      const explore = page.locator('.blog-post-explore-list a').first()
+      assert(
+        (await explore.getAttribute('href')) === '/dataset/01HXDS0000000000000000000A',
+        'cited dataset should deep-link into the globe',
+      )
+      await page.locator('.blog-post-citation a').waitFor()
     },
   },
   {

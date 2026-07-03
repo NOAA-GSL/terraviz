@@ -256,6 +256,62 @@ const events = {
 
 const eventsEmpty = { events: [] }
 
+/** The `/api/v1/publish/blog` authoring list — one draft + one
+ *  published post so both status badges render. */
+const blogAuthoring = {
+  posts: [
+    {
+      id: '01HXBLOGDRAFT0000000000000',
+      slug: 'gulf-warming-draft',
+      title: 'Watching the Gulf warm (draft)',
+      summary: 'Three decades of SST in one loop.',
+      bodyMd: '## The data',
+      datasetIds: ['01HXDS0000000000000000000A'],
+      eventId: null,
+      status: 'draft',
+      updatedAt: '2026-07-02T00:00:00.000Z',
+      publishedAt: null,
+    },
+    {
+      id: '01HXBLOGPUB00000000000000B',
+      slug: 'city-lights-spread',
+      title: 'How city lights map human growth',
+      summary: 'Night-lights data as a census.',
+      bodyMd: '## Lights',
+      datasetIds: [],
+      eventId: null,
+      status: 'published',
+      updatedAt: '2026-07-01T00:00:00.000Z',
+      publishedAt: '2026-07-01T00:00:00.000Z',
+    },
+  ],
+}
+
+/** Public blog fixtures — the `/blog` list + one full `/blog/:slug`
+ *  post, used by the public-surface scenes/smoke. */
+export function blogPublicFixtures(): FixtureRule[] {
+  const post = {
+    post: {
+      slug: 'city-lights-spread',
+      title: 'How city lights map human growth',
+      summary: 'Night-lights data as a census.',
+      bodyMd: '## Lights as a census\n\nWe looked at the loop and the spread of light tells the story.\n\n- Cities brighten\n- Coastlines fill in',
+      publishedAt: '2026-07-01T00:00:00.000Z',
+      datasets: [{ id: '01HXDS0000000000000000000A', title: 'Earth at Night' }],
+      event: { id: 'EVT1', title: 'Global urbanization report released', sourceName: 'UN Habitat', sourceUrl: 'https://example.org/report' },
+    },
+  }
+  const list = {
+    posts: [
+      { slug: 'city-lights-spread', title: 'How city lights map human growth', summary: 'Night-lights data as a census.', publishedAt: '2026-07-01T00:00:00.000Z', datasetCount: 1 },
+    ],
+  }
+  return [
+    { url: '/api/v1/blog/', json: post },
+    { url: '/api/v1/blog', json: list },
+  ]
+}
+
 /** The `/api/v1/publish/node-profile` singleton — filled in so the
  *  profile form renders populated. */
 const nodeProfile = {
@@ -379,5 +435,6 @@ export function publisherFixtures(
     { url: '/api/v1/publish/feeds/preview', json: feedPreview },
     { url: '/api/v1/publish/feeds', json: feeds },
     { url: '/api/v1/publish/node-profile', json: nodeProfile },
+    { url: '/api/v1/publish/blog', json: blogAuthoring },
   ]
 }

@@ -30,7 +30,7 @@ import { gotoApp } from './core/browser'
 import type { FixtureRule } from './core/fixtures'
 import { analyticsFixtures, feedbackFixtures } from './fixtures/admin'
 import { catalogReportFixtures } from './fixtures/catalog'
-import { publisherFixtures } from './fixtures/publisher'
+import { blogPublicFixtures, publisherFixtures } from './fixtures/publisher'
 
 export interface Scene {
   /** Stable id — used as the screenshot filename and Weblate name. */
@@ -434,6 +434,34 @@ export const scenes: Scene[] = [
     async setup(page) {
       await openPublish(page, '/publish/node-profile')
       await page.locator('#nodeprofile-org').waitFor()
+    },
+  },
+  {
+    name: 'publish-blog',
+    description: 'Publisher portal — blog authoring list (Phase 3d)',
+    fixtures: publisherFixtures({ admin: true }),
+    async setup(page) {
+      await openPublish(page, '/publish/blog')
+      await page.locator('.publisher-blog-badge').first().waitFor()
+    },
+  },
+  {
+    name: 'publish-blog-edit',
+    description: 'Publisher portal — blog editor with the AI Generate panel (Phase 3d)',
+    fixtures: publisherFixtures({ admin: true }),
+    async setup(page) {
+      await openPublish(page, '/publish/blog/new')
+      await page.locator('#blog-title').waitFor()
+      await page.locator('.publisher-blog-generate-btn').waitFor()
+    },
+  },
+  {
+    name: 'blog-public-post',
+    description: 'Public blog post page — sanitized markdown + dataset deep links + citation (Phase 3d)',
+    fixtures: blogPublicFixtures(),
+    async setup(page) {
+      await gotoApp(page, '/blog/city-lights-spread')
+      await page.locator('.blog-post-body h2').waitFor()
     },
   },
   {
