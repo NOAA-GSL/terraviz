@@ -88,8 +88,10 @@ describe('renderEventDetail — suggested media (task: media suggestion engine)'
       },
     }
     const fetchFn = vi.fn(async (input: RequestInfo | URL) => {
-      const url = String(input)
-      const body = url.includes('commons.wikimedia.org') ? commonsBody : { event: null, links: [] }
+      // Route by parsed hostname (CodeQL: no substring host checks);
+      // the review-API calls arrive as relative paths, hence the base.
+      const host = new URL(String(input), 'https://localhost').hostname
+      const body = host === 'commons.wikimedia.org' ? commonsBody : { event: null, links: [] }
       return { ok: true, status: 200, type: 'basic', json: async () => body, text: async () => JSON.stringify(body) } as unknown as Response
     })
     const pane = renderEventDetail(located(), { onEventStatusChange: vi.fn(), fetchFn } as never)
