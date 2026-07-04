@@ -14,6 +14,7 @@ import type { CatalogEnv } from './env'
 import { newUlid } from './ulid'
 import {
   deriveSlug,
+  looksLikeUrl,
   validateTourDraft,
   type TourDraftBody,
   type ValidationError,
@@ -116,6 +117,16 @@ export async function createDraftTour(
   const db = env.CATALOG_DB!
   const id = newUlid()
   const title = overrides.title?.trim() || `Untitled tour ${id.slice(-6)}`
+  // Keep the draft-row invariant here, not just at call sites: a
+  // thumbnail ref is an `r2:` ref or a fetchable http(s) URL, sanely
+  // bounded — anything else is dropped rather than stored.
+  const rawThumb = overrides.thumbnailRef
+  const thumbnailRef =
+    typeof rawThumb === 'string' &&
+    rawThumb.length <= 2048 &&
+    (rawThumb.startsWith('r2:') || looksLikeUrl(rawThumb))
+      ? rawThumb
+      : null
   const slug = await ensureUniqueSlug(db, deriveSlug(title))
   const now = new Date().toISOString()
   const ref = tourDraftR2Ref(id)
@@ -142,7 +153,7 @@ export async function createDraftTour(
          visibility, schema_version, created_at, updated_at, published_at, publisher_id
        ) VALUES (?, ?, (SELECT node_id FROM node_identity LIMIT 1), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
-    .bind(id, slug, title, null, ref, overrides.thumbnailRef ?? null, 'public', 1, now, now, null, publisher.id)
+    .bind(id, slug, title, null, ref, thumbnailRef, 'public', 1, now, now, null, publisher.id)
     .run()
   const row = await db
     .prepare('SELECT * FROM tours WHERE id = ?')

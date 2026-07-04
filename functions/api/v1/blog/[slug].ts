@@ -76,7 +76,7 @@ export const onRequestGet: PagesFunction<CatalogEnv, 'slug'> = async context => 
   // documented `no-store` 404, never a 500 from a public route.
   let pub
   let datasets: Array<{ id: string; title: string }> = []
-  let event: { id: string; title: string; sourceName: string; sourceUrl: string; imageUrl: string | null } | null = null
+  let event: { id: string; title: string; sourceName: string; sourceUrl: string; imageUrl: string | null; imageAlt: string | null } | null = null
   let tour: { id: string } | null = null
   try {
     const row = await getPublishedBySlug(context.env.CATALOG_DB, slug)
@@ -115,8 +115,10 @@ export const onRequestGet: PagesFunction<CatalogEnv, 'slug'> = async context => 
           sourceName: ev.source_name,
           sourceUrl: ev.source_url,
           // The vetted story image (feed enclosure / og:image / curator
-          // pick) — same http(s) read-guard as toPublicEvent.
+          // pick) — same http(s) read-guard as toPublicEvent — plus its
+          // curator-written alt text (media accessibility).
           imageUrl: ev.image_url && /^https?:\/\//i.test(ev.image_url) ? ev.image_url : null,
+          imageAlt: ev.image_url && /^https?:\/\//i.test(ev.image_url) ? (ev.image_alt ?? null) : null,
         }
       }
     }

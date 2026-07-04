@@ -84,7 +84,7 @@ interface ParsedReview {
    *  resolved from `edits.regionName` via `regions.ts` and/or a raw
    *  `edits.point`; `pointOnly` marks a point-without-region edit so the
    *  handler can preserve the event's existing bbox/region. */
-  edits?: { occurredStart?: string; geometry?: EventGeometry; pointOnly?: boolean; imageUrl?: string }
+  edits?: { occurredStart?: string; geometry?: EventGeometry; pointOnly?: boolean; imageUrl?: string; imageAlt?: string | null }
 }
 
 function jsonError(status: number, error: string, message: string): Response {
@@ -198,7 +198,17 @@ function parseReview(
         out.imageUrl = img
       }
     }
-    if (out.occurredStart !== undefined || out.geometry !== undefined || out.imageUrl !== undefined) edits = out
+    // Alt text for the image (media accessibility). Accompanies an
+    // imageUrl edit, or stands alone to describe the image in place.
+    if (e.imageAlt != null) {
+      const alt = typeof e.imageAlt === 'string' ? e.imageAlt.trim() : null
+      if (alt === null || alt.length > 512) {
+        errors.push({ field: 'edits.imageAlt', code: 'invalid', message: '`edits.imageAlt` must be a string of at most 512 characters.' })
+      } else {
+        out.imageAlt = alt.length > 0 ? alt : null
+      }
+    }
+    if (out.occurredStart !== undefined || out.geometry !== undefined || out.imageUrl !== undefined || out.imageAlt !== undefined) edits = out
   }
 
   if (event === undefined && links.length === 0 && addDatasetIds.length === 0 && edits === undefined && errors.length === 0) {
@@ -256,6 +266,7 @@ export const onRequestPost: PagesFunction<CatalogEnv, 'id'> = async context => {
       occurredStart: edits.occurredStart,
       geometry: edits.geometry,
       imageUrl: edits.imageUrl,
+      imageAlt: edits.imageAlt,
     })
     // The matcher scores on date/place — an image-only edit changes
     // no signal, so skip the re-run for it.

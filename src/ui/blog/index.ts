@@ -41,7 +41,7 @@ interface PublicPost {
   bodyMd: string
   publishedAt: string | null
   datasets: Array<{ id: string; title: string }>
-  event: { id: string; title: string; sourceName: string; sourceUrl: string; imageUrl?: string | null } | null
+  event: { id: string; title: string; sourceName: string; sourceUrl: string; imageUrl?: string | null; imageAlt?: string | null } | null
   /** The published companion tour, when one exists and is playable. */
   tour?: { id: string } | null
 }
@@ -135,7 +135,7 @@ function renderPost(post: PublicPost): HTMLElement {
     const img = el('img', {
       className: 'blog-post-image',
       src: post.event.imageUrl,
-      alt: post.event.title,
+      alt: post.event.imageAlt ?? post.event.title,
       loading: 'lazy',
     })
     // A dead image link should drop the whole figure, caption included.

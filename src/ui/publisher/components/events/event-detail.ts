@@ -109,13 +109,16 @@ function suggestionCard(
   onCardGone: () => void,
 ): HTMLElement {
   const card = el('div', 'publisher-events-suggest-card')
-  const img = document.createElement('img')
-  img.className = 'publisher-events-suggest-preview'
-  img.src = suggestion.url
-  img.alt =
+  // One description serves the preview and, on pick, the stored alt
+  // text (media accessibility) every downstream surface renders with.
+  const altText =
     suggestion.kind === 'commons'
       ? t('publisher.events.suggest.commonsAlt')
       : t('publisher.events.suggest.worldviewAlt')
+  const img = document.createElement('img')
+  img.className = 'publisher-events-suggest-preview'
+  img.src = suggestion.url
+  img.alt = altText
   img.loading = 'lazy'
   img.addEventListener('error', () => {
     card.remove()
@@ -143,7 +146,7 @@ function suggestionCard(
     status.classList.remove('publisher-events-status-error')
     void publisherSend<{ event?: Partial<ReviewEvent> }>(
       `${EVENTS_ENDPOINT}/${encodeURIComponent(event.id)}`,
-      { edits: { imageUrl: suggestion.url } },
+      { edits: { imageUrl: suggestion.url, imageAlt: altText } },
       { fetchFn: cb.fetchFn },
     ).then(res => {
       use.disabled = false
@@ -154,6 +157,7 @@ function suggestionCard(
       // The event now has a vetted image — reflect it and let the
       // orchestrator re-render (the pane yields to the story image).
       event.imageUrl = res.data?.event?.imageUrl ?? suggestion.url
+      event.imageAlt = res.data?.event?.imageAlt ?? altText
       cb.onEventStatusChange(event.id, event.status)
     })
   })
@@ -161,6 +165,82 @@ function suggestionCard(
   meta.append(use, status)
   card.append(img, meta)
   return card
+}
+
+/** File bytes → standard base64 (chunked — photos exceed the
+ *  argument-spread limit of a single String.fromCharCode call). */
+async function fileToBase64(file: File): Promise<string> {
+  const bytes = new Uint8Array(await file.arrayBuffer())
+  let bin = ''
+  const CHUNK = 0x8000
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    bin += String.fromCharCode(...bytes.subarray(i, i + CHUNK))
+  }
+  return btoa(bin)
+}
+
+/**
+ * "Upload photo" — the publisher's own image as the event's story
+ * image (task: media suggestion engine). Posts base64-in-JSON to the
+ * event-image endpoint, which stores it in R2 and sets `image_url`;
+ * the orchestrator re-render then shows it as the vetted story image.
+ * Offered both while imageless (`upload`) and under an existing image
+ * (`replace`).
+ */
+function renderImageUpload(
+  event: ReviewEvent,
+  cb: EventDetailCallbacks,
+  mode: 'upload' | 'replace',
+): HTMLElement {
+  const wrap = el('div', 'publisher-events-upload')
+  const status = el('span', 'publisher-events-edit-status')
+  const input = document.createElement('input')
+  input.type = 'file'
+  input.accept = 'image/png,image/jpeg,image/webp'
+  input.hidden = true
+  // Alt text travels with the upload (media accessibility) — every
+  // surface that renders the image uses it.
+  const alt = document.createElement('input')
+  alt.type = 'text'
+  alt.className = 'publisher-events-upload-alt'
+  alt.maxLength = 512
+  alt.placeholder = t('publisher.events.suggest.altPlaceholder')
+  alt.setAttribute('aria-label', t('publisher.events.suggest.altPlaceholder'))
+  if (mode === 'replace' && event.imageAlt) alt.value = event.imageAlt
+  const btn = document.createElement('button')
+  btn.type = 'button'
+  btn.className = 'publisher-btn publisher-btn-small'
+  btn.textContent =
+    mode === 'replace' ? t('publisher.events.suggest.replacePhoto') : t('publisher.events.suggest.uploadPhoto')
+  btn.addEventListener('click', () => input.click())
+  input.addEventListener('change', () => {
+    const file = input.files?.[0]
+    if (!file) return
+    btn.disabled = true
+    status.textContent = ''
+    status.classList.remove('publisher-events-status-error')
+    void fileToBase64(file)
+      .then(dataBase64 =>
+        publisherSend<{ imageUrl?: string }>(
+          `${EVENTS_ENDPOINT}/${encodeURIComponent(event.id)}/image`,
+          { contentType: file.type, dataBase64, altText: alt.value.trim() || undefined },
+          { fetchFn: cb.fetchFn },
+        ),
+      )
+      .then(res => {
+        btn.disabled = false
+        input.value = ''
+        if (!res.ok) {
+          handleWriteError(res, status, cb.navigate)
+          return
+        }
+        if (res.data?.imageUrl) event.imageUrl = res.data.imageUrl
+        event.imageAlt = alt.value.trim() || undefined
+        cb.onEventStatusChange(event.id, event.status)
+      })
+  })
+  wrap.append(alt, btn, input, status)
+  return wrap
 }
 
 function renderMediaSuggestions(event: ReviewEvent, cb: EventDetailCallbacks): HTMLElement | null {
@@ -404,17 +484,19 @@ export function renderEventDetail(event: ReviewEvent, cb: EventDetailCallbacks):
     const img = document.createElement('img')
     img.className = 'publisher-events-story-image'
     img.src = event.imageUrl
-    img.alt = t('publisher.events.storyImage.alt')
+    img.alt = event.imageAlt ?? t('publisher.events.storyImage.alt')
     img.loading = 'lazy'
     // A dead image link should vanish, not show a broken-image glyph.
     img.addEventListener('error', () => img.remove())
-    pane.append(img)
+    pane.append(img, renderImageUpload(event, cb, 'replace'))
   } else {
     // --- Suggested media (task: media suggestion engine) — offered
     // only while the event has no image; picking one writes it as the
     // event's story image through the review endpoint's edits.
     const suggest = renderMediaSuggestions(event, cb)
     if (suggest) pane.append(suggest)
+    // The publisher's own photo is always an option, located or not.
+    pane.append(renderImageUpload(event, cb, 'upload'))
   }
 
   // --- Meta strip: source / first observed / detail ---

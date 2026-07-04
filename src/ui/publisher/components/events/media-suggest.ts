@@ -160,7 +160,11 @@ export const COMMONS_TIMEOUT_MS = 5_000
 /** Event location for the photo search: the pin when there is one,
  *  else the bbox centre (antimeridian-aware — a w > e box wraps). */
 function locationFor(geometry: EventGeometry | undefined): { lat: number; lon: number } | null {
-  if (geometry?.point) return geometry.point
+  // Clamp both paths — an out-of-range stored point would otherwise
+  // build an invalid ggscoord and silently drop the suggestions.
+  if (geometry?.point) {
+    return { lat: clampLat(geometry.point.lat), lon: clampLon(geometry.point.lon) }
+  }
   const bbox = geometry?.boundingBox
   if (!bbox) return null
   const lat = clampLat((bbox.n + bbox.s) / 2)

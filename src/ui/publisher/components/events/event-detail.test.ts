@@ -72,6 +72,29 @@ describe('renderEventDetail — suggested media (task: media suggestion engine)'
     expect(nowhere.querySelector('.publisher-events-suggest')).toBeNull()
   })
 
+  it('uses the stored alt text on the story image and offers Replace photo', () => {
+    const pane = renderEventDetail(
+      event({ imageUrl: 'https://img.ex/story.jpg', imageAlt: 'Flood waters over the harbor' }),
+      { fetchFn: okFetch() } as never,
+    )
+    const img = pane.querySelector('.publisher-events-story-image') as HTMLImageElement
+    expect(img.alt).toBe('Flood waters over the harbor')
+    // The upload control doubles as "replace" under an existing image,
+    // pre-filled with the current description.
+    const altInput = pane.querySelector('.publisher-events-upload-alt') as HTMLInputElement
+    expect(altInput.value).toBe('Flood waters over the harbor')
+  })
+
+  it('"Use as event image" sends the card description as the stored alt text', async () => {
+    const fetchFn = okFetch()
+    const pane = renderEventDetail(located(), { onEventStatusChange: vi.fn(), fetchFn } as never)
+    ;(pane.querySelector('.publisher-events-suggest button') as HTMLButtonElement).click()
+    await flush()
+    const post = fetchFn.mock.calls.find(c => (c[1] as RequestInit | undefined)?.method === 'POST')!
+    const body = JSON.parse(String((post[1] as RequestInit).body)) as { edits: { imageAlt?: string } }
+    expect(body.edits.imageAlt).toBeTruthy() // the Worldview card's description
+  })
+
   it('appends nearby Commons photo cards asynchronously alongside the Worldview card', async () => {
     const commonsBody = {
       query: {

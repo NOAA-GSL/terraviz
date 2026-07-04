@@ -230,14 +230,16 @@ describe('publish transition + public reads', () => {
       sourceName: 'NOAA',
       sourceUrl: 'https://example.gov/heatwave',
       imageUrl: 'https://img.example.org/heatwave.jpg',
+      imageAlt: 'Sea-surface temperature anomaly over the Gulf',
     })
     await setEventStatus(env.CATALOG_DB, ev.id, 'approved', ADMIN.id)
     const post = await createDraft(env, { ...VALID, eventId: ev.id })
     await transition(ctx({ env, method: 'POST', params: { id: post.id }, body: { action: 'publish' } }))
 
     const one = await publicPost(ctx({ env, path: `/api/v1/blog/${post.slug}`, params: { slug: post.slug } }))
-    const { post: detail } = await readJson<{ post: { event: { imageUrl: string | null } | null } }>(one)
+    const { post: detail } = await readJson<{ post: { event: { imageUrl: string | null; imageAlt: string | null } | null } }>(one)
     expect(detail.event?.imageUrl).toBe('https://img.example.org/heatwave.jpg')
+    expect(detail.event?.imageAlt).toBe('Sea-surface temperature anomaly over the Gulf')
 
     // A stored non-http(s) value (defense in depth — parseCreate should
     // never let one in) is re-guarded to null before it reaches the wire.

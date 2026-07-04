@@ -397,6 +397,7 @@ describe('toPublicEvent', () => {
       reviewed_by: null,
       inferred_fields: null,
       image_url: null,
+      image_alt: null,
     }
     expect(toPublicEvent({ ...base, image_url: 'https://img.ex/story.jpg' }).imageUrl).toBe('https://img.ex/story.jpg')
     // eslint-disable-next-line no-script-url
@@ -411,6 +412,7 @@ describe('toPublicEvent', () => {
       title: 'Quiet day',
       summary: null,
       image_url: null,
+      image_alt: null,
       source_name: 'USGS',
       source_url: 'https://example.gov/x',
       published_at: null,
