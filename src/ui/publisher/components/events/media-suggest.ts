@@ -350,6 +350,23 @@ export function parseShakemapDetail(json: unknown): string | null {
  * failure path — not a quake, no location/date, no match, timeout —
  * is null.
  */
+/** One fetch under its own timeout — each request in a chain gets the
+ *  full budget rather than sharing one controller (a slow first hop
+ *  must not starve the second). */
+async function fetchWithTimeout(
+  fetchFn: typeof fetch,
+  url: string,
+  timeoutMs: number,
+): Promise<Response> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    return await fetchFn(url, { signal: controller.signal })
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 export async function fetchShakemapSuggestion(
   event: { title?: string; summary?: string; keywords?: string[]; occurredStart?: string; source?: { publishedAt?: string }; geometry?: EventGeometry },
   fetchFn: typeof fetch = fetch,
@@ -359,14 +376,12 @@ export async function fetchShakemapSuggestion(
   const rawDate = event.occurredStart ?? event.source?.publishedAt
   if (!point || !rawDate || !Number.isFinite(Date.parse(rawDate))) return null
 
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), USGS_TIMEOUT_MS)
   try {
-    const res = await fetchFn(buildUsgsQueryUrl(point, rawDate), { signal: controller.signal })
+    const res = await fetchWithTimeout(fetchFn, buildUsgsQueryUrl(point, rawDate), USGS_TIMEOUT_MS)
     if (!res.ok) return null
     const detailUrl = parseUsgsQuery(await res.json())
     if (!detailUrl) return null
-    const detail = await fetchFn(detailUrl, { signal: controller.signal })
+    const detail = await fetchWithTimeout(fetchFn, detailUrl, USGS_TIMEOUT_MS)
     if (!detail.ok) return null
     const url = parseShakemapDetail(await detail.json())
     if (!url) return null
@@ -377,8 +392,6 @@ export async function fetchShakemapSuggestion(
     }
   } catch {
     return null
-  } finally {
-    clearTimeout(timer)
   }
 }
 
