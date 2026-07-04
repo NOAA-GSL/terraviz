@@ -56,6 +56,7 @@ import {
   type EventLinkStatus,
 } from '../../_lib/events-store'
 import { sanitizeDatasetIds, filterVisibleDatasetIds } from '../../_lib/events-ingest'
+import { looksLikeUrl } from '../../_lib/validators'
 import { runMatcherForEvent } from '../../_lib/events-matcher'
 import { resolveRegion } from '../../../../../src/data/regions'
 
@@ -191,7 +192,7 @@ function parseReview(
     // guard as ingest: http(s) only, bounded — it renders publicly.
     if (e.imageUrl != null) {
       const img = typeof e.imageUrl === 'string' ? e.imageUrl.trim() : ''
-      if (!/^https?:\/\//i.test(img) || img.length > 2048) {
+      if (!looksLikeUrl(img) || img.length > 2048) {
         errors.push({ field: 'edits.imageUrl', code: 'invalid', message: '`edits.imageUrl` must be an http(s) URL of at most 2048 characters.' })
       } else {
         out.imageUrl = img

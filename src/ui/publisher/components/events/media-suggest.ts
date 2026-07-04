@@ -66,6 +66,14 @@ export function buildWorldviewSnapshot(event: {
     s = clampLat(bbox.s)
     w = clampLon(bbox.w)
     e = clampLon(bbox.e)
+    // The catalog encodes an antimeridian-crossing box as w > e
+    // ("170°E east through 180° to -160°" — see catalogMap.ts). The
+    // snapshot API wants a plain min<max range, so keep the wider of
+    // the two dateline halves — most of the event area, always valid.
+    if (w > e) {
+      if (180 - w >= e + 180) e = 180
+      else w = -180
+    }
     // Grow degenerate boxes to a visible span around their centre.
     if (n - s < MIN_SPAN_DEG) {
       const mid = (n + s) / 2

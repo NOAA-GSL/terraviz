@@ -45,6 +45,23 @@ describe('buildWorldviewSnapshot', () => {
     expect(params(boxed.url).get('BBOX')).toBe('18,-98,31,-80')
   })
 
+  it('resolves an antimeridian-crossing bbox (w > e) to its wider dateline half', () => {
+    // "170°E east through 180° to -160°" — the eastern half is wider
+    // (20° vs 10°), so the snapshot keeps [-180, -160].
+    const east = buildWorldviewSnapshot({
+      occurredStart: '2026-06-01T00:00:00.000Z',
+      geometry: { boundingBox: { n: 60, s: 40, w: 170, e: -160 } },
+    })!
+    expect(params(east.url).get('BBOX')).toBe('40,-180,60,-160')
+
+    // Mirrored: the western half is wider → keep [160, 180].
+    const west = buildWorldviewSnapshot({
+      occurredStart: '2026-06-01T00:00:00.000Z',
+      geometry: { boundingBox: { n: 60, s: 40, w: 160, e: -170 } },
+    })!
+    expect(params(west.url).get('BBOX')).toBe('40,160,60,180')
+  })
+
   it('grows a degenerate bbox to a visible span', () => {
     const s = buildWorldviewSnapshot({
       occurredStart: '2026-06-01T00:00:00.000Z',

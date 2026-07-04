@@ -286,6 +286,9 @@ describe('POST /api/v1/publish/events/:id', () => {
       expect(bad.status).toBe(400)
       const body = (await bad.json()) as { errors: Array<{ field: string }> }
       expect(body.errors[0].field).toBe('edits.imageUrl')
+      // Scheme-only strings pass a naive prefix check but are not URLs.
+      const hostless = await reviewPost(ctx({ env, id, body: { edits: { imageUrl: 'https://' } } }))
+      expect(hostless.status).toBe(400)
       const huge = await reviewPost(
         ctx({ env, id, body: { edits: { imageUrl: `https://img.example.org/${'x'.repeat(2048)}` } } }),
       )
