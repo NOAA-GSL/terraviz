@@ -126,6 +126,23 @@ describe('GET /api/v1/publish/media/youtube-search', () => {
     expect(videos).toEqual([{ videoId: 'cust123XYZ', title: 'A briefing', channelId: CUSTOM, channelName: 'City Museum' }])
   })
 
+  it('degrades to defaults-only (not a 500) when the custom-channels table is missing', async () => {
+    // An un-migrated preview D1: any query on `youtube_channels` throws.
+    const failingDb = {
+      prepare: () => ({
+        all: async () => {
+          throw new Error('no such table: youtube_channels')
+        },
+      }),
+    } as unknown as D1Database
+    stubUpstream([item('abc123XYZ', NASA), item('bad', 'UCnope')])
+    const res = await searchGet(ctx({ q: 'hurricane', env: { YOUTUBE_API_KEY: 'k', CATALOG_DB: failingDb } }))
+    expect(res.status).toBe(200)
+    const { videos } = await readJson<{ videos: Array<{ videoId: string }> }>(res)
+    // Built-in agency channels still filter through; no throw.
+    expect(videos.map(v => v.videoId)).toEqual(['abc123XYZ'])
+  })
+
   it('degrades to [] on upstream failure and does not cache it', async () => {
     const boom = vi.fn(async () => {
       throw new Error('quota exceeded')

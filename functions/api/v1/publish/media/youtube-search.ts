@@ -117,7 +117,16 @@ export const onRequestGet: PagesFunction<CatalogEnv> = async context => {
   // Effective allowlist = hardcoded agency defaults ∪ the node's own
   // custom channels. A change to the custom set changes the cache key,
   // so a freshly-added channel's videos aren't hidden by a stale entry.
-  const custom = context.env.CATALOG_DB ? await listCustomChannels(context.env.CATALOG_DB) : []
+  // A missing/failed `youtube_channels` table (e.g. an un-migrated
+  // preview D1) degrades to defaults-only — the source must never 500.
+  let custom: Awaited<ReturnType<typeof listCustomChannels>> = []
+  if (context.env.CATALOG_DB) {
+    try {
+      custom = await listCustomChannels(context.env.CATALOG_DB)
+    } catch {
+      // No custom table yet → just the hardcoded agency defaults.
+    }
+  }
   const customMap = new Map(custom.map(c => [c.channelId, c.channelName]))
   const allow: ChannelAllowlist = {
     has: id => isAllowlistedChannel(id) || customMap.has(id),
