@@ -1,0 +1,39 @@
+/**
+ * Embed mode (`?embed=1`) — minimal chrome for iframe embedding.
+ *
+ * `body.embed-mode` is set by `applyEmbedMode()` in
+ * `src/utils/embedMode.ts` when the URL carries `?embed=1`. It hides
+ * the chrome that lets a viewer navigate away from the embedded
+ * dataset/tour — the tools menu, help trigger, home button, and the
+ * Orbit chat trigger — while leaving the globe and the playback
+ * transport. The browse overlay and the catalog↔sphere tab control
+ * are kept only when catalog mode is also active, since the catalog
+ * grid is the whole point of a `?catalog=true&embed=1` embed.
+ *
+ * `!important` is required: the elements are toggled via the global
+ * `.hidden` utility (`display: none !important`), so overriding it —
+ * or holding an element hidden after JS removes `.hidden` — needs
+ * the same weight. These selectors carry an id + class + type, so
+ * they outrank `.hidden` among `!important` rules.
+ *
+ * Grammar: `docs/EMBED_URL_GRAMMAR.md`.
+ */
+
+body.embed-mode #map-controls,
+body.embed-mode #help-trigger,
+body.embed-mode #home-btn {
+  display: none !important;
+}
+
+/* Orbit chat trigger — hidden by default in embed mode; opt back in
+   with `?embed=1&chat=1` (adds `body.embed-show-chat`). */
+body.embed-mode:not(.embed-show-chat) #chat-trigger {
+  display: none !important;
+}
+
+/* Browse grid + catalog tab control — kept in a catalog embed
+   (`?catalog=true&embed=1`), hidden in a dataset/tour embed. */
+body.embed-mode:not(.catalog-mode) #browse-overlay,
+body.embed-mode:not(.catalog-mode) #catalog-tabs {
+  display: none !important;
+}

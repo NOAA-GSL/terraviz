@@ -264,6 +264,7 @@ npm run screenshots:smoke   # gating interaction tests (search, Orbit, nav)
 | `src/utils/captionProxy.ts` | Caption-URL proxying helper |
 | `src/utils/catalogFilters.ts` | URL round-trip for catalog filter state |
 | `src/utils/catalogMode.ts` | Catalog mode — `?catalog=true` URL routing |
+| `src/utils/embedMode.ts` | Embed mode — `?embed=1` minimal-chrome URL routing for iframe hosting (`docs/EMBED_URL_GRAMMAR.md`) |
 | `src/utils/posterDeepLinks.ts` | Poster deep-link handlers |
 | `functions/api/ingest.ts` | Cloudflare Pages Function — receives telemetry batches, stamps `event_type` / `environment` / `country` / `internal` server-side, writes to Workers Analytics Engine |
 

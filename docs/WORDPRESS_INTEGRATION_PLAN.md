@@ -245,6 +245,13 @@ This is the high-value, low-risk half. It ships first.
 
 ### 3.1 The one upstream change: an `?embed=` minimal-chrome mode
 
+> **Shipped on this branch** (2026-07-04). `?embed=1` (with the
+> `?embed=1&chat=1` opt-in) is implemented in `src/utils/embedMode.ts`
+> + `src/styles/embed.css`, wired at the `src/main.ts` catalog-mode
+> boot seam, and specified in
+> [`EMBED_URL_GRAMMAR.md`](EMBED_URL_GRAMMAR.md). The rest of this
+> section is the original rationale.
+
 Today there is no chromeless mode (grep for
 `kiosk|minimal.?chrome|chromeless` finds nothing in `src/`; the
 closest is `?catalog=true`, which *adds* chrome). The embed
@@ -607,8 +614,10 @@ Phases are ordered by value-over-risk and by the read/publish seam
 
 ### Phase 0 — Upstream enablers (main repo)
 
-- Add the `?embed=1` minimal-chrome mode at the `src/main.ts:503-618`
-  boot seam; add a `docs/EMBED_URL_GRAMMAR.md`. **S.**
+- ~~Add the `?embed=1` minimal-chrome mode at the `src/main.ts`
+  boot seam; add a `docs/EMBED_URL_GRAMMAR.md`.~~ **Done
+  (2026-07-04)** — `src/utils/embedMode.ts`, `src/styles/embed.css`,
+  `docs/EMBED_URL_GRAMMAR.md`.
 - (Rides on / coordinates with federation §7 Directive 2) publish
   the wire `Dataset` + catalog JSON Schema at a stable URL. **M**
   — may already be in flight for Phase 4; the plugin consumes it.

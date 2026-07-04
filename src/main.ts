@@ -69,6 +69,7 @@ import { isMobile, IS_MOBILE_NATIVE, getCloudTextureUrl } from './utils/deviceCa
 import { initDeepLinks, parseDatasetPathname } from './services/deepLinkService'
 import { recordVisit, writeLastSession } from './services/visitMemory'
 import { getCatalogMode, setCatalogMode } from './utils/catalogMode'
+import { applyEmbedMode } from './utils/embedMode'
 import {
   hideCatalogTabs,
   initCatalogTabs,
@@ -335,6 +336,13 @@ class InteractiveSphere {
       const catalogModeActive = getCatalogMode()
       if (catalogModeActive) document.body.classList.add('catalog-mode')
 
+      // Embed mode (`?embed=1`) strips app chrome for iframe hosting
+      // (WordPress blocks, kiosk, the poster). Apply before any UI
+      // renders — same first-paint reasoning as catalog mode — so the
+      // chrome never flashes in. Composes with `?dataset=`/`?tour=`/
+      // `?catalog=true`. See `docs/EMBED_URL_GRAMMAR.md`.
+      const embedModeActive = applyEmbedMode()
+
       if (!this.checkWebGLSupport()) return
 
       const container = document.getElementById('container')
@@ -411,8 +419,11 @@ class InteractiveSphere {
       onPlaylistPlaybackChange(syncPlaylistNextBtn)
       syncPlaylistNextBtn()
       // First-session privacy disclosure. No-ops on every launch
-      // after the user dismisses it.
-      showDisclosureBannerIfNeeded()
+      // after the user dismisses it. Skipped inside an embed — the
+      // host page owns consent, and a privacy banner popping up in a
+      // third-party iframe is both wrong and intrusive (§J of
+      // `docs/WORDPRESS_INTEGRATION_PLAN.md`).
+      if (!embedModeActive) showDisclosureBannerIfNeeded()
       // Telemetry transport — skipped entirely when the compile-time
       // flag is off (telemetry-free builds) and when console mode
       // is on (dev convenience: events log locally, no POSTs).
