@@ -28,7 +28,7 @@ import {
   type ReviewEvent,
   type ReviewLink,
 } from './events-model'
-import { buildWorldviewSnapshot } from './media-suggest'
+import { buildWorldviewSnapshot, fetchCommonsSuggestions, type MediaSuggestion } from './media-suggest'
 
 /** Cap on candidate rows shown in the "+ Add dataset" search. */
 const ADD_CANDIDATE_ROWS = 20
@@ -102,25 +102,34 @@ function handleWriteError(
  * loads the preview), and nothing is stored until the curator picks.
  * A candidate whose image fails to load removes itself.
  */
-function renderMediaSuggestions(event: ReviewEvent, cb: EventDetailCallbacks): HTMLElement | null {
-  const worldview = buildWorldviewSnapshot(event)
-  if (!worldview) return null
-
-  const wrap = el('div', 'publisher-events-suggest')
-  wrap.append(el('h4', 'publisher-events-suggest-title', [t('publisher.events.suggest.title')]))
-
+function suggestionCard(
+  suggestion: MediaSuggestion,
+  event: ReviewEvent,
+  cb: EventDetailCallbacks,
+  onCardGone: () => void,
+): HTMLElement {
   const card = el('div', 'publisher-events-suggest-card')
   const img = document.createElement('img')
   img.className = 'publisher-events-suggest-preview'
-  img.src = worldview.url
-  img.alt = t('publisher.events.suggest.worldviewAlt')
+  img.src = suggestion.url
+  img.alt =
+    suggestion.kind === 'commons'
+      ? t('publisher.events.suggest.commonsAlt')
+      : t('publisher.events.suggest.worldviewAlt')
   img.loading = 'lazy'
-  img.addEventListener('error', () => wrap.remove())
+  img.addEventListener('error', () => {
+    card.remove()
+    onCardGone()
+  })
 
   const meta = el('div', 'publisher-events-suggest-meta')
   meta.append(
-    el('span', 'publisher-events-suggest-badge', [t('publisher.events.suggest.worldview')]),
-    el('span', 'publisher-events-suggest-attribution', [worldview.attribution]),
+    el('span', 'publisher-events-suggest-badge', [
+      suggestion.kind === 'commons'
+        ? t('publisher.events.suggest.commons')
+        : t('publisher.events.suggest.worldview'),
+    ]),
+    el('span', 'publisher-events-suggest-attribution', [suggestion.attribution]),
   )
 
   const status = el('span', 'publisher-events-edit-status')
@@ -134,7 +143,7 @@ function renderMediaSuggestions(event: ReviewEvent, cb: EventDetailCallbacks): H
     status.classList.remove('publisher-events-status-error')
     void publisherSend<{ event?: Partial<ReviewEvent> }>(
       `${EVENTS_ENDPOINT}/${encodeURIComponent(event.id)}`,
-      { edits: { imageUrl: worldview.url } },
+      { edits: { imageUrl: suggestion.url } },
       { fetchFn: cb.fetchFn },
     ).then(res => {
       use.disabled = false
@@ -144,14 +153,42 @@ function renderMediaSuggestions(event: ReviewEvent, cb: EventDetailCallbacks): H
       }
       // The event now has a vetted image — reflect it and let the
       // orchestrator re-render (the pane yields to the story image).
-      event.imageUrl = res.data?.event?.imageUrl ?? worldview.url
+      event.imageUrl = res.data?.event?.imageUrl ?? suggestion.url
       cb.onEventStatusChange(event.id, event.status)
     })
   })
 
   meta.append(use, status)
   card.append(img, meta)
-  wrap.append(card)
+  return card
+}
+
+function renderMediaSuggestions(event: ReviewEvent, cb: EventDetailCallbacks): HTMLElement | null {
+  // Location is the one hard requirement — every source is "imagery
+  // of the place". (Worldview additionally needs a date.)
+  if (!event.geometry?.point && !event.geometry?.boundingBox) return null
+
+  const wrap = el('div', 'publisher-events-suggest')
+  wrap.append(el('h4', 'publisher-events-suggest-title', [t('publisher.events.suggest.title')]))
+  // An empty shortlist should leave no visible chrome behind.
+  const syncWithCards = (): void => {
+    const any = wrap.querySelector('.publisher-events-suggest-card') !== null
+    wrap.hidden = !any
+  }
+
+  const worldview = buildWorldviewSnapshot(event)
+  if (worldview) wrap.append(suggestionCard(worldview, event, cb, syncWithCards))
+  syncWithCards()
+
+  // Nearby public-domain photos arrive async; append only while the
+  // event is still imageless (a pane swapped out mid-fetch is detached
+  // — appending there is harmless and it just gets collected).
+  void fetchCommonsSuggestions(event, cb.fetchFn ?? fetch).then(suggestions => {
+    if (event.imageUrl) return
+    for (const s of suggestions) wrap.append(suggestionCard(s, event, cb, syncWithCards))
+    syncWithCards()
+  })
+
   return wrap
 }
 

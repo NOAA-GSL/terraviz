@@ -3,7 +3,7 @@ import { renderEventDetail } from './event-detail'
 import type { ReviewEvent, ReviewLink } from './events-model'
 
 function okFetch() {
-  return vi.fn(async () => ({
+  return vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => ({
     ok: true,
     status: 200,
     type: 'basic',
@@ -72,6 +72,39 @@ describe('renderEventDetail — suggested media (task: media suggestion engine)'
     expect(nowhere.querySelector('.publisher-events-suggest')).toBeNull()
   })
 
+  it('appends nearby Commons photo cards asynchronously alongside the Worldview card', async () => {
+    const commonsBody = {
+      query: {
+        pages: {
+          '1': {
+            imageinfo: [{
+              url: 'https://upload.wikimedia.org/full.jpg',
+              thumburl: 'https://upload.wikimedia.org/thumb.jpg',
+              mime: 'image/jpeg',
+              extmetadata: { LicenseShortName: { value: 'Public domain' } },
+            }],
+          },
+        },
+      },
+    }
+    const fetchFn = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      const body = url.includes('commons.wikimedia.org') ? commonsBody : { event: null, links: [] }
+      return { ok: true, status: 200, type: 'basic', json: async () => body, text: async () => JSON.stringify(body) } as unknown as Response
+    })
+    const pane = renderEventDetail(located(), { onEventStatusChange: vi.fn(), fetchFn } as never)
+    await flush()
+
+    const previews = [...pane.querySelectorAll('.publisher-events-suggest-preview')] as HTMLImageElement[]
+    expect(previews).toHaveLength(2)
+    expect(previews[0].src).toContain('wvs.earthdata.nasa.gov')
+    expect(previews[1].src).toBe('https://upload.wikimedia.org/thumb.jpg')
+    // The Commons card carries its own badge and is pickable.
+    const badges = [...pane.querySelectorAll('.publisher-events-suggest-badge')].map(b => b.textContent)
+    expect(badges).toHaveLength(2)
+    expect(badges[0]).not.toBe(badges[1])
+  })
+
   it('"Use as event image" posts the snapshot URL as an imageUrl edit and re-renders', async () => {
     const fetchFn = okFetch()
     const onEventStatusChange = vi.fn()
@@ -81,7 +114,10 @@ describe('renderEventDetail — suggested media (task: media suggestion engine)'
     ;(pane.querySelector('.publisher-events-suggest button') as HTMLButtonElement).click()
     await flush()
 
-    const [url, init] = fetchFn.mock.calls[0] as unknown as [string, RequestInit]
+    // The pane also fires the Commons lookup on render — find the
+    // review POST rather than assuming call order.
+    const post = fetchFn.mock.calls.find(c => (c[1] as RequestInit | undefined)?.method === 'POST')
+    const [url, init] = post as unknown as [string, RequestInit]
     expect(url).toContain('/publish/events/EVT1')
     const body = JSON.parse(String(init.body)) as { edits: { imageUrl: string } }
     expect(body.edits.imageUrl).toContain('wvs.earthdata.nasa.gov')

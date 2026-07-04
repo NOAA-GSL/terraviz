@@ -2486,6 +2486,10 @@
   padding: calc(0.6rem * var(--ui-scale));
 }
 
+.publisher-events-suggest-card + .publisher-events-suggest-card {
+  margin-block-start: calc(0.6rem * var(--ui-scale));
+}
+
 .publisher-events-suggest-preview {
   display: block;
   inline-size: min(14rem, 45%);
