@@ -155,7 +155,11 @@ function suggestionCard(
     onCardGone()
   })
   preview.append(img)
-  if (isVideo) preview.append(el('span', 'publisher-events-suggest-play', ['▶']))
+  if (isVideo) {
+    const play = el('span', 'publisher-events-suggest-play', ['▶'])
+    play.setAttribute('aria-hidden', 'true') // decorative — the alt text conveys "video"
+    preview.append(play)
+  }
 
   const meta = el('div', 'publisher-events-suggest-meta')
   meta.append(

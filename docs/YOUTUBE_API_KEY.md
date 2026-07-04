@@ -14,12 +14,15 @@ requires an API key. This guide walks through getting one, locking it
 down, and wiring it into a TerraViz deployment.
 
 > **Which channels count as reputable?** The search proxy keeps a
-> result only when its channel is on the vetted allowlist in
-> [`functions/api/v1/_lib/youtube-channels.ts`](../functions/api/v1/_lib/youtube-channels.ts)
-> — a curated, operator-extensible set of science-agency channels
-> (NASA, USGS, the NOAA family), keyed by channel id. To broaden it (a
-> specific NWS/NHC sub-channel, a non-US agency), add the channel's
-> verified `UC…` id there.
+> result only when its channel is on the effective allowlist: the
+> built-in curated set (NASA, USGS, the NOAA family) in
+> [`functions/api/v1/_lib/youtube-channels.ts`](../functions/api/v1/_lib/youtube-channels.ts),
+> **plus** the node's own custom channels. Publishers add those at
+> runtime — no redeploy — in the **Feeds console** ("Trusted video
+> channels" card): paste a channel URL and it's resolved to the
+> canonical id and stored (`youtube_channels` table). Editing the
+> hardcoded file changes the built-in defaults for a fork; the
+> per-node additions live in the console.
 
 The key is free. No billing account is required for the default quota,
 and the quota comfortably covers this feature's usage pattern (see
@@ -100,12 +103,11 @@ Environment variables → Add variable**, type **Secret**, name
 **Preview** too if you want to exercise the feature on preview
 deploys).
 
-When the YouTube suggestion source lands it will read
-`context.env.YOUTUBE_API_KEY` in a publish-scoped Pages Function —
-mirroring the NHC storms proxy
-(`functions/api/v1/publish/media/nhc-storms.ts`) — and degrade to "no
-suggestion" when the secret is absent, like every other source. No
-key, no error: the feature simply stays off.
+The YouTube suggestion source reads `context.env.YOUTUBE_API_KEY` in a
+publish-scoped Pages Function (`youtube-search.ts`, mirroring the NHC
+storms proxy `nhc-storms.ts`) and degrades to "no suggestion" when the
+secret is absent, like every other source. No key, no error: the
+feature simply stays off.
 
 ## Step 7 — Sanity-check the key
 

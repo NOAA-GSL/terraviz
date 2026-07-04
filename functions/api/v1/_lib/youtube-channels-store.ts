@@ -159,7 +159,9 @@ type ParsedChannelUrl =
 /**
  * Pull the channel selector out of a pasted URL (or a bare `@handle`) —
  * pure, exported for tests. Accepts youtube.com / m.youtube.com /
- * youtube-nocookie.com and youtu.be; rejects any other host.
+ * youtube-nocookie.com (www./m. stripped); rejects any other host.
+ * `youtu.be` is a video-shortlink host with no channel paths, so it's
+ * not accepted.
  */
 export function parseChannelUrl(raw: string): ParsedChannelUrl | null {
   const trimmed = raw.trim()
