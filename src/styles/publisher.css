@@ -2486,6 +2486,28 @@
   padding: calc(0.6rem * var(--ui-scale));
 }
 
+.publisher-events-suggest-card + .publisher-events-suggest-card {
+  margin-block-start: calc(0.6rem * var(--ui-scale));
+}
+
+.publisher-events-upload {
+  display: flex;
+  align-items: center;
+  gap: calc(0.5rem * var(--ui-scale));
+  margin-block-start: calc(0.6rem * var(--ui-scale));
+}
+
+.publisher-events-upload-alt {
+  flex: 1;
+  min-inline-size: 0;
+  background: var(--color-surface-alt);
+  border: 1px solid var(--white-o08);
+  border-radius: calc(6px * var(--ui-scale));
+  color: var(--color-text);
+  padding: calc(0.35rem * var(--ui-scale)) calc(0.55rem * var(--ui-scale));
+  font-size: calc(0.8rem * var(--ui-scale));
+}
+
 .publisher-events-suggest-preview {
   display: block;
   inline-size: min(14rem, 45%);

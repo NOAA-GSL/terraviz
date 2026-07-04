@@ -57,6 +57,9 @@ export interface ReviewEvent {
   /** The story's lead image (feed enclosure / og:image) — shown in the
    *  detail pane so the curator vets it with the event. */
   imageUrl?: string
+  /** Alt text for `imageUrl` (media accessibility) — curator-supplied
+   *  on upload / suggestion pick. */
+  imageAlt?: string
   links: ReviewLink[]
 }
 

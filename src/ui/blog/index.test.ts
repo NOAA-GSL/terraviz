@@ -83,10 +83,23 @@ describe('bootBlogPage', () => {
     await bootBlogPage()
     const img = document.querySelector('.blog-post-image') as HTMLImageElement
     expect(img.getAttribute('src')).toBe('https://img.example.org/heatwave.jpg')
+    // No stored alt → the event title is the accessible fallback.
+    expect(img.alt).toBe('Gulf marine heatwave')
     expect(document.querySelector('.blog-post-figcaption')?.textContent).toBe('Gulf marine heatwave — NOAA')
 
+    // A curator-written description wins over the title fallback.
+    stubFetch(200, {
+      post: {
+        ...POST.post,
+        event: { ...POST.post.event, imageUrl: 'https://img.example.org/heatwave.jpg', imageAlt: 'SST anomaly map' },
+      },
+    })
+    await bootBlogPage()
+    expect((document.querySelector('.blog-post-image') as HTMLImageElement).alt).toBe('SST anomaly map')
+
     // A dead image link drops the whole figure, caption included.
-    img.dispatchEvent(new Event('error'))
+    const current = document.querySelector('.blog-post-image') as HTMLImageElement
+    current.dispatchEvent(new Event('error'))
     expect(document.querySelector('.blog-post-figure')).toBeNull()
     expect(document.querySelector('.blog-post-figcaption')).toBeNull()
 

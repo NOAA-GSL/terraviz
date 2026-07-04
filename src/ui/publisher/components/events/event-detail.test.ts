@@ -3,7 +3,7 @@ import { renderEventDetail } from './event-detail'
 import type { ReviewEvent, ReviewLink } from './events-model'
 
 function okFetch() {
-  return vi.fn(async () => ({
+  return vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => ({
     ok: true,
     status: 200,
     type: 'basic',
@@ -72,6 +72,64 @@ describe('renderEventDetail — suggested media (task: media suggestion engine)'
     expect(nowhere.querySelector('.publisher-events-suggest')).toBeNull()
   })
 
+  it('uses the stored alt text on the story image and offers Replace photo', () => {
+    const pane = renderEventDetail(
+      event({ imageUrl: 'https://img.ex/story.jpg', imageAlt: 'Flood waters over the harbor' }),
+      { fetchFn: okFetch() } as never,
+    )
+    const img = pane.querySelector('.publisher-events-story-image') as HTMLImageElement
+    expect(img.alt).toBe('Flood waters over the harbor')
+    // The upload control doubles as "replace" under an existing image,
+    // pre-filled with the current description.
+    const altInput = pane.querySelector('.publisher-events-upload-alt') as HTMLInputElement
+    expect(altInput.value).toBe('Flood waters over the harbor')
+  })
+
+  it('"Use as event image" sends the card description as the stored alt text', async () => {
+    const fetchFn = okFetch()
+    const pane = renderEventDetail(located(), { onEventStatusChange: vi.fn(), fetchFn } as never)
+    ;(pane.querySelector('.publisher-events-suggest button') as HTMLButtonElement).click()
+    await flush()
+    const post = fetchFn.mock.calls.find(c => (c[1] as RequestInit | undefined)?.method === 'POST')!
+    const body = JSON.parse(String((post[1] as RequestInit).body)) as { edits: { imageAlt?: string } }
+    expect(body.edits.imageAlt).toBeTruthy() // the Worldview card's description
+  })
+
+  it('appends nearby Commons photo cards asynchronously alongside the Worldview card', async () => {
+    const commonsBody = {
+      query: {
+        pages: {
+          '1': {
+            imageinfo: [{
+              url: 'https://upload.wikimedia.org/full.jpg',
+              thumburl: 'https://upload.wikimedia.org/thumb.jpg',
+              mime: 'image/jpeg',
+              extmetadata: { LicenseShortName: { value: 'Public domain' } },
+            }],
+          },
+        },
+      },
+    }
+    const fetchFn = vi.fn(async (input: RequestInfo | URL) => {
+      // Route by parsed hostname (CodeQL: no substring host checks);
+      // the review-API calls arrive as relative paths, hence the base.
+      const host = new URL(String(input), 'https://localhost').hostname
+      const body = host === 'commons.wikimedia.org' ? commonsBody : { event: null, links: [] }
+      return { ok: true, status: 200, type: 'basic', json: async () => body, text: async () => JSON.stringify(body) } as unknown as Response
+    })
+    const pane = renderEventDetail(located(), { onEventStatusChange: vi.fn(), fetchFn } as never)
+    await flush()
+
+    const previews = [...pane.querySelectorAll('.publisher-events-suggest-preview')] as HTMLImageElement[]
+    expect(previews).toHaveLength(2)
+    expect(previews[0].src).toContain('wvs.earthdata.nasa.gov')
+    expect(previews[1].src).toBe('https://upload.wikimedia.org/thumb.jpg')
+    // The Commons card carries its own badge and is pickable.
+    const badges = [...pane.querySelectorAll('.publisher-events-suggest-badge')].map(b => b.textContent)
+    expect(badges).toHaveLength(2)
+    expect(badges[0]).not.toBe(badges[1])
+  })
+
   it('"Use as event image" posts the snapshot URL as an imageUrl edit and re-renders', async () => {
     const fetchFn = okFetch()
     const onEventStatusChange = vi.fn()
@@ -81,7 +139,10 @@ describe('renderEventDetail — suggested media (task: media suggestion engine)'
     ;(pane.querySelector('.publisher-events-suggest button') as HTMLButtonElement).click()
     await flush()
 
-    const [url, init] = fetchFn.mock.calls[0] as unknown as [string, RequestInit]
+    // The pane also fires the Commons lookup on render — find the
+    // review POST rather than assuming call order.
+    const post = fetchFn.mock.calls.find(c => (c[1] as RequestInit | undefined)?.method === 'POST')
+    const [url, init] = post as unknown as [string, RequestInit]
     expect(url).toContain('/publish/events/EVT1')
     const body = JSON.parse(String(init.body)) as { edits: { imageUrl: string } }
     expect(body.edits.imageUrl).toContain('wvs.earthdata.nasa.gov')

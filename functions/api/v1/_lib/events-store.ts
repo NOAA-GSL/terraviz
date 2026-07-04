@@ -108,6 +108,9 @@ export interface CurrentEventRow {
   inferred_fields: string | null
   /** The story's own image (feed enclosure / og:image), http(s). */
   image_url: string | null
+  /** Human-written description of `image_url` (curator-supplied on
+   *  upload / suggestion pick); NULL for feed images without one. */
+  image_alt: string | null
 }
 
 /** The `event_dataset_links` row as stored (snake_case). */
@@ -152,6 +155,8 @@ export interface CurrentEventPublic {
   inferredFields?: string[]
   /** The story's lead image (http(s), re-validated on read). */
   imageUrl?: string
+  /** Alt text for `imageUrl` — only present alongside it. */
+  imageAlt?: string
 }
 
 /** Fields a caller supplies to {@link insertCurrentEvent}. The store
@@ -179,6 +184,8 @@ export interface NewCurrentEvent {
   /** The story's lead image (feed enclosure / media:content /
    *  og:image), http(s)-validated by the ingest layer. */
   imageUrl?: string | null
+  /** Alt text for `imageUrl`; feeds rarely carry one. */
+  imageAlt?: string | null
 }
 
 /** Fields a caller supplies to {@link upsertEventDatasetLink}. */
@@ -195,7 +202,7 @@ export interface NewEventDatasetLink {
 const EVENT_COLUMNS = `id, origin_node, title, summary, source_name, source_url,
   published_at, feed_id, external_id, occurred_start, occurred_end,
   bbox_n, bbox_s, bbox_w, bbox_e, point_lat, point_lon, region_name,
-  status, created_at, updated_at, reviewed_at, reviewed_by, inferred_fields, image_url`
+  status, created_at, updated_at, reviewed_at, reviewed_by, inferred_fields, image_url, image_alt`
 
 const LINK_COLUMNS = `event_id, dataset_id, match_score, signals_json,
   status, created_at, approved_at, approved_by`
@@ -243,12 +250,13 @@ export async function insertCurrentEvent(
     reviewed_by: null,
     inferred_fields: input.inferredFields?.length ? JSON.stringify(input.inferredFields) : null,
     image_url: input.imageUrl ?? null,
+    image_alt: input.imageAlt ?? null,
   }
 
   await db
     .prepare(
       `INSERT INTO current_events (${EVENT_COLUMNS})
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .bind(
       row.id,
@@ -276,6 +284,7 @@ export async function insertCurrentEvent(
       row.reviewed_by,
       row.inferred_fields,
       row.image_url,
+      row.image_alt,
     )
     .run()
 
@@ -412,14 +421,17 @@ export async function listCurrentEvents(
  * geometry — bbox + region name from the resolved region, any stale
  * point cleared — so the matcher's geo signal scores against exactly
  * what the curator chose. An `imageUrl` edit (the Suggested-media
- * pick) only sets `image_url`: choosing an image says nothing about
- * whether the date/place were verified, so `inferred_fields` is
- * untouched.
+ * pick / photo upload) only sets `image_url` (+ its `imageAlt`
+ * description): choosing an image says nothing about whether the
+ * date/place were verified, so `inferred_fields` is untouched. An
+ * image edit ALWAYS rewrites `image_alt` — callers pass the fresh
+ * description or explicit null, so stale text never describes a new
+ * image.
  */
 export async function applyEventEdits(
   db: D1Database,
   id: string,
-  edits: { occurredStart?: string; geometry?: EventGeometry; imageUrl?: string },
+  edits: { occurredStart?: string; geometry?: EventGeometry; imageUrl?: string; imageAlt?: string | null },
   now: string = new Date().toISOString(),
 ): Promise<void> {
   const existing = await getCurrentEvent(db, id)
@@ -436,8 +448,12 @@ export async function applyEventEdits(
   const sets: string[] = ['updated_at = ?']
   const binds: unknown[] = [now]
   if (edits.imageUrl !== undefined) {
-    sets.push('image_url = ?')
-    binds.push(edits.imageUrl)
+    sets.push('image_url = ?', 'image_alt = ?')
+    binds.push(edits.imageUrl, edits.imageAlt ?? null)
+  } else if (edits.imageAlt !== undefined) {
+    // Alt-only edit (describe the image already in place).
+    sets.push('image_alt = ?')
+    binds.push(edits.imageAlt)
   }
   if (edits.occurredStart !== undefined) {
     sets.push('occurred_start = ?')
@@ -761,7 +777,10 @@ export function toPublicEvent(
   if (row.reviewed_by) out.reviewedBy = row.reviewed_by
   // Re-validate on the way out (like the profile links): a stored
   // non-http(s) image URL must never reach an <img src>.
-  if (row.image_url && /^https?:\/\//i.test(row.image_url)) out.imageUrl = row.image_url
+  if (row.image_url && /^https?:\/\//i.test(row.image_url)) {
+    out.imageUrl = row.image_url
+    if (row.image_alt) out.imageAlt = row.image_alt
+  }
   if (row.inferred_fields) {
     try {
       const parsed: unknown = JSON.parse(row.inferred_fields)

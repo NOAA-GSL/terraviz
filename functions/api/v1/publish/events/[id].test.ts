@@ -277,6 +277,35 @@ describe('POST /api/v1/publish/events/:id', () => {
       expect(row!.region_name).toBe('Europe')
     })
 
+    it('stores alt text with an image pick; a pick without one clears stale alt', async () => {
+      const { env } = setupEnv()
+      const id = await seedInferredEvent(env)
+      const res = await reviewPost(
+        ctx({
+          env,
+          id,
+          body: { edits: { imageUrl: 'https://img.example.org/a.jpg', imageAlt: 'Satellite view of the storm' } },
+        }),
+      )
+      expect(res.status).toBe(200)
+      let row = await getCurrentEvent(env.CATALOG_DB, id)
+      expect(row!.image_alt).toBe('Satellite view of the storm')
+
+      // A new image without a fresh description must not keep text
+      // that described the old one.
+      await reviewPost(ctx({ env, id, body: { edits: { imageUrl: 'https://img.example.org/b.jpg' } } }))
+      row = await getCurrentEvent(env.CATALOG_DB, id)
+      expect(row!.image_url).toBe('https://img.example.org/b.jpg')
+      expect(row!.image_alt).toBeNull()
+
+      // Alt-only edit describes the image already in place.
+      const altOnly = await reviewPost(ctx({ env, id, body: { edits: { imageAlt: 'A new description' } } }))
+      expect(altOnly.status).toBe(200)
+      row = await getCurrentEvent(env.CATALOG_DB, id)
+      expect(row!.image_url).toBe('https://img.example.org/b.jpg')
+      expect(row!.image_alt).toBe('A new description')
+    })
+
     it('400 for a non-http(s) or oversized imageUrl', async () => {
       const { env } = setupEnv()
       const id = await seedInferredEvent(env)

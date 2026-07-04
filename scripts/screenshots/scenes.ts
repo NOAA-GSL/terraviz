@@ -412,6 +412,14 @@ export const scenes: Scene[] = [
     description: 'Publisher portal — current-events review queue (populated via fixtures)',
     fixtures: publisherFixtures({ admin: true }),
     async setup(page) {
+      // The detail pane's Suggested-media sources hit external hosts
+      // (Worldview snapshot preview, Commons geosearch) — stub them so
+      // the scene is deterministic and free of failed-request noise.
+      // An empty/invalid image body makes the card self-remove.
+      await page.route('https://wvs.earthdata.nasa.gov/**', r => r.fulfill({ status: 204, body: '' }))
+      await page.route('https://commons.wikimedia.org/**', r =>
+        r.fulfill({ status: 200, contentType: 'application/json', body: '{"query":{"pages":{}}}' }),
+      )
       await openPublish(page, '/publish/events')
       // Direction A master–detail: wait for the detail title (the first
       // event auto-selects) so the capture includes the populated panes.
