@@ -142,6 +142,9 @@ export const onRequestPost: PagesFunction<CatalogEnv & EnrichEnv> = async contex
       const tourTasks = buildEventTourTasks(event, tourDatasets, captions)
       const created = await createDraftTour(context.env, publisher, {
         title: `Event: ${event.title}`.slice(0, 200),
+        // The vetted story image doubles as the tour's catalog-card
+        // thumbnail — a generated tour otherwise ships with none.
+        thumbnailRef: event.image_url && /^https?:\/\//i.test(event.image_url) ? event.image_url : null,
       })
       if (!created.ok) {
         tourError = created.errors?.[0]?.message ?? 'Could not create the tour draft.'
