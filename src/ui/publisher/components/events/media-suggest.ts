@@ -44,6 +44,32 @@ const MIN_SPAN_DEG = 2
 const clampLat = (v: number): number => Math.max(-90, Math.min(90, v))
 const clampLon = (v: number): number => Math.max(-180, Math.min(180, v))
 
+/** Widen `[lo, hi]` to at least `span`, sliding the window to stay
+ *  inside `[boundLo, boundHi]` rather than clamping each edge
+ *  independently — a degenerate box at a pole or the dateline still
+ *  comes out full-span (the bounds are ≥ 180° wide, span is 2°). */
+const growSpan = (
+  lo: number,
+  hi: number,
+  span: number,
+  boundLo: number,
+  boundHi: number,
+): [number, number] => {
+  if (hi - lo >= span) return [lo, hi]
+  const mid = (lo + hi) / 2
+  let nextLo = mid - span / 2
+  let nextHi = mid + span / 2
+  if (nextLo < boundLo) {
+    nextHi += boundLo - nextLo
+    nextLo = boundLo
+  }
+  if (nextHi > boundHi) {
+    nextLo -= nextHi - boundHi
+    nextHi = boundHi
+  }
+  return [Math.max(boundLo, nextLo), Math.min(boundHi, nextHi)]
+}
+
 /**
  * Build the Worldview snapshot candidate for an event, or null when
  * the event lacks what a snapshot needs (a date and a location).
@@ -75,16 +101,8 @@ export function buildWorldviewSnapshot(event: {
       else w = -180
     }
     // Grow degenerate boxes to a visible span around their centre.
-    if (n - s < MIN_SPAN_DEG) {
-      const mid = (n + s) / 2
-      n = clampLat(mid + MIN_SPAN_DEG / 2)
-      s = clampLat(mid - MIN_SPAN_DEG / 2)
-    }
-    if (e - w < MIN_SPAN_DEG) {
-      const mid = (e + w) / 2
-      e = clampLon(mid + MIN_SPAN_DEG / 2)
-      w = clampLon(mid - MIN_SPAN_DEG / 2)
-    }
+    ;[s, n] = growSpan(s, n, MIN_SPAN_DEG, -90, 90)
+    ;[w, e] = growSpan(w, e, MIN_SPAN_DEG, -180, 180)
   } else if (point) {
     n = clampLat(point.lat + POINT_PAD_DEG)
     s = clampLat(point.lat - POINT_PAD_DEG)

@@ -72,6 +72,20 @@ describe('buildWorldviewSnapshot', () => {
     expect(east - west).toBeGreaterThanOrEqual(2)
   })
 
+  it('keeps the full minimum span for a degenerate bbox at a pole / the dateline', () => {
+    // Sliding growth, not per-edge clamping: the window shifts inward
+    // so the span survives even when the midpoint hugs the boundary.
+    const polar = buildWorldviewSnapshot({
+      occurredStart: '2026-06-01T00:00:00.000Z',
+      geometry: { boundingBox: { n: 90, s: 89.9, w: 179.9, e: 180 } },
+    })!
+    const [south, west, north, east] = params(polar.url).get('BBOX')!.split(',').map(Number)
+    expect(north).toBeLessThanOrEqual(90)
+    expect(east).toBeLessThanOrEqual(180)
+    expect(north - south).toBeGreaterThanOrEqual(2)
+    expect(east - west).toBeGreaterThanOrEqual(2)
+  })
+
   it('requires a date and a location; falls back to the publish date', () => {
     expect(buildWorldviewSnapshot({ geometry: { point: { lat: 0, lon: 0 } } })).toBeNull()
     expect(buildWorldviewSnapshot({ occurredStart: '2026-06-01T00:00:00.000Z', geometry: {} })).toBeNull()
