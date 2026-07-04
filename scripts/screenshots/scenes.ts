@@ -321,6 +321,28 @@ export const scenes: Scene[] = [
       await page.locator('#chat-settings').waitFor({ state: 'visible' })
     },
   },
+  {
+    name: 'embed-globe',
+    description:
+      'Embed mode (?embed=1) — globe with the app shell stripped for iframe hosting (no tools bar, help, chat trigger, or home button)',
+    fixtures: catalogReportFixtures(),
+    // Boots the full WebGL globe (embed mode is presentational — the same
+    // app, minus chrome), so it carries the same GPU pressure that
+    // destabilizes the Weblate capturer's shared browser as the other
+    // globe scenes; and embed mode renders no unique translatable strings.
+    // Report-capturer only. The report capturer hides `#map-grid` via
+    // stabilizeBackdrop, so the shot is the stripped shell, not the globe.
+    skipWeblate: true,
+    async setup(page) {
+      await gotoApp(page, '/?embed=1')
+      // The mode class is applied synchronously at boot (before the WebGL
+      // check), so it is set even on a headless capture.
+      await page.locator('body.embed-mode').waitFor()
+      // Assert the app-shell chrome stays suppressed, so a regression that
+      // re-introduces it fails the capture loudly rather than silently.
+      await page.locator('#map-controls').waitFor({ state: 'hidden' })
+    },
+  },
 
   // ── Publisher portal ──────────────────────────────────────────
   // Populated via route-stub fixtures (Phase V7); see openPublish().

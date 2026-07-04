@@ -56,7 +56,10 @@ const CONTENT_TYPE = 'application/json; charset=utf-8'
 // it with the latest `updated_at`.
 const EMPTY_GENERATED_AT = '1970-01-01T00:00:00.000Z'
 
-interface CatalogResponseBody {
+// Exported so `scripts/build-protocol-schemas.ts` can pin this shape
+// as the published `catalog.schema.json` wire contract (federation
+// §7 Directive 2 / WordPress plan Phase 0).
+export interface CatalogResponseBody {
   schema_version: number
   generated_at: string
   etag: string
