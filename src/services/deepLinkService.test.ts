@@ -7,12 +7,14 @@ describe('parseDatasetPathname', () => {
     expect(parseDatasetPathname('/dataset/01JXCULID0000000000000000/')).toBe('01JXCULID0000000000000000')
   })
 
-  it('rejects other paths and nested segments', () => {
+  it('rejects other paths, nested segments, and ids outside the shared alphabet', () => {
     expect(parseDatasetPathname('/')).toBeNull()
     expect(parseDatasetPathname('/blog/some-post')).toBeNull()
     expect(parseDatasetPathname('/dataset/')).toBeNull()
     expect(parseDatasetPathname('/dataset/id/extra')).toBeNull()
     expect(parseDatasetPathname('/dataset/bad%20chars')).toBeNull()
+    // Aligned with parseDatasetFromUrl's ID_PATTERN — no hyphens.
+    expect(parseDatasetPathname('/dataset/has-hyphen')).toBeNull()
   })
 })
 

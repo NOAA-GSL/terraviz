@@ -70,7 +70,9 @@ export async function initDeepLinks(
  * below handles the same shape arriving as a full URL.
  */
 export function parseDatasetPathname(pathname: string): string | null {
-  const m = pathname.match(/^\/dataset\/([A-Z0-9_-]+)\/?$/i)
+  // Same id alphabet as parseDatasetFromUrl's ID_PATTERN (ULIDs +
+  // legacy INTERNAL_SOS_*), so both entry points accept the same links.
+  const m = pathname.match(/^\/dataset\/([A-Z0-9_]+)\/?$/i)
   return m ? m[1] : null
 }
 

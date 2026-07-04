@@ -85,6 +85,11 @@ describe('bootBlogPage', () => {
     expect(img.getAttribute('src')).toBe('https://img.example.org/heatwave.jpg')
     expect(document.querySelector('.blog-post-figcaption')?.textContent).toBe('Gulf marine heatwave — NOAA')
 
+    // A dead image link drops the whole figure, caption included.
+    img.dispatchEvent(new Event('error'))
+    expect(document.querySelector('.blog-post-figure')).toBeNull()
+    expect(document.querySelector('.blog-post-figcaption')).toBeNull()
+
     // eslint-disable-next-line no-script-url
     stubFetch(200, { post: { ...POST.post, event: { ...POST.post.event, imageUrl: 'javascript:alert(1)' } } })
     await bootBlogPage()
