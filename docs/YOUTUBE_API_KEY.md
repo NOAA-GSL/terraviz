@@ -1,17 +1,25 @@
 # Acquiring a YouTube Data API key
 
-Status: operator guide — needed only for the (planned) agency-YouTube
+Status: operator guide — needed only for the agency-YouTube
 media-suggestion source.
 
 The media suggestion engine
 (`src/ui/publisher/components/events/media-suggest.ts`) offers curators
-event imagery from keyless, public-domain sources — NASA Worldview
+event media from keyless, public-domain sources — NASA Worldview
 snapshots, Wikimedia Commons photos, USGS ShakeMaps, NHC forecast
-cones. The one planned source that **does** need a credential is
-agency **YouTube** video (NOAA, NASA, USGS channels): searching YouTube
+cones. The one source that **does** need a credential is agency
+**YouTube** video (NOAA, NASA, USGS channels): searching YouTube
 programmatically goes through the **YouTube Data API v3**, which
 requires an API key. This guide walks through getting one, locking it
 down, and wiring it into a TerraViz deployment.
+
+> **Which channels count as reputable?** The search proxy keeps a
+> result only when its channel is on the vetted allowlist in
+> [`functions/api/v1/_lib/youtube-channels.ts`](../functions/api/v1/_lib/youtube-channels.ts)
+> — a curated, operator-extensible set of science-agency channels
+> (NASA, USGS, the NOAA family), keyed by channel id. To broaden it (a
+> specific NWS/NHC sub-channel, a non-US agency), add the channel's
+> verified `UC…` id there.
 
 The key is free. No billing account is required for the default quota,
 and the quota comfortably covers this feature's usage pattern (see

@@ -293,6 +293,12 @@ const NHC_STORMS_RULE: FixtureRule = {
   json: { activeStorms: [] },
 }
 
+/** The agency-YouTube search proxy — no key in captures, no video cards. */
+const YOUTUBE_SEARCH_RULE: FixtureRule = {
+  url: '/api/v1/publish/media/youtube-search',
+  json: { videos: [] },
+}
+
 /** Public blog fixtures — the `/blog` list + one full `/blog/:slug`
  *  post, used by the public-surface scenes/smoke. */
 export function blogPublicFixtures(): FixtureRule[] {
@@ -447,6 +453,7 @@ export function publisherFixtures(
     { url: '/api/v1/publish/feeds/preview', json: feedPreview },
     { url: '/api/v1/publish/feeds', json: feeds },
     NHC_STORMS_RULE,
+    YOUTUBE_SEARCH_RULE,
     { url: '/api/v1/publish/node-profile', json: nodeProfile },
     { url: '/api/v1/publish/blog', json: blogAuthoring },
   ]
