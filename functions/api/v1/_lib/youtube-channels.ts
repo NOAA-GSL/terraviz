@@ -37,6 +37,15 @@ export function isAllowlistedChannel(channelId: string | null | undefined): bool
   return typeof channelId === 'string' && channelId in AGENCY_YOUTUBE_CHANNELS
 }
 
+/**
+ * A stable signature of the built-in allowlist. Folded into the search
+ * cache key so that editing this set (adding OR removing a channel)
+ * invalidates previously-cached results immediately — a removed channel
+ * can't keep being served from a stale cache entry until its TTL
+ * expires, which would weaken the reputability gate.
+ */
+export const AGENCY_ALLOWLIST_SIGNATURE = Object.keys(AGENCY_YOUTUBE_CHANNELS).sort().join(',')
+
 /** The vetted channel's display name, or null when not allowlisted. */
 export function channelName(channelId: string | null | undefined): string | null {
   return typeof channelId === 'string' ? (AGENCY_YOUTUBE_CHANNELS[channelId] ?? null) : null

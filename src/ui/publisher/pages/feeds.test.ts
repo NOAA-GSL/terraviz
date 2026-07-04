@@ -247,6 +247,17 @@ describe('renderFeedsPage', () => {
     expect(customRow.querySelector('button')?.textContent).toBe('Remove')
   })
 
+  it('omits the channels card when the channels endpoint is unavailable (older deploy)', async () => {
+    const routes = baseRoutes()
+    // Route missing on an older deploy → 404.
+    routes['/api/v1/publish/media/youtube-channels'] = { status: 404, body: { error: 'not_found' } }
+    await renderFeedsPage(mount, { fetchFn: mockFetch(routes) })
+    // The rest of the console still renders; only the channels card is gone.
+    expect(mount.querySelector('.publisher-feeds-row')).not.toBeNull()
+    expect([...mount.querySelectorAll('h2, h3')].some(h => h.textContent === 'Trusted video channels')).toBe(false)
+    expect(mount.querySelector('#feeds-channel-url')).toBeNull()
+  })
+
   it('adding a channel by URL POSTs { url } to the channels endpoint', async () => {
     const routes = baseRoutes()
     routes['POST /api/v1/publish/media/youtube-channels'] = {

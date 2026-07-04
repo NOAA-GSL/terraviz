@@ -23,7 +23,7 @@
 import type { CatalogEnv } from '../../_lib/env'
 import type { PublisherData } from '../_middleware'
 import { isPrivileged } from '../../_lib/publisher-store'
-import { channelName, isAllowlistedChannel } from '../../_lib/youtube-channels'
+import { AGENCY_ALLOWLIST_SIGNATURE, channelName, isAllowlistedChannel } from '../../_lib/youtube-channels'
 import { listCustomChannels } from '../../_lib/youtube-channels-store'
 
 const CONTENT_TYPE = 'application/json; charset=utf-8'
@@ -51,8 +51,23 @@ function ok(body: string, xCache: 'HIT' | 'MISS'): Response {
   })
 }
 
+/** Compact, stable hash of the allowlist signature (FNV-1a → 8 hex) so
+ *  a long channel-id list can't crowd the query out of the length-capped
+ *  cache key. Changes whenever the allowlist changes. */
+function sigHash(s: string): string {
+  let h = 0x811c9dc5
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i)
+    h = Math.imul(h, 0x01000193)
+  }
+  return (h >>> 0).toString(16).padStart(8, '0')
+}
+
 /** Stable cache key from the query — lowercased, whitespace-collapsed,
- *  URI-encoded so a KV key can't be oversized or contain odd bytes. */
+ *  URI-encoded so a KV key can't be oversized or contain odd bytes. The
+ *  `signature` is a hash of the effective allowlist (built-in defaults +
+ *  the node's custom channels), so any allowlist change — including
+ *  editing the built-in set — invalidates stale entries immediately. */
 function cacheKeyFor(query: string, signature: string): string {
   const q = query.toLowerCase().replace(/\s+/g, ' ').trim()
   return `yt-search:v1:${encodeURIComponent(`${signature}|${q}`).slice(0, 400)}`
@@ -132,7 +147,11 @@ export const onRequestGet: PagesFunction<CatalogEnv> = async context => {
     has: id => isAllowlistedChannel(id) || customMap.has(id),
     name: id => customMap.get(id) ?? channelName(id),
   }
-  const signature = [...customMap.keys()].sort().join(',')
+  // Signature = the built-in allowlist + the node's custom ids, hashed.
+  // Folding the built-in set in means removing a channel from the
+  // hardcoded defaults invalidates its previously-cached results at once
+  // rather than serving them until TTL expiry.
+  const signature = sigHash(`${AGENCY_ALLOWLIST_SIGNATURE}|${[...customMap.keys()].sort().join(',')}`)
 
   const cacheKey = cacheKeyFor(query, signature)
   if (context.env.CATALOG_KV) {

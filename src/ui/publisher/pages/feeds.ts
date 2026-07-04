@@ -175,7 +175,12 @@ export async function renderFeedsPage(mount: HTMLElement, options: FeedsPageOpti
     return
   }
 
-  const channels = channelsRes.ok && Array.isArray(channelsRes.data.channels) ? channelsRes.data.channels : []
+  // `null` = the channels endpoint is unavailable (older deploy where
+  // the route 404s, or a transient failure) — distinct from a valid
+  // response. renderConsole omits the whole card in that case rather
+  // than showing an allowlist UI whose Add/Remove actions would 404.
+  const channels =
+    channelsRes.ok && Array.isArray(channelsRes.data.channels) ? channelsRes.data.channels : null
   renderConsole(mount, feedsRes.data.feeds, channels, options)
 }
 
@@ -187,7 +192,7 @@ async function reload(mount: HTMLElement, options: FeedsPageOptions): Promise<vo
 function renderConsole(
   mount: HTMLElement,
   feeds: FeedRow[],
-  channels: YoutubeChannel[],
+  channels: YoutubeChannel[] | null,
   options: FeedsPageOptions,
 ): void {
   const status = el('div', { className: 'publisher-feeds-status', role: 'status' })
@@ -518,9 +523,13 @@ function renderConsole(
   )
 
   // ── Card 4: agency-YouTube channel allowlist ───────────────────
-  const channelsCard = renderChannelsCard(mount, channels, options, showError, send)
+  // Omit the card entirely when the channels endpoint is unavailable
+  // (older deploy) — an allowlist UI whose Add/Remove would 404 is
+  // worse than no card.
+  const cards = [yourFeeds, suggested, custom]
+  if (channels !== null) cards.push(renderChannelsCard(mount, channels, options, showError, send))
 
-  mount.replaceChildren(shell(yourFeeds, suggested, custom, channelsCard))
+  mount.replaceChildren(shell(...cards))
 }
 
 /** The "Trusted video channels" card — the reputable-source allowlist
