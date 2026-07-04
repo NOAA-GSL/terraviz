@@ -325,13 +325,21 @@ export function parseUsgsQuery(json: unknown): string | null {
 
 /** Pull the ShakeMap intensity image out of the detail feed
  *  (`products.shakemap[0].contents["download/intensity.jpg"].url`) —
- *  pure, exported for tests. */
+ *  pure, exported for tests. Same-host enforcement as parseUsgsQuery:
+ *  this URL can become the stored event image, so a third-party URL
+ *  in the upstream feed must never pass through. */
 export function parseShakemapDetail(json: unknown): string | null {
   const contents = (json as {
     properties?: { products?: { shakemap?: Array<{ contents?: Record<string, { url?: unknown }> }> } }
   })?.properties?.products?.shakemap?.[0]?.contents
   const url = contents?.['download/intensity.jpg']?.url ?? contents?.['download/intensity.png']?.url
-  return typeof url === 'string' && /^https?:\/\//i.test(url) && url.length <= 2048 ? url : null
+  if (typeof url !== 'string' || url.length > 2048) return null
+  try {
+    const u = new URL(url)
+    return (u.protocol === 'https:' || u.protocol === 'http:') && u.hostname === USGS_HOST ? url : null
+  } catch {
+    return null
+  }
 }
 
 /**

@@ -278,6 +278,16 @@ describe('USGS ShakeMap source', () => {
     }
     expect(parseShakemapDetail(detail)).toContain('intensity.jpg')
     expect(parseShakemapDetail({ properties: { products: {} } })).toBeNull()
+    // Same-host enforcement — a third-party URL in the upstream feed
+    // must never become the stored event image.
+    const foreign = {
+      properties: {
+        products: {
+          shakemap: [{ contents: { 'download/intensity.jpg': { url: 'https://evil.example.org/i.jpg' } } }],
+        },
+      },
+    }
+    expect(parseShakemapDetail(foreign)).toBeNull()
   })
 
   it('runs the two-fetch chain and degrades to null on any failure', async () => {
