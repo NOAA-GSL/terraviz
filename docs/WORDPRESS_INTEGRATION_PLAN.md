@@ -319,7 +319,11 @@ picker is where Integration H (cached catalog) earns its keep.
 Government WordPress installs are frequently on Classic Editor or
 older versions. A `[terraviz dataset="INTERNAL_…" terrain="on"]`
 shortcode with the same SSR+iframe rendering covers them — the
-shortcode and the block share one `render()` function.
+shortcode and the block share one `render()` function. (The one
+representative NOAA site probed for this plan — `gsl.noaa.gov` —
+runs the block editor, §11, so v1 **leads with Gutenberg blocks**
+and treats the shortcode as the compatibility path, not a co-equal
+bet.)
 
 An **oEmbed provider** is a cheap polish win: register Terraviz
 dataset/tour URLs as oEmbeddable so an author pasting
@@ -719,12 +723,17 @@ the federation pilot answers.
 
 ## 10. Open questions for Eric
 
-1. **Which WordPress, where?** Is the target a specific NOAA
-   deployment (WordPress VIP? Pantheon? self-hosted? a Federal
-   cloud)? Multisite/network? Classic or block editor as the norm?
-   Several §3/§7 choices firm up once this is known. (Drives how
-   hard we lean on Gutenberg vs. shortcodes, and any WPVIP
-   plugin-review constraints.)
+1. **Which WordPress, where?** *Partially answered — see the
+   §11 probe of a representative NOAA site.* Confirmed there: NOAA
+   GSL (`gsl.noaa.gov`) runs **current WordPress core with the block
+   editor (Gutenberg)**, behind Cloudflare with aggressive bot
+   management. The Gutenberg confirmation resolves the "how hard do
+   we lean on blocks vs. shortcodes" question — lead with blocks
+   (§3.4). Still open for any *specific* target deployment: hosting
+   model (WordPress VIP? Pantheon? self-hosted gov infra?),
+   multisite/network, exact core version, and plugin set — the
+   hosting model is what gates any WordPress VIP plugin-review
+   constraints (§7).
 2. **Attribution: does per-user matter for v1?** Is the shared
    `service`-identity audit trail (§5 Option 1) acceptable to
    start, or is per-user attribution a hard requirement that pulls
@@ -742,6 +751,56 @@ the federation pilot answers.
 6. **Directory / distribution:** public WordPress.org plugin
    directory, or an internal NOAA plugin registry only? (Affects
    licensing posture, review process, and update mechanism.)
+
+---
+
+## 11. Representative deployment probe — gsl.noaa.gov
+
+To ground open question 1 in a real target rather than a
+hypothetical, NOAA's Global Systems Laboratory site
+(`gsl.noaa.gov`) was fingerprinted from the outside on 2026-07-04.
+It is a useful sample of the environment this plugin would actually
+land in.
+
+**Confirmed:**
+
+| Finding | Evidence |
+|---|---|
+| Genuine WordPress, current core (2025-era, 6.7/6.8 class) | `/license.txt` is the verbatim WordPress GPL license, "Copyright 2011–2025" |
+| Stock WordPress-core robots + core sitemaps (no Yoast/RankMath owning sitemaps) | `/robots.txt` = core's generated `Disallow: /wp-admin/` + `Allow: /wp-admin/admin-ajax.php` + `Sitemap: …/wp-sitemap.xml` |
+| **Block editor (Gutenberg)** | Confirmed by the site operator (Eric), 2026-07-04 |
+| Fronted by Cloudflare with aggressive bot management + AI "Content-Signal" robots directives | 403 to every automated client (curl, real headless Chromium, Anthropic fetcher) on `/`, `/wp-json/`, `/wp-login.php`, `/wp-sitemap.xml`; `cf-ray` / `__cf_bm` on every response; Content-Signal + AI-bot disallows (GPTBot, ClaudeBot, CCBot, Amazonbot, …) in robots.txt |
+
+**Not externally determinable** (masked by the Cloudflare WAF, which
+strips origin headers and 403s the page HTML): exact core version,
+theme, plugin set, whether it is multisite, and the hosting model.
+No WP VIP (`x-ac`), Pantheon (`x-pantheon-styx`), or WP Engine
+(`x-wpe`) header leaked — consistent with self-hosted gov
+infrastructure behind Cloudflare, but unconfirmed. These are a
+~30-second check for anyone with browser access: view-source for
+`wp-block-*` / `wp-content/themes/<name>` / `<meta name="generator">`,
+and `wp-admin` for the editor and Site Editor.
+
+**What it changes in this plan:**
+
+- **Gutenberg is confirmed on a real NOAA target**, so the plan
+  leads with Gutenberg blocks (§3.2–3.3) and treats the Classic
+  shortcode (§3.4) as the compatibility fallback, not an equal bet.
+- The **strict WAF / bot-management posture validates the
+  "self-contained, no phone-home" non-goal** (§9). The embed model
+  sidesteps the WAF cleanly — the iframe loads from the Terraviz
+  origin directly in the end-user's browser, not proxied through
+  the WP site's Cloudflare — but any publisher-side plugin making
+  outbound calls to a Terraviz node must expect gov-grade egress
+  scrutiny.
+- **Hosting model remains the open sub-question** (§10 q1) that
+  gates WordPress VIP plugin-review constraints (§7); confirm per
+  target deployment.
+
+This is one sample, not the population. Other NOAA sites may run
+Classic, older cores, or different hosting — which is exactly why
+the dual block-plus-shortcode path (§3.4) and the
+hosting-agnostic, self-contained posture (§9) stay in the plan.
 
 ---
 
@@ -783,3 +842,9 @@ exploration on the branch tip):
 **Strategy / framing**
 - `docs/architecture/federation-scoping.md` (esp. Goals, §7 Directives 1–2, §8 decisions 3–4) — partner tiers, the auth question, "spec is the artifact"
 - `MISSION.md`, `ROADMAP.md`, `docs/CATALOG_PUBLISHING_TOOLS.md`, `docs/CATALOG_DATA_MODEL.md`, `docs/CURRENT_EVENTS_PLAN.md`
+
+**Representative deployment probe (§11)**
+- `gsl.noaa.gov/license.txt` — verbatim WordPress GPL license (core confirmation, "Copyright 2011–2025")
+- `gsl.noaa.gov/robots.txt` — stock WordPress-core robots (`/wp-admin/` disallow, `admin-ajax.php` allow, `wp-sitemap.xml`) + Cloudflare AI "Content-Signal" directives
+- External 403s on `/`, `/wp-json/`, `/wp-login.php`, `/wp-sitemap.xml` (curl, headless Chromium via proxy, Anthropic fetcher) — Cloudflare bot management
+- Block editor (Gutenberg) confirmed by the site operator, 2026-07-04
