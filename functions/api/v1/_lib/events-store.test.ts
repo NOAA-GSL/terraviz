@@ -370,12 +370,47 @@ describe('toPublicEvent', () => {
     expect(pub.status).toBe('proposed')
   })
 
+  it('re-validates image_url on the way out — http(s) passes, garbage is dropped', () => {
+    const base = {
+      id: 'E0000000000000000000000000',
+      origin_node: 'NODE000',
+      title: 'Storm',
+      summary: null,
+      source_name: 'NOAA',
+      source_url: 'https://example.gov/x',
+      published_at: null,
+      feed_id: null,
+      external_id: null,
+      occurred_start: null,
+      occurred_end: null,
+      bbox_n: null,
+      bbox_s: null,
+      bbox_w: null,
+      bbox_e: null,
+      point_lat: null,
+      point_lon: null,
+      region_name: null,
+      status: 'proposed' as const,
+      created_at: '2026-07-01T00:00:00.000Z',
+      updated_at: '2026-07-01T00:00:00.000Z',
+      reviewed_at: null,
+      reviewed_by: null,
+      inferred_fields: null,
+      image_url: null,
+    }
+    expect(toPublicEvent({ ...base, image_url: 'https://img.ex/story.jpg' }).imageUrl).toBe('https://img.ex/story.jpg')
+    // eslint-disable-next-line no-script-url
+    expect(toPublicEvent({ ...base, image_url: 'javascript:alert(1)' }).imageUrl).toBeUndefined()
+    expect(toPublicEvent(base).imageUrl).toBeUndefined()
+  })
+
   it('omits absent optionals and partial geometry', () => {
     const pub = toPublicEvent({
       id: 'E0000000000000000000000000',
       origin_node: 'NODE000',
       title: 'Quiet day',
       summary: null,
+      image_url: null,
       source_name: 'USGS',
       source_url: 'https://example.gov/x',
       published_at: null,
