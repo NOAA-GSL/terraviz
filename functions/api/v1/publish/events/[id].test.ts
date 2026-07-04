@@ -262,6 +262,38 @@ describe('POST /api/v1/publish/events/:id', () => {
       expect(badDate.status).toBe(400)
     })
 
+    it('sets the event image from an imageUrl edit without touching date/geometry provenance', async () => {
+      const { env } = setupEnv()
+      const id = await seedInferredEvent(env)
+      const res = await reviewPost(
+        ctx({ env, id, body: { edits: { imageUrl: 'https://img.example.org/storm.jpg' } } }),
+      )
+      expect(res.status).toBe(200)
+      const row = await getCurrentEvent(env.CATALOG_DB, id)
+      expect(row!.image_url).toBe('https://img.example.org/storm.jpg')
+      // Image-only edit: the AI-provenance flags stay — nothing about
+      // the date or place was human-corrected.
+      expect(JSON.parse(row!.inferred_fields!)).toEqual(['occurredStart', 'geometry'])
+      expect(row!.region_name).toBe('Europe')
+    })
+
+    it('400 for a non-http(s) or oversized imageUrl', async () => {
+      const { env } = setupEnv()
+      const id = await seedInferredEvent(env)
+      const bad = await reviewPost(
+        ctx({ env, id, body: { edits: { imageUrl: 'javascript:alert(1)' } } }),
+      )
+      expect(bad.status).toBe(400)
+      const body = (await bad.json()) as { errors: Array<{ field: string }> }
+      expect(body.errors[0].field).toBe('edits.imageUrl')
+      const huge = await reviewPost(
+        ctx({ env, id, body: { edits: { imageUrl: `https://img.example.org/${'x'.repeat(2048)}` } } }),
+      )
+      expect(huge.status).toBe(400)
+      const row = await getCurrentEvent(env.CATALOG_DB, id)
+      expect(row!.image_url).toBeNull()
+    })
+
     it('records the edits in the audit row and supports edit + approve in one submit', async () => {
       const { sqlite, env } = setupEnv()
       const id = await seedInferredEvent(env)

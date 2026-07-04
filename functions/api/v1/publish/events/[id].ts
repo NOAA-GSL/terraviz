@@ -83,7 +83,7 @@ interface ParsedReview {
    *  resolved from `edits.regionName` via `regions.ts` and/or a raw
    *  `edits.point`; `pointOnly` marks a point-without-region edit so the
    *  handler can preserve the event's existing bbox/region. */
-  edits?: { occurredStart?: string; geometry?: EventGeometry; pointOnly?: boolean }
+  edits?: { occurredStart?: string; geometry?: EventGeometry; pointOnly?: boolean; imageUrl?: string }
 }
 
 function jsonError(status: number, error: string, message: string): Response {
@@ -187,7 +187,17 @@ function parseReview(
       out.geometry = { point }
       out.pointOnly = true
     }
-    if (out.occurredStart !== undefined || out.geometry !== undefined) edits = out
+    // Curator-picked story image (the Suggested-media pane). Same
+    // guard as ingest: http(s) only, bounded — it renders publicly.
+    if (e.imageUrl != null) {
+      const img = typeof e.imageUrl === 'string' ? e.imageUrl.trim() : ''
+      if (!/^https?:\/\//i.test(img) || img.length > 2048) {
+        errors.push({ field: 'edits.imageUrl', code: 'invalid', message: '`edits.imageUrl` must be an http(s) URL of at most 2048 characters.' })
+      } else {
+        out.imageUrl = img
+      }
+    }
+    if (out.occurredStart !== undefined || out.geometry !== undefined || out.imageUrl !== undefined) edits = out
   }
 
   if (event === undefined && links.length === 0 && addDatasetIds.length === 0 && edits === undefined && errors.length === 0) {
@@ -241,8 +251,16 @@ export const onRequestPost: PagesFunction<CatalogEnv, 'id'> = async context => {
       if (event.region_name) existing.regionName = event.region_name
       edits.geometry = { ...existing, point: edits.geometry.point }
     }
-    await applyEventEdits(db, id, { occurredStart: edits.occurredStart, geometry: edits.geometry })
-    await runMatcherForEvent(db, id, { env: context.env })
+    await applyEventEdits(db, id, {
+      occurredStart: edits.occurredStart,
+      geometry: edits.geometry,
+      imageUrl: edits.imageUrl,
+    })
+    // The matcher scores on date/place — an image-only edit changes
+    // no signal, so skip the re-run for it.
+    if (edits.occurredStart !== undefined || edits.geometry !== undefined) {
+      await runMatcherForEvent(db, id, { env: context.env })
+    }
   }
 
   // Seed any hand-picked additions FIRST (so an add + approve can land in

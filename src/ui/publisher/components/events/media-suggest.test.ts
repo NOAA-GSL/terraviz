@@ -1,0 +1,69 @@
+/**
+ * Tests for the media-suggestion builders (task: media suggestion
+ * engine) — the Worldview snapshot candidate's geometry, date, and
+ * URL contract.
+ */
+
+import { describe, expect, it } from 'vitest'
+import { buildWorldviewSnapshot, WORLDVIEW_SNAPSHOT_LAYER } from './media-suggest'
+
+const params = (url: string): URLSearchParams => new URLSearchParams(new URL(url).search)
+
+describe('buildWorldviewSnapshot', () => {
+  it('builds a padded bbox around a point event, EPSG:4326 axis order', () => {
+    const s = buildWorldviewSnapshot({
+      occurredStart: '2026-06-25T12:00:00.000Z',
+      geometry: { point: { lat: 25, lon: -80 } },
+    })!
+    expect(s.kind).toBe('worldview')
+    const p = params(s.url)
+    expect(p.get('TIME')).toBe('2026-06-25')
+    expect(p.get('BBOX')).toBe('20,-85,30,-75') // s,w,n,e — lat first
+    expect(p.get('LAYERS')).toBe(WORLDVIEW_SNAPSHOT_LAYER)
+    expect(p.get('FORMAT')).toBe('image/jpeg')
+    // 10° × 10° → square aspect at the fixed width.
+    expect(p.get('WIDTH')).toBe('768')
+    expect(p.get('HEIGHT')).toBe('768')
+  })
+
+  it('clamps padding at the poles/antimeridian and uses the event bbox when present', () => {
+    const polar = buildWorldviewSnapshot({
+      occurredStart: '2026-01-01T00:00:00.000Z',
+      geometry: { point: { lat: 89, lon: 179 } },
+    })!
+    const p = params(polar.url)
+    const [s2, w, n, e] = p.get('BBOX')!.split(',').map(Number)
+    expect(n).toBeLessThanOrEqual(90)
+    expect(e).toBeLessThanOrEqual(180)
+    expect(s2).toBeLessThan(n)
+    expect(w).toBeLessThan(e)
+
+    const boxed = buildWorldviewSnapshot({
+      occurredStart: '2026-06-01T00:00:00.000Z',
+      geometry: { boundingBox: { n: 31, s: 18, w: -98, e: -80 } },
+    })!
+    expect(params(boxed.url).get('BBOX')).toBe('18,-98,31,-80')
+  })
+
+  it('grows a degenerate bbox to a visible span', () => {
+    const s = buildWorldviewSnapshot({
+      occurredStart: '2026-06-01T00:00:00.000Z',
+      geometry: { boundingBox: { n: 25.1, s: 25, w: -80.1, e: -80 } },
+    })!
+    const [south, west, north, east] = params(s.url).get('BBOX')!.split(',').map(Number)
+    expect(north - south).toBeGreaterThanOrEqual(2)
+    expect(east - west).toBeGreaterThanOrEqual(2)
+  })
+
+  it('requires a date and a location; falls back to the publish date', () => {
+    expect(buildWorldviewSnapshot({ geometry: { point: { lat: 0, lon: 0 } } })).toBeNull()
+    expect(buildWorldviewSnapshot({ occurredStart: '2026-06-01T00:00:00.000Z', geometry: {} })).toBeNull()
+    expect(buildWorldviewSnapshot({ occurredStart: 'not a date', geometry: { point: { lat: 0, lon: 0 } } })).toBeNull()
+
+    const fromPublish = buildWorldviewSnapshot({
+      source: { publishedAt: '2026-06-20T08:00:00.000Z' },
+      geometry: { point: { lat: 10, lon: 10 } },
+    })!
+    expect(params(fromPublish.url).get('TIME')).toBe('2026-06-20')
+  })
+})

@@ -415,7 +415,7 @@ export async function listCurrentEvents(
 export async function applyEventEdits(
   db: D1Database,
   id: string,
-  edits: { occurredStart?: string; geometry?: EventGeometry },
+  edits: { occurredStart?: string; geometry?: EventGeometry; imageUrl?: string },
   now: string = new Date().toISOString(),
 ): Promise<void> {
   const existing = await getCurrentEvent(db, id)
@@ -431,6 +431,10 @@ export async function applyEventEdits(
 
   const sets: string[] = ['updated_at = ?']
   const binds: unknown[] = [now]
+  if (edits.imageUrl !== undefined) {
+    sets.push('image_url = ?')
+    binds.push(edits.imageUrl)
+  }
   if (edits.occurredStart !== undefined) {
     sets.push('occurred_start = ?')
     binds.push(edits.occurredStart)

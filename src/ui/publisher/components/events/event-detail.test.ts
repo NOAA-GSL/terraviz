@@ -45,6 +45,51 @@ describe('renderEventDetail — story image (task: story media)', () => {
   })
 })
 
+describe('renderEventDetail — suggested media (task: media suggestion engine)', () => {
+  const located = () =>
+    event({
+      occurredStart: '2026-06-25T12:00:00.000Z',
+      geometry: { point: { lat: 25, lon: -80 } },
+    })
+
+  it('offers a Worldview snapshot only while the event has no image', () => {
+    const pane = renderEventDetail(located(), { fetchFn: okFetch() } as never)
+    const preview = pane.querySelector('.publisher-events-suggest-preview') as HTMLImageElement
+    expect(preview.src).toContain('wvs.earthdata.nasa.gov')
+    expect(preview.src).toContain('TIME=2026-06-25')
+
+    // A vetted image already present → the story image wins, no pane.
+    const withImage = renderEventDetail(
+      { ...located(), imageUrl: 'https://img.ex/story.jpg' },
+      { fetchFn: okFetch() } as never,
+    )
+    expect(withImage.querySelector('.publisher-events-suggest')).toBeNull()
+
+    // No location → nothing to snapshot, no pane.
+    const nowhere = renderEventDetail(event({ occurredStart: '2026-06-25T12:00:00.000Z' }), {
+      fetchFn: okFetch(),
+    } as never)
+    expect(nowhere.querySelector('.publisher-events-suggest')).toBeNull()
+  })
+
+  it('"Use as event image" posts the snapshot URL as an imageUrl edit and re-renders', async () => {
+    const fetchFn = okFetch()
+    const onEventStatusChange = vi.fn()
+    const evt = located()
+    const pane = renderEventDetail(evt, { onEventStatusChange, fetchFn } as never)
+
+    ;(pane.querySelector('.publisher-events-suggest button') as HTMLButtonElement).click()
+    await flush()
+
+    const [url, init] = fetchFn.mock.calls[0] as unknown as [string, RequestInit]
+    expect(url).toContain('/publish/events/EVT1')
+    const body = JSON.parse(String(init.body)) as { edits: { imageUrl: string } }
+    expect(body.edits.imageUrl).toContain('wvs.earthdata.nasa.gov')
+    expect(evt.imageUrl).toBe(body.edits.imageUrl)
+    expect(onEventStatusChange).toHaveBeenCalledWith('EVT1', 'proposed')
+  })
+})
+
 describe('renderEventDetail — locator coordinates', () => {
   it('renders the hemisphere suffix without the numeric sign', () => {
     // A southern/western point: the suffix conveys the hemisphere, so the
