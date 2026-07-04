@@ -405,17 +405,21 @@ export async function listCurrentEvents(
 }
 
 /**
- * Apply curator edits to an event's occurred time / location. A field
- * edited by a human stops being AI provenance: its entry is removed
- * from `inferred_fields` (the badge disappears for that field). A
- * location edit replaces the whole geometry — bbox + region name from
- * the resolved region, any stale point cleared — so the matcher's geo
- * signal scores against exactly what the curator chose.
+ * Apply curator edits to an event's occurred time / location / story
+ * image. A date or location edited by a human stops being AI
+ * provenance: its entry is removed from `inferred_fields` (the badge
+ * disappears for that field). A location edit replaces the whole
+ * geometry — bbox + region name from the resolved region, any stale
+ * point cleared — so the matcher's geo signal scores against exactly
+ * what the curator chose. An `imageUrl` edit (the Suggested-media
+ * pick) only sets `image_url`: choosing an image says nothing about
+ * whether the date/place were verified, so `inferred_fields` is
+ * untouched.
  */
 export async function applyEventEdits(
   db: D1Database,
   id: string,
-  edits: { occurredStart?: string; geometry?: EventGeometry },
+  edits: { occurredStart?: string; geometry?: EventGeometry; imageUrl?: string },
   now: string = new Date().toISOString(),
 ): Promise<void> {
   const existing = await getCurrentEvent(db, id)
@@ -431,6 +435,10 @@ export async function applyEventEdits(
 
   const sets: string[] = ['updated_at = ?']
   const binds: unknown[] = [now]
+  if (edits.imageUrl !== undefined) {
+    sets.push('image_url = ?')
+    binds.push(edits.imageUrl)
+  }
   if (edits.occurredStart !== undefined) {
     sets.push('occurred_start = ?')
     binds.push(edits.occurredStart)

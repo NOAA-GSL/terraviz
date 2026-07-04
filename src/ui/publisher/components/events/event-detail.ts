@@ -28,6 +28,7 @@ import {
   type ReviewEvent,
   type ReviewLink,
 } from './events-model'
+import { buildWorldviewSnapshot } from './media-suggest'
 
 /** Cap on candidate rows shown in the "+ Add dataset" search. */
 const ADD_CANDIDATE_ROWS = 20
@@ -91,6 +92,67 @@ function handleWriteError(
     status.textContent = t('publisher.events.error.generic')
   }
   status.classList.add('publisher-events-status-error')
+}
+
+/**
+ * The "Suggested media" row (task: media suggestion engine) — image
+ * candidates built purely from the event's own place + date, each with
+ * a provenance badge and a one-click "Use as event image". Nothing is
+ * fetched to suggest (the candidate URL *is* the image; the browser
+ * loads the preview), and nothing is stored until the curator picks.
+ * A candidate whose image fails to load removes itself.
+ */
+function renderMediaSuggestions(event: ReviewEvent, cb: EventDetailCallbacks): HTMLElement | null {
+  const worldview = buildWorldviewSnapshot(event)
+  if (!worldview) return null
+
+  const wrap = el('div', 'publisher-events-suggest')
+  wrap.append(el('h4', 'publisher-events-suggest-title', [t('publisher.events.suggest.title')]))
+
+  const card = el('div', 'publisher-events-suggest-card')
+  const img = document.createElement('img')
+  img.className = 'publisher-events-suggest-preview'
+  img.src = worldview.url
+  img.alt = t('publisher.events.suggest.worldviewAlt')
+  img.loading = 'lazy'
+  img.addEventListener('error', () => wrap.remove())
+
+  const meta = el('div', 'publisher-events-suggest-meta')
+  meta.append(
+    el('span', 'publisher-events-suggest-badge', [t('publisher.events.suggest.worldview')]),
+    el('span', 'publisher-events-suggest-attribution', [worldview.attribution]),
+  )
+
+  const status = el('span', 'publisher-events-edit-status')
+  const use = document.createElement('button')
+  use.type = 'button'
+  use.className = 'publisher-btn publisher-btn-small publisher-btn-primary'
+  use.textContent = t('publisher.events.suggest.use')
+  use.addEventListener('click', () => {
+    use.disabled = true
+    status.textContent = ''
+    status.classList.remove('publisher-events-status-error')
+    void publisherSend<{ event?: Partial<ReviewEvent> }>(
+      `${EVENTS_ENDPOINT}/${encodeURIComponent(event.id)}`,
+      { edits: { imageUrl: worldview.url } },
+      { fetchFn: cb.fetchFn },
+    ).then(res => {
+      use.disabled = false
+      if (!res.ok) {
+        handleWriteError(res, status, cb.navigate)
+        return
+      }
+      // The event now has a vetted image — reflect it and let the
+      // orchestrator re-render (the pane yields to the story image).
+      event.imageUrl = res.data?.event?.imageUrl ?? worldview.url
+      cb.onEventStatusChange(event.id, event.status)
+    })
+  })
+
+  meta.append(use, status)
+  card.append(img, meta)
+  wrap.append(card)
+  return wrap
 }
 
 /** The "Edit date / location" disclosure under the meta strip. Saving
@@ -310,6 +372,12 @@ export function renderEventDetail(event: ReviewEvent, cb: EventDetailCallbacks):
     // A dead image link should vanish, not show a broken-image glyph.
     img.addEventListener('error', () => img.remove())
     pane.append(img)
+  } else {
+    // --- Suggested media (task: media suggestion engine) — offered
+    // only while the event has no image; picking one writes it as the
+    // event's story image through the review endpoint's edits.
+    const suggest = renderMediaSuggestions(event, cb)
+    if (suggest) pane.append(suggest)
   }
 
   // --- Meta strip: source / first observed / detail ---
