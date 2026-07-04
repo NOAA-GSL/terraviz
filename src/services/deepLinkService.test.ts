@@ -1,5 +1,20 @@
 import { describe, it, expect, afterEach, vi } from 'vitest'
-import { parseDatasetFromUrl } from './deepLinkService'
+import { parseDatasetFromUrl, parseDatasetPathname } from './deepLinkService'
+
+describe('parseDatasetPathname', () => {
+  it('parses the /dataset/<id> path form share links and blog posts emit', () => {
+    expect(parseDatasetPathname('/dataset/INTERNAL_SOS_123')).toBe('INTERNAL_SOS_123')
+    expect(parseDatasetPathname('/dataset/01JXCULID0000000000000000/')).toBe('01JXCULID0000000000000000')
+  })
+
+  it('rejects other paths and nested segments', () => {
+    expect(parseDatasetPathname('/')).toBeNull()
+    expect(parseDatasetPathname('/blog/some-post')).toBeNull()
+    expect(parseDatasetPathname('/dataset/')).toBeNull()
+    expect(parseDatasetPathname('/dataset/id/extra')).toBeNull()
+    expect(parseDatasetPathname('/dataset/bad%20chars')).toBeNull()
+  })
+})
 
 describe('parseDatasetFromUrl', () => {
   it('parses zyra:// custom scheme URLs', () => {
