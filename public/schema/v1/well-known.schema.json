@@ -1,0 +1,80 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://terraviz.zyra-project.org/schema/v1/well-known.schema.json",
+  "title": "Terraviz node discovery document",
+  "type": "object",
+  "properties": {
+    "node_id": {
+      "type": "string"
+    },
+    "display_name": {
+      "type": "string"
+    },
+    "base_url": {
+      "type": "string"
+    },
+    "public_key": {
+      "type": "string"
+    },
+    "schema_versions_supported": {
+      "type": "array",
+      "items": {
+        "type": "number"
+      }
+    },
+    "endpoints": {
+      "type": "object",
+      "properties": {
+        "catalog": {
+          "type": "string"
+        },
+        "feed": {
+          "type": "string"
+        },
+        "handshake": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "catalog",
+        "feed",
+        "handshake"
+      ]
+    },
+    "policy": {
+      "type": "object",
+      "properties": {
+        "open_subscription": {
+          "type": "boolean"
+        },
+        "auto_approve": {
+          "type": "boolean"
+        },
+        "max_request_rate_per_minute": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "open_subscription",
+        "auto_approve",
+        "max_request_rate_per_minute"
+      ]
+    },
+    "contact": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "node_id",
+    "display_name",
+    "base_url",
+    "public_key",
+    "schema_versions_supported",
+    "endpoints",
+    "policy",
+    "contact"
+  ]
+}

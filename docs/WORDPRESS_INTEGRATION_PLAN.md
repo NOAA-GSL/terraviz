@@ -618,12 +618,19 @@ Phases are ordered by value-over-risk and by the read/publish seam
   boot seam; add a `docs/EMBED_URL_GRAMMAR.md`.~~ **Done
   (2026-07-04)** — `src/utils/embedMode.ts`, `src/styles/embed.css`,
   `docs/EMBED_URL_GRAMMAR.md`.
-- (Rides on / coordinates with federation §7 Directive 2) publish
-  the wire `Dataset` + catalog JSON Schema at a stable URL. **M**
-  — may already be in flight for Phase 4; the plugin consumes it.
+- ~~(Rides on / coordinates with federation §7 Directive 2) publish
+  the wire `Dataset` + catalog JSON Schema at a stable URL.~~ **Done
+  (2026-07-04)** — `public/schema/v1/{dataset,catalog,well-known}.schema.json`,
+  generated + drift-checked by `scripts/build-protocol-schemas.ts`
+  (`npm run check:protocol-schemas`, in the type-check chain), served
+  at `https://<node>/schema/v1/`. Prose + versioning policy in
+  [`protocol/README.md`](protocol/README.md) and
+  [`protocol/CHANGELOG.md`](protocol/CHANGELOG.md). The federation
+  `feed.schema.json` and STAC-profile fields are deferred to Phase 4
+  (their serializer doesn't exist yet).
 
 **Exit:** an embed URL renders a chromeless globe; the embed grammar
-and wire schema are documented and versioned.
+and wire schema are documented and versioned. **Phase 0 complete.**
 
 ### Phase 1 — Zero-auth embed plugin (plugin repo)
 
