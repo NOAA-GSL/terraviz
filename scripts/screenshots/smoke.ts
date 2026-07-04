@@ -130,6 +130,24 @@ const checks: Check[] = [
     },
   },
   {
+    name: 'embed mode strips the app shell',
+    fixtures: catalogFixtures(),
+    async run(page) {
+      await gotoApp(page, '/?embed=1')
+      // The mode class is applied synchronously at boot.
+      await page.locator('body.embed-mode').waitFor()
+      // The app-shell chrome a bare "/" shows must be suppressed in embed
+      // mode — assert each is hidden so a regression that re-introduces
+      // chrome (e.g. a dropped/scoped-out embed rule) fails this gate.
+      for (const id of ['#map-controls', '#help-trigger', '#chat-trigger', '#home-btn']) {
+        assert(!(await page.locator(id).isVisible()), `embed mode should hide ${id}`)
+      }
+      // The ?chat=1 sub-flag opts the Orbit trigger back in.
+      await gotoApp(page, '/?embed=1&chat=1')
+      await page.locator('body.embed-show-chat').waitFor()
+    },
+  },
+  {
     name: 'catalog Timeline exposes the current-event legend',
     async run(page) {
       // The catalog Timeline ships an amber "current event" legend swatch
