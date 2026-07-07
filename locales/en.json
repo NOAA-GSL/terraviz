@@ -245,6 +245,7 @@
   "chat.settings.voiceHandsFree.off": "Off",
   "chat.settings.voiceHandsFree.openMic": "Open mic",
   "chat.settings.voiceHandsFree.pushToTalk": "Push to talk",
+  "chat.settings.voiceHandsFree.wakeWord": "Wake word (“Hey Orbit”)",
   "chat.settings.voiceLang.auto": "Same as app",
   "chat.settings.voiceLang.label": "Recognition language",
   "chat.settings.voiceName.default": "Default",
