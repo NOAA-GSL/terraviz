@@ -37,11 +37,16 @@ that decide the exhibit interaction model). **Phase 3.5 wake-word** has
 now landed too: the on-device `WakeWordDetector` + the **openWakeWord
 ONNX scorer** (built-in `hey jarvis`; lazy onnxruntime-web,
 operator-hosted models, runbook + custom-"Hey Orbit" training steps in
-`docs/ORBIT_WAKEWORD.md`) — pending on-hardware validation and the
-hands-free UI wiring. Remaining Phase 3+ work: a true **WebSocket**
-streaming path (Deepgram Nova-3/Flux on Workers AI) for live partials,
-the wake-word **hands-free integration** (a wake-arm mode + settings),
-and Phase 4 (on-device).
+`docs/ORBIT_WAKEWORD.md`) — pending on-hardware validation. The
+wake-word **hands-free integration** has now landed as well: a
+`wake-word` interaction model in `HandsFreeController` (silent until an
+on-device wake arms a single turn — no audio streams to STT before the
+wake), the settings picker option (gated on
+`VITE_VOICE_WAKEWORD_MODEL_URL`), and the §10.4 **false-fire** telemetry
+(a `wake-word` turn with no speech). With that, **Phase 3 is
+functionally complete** — remaining work is a true **WebSocket**
+streaming path validation on real hardware and Phase 4 (on-device
+models).
 
 > Cross-references:
 > [`docs/DOCENT_UX_IMPROVEMENT_PLAN.md`](DOCENT_UX_IMPROVEMENT_PLAN.md)
