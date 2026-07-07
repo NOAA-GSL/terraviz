@@ -73,8 +73,11 @@ the same files). Total size is a few MB.
 ### 3.1 Enabling the hands-free mode (operators)
 
 The chat's hands-free picker (Tools → Orbit → Settings → **Hands-free**)
-only offers the **"Wake word (Hey Orbit)"** option once a deploy has
-configured the model URL. Set these **build-time** env vars (they're
+only offers the **"Wake word"** option once a deploy has configured the
+model URL. The label is phrase-neutral on purpose: the phrase a visitor
+must say is whatever the configured model detects — the built-in default
+is **"Hey Jarvis"**, and a branded **"Hey Orbit"** needs a custom model
+(§5). Set these **build-time** env vars (they're
 `VITE_`-prefixed, so they're baked into the bundle at `npm run build`;
 Cloudflare Pages → Settings → Variables → *build* variables):
 
