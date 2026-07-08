@@ -23,7 +23,7 @@ import { logger } from '../../utils/logger'
 import { t } from '../../i18n'
 import { PublisherRouter, type RouteHandler } from './router'
 import { renderOverviewPage } from './pages/overview'
-import { renderMePage } from './pages/me'
+import { renderMePage, localizedRole } from './pages/me'
 import { renderDatasetsPage } from './pages/datasets'
 import { renderDatasetDetailPage } from './pages/dataset-detail'
 import { renderDatasetEditPage } from './pages/dataset-edit'
@@ -76,20 +76,23 @@ export function routeForPath(
   | 'feedback'
   | 'users'
   | 'unknown' {
-  if (pathname === '/publish' || pathname.startsWith('/publish/overview')) return 'overview'
-  if (pathname.startsWith('/publish/me')) return 'me'
-  if (pathname.startsWith('/publish/datasets')) return 'datasets'
-  if (pathname.startsWith('/publish/tours')) return 'tours'
-  if (pathname.startsWith('/publish/workflows')) return 'workflows'
-  if (pathname.startsWith('/publish/featured-hero')) return 'featured_hero'
-  if (pathname.startsWith('/publish/node-profile')) return 'node_profile'
-  if (pathname.startsWith('/publish/blog')) return 'blog'
-  if (pathname.startsWith('/publish/events')) return 'events'
-  if (pathname.startsWith('/publish/feeds')) return 'feeds'
-  if (pathname.startsWith('/publish/import')) return 'import'
-  if (pathname.startsWith('/publish/analytics')) return 'analytics'
-  if (pathname.startsWith('/publish/feedback')) return 'feedback'
-  if (pathname.startsWith('/publish/users')) return 'users'
+  // Normalise a trailing slash so `/publish/` maps to the same route
+  // as `/publish` (the router treats them identically).
+  const path = pathname.length > 1 && pathname.endsWith('/') ? pathname.slice(0, -1) : pathname
+  if (path === '/publish' || path.startsWith('/publish/overview')) return 'overview'
+  if (path.startsWith('/publish/me')) return 'me'
+  if (path.startsWith('/publish/datasets')) return 'datasets'
+  if (path.startsWith('/publish/tours')) return 'tours'
+  if (path.startsWith('/publish/workflows')) return 'workflows'
+  if (path.startsWith('/publish/featured-hero')) return 'featured_hero'
+  if (path.startsWith('/publish/node-profile')) return 'node_profile'
+  if (path.startsWith('/publish/blog')) return 'blog'
+  if (path.startsWith('/publish/events')) return 'events'
+  if (path.startsWith('/publish/feeds')) return 'feeds'
+  if (path.startsWith('/publish/import')) return 'import'
+  if (path.startsWith('/publish/analytics')) return 'analytics'
+  if (path.startsWith('/publish/feedback')) return 'feedback'
+  if (path.startsWith('/publish/users')) return 'users'
   return 'unknown'
 }
 
@@ -325,23 +328,6 @@ function feedbackPage(mount: HTMLElement): RouteHandler {
 
 function notFoundPage(mount: HTMLElement): RouteHandler {
   return () => renderPlaceholder(mount, t('publisher.section.notFound'), '3pa/A')
-}
-
-/** Localize a publisher role for the sidebar footer, reusing the
- *  role labels the /publish/me page already defines. */
-function localizedRole(role: string): string {
-  switch (role) {
-    case 'admin':
-      return t('publisher.me.role.admin')
-    case 'publisher':
-      return t('publisher.me.role.publisher')
-    case 'service':
-      return t('publisher.me.role.service')
-    case 'readonly':
-      return t('publisher.me.role.readonly')
-    default:
-      return role
-  }
 }
 
 interface PortalChrome {

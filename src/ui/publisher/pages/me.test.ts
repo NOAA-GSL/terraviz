@@ -125,6 +125,9 @@ describe('renderMePage', () => {
     expect(patch?.init?.method).toBe('PATCH')
     expect(String(patch?.init?.body)).toContain('Jane R. Doe')
     expect(mount.querySelector('.publisher-account-save-ok')?.textContent).toBe('Saved ✓')
+    // The identity header (name + avatar) refreshes to the saved value.
+    expect(mount.querySelector('.publisher-account-name')?.textContent).toBe('Jane R. Doe')
+    expect(mount.querySelector('.publisher-account-avatar')?.textContent).toBe('JR')
   })
 
   it('a non-admin sees read-only profile fields and no Save button', async () => {

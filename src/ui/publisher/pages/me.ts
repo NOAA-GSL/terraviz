@@ -75,7 +75,9 @@ function badge(text: string, kind: 'admin' | 'role' | 'status'): HTMLElement {
   return el('span', `publisher-badge publisher-badge-${kind}`, text)
 }
 
-function localizedRole(role: string): string {
+/** Localize a publisher role. Exported so the sidebar footer reuses
+ *  the single source of truth (avoids a drifting second copy). */
+export function localizedRole(role: string): string {
   switch (role) {
     case 'admin':
       return t('publisher.me.role.admin')
@@ -142,7 +144,11 @@ function renderIdentityCard(me: PublisherMeResponse): HTMLElement {
   return card(head)
 }
 
-function renderProfileCard(me: PublisherMeResponse, options: MePageOptions): HTMLElement {
+function renderProfileCard(
+  me: PublisherMeResponse,
+  options: MePageOptions,
+  onSaved: () => void,
+): HTMLElement {
   const canEdit = me.is_admin === true || me.role === 'admin'
 
   const form = el('div', 'publisher-account-form')
@@ -209,6 +215,9 @@ function renderProfileCard(me: PublisherMeResponse, options: MePageOptions): HTM
           me.affiliation = affInput.value.trim() || null
           status.textContent = t('publisher.account.saved')
           status.className = 'publisher-account-save-status publisher-account-save-ok'
+          // Keep the identity header (name + avatar initials) in sync
+          // with the just-saved values.
+          onSaved()
         } else {
           status.textContent = t('publisher.account.saveError')
           status.className = 'publisher-account-save-status publisher-account-save-error'
@@ -265,8 +274,15 @@ function renderSessionsCard(): HTMLElement {
 
 function renderAccount(mount: HTMLElement, me: PublisherMeResponse, options: MePageOptions): void {
   const shell = el('main', 'publisher-shell publisher-account')
-  shell.appendChild(renderIdentityCard(me))
-  shell.appendChild(renderProfileCard(me, options))
+  let identityCard = renderIdentityCard(me)
+  shell.appendChild(identityCard)
+  shell.appendChild(
+    renderProfileCard(me, options, () => {
+      const next = renderIdentityCard(me)
+      identityCard.replaceWith(next)
+      identityCard = next
+    }),
+  )
   shell.appendChild(renderSecurityCard(me))
   shell.appendChild(renderSessionsCard())
   mount.replaceChildren(shell)
