@@ -194,7 +194,7 @@ describe('renderEventsPage', () => {
     inputs[1].value = 'NOAA' // source name
     inputs[2].value = 'https://example.gov/manual' // source url
     const saveBtn = Array.from(document.querySelectorAll<HTMLButtonElement>('.publisher-events-drawer-actions button'))
-      .find(b => b.classList.contains('publisher-btn-primary'))!
+      .find(b => b.classList.contains('publisher-button-primary'))!
     saveBtn.click()
     await settle()
 

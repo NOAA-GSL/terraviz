@@ -237,7 +237,7 @@ function renderForm(mount: HTMLElement, state: FormState): void {
   for (const link of profile?.links ?? []) addLinkRow(link)
   const addLink = el('button', {
     type: 'button',
-    className: 'publisher-btn publisher-btn-small',
+    className: 'publisher-button publisher-button-small',
     textContent: t('publisher.nodeProfile.links.add'),
   })
   addLink.addEventListener('click', () => addLinkRow())
@@ -256,7 +256,7 @@ function renderForm(mount: HTMLElement, state: FormState): void {
   const status = el('div', { className: 'publisher-nodeprofile-status', role: 'status' })
   const saveBtn = el('button', {
     type: 'button',
-    className: 'publisher-btn publisher-btn-primary',
+    className: 'publisher-button publisher-button-primary',
     textContent: t('publisher.nodeProfile.save'),
   })
   saveBtn.addEventListener('click', () => {
@@ -378,14 +378,14 @@ function buildLogo(state: FormState): HTMLElement {
   fileInput.hidden = true
   const chooseBtn = el('button', {
     type: 'button',
-    className: 'publisher-btn publisher-btn-small',
+    className: 'publisher-button publisher-button-small',
     textContent: t('publisher.nodeProfile.logo.choose'),
   })
   chooseBtn.addEventListener('click', () => fileInput.click())
 
   const removeBtn = el('button', {
     type: 'button',
-    className: 'publisher-btn publisher-btn-small',
+    className: 'publisher-button publisher-button-small',
     textContent: t('publisher.nodeProfile.logo.remove'),
   })
   const refreshRemove = (): void => {

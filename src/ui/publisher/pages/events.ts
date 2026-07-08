@@ -219,7 +219,7 @@ function renderTopbar(
 
   const refreshBtn = document.createElement('button')
   refreshBtn.type = 'button'
-  refreshBtn.className = 'publisher-btn'
+  refreshBtn.className = 'publisher-button'
   refreshBtn.textContent = t('publisher.events.refresh')
   refreshBtn.addEventListener('click', () => {
     refreshBtn.disabled = true
@@ -248,7 +248,7 @@ function renderTopbar(
 
   const newBtn = document.createElement('button')
   newBtn.type = 'button'
-  newBtn.className = 'publisher-btn publisher-btn-primary'
+  newBtn.className = 'publisher-button publisher-button-primary'
   newBtn.textContent = t('publisher.events.new')
   newBtn.addEventListener('click', () => {
     openNewEventDrawer({

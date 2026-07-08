@@ -344,7 +344,7 @@ export async function renderBlogEditPage(mount: HTMLElement, options: BlogEditPa
   }
   refreshTourLink()
   const genBtn = el('button', {
-    type: 'button', className: 'publisher-btn publisher-btn-primary publisher-blog-generate-btn',
+    type: 'button', className: 'publisher-button publisher-button-primary publisher-blog-generate-btn',
     textContent: t('publisher.blog.generate.run'),
   })
   genBtn.addEventListener('click', () => {
@@ -395,11 +395,11 @@ export async function renderBlogEditPage(mount: HTMLElement, options: BlogEditPa
   const saveStatus = el('span', { className: 'publisher-blog-status' })
   saveStatus.setAttribute('role', 'status')
   const saveBtn = el('button', {
-    type: 'button', className: 'publisher-btn publisher-btn-primary publisher-blog-save-btn',
+    type: 'button', className: 'publisher-button publisher-button-primary publisher-blog-save-btn',
     textContent: t('publisher.blog.save'),
   })
   const publishBtn = el('button', {
-    type: 'button', className: 'publisher-btn publisher-blog-publish-btn',
+    type: 'button', className: 'publisher-button publisher-blog-publish-btn',
   })
   const refreshPublishBtn = (): void => {
     publishBtn.textContent = postStatus === 'published' ? t('publisher.blog.unpublish') : t('publisher.blog.publish')

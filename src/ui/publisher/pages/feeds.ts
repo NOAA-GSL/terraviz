@@ -254,7 +254,7 @@ function renderConsole(
     })
     const button = el('button', {
       type: 'button',
-      className: 'publisher-btn publisher-btn-small',
+      className: 'publisher-button publisher-button-small',
       textContent: t('publisher.feeds.preview'),
     })
     button.setAttribute('aria-expanded', 'false')
@@ -325,7 +325,7 @@ function renderConsole(
   // ── Card 1: your feeds ─────────────────────────────────────────
   const runBtn = el('button', {
     type: 'button',
-    className: 'publisher-btn publisher-btn-primary',
+    className: 'publisher-button publisher-button-primary',
     textContent: t('publisher.feeds.runNow'),
   })
   runBtn.addEventListener('click', () => {
@@ -374,7 +374,7 @@ function renderConsole(
 
     const toggleBtn = el('button', {
       type: 'button',
-      className: 'publisher-btn publisher-btn-small',
+      className: 'publisher-button publisher-button-small',
       textContent: feed.enabled ? t('publisher.feeds.pause') : t('publisher.feeds.resume'),
     })
     toggleBtn.addEventListener('click', () => {
@@ -387,7 +387,7 @@ function renderConsole(
 
     const removeBtn = el('button', {
       type: 'button',
-      className: 'publisher-btn publisher-btn-small publisher-btn-danger',
+      className: 'publisher-button publisher-button-small publisher-button-danger',
       textContent: t('publisher.feeds.remove'),
     })
     removeBtn.addEventListener('click', () => {
@@ -431,7 +431,7 @@ function renderConsole(
       const added = registeredUrls.has(preset.url)
       const addBtn = el('button', {
         type: 'button',
-        className: 'publisher-btn publisher-btn-small',
+        className: 'publisher-button publisher-button-small',
         textContent: added ? t('publisher.feeds.addedBadge') : t('publisher.feeds.add'),
         disabled: added,
       })
@@ -483,7 +483,7 @@ function renderConsole(
 
   const addCustomBtn = el('button', {
     type: 'button',
-    className: 'publisher-btn publisher-btn-primary',
+    className: 'publisher-button publisher-button-primary',
     textContent: t('publisher.feeds.custom.add'),
   })
   addCustomBtn.addEventListener('click', () => {
@@ -603,7 +603,7 @@ function renderChannelsCard(
     if (!ch.builtin) {
       const remove = el('button', {
         type: 'button',
-        className: 'publisher-btn publisher-btn-small',
+        className: 'publisher-button publisher-button-small',
         textContent: t('publisher.feeds.channels.remove'),
       })
       remove.addEventListener('click', () => {
@@ -630,7 +630,7 @@ function renderChannelsCard(
   })
   const addBtn = el('button', {
     type: 'button',
-    className: 'publisher-btn publisher-btn-primary',
+    className: 'publisher-button publisher-button-primary',
     textContent: t('publisher.feeds.channels.add'),
   })
   addBtn.addEventListener('click', () => {
