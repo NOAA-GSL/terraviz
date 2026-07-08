@@ -523,13 +523,54 @@ function renderConsole(
   )
 
   // ── Card 4: agency-YouTube channel allowlist ───────────────────
-  // Omit the card entirely when the channels endpoint is unavailable
-  // (older deploy) — an allowlist UI whose Add/Remove would 404 is
-  // worse than no card.
-  const cards = [yourFeeds, suggested, custom]
-  if (channels !== null) cards.push(renderChannelsCard(mount, channels, options, showError, send))
+  // When the channels endpoint is unavailable (older deploy), the
+  // Media channels tab shows a note instead of an allowlist UI whose
+  // Add/Remove would 404.
+  const mediaContent =
+    channels !== null
+      ? renderChannelsCard(mount, channels, options, showError, send)
+      : card(
+          heading(t('publisher.feeds.channels.title')),
+          el('p', { className: 'publisher-feeds-restricted', textContent: t('publisher.feeds.channels.unavailable') }),
+        )
 
-  mount.replaceChildren(shell(...cards))
+  // Page header + two tabs (News feeds / Media channels), matching
+  // the review deck. Tabs toggle panel visibility in place — no
+  // refetch — so switching tabs is instant.
+  const header = el('header', { className: 'publisher-page-header' }, [
+    el('div', { className: 'publisher-page-titles' }, [
+      el('h1', { className: 'publisher-page-title', textContent: t('publisher.feeds.pageTitle') }),
+      el('p', { className: 'publisher-page-subtitle', textContent: t('publisher.feeds.pageSubtitle') }),
+    ]),
+  ])
+
+  const newsPanel = el('div', { className: 'publisher-feeds-panel' }, [yourFeeds, suggested, custom])
+  const mediaPanel = el('div', { className: 'publisher-feeds-panel' }, [mediaContent])
+  mediaPanel.hidden = true
+
+  const tabs = el('div', { className: 'publisher-tabs', role: 'tablist' }) as HTMLElement
+  const makeTab = (labelKey: 'publisher.feeds.tab.news' | 'publisher.feeds.tab.media', panel: HTMLElement, active: boolean): HTMLElement => {
+    const tab = el('button', {
+      type: 'button',
+      className: active ? 'publisher-tab publisher-tab-active' : 'publisher-tab',
+      textContent: t(labelKey),
+    }) as HTMLButtonElement
+    tab.setAttribute('role', 'tab')
+    tab.setAttribute('aria-selected', active ? 'true' : 'false')
+    tab.addEventListener('click', () => {
+      newsPanel.hidden = panel !== newsPanel
+      mediaPanel.hidden = panel !== mediaPanel
+      for (const el2 of Array.from(tabs.children)) {
+        const isThis = el2 === tab
+        el2.classList.toggle('publisher-tab-active', isThis)
+        el2.setAttribute('aria-selected', isThis ? 'true' : 'false')
+      }
+    })
+    return tab
+  }
+  tabs.append(makeTab('publisher.feeds.tab.news', newsPanel, true), makeTab('publisher.feeds.tab.media', mediaPanel, false))
+
+  mount.replaceChildren(shell(header, tabs, newsPanel, mediaPanel))
 }
 
 /** The "Trusted video channels" card — the reputable-source allowlist
