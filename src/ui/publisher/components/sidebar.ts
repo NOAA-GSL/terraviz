@@ -5,7 +5,8 @@
  * portal title + back-to-Terraviz link at the top, the section nav
  * grouped under headers (Catalog / Newsroom / Insights / Settings)
  * with a standalone Overview entry above them, and a user identity
- * footer (org avatar + name + role + Sign out) pinned to the bottom.
+ * footer (signed-in user's avatar + name + role + Sign out) pinned to
+ * the bottom.
  *
  * Active-state tracking is decoupled from the router via the
  * `publisher:routechange` CustomEvent so the sidebar doesn't need to
@@ -227,9 +228,13 @@ function buildFooter(options: SidebarOptions): HTMLElement {
   const footer = document.createElement('div')
   footer.className = 'publisher-sidebar-footer'
 
+  // The footer identifies the signed-in *person* (whose session this
+  // is and who Sign out logs out), so prefer their display name — the
+  // avatar then reads as their initials (e.g. "Eric Hackathorn" → EH).
+  // Fall back to the host org name, then the portal title.
   const name =
-    options.identity?.orgName?.trim() ||
     options.identity?.displayName?.trim() ||
+    options.identity?.orgName?.trim() ||
     t('publisher.portal.title')
 
   const user = document.createElement('div')

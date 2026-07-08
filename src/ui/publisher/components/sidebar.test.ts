@@ -85,13 +85,23 @@ describe('renderSidebar', () => {
     expect(host.querySelector('.publisher-nav-badge')).toBeNull()
   })
 
-  it('renders the footer identity (org name, role) and avatar initials', () => {
+  it('prefers the signed-in person for the footer name + avatar initials', () => {
+    renderSidebar(host, router, {
+      isAdmin: true,
+      identity: { orgName: 'The Zyra Project', displayName: 'Eric Hackathorn', roleLabel: 'Admin' },
+    })
+    // The footer identifies the person, not the org: "Eric Hackathorn" → EH.
+    expect(host.querySelector('.publisher-sidebar-user-name')?.textContent).toBe('Eric Hackathorn')
+    expect(host.querySelector('.publisher-sidebar-user-role')?.textContent).toBe('Admin')
+    expect(host.querySelector('.publisher-sidebar-avatar')?.textContent).toBe('EH')
+  })
+
+  it('falls back to the org name when no display name is present', () => {
     renderSidebar(host, router, {
       isAdmin: true,
       identity: { orgName: 'The Zyra Project', roleLabel: 'Admin' },
     })
     expect(host.querySelector('.publisher-sidebar-user-name')?.textContent).toBe('The Zyra Project')
-    expect(host.querySelector('.publisher-sidebar-user-role')?.textContent).toBe('Admin')
     // Leading article dropped: "The Zyra Project" → "ZP".
     expect(host.querySelector('.publisher-sidebar-avatar')?.textContent).toBe('ZP')
   })
