@@ -370,6 +370,9 @@ const checks: Check[] = [
     async run(page) {
       await gotoApp(page, '/publish/datasets/01HEXAMPLEDATASET00000001/edit')
       await page.locator('#publisher-root .publisher-sidebar').waitFor({ state: 'visible' })
+      // The dataset form is a stepper — open the Media section (where
+      // the thumbnail uploader lives) before interacting with it.
+      await page.locator('.publisher-form-nav-link[data-section="ds-section-media"]').click()
       // The thumbnail uploader's globe-thumbnail generator block.
       await page
         .locator('.publisher-asset-uploader-generate')

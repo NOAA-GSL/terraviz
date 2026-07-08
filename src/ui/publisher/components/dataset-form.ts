@@ -126,6 +126,12 @@ interface FormState {
   licenseSpdx: string
   licenseUrl: string
   licenseStatement: string
+  /** Guided license-chooser UI state (persists across re-renders).
+   *  `licenseAdapt`: '' | 'yes' | 'sharealike' | 'no';
+   *  `licenseCommercial`: '' | 'yes' | 'no'. */
+  licenseChooserOpen: boolean
+  licenseAdapt: string
+  licenseCommercial: string
   attributionText: string
   rightsHolder: string
   doi: string
@@ -303,6 +309,7 @@ function buildSectionNav(activeSection: string, onSelect: (id: string) => void):
         ? 'publisher-form-nav-link publisher-form-nav-link-active'
         : 'publisher-form-nav-link'
     if (section.id === activeSection) a.setAttribute('aria-current', 'step')
+    a.dataset.section = section.id
     a.textContent = t(section.labelKey)
     a.addEventListener('click', () => onSelect(section.id))
     nav.appendChild(a)
@@ -1067,6 +1074,194 @@ function categorizationCard(state: FormState): HTMLElement {
   return card
 }
 
+/** Creative Commons 4.0 licenses keyed by `<adapt>|<commercial>`
+ *  answers — the guided chooser's suggestion table. */
+const CC_LICENSES: Record<string, { spdx: string; url: string }> = {
+  'yes|yes': { spdx: 'CC-BY-4.0', url: 'https://creativecommons.org/licenses/by/4.0/' },
+  'yes|no': { spdx: 'CC-BY-NC-4.0', url: 'https://creativecommons.org/licenses/by-nc/4.0/' },
+  'sharealike|yes': { spdx: 'CC-BY-SA-4.0', url: 'https://creativecommons.org/licenses/by-sa/4.0/' },
+  'sharealike|no': { spdx: 'CC-BY-NC-SA-4.0', url: 'https://creativecommons.org/licenses/by-nc-sa/4.0/' },
+  'no|yes': { spdx: 'CC-BY-ND-4.0', url: 'https://creativecommons.org/licenses/by-nd/4.0/' },
+  'no|no': { spdx: 'CC-BY-NC-ND-4.0', url: 'https://creativecommons.org/licenses/by-nc-nd/4.0/' },
+}
+
+/** A few common licenses offered as one-click quick-picks. */
+const COMMON_LICENSES: ReadonlyArray<{ spdx: string; url: string }> = [
+  { spdx: 'CC0-1.0', url: 'https://creativecommons.org/publicdomain/zero/1.0/' },
+  { spdx: 'CC-BY-4.0', url: 'https://creativecommons.org/licenses/by/4.0/' },
+  { spdx: 'CC-BY-SA-4.0', url: 'https://creativecommons.org/licenses/by-sa/4.0/' },
+  { spdx: 'CC-BY-NC-4.0', url: 'https://creativecommons.org/licenses/by-nc/4.0/' },
+]
+
+/** Map the two chooser answers to a suggested license, or null until
+ *  both are answered. Pure — exported for tests. */
+export function suggestedLicense(
+  adapt: string,
+  commercial: string,
+): { spdx: string; url: string } | null {
+  if (!adapt || !commercial) return null
+  return CC_LICENSES[`${adapt}|${commercial}`] ?? null
+}
+
+/** A labelled radio group for one chooser question. */
+function chooserQuestion(
+  labelKey: MessageKey,
+  name: string,
+  options: ReadonlyArray<{ value: string; labelKey: MessageKey }>,
+  selected: string,
+  onSelect: (value: string) => void,
+): HTMLElement {
+  const fieldset = document.createElement('fieldset')
+  fieldset.className = 'publisher-license-chooser-question'
+  const legend = document.createElement('legend')
+  legend.className = 'publisher-license-chooser-legend'
+  legend.textContent = t(labelKey)
+  fieldset.appendChild(legend)
+  const row = document.createElement('div')
+  row.className = 'publisher-license-chooser-options'
+  for (const opt of options) {
+    const label = document.createElement('label')
+    label.className = 'publisher-license-chooser-option'
+    const radio = document.createElement('input')
+    radio.type = 'radio'
+    radio.name = name
+    radio.value = opt.value
+    radio.checked = selected === opt.value
+    radio.addEventListener('change', () => onSelect(opt.value))
+    label.append(radio, el('span', { textContent: t(opt.labelKey) }))
+    row.appendChild(label)
+  }
+  fieldset.appendChild(row)
+  return fieldset
+}
+
+/** The guided license chooser block (deck slide 5): a Quick-pick row
+ *  of common licenses plus two questions that suggest a CC license,
+ *  all of which fill the SPDX + URL fields below. */
+function licenseChooser(state: FormState, update: () => void): HTMLElement {
+  const applyLicense = (spdx: string, url: string): void => {
+    state.licenseSpdx = spdx
+    state.licenseUrl = url
+    update()
+  }
+
+  const chooser = document.createElement('div')
+  chooser.className = 'publisher-license-chooser'
+
+  const head = document.createElement('div')
+  head.className = 'publisher-license-chooser-head'
+  head.appendChild(
+    el('span', {
+      className: 'publisher-license-chooser-title',
+      textContent: t('publisher.datasetForm.chooser.quickPick'),
+    }),
+  )
+  const toggle = document.createElement('button')
+  toggle.type = 'button'
+  toggle.className = 'publisher-license-chooser-toggle'
+  toggle.textContent = state.licenseChooserOpen
+    ? t('publisher.datasetForm.chooser.hide')
+    : t('publisher.datasetForm.chooser.show')
+  toggle.addEventListener('click', () => {
+    state.licenseChooserOpen = !state.licenseChooserOpen
+    update()
+  })
+  head.appendChild(toggle)
+  chooser.appendChild(head)
+
+  chooser.appendChild(
+    el('p', {
+      className: 'publisher-license-chooser-help',
+      textContent: t('publisher.datasetForm.chooser.help'),
+    }),
+  )
+
+  if (!state.licenseChooserOpen) return chooser
+
+  const quick = document.createElement('div')
+  quick.className = 'publisher-license-chooser-quick'
+  for (const lic of COMMON_LICENSES) {
+    const btn = document.createElement('button')
+    btn.type = 'button'
+    btn.className = 'publisher-license-chooser-chip'
+    btn.textContent = lic.spdx // i18n-exempt: SPDX identifier
+    if (state.licenseSpdx === lic.spdx) btn.classList.add('is-selected')
+    btn.addEventListener('click', () => applyLicense(lic.spdx, lic.url))
+    quick.appendChild(btn)
+  }
+  chooser.appendChild(quick)
+
+  chooser.appendChild(
+    el('h4', {
+      className: 'publisher-license-chooser-heading',
+      textContent: t('publisher.datasetForm.chooser.heading'),
+    }),
+  )
+  chooser.appendChild(
+    chooserQuestion(
+      'publisher.datasetForm.chooser.q1',
+      'dataset-license-adapt',
+      [
+        { value: 'yes', labelKey: 'publisher.datasetForm.chooser.q1.yes' },
+        { value: 'sharealike', labelKey: 'publisher.datasetForm.chooser.q1.sharealike' },
+        { value: 'no', labelKey: 'publisher.datasetForm.chooser.q1.no' },
+      ],
+      state.licenseAdapt,
+      v => {
+        state.licenseAdapt = v
+        update()
+      },
+    ),
+  )
+  chooser.appendChild(
+    chooserQuestion(
+      'publisher.datasetForm.chooser.q2',
+      'dataset-license-commercial',
+      [
+        { value: 'yes', labelKey: 'publisher.datasetForm.chooser.q2.yes' },
+        { value: 'no', labelKey: 'publisher.datasetForm.chooser.q2.no' },
+      ],
+      state.licenseCommercial,
+      v => {
+        state.licenseCommercial = v
+        update()
+      },
+    ),
+  )
+
+  const suggestion = suggestedLicense(state.licenseAdapt, state.licenseCommercial)
+  if (!suggestion) {
+    chooser.appendChild(
+      el('p', {
+        className: 'publisher-license-chooser-prompt',
+        textContent: t('publisher.datasetForm.chooser.prompt'),
+      }),
+    )
+  } else {
+    const row = document.createElement('div')
+    row.className = 'publisher-license-chooser-suggestion'
+    row.appendChild(
+      el('span', {
+        className: 'publisher-license-chooser-suggestion-label',
+        textContent: `${t('publisher.datasetForm.chooser.suggested')}: ${suggestion.spdx}`,
+      }),
+    )
+    const apply = document.createElement('button')
+    apply.type = 'button'
+    apply.className = 'publisher-button publisher-button-primary publisher-license-chooser-apply'
+    const isApplied = state.licenseSpdx === suggestion.spdx
+    apply.textContent = isApplied
+      ? t('publisher.datasetForm.chooser.applied')
+      : t('publisher.datasetForm.chooser.apply')
+    apply.disabled = isApplied
+    apply.addEventListener('click', () => applyLicense(suggestion.spdx, suggestion.url))
+    row.appendChild(apply)
+    chooser.appendChild(row)
+  }
+
+  return chooser
+}
+
 function licensingCard(state: FormState, update: () => void): HTMLElement {
   const card = document.createElement('section')
   card.className = 'publisher-card publisher-glass publisher-form-card'
@@ -1075,6 +1270,8 @@ function licensingCard(state: FormState, update: () => void): HTMLElement {
   heading.className = 'publisher-card-heading'
   heading.textContent = t('publisher.datasetForm.section.licensing')
   card.appendChild(heading)
+
+  card.appendChild(licenseChooser(state, update))
 
   card.appendChild(
     inputField({
@@ -2091,6 +2288,9 @@ function initialState(
       licenseSpdx: '',
       licenseUrl: '',
       licenseStatement: '',
+      licenseChooserOpen: true,
+      licenseAdapt: '',
+      licenseCommercial: '',
       attributionText: '',
       rightsHolder: '',
       doi: '',
@@ -2141,6 +2341,11 @@ function initialState(
     licenseSpdx: row.license_spdx ?? '',
     licenseUrl: row.license_url ?? '',
     licenseStatement: row.license_statement ?? '',
+    // Open the chooser only when no license is set yet (nothing to
+    // overwrite); an already-licensed row starts collapsed.
+    licenseChooserOpen: !(row.license_spdx ?? '').trim(),
+    licenseAdapt: '',
+    licenseCommercial: '',
     attributionText: row.attribution_text ?? '',
     rightsHolder: row.rights_holder ?? '',
     doi: row.doi ?? '',

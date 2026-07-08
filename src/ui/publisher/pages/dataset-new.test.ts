@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { renderDatasetNewPage, dateTimeToIso } from './dataset-new'
+import { suggestedLicense } from '../components/dataset-form'
 
 function jsonResponse(body: unknown, status = 201): Response {
   return new Response(JSON.stringify(body), {
@@ -94,6 +95,41 @@ describe('renderDatasetNewPage', () => {
     expect(mount.querySelector<HTMLElement>('#ds-section-licensing')?.style.display).not.toBe('none')
     expect(mount.querySelector<HTMLElement>('#ds-section-identity')?.style.display).toBe('none')
     expect(mount.querySelector('.publisher-form-nav-link-active')?.textContent).toBe('Licensing & attribution')
+  })
+
+  it('suggestedLicense maps the two chooser answers to a CC license', () => {
+    expect(suggestedLicense('yes', 'yes')?.spdx).toBe('CC-BY-4.0')
+    expect(suggestedLicense('yes', 'no')?.spdx).toBe('CC-BY-NC-4.0')
+    expect(suggestedLicense('sharealike', 'yes')?.spdx).toBe('CC-BY-SA-4.0')
+    expect(suggestedLicense('no', 'no')?.spdx).toBe('CC-BY-NC-ND-4.0')
+    expect(suggestedLicense('yes', '')).toBeNull()
+    expect(suggestedLicense('', '')).toBeNull()
+  })
+
+  it('the license chooser fills the SPDX + URL fields', () => {
+    renderDatasetNewPage(mount)
+    // Open the Licensing section (stepper).
+    const tab = Array.from(mount.querySelectorAll<HTMLButtonElement>('.publisher-form-nav-link')).find(
+      b => b.dataset.section === 'ds-section-licensing',
+    )!
+    tab.click()
+    expect(mount.querySelector('.publisher-license-chooser')).not.toBeNull()
+
+    // A quick-pick chip fills SPDX directly.
+    const cc0 = Array.from(mount.querySelectorAll<HTMLButtonElement>('.publisher-license-chooser-chip')).find(
+      b => b.textContent === 'CC0-1.0',
+    )!
+    cc0.click()
+    expect(mount.querySelector<HTMLInputElement>('#dataset-license-spdx')?.value).toBe('CC0-1.0')
+
+    // Answering both questions and clicking Apply fills the suggestion.
+    mount.querySelector<HTMLInputElement>('input[name="dataset-license-adapt"][value="yes"]')!.click()
+    mount.querySelector<HTMLInputElement>('input[name="dataset-license-commercial"][value="yes"]')!.click()
+    mount.querySelector<HTMLButtonElement>('.publisher-license-chooser-apply')!.click()
+    expect(mount.querySelector<HTMLInputElement>('#dataset-license-spdx')?.value).toBe('CC-BY-4.0')
+    expect(mount.querySelector<HTMLInputElement>('#dataset-license-url')?.value).toContain(
+      'creativecommons.org/licenses/by/4.0',
+    )
   })
 
   it('defaults to format=video/mp4 and visibility=public', () => {

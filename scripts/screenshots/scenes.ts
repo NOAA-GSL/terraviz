@@ -464,6 +464,9 @@ export const scenes: Scene[] = [
     masks: ['.publisher-asset-uploader-generate-preview'],
     async setup(page) {
       await openPublish(page, '/publish/datasets/01HEXAMPLEDATASET00000001/edit')
+      // The dataset form is a stepper — open the Media section (where
+      // the thumbnail uploader lives) before interacting with it.
+      await page.locator('.publisher-form-nav-link[data-section="ds-section-media"]').click()
       // The thumbnail uploader's generator block (thumbnail kind only).
       await page.locator('.publisher-asset-uploader-generate').first().waitFor()
       // Feed a 2:1 equirectangular frame (the bundled Earth specular
