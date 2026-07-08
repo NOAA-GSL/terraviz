@@ -114,16 +114,26 @@ function buildShell(
   const shell = document.createElement('main')
   shell.className = 'publisher-shell'
 
-  const header = document.createElement('div')
-  header.className = 'publisher-tour-list-header'
+  // Page header mirrors the datasets/workflows lists (deck layout):
+  // stacked title + subtitle on the start side, a primary action
+  // button on the end side.
+  const header = document.createElement('header')
+  header.className = 'publisher-page-header'
 
-  const h2 = document.createElement('h2')
-  h2.textContent = t('publisher.tours.heading')
-  header.appendChild(h2)
+  const titles = document.createElement('div')
+  titles.className = 'publisher-page-titles'
+  const h1 = document.createElement('h1')
+  h1.className = 'publisher-page-title'
+  h1.textContent = t('publisher.tours.heading')
+  const sub = document.createElement('p')
+  sub.className = 'publisher-page-subtitle'
+  sub.textContent = t('publisher.tours.intro')
+  titles.append(h1, sub)
+  header.appendChild(titles)
 
   const newBtn = document.createElement('button')
   newBtn.type = 'button'
-  newBtn.className = 'publisher-tab publisher-tab-active publisher-tour-new-btn'
+  newBtn.className = 'publisher-button publisher-button-primary publisher-tour-new-btn'
   newBtn.setAttribute('aria-label', t('publisher.tours.new.aria'))
   newBtn.textContent = t('publisher.tours.new')
   newBtn.addEventListener('click', () => {
@@ -149,11 +159,6 @@ function buildShell(
   })
   header.appendChild(newBtn)
   shell.appendChild(header)
-
-  const intro = document.createElement('p')
-  intro.className = 'publisher-tour-intro'
-  intro.textContent = t('publisher.tours.intro')
-  shell.appendChild(intro)
 
   if (tours.length === 0) {
     const empty = document.createElement('section')
@@ -390,35 +395,44 @@ function buildRow(
   // success removes the row from the DOM rather than re-
   // rendering the whole list. Server-side errors land in an
   // inline status next to the actions.
-  const deleteBtn = document.createElement('button')
-  deleteBtn.type = 'button'
-  deleteBtn.className = 'publisher-row-action publisher-row-delete'
-  deleteBtn.textContent = t('publisher.tours.action.delete')
-  deleteBtn.setAttribute(
-    'aria-label',
-    t('publisher.tours.action.delete.aria', { title: tour.title }),
-  )
-  const statusSpan = document.createElement('span')
-  statusSpan.className = 'publisher-row-action-status'
-  deleteBtn.addEventListener('click', () => {
-    const confirmed = confirmFn(
-      t('publisher.tours.delete.confirm', { title: tour.title }),
+  //
+  // Only offered on rows that are NOT currently published (draft or
+  // retracted) — a live row must be retracted before it can be
+  // deleted (the API enforces this with a 409), and the deck shows
+  // published rows with Edit + Retract only. This also keeps the
+  // action set to two buttons so it doesn't wrap.
+  if (statusKind !== 'published') {
+    const deleteBtn = document.createElement('button')
+    deleteBtn.type = 'button'
+    deleteBtn.className = 'publisher-row-action publisher-row-delete'
+    deleteBtn.textContent = t('publisher.tours.action.delete')
+    deleteBtn.setAttribute(
+      'aria-label',
+      t('publisher.tours.action.delete.aria', { title: tour.title }),
     )
-    if (!confirmed) return
-    deleteBtn.disabled = true
-    statusSpan.textContent = ''
-    void del(tour.id).then(result => {
-      if ('error' in result) {
-        deleteBtn.disabled = false
-        statusSpan.textContent = result.error
-        statusSpan.classList.add('publisher-row-action-status-error')
-        return
-      }
-      tr.remove()
+    const statusSpan = document.createElement('span')
+    statusSpan.className = 'publisher-row-action-status'
+    deleteBtn.addEventListener('click', () => {
+      const confirmed = confirmFn(
+        t('publisher.tours.delete.confirm', { title: tour.title }),
+      )
+      if (!confirmed) return
+      deleteBtn.disabled = true
+      statusSpan.textContent = ''
+      statusSpan.classList.remove('publisher-row-action-status-error')
+      void del(tour.id).then(result => {
+        if ('error' in result) {
+          deleteBtn.disabled = false
+          statusSpan.textContent = result.error
+          statusSpan.classList.add('publisher-row-action-status-error')
+          return
+        }
+        tr.remove()
+      })
     })
-  })
-  actionsCell.appendChild(deleteBtn)
-  actionsCell.appendChild(statusSpan)
+    actionsCell.appendChild(deleteBtn)
+    actionsCell.appendChild(statusSpan)
+  }
   tr.appendChild(actionsCell)
 
   return tr

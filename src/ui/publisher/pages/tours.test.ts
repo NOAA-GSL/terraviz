@@ -27,7 +27,7 @@ describe('renderToursPage (tour/A → /G)', () => {
       createDraft: vi.fn(),
       listFn: vi.fn(async () => ({ tours: [], next_cursor: null })),
     })
-    expect(content.querySelector('h2')?.textContent).toBe('Tours')
+    expect(content.querySelector('.publisher-page-title')?.textContent).toBe('Tours')
     expect(content.querySelector('.publisher-empty')?.textContent).toContain('No tours yet')
   })
 

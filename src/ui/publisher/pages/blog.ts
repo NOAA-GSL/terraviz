@@ -109,7 +109,7 @@ export async function renderBlogPage(mount: HTMLElement, options: BlogPageOption
   )
   const newBtn = el('button', {
     type: 'button',
-    className: 'publisher-btn publisher-btn-primary publisher-blog-new-btn',
+    className: 'publisher-button publisher-button-primary publisher-blog-new-btn',
     textContent: t('publisher.blog.new'),
   })
   newBtn.addEventListener('click', () => navigate('/publish/blog/new'))
@@ -152,21 +152,33 @@ export async function renderBlogPage(mount: HTMLElement, options: BlogPageOption
           }),
         ]),
       )
-      tr.append(el('td', { textContent: post.updatedAt.slice(0, 10) }))
-      // Published posts link straight to their public page; drafts
-      // have nothing public to link to.
-      const viewCell = el('td')
+      tr.append(el('td', { className: 'publisher-cell-updated', textContent: post.updatedAt.slice(0, 10) }))
+      // Actions: Edit (all rows, opens the editor) + View (published
+      // only — a public page to link to). Consistent action pills with
+      // the other list pages.
+      const actionsCell = el('td', { className: 'publisher-cell-actions' })
+      const edit = el('a', {
+        className: 'publisher-row-action publisher-row-edit',
+        href: `/publish/blog/${encodeURIComponent(post.id)}/edit`,
+        textContent: t('publisher.blog.list.edit'),
+      })
+      edit.addEventListener('click', e => {
+        if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return
+        e.preventDefault()
+        navigate(`/publish/blog/${encodeURIComponent(post.id)}/edit`)
+      })
+      actionsCell.append(edit)
       if (post.status === 'published') {
         const view = el('a', {
-          className: 'publisher-row-link publisher-blog-view-link',
+          className: 'publisher-row-action publisher-blog-view-link',
           href: `/blog/${encodeURIComponent(post.slug)}`,
           textContent: t('publisher.blog.list.view'),
         })
         view.target = '_blank'
         view.rel = 'noopener'
-        viewCell.append(view)
+        actionsCell.append(view)
       }
-      tr.append(viewCell)
+      tr.append(actionsCell)
       tbody.append(tr)
     }
     table.append(tbody)

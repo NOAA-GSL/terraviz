@@ -1487,22 +1487,17 @@
 }
 
 /* Phase 3pt/A — `/publish/tours` landing page styles. */
-.publisher-tour-list-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  gap: calc(1rem * var(--ui-scale));
-  margin-block-end: calc(0.5rem * var(--ui-scale));
-}
-
 .publisher-tour-new-btn {
   flex-shrink: 0;
 }
 
-.publisher-tour-intro {
-  color: var(--color-text-muted, #aaa);
-  margin-block: 0 calc(1rem * var(--ui-scale));
-  font-size: calc(0.85rem * var(--ui-scale));
+/* Detail-page header action cluster (workflow detail, etc.) — the
+   Edit / Run now buttons on the end side of the page header. */
+.publisher-detail-actions {
+  display: flex;
+  align-items: center;
+  gap: calc(0.5rem * var(--ui-scale));
+  flex-wrap: wrap;
 }
 
 .publisher-tour-empty-hint {
