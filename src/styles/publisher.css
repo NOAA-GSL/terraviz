@@ -26,6 +26,21 @@
   color-scheme: dark;
 }
 
+/* Native <select> option popups: when a control sets an explicit
+   (often semi-transparent) background, browsers paint the option list
+   with it — over the OS-default white that composites to white-on-white
+   (e.g. the feeds category dropdown). Force a solid dark background +
+   light text on every portal option. Selects that style their own
+   options (e.g. `.publisher-hero-select option`) still win by source
+   order since they're defined later. */
+.publisher-portal option {
+  /* Opaque menu background — the `--color-surface*` tokens are
+     translucent white overlays, which is exactly what composites to
+     white-on-white here; use an opaque dark instead. */
+  background-color: #171a22;
+  color: var(--color-text, #e6e8ec);
+}
+
 .publisher-content {
   flex: 1 1 auto;
   min-width: 0;
