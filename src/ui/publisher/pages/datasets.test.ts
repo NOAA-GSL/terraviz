@@ -259,7 +259,10 @@ describe('renderDatasetsPage', () => {
           next_cursor: null,
         }),
       )
-    await renderDatasetsPage(mount, { fetchFn: fetchFn as unknown as typeof fetch })
+    await renderDatasetsPage(mount, {
+      fetchFn: fetchFn as unknown as typeof fetch,
+      fetchCounts: false,
+    })
 
     expect(mount.querySelectorAll('tbody tr').length).toBe(1)
 
@@ -383,6 +386,7 @@ describe('renderDatasetsPage — delete action', () => {
     await renderDatasetsPage(mount, {
       fetchFn: fetchFn as unknown as typeof fetch,
       confirm: () => false,
+      fetchCounts: false,
     })
     mount.querySelector<HTMLButtonElement>('.publisher-row-delete')?.click()
     await Promise.resolve()
@@ -397,6 +401,7 @@ describe('renderDatasetsPage — delete action', () => {
     await renderDatasetsPage(mount, {
       fetchFn: fetchFn as unknown as typeof fetch,
       confirm: () => true,
+      fetchCounts: false,
     })
     mount.querySelector<HTMLButtonElement>('.publisher-row-delete')?.click()
     await vi.waitFor(() => {
@@ -406,6 +411,54 @@ describe('renderDatasetsPage — delete action', () => {
       '/api/v1/publish/datasets/01AAA',
       expect.objectContaining({ method: 'DELETE' }),
     )
+  })
+
+  it('published rows show Edit + Retract (not Delete)', async () => {
+    window.history.replaceState(null, '', '/publish/datasets?status=published')
+    const fetchFn = vi.fn().mockResolvedValue(
+      jsonResponse({ datasets: [dataset({ id: 'P', published_at: '2026-04-30T12:00:00Z' })], next_cursor: null }),
+    )
+    await renderDatasetsPage(mount, { fetchFn: fetchFn as unknown as typeof fetch, fetchCounts: false })
+    expect(mount.querySelector('.publisher-row-edit')?.getAttribute('href')).toBe('/publish/datasets/P/edit')
+    expect(mount.querySelector('.publisher-row-retract')).not.toBeNull()
+    expect(mount.querySelector('.publisher-row-delete')).toBeNull()
+  })
+
+  it('a confirmed Retract POSTs to the retract endpoint and drops the row', async () => {
+    window.history.replaceState(null, '', '/publish/datasets?status=published')
+    const calls: Array<[string, RequestInit | undefined]> = []
+    const fetchFn = vi.fn((url: RequestInfo | URL, init?: RequestInit) => {
+      calls.push([String(url), init])
+      if (String(url).includes('/retract')) return Promise.resolve(jsonResponse({ dataset: {} }))
+      return Promise.resolve(jsonResponse({ datasets: [dataset({ id: 'P', published_at: '2026-04-30T12:00:00Z' })], next_cursor: null }))
+    })
+    await renderDatasetsPage(mount, {
+      fetchFn: fetchFn as unknown as typeof fetch,
+      confirm: () => true,
+      fetchCounts: false,
+    })
+    mount.querySelector<HTMLButtonElement>('.publisher-row-retract')?.click()
+    await vi.waitFor(() => expect(mount.querySelector('tbody tr')).toBeNull())
+    const retract = calls.find(c => c[0].includes('/retract'))
+    expect(retract?.[0]).toBe('/api/v1/publish/datasets/P/retract')
+    expect(retract?.[1]?.method).toBe('POST')
+  })
+
+  it('folds per-lifecycle counts into the tab labels once the probe resolves', async () => {
+    window.history.replaceState(null, '', '/publish/datasets?status=draft')
+    // First call = the draft list; the three count probes follow.
+    const fetchFn = vi.fn((url: RequestInfo | URL) => {
+      const u = String(url)
+      const n = u.includes('status=draft') ? 2 : u.includes('status=published') ? 8 : 1
+      return Promise.resolve(
+        jsonResponse({ datasets: Array.from({ length: n }, (_, i) => dataset({ id: `${u}-${i}` })), next_cursor: null }),
+      )
+    })
+    await renderDatasetsPage(mount, { fetchFn: fetchFn as unknown as typeof fetch })
+    await vi.waitFor(() => {
+      const counts = Array.from(mount.querySelectorAll('.publisher-tab-count')).map(c => c.textContent)
+      expect(counts).toEqual(['2', '8', '1'])
+    })
   })
 
   it('shows an inline error and keeps the row when DELETE fails', async () => {
