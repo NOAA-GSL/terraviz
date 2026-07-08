@@ -8,7 +8,7 @@ import {
 } from '../services/voiceService'
 import type { StartVad } from '../services/voiceRealtimeSession'
 
-/** A driveable wake-word seam: `fire()` simulates a "Hey Orbit". */
+/** A driveable wake-word seam: `fire()` simulates a detected wake phrase. */
 function makeWake() {
   let onWake: (() => void) | null = null
   let stopped = false

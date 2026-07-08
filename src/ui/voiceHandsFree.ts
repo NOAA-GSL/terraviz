@@ -68,7 +68,7 @@ export interface HandsFreeDeps {
 }
 
 // A wake that arms a turn but hears nothing is abandoned after this long,
-// so a stray "Hey Orbit" doesn't hold the mic open forever. Real turns
+// so a stray wake phrase doesn't hold the mic open forever. Real turns
 // endpoint well inside this via the streaming engine's turn detector.
 const WAKE_CAPTURE_TIMEOUT_MS = 8000
 
