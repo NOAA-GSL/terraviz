@@ -301,6 +301,10 @@ function renderForm(mount: HTMLElement, state: FormState): void {
   const form = card(
     heading(t('publisher.nodeProfile.title')),
     el('p', { className: 'publisher-nodeprofile-intro', textContent: t('publisher.nodeProfile.intro') }),
+    el('div', { className: 'publisher-nodeprofile-callout' }, [
+      el('span', { className: 'publisher-nodeprofile-callout-icon', textContent: '✦' }),
+      el('p', { className: 'publisher-nodeprofile-callout-text', textContent: t('publisher.nodeProfile.aiCallout') }),
+    ]),
     labelled(t('publisher.nodeProfile.orgName'), orgName),
     labelled(t('publisher.nodeProfile.mission'), mission),
     aboutField(t('publisher.nodeProfile.aboutMd'), aboutToggle, aboutToolbar, about, aboutPreview),

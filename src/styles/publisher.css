@@ -4242,3 +4242,26 @@
   margin-block: calc(1rem * var(--ui-scale)) calc(1.25rem * var(--ui-scale));
   flex-wrap: wrap;
 }
+
+/* --- Node profile AI callout --- */
+.publisher-nodeprofile-callout {
+  display: flex;
+  gap: calc(0.6rem * var(--ui-scale));
+  align-items: flex-start;
+  padding: calc(0.75rem * var(--ui-scale)) calc(1rem * var(--ui-scale));
+  margin-block-end: calc(1rem * var(--ui-scale));
+  background: var(--accent-o08, rgba(77, 166, 255, 0.08));
+  border: 1px solid var(--accent-o20, rgba(77, 166, 255, 0.2));
+  border-radius: var(--radius-lg, calc(8px * var(--ui-scale)));
+}
+.publisher-nodeprofile-callout-icon {
+  flex: none;
+  color: var(--color-accent, #4da6ff);
+  font-size: calc(1rem * var(--ui-scale));
+  line-height: 1.4;
+}
+.publisher-nodeprofile-callout-text {
+  margin: 0;
+  font-size: calc(0.84rem * var(--ui-scale));
+  color: var(--color-text-secondary, #b8c0cc);
+}
