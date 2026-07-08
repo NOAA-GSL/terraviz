@@ -58,7 +58,13 @@ describe('renderMePage', () => {
     expect(mount.querySelector('.publisher-loading')).toBeNull()
     expect(mount.querySelector('.publisher-card')).not.toBeNull()
     expect(mount.textContent).toContain('jane@example.org')
-    expect(mount.textContent).toContain('NOAA/PMEL')
+    // Display name + affiliation are now editable inputs.
+    expect(mount.querySelector<HTMLInputElement>('#publisher-account-display-name')?.value).toBe(
+      'Jane Doe',
+    )
+    expect(mount.querySelector<HTMLInputElement>('#publisher-account-affiliation')?.value).toBe(
+      'NOAA/PMEL',
+    )
   })
 
   it('renders the admin role with the admin-styled badge', async () => {
@@ -78,11 +84,59 @@ describe('renderMePage', () => {
     expect(mount.querySelector('.publisher-badge-role')?.textContent).toBe('Publisher')
   })
 
-  it("renders an explicit 'Not set' when affiliation is null", async () => {
+  it('renders an empty affiliation input when affiliation is null', async () => {
     const payload = samplePayload({ affiliation: null })
     const fetchFn = vi.fn().mockResolvedValue(jsonResponse(payload))
     await renderMePage(mount, { fetchFn: fetchFn as unknown as typeof fetch })
-    expect(mount.textContent).toContain('Not set')
+    expect(mount.querySelector<HTMLInputElement>('#publisher-account-affiliation')?.value).toBe('')
+  })
+
+  it('renders the security + sessions sections with inert IdP-managed controls', async () => {
+    const fetchFn = vi.fn().mockResolvedValue(jsonResponse(SAMPLE))
+    await renderMePage(mount, { fetchFn: fetchFn as unknown as typeof fetch })
+    expect(mount.textContent).toContain('Account & security')
+    expect(mount.textContent).toContain('Active sessions')
+    // Security action buttons are present but disabled (IdP-owned).
+    const securityBtns = mount.querySelectorAll<HTMLButtonElement>(
+      '.publisher-account-security-row .publisher-button',
+    )
+    expect(securityBtns.length).toBe(3)
+    expect(Array.from(securityBtns).every(b => b.disabled)).toBe(true)
+  })
+
+  it('an admin can save profile changes via the publishers PATCH route', async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = []
+    const fetchFn = vi.fn((url: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(url), init })
+      if (String(url).includes('/publishers/')) return Promise.resolve(jsonResponse({ publisher: {} }))
+      return Promise.resolve(jsonResponse(SAMPLE))
+    })
+    await renderMePage(mount, { fetchFn: fetchFn as unknown as typeof fetch })
+
+    const nameInput = mount.querySelector<HTMLInputElement>('#publisher-account-display-name')!
+    nameInput.value = 'Jane R. Doe'
+    const save = Array.from(mount.querySelectorAll<HTMLButtonElement>('.publisher-account-actions .publisher-button')).find(
+      b => b.textContent === 'Save changes',
+    )!
+    save.click()
+    await new Promise(r => setTimeout(r, 0))
+
+    const patch = calls.find(c => c.url.includes('/publishers/'))
+    expect(patch?.init?.method).toBe('PATCH')
+    expect(String(patch?.init?.body)).toContain('Jane R. Doe')
+    expect(mount.querySelector('.publisher-account-save-ok')?.textContent).toBe('Saved ✓')
+  })
+
+  it('a non-admin sees read-only profile fields and no Save button', async () => {
+    const payload = samplePayload({ role: 'publisher', is_admin: false })
+    const fetchFn = vi.fn().mockResolvedValue(jsonResponse(payload))
+    await renderMePage(mount, { fetchFn: fetchFn as unknown as typeof fetch })
+    expect(mount.querySelector<HTMLInputElement>('#publisher-account-display-name')?.disabled).toBe(true)
+    expect(mount.textContent).toContain('Contact an admin')
+    const save = Array.from(mount.querySelectorAll<HTMLButtonElement>('.publisher-button')).find(
+      b => b.textContent === 'Save changes',
+    )
+    expect(save).toBeUndefined()
   })
 
   it('applies the status data-status attribute so the badge can colour-code', async () => {
