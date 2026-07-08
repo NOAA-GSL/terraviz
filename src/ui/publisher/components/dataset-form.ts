@@ -167,6 +167,10 @@ interface FormState {
   // matches the validator.
   keywords: ReadonlyArray<string>
   tags: ReadonlyArray<string>
+  /** DOM id of the section card currently shown — the deck's form is
+   *  a stepper, so only one section is visible at a time (the left-
+   *  rail nav switches it). */
+  activeSection: string
   isSaving: boolean
   errors: ReadonlyArray<PublisherValidationError>
   /** Non-validation top-level error (network / server / session
@@ -238,6 +242,132 @@ function backLink(): HTMLElement {
   a.className = 'publisher-back-link'
   a.textContent = `← ${t('publisher.datasetDetail.backToList')}`
   return a
+}
+
+/** Terse createElement helper for the form's chrome (nav / readiness). */
+function el(tag: string, props: { className?: string; textContent?: string } = {}): HTMLElement {
+  const node = document.createElement(tag)
+  if (props.className) node.className = props.className
+  if (props.textContent != null) node.textContent = props.textContent
+  return node
+}
+
+/** DOM ids for the form's section cards — shared by the cards
+ *  themselves and the left-rail section nav that jumps to them. */
+const FORM_SECTIONS: ReadonlyArray<{
+  id: string
+  labelKey:
+    | 'publisher.datasetForm.section.identity'
+    | 'publisher.datasetForm.section.abstract'
+    | 'publisher.datasetForm.section.media'
+    | 'publisher.datasetForm.section.licensing'
+    | 'publisher.datasetForm.section.timeSpace'
+    | 'publisher.datasetForm.section.categorization'
+}> = [
+  { id: 'ds-section-identity', labelKey: 'publisher.datasetForm.section.identity' },
+  { id: 'ds-section-abstract', labelKey: 'publisher.datasetForm.section.abstract' },
+  { id: 'ds-section-media', labelKey: 'publisher.datasetForm.section.media' },
+  { id: 'ds-section-licensing', labelKey: 'publisher.datasetForm.section.licensing' },
+  { id: 'ds-section-timespace', labelKey: 'publisher.datasetForm.section.timeSpace' },
+  { id: 'ds-section-categorization', labelKey: 'publisher.datasetForm.section.categorization' },
+]
+
+/** Map a server validation-error field to the section that holds it,
+ *  so a failed save can jump the stepper to the offending field
+ *  (otherwise an error in a hidden section is invisible). */
+function sectionForField(field: string): string {
+  if (field === 'abstract') return 'ds-section-abstract'
+  if (field === 'thumbnail_ref' || field === 'legend_ref') return 'ds-section-media'
+  if (field.startsWith('license') || field === 'attribution_text' || field === 'rights_holder' || field === 'doi' || field === 'citation_text') {
+    return 'ds-section-licensing'
+  }
+  if (field === 'start_time' || field === 'end_time' || field === 'period' || field.startsWith('bounding_box') || field === 'lon_origin' || field === 'celestial_body' || field === 'radius_mi') {
+    return 'ds-section-timespace'
+  }
+  if (field === 'keywords' || field === 'tags') return 'ds-section-categorization'
+  // title / slug / format / visibility / data_ref / organization.
+  return 'ds-section-identity'
+}
+
+/** Left-rail section nav. The form is a stepper — clicking a section
+ *  shows only that section's card(s); the active one is highlighted. */
+function buildSectionNav(activeSection: string, onSelect: (id: string) => void): HTMLElement {
+  const nav = document.createElement('nav')
+  nav.className = 'publisher-form-nav'
+  nav.setAttribute('aria-label', t('publisher.datasetForm.nav.aria'))
+  for (const section of FORM_SECTIONS) {
+    const a = document.createElement('button')
+    a.type = 'button'
+    a.className =
+      section.id === activeSection
+        ? 'publisher-form-nav-link publisher-form-nav-link-active'
+        : 'publisher-form-nav-link'
+    if (section.id === activeSection) a.setAttribute('aria-current', 'step')
+    a.textContent = t(section.labelKey)
+    a.addEventListener('click', () => onSelect(section.id))
+    nav.appendChild(a)
+  }
+  return nav
+}
+
+/** The five publish-readiness requirements and whether the current
+ *  form state satisfies each — the same fields `validateForPublish`
+ *  enforces server-side, surfaced as a live checklist. */
+function readinessItems(state: FormState): Array<{ labelKey: string; ready: boolean }> {
+  return [
+    { labelKey: 'publisher.datasetForm.readiness.title', ready: state.title.trim() !== '' },
+    { labelKey: 'publisher.datasetForm.readiness.format', ready: state.format.trim() !== '' },
+    { labelKey: 'publisher.datasetForm.readiness.abstract', ready: state.abstract.trim() !== '' },
+    { labelKey: 'publisher.datasetForm.readiness.dataRef', ready: state.dataRef.trim() !== '' },
+    {
+      labelKey: 'publisher.datasetForm.readiness.license',
+      ready: state.licenseSpdx.trim() !== '' || state.licenseStatement.trim() !== '',
+    },
+  ]
+}
+
+/** Left-rail "Publish readiness" checklist. */
+function buildReadiness(state: FormState): HTMLElement {
+  const items = readinessItems(state)
+  const readyCount = items.filter(i => i.ready).length
+
+  const panel = document.createElement('div')
+  panel.className = 'publisher-form-readiness'
+  panel.appendChild(
+    el('div', {
+      className: 'publisher-form-readiness-heading',
+      textContent: t('publisher.datasetForm.readiness.heading'),
+    }),
+  )
+  panel.appendChild(
+    el('div', {
+      className: 'publisher-form-readiness-count',
+      textContent: t('publisher.datasetForm.readiness.count', {
+        ready: String(readyCount),
+        total: String(items.length),
+      }),
+    }),
+  )
+  const list = document.createElement('ul')
+  list.className = 'publisher-form-readiness-list'
+  for (const item of items) {
+    const li = document.createElement('li')
+    li.className = `publisher-form-readiness-item ${item.ready ? 'is-ready' : 'is-pending'}`
+    const mark = el('span', {
+      className: 'publisher-form-readiness-mark',
+      textContent: item.ready ? '✓' : '○',
+    })
+    mark.setAttribute(
+      'aria-label',
+      item.ready
+        ? t('publisher.datasetForm.readiness.readyAria')
+        : t('publisher.datasetForm.readiness.notReadyAria'),
+    )
+    li.append(mark, el('span', { textContent: t(item.labelKey as 'publisher.datasetForm.readiness.title') }))
+    list.appendChild(li)
+  }
+  panel.appendChild(list)
+  return panel
 }
 
 function renderTopLevelError(
@@ -1352,21 +1482,45 @@ function renderForm(
   ctx: RenderContext,
 ): void {
   const shell = document.createElement('main')
-  shell.className = 'publisher-shell'
+  shell.className = 'publisher-shell publisher-dataset-form'
 
-  shell.appendChild(backLink())
+  // Top header: back link + title on the left, action buttons on the
+  // right (the deck moves Cancel / Save here from the form footer).
+  const header = document.createElement('header')
+  header.className = 'publisher-dataset-form-header'
 
+  const headerMain = document.createElement('div')
+  headerMain.className = 'publisher-dataset-form-header-main'
+  headerMain.appendChild(backLink())
   const heading = document.createElement('h1')
   heading.className = 'publisher-detail-title'
   heading.textContent =
     ctx.mode === 'edit'
       ? t('publisher.datasetForm.headingEdit')
       : t('publisher.datasetForm.headingNew')
-  shell.appendChild(heading)
+  headerMain.appendChild(heading)
+  header.appendChild(headerMain)
+  header.appendChild(buildActions())
+  shell.appendChild(header)
 
   if (state.topLevelError) {
     shell.appendChild(renderTopLevelError(state.topLevelError, state.topLevelErrorDetails))
   }
+
+  // Two-column layout: a sticky left rail (section nav + publish
+  // readiness) and the form cards on the right.
+  const layout = document.createElement('div')
+  layout.className = 'publisher-dataset-form-layout'
+  const rail = document.createElement('aside')
+  rail.className = 'publisher-dataset-form-rail'
+  rail.appendChild(
+    buildSectionNav(state.activeSection, id => {
+      state.activeSection = id
+      update()
+    }),
+  )
+  rail.appendChild(buildReadiness(state))
+  layout.appendChild(rail)
 
   const form = document.createElement('form')
   form.className = 'publisher-form'
@@ -1659,48 +1813,75 @@ function renderForm(
     }),
   )
 
-  form.appendChild(identityCard)
-  form.appendChild(abstractCard(state, update))
-  form.appendChild(mediaCard(content, state, ctx))
-  form.appendChild(licensingCard(state, update))
-  form.appendChild(timeRangeCard(state))
-  form.appendChild(geographyCard(state))
-  form.appendChild(categorizationCard(state))
+  identityCard.id = 'ds-section-identity'
+  identityCard.dataset.section = 'ds-section-identity'
+  const abstractEl = abstractCard(state, update)
+  abstractEl.id = 'ds-section-abstract'
+  abstractEl.dataset.section = 'ds-section-abstract'
+  const mediaEl = mediaCard(content, state, ctx)
+  mediaEl.id = 'ds-section-media'
+  mediaEl.dataset.section = 'ds-section-media'
+  const licensingEl = licensingCard(state, update)
+  licensingEl.id = 'ds-section-licensing'
+  licensingEl.dataset.section = 'ds-section-licensing'
+  const timeEl = timeRangeCard(state)
+  timeEl.id = 'ds-section-timespace'
+  timeEl.dataset.section = 'ds-section-timespace'
+  // Geography shares the "Time & space" step with the time-range card.
+  const geoEl = geographyCard(state)
+  geoEl.dataset.section = 'ds-section-timespace'
+  const catEl = categorizationCard(state)
+  catEl.id = 'ds-section-categorization'
+  catEl.dataset.section = 'ds-section-categorization'
+  const cards = [identityCard, abstractEl, mediaEl, licensingEl, timeEl, geoEl, catEl]
+  for (const card of cards) {
+    // Stepper: only the active section's card(s) are shown. Use inline
+    // display (not the `hidden` attribute) because the card classes
+    // set `display`, which would override `[hidden]`.
+    if (card.dataset.section !== state.activeSection) card.style.display = 'none'
+    form.appendChild(card)
+  }
 
-  // Submit row.
-  const actions = document.createElement('div')
-  actions.className = 'publisher-form-actions'
-
-  const cancel = document.createElement('a')
-  cancel.href = '/publish/datasets'
-  cancel.className = 'publisher-button publisher-button-secondary'
-  cancel.textContent = t('publisher.datasetForm.action.cancel')
-  cancel.addEventListener('click', e => {
-    if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return
-    e.preventDefault()
-    // In edit mode the natural cancel target is the detail page
-    // the publisher arrived from; in create mode it's the list.
-    if (ctx.mode === 'edit' && ctx.datasetId) {
-      ctx.routerNavigate(`/publish/datasets/${encodeURIComponent(ctx.datasetId)}`)
-    } else {
-      ctx.routerNavigate('/publish/datasets')
-    }
-  })
-  actions.appendChild(cancel)
-
-  const submit = document.createElement('button')
-  submit.type = 'submit'
-  submit.className = 'publisher-button publisher-button-primary'
-  submit.textContent = state.isSaving
-    ? t('publisher.datasetForm.action.saving')
-    : t('publisher.datasetForm.action.saveDraft')
-  submit.disabled = state.isSaving
-  actions.appendChild(submit)
-
-  form.appendChild(actions)
-
-  shell.appendChild(form)
+  layout.appendChild(form)
+  shell.appendChild(layout)
   content.replaceChildren(shell)
+
+  /** Cancel + Save-draft buttons, mounted in the top header. They
+   *  live outside the <form>, so Save is a plain button that calls
+   *  the same submit path the form's submit event used to. */
+  function buildActions(): HTMLElement {
+    const actions = document.createElement('div')
+    actions.className = 'publisher-form-actions publisher-dataset-form-header-actions'
+
+    const cancel = document.createElement('a')
+    cancel.href = '/publish/datasets'
+    cancel.className = 'publisher-button publisher-button-secondary'
+    cancel.textContent = t('publisher.datasetForm.action.cancel')
+    cancel.addEventListener('click', e => {
+      if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return
+      e.preventDefault()
+      // In edit mode the natural cancel target is the detail page the
+      // publisher arrived from; in create mode it's the list.
+      if (ctx.mode === 'edit' && ctx.datasetId) {
+        ctx.routerNavigate(`/publish/datasets/${encodeURIComponent(ctx.datasetId)}`)
+      } else {
+        ctx.routerNavigate('/publish/datasets')
+      }
+    })
+    actions.appendChild(cancel)
+
+    const submit = document.createElement('button')
+    submit.type = 'button'
+    submit.className = 'publisher-button publisher-button-primary'
+    submit.textContent = state.isSaving
+      ? t('publisher.datasetForm.action.saving')
+      : t('publisher.datasetForm.action.saveDraft')
+    submit.disabled = state.isSaving
+    submit.addEventListener('click', () => void onSubmit())
+    actions.appendChild(submit)
+
+    return actions
+  }
 
   // Internal re-render. The lifecycle/disposed bookkeeping lives
   // ONE level up (in `renderDatasetForm`), so this function just
@@ -1834,6 +2015,11 @@ function renderForm(
     }
     if (result.kind === 'validation') {
       state.errors = result.errors
+      // Jump the stepper to the first offending field's section so the
+      // error isn't hidden in a collapsed section.
+      if (result.errors.length > 0) {
+        state.activeSection = sectionForField(result.errors[0].field)
+      }
       update()
       return
     }
@@ -1889,6 +2075,7 @@ function initialState(
       title: '',
       slug: '',
       slugLocked: false,
+      activeSection: 'ds-section-identity',
       format: 'video/mp4',
       visibility: 'public',
       dataRef: '',
@@ -1938,6 +2125,7 @@ function initialState(
     // ago) already committed to a slug — treat it as manually
     // chosen so subsequent title edits don't clobber it.
     slugLocked: true,
+    activeSection: 'ds-section-identity',
     format: row.format,
     visibility: row.visibility,
     dataRef: row.data_ref ?? '',

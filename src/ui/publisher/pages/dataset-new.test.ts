@@ -76,6 +76,26 @@ describe('renderDatasetNewPage', () => {
     expect(mount.querySelectorAll('input[name="visibility"]').length).toBe(4)
   })
 
+  it('is a stepper: shows only the active section, switchable via the rail', () => {
+    renderDatasetNewPage(mount)
+    // Identity is the default active section.
+    expect(mount.querySelector<HTMLElement>('#ds-section-identity')?.style.display).not.toBe('none')
+    expect(mount.querySelector<HTMLElement>('#ds-section-licensing')?.style.display).toBe('none')
+    expect(mount.querySelector('.publisher-form-nav-link-active')?.textContent).toBe('Identity')
+    // Publish-readiness checklist renders with the deck's 5 items.
+    expect(mount.querySelector('.publisher-form-readiness-count')?.textContent).toBe('1 of 5 ready')
+    expect(mount.querySelectorAll('.publisher-form-readiness-item').length).toBe(5)
+
+    // Clicking a rail item switches the visible section.
+    const licensingTab = Array.from(
+      mount.querySelectorAll<HTMLButtonElement>('.publisher-form-nav-link'),
+    ).find(b => b.textContent === 'Licensing & attribution')!
+    licensingTab.click()
+    expect(mount.querySelector<HTMLElement>('#ds-section-licensing')?.style.display).not.toBe('none')
+    expect(mount.querySelector<HTMLElement>('#ds-section-identity')?.style.display).toBe('none')
+    expect(mount.querySelector('.publisher-form-nav-link-active')?.textContent).toBe('Licensing & attribution')
+  })
+
   it('defaults to format=video/mp4 and visibility=public', () => {
     renderDatasetNewPage(mount)
     const checkedFormat = mount.querySelector<HTMLInputElement>(
