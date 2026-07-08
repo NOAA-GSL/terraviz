@@ -32,6 +32,11 @@ import { renderWorkflowsPage } from './pages/workflows'
 import { renderWorkflowDetailPage } from './pages/workflow-detail'
 import { renderWorkflowEditPage } from './pages/workflow-edit'
 import { renderFeaturedHeroPage } from './pages/featured-hero'
+import { renderNodeProfilePage } from './pages/node-profile'
+import { renderBlogPage } from './pages/blog'
+import { renderBlogEditPage } from './pages/blog-edit'
+import { renderFeedsPage } from './pages/feeds'
+import { renderEventsPage } from './pages/events'
 import { renderAnalyticsPage } from './pages/analytics'
 import { renderUsersPage } from './pages/users'
 import { renderFeedbackPage } from './pages/feedback'
@@ -58,6 +63,10 @@ export function routeForPath(
   | 'datasets'
   | 'tours'
   | 'featured_hero'
+  | 'node_profile'
+  | 'blog'
+  | 'events'
+  | 'feeds'
   | 'import'
   | 'workflows'
   | 'analytics'
@@ -69,6 +78,10 @@ export function routeForPath(
   if (pathname.startsWith('/publish/tours')) return 'tours'
   if (pathname.startsWith('/publish/workflows')) return 'workflows'
   if (pathname.startsWith('/publish/featured-hero')) return 'featured_hero'
+  if (pathname.startsWith('/publish/node-profile')) return 'node_profile'
+  if (pathname.startsWith('/publish/blog')) return 'blog'
+  if (pathname.startsWith('/publish/events')) return 'events'
+  if (pathname.startsWith('/publish/feeds')) return 'feeds'
   if (pathname.startsWith('/publish/import')) return 'import'
   if (pathname.startsWith('/publish/analytics')) return 'analytics'
   if (pathname.startsWith('/publish/feedback')) return 'feedback'
@@ -267,6 +280,26 @@ function featuredHeroPage(mount: HTMLElement): RouteHandler {
   return () => void renderFeaturedHeroPage(mount)
 }
 
+function nodeProfilePage(mount: HTMLElement): RouteHandler {
+  return () => void renderNodeProfilePage(mount)
+}
+
+function blogPage(mount: HTMLElement, getRouter: () => { navigate: (p: string) => void }): RouteHandler {
+  return () => void renderBlogPage(mount, { navigate: p => getRouter().navigate(p) })
+}
+
+function blogEditPage(mount: HTMLElement, getRouter: () => { navigate: (p: string) => void }): RouteHandler {
+  return params => void renderBlogEditPage(mount, { postId: params.id, navigate: p => getRouter().navigate(p) })
+}
+
+function eventsPage(mount: HTMLElement): RouteHandler {
+  return () => void renderEventsPage(mount)
+}
+
+function feedsPage(mount: HTMLElement): RouteHandler {
+  return () => void renderFeedsPage(mount)
+}
+
 function analyticsPage(mount: HTMLElement): RouteHandler {
   return () => void renderAnalyticsPage(mount)
 }
@@ -340,6 +373,12 @@ export async function bootPublisherPortal(): Promise<void> {
       },
       { pattern: '/publish/workflows/:id', handler: workflowDetailPage(content, getRouter) },
       { pattern: '/publish/featured-hero', handler: featuredHeroPage(content) },
+      { pattern: '/publish/node-profile', handler: nodeProfilePage(content) },
+      { pattern: '/publish/blog/new', handler: blogEditPage(content, getRouter) },
+      { pattern: '/publish/blog/:id/edit', handler: blogEditPage(content, getRouter) },
+      { pattern: '/publish/blog', handler: blogPage(content, getRouter) },
+      { pattern: '/publish/events', handler: eventsPage(content) },
+      { pattern: '/publish/feeds', handler: feedsPage(content) },
       { pattern: '/publish/analytics', handler: analyticsPage(content) },
       { pattern: '/publish/feedback', handler: feedbackPage(content) },
       { pattern: '/publish/users', handler: usersPage(content) },

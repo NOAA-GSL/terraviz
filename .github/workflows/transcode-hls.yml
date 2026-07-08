@@ -49,10 +49,14 @@ jobs:
   transcode:
     name: Transcode ${{ github.event.client_payload.dataset_id }}
     runs-on: ubuntu-22.04
-    # 30 min cap — large 4K sources can push 10–15 min; doubling the
-    # ceiling keeps the runner from killing a slow but eventually-
-    # successful encode.
-    timeout-minutes: 30
+    # 90 min cap. A normal incremental run reuses most chunks and
+    # finishes in minutes, but a COLD start (no prior segment manifest)
+    # re-encodes every chunk as a separate sequential ffmpeg pass, which
+    # is slower than the old single monolithic encode — a 4K dataset of
+    # several thousand frames (e.g. a P30D 10-min-cadence set ≈ 24
+    # chunks) blew past the old 30-min cap mid-encode. The cold start is
+    # a one-time cost per dataset; subsequent runs reuse and are fast.
+    timeout-minutes: 90
 
     steps:
       - name: Validate dispatch payload
@@ -118,15 +122,25 @@ jobs:
         run: npm ci
 
       - name: Install ffmpeg
+        # apt on GitHub runners can hang for minutes when a package
+        # mirror stalls or the boot-time apt-daily / unattended-upgrades
+        # job holds the dpkg lock. Stop those services, bound every
+        # network wait so a stalled mirror fails fast and retries, and
+        # cap the lock wait — a transient hiccup costs seconds, not the
+        # 30-minute job timeout.
         run: |
-          set -e
-          sudo apt-get update -qq
+          set -euo pipefail
+          export DEBIAN_FRONTEND=noninteractive
+          sudo systemctl stop apt-daily.timer apt-daily-upgrade.timer 2>/dev/null || true
+          sudo systemctl stop apt-daily.service apt-daily-upgrade.service unattended-upgrades.service 2>/dev/null || true
           # The Ubuntu 22.04 runner ships ffmpeg 4.4, which covers
           # every codec the ladder uses (H.264 + AAC + HLS muxer).
           # The PPA upgrade would buy us AV1 support but the ladder
           # stays on H.264 main profile for now (see
           # CATALOG_ASSETS_PIPELINE.md "Codec choices").
-          sudo apt-get install -y -qq ffmpeg
+          APT_OPTS="-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=180"
+          sudo apt-get $APT_OPTS update
+          sudo apt-get $APT_OPTS install -y --no-install-recommends ffmpeg
           ffmpeg -version | head -n1
           ffprobe -version | head -n1
 
@@ -183,6 +197,27 @@ jobs:
               --cleanup-on-failure
           fi
 
+      # Release the dataset's `transcoding` lock when the encode failed
+      # or — the common case — the job hit `timeout-minutes` and was
+      # cancelled, which SIGKILLs the runner above before it can post
+      # `transcode-complete`. `failure() || cancelled()` covers both and
+      # never fires on success. The server leaves `data_ref` on the
+      # prior good bundle and is idempotent, so this is safe to run.
+      - name: Report transcode failure
+        if: ${{ failure() || cancelled() }}
+        env:
+          TERRAVIZ_SERVER: ${{ secrets.TERRAVIZ_SERVER }}
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+          PAYLOAD_DATASET_ID: ${{ github.event.client_payload.dataset_id }}
+          PAYLOAD_UPLOAD_ID: ${{ github.event.client_payload.upload_id }}
+        run: |
+          set -euo pipefail
+          npx tsx cli/report-transcode-failure.ts \
+            --dataset-id="$PAYLOAD_DATASET_ID" \
+            --upload-id="$PAYLOAD_UPLOAD_ID" \
+            --error-summary="Transcode failed or timed out in GitHub Actions run ${{ github.run_id }} — see the Actions log."
+
       - name: Summarise outcome
         if: always()
         env:
@@ -192,5 +227,5 @@ jobs:
           if [ "$JOB_STATUS" = "success" ]; then
             echo "::notice::Transcode complete for $PAYLOAD_DATASET_ID"
           else
-            echo "::error::Transcode failed for $PAYLOAD_DATASET_ID (job status: $JOB_STATUS). The dataset row is still flagged transcoding=1; an operator can clear it manually after diagnosing or trigger a retry by re-uploading."
+            echo "::error::Transcode failed for $PAYLOAD_DATASET_ID (job status: $JOB_STATUS). The Report-transcode-failure step attempts to release the dataset's transcoding lock — if that step also failed (see its log), clear it manually. Then retry the publish from the dashboard."
           fi

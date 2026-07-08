@@ -85,14 +85,16 @@ describe('buildSourceFilenames', () => {
 
 /** Minimal stub of the TerravizClient surface publishFrameSequence
  *  touches, recording calls for assertions. */
-function makeStubClient(opts: { mock?: boolean } = {}) {
+function makeStubClient(
+  opts: { mock?: boolean; onUpload?: (url: string) => { ok: boolean; status: number; message?: string } } = {},
+) {
   const calls = {
     init: [] as unknown[],
     putUrls: [] as string[],
     complete: [] as Array<[string, string]>,
   }
   const client = {
-    initImageSequenceUpload: (_datasetId: string, body: unknown) => {
+    initImageSequenceUpload: (datasetId: string, body: unknown) => {
       calls.init.push(body)
       const frames = (body as { frames: FrameDigest[] }).frames
       return Promise.resolve({
@@ -102,19 +104,24 @@ function makeStubClient(opts: { mock?: boolean } = {}) {
           upload_id: 'UPLOAD01',
           kind: 'data',
           target: 'r2',
+          // Mirror the real init: content-addressed per-frame keys
+          // derived from each frame's digest
+          // (videos/{dataset}/frames/sha256/{hex}.{ext}), so the
+          // dedupe `exists` gate is exercised against the real key
+          // shape, not the legacy per-upload index path.
           frames: frames.map((f, index) => ({
             filename: f.filename,
             index,
             method: 'PUT',
             url: `https://r2.example/frames/${index}`,
             headers: {},
-            key: `uploads/d/u/frames/${String(index).padStart(5, '0')}.png`,
+            key: `videos/${datasetId}/frames/sha256/${f.digest.replace(/^sha256:/, '')}.png`,
           })),
           source_filenames: {
             method: 'PUT',
             url: 'https://r2.example/source_filenames.json',
             headers: {},
-            key: 'uploads/d/u/source_filenames.json',
+            key: `uploads/${datasetId}/UPLOAD01/source_filenames.json`,
           },
           expires_at: '2030-01-01T00:00:00Z',
           mock: opts.mock ?? false,
@@ -123,7 +130,7 @@ function makeStubClient(opts: { mock?: boolean } = {}) {
     },
     uploadBytes: (_target: string, url: string) => {
       calls.putUrls.push(url)
-      return Promise.resolve({ ok: true, status: 200 })
+      return Promise.resolve(opts.onUpload?.(url) ?? { ok: true, status: 200 })
     },
     completeAssetUpload: (datasetId: string, uploadId: string) => {
       calls.complete.push([datasetId, uploadId])
@@ -139,7 +146,9 @@ describe('publishFrameSequence', () => {
     const { client, calls } = makeStubClient()
     const result = await publishFrameSequence(client, 'DATASET01', dir, { concurrency: 1 })
 
-    expect(result).toEqual({ uploadId: 'UPLOAD01', frameCount: 3, mock: false })
+    expect(result).toMatchObject({ uploadId: 'UPLOAD01', frameCount: 3, uploaded: 3, reused: 0, mock: false })
+    expect(result.digests).toHaveLength(3)
+    expect(result.digests.every(d => /^sha256:[0-9a-f]{64}$/.test(d))).toBe(true)
     // 3 frame PUTs + 1 manifest PUT.
     expect(calls.putUrls).toHaveLength(4)
     expect(calls.putUrls).toContain('https://r2.example/source_filenames.json')
@@ -150,6 +159,41 @@ describe('publishFrameSequence', () => {
     expect(initBody.source_filenames_digest).toMatch(/^sha256:[0-9a-f]{64}$/)
   })
 
+  it('skips frames whose content-addressed key already exists (dedupe)', async () => {
+    const dir = tmpFrames({ 'f_1.png': 'a', 'f_2.png': 'b', 'f_3.png': 'c' })
+    const { client, calls } = makeStubClient()
+    // The stub keys frames content-addressed at
+    // videos/DATASET01/frames/sha256/{sha256(content)}.png; pretend the
+    // first two frames' bytes ('a', 'b') already live in R2, only 'c' is
+    // new.
+    const caKey = (content: string) =>
+      `videos/DATASET01/frames/sha256/${sha256Hex(content)}.png`
+    const present = new Set([caKey('a'), caKey('b')])
+    const result = await publishFrameSequence(client, 'DATASET01', dir, {
+      concurrency: 1,
+      exists: (key: string) => Promise.resolve(present.has(key)),
+    })
+
+    expect(result).toMatchObject({ frameCount: 3, uploaded: 1, reused: 2 })
+    // Only the 1 new frame PUT + the manifest PUT (manifest is never
+    // deduped) = 2 calls.
+    expect(calls.putUrls).toHaveLength(2)
+    expect(calls.putUrls).toContain('https://r2.example/source_filenames.json')
+    expect(calls.complete).toEqual([['DATASET01', 'UPLOAD01']])
+  })
+
+  it('uploads on a HEAD failure (best-effort gate never blocks the publish)', async () => {
+    const dir = tmpFrames({ 'f_1.png': 'a' })
+    const { client, calls } = makeStubClient()
+    const result = await publishFrameSequence(client, 'DATASET01', dir, {
+      concurrency: 1,
+      exists: () => Promise.reject(new Error('HEAD blew up')),
+    })
+    // The throwing gate is swallowed → the frame is uploaded anyway.
+    expect(result).toMatchObject({ uploaded: 1, reused: 0 })
+    expect(calls.putUrls).toHaveLength(2) // frame + manifest
+  })
+
   it('skips the byte PUTs in mock mode but still completes', async () => {
     const dir = tmpFrames({ 'f_1.png': 'a' })
     const { client, calls } = makeStubClient({ mock: true })
@@ -158,5 +202,49 @@ describe('publishFrameSequence', () => {
     expect(result.mock).toBe(true)
     expect(calls.putUrls).toHaveLength(0)
     expect(calls.complete).toEqual([['DATASET01', 'UPLOAD01']])
+  })
+
+  it('retries a transient 500 PUT and succeeds (R2 InternalError)', async () => {
+    const dir = tmpFrames({ 'f_1.png': 'a' })
+    const failedOnce = new Set<string>()
+    const { client, calls } = makeStubClient({
+      onUpload: url => {
+        if (!failedOnce.has(url)) {
+          failedOnce.add(url)
+          return { ok: false, status: 500, message: 'InternalError' }
+        }
+        return { ok: true, status: 200 }
+      },
+    })
+    const result = await publishFrameSequence(client, 'DATASET01', dir, { concurrency: 1, retryDelayMs: 0 })
+    expect(result.frameCount).toBe(1)
+    // frame PUT (1 fail + 1 ok) + manifest PUT (1 fail + 1 ok) = 4 calls.
+    expect(calls.putUrls).toHaveLength(4)
+  })
+
+  it('gives up after putAttempts on a persistent 5xx and reports the attempt count', async () => {
+    const dir = tmpFrames({ 'f_1.png': 'a' })
+    const { client } = makeStubClient({ onUpload: () => ({ ok: false, status: 503, message: 'unavailable' }) })
+    await expect(
+      publishFrameSequence(client, 'DATASET01', dir, { concurrency: 1, putAttempts: 3, retryDelayMs: 0 }),
+    ).rejects.toThrow(/after 3 attempt\(s\)/)
+  })
+
+  it('does not retry a deterministic 4xx', async () => {
+    const dir = tmpFrames({ 'f_1.png': 'a' })
+    const { client, calls } = makeStubClient({ onUpload: () => ({ ok: false, status: 403, message: 'forbidden' }) })
+    await expect(
+      publishFrameSequence(client, 'DATASET01', dir, { concurrency: 1, putAttempts: 4, retryDelayMs: 0 }),
+    ).rejects.toThrow(/\(403\).*after 1 attempt/)
+    expect(calls.putUrls).toHaveLength(1) // one attempt, no retry
+  })
+
+  it('clamps a stray putAttempts: 0 up to a single attempt', async () => {
+    const dir = tmpFrames({ 'f_1.png': 'a' })
+    const { client, calls } = makeStubClient({ onUpload: () => ({ ok: false, status: 500, message: 'x' }) })
+    await expect(
+      publishFrameSequence(client, 'DATASET01', dir, { concurrency: 1, putAttempts: 0, retryDelayMs: 0 }),
+    ).rejects.toThrow(/after 1 attempt/)
+    expect(calls.putUrls).toHaveLength(1) // clamped to 1, not 0
   })
 })

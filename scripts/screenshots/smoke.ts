@@ -27,7 +27,7 @@ import { gotoApp, launchBrowser, withScenePage } from './core/browser'
 import { installFixtures, type FixtureRule } from './core/fixtures'
 import { attachSignalCollectors } from './core/signals'
 import { catalogFixtures } from './fixtures/catalog'
-import { publisherFixtures } from './fixtures/publisher'
+import { blogPublicFixtures, publisherFixtures } from './fixtures/publisher'
 
 const BASE_URL = process.env.SCREENSHOT_BASE_URL ?? 'http://localhost:4173'
 const VIEWPORT = { width: 1440, height: 900 }
@@ -130,6 +130,69 @@ const checks: Check[] = [
     },
   },
   {
+    name: 'embed mode strips the app shell',
+    fixtures: catalogFixtures(),
+    async run(page) {
+      // Baseline: this chrome is genuinely visible on a bare globe, so
+      // asserting embed mode hides it is a real gate (not a no-op that
+      // passes because the element was hidden for some other reason).
+      await gotoApp(page, '/')
+      for (const id of ['#map-controls', '#help-trigger']) {
+        await page.locator(id).waitFor({ state: 'visible' })
+      }
+      // Embed mode hides it.
+      await gotoApp(page, '/?embed=1')
+      await page.locator('body.embed-mode').waitFor()
+      for (const id of ['#map-controls', '#help-trigger']) {
+        assert(!(await page.locator(id).isVisible()), `embed mode should hide ${id}`)
+      }
+      // The ?chat=1 sub-flag (body.embed-show-chat) must stop embed.css from
+      // hiding the Orbit chat trigger. The app only adds `.visible` to the
+      // trigger once a dataset loads (never in offline CI), so its live
+      // visibility isn't observable here — assert the embed.css rule both
+      // ways against the app's real "shown" class instead. A regression on
+      // the `:not(.embed-show-chat)` selector flips one of these.
+      const rule = await page.evaluate(() => {
+        const el = document.getElementById('chat-trigger')
+        if (!el) return { hiddenInEmbed: false, shownWithChatFlag: false }
+        el.classList.add('visible') // simulate the app having shown the trigger
+        const body = document.body
+        body.classList.add('embed-mode')
+        body.classList.remove('embed-show-chat')
+        const hiddenInEmbed = getComputedStyle(el).display === 'none'
+        body.classList.add('embed-show-chat')
+        const shownWithChatFlag = getComputedStyle(el).display !== 'none'
+        return { hiddenInEmbed, shownWithChatFlag }
+      })
+      assert(rule.hiddenInEmbed, 'embed mode should hide a shown #chat-trigger')
+      assert(rule.shownWithChatFlag, '?chat=1 (embed-show-chat) should un-hide #chat-trigger')
+    },
+  },
+  {
+    name: 'catalog Timeline exposes the current-event legend',
+    async run(page) {
+      // The catalog Timeline ships an amber "current event" legend swatch
+      // as the user-visible affordance for the event overlays. The swatch
+      // is static markup, so asserting it is data-independent.
+      //
+      // The equivalent MAP-view assertion used to live here too, but the
+      // map view lazy-loads the heavy MapLibre chunk before its toolbar
+      // (legend) mounts, so on a cold CI runner it occasionally tailed
+      // past the wait and flaked this gating check. The map legend swatch
+      // is now covered deterministically by the catalogMapUI unit test
+      // (`browse-map-legend-dot-event`), and the map view's *mount* is
+      // already covered by the "view-mode navigation mounts each surface"
+      // check — so the flaky live-map wait was pure redundancy.
+      await gotoApp(page, '/?catalog=true')
+      await page.locator('#browse-overlay').waitFor({ state: 'visible' })
+      await page.locator('#browse-toolbar').waitFor({ state: 'visible' })
+
+      await page.locator('#browse-view-mode [data-view-mode="timeline"]').click()
+      await page.locator('#browse-timeline:not(.hidden)').waitFor()
+      await page.locator('.browse-timeline-legend-dot-event').first().waitFor({ timeout: 30_000 })
+    },
+  },
+  {
     name: 'publisher datasets page renders populated content',
     fixtures: publisherFixtures({ admin: true }),
     async run(page) {
@@ -138,6 +201,129 @@ const checks: Check[] = [
       await page
         .locator('#publisher-root', { hasText: 'Global Sea Surface Temperature' })
         .waitFor({ timeout: 15_000 })
+    },
+  },
+  {
+    name: 'publisher events review queue renders proposed events + links',
+    fixtures: publisherFixtures({ admin: true }),
+    async run(page) {
+      await gotoApp(page, '/publish/events')
+      await page.locator('#publisher-root .publisher-topbar').waitFor({ state: 'visible' })
+      // Direction A master–detail: the queue (left) lists events; the
+      // first auto-selects into the detail (right).
+      await page.locator('.publisher-events-queue-list').first().waitFor({ timeout: 15_000 })
+      await page
+        .locator('.publisher-events-detail-title', { hasText: 'Hurricane Lena makes landfall' })
+        .first()
+        .waitFor()
+      // The dataset pairing rows render in the detail, each with a Match Badge.
+      const pairings = page.locator('.publisher-events-pairing')
+      assert((await pairings.count()) >= 1, 'detail should render at least one dataset pairing')
+      assert(
+        (await page.locator('.publisher-events-match-badge').count()) >= 1,
+        'each pairing should render a Match Badge',
+      )
+      // Selecting the AI-enriched fixture event surfaces the slice-C
+      // "AI-inferred" provenance badge in the meta strip.
+      await page
+        .locator('.publisher-events-queue-row', { hasText: 'wildfire smoke' })
+        .first()
+        .click()
+      await page.locator('.publisher-events-inferred-badge').first().waitFor({ timeout: 5_000 })
+      // The pairings toolbar exposes the one-shot Generate-tour action
+      // (event + vetted pairings → editable draft tour).
+      await page.locator('.publisher-events-tour-btn').first().waitFor({ timeout: 5_000 })
+      // The status filter row lets a curator reach reviewed events.
+      const filters = page.locator('.publisher-events-filters button')
+      assert((await filters.count()) >= 5, 'queue header should expose the status filter (incl. All)')
+      // The authoring toolbar exposes Refresh + New event; clicking New
+      // opens the Direction-D drawer (compose + search/pair datasets).
+      const toolbarButtons = page.locator('.publisher-events-toolbar button')
+      assert((await toolbarButtons.count()) >= 2, 'queue header should expose the Refresh + New-event actions')
+      await toolbarButtons.nth(1).click()
+      await page.locator('.publisher-events-drawer').first().waitFor({ timeout: 5_000 })
+      await page.locator('.publisher-events-drawer-pair').first().waitFor({ timeout: 5_000 })
+    },
+  },
+  {
+    name: 'publisher node-profile form renders populated and pre-filled',
+    fixtures: publisherFixtures({ admin: true }),
+    async run(page) {
+      await gotoApp(page, '/publish/node-profile')
+      await page.locator('#publisher-root .publisher-topbar').waitFor({ state: 'visible' })
+      const org = page.locator('#nodeprofile-org')
+      await org.waitFor({ timeout: 15_000 })
+      assert(
+        (await org.inputValue()) === 'Coastal Science Center',
+        'org-name input should pre-fill from the stored profile',
+      )
+      assert(
+        (await page.locator('.publisher-nodeprofile-link-row').count()) >= 1,
+        'stored links should render as editable rows',
+      )
+    },
+  },
+  {
+    name: 'blog editor renders grounding pickers + Generate; public post renders sanitized markdown',
+    fixtures: [...publisherFixtures({ admin: true }), ...blogPublicFixtures()],
+    async run(page) {
+      // Authoring: the editor's three sections mount, with the picker
+      // enabled once the catalog fixture loads.
+      await gotoApp(page, '/publish/blog/new')
+      await page.locator('#publisher-root .publisher-topbar').waitFor({ state: 'visible' })
+      await page.locator('#blog-title').waitFor({ timeout: 15_000 })
+      await page.locator('.publisher-blog-generate-btn').waitFor()
+      await page.locator('#publisher-root input[type="search"]:not([disabled])').first().waitFor({ timeout: 10_000 })
+
+      // Public: the post page renders the sanitized body, the dataset
+      // deep link, and the event citation.
+      await gotoApp(page, '/blog/city-lights-spread')
+      await page.locator('.blog-post-body h2').waitFor({ timeout: 15_000 })
+      const explore = page.locator('.blog-post-explore-list a').first()
+      assert(
+        (await explore.getAttribute('href')) === '/dataset/01HXDS0000000000000000000A',
+        'cited dataset should deep-link into the globe',
+      )
+      await page.locator('.blog-post-citation a').waitFor()
+    },
+  },
+  {
+    name: 'publisher feeds console renders connectors + preset gallery',
+    fixtures: publisherFixtures({ admin: true }),
+    async run(page) {
+      await gotoApp(page, '/publish/feeds')
+      await page.locator('#publisher-root .publisher-topbar').waitFor({ state: 'visible' })
+      // The registered connectors render with state dots + bookkeeping.
+      await page
+        .locator('.publisher-feeds-row', { hasText: 'NASA EONET' })
+        .first()
+        .waitFor({ timeout: 15_000 })
+      assert(
+        (await page.locator('.publisher-feeds-dot-off').count()) >= 1,
+        'the paused fixture connector should render a paused dot',
+      )
+      // The curated preset gallery renders grouped suggestions; the
+      // already-registered EONET preset shows as added (disabled).
+      const presets = page.locator('.publisher-feeds-preset')
+      assert((await presets.count()) >= 10, 'the preset gallery should list the curated feeds')
+      assert(
+        (await page.locator('.publisher-feeds-preset button[disabled]').count()) >= 1,
+        'an already-registered preset should show as added',
+      )
+      // The bring-your-own form is present.
+      await page.locator('#feeds-custom-url').waitFor()
+      // Preview dry-runs the feed and lists the latest mapped items
+      // inline (fixture-backed `/feeds/preview` response).
+      await page
+        .locator('.publisher-feeds-row', { hasText: 'NASA EONET' })
+        .locator('button[aria-expanded]')
+        .first()
+        .click()
+      await page.locator('.publisher-feeds-preview-item').first().waitFor({ timeout: 5_000 })
+      assert(
+        (await page.locator('.publisher-feeds-preview-item').count()) >= 3,
+        'the feed preview should list the fixture items',
+      )
     },
   },
   {

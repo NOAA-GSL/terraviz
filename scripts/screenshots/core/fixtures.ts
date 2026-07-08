@@ -31,17 +31,28 @@ export interface FixtureRule {
   body?: string
   /** Content-Type; `application/json` when omitted. */
   contentType?: string
+  /** Let the matched request through to the real network instead of
+   *  stubbing it. A trailing `{ url: '/api/', passthrough: true }`
+   *  catch-all keeps everything a scene doesn't stub (the GIBS tile
+   *  proxy, telemetry ingest) behaving exactly as on an un-fixtured
+   *  scene, instead of hitting the 404 default. */
+  passthrough?: boolean
 }
 
 export interface FixtureResponse {
   status: number
   contentType: string
   body: string
+  /** Set when a passthrough rule matched — the caller must
+   *  `route.continue()` the request instead of fulfilling it; the stub
+   *  fields above are placeholders and unused. */
+  passthrough?: true
 }
 
 /**
  * Resolve the first rule matching `url` + `method`, or null. Pure —
- * exported for tests.
+ * exported for tests. A passthrough rule resolves with
+ * `passthrough: true` set.
  */
 export function matchFixture(
   rules: readonly FixtureRule[],
@@ -53,6 +64,9 @@ export function matchFixture(
     const matches =
       typeof r.url === 'string' ? url.includes(r.url) : r.url.test(url)
     if (!matches) continue
+    if (r.passthrough) {
+      return { status: 0, contentType: '', body: '', passthrough: true }
+    }
     return {
       status: r.status ?? 200,
       contentType: r.contentType ?? 'application/json',
@@ -82,13 +96,19 @@ export async function installFixtures(
 ): Promise<void> {
   await page.route('**/api/**', async (route) => {
     const req = route.request()
-    const hit = matchFixture(rules, req.url(), req.method()) ?? {
-      status: opts.unmatchedStatus ?? 404,
-      contentType: 'application/json',
-      body: JSON.stringify(opts.unmatchedBody ?? { error: 'no_fixture' }),
-    }
+    const match = matchFixture(rules, req.url(), req.method())
     try {
-      await route.fulfill(hit)
+      if (match?.passthrough) {
+        await route.continue()
+        return
+      }
+      await route.fulfill(
+        match ?? {
+          status: opts.unmatchedStatus ?? 404,
+          contentType: 'application/json',
+          body: JSON.stringify(opts.unmatchedBody ?? { error: 'no_fixture' }),
+        },
+      )
     } catch (err) {
       // The page/context can close mid-request (scene already done);
       // awaiting keeps this from surfacing as an unhandled rejection.

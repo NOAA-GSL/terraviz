@@ -14,7 +14,7 @@ import './styles/index.css'
 
 import { HLSService } from './services/hlsService'
 import { dataService, PreviewFetchError } from './services/dataService'
-import { formatDate, videoTimeToDate, dateToVideoTime, isSubDailyPeriod, getSunPosition, inferDisplayInterval } from './utils/time'
+import { formatDate, videoTimeToDate, dateToVideoTime, computeSiblingSyncCorrection, isSubDailyPeriod, getSunPosition, inferDisplayInterval } from './utils/time'
 import { logger } from './utils/logger'
 import type { AppState, VideoTextureHandle, TourFile, Dataset } from './types'
 
@@ -58,14 +58,18 @@ import {
 } from './ui/playbackController'
 import {
   loadImageDataset, loadVideoDataset, displayDatasetInfo,
+  type EventNavResult,
 } from './services/datasetLoader'
+import { resolveRegion } from './data/regions'
+import type { PublicEvent } from './services/eventsService'
 import { TourEngine, type TourTelemetryMeta } from './services/tourEngine'
 import { showTourControls, hideTourControls, hideAllTourTextBoxes, hideAllTourImages, hideAllTourVideos, hideAllTourPopups, hideAllTourQuestions } from './ui/tourUI'
 import { initLegendForDataset, clearLegendCache, loadConfig } from './services/docentService'
 import { isMobile, IS_MOBILE_NATIVE, getCloudTextureUrl } from './utils/deviceCapability'
-import { initDeepLinks } from './services/deepLinkService'
+import { initDeepLinks, parseDatasetPathname } from './services/deepLinkService'
 import { recordVisit, writeLastSession } from './services/visitMemory'
 import { getCatalogMode, setCatalogMode } from './utils/catalogMode'
+import { applyEmbedMode } from './utils/embedMode'
 import {
   hideCatalogTabs,
   initCatalogTabs,
@@ -124,6 +128,19 @@ const CLOUD_TEXTURE_WEIGHT = 0.2
 const LOADING_BASE_PROGRESS = 20
 const LOADING_TEXTURE_RANGE = 70
 const LOADING_HIDE_DELAY_MS = 300
+
+/**
+ * Drift (seconds of video time) beyond which `correctSiblingDrift`
+ * hard-seeks a sibling instead of easing it back via a rate trim.
+ * Smaller drift is corrected smoothly through `playbackRate` (see
+ * `computeSiblingSyncCorrection`), so a hard seek — which interrupts
+ * decode and flickers the panel (terraviz#229) — fires only for a real
+ * desync (re-entry from out-of-range, a stall, or a scrub). The soft
+ * rate trim keeps steady-state drift far below this, so on the Climate
+ * Futures tour (≈2.8 model years per video second) the panels stay
+ * visibly locked without per-frame seeking.
+ */
+const SIBLING_HARD_SEEK_THRESHOLD_S = 0.5
 
 /**
  * Root application class that boots the WebGL globe, loads datasets,
@@ -240,8 +257,20 @@ class InteractiveSphere {
   /** Listener attached to the primary video for sibling sync. */
   private primaryVideoSyncListeners: Array<{ event: string; handler: EventListener }> = []
   private primaryVideoSyncTarget: HTMLVideoElement | null = null
-  /** Interval ID for the periodic drift-correction timer. */
-  private driftCheckInterval: ReturnType<typeof setInterval> | null = null
+  /**
+   * True while sibling sync is wired to a primary video. Gates the
+   * per-frame drift correction driven off the playback rAF loop — see
+   * `correctSiblingDrift()`.
+   */
+  private primaryVideoSyncActive = false
+  /**
+   * Per-slot record of whether a sibling was frozen out-of-range on the
+   * previous drift-correction frame. Lets `correctSiblingDrift` resume a
+   * sibling with a single `play()` on the out→in transition instead of
+   * re-issuing `play()` (and allocating/catching a Promise) every frame
+   * when autoplay is blocked or a stream is briefly unplayable.
+   */
+  private siblingOutOfRange: boolean[] = []
 
   /**
    * Convenience getter returning the primary viewport's renderer.
@@ -306,6 +335,13 @@ class InteractiveSphere {
       // `docs/WEB_CATALOG_FEATURES_PLAN.md` \u00a73.
       const catalogModeActive = getCatalogMode()
       if (catalogModeActive) document.body.classList.add('catalog-mode')
+
+      // Embed mode (`?embed=1`) strips app chrome for iframe hosting
+      // (WordPress blocks, kiosk, the poster). Apply before any UI
+      // renders — same first-paint reasoning as catalog mode — so the
+      // chrome never flashes in. Composes with `?dataset=`/`?tour=`/
+      // `?catalog=true`. See `docs/EMBED_URL_GRAMMAR.md`.
+      const embedModeActive = applyEmbedMode()
 
       if (!this.checkWebGLSupport()) return
 
@@ -383,8 +419,11 @@ class InteractiveSphere {
       onPlaylistPlaybackChange(syncPlaylistNextBtn)
       syncPlaylistNextBtn()
       // First-session privacy disclosure. No-ops on every launch
-      // after the user dismisses it.
-      showDisclosureBannerIfNeeded()
+      // after the user dismisses it. Skipped inside an embed — the
+      // host page owns consent, and a privacy banner popping up in a
+      // third-party iframe is both wrong and intrusive (§J of
+      // `docs/WORDPRESS_INTEGRATION_PLAN.md`).
+      if (!embedModeActive) showDisclosureBannerIfNeeded()
       // Telemetry transport — skipped entirely when the compile-time
       // flag is off (telemetry-free builds) and when console mode
       // is on (dev convenience: events log locally, no POSTs).
@@ -474,6 +513,12 @@ class InteractiveSphere {
 
       const datasetId = previewFailed ? null : this.getDatasetIdFromUrl()
       if (datasetId) {
+        // Canonicalize a path-form deep link (`/dataset/<id>`) to the
+        // query form so in-app `?dataset=` pushState navigation doesn't
+        // stack a query onto the old path.
+        if (parseDatasetPathname(window.location.pathname)) {
+          window.history.replaceState({}, '', `/?dataset=${encodeURIComponent(datasetId)}`)
+        }
         this.setLoadingStatus('Loading dataset\u2026', 50)
         await this.loadDataset(datasetId, 'url')
         this.setLoading(false)
@@ -674,10 +719,12 @@ class InteractiveSphere {
     }
   }
 
-  /** Extract the `dataset` query parameter from the current URL. */
+  /** Extract the dataset to boot with from the current URL — the
+   *  `?dataset=` query param, or the `/dataset/<id>` path form that
+   *  share links and blog posts emit (served via the SPA fallback). */
   private getDatasetIdFromUrl(): string | null {
     const params = new URLSearchParams(window.location.search)
-    return params.get('dataset')
+    return params.get('dataset') ?? parseDatasetPathname(window.location.pathname)
   }
 
   /**
@@ -948,6 +995,11 @@ class InteractiveSphere {
       this.appState,
       (time) => this.updateVideoTimeLabel(time),
       () => this.renderer?.getMap()?.triggerRepaint(),
+      // Per-frame sibling drift correction. The primary video is the
+      // master clock; siblings are kept in temporal lockstep here
+      // rather than free-running on a once-set playbackRate (which
+      // integrates duration-imprecision error into visible drift).
+      () => this.correctSiblingDrift(),
     )
   }
 
@@ -1156,6 +1208,12 @@ class InteractiveSphere {
       setPlaybackRate: (rate) => {
         if (this.hlsService) this.hlsService.playbackRate = rate
       },
+      // The `setTime` task — same seek the docent's set_time action and
+      // the In-the-news jump use. Best-effort: an unseekable dataset or
+      // out-of-range time is a quiet no-op mid-tour.
+      setTime: (isoTime) => {
+        seekToDate(isoTime, this.hlsService, this.appState, this.playback)
+      },
       onTourEnd: () => this.endTour(),
       onStop: () => {
         // User-initiated stop. Release a playlist that was waiting
@@ -1359,6 +1417,59 @@ class InteractiveSphere {
   }
 
   /**
+   * Fly the primary globe to a related current event's place and seek the
+   * loaded dataset to its time — the "In the news" card's "View on globe"
+   * action (`docs/CURRENT_EVENTS_PLAN.md` §6). Reuses the same primitives
+   * Orbit's docent drives: `renderer.flyTo` / `fitBounds` for place,
+   * `seekToDate` for time. Point geometry flies in to a regional altitude;
+   * a bounding box or a named region fits its extent. The time seek only
+   * runs when the event's start falls inside the loaded dataset's coverage;
+   * outside it (common for rolling real-time windows) we still fly to the
+   * place and report `out-of-range` so the card can note it.
+   */
+  private navigateToEvent(ev: PublicEvent): EventNavResult {
+    // A point event flies to ~regional altitude (km → MapLibre zoom in
+    // `MapRenderer.flyTo`); box/region events fit their extent instead.
+    const EVENT_FLY_ALTITUDE_KM = 3000
+    let navigated = false
+    const g = ev.geometry
+    if (g.point) {
+      void this.renderer?.flyTo(g.point.lat, g.point.lon, EVENT_FLY_ALTITUDE_KM)
+      if (isVrActive()) void flyToOnGlobe(g.point.lat, g.point.lon)
+      navigated = true
+    } else if (g.boundingBox) {
+      const { n, s, w, e } = g.boundingBox
+      this.renderer?.fitBounds([w, s, e, n])
+      navigated = true
+    } else if (g.regionName) {
+      const region = resolveRegion(g.regionName)
+      if (region) {
+        this.renderer?.fitBounds(region.bounds)
+        navigated = true
+      }
+    }
+
+    let time: EventNavResult['time'] = 'none'
+    if (ev.occurredStart) {
+      const ds = this.appState.currentDataset
+      const start = ds?.startTime ? new Date(ds.startTime).getTime() : NaN
+      const end = ds?.endTime ? new Date(ds.endTime).getTime() : NaN
+      const target = new Date(ev.occurredStart).getTime()
+      // Only temporal datasets can be seeked or reported out-of-range; a
+      // static image has no time axis, so there is nothing to note.
+      if (!isNaN(start) && !isNaN(end) && end > start && !isNaN(target)) {
+        if (target >= start && target <= end) {
+          seekToDate(ev.occurredStart, this.hlsService, this.appState, this.playback)
+          time = 'seeked'
+        } else {
+          time = 'out-of-range'
+        }
+      }
+    }
+    return { navigated, time }
+  }
+
+  /**
    * Render the info panel for whichever slot `getInfoDisplayIndex`
    * points at, repopulate the picker dropdown with all loaded
    * datasets, and show/hide the picker based on how many are loaded.
@@ -1378,7 +1489,12 @@ class InteractiveSphere {
     }
 
     // Render the currently-selected dataset into the info panel body.
-    displayDatasetInfo(dataset, this.appState.datasets, (id) => this.loadDataset(id, 'browse'))
+    displayDatasetInfo(
+      dataset,
+      this.appState.datasets,
+      (id) => this.loadDataset(id, 'browse'),
+      (ev) => this.navigateToEvent(ev),
+    )
 
     // Repopulate the picker with every loaded dataset (in panel order)
     // and wire the change handler once.
@@ -2487,36 +2603,36 @@ class InteractiveSphere {
   }
 
   /**
-   * Sibling video sync — seek-once-then-free-run strategy.
+   * Sibling video sync — primary-as-master-clock, per-frame correction.
    *
-   * The previous implementation listened to every `timeupdate` event
-   * (~4 per second) and seeked every sibling's `currentTime` on each
-   * tick. That caused constant decoder interruption (16+ seeks/sec
-   * with 4 panels), manifesting as visible jitter and pauses.
+   * The primary panel's video is the single source of truth for the
+   * current real-world date; siblings are kept locked to it. Rather
+   * than set a once-off `playbackRate` and let siblings free-run (which
+   * integrates `video.duration` imprecision into visible drift — see
+   * terraviz#132), we re-derive each sibling's target position from the
+   * primary's date every frame and steer it back into alignment.
    *
-   * New approach:
+   *   - **On play / seeked** (`seekSiblingsToDate`): exact-align every
+   *     sibling to the primary's date and mirror its play/pause state.
+   *     Runs once on attach and on the primary's `play` / `seeked`.
    *
-   *   - **On play**: seek every sibling to match the primary's
-   *     real-world date, then call `play()` on all of them at once.
-   *     After that, the browser's internal media clock keeps them
-   *     naturally in sync without any seeking.
+   *   - **On pause** (`seekSiblingsToDate`): exact-align overlapping
+   *     siblings to the primary's date *then* freeze them, so the held
+   *     frame is frame-accurate for side-by-side study. Out-of-range
+   *     siblings stay frozen at their nearest boundary frame.
    *
-   *   - **On pause**: pause all siblings. No seek — they're already
-   *     at the right position from the play-sync.
+   *   - **Per-frame drift correction** (`correctSiblingDrift`, driven
+   *     from the playback rAF loop while the primary is playing): every
+   *     frame, re-derive each sibling's target/rate. Small drift is
+   *     eased out by gently trimming `playbackRate` (no seek — a
+   *     `currentTime` write on a playing video interrupts decode and
+   *     flickers the panel; terraviz#229). A hard seek fires only for a
+   *     large desync past {@link SIBLING_HARD_SEEK_THRESHOLD_S}, or to
+   *     pin an out-of-range sibling to its boundary frame.
    *
-   *   - **On seeked** (user scrubbed the transport): re-compute
-   *     target times, seek siblings, then resume play if the primary
-   *     is playing.
-   *
-   *   - **Periodic drift check** (every 5 seconds): if any sibling
-   *     has drifted more than 1.0s from the primary's date-mapped
-   *     position, seek just that sibling. This catches slow decoder
-   *     drift without the constant-seek jitter. The 1.0s threshold
-   *     is generous — 0.3s was too tight and triggered on normal
-   *     inter-decoder variance.
-   *
-   * This reduces seeking from ~16/sec to essentially 0 during normal
-   * playback, with a soft correction every 5s only when needed.
+   * Net: drift is bounded by the threshold (one frame to correct) rather
+   * than by an interval, and seeking stays near-zero in steady state
+   * because the smoothing rate keeps siblings inside the threshold.
    */
   private attachPrimaryVideoSync(): void {
     this.detachPrimaryVideoSync()
@@ -2580,7 +2696,10 @@ class InteractiveSphere {
           if (primaryRangeMs > 0 && sibRangeMs > 0) {
             // rate = (sib video seconds per real-world ms) / (primary video seconds per real-world ms)
             // Simplifies to: (sibDuration / sibRangeMs) / (primaryDuration / primaryRangeMs)
-            const rate = (sibVideo.duration / sibRangeMs) / (primaryVideo.duration / primaryRangeMs)
+            // Scaled by the primary's actual playbackRate so the sibling
+            // tracks tour playback-rate changes (e.g. 5fps → 0.167×),
+            // not just the 1× case (terraviz#229).
+            const rate = (sibVideo.duration / sibRangeMs) / (primaryVideo.duration / primaryRangeMs) * primaryVideo.playbackRate
             // Clamp to browser limits (typically 0.0625–16×)
             sibVideo.playbackRate = Math.max(0.0625, Math.min(16, rate))
           }
@@ -2616,65 +2735,17 @@ class InteractiveSphere {
       }
     }
 
-    /**
-     * Periodic drift correction — only seeks siblings that have
-     * drifted beyond the threshold. Much cheaper than constant-seek
-     * because most of the time no sibling needs correction.
-     */
-    const DRIFT_THRESHOLD_S = 1.0
-    const DRIFT_CHECK_MS = 5000
-
-    const driftCheck = () => {
-      if (primaryVideo.paused) return
-
-      const pIdx = this.viewports.getPrimaryIndex()
-      const pPanel = this.panelStates[pIdx]
-      const pDataset = pPanel?.dataset
-
-      let primaryDate: Date | null = null
-      if (pDataset?.startTime && pDataset.endTime && primaryVideo.duration > 0) {
-        primaryDate = videoTimeToDate(
-          primaryVideo.currentTime,
-          primaryVideo.duration,
-          new Date(pDataset.startTime),
-          new Date(pDataset.endTime),
-        )
-      }
-      if (!primaryDate) return
-
-      for (let i = 0; i < this.panelStates.length; i++) {
-        if (i === pIdx) continue
-        const sibPanel = this.panelStates[i]
-        const sibVideo = sibPanel?.hlsService?.getVideo?.() ?? null
-        if (!sibVideo || sibVideo.readyState < 2 || sibVideo.paused) continue
-
-        const sibDataset = sibPanel?.dataset
-        if (!sibDataset?.startTime || !sibDataset.endTime || sibVideo.duration <= 0) continue
-
-        const { videoTime: targetTime, position } = dateToVideoTime(
-          primaryDate,
-          sibVideo.duration,
-          new Date(sibDataset.startTime),
-          new Date(sibDataset.endTime),
-        )
-
-        if (position === 'inside' && Math.abs(sibVideo.currentTime - targetTime) > DRIFT_THRESHOLD_S) {
-          logger.debug(`[App] Drift correction: panel ${i} off by ${(sibVideo.currentTime - targetTime).toFixed(1)}s`)
-          sibVideo.currentTime = targetTime
-        }
-      }
-    }
-
     // --- Wire event listeners ---
 
     const onPlay = () => seekSiblingsToDate(true)
-    const onPause = () => {
-      for (let i = 0; i < this.panelStates.length; i++) {
-        if (i === this.viewports.getPrimaryIndex()) continue
-        const sibVideo = this.panelStates[i]?.hlsService?.getVideo?.() ?? null
-        if (sibVideo && !sibVideo.paused) sibVideo.pause()
-      }
-    }
+    // On pause, exact-align every overlapping sibling to the primary's
+    // date *before* freezing, so the held frame is frame-accurate for
+    // side-by-side study — paused is exactly when a viewer scrutinises
+    // the comparison, and a one-shot seek can't thrash. seekSiblingsToDate
+    // both snaps in-range siblings to the exact date and (because the
+    // primary is already paused here) mirrors the pause to them; siblings
+    // whose window doesn't contain the date stay frozen at their boundary.
+    const onPause = () => seekSiblingsToDate(true)
     const onSeeked = () => seekSiblingsToDate(true)
 
     primaryVideo.addEventListener('play', onPlay)
@@ -2687,24 +2758,114 @@ class InteractiveSphere {
     )
     this.primaryVideoSyncTarget = primaryVideo
 
-    // Start the periodic drift checker
-    this.driftCheckInterval = setInterval(driftCheck, DRIFT_CHECK_MS)
-
-    // Run once immediately so siblings reflect the primary's current
-    // state without waiting for a user action.
+    // Arm per-frame drift correction (driven from the playback rAF
+    // loop via `correctSiblingDrift`) and run a full resync once now so
+    // siblings reflect the primary's current state immediately.
+    this.primaryVideoSyncActive = true
     seekSiblingsToDate(true)
   }
 
   /**
+   * Per-frame sibling drift correction, invoked from the playback rAF
+   * loop (`startPlaybackLoop`'s `onTick`). The primary video is the
+   * master clock: every frame we re-derive each sibling's target
+   * position from the primary's real-world date and snap it back if it
+   * has drifted past {@link SIBLING_DRIFT_THRESHOLD_S}.
+   *
+   * This replaces the old once-set-`playbackRate` + 5 s/1 s interval
+   * scheme (terraviz#132). The rate is kept only as a smoothing aid so
+   * we don't seek every frame — it's re-derived continuously here so it
+   * tracks `video.duration` as HLS segments buffer and the reported
+   * duration firms up (the original failure mode: an imprecise duration
+   * froze a slightly-wrong rate whose error integrated into visible
+   * drift — ~2.83 years per second of video on the Climate Futures
+   * tour). The threshold-gated seek is the closed loop that bounds it.
+   */
+  private correctSiblingDrift(): void {
+    if (!this.primaryVideoSyncActive) return
+
+    const pIdx = this.viewports.getPrimaryIndex()
+    const pPanel = this.panelStates[pIdx]
+    const pDataset = pPanel?.dataset
+    const primaryVideo = pPanel?.hlsService?.getVideo?.() ?? null
+    // Only correct while the primary is actively playing; paused state
+    // is handled by the `pause` event handler in attachPrimaryVideoSync.
+    if (!primaryVideo || primaryVideo.paused || primaryVideo.readyState < 2) return
+    if (!pDataset?.startTime || !pDataset.endTime || primaryVideo.duration <= 0) return
+
+    const primaryDate = videoTimeToDate(
+      primaryVideo.currentTime,
+      primaryVideo.duration,
+      new Date(pDataset.startTime),
+      new Date(pDataset.endTime),
+    )
+
+    const primaryRangeMs = new Date(pDataset.endTime).getTime() - new Date(pDataset.startTime).getTime()
+
+    for (let i = 0; i < this.panelStates.length; i++) {
+      if (i === pIdx) continue
+      const sibPanel = this.panelStates[i]
+      const sibVideo = sibPanel?.hlsService?.getVideo?.() ?? null
+      if (!sibVideo || sibVideo.readyState < 2) continue
+
+      const sibDataset = sibPanel?.dataset
+      if (!sibDataset?.startTime || !sibDataset.endTime || sibVideo.duration <= 0) continue
+
+      // Re-derive target/rate/drift every frame so the rate tracks
+      // `video.duration` as HLS firms it up. Small in-range drift is
+      // eased out via the returned (gently trimmed) rate; `shouldSeek`
+      // is true only for a large desync or to pin an out-of-range
+      // sibling to its boundary frame (terraviz#229 — per-frame seeking
+      // interrupted decode and flickered the sibling).
+      const { position, targetTime, rate, shouldSeek } = computeSiblingSyncCorrection({
+        date: primaryDate,
+        sibCurrentTime: sibVideo.currentTime,
+        sibDuration: sibVideo.duration,
+        sibStart: new Date(sibDataset.startTime),
+        sibEnd: new Date(sibDataset.endTime),
+        primaryDuration: primaryVideo.duration,
+        primaryRangeMs,
+        primaryPlaybackRate: primaryVideo.playbackRate,
+        hardSeekThresholdS: SIBLING_HARD_SEEK_THRESHOLD_S,
+      })
+
+      sibVideo.playbackRate = rate
+
+      if (shouldSeek) {
+        sibVideo.currentTime = targetTime
+        const sibTex = sibPanel?.videoTexture
+        if (sibTex) sibTex.needsUpdate = true
+      }
+
+      if (position === 'inside') {
+        this.viewports.setOutOfRange(i, false)
+        const wasOutOfRange = this.siblingOutOfRange[i] === true
+        this.siblingOutOfRange[i] = false
+        // Resume a sibling that was frozen out-of-range and has now
+        // re-entered its window as the primary advanced. Only on the
+        // transition — re-issuing play() every frame would churn
+        // Promises (and log warnings) if autoplay is blocked.
+        if (wasOutOfRange && sibVideo.paused) {
+          sibVideo.play().catch(() => { /* autoplay blocked */ })
+        }
+      } else {
+        // Primary date is outside this sibling's range — it's been
+        // pinned to its boundary frame above; freeze + mark it.
+        this.viewports.setOutOfRange(i, true)
+        this.siblingOutOfRange[i] = true
+        if (!sibVideo.paused) sibVideo.pause()
+      }
+    }
+  }
+
+  /**
    * Detach all sibling-sync listeners from the previous primary video,
-   * stop the drift-check timer, and clear any lingering out-of-range
-   * state from siblings.
+   * disarm per-frame drift correction, and clear any lingering
+   * out-of-range state from siblings.
    */
   private detachPrimaryVideoSync(): void {
-    if (this.driftCheckInterval !== null) {
-      clearInterval(this.driftCheckInterval)
-      this.driftCheckInterval = null
-    }
+    this.primaryVideoSyncActive = false
+    this.siblingOutOfRange = []
     const target = this.primaryVideoSyncTarget
     if (target) {
       for (const { event, handler } of this.primaryVideoSyncListeners) {
@@ -3168,6 +3329,15 @@ document.addEventListener('DOMContentLoaded', async () => {
   if (location.pathname.startsWith('/publish')) {
     const { bootPublisherPortal } = await import('./ui/publisher')
     await bootPublisherPortal()
+    return
+  }
+
+  // Public blog route gate — same lazy-chunk shape as the portal:
+  // `/blog` and `/blog/:slug` render static content pages and skip
+  // the globe boot entirely (docs/CURRENT_EVENTS_PLAN.md §7).
+  if (location.pathname === '/blog' || location.pathname.startsWith('/blog/')) {
+    const { bootBlogPage } = await import('./ui/blog')
+    await bootBlogPage()
     return
   }
 

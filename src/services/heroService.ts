@@ -11,9 +11,13 @@
  *      static `public/featured-now.json` file apply as the fallback
  *      floor for static-only deploys. The chosen override must be
  *      in-window and resolve to a visible catalog row.
- *   2. Auto-derived — a real-time-tagged dataset whose `endTime` is
+ *   2. Approved current event — `/api/v1/featured-event` returns the
+ *      freshest curator-approved event with an approved link to a
+ *      visible dataset (`docs/CURRENT_EVENTS_PLAN.md` §6.1). It carries
+ *      a cited source the UI shows on the card.
+ *   3. Auto-derived — a real-time-tagged dataset whose `endTime` is
  *      within the last 24 h (the freshest one wins).
- *   3. null — nothing newsworthy. The panel hides entirely; the
+ *   4. null — nothing newsworthy. The panel hides entirely; the
  *      catalog never performs liveliness it doesn't have.
  *
  * The override's `window: { start, end }` is MANDATORY for both
@@ -84,6 +88,12 @@ export interface HeroOverride {
   headline?: string
 }
 
+/** A current event that headlines the hero (the `'event'` source). */
+export interface HeroEvent {
+  title: string
+  source: { name: string; url: string; publishedAt?: string }
+}
+
 /** The resolved hero, ready for the UI to render. */
 export interface HeroCandidate {
   dataset: Dataset
@@ -91,7 +101,10 @@ export interface HeroCandidate {
   headline?: string
   /** How this candidate was chosen — for the UI's accent + analytics
    *  in a future v2 (no telemetry in v1). */
-  source: 'override' | 'auto'
+  source: 'override' | 'auto' | 'event'
+  /** Present only when `source === 'event'`: the cited current event
+   *  whose approved dataset link this candidate surfaces. */
+  event?: HeroEvent
 }
 
 /** In-memory override cache. `fetchedAt = 0` means "never fetched". */
@@ -105,6 +118,32 @@ let overrideCache: { value: HeroOverride | null; fetchedAt: number } = {
 let backendCache: { value: HeroOverride | null; fetchedAt: number } = {
   value: null,
   fetchedAt: 0,
+}
+
+/** In-memory cache lifetime for the featured-event endpoint — matches
+ *  its 60 s KV TTL, same rationale as the backend hero cache. */
+export const FEATURED_EVENT_CACHE_MS = 60 * 1000
+
+/** A current event resolved from `/api/v1/featured-event`. */
+export interface FeaturedEvent {
+  title: string
+  datasetId: string
+  source: { name: string; url: string; publishedAt?: string }
+}
+
+/** In-memory cache for the featured-event endpoint. */
+let featuredEventCache: { value: FeaturedEvent | null; fetchedAt: number } = {
+  value: null,
+  fetchedAt: 0,
+}
+
+/** The public featured-event endpoint — the approved current event that
+ *  should headline the hero. */
+function featuredEventUrl(): string {
+  const base = typeof import.meta !== 'undefined' && import.meta.env?.BASE_URL
+    ? import.meta.env.BASE_URL
+    : '/'
+  return `${base}api/v1/featured-event`
 }
 
 /**
@@ -145,8 +184,86 @@ export async function getHeroCandidate(
     }
   }
 
+  // A curator-approved current event headlines the hero next — between
+  // an explicit curator pin (which always wins) and the auto-derived
+  // real-time pick. The backend has already gated this to approved,
+  // recent events with an approved link; we only need the linked dataset
+  // to be present + visible in the loaded catalog.
+  const event = await fetchFeaturedEvent(opts.signal)
+  if (event) {
+    const dataset = datasets.find(d => d.id === event.datasetId && !d.isHidden)
+    if (dataset) {
+      return { dataset, headline: event.title, source: 'event', event: { title: event.title, source: event.source } }
+    }
+    logger.warn('[hero] featured-event datasetId did not resolve:', event.datasetId)
+  }
+
   const auto = pickAutoDerived(datasets, now)
   return auto ? { dataset: auto, source: 'auto' } : null
+}
+
+/** True for an http(s) URL. The hero card renders `source.url` as an
+ *  `<a href>`, so a `javascript:`/`data:` URL would be a clickable XSS
+ *  vector — reject anything but http(s) (defense-in-depth; the backend
+ *  also validates on ingest). */
+function isHttpUrl(s: string): boolean {
+  try {
+    const u = new URL(s)
+    return u.protocol === 'http:' || u.protocol === 'https:'
+  } catch {
+    return false
+  }
+}
+
+/** Validate + coerce a raw featured-event payload, or null when it
+ *  isn't usable. Exported for testing. */
+export function sanitizeFeaturedEvent(raw: unknown): FeaturedEvent | null {
+  if (!raw || typeof raw !== 'object') return null
+  const r = raw as Record<string, unknown>
+  if (typeof r.title !== 'string' || r.title.length === 0) return null
+  if (typeof r.datasetId !== 'string' || r.datasetId.length === 0) return null
+  const s = r.source
+  if (!s || typeof s !== 'object') return null
+  const src = s as Record<string, unknown>
+  if (typeof src.name !== 'string' || typeof src.url !== 'string') return null
+  if (!isHttpUrl(src.url)) return null
+  const out: FeaturedEvent = {
+    title: r.title,
+    datasetId: r.datasetId,
+    source: { name: src.name, url: src.url },
+  }
+  if (typeof src.publishedAt === 'string' && src.publishedAt.length > 0) {
+    out.source.publishedAt = src.publishedAt
+  }
+  return out
+}
+
+/**
+ * Fetch + cache the featured current event. Returns null on any
+ * non-success (no approved event → `{ event: null }`, missing
+ * `CATALOG_DB` → 503, network error, malformed body) so the caller
+ * falls through to the auto pipeline.
+ */
+async function fetchFeaturedEvent(signal?: AbortSignal): Promise<FeaturedEvent | null> {
+  const fresh = Date.now() - featuredEventCache.fetchedAt < FEATURED_EVENT_CACHE_MS
+  if (fresh && featuredEventCache.fetchedAt !== 0) return featuredEventCache.value
+  try {
+    const res = await fetch(featuredEventUrl(), { signal })
+    if (!res.ok) {
+      featuredEventCache = { value: null, fetchedAt: Date.now() }
+      return null
+    }
+    const parsed = (await res.json()) as { event?: unknown }
+    const value = sanitizeFeaturedEvent(parsed?.event)
+    featuredEventCache = { value, fetchedAt: Date.now() }
+    return value
+  } catch (err) {
+    if ((err as { name?: string })?.name !== 'AbortError') {
+      logger.warn('[hero] Failed to fetch /api/v1/featured-event:', err)
+      featuredEventCache = { value: null, fetchedAt: Date.now() }
+    }
+    return null
+  }
 }
 
 /**
@@ -264,4 +381,5 @@ async function fetchBackendOverride(signal?: AbortSignal): Promise<HeroOverride 
 export function resetHeroCacheForTests(): void {
   overrideCache = { value: null, fetchedAt: 0 }
   backendCache = { value: null, fetchedAt: 0 }
+  featuredEventCache = { value: null, fetchedAt: 0 }
 }

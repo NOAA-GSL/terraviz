@@ -33,19 +33,22 @@ Web Speech) and **Cloudflare** (Whisper, VAD-segmented), the
 suspend, mute, listening indicator), **barge-in + dataset-audio
 ducking**, and **streaming-turn telemetry** (§10.4 — hands-free turns
 tagged `open-mic`/`push-to-talk`, plus barge-in frequency, the numbers
-that decide the exhibit interaction model). **Phase 3.5 wake-word** has
-now landed too: the on-device `WakeWordDetector` + the **openWakeWord
-ONNX scorer** (built-in `hey jarvis`; lazy onnxruntime-web,
-operator-hosted models, runbook + custom-"Hey Orbit" training steps in
-`docs/ORBIT_WAKEWORD.md`) — pending on-hardware validation. The
-wake-word **hands-free integration** has now landed as well: a
-`wake-word` interaction model in `HandsFreeController` (silent until an
-on-device wake arms a single turn — no audio streams to STT before the
-wake), the settings picker option (gated on
-`VITE_VOICE_WAKEWORD_MODEL_URL`), and the §10.4 **false-fire** telemetry
-(a `wake-word` turn with no speech). With that, **Phase 3 is
-functionally complete** — remaining work is a true **WebSocket**
-streaming path validation on real hardware and Phase 4 (on-device
+that decide the exhibit interaction model). The true **WebSocket**
+streaming path (Deepgram Nova-3/Flux via the AI Gateway realtime
+endpoint) has now landed too — the `/api/voice/stream` proxy + a client
+WS engine for **live interim transcripts**, flag-gated
+(`VITE_VOICE_WS_STREAMING`) and pending live AI-Gateway validation.
+**Phase 3.5 wake-word** has now landed as well: the on-device
+`WakeWordDetector` + the **openWakeWord ONNX scorer** (built-in `hey
+jarvis`; lazy onnxruntime-web, operator-hosted models, runbook +
+custom-"Hey Orbit" training steps in `docs/ORBIT_WAKEWORD.md`), plus its
+**hands-free integration** — a `wake-word` interaction model in
+`HandsFreeController` (silent until an on-device wake arms a single
+turn — no audio streams to STT before the wake), the settings picker
+option (gated on `VITE_VOICE_WAKEWORD_MODEL_URL`), and the §10.4
+**false-fire** telemetry (a `wake-word` turn with no speech). With that,
+**Phase 3 is functionally complete** — remaining work is on-hardware
+validation of the WebSocket + wake-word paths and Phase 4 (on-device
 models).
 
 > Cross-references:

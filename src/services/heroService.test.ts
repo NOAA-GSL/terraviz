@@ -217,3 +217,74 @@ describe('getHeroCandidate — backend read-through', () => {
     expect(res?.dataset.id).toBe('rt')
   })
 })
+
+describe('getHeroCandidate — approved event source', () => {
+  const activeWindow = { start: '2026-05-01T00:00:00.000Z', end: '2026-07-01T00:00:00.000Z' }
+  const realtime = ds('rt', { tags: [REAL_TIME_TAG], endTime: '2026-06-01T00:00:00.000Z' })
+  const eventBody = {
+    event: {
+      title: 'Hurricane Lena',
+      datasetId: 'feat',
+      source: { name: 'NOAA', url: 'https://example.gov/storm', publishedAt: '2026-05-30T00:00:00Z' },
+    },
+  }
+
+  /** Route fetch across the three hero sources by URL. */
+  function stubHero(routes: { hero?: unknown; file?: unknown; event?: unknown }): void {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: unknown) => {
+        const u = String(url)
+        const body = u.includes('featured-event')
+          ? routes.event
+          : u.includes('featured-hero')
+            ? routes.hero
+            : routes.file
+        return Promise.resolve({ ok: body !== undefined, json: async () => body ?? {} })
+      }),
+    )
+  }
+
+  it('surfaces an approved event when there is no curator pin', async () => {
+    stubHero({ hero: { hero: null }, file: {}, event: eventBody })
+    const res = await getHeroCandidate([ds('feat'), realtime], { now: NOW })
+    expect(res?.source).toBe('event')
+    expect(res?.dataset.id).toBe('feat')
+    expect(res?.headline).toBe('Hurricane Lena')
+    expect(res?.event?.source).toEqual({ name: 'NOAA', url: 'https://example.gov/storm', publishedAt: '2026-05-30T00:00:00Z' })
+  })
+
+  it('a curator pin beats the event', async () => {
+    stubHero({
+      hero: { hero: { datasetId: 'feat', window: activeWindow, headline: 'Pinned' } },
+      file: {},
+      event: eventBody,
+    })
+    const res = await getHeroCandidate([ds('feat'), realtime], { now: NOW })
+    expect(res?.source).toBe('override')
+    expect(res?.headline).toBe('Pinned')
+  })
+
+  it('falls through to auto-derive when the event dataset is not in the catalog', async () => {
+    stubHero({ hero: { hero: null }, file: {}, event: { event: { ...eventBody.event, datasetId: 'missing' } } })
+    const res = await getHeroCandidate([ds('feat'), realtime], { now: NOW })
+    expect(res?.source).toBe('auto')
+    expect(res?.dataset.id).toBe('rt')
+  })
+
+  it('falls through to auto-derive when there is no approved event', async () => {
+    stubHero({ hero: { hero: null }, file: {}, event: { event: null } })
+    const res = await getHeroCandidate([ds('feat'), realtime], { now: NOW })
+    expect(res?.source).toBe('auto')
+  })
+
+  it('rejects a non-http(s) source url (XSS defense) and falls through', async () => {
+    stubHero({
+      hero: { hero: null },
+      file: {},
+      event: { event: { ...eventBody.event, source: { name: 'NOAA', url: 'javascript:alert(1)' } } },
+    })
+    const res = await getHeroCandidate([ds('feat'), realtime], { now: NOW })
+    expect(res?.source).toBe('auto') // not 'event' — the bad-url event was dropped
+  })
+})

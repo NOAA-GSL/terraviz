@@ -106,6 +106,19 @@ function renderCard(
     ? `<img class="hero-panel-thumb" src="${escapeAttr(dataset.thumbnailLink)}" alt="" loading="lazy">`
     : ''
 
+  // For an event-sourced hero, cite the reputable source beneath the
+  // card. Rendered OUTSIDE the card <button> (an <a> inside a <button>
+  // is invalid) so the link opens the source while the card still loads
+  // the dataset.
+  const cite =
+    candidate.source === 'event' && candidate.event
+      ? `<div class="hero-panel-source">`
+        + escapeHtml(t('browse.hero.via'))
+        + ` <a class="hero-panel-source-link" href="${escapeAttr(candidate.event.source.url)}"`
+        + ` target="_blank" rel="noopener noreferrer">${escapeHtml(candidate.event.source.name)}</a>`
+        + `</div>`
+      : ''
+
   host.innerHTML =
     `<div class="hero-panel-inner">`
     + `<button type="button" class="hero-panel-dismiss" aria-label="${escapeAttr(t('browse.hero.dismiss.aria'))}">&#x2715;</button>`
@@ -118,6 +131,7 @@ function renderCard(
     + `<span class="hero-panel-badge">${escapeHtml(t('browse.hero.label'))}</span>`
     + `</span>`
     + `</button>`
+    + cite
     + `</div>`
   host.classList.remove('hidden')
   host.removeAttribute('aria-hidden')

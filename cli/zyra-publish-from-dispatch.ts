@@ -26,6 +26,14 @@
  *                    error summary. The workflow calls this from an
  *                    `if: failure()` step so any broken step still
  *                    lands a terminal status in `workflow_runs`.
+ *   --phase=acquire-softpass
+ *                    After `zyra run` failed: decide whether it was a
+ *                    transient NOAA-FTP `acquire` hiccup over a still-
+ *                    fresh published bundle. If so, POST a no-op
+ *                    `succeeded` (the run lands GREEN, no false-
+ *                    positive notification); otherwise exit non-zero
+ *                    and let the `if: failure()` step report `failed`.
+ *                    See `cli/lib/zyra-acquire-softpass.ts`.
  *
  * Environment (same resolution as every `terraviz` command — see
  * `cli/lib/config.ts`): TERRAVIZ_SERVER,
@@ -40,7 +48,11 @@
  *   2 — publisher API call failed (fetch / status / PATCH)
  *   3 — SOS spec preflight failed (hard failures)
  *   4 — asset init / PUT / complete failed
- *   5 — transcode wait timeout (upload landed; encode didn't finish)
+ *
+ * (A transcode that outlasts the --wait-seconds window is NOT a
+ * failure: the asset published and the encode finalizes
+ * asynchronously, so the publish phase reports success. The former
+ * exit code 5 is retired.)
  */
 
 import { createHash } from 'node:crypto'
@@ -55,7 +67,15 @@ import {
   renderSidecar,
   sanitizeErrorSummary,
 } from './lib/workflow-sidecar'
-import { loadR2ConfigFromEnv, type R2UploadConfig } from './lib/r2-upload'
+import {
+  deleteR2Object,
+  getR2ObjectText,
+  listR2KeysPaginated,
+  loadR2ConfigFromEnv,
+  r2ObjectExists,
+  type R2UploadConfig,
+} from './lib/r2-upload'
+import { frameHexFromKey, frameStorePrefix, selectFrameOrphans } from './lib/frame-store'
 import {
   isoDurationToSeconds,
   restoreFramesFromR2,
@@ -63,11 +83,33 @@ import {
   windowFrameBudget,
 } from './lib/r2-frames'
 import { publishFrameSequence } from './lib/frames-publish'
+import {
+  assessBundleFreshness,
+  classifyZyraFailure,
+  decideAcquireSoftPass,
+} from './lib/zyra-acquire-softpass'
 import { WORKFLOW_OUTPUT_PATH } from '../src/types/zyra-workflow-constants'
 
 const ULID_RE = /^[0-9A-HJKMNP-TV-Z]{26}$/
 
-export type Phase = 'fetch' | 'publish' | 'report-failure' | 'restore-frames' | 'save-frames'
+/** Default staleness threshold for the acquire soft-pass (2 days):
+ *  how long the published bundle's trailing edge may fall behind real
+ *  time before a transient acquire failure escalates instead of
+ *  soft-passing. Overridable per node via the workflow's
+ *  ZYRA_STALE_AFTER_SECONDS repo variable. */
+const DEFAULT_STALE_AFTER_SECONDS = 172_800
+/** Upper bound on --stale-after-seconds (30 days) — a guard against a
+ *  fat-fingered repo variable that would let an indefinite outage
+ *  soft-pass forever. */
+const MAX_STALE_AFTER_SECONDS = 2_592_000
+
+export type Phase =
+  | 'fetch'
+  | 'publish'
+  | 'report-failure'
+  | 'acquire-softpass'
+  | 'restore-frames'
+  | 'save-frames'
 
 export interface Args {
   phase: Phase
@@ -79,6 +121,11 @@ export interface Args {
   waitSeconds: number
   errorSummary: string
   ffprobeBin: string
+  /** Path to the captured `zyra run` combined output — the
+   *  acquire-softpass classifier's input. */
+  zyraLog: string | null
+  /** Staleness threshold (seconds) for the acquire soft-pass. */
+  staleAfterSeconds: number
 }
 
 export function parseArgs(argv: readonly string[]): Args | { error: string } {
@@ -93,11 +140,12 @@ export function parseArgs(argv: readonly string[]): Args | { error: string } {
     phase !== 'fetch' &&
     phase !== 'publish' &&
     phase !== 'report-failure' &&
+    phase !== 'acquire-softpass' &&
     phase !== 'restore-frames' &&
     phase !== 'save-frames'
   ) {
     return {
-      error: `--phase must be fetch, publish, report-failure, restore-frames, or save-frames; got ${phase ?? '(missing)'}`,
+      error: `--phase must be fetch, publish, report-failure, acquire-softpass, restore-frames, or save-frames; got ${phase ?? '(missing)'}`,
     }
   }
   const workflowId = get('workflow-id')
@@ -114,6 +162,17 @@ export function parseArgs(argv: readonly string[]): Args | { error: string } {
   if (!Number.isInteger(waitSeconds) || waitSeconds < 0 || waitSeconds > 21_600) {
     return { error: `--wait-seconds must be an integer 0..21600; got ${waitRaw}` }
   }
+  const staleRaw = get('stale-after-seconds')
+  const staleAfterSeconds = staleRaw === null ? DEFAULT_STALE_AFTER_SECONDS : Number(staleRaw)
+  if (
+    !Number.isInteger(staleAfterSeconds) ||
+    staleAfterSeconds < 0 ||
+    staleAfterSeconds > MAX_STALE_AFTER_SECONDS
+  ) {
+    return {
+      error: `--stale-after-seconds must be an integer 0..${MAX_STALE_AFTER_SECONDS}; got ${staleRaw}`,
+    }
+  }
   return {
     phase,
     workflowId,
@@ -124,6 +183,8 @@ export function parseArgs(argv: readonly string[]): Args | { error: string } {
     waitSeconds,
     errorSummary: get('error-summary') ?? 'Workflow run failed (no detail provided).',
     ffprobeBin: get('ffprobe-bin') ?? 'ffprobe',
+    zyraLog: get('zyra-log'),
+    staleAfterSeconds,
   }
 }
 
@@ -139,7 +200,14 @@ interface WorkflowEnvelope {
 }
 
 interface DatasetEnvelope {
-  dataset: { id: string; data_ref?: string | null; transcoding?: number | null }
+  dataset: {
+    id: string
+    data_ref?: string | null
+    transcoding?: number | null
+    end_time?: string | null
+    updated_at?: string | null
+    frame_source_filenames_ref?: string | null
+  }
 }
 
 interface AssetInitResponse {
@@ -269,12 +337,25 @@ async function waitAndReportSucceeded(
   uploadId: string,
 ): Promise<number> {
   if (args.waitSeconds > 0) {
-    const deadline = Date.now() + args.waitSeconds * 1000
+    const started = Date.now()
+    const deadline = started + args.waitSeconds * 1000
     const expectedRef = `r2:videos/${datasetId}/${uploadId}/master.m3u8`
+    // Heartbeat so the step doesn't look dead while the (silent)
+    // transcode runs — throttled to ~once a minute.
+    let lastHeartbeat = 0
     for (;;) {
       if (Date.now() > deadline) {
-        log(`TIMEOUT: transcode did not finish within ${args.waitSeconds}s`)
-        return 5
+        // The wait is a best-effort confirmation window, not a gate:
+        // the asset upload + metadata PATCH already succeeded and the
+        // transcode was dispatched, so a slow encode (a large
+        // frame-sequence transcode can run 30+ min) must not
+        // false-fail the run. Report success; the transcode finalizes
+        // `data_ref` asynchronously and reports its own status. Tune
+        // the window via --wait-seconds (0 = fire-and-forget).
+        log(
+          `transcode still running after ${args.waitSeconds}s — asset published and transcode dispatched; reporting success (it finalizes asynchronously)`,
+        )
+        break
       }
       await sleep(15_000)
       const row = await client.get<DatasetEnvelope>(datasetId)
@@ -285,6 +366,11 @@ async function waitAndReportSucceeded(
       if (row.body.dataset.data_ref === expectedRef && !row.body.dataset.transcoding) {
         log(`transcode landed — data_ref=${expectedRef}`)
         break
+      }
+      const elapsed = Math.round((Date.now() - started) / 1000)
+      if (elapsed - lastHeartbeat >= 60) {
+        lastHeartbeat = elapsed
+        log(`waiting on transcode… (${elapsed}s elapsed, transcoding=${row.body.dataset.transcoding ? 1 : 0})`)
       }
     }
   }
@@ -436,19 +522,125 @@ async function publishFrames(
   if (sidecarCode !== null) return sidecarCode
 
   // 2. Hash → init → PUT frames + manifest → complete (fires the
-  //    transcode).
+  //    transcode). Frames are content-addressed
+  //    (`docs/INCREMENTAL_FRAME_UPLOAD_PLAN.md`), so when R2 creds are
+  //    present we HEAD-skip frames already in the shared store and PUT
+  //    only the delta — a scheduled re-publish uploads the day's new
+  //    frames, not the whole window.
+  const r2 = frameCacheConfig()
+  // Capture the digests of the manifest the row advertises RIGHT NOW —
+  // before this run's transcode swaps it — as the GC grace set. This is
+  // the prior window the live `/frames` recall is still serving; reading
+  // it up front (rather than at GC time) makes the prune race-proof:
+  // even if the transcode completes during the publish wait below, the
+  // prior frames are already pinned for a one-run grace window.
+  const priorDigests = r2 ? await fetchAdvertisedFrameDigests(client, r2, datasetId) : []
+
   let uploadId: string
+  let currentDigests: string[] = []
   try {
-    const result = await publishFrameSequence(client, datasetId, framesDir, { log })
+    const result = await publishFrameSequence(client, datasetId, framesDir, {
+      log,
+      exists: r2 ? key => r2ObjectExists(r2, key) : undefined,
+    })
     uploadId = result.uploadId
-    log(`frame sequence upload ${uploadId} (${result.frameCount} frames, mock=${result.mock}) — transcode dispatch fired`)
+    currentDigests = result.digests
+    log(
+      `frame sequence upload ${uploadId} (${result.frameCount} frames: ` +
+        `${result.uploaded} uploaded, ${result.reused} reused, mock=${result.mock}) — transcode dispatch fired`,
+    )
   } catch (err) {
     log(`FAIL: frame-sequence publish → ${err instanceof Error ? err.message : String(err)}`)
     return 4
   }
 
   // 3. Wait for the transcode to flip data_ref, then report.
-  return await waitAndReportSucceeded(client, args, datasetId, uploadId)
+  const code = await waitAndReportSucceeded(client, args, datasetId, uploadId)
+
+  // 4. GC the content-addressed frame store (best-effort — never
+  //    changes the run's outcome). Keep this run's frames ∪ the prior
+  //    window captured above (the one-run grace window).
+  if (code === 0 && r2) {
+    await gcFrameStore(r2, datasetId, [...currentDigests, ...priorDigests])
+  }
+  return code
+}
+
+/**
+ * Read the digests of whatever frame manifest the dataset row currently
+ * advertises (`frame_source_filenames_ref`). Called at publish start so
+ * the value is the PRIOR window (the bundle `/frames` recall is serving
+ * before this run's transcode swaps it in) — the grace set the frame GC
+ * must keep so an in-flight reader on the prior manifest doesn't lose
+ * frames mid-enumeration.
+ *
+ * Best-effort: returns [] (no grace contribution) on any miss — a
+ * missing row, no prior frames, an unreadable or unparseable manifest.
+ * This run's own digests still protect the just-published frames.
+ */
+async function fetchAdvertisedFrameDigests(
+  client: TerravizClient,
+  r2: R2UploadConfig,
+  datasetId: string,
+): Promise<string[]> {
+  try {
+    const row = await client.get<DatasetEnvelope>(datasetId)
+    const ref = row.ok ? row.body.dataset.frame_source_filenames_ref : null
+    if (!ref) return []
+    const manifestKey = ref.startsWith('r2:') ? ref.slice('r2:'.length) : ref
+    const blob = await getR2ObjectText(r2, manifestKey)
+    if (!blob) return []
+    const entries = JSON.parse(blob) as Array<{ digest?: unknown }>
+    return entries
+      .filter((e): e is { digest: string } => typeof e.digest === 'string')
+      .map(e => e.digest)
+  } catch (err) {
+    log(`WARN: frame GC — could not read the prior manifest for the grace set (${err instanceof Error ? err.message : String(err)})`)
+    return []
+  }
+}
+
+/**
+ * Mark-and-sweep the shared content-addressed frame store
+ * (`docs/INCREMENTAL_FRAME_UPLOAD_PLAN.md` §GC). `keepDigests` is this
+ * run's frames ∪ the prior window captured at publish start, so every
+ * frame either the new bundle or the still-serving prior bundle
+ * references survives; the rest (frames that slid off ≥2 windows ago)
+ * is reclaimed. Fully best-effort: any failure logs and returns without
+ * affecting the run, exactly like `pruneSegments` in the HLS path.
+ */
+async function gcFrameStore(
+  r2: R2UploadConfig,
+  datasetId: string,
+  keepDigests: string[],
+): Promise<void> {
+  try {
+    const keys = await listR2KeysPaginated(r2, frameStorePrefix(datasetId))
+    const hexToKey = new Map<string, string>()
+    for (const k of keys) {
+      const hex = frameHexFromKey(k)
+      if (hex) hexToKey.set(hex, k)
+    }
+    const orphanHexes = selectFrameOrphans([...hexToKey.keys()], keepDigests)
+    if (orphanHexes.length === 0) {
+      log(`frame GC: nothing to prune (${hexToKey.size} frame(s) all referenced)`)
+      return
+    }
+    let deleted = 0
+    for (const hex of orphanHexes) {
+      const key = hexToKey.get(hex)
+      if (!key) continue
+      try {
+        await deleteR2Object(r2, key)
+        deleted++
+      } catch (err) {
+        log(`WARN: frame GC delete ${key} failed (continuing) — ${err instanceof Error ? err.message : String(err)}`)
+      }
+    }
+    log(`frame GC: pruned ${deleted}/${orphanHexes.length} orphaned frame(s), kept ${hexToKey.size - deleted}`)
+  } catch (err) {
+    log(`WARN: frame GC failed (continuing) — ${err instanceof Error ? err.message : String(err)}`)
+  }
 }
 
 /** R2 frame-cache config from the runner env, or null when the
@@ -648,6 +840,107 @@ async function phaseReportFailure(client: TerravizClient, args: Args): Promise<n
   return 0
 }
 
+/** Read the target dataset id the fetch phase stored in
+ *  workflow.json. Returns null (not an error) when the file is absent
+ *  or malformed — the soft-pass then can't confirm a published bundle
+ *  and escalates. */
+async function readTargetDatasetId(workdir: string): Promise<string | null> {
+  try {
+    const wf = JSON.parse(await readFile(join(workdir, 'workflow.json'), 'utf-8')) as {
+      target_dataset_id?: unknown
+    }
+    return typeof wf.target_dataset_id === 'string' ? wf.target_dataset_id : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * acquire-softpass: the workflow calls this after `zyra run` has
+ * failed (and exhausted its retries) to decide whether the failure is
+ * a soft-passable transient NOAA-FTP `acquire` hiccup. See
+ * `cli/lib/zyra-acquire-softpass.ts` for the decision logic.
+ *
+ *   - Soft-pass (transient acquire failure + fresh published bundle):
+ *     POST a no-op `succeeded` and exit 0, so the run finishes GREEN
+ *     with no false-positive failure notification. The workflow gates
+ *     its publish steps off this outcome (no new data was produced).
+ *   - Escalate (anything else — a non-acquire failure, a
+ *     never-published dataset, or a stale bundle = sustained outage):
+ *     exit non-zero WITHOUT posting, so the workflow's `if: failure()`
+ *     step posts `failed` and the operator is notified.
+ */
+async function phaseAcquireSoftpass(client: TerravizClient, args: Args): Promise<number> {
+  // 1. Classify the captured `zyra run` output.
+  let logText = ''
+  if (args.zyraLog) {
+    try {
+      logText = await readFile(args.zyraLog, 'utf-8')
+    } catch (err) {
+      log(
+        `WARN: cannot read zyra log ${args.zyraLog} — cannot confirm an acquire failure (${err instanceof Error ? err.message : String(err)})`,
+      )
+    }
+  } else {
+    log('WARN: no --zyra-log provided — cannot confirm an acquire failure')
+  }
+  const classification = classifyZyraFailure(logText)
+
+  // 2. Resolve the dataset's published-bundle state for the freshness
+  //    check.
+  const datasetId = await readTargetDatasetId(args.workdir)
+  let dataRef: string | null | undefined
+  let endTime: string | null | undefined
+  let updatedAt: string | null | undefined
+  if (datasetId) {
+    const row = await client.get<DatasetEnvelope>(datasetId)
+    if (row.ok) {
+      dataRef = row.body.dataset.data_ref
+      endTime = row.body.dataset.end_time
+      updatedAt = row.body.dataset.updated_at
+    } else {
+      log(`WARN: dataset GET → ${row.status} ${row.error} — treating as unpublished (will escalate)`)
+    }
+  } else {
+    log('WARN: no target_dataset_id in workflow.json — treating as unpublished (will escalate)')
+  }
+
+  const freshness = assessBundleFreshness({
+    dataRef,
+    endTime,
+    updatedAt,
+    nowMs: Date.now(),
+    staleAfterSeconds: args.staleAfterSeconds,
+  })
+  const decision = decideAcquireSoftPass({ classification, freshness })
+  log(decision.reason)
+
+  if (!decision.softPass) {
+    // Escalate: leave the `failed` callback to the workflow's
+    // if: failure() step. Non-zero exit fails the job.
+    log(`run ${args.runId} NOT soft-passed — failing the job`)
+    return 2
+  }
+
+  // Soft-pass: land a terminal `succeeded` (no upload_id — nothing was
+  // published this tick).
+  const status = await client.postWorkflowRunStatus(args.workflowId, args.runId, {
+    status: 'succeeded',
+    gha_run_id: args.ghaRunId,
+  })
+  if (!status.ok) {
+    // A 409 means the run already reached a terminal status — fine.
+    if (status.status === 409) {
+      log('soft-pass callback skipped — run already terminal')
+      return 0
+    }
+    log(`FAIL: soft-pass succeeded callback → ${status.status} ${status.error}`)
+    return 2
+  }
+  log(`run ${args.runId} soft-passed (no new data this tick; prior bundle preserved)`)
+  return 0
+}
+
 async function main(): Promise<number> {
   const parsed = parseArgs(process.argv.slice(2))
   if ('error' in parsed) {
@@ -669,6 +962,8 @@ async function main(): Promise<number> {
         return await phasePublish(client, parsed)
       case 'report-failure':
         return await phaseReportFailure(client, parsed)
+      case 'acquire-softpass':
+        return await phaseAcquireSoftpass(client, parsed)
     }
   } catch (err) {
     console.error(`error: ${err instanceof Error ? err.message : String(err)}`)

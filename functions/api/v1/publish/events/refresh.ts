@@ -1,0 +1,290 @@
+/**
+ * POST /api/v1/publish/events/refresh — on-demand current-events
+ * ingestion (`docs/CURRENT_EVENTS_PLAN.md` §9).
+ *
+ * The scheduled importer (`.github/workflows/import-events.yml`) pulls
+ * on a cron; this route lets a curator pull *now* from the review queue.
+ * It iterates the node's **enabled feed connectors** (the
+ * `feed_connectors` registry, `feed-connectors-store.ts`): for each, it
+ * fetches the feed, maps items to create bodies via the connector's
+ * pure mapper, and runs the same idempotent upsert+match path
+ * (`events-ingest.ts`). Every event still lands `proposed` — the
+ * curator gate is unchanged.
+ *
+ * Connector dispatch is by `kind`: 'eonet' (the GeoJSON mapper in
+ * `cli/lib/eonet.ts`) is the one implementation today; the generic RSS
+ * connector lands next. A row whose kind this deployment doesn't know
+ * is skipped with a recorded error rather than failing the run, so a
+ * registry ahead of the code degrades gracefully.
+ *
+ * One connector's outage shouldn't hide another's events: fetch
+ * failures are recorded per-connector (`recordFeedRun`) and the run
+ * continues. The route only answers 502 when at least one supported,
+ * validly-configured connector was actually fetched and none could be
+ * reached — preserving the old single-feed behaviour. Configuration
+ * problems (unknown kind, invalid URL) are recorded errors, never a
+ * 502: a registry ahead of the code must not break refresh.
+ *
+ * Privileged-only (admin / service). Static `refresh` segment, so Pages
+ * routes it ahead of the sibling `[id]` review-submit handler.
+ */
+
+import type { CatalogEnv } from '../../_lib/env'
+import type { PublisherData } from '../_middleware'
+import { isPrivileged } from '../../_lib/publisher-store'
+import { writeAuditEvent } from '../../_lib/audit-store'
+import { parseCreate, resolveOriginNode, ingestEvent } from '../../_lib/events-ingest'
+import { bustFeaturedEventCache, expireStaleProposedEvents } from '../../_lib/events-store'
+import {
+  feedRequestHeaders,
+  listFeedConnectors,
+  recordFeedRun,
+  type FeedConnectorRow,
+} from '../../_lib/feed-connectors-store'
+import { mapEonetFeed, type EonetFeed, type EventCreateBody } from '../../../../../cli/lib/eonet'
+import { countFeedItems, mapRssFeed } from '../../../../../cli/lib/rss'
+
+const CONTENT_TYPE = 'application/json; charset=utf-8'
+
+/** Bound the per-request matcher loop — a global budget across all
+ *  connectors. EONET's `days=14` window keeps the open-event count
+ *  modest; this is a backstop, not the norm. */
+const MAX_REFRESH_EVENTS = 100
+
+/** Give up on a slow feed rather than hang the request. */
+const FEED_TIMEOUT_MS = 10_000
+
+/** Days a `proposed` event may sit untouched (no re-ingest, no curator
+ *  decision) before the refresh sweep flips it to `expired`. Keeps the
+ *  review queue triageable as feeds accumulate; expired events stay
+ *  reachable via the queue's status filter and are never public. */
+const PROPOSED_EXPIRY_DAYS = 14
+
+/** Max AI date/location-enrichment calls per refresh request (slice C).
+ *  Only *new* events missing a date or a location spend from this, so
+ *  steady state (mostly re-ingests) costs nothing; a first pull of a
+ *  busy plain-news feed enriches the newest items and leaves the rest
+ *  for the next cycle. */
+const MAX_ENRICH_CALLS = 25
+
+/** Per-connector outcome reported in the response + run bookkeeping. */
+interface ConnectorSummary {
+  id: string
+  kind: string
+  label: string
+  fetched: number
+  mappable: number
+  created: number
+  refreshed: number
+  failed: number
+  /** New events on which slice-C enrichment filled at least one field —
+   *  0 with events created is the operator's signal that AI is unbound
+   *  (or every item already carried date + location). */
+  enriched: number
+  error?: string
+}
+
+function jsonError(status: number, error: string, message: string): Response {
+  return new Response(JSON.stringify({ error, message }), {
+    status,
+    headers: { 'Content-Type': CONTENT_TYPE },
+  })
+}
+
+/** True only for the http(s) URLs a connector may fetch. Registry rows
+ *  are operator data, not code — a `javascript:`/`file:`/malformed URL
+ *  must surface as a recorded connector error, never reach `fetch`. */
+function isFetchableUrl(value: string): boolean {
+  try {
+    const u = new URL(value)
+    return u.protocol === 'http:' || u.protocol === 'https:'
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Fetch + map one connector's feed into create bodies. Returns the raw
+ * item count alongside the mapped bodies, or a human-readable error
+ * string for the run bookkeeping. Dispatches on `kind` — the only place
+ * connector implementations are enumerated. `config: true` marks a
+ * configuration problem (unknown kind, invalid URL) as opposed to a
+ * network outage — the 502 guard downstream only counts outages.
+ */
+async function fetchAndMap(
+  connector: FeedConnectorRow,
+): Promise<
+  | { ok: true; fetched: number; bodies: EventCreateBody[] }
+  | { ok: false; error: string; config?: boolean }
+> {
+  if (connector.kind !== 'eonet' && connector.kind !== 'rss') {
+    return { ok: false, error: `unknown connector kind "${connector.kind}"`, config: true }
+  }
+  if (!isFetchableUrl(connector.url)) {
+    return { ok: false, error: 'invalid feed URL (must be http(s))', config: true }
+  }
+  if (connector.kind === 'eonet') {
+    let feed: EonetFeed
+    try {
+      const res = await fetch(connector.url, {
+        headers: feedRequestHeaders('eonet'),
+        signal: AbortSignal.timeout(FEED_TIMEOUT_MS),
+      })
+      if (!res.ok) return { ok: false, error: `feed responded ${res.status}` }
+      feed = (await res.json()) as EonetFeed
+    } catch {
+      return { ok: false, error: 'could not reach the feed' }
+    }
+    return {
+      ok: true,
+      fetched: Array.isArray(feed.events) ? feed.events.length : 0,
+      bodies: mapEonetFeed(feed),
+    }
+  }
+  // Generic RSS 2.0 / Atom — the bring-your-own-feed kind. The
+  // connector's registry id namespaces the dedupe key and its label is
+  // the provenance on every event it produces.
+  let xml: string
+  try {
+    // Real news CDNs content-negotiate: a bare Workers fetch (no UA, no
+    // Accept) gets 406'd by e.g. The Guardian. Send honest bot headers.
+    const res = await fetch(connector.url, {
+      headers: feedRequestHeaders('rss'),
+      signal: AbortSignal.timeout(FEED_TIMEOUT_MS),
+    })
+    if (!res.ok) return { ok: false, error: `feed responded ${res.status}` }
+    xml = await res.text()
+  } catch {
+    return { ok: false, error: 'could not reach the feed' }
+  }
+  const bodies = mapRssFeed(xml, { feedId: connector.id, sourceName: connector.label })
+  // `fetched` is the raw item count in the document (the RSS analogue of
+  // EONET's `feed.events.length`); `mappable` downstream is the mapped,
+  // capped body count — the split shows skips + the RSS_MAX_ITEMS cap.
+  return { ok: true, fetched: countFeedItems(xml), bodies }
+}
+
+export const onRequestPost: PagesFunction<CatalogEnv> = async context => {
+  if (!context.env.CATALOG_DB) {
+    return jsonError(503, 'binding_missing', 'CATALOG_DB binding is not configured on this deployment.')
+  }
+  const publisher = (context.data as unknown as PublisherData).publisher
+  if (!isPrivileged(publisher)) {
+    return jsonError(403, 'forbidden_role', 'Refreshing events is restricted to admin and service callers.')
+  }
+
+  const db = context.env.CATALOG_DB
+  const connectors = await listFeedConnectors(db, { enabledOnly: true })
+  const originNode = await resolveOriginNode(db)
+
+  const feeds: ConnectorSummary[] = []
+  let budget = MAX_REFRESH_EVENTS
+  // Shared AI-enrichment budget across the whole request — new events
+  // missing date/location spend from it (slice C); the rest of the run
+  // ingests unenriched once it's dry, rather than stacking model calls.
+  const enrichBudget = { remaining: MAX_ENRICH_CALLS }
+  let anyFetched = false
+  // Network fetches actually attempted (supported kind + valid URL) —
+  // the denominator for the all-feeds-down 502 below. Configuration
+  // failures don't count: they can't succeed on retry either.
+  let networkAttempts = 0
+
+  for (const connector of connectors) {
+    const summary: ConnectorSummary = {
+      id: connector.id,
+      kind: connector.kind,
+      label: connector.label,
+      fetched: 0,
+      mappable: 0,
+      created: 0,
+      refreshed: 0,
+      failed: 0,
+      enriched: 0,
+    }
+    const result = await fetchAndMap(connector)
+    if (!result.ok) {
+      if (!result.config) networkAttempts++
+      summary.error = result.error
+      await recordFeedRun(db, connector.id, { status: 'error', error: result.error })
+      feeds.push(summary)
+      continue
+    }
+    networkAttempts++
+    anyFetched = true
+    summary.fetched = result.fetched
+    summary.mappable = result.bodies.length
+
+    for (const body of result.bodies.slice(0, budget)) {
+      const parsed = parseCreate(body)
+      if (!parsed.ok) {
+        summary.failed++
+        continue
+      }
+      try {
+        // `env` enables the matcher's semantic (Vectorize) signal and the
+        // slice-C date/location enrichment when the AI bindings are
+        // configured; both degrade gracefully when not.
+        const outcome = await ingestEvent(db, { ...parsed.value, originNode }, {
+          env: context.env,
+          enrichBudget,
+          // og:image article fetches spend the same per-run budget.
+          ogFetch: (input, init) => fetch(input, init),
+        })
+        if (outcome.created) summary.created++
+        else summary.refreshed++
+        if (outcome.enriched) summary.enriched++
+      } catch {
+        summary.failed++
+      }
+    }
+    budget -= Math.min(summary.mappable, budget)
+    await recordFeedRun(db, connector.id, { status: 'ok' })
+    feeds.push(summary)
+  }
+
+  // Preserve the old single-feed contract: a total feed outage is a 502
+  // the UI explains, not a silent all-zeros success. Only network
+  // outages count — no enabled connectors, or enabled rows that are all
+  // configuration problems (unknown kind / invalid URL), are legitimate
+  // states that answer 200 with their per-connector errors recorded.
+  if (networkAttempts > 0 && !anyFetched) {
+    return jsonError(502, 'feed_unavailable', 'Could not reach any enabled events feed.')
+  }
+
+  const totals = feeds.reduce(
+    (acc, f) => ({
+      fetched: acc.fetched + f.fetched,
+      mappable: acc.mappable + f.mappable,
+      created: acc.created + f.created,
+      refreshed: acc.refreshed + f.refreshed,
+      failed: acc.failed + f.failed,
+      enriched: acc.enriched + f.enriched,
+    }),
+    { fetched: 0, mappable: 0, created: 0, refreshed: 0, failed: 0, enriched: 0 },
+  )
+  // Age the queue: proposed events untouched (by feed or curator) for
+  // PROPOSED_EXPIRY_DAYS flip to expired. Runs after ingest so anything
+  // a feed still carries was just re-touched and survives.
+  const cutoff = new Date(Date.now() - PROPOSED_EXPIRY_DAYS * 24 * 60 * 60 * 1000).toISOString()
+  const expired = await expireStaleProposedEvents(db, cutoff)
+
+  const summary = { ...totals, expired, feeds }
+
+  await writeAuditEvent(db, {
+    actor_kind: 'publisher',
+    actor_id: publisher.id,
+    action: 'event.refreshed',
+    subject_kind: 'event',
+    subject_id: null,
+    metadata_json: JSON.stringify(summary),
+  })
+
+  // A refresh of an already-approved event can change what the hero
+  // surfaces (e.g. a fresher published_at), so bust the public cache.
+  await bustFeaturedEventCache(context.env.CATALOG_KV)
+
+  return new Response(JSON.stringify(summary), {
+    status: 200,
+    headers: { 'Content-Type': CONTENT_TYPE, 'Cache-Control': 'private, no-store' },
+  })
+}

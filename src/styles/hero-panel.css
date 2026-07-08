@@ -121,3 +121,22 @@
     background: var(--white-o15);
     color: var(--color-text);
 }
+
+/* Source citation for an event-sourced hero (the `'event'` source).
+   Sits under the card; the link opens the reputable source. */
+.hero-panel-source {
+    margin-block-start: calc(0.35rem * var(--ui-scale));
+    padding-inline: calc(0.2rem * var(--ui-scale));
+    font-size: calc(0.7rem * var(--ui-scale));
+    color: var(--color-text-secondary);
+}
+
+.hero-panel-source-link {
+    color: var(--color-accent);
+    text-decoration: none;
+}
+
+.hero-panel-source-link:hover,
+.hero-panel-source-link:focus-visible {
+    text-decoration: underline;
+}

@@ -149,6 +149,68 @@ CREATE TABLE audit_events (
   created_at     TEXT NOT NULL
 );
 
+CREATE TABLE blog_posts (
+  id           TEXT PRIMARY KEY,
+  slug         TEXT NOT NULL UNIQUE,
+  title        TEXT NOT NULL,
+  summary      TEXT,                     -- optional standfirst under the title
+  body_md      TEXT NOT NULL,
+  dataset_ids  TEXT,                     -- JSON array of datasets.id
+  event_id     TEXT,                     -- optional cited current_events.id
+  author_id    TEXT NOT NULL,            -- publishers.id
+  status       TEXT NOT NULL DEFAULT 'draft',
+  created_at   TEXT NOT NULL,            -- ISO 8601
+  updated_at   TEXT NOT NULL,            -- ISO 8601
+  -- ISO 8601; set on publish. No trailing comment on this line:
+  -- SQLite's ALTER ... ADD COLUMN splices new columns onto the last
+  -- column-def line of the stored CREATE TABLE text, and a trailing
+  -- comment would read as if it documented the appended column
+  -- (same convention as 0024's reviewed_by and 0028's updated_at).
+  published_at TEXT, tour_id TEXT,
+  FOREIGN KEY (author_id) REFERENCES publishers(id),
+  FOREIGN KEY (event_id)  REFERENCES current_events(id) ON DELETE SET NULL
+);
+
+CREATE TABLE current_events (
+  id             TEXT PRIMARY KEY,              -- ULID (newUlid)
+  origin_node    TEXT NOT NULL,                 -- node_id, denormalized (federation-ready)
+
+  title          TEXT NOT NULL,
+  summary        TEXT,
+
+  -- Provenance — mandatory source attribution (every item is citable).
+  source_name    TEXT NOT NULL,                 -- e.g. "NOAA", "USGS"
+  source_url     TEXT NOT NULL,                 -- the citation link
+  published_at   TEXT,                          -- ISO 8601, when the source published
+  feed_id        TEXT,                          -- connector that produced this (null = manual)
+
+  -- The event's own time span (distinct from publish time).
+  occurred_start TEXT,                          -- ISO 8601
+  occurred_end   TEXT,                          -- ISO 8601 (null = ongoing / instantaneous)
+
+  -- Geometry — any subset may be present.
+  bbox_n         REAL,                          -- NSWE box, degrees (cf. datasets.bbox_*)
+  bbox_s         REAL,
+  bbox_w         REAL,
+  bbox_e         REAL,
+  point_lat      REAL,
+  point_lon      REAL,
+  region_name    TEXT,                          -- resolved via regions.ts at match time
+
+  -- Curator gate: proposed | approved | rejected | expired.
+  status         TEXT NOT NULL DEFAULT 'proposed',
+
+  created_at     TEXT NOT NULL,                 -- ISO 8601
+  updated_at     TEXT NOT NULL,                 -- ISO 8601
+  -- Review audit: reviewed_at is when a curator last acted (ISO 8601);
+  -- reviewed_by is the publishers.id, null until reviewed. (Kept off the
+  -- column line so a later ALTER ADD COLUMN doesn't splice a new column
+  -- after it and inherit this comment in the schema snapshot.)
+  reviewed_at    TEXT,
+  reviewed_by    TEXT, external_id TEXT, inferred_fields TEXT, image_url TEXT, image_alt TEXT, video_embed_url TEXT,
+  FOREIGN KEY (reviewed_by) REFERENCES publishers(id)
+);
+
 CREATE TABLE dataset_categories (
   dataset_id  TEXT NOT NULL,
   facet       TEXT NOT NULL,                  -- e.g., "Theme", "Region"
@@ -277,6 +339,36 @@ CREATE TABLE datasets (
   FOREIGN KEY (publisher_id) REFERENCES publishers(id)
 );
 
+CREATE TABLE event_categories (
+  event_id  TEXT NOT NULL,
+  facet     TEXT NOT NULL,                      -- e.g. "Theme", "Region"
+  value     TEXT NOT NULL,
+  PRIMARY KEY (event_id, facet, value),
+  FOREIGN KEY (event_id) REFERENCES current_events(id) ON DELETE CASCADE
+);
+
+CREATE TABLE event_dataset_links (
+  event_id     TEXT NOT NULL,
+  dataset_id   TEXT NOT NULL,
+  match_score  REAL,                            -- combined matcher score
+  signals_json TEXT,                            -- JSON: { geo, temporal, semantic }
+  status       TEXT NOT NULL DEFAULT 'proposed', -- proposed | approved | rejected
+  created_at   TEXT NOT NULL,                   -- ISO 8601
+  approved_at  TEXT,                            -- ISO 8601, null until approved
+  approved_by  TEXT,                            -- publishers.id (audit)
+  PRIMARY KEY (event_id, dataset_id),
+  FOREIGN KEY (event_id)    REFERENCES current_events(id) ON DELETE CASCADE,
+  FOREIGN KEY (dataset_id)  REFERENCES datasets(id)       ON DELETE CASCADE,
+  FOREIGN KEY (approved_by) REFERENCES publishers(id)
+);
+
+CREATE TABLE event_keywords (
+  event_id  TEXT NOT NULL,
+  keyword   TEXT NOT NULL,
+  PRIMARY KEY (event_id, keyword),
+  FOREIGN KEY (event_id) REFERENCES current_events(id) ON DELETE CASCADE
+);
+
 CREATE TABLE featured_datasets (
   dataset_id   TEXT PRIMARY KEY,
   position     INTEGER NOT NULL,             -- display order; lower = higher
@@ -284,6 +376,20 @@ CREATE TABLE featured_datasets (
   added_at     TEXT NOT NULL,
   FOREIGN KEY (dataset_id) REFERENCES datasets(id) ON DELETE CASCADE,
   FOREIGN KEY (added_by)   REFERENCES publishers(id)
+);
+
+CREATE TABLE feed_connectors (
+  id TEXT PRIMARY KEY,                -- ULID for operator-added rows; fixed id for seeds
+  kind TEXT NOT NULL,                 -- connector implementation: 'eonet' | 'rss' (later)
+  label TEXT NOT NULL,                -- operator-facing display name
+  url TEXT NOT NULL,                  -- the feed endpoint the connector fetches
+  category TEXT,                      -- portal grouping ('hazards', 'science-news', 'news', …)
+  enabled INTEGER NOT NULL DEFAULT 1, -- 0 = paused; disabled rows are skipped by every run
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  last_run_at TEXT,                   -- ISO timestamp of the most recent run attempt
+  last_run_status TEXT,               -- 'ok' | 'error' (null until first run)
+  last_run_error TEXT                 -- human-readable failure detail when status = 'error'
 );
 
 CREATE TABLE hero_override (
@@ -307,6 +413,23 @@ CREATE TABLE node_identity (
   public_key         TEXT NOT NULL,           -- Ed25519, base64
   created_at         TEXT NOT NULL
 , singleton INTEGER NOT NULL DEFAULT 1);
+
+CREATE TABLE node_profile (
+  id           INTEGER PRIMARY KEY CHECK (id = 1),  -- singleton row
+  org_name     TEXT NOT NULL,
+  mission      TEXT,
+  about_md     TEXT,
+  region_focus TEXT,
+  default_tone TEXT,
+  links_json   TEXT,                     -- JSON array of {label, url}
+  updated_by   TEXT NOT NULL,            -- publishers.id (audit)
+  -- ISO 8601. No trailing comment here: SQLite's ALTER ... ADD COLUMN
+  -- splices new columns onto the last column-def line of the stored
+  -- CREATE TABLE text, and a trailing comment would read as if it
+  -- documented the appended column (see 0024's reviewed_by).
+  updated_at   TEXT NOT NULL, logo_ref TEXT,
+  FOREIGN KEY (updated_by) REFERENCES publishers(id)
+);
 
 CREATE TABLE publishers (
   id              TEXT PRIMARY KEY,           -- ULID
@@ -377,6 +500,14 @@ CREATE TABLE workflows (
   FOREIGN KEY (target_dataset_id) REFERENCES datasets(id)
 );
 
+CREATE TABLE youtube_channels (
+  channel_id    TEXT PRIMARY KEY,          -- canonical UC… id
+  channel_name  TEXT NOT NULL,             -- fetched channel title (display)
+  added_by      TEXT,                      -- publishers.id (nullable for service)
+  created_at    TEXT NOT NULL,
+  FOREIGN KEY (added_by) REFERENCES publishers(id)
+);
+
 -- Indexes
 
 CREATE INDEX idx_analytics_daily_event
@@ -399,13 +530,21 @@ CREATE INDEX idx_analytics_spatial_daily_layer
   ON analytics_spatial_daily (event_type, layer_id, day);
 CREATE INDEX idx_asset_uploads_dataset ON asset_uploads(dataset_id, created_at);
 CREATE INDEX idx_audit_subject ON audit_events(subject_kind, subject_id, created_at);
+CREATE INDEX idx_blog_posts_status ON blog_posts(status, published_at DESC);
+CREATE UNIQUE INDEX idx_current_events_feed_external
+  ON current_events(feed_id, external_id)
+  WHERE feed_id IS NOT NULL AND external_id IS NOT NULL;
+CREATE INDEX idx_current_events_origin_node ON current_events(origin_node);
+CREATE INDEX idx_current_events_status      ON current_events(status, created_at);
 CREATE UNIQUE INDEX idx_datasets_legacy_id
   ON datasets(legacy_id)
   WHERE legacy_id IS NOT NULL;
 CREATE INDEX idx_datasets_publisher  ON datasets(publisher_id);
 CREATE INDEX idx_datasets_updated_at ON datasets(updated_at);
 CREATE INDEX idx_datasets_visibility ON datasets(visibility, is_hidden, retracted_at);
+CREATE INDEX idx_event_dataset_links_dataset ON event_dataset_links(dataset_id, status);
 CREATE INDEX idx_featured_datasets_position ON featured_datasets(position);
+CREATE INDEX idx_feed_connectors_enabled ON feed_connectors(enabled);
 CREATE UNIQUE INDEX idx_node_identity_singleton ON node_identity(singleton);
 CREATE INDEX idx_renditions_dataset ON dataset_renditions(dataset_id);
 CREATE INDEX idx_tours_visibility ON tours(visibility, retracted_at, published_at);

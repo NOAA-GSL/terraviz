@@ -140,7 +140,7 @@ function hasControlChars(s: string): boolean {
   return /[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/.test(s)
 }
 
-function looksLikeUrl(s: string): boolean {
+export function looksLikeUrl(s: string): boolean {
   try {
     const u = new URL(s)
     return u.protocol === 'http:' || u.protocol === 'https:'

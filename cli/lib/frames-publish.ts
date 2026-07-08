@@ -80,6 +80,14 @@ interface ImageSequenceInitResponse {
 export interface FramesPublishResult {
   uploadId: string
   frameCount: number
+  /** Frames actually PUT this run (new content). */
+  uploaded: number
+  /** Frames skipped because their content-addressed object already
+   *  existed in R2 (the dedupe win). */
+  reused: number
+  /** This run's frame digests (`sha256:<hex>`), in encode order — the
+   *  current side of the GC keep-set. */
+  digests: string[]
   mock: boolean
 }
 
@@ -87,6 +95,59 @@ export interface FramesPublishOptions {
   log?: (line: string) => void
   /** Override the per-frame PUT concurrency (tests pin it to 1). */
   concurrency?: number
+  /** Total attempts per R2 PUT before giving up. R2 returns sporadic
+   *  500 InternalError, so a single un-retried PUT among thousands of
+   *  frames fails the whole publish. Default 4. */
+  putAttempts?: number
+  /** Base backoff between PUT retries (ms); doubles each attempt.
+   *  Default 500. Tests pass 0. */
+  retryDelayMs?: number
+  /**
+   * Optional content-addressed HEAD gate
+   * (`docs/INCREMENTAL_FRAME_UPLOAD_PLAN.md`). When supplied, each
+   * frame's presigned PUT is skipped if its (content-addressed) R2 key
+   * already exists — so a scheduled re-publish only uploads the frames
+   * whose bytes changed. Backed by an R2 S3 HEAD on the runner; absent
+   * (e.g. the browser portal, which can't read R2) every frame is
+   * uploaded, which is correct, just not deduped.
+   */
+  exists?: (key: string) => Promise<boolean>
+}
+
+const DEFAULT_PUT_ATTEMPTS = 4
+const DEFAULT_RETRY_DELAY_MS = 500
+
+function sleep(ms: number): Promise<void> {
+  return ms > 0 ? new Promise(resolve => setTimeout(resolve, ms)) : Promise.resolve()
+}
+
+/**
+ * PUT bytes to a presigned R2 URL, retrying transient failures — a
+ * network blip (`status 0`), a 429, or any 5xx. R2 hands back
+ * occasional `500 InternalError`, and with thousands of frame PUTs the
+ * odds of hitting one are high; a single un-retried failure would sink
+ * the whole publish. Deterministic 4xx (except 429) fails fast.
+ * Backoff doubles each attempt from `delayMs`.
+ */
+async function putBytesWithRetry(
+  client: TerravizClient,
+  url: string,
+  headers: Record<string, string>,
+  bytes: Uint8Array,
+  mime: string,
+  filename: string,
+  attempts: number,
+  delayMs: number,
+): Promise<{ ok: boolean; status: number; message?: string; attempts: number }> {
+  let last: { ok: boolean; status: number; message?: string } = { ok: false, status: 0 }
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    last = await client.uploadBytes('r2', url, headers, bytes, mime, filename)
+    if (last.ok) return { ...last, attempts: attempt }
+    const retriable = last.status === 0 || last.status === 429 || last.status >= 500
+    if (!retriable || attempt === attempts) return { ...last, attempts: attempt }
+    await sleep(delayMs * 2 ** (attempt - 1))
+  }
+  return { ...last, attempts }
 }
 
 function mimeForName(name: string): string | null {
@@ -150,23 +211,49 @@ async function putFrames(
   mime: string,
   initFrames: InitFrame[],
   concurrency: number,
-): Promise<void> {
+  attempts: number,
+  delayMs: number,
+  exists?: (key: string) => Promise<boolean>,
+): Promise<{ uploaded: number; reused: number }> {
   let cursor = 0
+  let uploaded = 0
+  let reused = 0
   async function worker(): Promise<void> {
     for (;;) {
       const i = cursor++
       if (i >= initFrames.length) return
       const fr = initFrames[i]
-      const bytes = new Uint8Array(await readFile(join(framesDir, fr.filename)))
-      const put = await client.uploadBytes('r2', fr.url, fr.headers, bytes, mime, fr.filename)
-      if (!put.ok) {
-        throw new Error(`frames-publish: frame PUT ${fr.filename} failed (${put.status})${put.message ? `: ${put.message}` : ''}`)
+      // Content-addressed dedupe: skip the PUT when the frame's shared
+      // object is already in R2. A best-effort HEAD failure falls
+      // through to the PUT (re-uploading is always safe — the key is
+      // idempotent), so a flaky HEAD never blocks the publish.
+      if (exists) {
+        let present = false
+        try {
+          present = await exists(fr.key)
+        } catch {
+          present = false
+        }
+        if (present) {
+          reused++
+          continue
+        }
       }
+      const bytes = new Uint8Array(await readFile(join(framesDir, fr.filename)))
+      const put = await putBytesWithRetry(client, fr.url, fr.headers, bytes, mime, fr.filename, attempts, delayMs)
+      if (!put.ok) {
+        throw new Error(
+          `frames-publish: frame PUT ${fr.filename} failed (${put.status})` +
+            `${put.message ? `: ${put.message}` : ''} after ${put.attempts} attempt(s)`,
+        )
+      }
+      uploaded++
     }
   }
   await Promise.all(
     Array.from({ length: Math.max(1, Math.min(concurrency, initFrames.length)) }, () => worker()),
   )
+  return { uploaded, reused }
 }
 
 /**
@@ -200,28 +287,61 @@ export async function publishFrameSequence(
   }
   const body = init.body
 
+  // Clamp to sane values so a stray option (0, negative, float) can't
+  // produce zero/odd attempts and silently weaken the upload.
+  const attempts = Math.max(1, Math.floor(options.putAttempts ?? DEFAULT_PUT_ATTEMPTS))
+  const delayMs = Math.max(0, options.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS)
+
+  let uploaded = 0
+  let reused = 0
   if (body.mock) {
     log(`frames-publish: mock mode — skipping ${frames.length} frame PUTs + manifest`)
   } else {
-    await putFrames(client, framesDir, mime, body.frames, options.concurrency ?? DEFAULT_CONCURRENCY)
+    ;({ uploaded, reused } = await putFrames(
+      client,
+      framesDir,
+      mime,
+      body.frames,
+      options.concurrency ?? DEFAULT_CONCURRENCY,
+      attempts,
+      delayMs,
+      options.exists,
+    ))
+    // The source-filenames manifest is per-upload (it pins this run's
+    // index→digest order), so it's always PUT, never deduped.
     const blob = new TextEncoder().encode(manifestJson)
-    const blobPut = await client.uploadBytes(
-      'r2',
+    const blobPut = await putBytesWithRetry(
+      client,
       body.source_filenames.url,
       body.source_filenames.headers,
       blob,
       'application/json',
       'source_filenames.json',
+      attempts,
+      delayMs,
     )
     if (!blobPut.ok) {
-      throw new Error(`frames-publish: source-filenames PUT failed (${blobPut.status})${blobPut.message ? `: ${blobPut.message}` : ''}`)
+      throw new Error(
+        `frames-publish: source-filenames PUT failed (${blobPut.status})` +
+          `${blobPut.message ? `: ${blobPut.message}` : ''} after ${blobPut.attempts} attempt(s)`,
+      )
     }
-    log(`frames-publish: uploaded ${body.frames.length} frame(s) + manifest`)
+    log(
+      `frames-publish: ${uploaded} frame(s) uploaded, ${reused} reused` +
+        `${reused > 0 ? ` (content-addressed dedupe)` : ''} + manifest`,
+    )
   }
 
   const complete = await client.completeAssetUpload<{ upload_id?: string }>(datasetId, body.upload_id)
   if (!complete.ok) {
     throw new Error(`frames-publish: complete failed (${complete.status}) ${complete.error}`)
   }
-  return { uploadId: body.upload_id, frameCount: frames.length, mock: body.mock }
+  return {
+    uploadId: body.upload_id,
+    frameCount: frames.length,
+    uploaded,
+    reused,
+    digests: frames.map(f => f.digest),
+    mock: body.mock,
+  }
 }
