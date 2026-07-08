@@ -233,6 +233,7 @@ npm run screenshots:smoke   # gating interaction tests (search, Orbit, nav)
 | `src/ui/publisher/pages/dataset-detail.ts` | `/publish/datasets/:id` — read-only dataset detail |
 | `src/ui/publisher/pages/dataset-edit.ts` | `/publish/datasets/:id/edit` — edit an existing draft |
 | `src/ui/publisher/pages/dataset-new.ts` | `/publish/datasets/new` — wrapper around the shared dataset form |
+| `src/ui/publisher/pages/import.ts` | `/publish/import` — bulk manifest import: method chooser (manifest / remote node / CLI), drag-drop CSV/JSON upload with real client-side parsing + per-row validation preview (ready/warning/error), default-visibility + attach-workflow controls. Submit is disabled pending the server-side bulk-import endpoint; parsing/validation helpers are pure and unit-tested |
 | `src/ui/publisher/pages/tours.ts` | `/publish/tours` — tour-creator landing page |
 | `src/ui/publisher/workflows-api.ts` | Typed API wrappers for the Zyra workflow surface (Phase Z2 of `docs/ZYRA_INTEGRATION_PLAN.md`) |
 | `src/ui/publisher/workflow-templates.ts` | Curated workflow templates + insert-stage snippets for guided authoring (Phase Z3) |

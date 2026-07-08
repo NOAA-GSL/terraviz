@@ -419,6 +419,30 @@ export const scenes: Scene[] = [
     },
   },
   {
+    name: 'publish-import',
+    description: 'Publisher portal — bulk import: method cards + validated manifest preview',
+    fixtures: publisherFixtures({ admin: true }),
+    async setup(page) {
+      await openPublish(page, '/publish/import')
+      // Inject a manifest so the ready/warning/error preview renders
+      // populated (the page parses + validates client-side; no backend).
+      const csv = [
+        'title,slug,format,data_ref,license',
+        'Sea Surface Temp — May 2026,sst-2026-05,mp4,https://example.org/sst.mp4,CC-BY-4.0',
+        'Arctic Sea Ice Extent — 2026,sea-ice-2026,mp4,https://example.org/ice.mp4,CC0-1.0',
+        'Global Nightlights 2026,nightlights-2026,png,https://example.org/nl.png,',
+        'Drought Risk — Q2 2026,drought-q2-2026,,,',
+        'CO2 Concentration 2026,co2-2026,png,https://example.org/co2.png,CC-BY-4.0',
+      ].join('\n')
+      await page.setInputFiles('.publisher-import-file-input', {
+        name: 'publisher-datasets.csv',
+        mimeType: 'text/csv',
+        buffer: Buffer.from(csv, 'utf-8'),
+      })
+      await page.locator('.publisher-import-preview').waitFor({ state: 'visible' })
+    },
+  },
+  {
     name: 'publish-dataset-new',
     description: 'Publisher portal — new-dataset form (field labels & placeholders)',
     fixtures: publisherFixtures(),

@@ -41,6 +41,7 @@ import { renderEventsPage } from './pages/events'
 import { renderAnalyticsPage } from './pages/analytics'
 import { renderUsersPage } from './pages/users'
 import { renderFeedbackPage } from './pages/feedback'
+import { renderImportPage } from './pages/import'
 import { renderSidebar, type SidebarIdentity } from './components/sidebar'
 import { publisherGet } from './api'
 import '../../styles/publisher.css'
@@ -283,7 +284,7 @@ function workflowEditPage(
 }
 
 function importPage(mount: HTMLElement): RouteHandler {
-  return () => renderPlaceholder(mount, t('publisher.section.import'), '3pf')
+  return () => renderImportPage(mount)
 }
 
 function featuredHeroPage(mount: HTMLElement): RouteHandler {
