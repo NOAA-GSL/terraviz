@@ -620,9 +620,9 @@ function emitHandsFreeTurn(transcript: string): void {
 }
 
 /**
- * Tier B: record a wake-word false fire — "Hey Orbit" armed a turn but
- * no speech followed. A `wake-word` STT row with `success:false` and no
- * duration; the false-fire rate is the §10.4 metric that tells the
+ * Tier B: record a wake-word false fire — the wake phrase armed a turn
+ * but no speech followed. A `wake-word` STT row with `success:false` and
+ * no duration; the false-fire rate is the §10.4 metric that tells the
  * exhibit whether the wake threshold is tuned for the hall.
  */
 function emitWakeMisfire(): void {
@@ -1165,7 +1165,11 @@ function readSettingsForm(): DocentConfig {
     : current.voiceProvider
   // "" (Same as app) clears the override so voice tracks the UI locale.
   const voiceLang = voiceLangSelect ? (voiceLangSelect.value || undefined) : current.voiceLang
-  const handsFreeValue = handsFreeSelect?.value
+  // A stale/persisted 'wake-word' on a deploy that no longer configures
+  // it (or Tauri) falls back to 'off' — the option is hidden, so it
+  // can't be re-selected and would otherwise strand a dead mode.
+  let handsFreeValue = handsFreeSelect?.value
+  if (handsFreeValue === 'wake-word' && !isWakeWordConfigured()) handsFreeValue = 'off'
   const voiceHandsFree = handsFreeValue === 'push-to-talk' || handsFreeValue === 'open-mic'
     || handsFreeValue === 'wake-word' || handsFreeValue === 'off'
     ? handsFreeValue

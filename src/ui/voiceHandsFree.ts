@@ -12,10 +12,12 @@
  * Three hands-free interaction models (§9.1):
  *   - `push-to-talk` — a held control opens the mic for one turn,
  *   - `open-mic`     — continuous, local-VAD-gated listening,
- *   - `wake-word`    — silent until an on-device "Hey Orbit" wake arms a
- *                      single turn. No audio streams to STT until a wake
- *                      fires (the tiny wake model is the only thing
- *                      listening), the privacy-preserving exhibit path.
+ *   - `wake-word`    — silent until an on-device wake phrase arms a
+ *                      single turn (the phrase depends on the configured
+ *                      model — built-in default "Hey Jarvis"). No audio
+ *                      streams to STT until a wake fires (the tiny wake
+ *                      model is the only thing listening), the
+ *                      privacy-preserving exhibit path.
  *
  * The session exists only when the user opts into a hands-free mode AND
  * a streaming engine resolves for the locale; otherwise this is inert
@@ -54,7 +56,8 @@ export interface HandsFreeSyncOptions {
 
 /** A running wake-word listener; `stop()` releases its mic + model. */
 export interface WakeSession { stop(): void }
-/** Start on-device wake-word listening; `onWake` fires on "Hey Orbit". */
+/** Start on-device wake-word listening; `onWake` fires on the configured
+ *  wake phrase (built-in default "Hey Jarvis"). */
 export type StartWake = (onWake: () => void) => WakeSession
 
 /** Optional mic/VAD/wake seams forwarded to the session (tests inject fakes). */
@@ -167,6 +170,11 @@ export class HandsFreeController {
     this.lang = opts.lang
     this.provider = opts.provider
     if (opts.mode === 'off') return
+    // Unconfigured wake-word (no injected `startWake` seam and no model
+    // URL / not web) would build a session with a no-op wake listener —
+    // a dead mode that a stale persisted config could strand the user
+    // in. Treat it as `off` so it never activates without a real wake.
+    if (opts.mode === 'wake-word' && !this.deps.startWake && !isWakeWordConfigured()) return
     const engine = resolveStreamingSttEngine(opts.provider, opts.lang)
     if (!engine) return // no streaming engine for this locale → stay inert
     this.mode = opts.mode
@@ -188,7 +196,7 @@ export class HandsFreeController {
       // Listens continuously from the moment it's enabled.
       void this.session.arm()
     } else if (opts.mode === 'wake-word') {
-      // Silent until "Hey Orbit"; the session arms per-wake.
+      // Silent until the wake phrase; the session arms per-wake.
       const start = this.deps.startWake ?? defaultStartWake
       this.wake = start(() => this.onWake())
     }
@@ -247,7 +255,7 @@ export class HandsFreeController {
 
   // --- wake-word internals ---
 
-  /** A confirmed "Hey Orbit" — arm a single turn (unless muted/busy). */
+  /** A confirmed wake phrase — arm a single turn (unless muted/busy). */
   private onWake(): void {
     if (this.mode !== 'wake-word' || !this.session || this.muted || this.busy) return
     // Already handling a wake-armed turn — ignore (the detector's own
@@ -258,6 +266,15 @@ export class HandsFreeController {
       // A teardown/mute could have raced in during mic acquisition.
       if (this.mode !== 'wake-word' || !this.session) return
       this.session.startCapture()
+      // Only arm the no-speech timeout if capture actually started. If
+      // arm() failed (permission denied → still 'idle') or startCapture
+      // was gated (suspended), there's no turn to time out — and firing
+      // the misfire telemetry would mislabel a mic/engine failure as a
+      // "wake but no speech". Release any half-armed mic instead.
+      if (this.session.getState() !== 'capturing') {
+        if (this.session.getState() !== 'idle') this.session.disarm()
+        return
+      }
       this.clearWakeTimer()
       this.wakeCaptureTimer = setTimeout(() => {
         // Heard the wake but no turn followed — a false fire.

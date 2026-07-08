@@ -228,4 +228,32 @@ describe('HandsFreeController wake-word', () => {
     expect(wake.stopped).toBe(true)
     expect(c.isActive()).toBe(false)
   })
+
+  it('stays inert for wake-word when unconfigured and no startWake seam is injected', () => {
+    // No `startWake` dep + no VITE model URL in the test env → the mode
+    // can't actually run, so it must fall back to inert (not a dead mode).
+    const c = new HandsFreeController({ onPartial: () => {}, onTurn: () => {} }, makeSeams())
+    c.sync({ mode: 'wake-word', lang: 'en', provider: 'auto' })
+    expect(c.isActive()).toBe(false)
+  })
+
+  it('does not report a misfire when the mic fails to arm on wake', async () => {
+    vi.useFakeTimers()
+    try {
+      const onWakeMisfire = vi.fn()
+      const wake = makeWake()
+      const c = new HandsFreeController(
+        { onPartial: () => {}, onTurn: () => {}, onWakeMisfire },
+        { acquireMic: () => Promise.reject(new Error('denied')), startWake: wake.startWake },
+      )
+      c.sync({ mode: 'wake-word', lang: 'en', provider: 'auto' })
+      wake.fire()
+      await vi.advanceTimersByTimeAsync(10_000) // past the capture window
+      expect(engine.active).toBe(false)
+      // A mic failure is not a "wake but no speech" — no false-fire row.
+      expect(onWakeMisfire).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })
