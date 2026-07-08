@@ -298,35 +298,58 @@ function renderForm(mount: HTMLElement, state: FormState): void {
       })
   })
 
-  const form = card(
-    heading(t('publisher.nodeProfile.title')),
-    el('p', { className: 'publisher-nodeprofile-intro', textContent: t('publisher.nodeProfile.intro') }),
-    el('div', { className: 'publisher-nodeprofile-callout' }, [
-      el('span', { className: 'publisher-nodeprofile-callout-icon', textContent: '✦' }),
-      el('p', { className: 'publisher-nodeprofile-callout-text', textContent: t('publisher.nodeProfile.aiCallout') }),
+  // Page header (title + subtitle) + the AI-grounding callout, then
+  // the fields grouped into deck sections. The logo leads the
+  // Organization section rather than trailing the whole form.
+  const header = el('header', { className: 'publisher-page-header' }, [
+    el('div', { className: 'publisher-page-titles' }, [
+      el('h1', { className: 'publisher-page-title', textContent: t('publisher.nodeProfile.title') }),
+      el('p', { className: 'publisher-page-subtitle', textContent: t('publisher.nodeProfile.intro') }),
     ]),
+  ])
+
+  const callout = el('div', { className: 'publisher-nodeprofile-callout' }, [
+    el('span', { className: 'publisher-nodeprofile-callout-icon', textContent: '✦' }),
+    el('p', { className: 'publisher-nodeprofile-callout-text', textContent: t('publisher.nodeProfile.aiCallout') }),
+  ])
+
+  const organization = card(
+    heading(t('publisher.nodeProfile.section.organization')),
+    buildLogo(state),
     labelled(t('publisher.nodeProfile.orgName'), orgName),
+    labelledWithHint(
+      t('publisher.nodeProfile.regionFocus'),
+      region,
+      t('publisher.nodeProfile.regionFocus.hint'),
+    ),
+  )
+
+  const missionAbout = card(
+    heading(t('publisher.nodeProfile.section.missionAbout')),
     labelled(t('publisher.nodeProfile.mission'), mission),
     aboutField(t('publisher.nodeProfile.aboutMd'), aboutToggle, aboutToolbar, about, aboutPreview),
-    labelled(t('publisher.nodeProfile.regionFocus'), region),
     labelled(t('publisher.nodeProfile.defaultTone'), tone),
-    el('div', { className: 'publisher-nodeprofile-links-wrap' }, [
-      el('span', { className: 'publisher-field-label', textContent: t('publisher.nodeProfile.links') }),
-      linkRows,
-      addLink,
-    ]),
-    el('div', { className: 'publisher-nodeprofile-actions' }, [saveBtn]),
-    status,
   )
-  mount.replaceChildren(shell(form, renderLogoCard(state)))
+
+  const links = card(
+    heading(t('publisher.nodeProfile.links')),
+    el('div', { className: 'publisher-nodeprofile-links-wrap' }, [linkRows, addLink]),
+  )
+
+  const actions = el('div', { className: 'publisher-nodeprofile-actions' }, [saveBtn, status])
+
+  mount.replaceChildren(shell(header, callout, organization, missionAbout, links, actions))
 }
 
 /**
- * The logo card — preview, upload (base64-in-JSON to the dedicated
- * logo route), and remove. Uploading requires a saved profile; the
- * API enforces that, and the card surfaces its field error verbatim.
+ * The logo block — preview, upload (base64-in-JSON to the dedicated
+ * logo route), and remove. Leads the Organization section rather than
+ * being its own trailing card. Uploading requires a saved profile;
+ * the API enforces that, and the block surfaces its field error
+ * verbatim through its own status line (a distinct class from the
+ * form-save status so the two never collide).
  */
-function renderLogoCard(state: FormState): HTMLElement {
+function buildLogo(state: FormState): HTMLElement {
   // Normalize once at the boundary: anything non-http(s) is treated
   // as "no logo" everywhere (preview AND the Remove button), so the
   // two can't disagree about whether a logo exists.
@@ -344,7 +367,7 @@ function renderLogoCard(state: FormState): HTMLElement {
   }
   renderPreview()
 
-  const status = el('div', { className: 'publisher-nodeprofile-status', role: 'status' })
+  const status = el('div', { className: 'publisher-nodeprofile-logo-status', role: 'status' })
   const setStatus = (message: string, isError: boolean): void => {
     status.textContent = message
     status.classList.toggle('publisher-nodeprofile-status-error', isError)
@@ -447,13 +470,16 @@ function renderLogoCard(state: FormState): HTMLElement {
       })
   })
 
-  return card(
-    heading(t('publisher.nodeProfile.logo.label')),
-    el('p', { className: 'publisher-nodeprofile-intro', textContent: t('publisher.nodeProfile.logo.hint') }),
-    preview,
-    el('div', { className: 'publisher-nodeprofile-actions' }, [chooseBtn, removeBtn, fileInput]),
+  return el('div', { className: 'publisher-nodeprofile-logo' }, [
+    el('span', { className: 'publisher-field-label', textContent: t('publisher.nodeProfile.logo.label') }),
+    el('div', { className: 'publisher-nodeprofile-logo-row' }, [
+      preview,
+      el('div', { className: 'publisher-nodeprofile-logo-controls' }, [chooseBtn, removeBtn]),
+    ]),
+    el('p', { className: 'publisher-nodeprofile-logo-hint', textContent: t('publisher.nodeProfile.logo.hint') }),
     status,
-  )
+    fileInput,
+  ])
 }
 
 // ----- Small DOM helpers (mirror the featured-hero.ts idiom) -----
@@ -472,6 +498,14 @@ function labelled(label: string, control: HTMLElement): HTMLElement {
   const wrap = el('label', { className: 'publisher-nodeprofile-field' })
   wrap.append(el('span', { className: 'publisher-field-label', textContent: label }))
   wrap.append(control)
+  return wrap
+}
+
+/** `labelled` plus a muted help line under the control (deck fields
+ *  like "Geographic focus" carry a one-line hint). */
+function labelledWithHint(label: string, control: HTMLElement, hint: string): HTMLElement {
+  const wrap = labelled(label, control)
+  wrap.append(el('span', { className: 'publisher-nodeprofile-hint', textContent: hint }))
   return wrap
 }
 
