@@ -11,6 +11,8 @@
 
 .publisher-portal {
   min-height: 100vh;
+  display: flex;
+  align-items: stretch;
   background: var(--color-bg, #0a0d14);
   color: var(--color-text, #e6e8ec);
   font-family: var(--font-family-sans, system-ui, sans-serif);
@@ -25,6 +27,8 @@
 }
 
 .publisher-content {
+  flex: 1 1 auto;
+  min-width: 0;
   padding: calc(2rem * var(--ui-scale));
 }
 
@@ -33,65 +37,96 @@
   margin: 0 auto;
 }
 
-/* --- Topbar (glass-surface, sticky) --- */
+/* --- Sidebar (glass-surface, sticky full-height) --- */
 
-.publisher-topbar {
+.publisher-sidebar {
   position: sticky;
   top: 0;
   z-index: 100;
+  flex: none;
+  inline-size: calc(15rem * var(--ui-scale));
+  block-size: 100vh;
   display: flex;
-  align-items: center;
-  gap: calc(2rem * var(--ui-scale));
-  padding: calc(0.75rem * var(--ui-scale)) calc(2rem * var(--ui-scale));
+  flex-direction: column;
+  gap: calc(1rem * var(--ui-scale));
+  padding: calc(1.1rem * var(--ui-scale)) calc(0.9rem * var(--ui-scale));
+  overflow-y: auto;
   border-radius: 0;
-  border-block-start: 0;
+  border-block: 0;
   border-inline-start: 0;
-  border-inline-end: 0;
 }
 
-.publisher-topbar-title-block {
+.publisher-sidebar-header {
   display: flex;
   align-items: center;
-  gap: calc(0.75rem * var(--ui-scale));
+  gap: calc(0.6rem * var(--ui-scale));
+  padding-inline: calc(0.35rem * var(--ui-scale));
 }
 
-.publisher-topbar-back {
+.publisher-sidebar-back {
   color: var(--color-text-muted, #999999);
   text-decoration: none;
   font-size: calc(1.1rem * var(--ui-scale));
   padding: calc(0.25rem * var(--ui-scale)) calc(0.5rem * var(--ui-scale));
-  border-radius: calc(6px * var(--ui-scale));
+  border-radius: var(--radius-md, calc(6px * var(--ui-scale)));
 }
-
-.publisher-topbar-back:hover {
+.publisher-sidebar-back:hover {
   background: var(--white-o08, rgba(255, 255, 255, 0.08));
   color: var(--color-text, #e8eaf0);
 }
-
-.publisher-topbar-back:focus-visible {
+.publisher-sidebar-back:focus-visible {
   outline: 2px solid var(--white-o20, rgba(255, 255, 255, 0.2));
   outline-offset: 2px;
 }
 
-.publisher-topbar-title {
+.publisher-sidebar-title {
   font-size: calc(0.95rem * var(--ui-scale));
-  font-weight: 600;
+  font-weight: 650;
   color: var(--color-text, #e8eaf0);
 }
 
 .publisher-nav {
+  flex: 1 1 auto;
   display: flex;
-  gap: calc(0.25rem * var(--ui-scale));
+  flex-direction: column;
+  gap: calc(1rem * var(--ui-scale));
+}
+
+.publisher-nav-group {
+  display: flex;
+  flex-direction: column;
+  gap: calc(0.1rem * var(--ui-scale));
+}
+
+.publisher-nav-group-label {
+  padding: calc(0.15rem * var(--ui-scale)) calc(0.6rem * var(--ui-scale));
+  margin-block-end: calc(0.15rem * var(--ui-scale));
+  font-size: calc(0.66rem * var(--ui-scale));
+  font-weight: 650;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--color-text-faint, #666666);
 }
 
 .publisher-nav-link {
+  display: flex;
+  align-items: center;
+  gap: calc(0.5rem * var(--ui-scale));
   color: var(--color-text-muted, #999999);
   text-decoration: none;
   font-size: calc(0.875rem * var(--ui-scale));
-  padding: calc(0.5rem * var(--ui-scale)) calc(0.875rem * var(--ui-scale));
-  border-radius: calc(6px * var(--ui-scale));
+  padding: calc(0.45rem * var(--ui-scale)) calc(0.6rem * var(--ui-scale));
+  border-radius: var(--radius-md, calc(6px * var(--ui-scale)));
   border: 1px solid transparent;
   transition: color 120ms ease, background 120ms ease, border-color 120ms ease;
+}
+
+.publisher-nav-link-label {
+  flex: 1 1 auto;
+  min-inline-size: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .publisher-nav-link:hover {
@@ -106,15 +141,130 @@
 
 .publisher-nav-link-active {
   color: var(--color-text, #e8eaf0);
-  background: var(--white-o10, rgba(255, 255, 255, 0.1));
-  border-color: var(--white-o12, rgba(255, 255, 255, 0.12));
+  background: var(--accent-o12, rgba(77, 166, 255, 0.12));
+  border-color: var(--accent-o20, rgba(77, 166, 255, 0.2));
 }
 
-/* Sign out lives at the far right, visually separated from the
- * section tabs. The `margin-inline-start: auto` shoves it across
- * the flex row, leaving the section nav on the left. */
+.publisher-nav-badge {
+  flex: none;
+  min-inline-size: calc(1.25rem * var(--ui-scale));
+  padding: 0 calc(0.35rem * var(--ui-scale));
+  border-radius: var(--radius-pill, 999px);
+  background: var(--color-accent, #4da6ff);
+  color: #06121f;
+  font-size: calc(0.7rem * var(--ui-scale));
+  font-weight: 700;
+  line-height: calc(1.25rem * var(--ui-scale));
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- User footer --- */
+
+.publisher-sidebar-footer {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: calc(0.5rem * var(--ui-scale));
+  padding-block-start: calc(0.75rem * var(--ui-scale));
+  border-block-start: 1px solid var(--white-o08, rgba(255, 255, 255, 0.08));
+}
+
+.publisher-sidebar-user {
+  display: flex;
+  align-items: center;
+  gap: calc(0.6rem * var(--ui-scale));
+  padding-inline: calc(0.35rem * var(--ui-scale));
+}
+
+.publisher-sidebar-avatar {
+  flex: none;
+  display: grid;
+  place-items: center;
+  inline-size: calc(2rem * var(--ui-scale));
+  block-size: calc(2rem * var(--ui-scale));
+  border-radius: var(--radius-lg, calc(8px * var(--ui-scale)));
+  background: var(--accent-o15, rgba(77, 166, 255, 0.15));
+  color: var(--color-accent, #4da6ff);
+  font-size: calc(0.75rem * var(--ui-scale));
+  font-weight: 700;
+  letter-spacing: 0.03em;
+}
+
+.publisher-sidebar-user-meta {
+  display: flex;
+  flex-direction: column;
+  min-inline-size: 0;
+}
+
+.publisher-sidebar-user-name {
+  font-size: calc(0.85rem * var(--ui-scale));
+  font-weight: 600;
+  color: var(--color-text, #e8eaf0);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.publisher-sidebar-user-role {
+  font-size: calc(0.72rem * var(--ui-scale));
+  color: var(--color-text-muted, #999999);
+}
+
 .publisher-nav-link-signout {
-  margin-inline-start: auto;
+  justify-content: flex-start;
+}
+
+/* --- Narrow viewports: sidebar becomes a scrollable top strip --- */
+@media (max-width: 768px) {
+  .publisher-portal {
+    flex-direction: column;
+  }
+  .publisher-sidebar {
+    inline-size: auto;
+    block-size: auto;
+    flex-direction: row;
+    align-items: center;
+    gap: calc(0.75rem * var(--ui-scale));
+    overflow-x: auto;
+    overflow-y: hidden;
+    border-block-end: 1px solid var(--white-o08, rgba(255, 255, 255, 0.08));
+  }
+  .publisher-sidebar-header {
+    flex: none;
+  }
+  .publisher-sidebar-title {
+    display: none;
+  }
+  .publisher-nav {
+    flex-direction: row;
+    align-items: center;
+    gap: calc(0.5rem * var(--ui-scale));
+    flex: 1 1 auto;
+  }
+  .publisher-nav-group {
+    flex-direction: row;
+    align-items: center;
+    gap: calc(0.15rem * var(--ui-scale));
+  }
+  .publisher-nav-group-label {
+    display: none;
+  }
+  .publisher-nav-link {
+    white-space: nowrap;
+  }
+  .publisher-sidebar-footer {
+    flex: none;
+    flex-direction: row;
+    align-items: center;
+    padding-block-start: 0;
+    border-block-start: 0;
+    border-inline-start: 1px solid var(--white-o08, rgba(255, 255, 255, 0.08));
+    padding-inline-start: calc(0.75rem * var(--ui-scale));
+  }
+  .publisher-sidebar-user-meta {
+    display: none;
+  }
 }
 
 /* --- Lifecycle tabs (Drafts / Published / Retracted) --- */

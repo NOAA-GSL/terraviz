@@ -41,7 +41,7 @@ import { renderEventsPage } from './pages/events'
 import { renderAnalyticsPage } from './pages/analytics'
 import { renderUsersPage } from './pages/users'
 import { renderFeedbackPage } from './pages/feedback'
-import { renderTopbar } from './components/topbar'
+import { renderSidebar, type SidebarIdentity } from './components/sidebar'
 import { publisherGet } from './api'
 import '../../styles/publisher.css'
 
@@ -326,16 +326,56 @@ function notFoundPage(mount: HTMLElement): RouteHandler {
   return () => renderPlaceholder(mount, t('publisher.section.notFound'), '3pa/A')
 }
 
+/** Localize a publisher role for the sidebar footer, reusing the
+ *  role labels the /publish/me page already defines. */
+function localizedRole(role: string): string {
+  switch (role) {
+    case 'admin':
+      return t('publisher.me.role.admin')
+    case 'publisher':
+      return t('publisher.me.role.publisher')
+    case 'service':
+      return t('publisher.me.role.service')
+    case 'readonly':
+      return t('publisher.me.role.readonly')
+    default:
+      return role
+  }
+}
+
+interface PortalChrome {
+  isAdmin: boolean
+  identity: SidebarIdentity
+  eventsBadge: number
+}
+
 /**
- * Best-effort identity probe used only to decide whether the topbar
- * renders admin-only tabs. Returns false on any error — the Users
- * page and its API both enforce admin access independently, so a
- * hidden-but-reachable tab degrades safely.
+ * Best-effort probe that fills in the sidebar's admin-only links,
+ * footer identity, and events badge. Every read degrades safely —
+ * the pages and their APIs enforce access independently, so a
+ * hidden-but-reachable link (or a missing badge) is harmless. The
+ * events count is only fetched for admins (the endpoint 403s
+ * otherwise).
  */
-async function resolveIsAdmin(): Promise<boolean> {
-  const res = await publisherGet<{ role: string; is_admin: boolean }>('/api/v1/publish/me')
-  if (!res.ok) return false
-  return res.data.is_admin === true || res.data.role === 'admin'
+async function resolvePortalChrome(): Promise<PortalChrome> {
+  const [meRes, profRes] = await Promise.all([
+    publisherGet<{ role: string; is_admin: boolean; display_name: string }>(
+      '/api/v1/publish/me',
+    ),
+    publisherGet<{ profile: { orgName?: string | null } | null }>('/api/v1/node-profile'),
+  ])
+  const isAdmin = meRes.ok && (meRes.data.is_admin === true || meRes.data.role === 'admin')
+  const identity: SidebarIdentity = {
+    orgName: profRes.ok ? profRes.data.profile?.orgName ?? null : null,
+    displayName: meRes.ok ? meRes.data.display_name : null,
+    roleLabel: meRes.ok ? localizedRole(meRes.data.role) : null,
+  }
+  let eventsBadge = 0
+  if (isAdmin) {
+    const ev = await publisherGet<{ events: unknown[] }>('/api/v1/publish/events?status=proposed')
+    if (ev.ok && Array.isArray(ev.data.events)) eventsBadge = ev.data.events.length
+  }
+  return { isAdmin, identity, eventsBadge }
 }
 
 let activeRouter: PublisherRouter | null = null
@@ -397,13 +437,14 @@ export async function bootPublisherPortal(): Promise<void> {
     ],
     notFoundPage(content),
   )
-  // Render the topbar immediately (without admin-only tabs) so the
-  // portal never blocks on the network. The admin-tab probe is
-  // best-effort and only controls visibility of the Users tab, so we
-  // fire it in the background and re-render the topbar if it resolves
-  // true. The page and API both gate independently.
+  // Render the sidebar immediately (without admin-only links, footer
+  // identity, or the events badge) so the portal never blocks on the
+  // network. The chrome probe is best-effort — it fills in admin
+  // links, the user footer, and the events count — so we fire it in
+  // the background and re-render once it resolves. The pages and APIs
+  // gate independently.
   const bootedRouter = activeRouter
-  renderTopbar(root, bootedRouter, { isAdmin: false })
+  renderSidebar(root, bootedRouter, { isAdmin: false })
   await bootedRouter.start()
   // One emit per portal-chunk load — the publisher visits
   // /publish/*, the chunk resolves, the first route dispatches,
@@ -416,11 +457,11 @@ export async function bootPublisherPortal(): Promise<void> {
   })
   logger.info('[publisher] portal booted at', window.location.pathname)
 
-  void resolveIsAdmin().then(isAdmin => {
+  void resolvePortalChrome().then(chrome => {
     // Guard against a teardown (or re-boot) that happened while the
-    // probe was in flight — only re-render the topbar we mounted.
-    if (isAdmin && activeRouter === bootedRouter) {
-      renderTopbar(root, bootedRouter, { isAdmin: true })
+    // probe was in flight — only re-render the sidebar we mounted.
+    if (activeRouter === bootedRouter) {
+      renderSidebar(root, bootedRouter, chrome)
     }
   })
 }

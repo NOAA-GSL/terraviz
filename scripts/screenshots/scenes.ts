@@ -109,7 +109,7 @@ async function openCatalog(page: Page): Promise<void> {
  * The portal lives behind Cloudflare Access with a Pages-Functions
  * API backend — neither exists against a local dev server. What
  * *does* render without a backend is the part translators most need
- * context for: the topbar + section tabs, page headings, and (for
+ * context for: the sidebar + section nav, page headings, and (for
  * the static-form pages) field labels/placeholders. Every page
  * mounts its chrome synchronously before fetching data.
  *
@@ -122,7 +122,7 @@ async function openCatalog(page: Page): Promise<void> {
  */
 async function openPublish(page: Page, path: string): Promise<void> {
   await gotoApp(page, path)
-  await page.locator('#publisher-root .publisher-topbar').waitFor({ state: 'visible' })
+  await page.locator('#publisher-root .publisher-sidebar').waitFor({ state: 'visible' })
 }
 
 /**
