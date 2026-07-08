@@ -1511,29 +1511,63 @@
   margin-block-start: calc(0.5rem * var(--ui-scale));
 }
 
-/* Phase 3pt/G — Delete (×) button on tour list rows. */
+/* List-row actions (datasets / tours / workflows / blog).
+   One consistent ghost-pill treatment so an <a> "Edit" and a
+   <button> "Retract" read as the same control — the deck shows them
+   as a uniform action set differing only in tone. Scoped with
+   :not(.publisher-button) so users.ts, which deliberately composes
+   the full `.publisher-button` variants, keeps its own styling.
+   The compound selectors also out-specify the base.css `button` /
+   `button:hover` accent fill a bare <button> would otherwise inherit. */
 .publisher-row-action {
   margin-inline-end: calc(0.5rem * var(--ui-scale));
 }
-
-.publisher-row-delete {
+.publisher-row-action:not(.publisher-button) {
+  display: inline-flex;
+  align-items: center;
+  appearance: none;
+  -webkit-appearance: none;
   background: transparent;
-  border: 1px solid rgba(255, 138, 138, 0.4);
-  color: #ff8a8a;
-  border-radius: calc(0.25rem * var(--ui-scale));
-  padding: calc(0.15rem * var(--ui-scale)) calc(0.55rem * var(--ui-scale));
-  font-size: calc(0.75rem * var(--ui-scale));
+  border: 1px solid var(--white-o12, rgba(255, 255, 255, 0.12));
+  border-radius: calc(0.35rem * var(--ui-scale));
+  padding: calc(0.2rem * var(--ui-scale)) calc(0.6rem * var(--ui-scale));
+  font-family: inherit;
+  font-size: calc(0.78rem * var(--ui-scale));
+  line-height: 1.4;
+  color: var(--color-text-secondary, #b8c0cc);
+  text-decoration: none;
   cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
 }
-
-.publisher-row-delete:hover,
-.publisher-row-delete:focus-visible {
-  background: rgba(255, 138, 138, 0.12);
+.publisher-row-action:not(.publisher-button):hover,
+.publisher-row-action:not(.publisher-button):focus-visible {
+  background: var(--white-o06, rgba(255, 255, 255, 0.06));
+  border-color: var(--white-o24, rgba(255, 255, 255, 0.24));
+  text-decoration: none;
 }
-
-.publisher-row-delete:disabled {
+.publisher-row-action:not(.publisher-button):disabled {
   cursor: progress;
   opacity: 0.6;
+}
+
+/* Tone variants — same pill, semantic accent. */
+.publisher-row-retract:not(.publisher-button) {
+  color: var(--color-warning, #ffcc66);
+  border-color: rgba(255, 204, 102, 0.35);
+}
+.publisher-row-retract:not(.publisher-button):hover,
+.publisher-row-retract:not(.publisher-button):focus-visible {
+  background: rgba(255, 204, 102, 0.1);
+  border-color: var(--color-warning, #ffcc66);
+}
+.publisher-row-delete:not(.publisher-button) {
+  color: #ff8a8a;
+  border-color: rgba(255, 138, 138, 0.4);
+}
+.publisher-row-delete:not(.publisher-button):hover,
+.publisher-row-delete:not(.publisher-button):focus-visible {
+  background: rgba(255, 138, 138, 0.12);
+  border-color: #ff8a8a;
 }
 
 .publisher-row-action-status {
@@ -4185,16 +4219,9 @@
   gap: calc(0.5rem * var(--ui-scale));
   white-space: nowrap;
 }
-.publisher-row-edit {
-  color: var(--color-accent, #4da6ff);
-  text-decoration: none;
-}
-.publisher-row-edit:hover {
-  text-decoration: underline;
-}
-.publisher-row-retract {
-  color: var(--color-warning, #ffcc66);
-}
+/* Edit / View / target links keep the neutral base pill (defined
+   above). Tone variants (retract / delete / run-now) live alongside
+   the base so the whole action set stays in one place. */
 
 /* --- Team page additions --- */
 .publisher-team-invite-wrap {
@@ -4291,8 +4318,14 @@
   align-items: center;
   gap: calc(0.4rem * var(--ui-scale));
 }
-.publisher-workflows-run {
+.publisher-workflows-run:not(.publisher-button) {
   color: var(--color-accent, #4da6ff);
+  border-color: rgba(77, 166, 255, 0.35);
+}
+.publisher-workflows-run:not(.publisher-button):hover,
+.publisher-workflows-run:not(.publisher-button):focus-visible {
+  background: rgba(77, 166, 255, 0.1);
+  border-color: var(--color-accent, #4da6ff);
 }
 
 /* ============================================================== */

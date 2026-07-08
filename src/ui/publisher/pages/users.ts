@@ -295,7 +295,7 @@ function renderRow(
 
   // Role cell — a select for promote/demote/edit-role. The service
   // role is never offered (machine-token only); a current service
-  // row renders read-only text instead.
+  // row renders a read-only "Service key" badge instead.
   const roleCell = document.createElement('td')
   const statusBadge = document.createElement('span')
   const actionStatus = document.createElement('span')

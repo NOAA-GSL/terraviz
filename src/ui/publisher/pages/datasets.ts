@@ -295,6 +295,9 @@ function renderTable(
         if (!confirmFn(t('publisher.datasets.retract.confirm', { title: d.title }))) return
         retractBtn.disabled = true
         statusSpan.textContent = ''
+        // Clear any error styling from a prior failed attempt so a
+        // retry doesn't inherit the red status text.
+        statusSpan.classList.remove('publisher-row-action-status-error')
         void publisherSend<{ dataset: unknown }>(
           `/api/v1/publish/datasets/${encodeURIComponent(d.id)}/retract`,
           {},
@@ -321,6 +324,9 @@ function renderTable(
         if (!confirmFn(t('publisher.datasets.delete.confirm', { title: d.title }))) return
         deleteBtn.disabled = true
         statusSpan.textContent = ''
+        // Clear any error styling from a prior failed attempt so a
+        // retry doesn't inherit the red status text.
+        statusSpan.classList.remove('publisher-row-action-status-error')
         void publisherSend<{ deleted_id: string }>(
           `/api/v1/publish/datasets/${encodeURIComponent(d.id)}`,
           undefined,
