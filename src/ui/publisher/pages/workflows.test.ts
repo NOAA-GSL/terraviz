@@ -107,7 +107,7 @@ describe('renderWorkflowsPage', () => {
       listFn: async () => ({ ok: true, data: { workflows: [] } }),
       navigate: url => visited.push(url),
     })
-    const newLink = mount.querySelector<HTMLAnchorElement>('a.publisher-tour-new-btn')
+    const newLink = mount.querySelector<HTMLAnchorElement>('a.publisher-workflows-new')
     newLink?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
     expect(visited).toEqual(['/publish/workflows/new'])
   })

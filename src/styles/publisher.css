@@ -1461,6 +1461,9 @@
 }
 
 .publisher-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   background: var(--white-o10, rgba(255, 255, 255, 0.1));
   border: 1px solid var(--white-o15, rgba(255, 255, 255, 0.15));
   color: var(--color-text, #e8eaf0);
@@ -1469,6 +1472,9 @@
   font-size: calc(0.875rem * var(--ui-scale));
   cursor: pointer;
   font-family: inherit;
+  /* The button variants are used on <a> as well as <button>; kill the
+     anchor's default underline so a link-button reads as a button. */
+  text-decoration: none;
 }
 
 .publisher-button:hover {
@@ -4188,6 +4194,19 @@
   justify-content: space-between;
   gap: calc(1rem * var(--ui-scale));
   margin-block-end: calc(1.25rem * var(--ui-scale));
+}
+/* Let the title column absorb a long subtitle (wrapping within itself)
+   so the action button stays on the header's end side instead of
+   being pushed to a second row. The button keeps its intrinsic width. */
+.publisher-page-titles {
+  /* flex-basis 0 (not auto) so the flex line-break decision ignores the
+     subtitle's long natural width — the column grows to fill instead,
+     keeping the button on the same row. */
+  flex: 1 1 0%;
+  min-inline-size: calc(12rem * var(--ui-scale));
+}
+.publisher-page-header > .publisher-button {
+  flex: 0 0 auto;
 }
 .publisher-page-title {
   margin: 0;

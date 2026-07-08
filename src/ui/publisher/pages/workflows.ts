@@ -125,24 +125,29 @@ function buildShell(workflows: PublisherWorkflow[], ctx: RowCtx): HTMLElement {
   const shell = document.createElement('main')
   shell.className = 'publisher-shell'
 
-  const header = document.createElement('div')
-  header.className = 'publisher-tour-list-header'
-  const h2 = document.createElement('h2')
-  h2.textContent = t('publisher.workflows.heading')
-  header.appendChild(h2)
+  // Page header mirrors the datasets list (deck layout): stacked
+  // title + subtitle on the start side, a primary "New workflow"
+  // button on the end side.
+  const header = document.createElement('header')
+  header.className = 'publisher-page-header'
+  const titles = document.createElement('div')
+  titles.className = 'publisher-page-titles'
+  const h1 = document.createElement('h1')
+  h1.className = 'publisher-page-title'
+  h1.textContent = t('publisher.workflows.heading')
+  const sub = document.createElement('p')
+  sub.className = 'publisher-page-subtitle'
+  sub.textContent = t('publisher.workflows.intro')
+  titles.append(h1, sub)
+  header.appendChild(titles)
 
   const newLink = document.createElement('a')
   newLink.href = '/publish/workflows/new'
-  newLink.className = 'publisher-tab publisher-tab-active publisher-tour-new-btn'
+  newLink.className = 'publisher-button publisher-button-primary publisher-workflows-new'
   newLink.textContent = t('publisher.workflows.new')
   interceptNav(newLink, ctx.navigate)
   header.appendChild(newLink)
   shell.appendChild(header)
-
-  const intro = document.createElement('p')
-  intro.className = 'publisher-tour-intro'
-  intro.textContent = t('publisher.workflows.intro')
-  shell.appendChild(intro)
 
   if (workflows.length === 0) {
     const empty = document.createElement('section')
@@ -171,11 +176,12 @@ function buildTable(workflows: PublisherWorkflow[], ctx: RowCtx): HTMLElement {
 
   const thead = document.createElement('thead')
   const headRow = document.createElement('tr')
+  // Deck layout: no standalone Enabled column — the enabled badge sits
+  // under the workflow name (same fold as the datasets status badge).
   for (const key of [
     'publisher.workflows.col.name',
     'publisher.workflows.col.schedule',
     'publisher.workflows.col.target',
-    'publisher.workflows.col.enabled',
     'publisher.workflows.col.lastRun',
     'publisher.workflows.col.actions',
   ] as const) {
@@ -201,12 +207,22 @@ function buildRow(workflow: PublisherWorkflow, ctx: RowCtx): HTMLElement {
   const detailPath = `/publish/workflows/${encodeURIComponent(workflow.id)}`
 
   const nameCell = document.createElement('td')
+  // Name + enabled badge stacked (deck fold — no separate column).
+  const nameStack = document.createElement('div')
+  nameStack.className = 'publisher-cell-title'
   const nameLink = document.createElement('a')
   nameLink.className = 'publisher-row-link'
   nameLink.href = detailPath
   nameLink.textContent = workflow.name
   interceptNav(nameLink, ctx.navigate)
-  nameCell.appendChild(nameLink)
+  nameStack.appendChild(nameLink)
+  const badge = document.createElement('span')
+  badge.className = `publisher-badge publisher-badge-status publisher-badge-${workflow.enabled ? 'published' : 'draft'}`
+  badge.textContent = workflow.enabled
+    ? t('publisher.workflows.enabled.on')
+    : t('publisher.workflows.enabled.off')
+  nameStack.appendChild(badge)
+  nameCell.appendChild(nameStack)
   tr.appendChild(nameCell)
 
   const scheduleCell = document.createElement('td')
@@ -222,26 +238,20 @@ function buildRow(workflow: PublisherWorkflow, ctx: RowCtx): HTMLElement {
   targetCell.appendChild(targetLink)
   tr.appendChild(targetCell)
 
-  const enabledCell = document.createElement('td')
-  const badge = document.createElement('span')
-  badge.className = `publisher-badge publisher-badge-status publisher-badge-${workflow.enabled ? 'published' : 'draft'}`
-  badge.textContent = workflow.enabled
-    ? t('publisher.workflows.enabled.on')
-    : t('publisher.workflows.enabled.off')
-  enabledCell.appendChild(badge)
-  tr.appendChild(enabledCell)
-
   const lastRunCell = document.createElement('td')
-  lastRunCell.className = 'publisher-cell-updated publisher-workflows-lastrun'
-  lastRunCell.dataset.workflowLastrun = workflow.id
-  // The last-run status badge (hydrated after render) is prepended
-  // here; the timestamp lives in its own span so it survives the
-  // prepend.
+  lastRunCell.className = 'publisher-cell-updated'
+  // Inner flex wrapper (NOT the <td> itself) holds the hydrated status
+  // badge + timestamp. Setting display:flex on a <td> drops it from the
+  // table's column model, which is what pushed the actions out of line.
+  const lastRunWrap = document.createElement('div')
+  lastRunWrap.className = 'publisher-workflows-lastrun'
+  lastRunWrap.dataset.workflowLastrun = workflow.id
   const when = document.createElement('span')
   when.textContent = workflow.last_run_at
     ? formatDate(workflow.last_run_at)
     : t('publisher.workflows.lastRun.never')
-  lastRunCell.appendChild(when)
+  lastRunWrap.appendChild(when)
+  lastRunCell.appendChild(lastRunWrap)
   tr.appendChild(lastRunCell)
 
   const actionsCell = document.createElement('td')
