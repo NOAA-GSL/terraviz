@@ -170,8 +170,72 @@ function buildShell(
     return shell
   }
 
-  shell.appendChild(buildTable(tours, navigate, del, retract, confirmFn))
+  const table = buildTable(tours, navigate, del, retract, confirmFn)
+  shell.appendChild(buildStatusFilter(tours, table))
+  shell.appendChild(table)
   return shell
+}
+
+type TourStatus = 'draft' | 'published' | 'retracted'
+
+function statusOf(tour: TourListItem): TourStatus {
+  return tour.retracted_at ? 'retracted' : tour.published_at ? 'published' : 'draft'
+}
+
+/**
+ * Status filter row with per-status counts (All / Draft / Published /
+ * Retracted), matching the deck. Filters the already-loaded table's
+ * rows in place by their `data-status` — no refetch.
+ */
+function buildStatusFilter(tours: TourListItem[], table: HTMLElement): HTMLElement {
+  const counts: Record<'all' | TourStatus, number> = {
+    all: tours.length,
+    draft: 0,
+    published: 0,
+    retracted: 0,
+  }
+  for (const tour of tours) counts[statusOf(tour)]++
+
+  const bar = document.createElement('div')
+  bar.className = 'publisher-tabs publisher-tours-filter'
+  bar.setAttribute('role', 'tablist')
+  bar.setAttribute('aria-label', t('publisher.tours.filter.aria'))
+
+  const entries: Array<['all' | TourStatus, 'publisher.tours.filter.all' | 'publisher.tours.filter.draft' | 'publisher.tours.filter.published' | 'publisher.tours.filter.retracted']> = [
+    ['all', 'publisher.tours.filter.all'],
+    ['draft', 'publisher.tours.filter.draft'],
+    ['published', 'publisher.tours.filter.published'],
+    ['retracted', 'publisher.tours.filter.retracted'],
+  ]
+
+  const apply = (value: 'all' | TourStatus): void => {
+    for (const row of Array.from(table.querySelectorAll<HTMLElement>('tbody tr'))) {
+      row.hidden = value !== 'all' && row.dataset.status !== value
+    }
+  }
+
+  entries.forEach(([value, labelKey], i) => {
+    const tab = document.createElement('button')
+    tab.type = 'button'
+    tab.className = i === 0 ? 'publisher-tab publisher-tab-active' : 'publisher-tab'
+    tab.setAttribute('role', 'tab')
+    tab.setAttribute('aria-selected', i === 0 ? 'true' : 'false')
+    tab.append(document.createTextNode(t(labelKey)))
+    const badge = document.createElement('span')
+    badge.className = 'publisher-tab-count'
+    badge.textContent = String(counts[value])
+    tab.append(badge)
+    tab.addEventListener('click', () => {
+      apply(value)
+      for (const btn of Array.from(bar.children)) {
+        const isThis = btn === tab
+        btn.classList.toggle('publisher-tab-active', isThis)
+        btn.setAttribute('aria-selected', isThis ? 'true' : 'false')
+      }
+    })
+    bar.append(tab)
+  })
+  return bar
 }
 
 function buildTable(
@@ -248,6 +312,7 @@ function buildRow(
     : tour.published_at
       ? 'published'
       : 'draft'
+  tr.dataset.status = statusKind
   const statusCell = document.createElement('td')
   const badge = document.createElement('span')
   badge.className = `publisher-badge publisher-badge-status publisher-badge-${statusKind}`

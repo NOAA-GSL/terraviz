@@ -56,6 +56,31 @@ describe('renderToursPage (tour/A → /G)', () => {
     expect(rows[1].textContent).toContain('Published')
   })
 
+  it('shows per-status filter counts and filters rows in place', async () => {
+    const content = document.createElement('div')
+    await renderToursPage(content, {
+      navigate: () => {},
+      createDraft: vi.fn(),
+      listFn: vi.fn(async () => ({
+        tours: [
+          makeTour({ id: 'd1', title: 'Draft one' }),
+          makeTour({ id: 'p1', title: 'Pub one', published_at: '2026-05-21T13:00:00Z' }),
+          makeTour({ id: 'r1', title: 'Ret one', published_at: '2026-05-01T00:00:00Z', retracted_at: '2026-05-10T00:00:00Z' }),
+        ],
+        next_cursor: null,
+      })),
+    })
+    const counts = Array.from(content.querySelectorAll('.publisher-tours-filter .publisher-tab-count')).map(c => c.textContent)
+    expect(counts).toEqual(['3', '1', '1', '1'])
+
+    // Click "Draft" → only the draft row remains visible.
+    const draftTab = Array.from(content.querySelectorAll<HTMLButtonElement>('.publisher-tours-filter .publisher-tab')).find(b => b.textContent?.startsWith('Draft'))!
+    draftTab.click()
+    const visible = Array.from(content.querySelectorAll<HTMLElement>('tbody tr')).filter(r => !r.hidden)
+    expect(visible).toHaveLength(1)
+    expect(visible[0].textContent).toContain('Draft one')
+  })
+
   it('Edit / title link navigates to /?tourEdit=<id>', async () => {
     const content = document.createElement('div')
     const navigate = vi.fn()
