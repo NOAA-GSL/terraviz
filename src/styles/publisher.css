@@ -4183,3 +4183,44 @@
 .publisher-row-retract {
   color: var(--color-warning, #ffcc66);
 }
+
+/* --- Team page additions --- */
+.publisher-team-invite-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: calc(0.3rem * var(--ui-scale));
+}
+.publisher-team-invite-note {
+  margin: 0;
+  max-inline-size: calc(16rem * var(--ui-scale));
+  text-align: end;
+  font-size: calc(0.74rem * var(--ui-scale));
+  color: var(--color-text-muted, #999999);
+}
+.publisher-team-roles-note {
+  margin: calc(1rem * var(--ui-scale)) 0 0;
+  font-size: calc(0.8rem * var(--ui-scale));
+  color: var(--color-text-muted, #999999);
+}
+.publisher-users-identity {
+  display: flex;
+  align-items: center;
+  gap: calc(0.6rem * var(--ui-scale));
+}
+.publisher-users-avatar {
+  flex: none;
+  display: grid;
+  place-items: center;
+  inline-size: calc(2rem * var(--ui-scale));
+  block-size: calc(2rem * var(--ui-scale));
+  border-radius: var(--radius-lg, calc(8px * var(--ui-scale)));
+  background: var(--white-o08, rgba(255, 255, 255, 0.08));
+  color: var(--color-text-secondary, #b8c0cc);
+  font-size: calc(0.72rem * var(--ui-scale));
+  font-weight: 700;
+}
+.publisher-team-service-badge {
+  background: var(--white-o08, rgba(255, 255, 255, 0.08));
+  color: var(--color-text-secondary, #b8c0cc);
+}
