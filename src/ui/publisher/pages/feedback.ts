@@ -511,10 +511,14 @@ function buildHeader(
   })
   range.append(select)
 
+  const subtitle = document.createElement('p')
+  subtitle.className = 'publisher-page-subtitle'
+  subtitle.textContent = t('publisher.feedback.subtitle')
+
   const controls = el('div', { className: 'publisher-analytics-controls' }, [tabs, range])
   const header = document.createElement('header')
   header.className = 'publisher-feedback-header'
-  header.append(heading, controls)
+  header.append(heading, subtitle, controls)
   return header
 }
 

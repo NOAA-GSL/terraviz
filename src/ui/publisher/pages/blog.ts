@@ -101,7 +101,12 @@ export async function renderBlogPage(mount: HTMLElement, options: BlogPageOption
   }
 
   const header = el('div', { className: 'publisher-blog-header' })
-  header.append(el('h2', { className: 'publisher-card-heading', textContent: t('publisher.blog.title') }))
+  header.append(
+    el('div', { className: 'publisher-page-titles' }, [
+      el('h2', { className: 'publisher-card-heading', textContent: t('publisher.blog.title') }),
+      el('p', { className: 'publisher-page-subtitle', textContent: t('publisher.blog.subtitle') }),
+    ]),
+  )
   const newBtn = el('button', {
     type: 'button',
     className: 'publisher-btn publisher-btn-primary publisher-blog-new-btn',

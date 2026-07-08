@@ -282,6 +282,7 @@ function renderTopbar(
       el('h2', 'publisher-card-heading', [t('publisher.events.title')]),
       el('div', 'publisher-events-toolbar', [refreshBtn, newBtn]),
     ]),
+    el('p', 'publisher-events-intro', [t('publisher.events.subtitle')]),
     filters,
     status,
   ])
