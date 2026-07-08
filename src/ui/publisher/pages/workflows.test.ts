@@ -47,6 +47,42 @@ describe('renderWorkflowsPage', () => {
     expect(detailLink?.getAttribute('href')).toBe('/publish/workflows/01HX0000000000000000000000')
   })
 
+  it('hydrates the last-run status badge and runs a workflow on demand', async () => {
+    const runCalls: string[] = []
+    const failedRun = {
+      id: 'r1',
+      workflow_id: 'wf1',
+      status: 'failed' as const,
+      trigger: 'manual',
+      created_at: '2026-06-09T12:00:00.000Z',
+      started_at: null,
+      finished_at: null,
+      gha_run_id: null,
+      upload_id: null,
+      error_summary: 'exit 1',
+    }
+    await renderWorkflowsPage(mount, {
+      listFn: async () => ({ ok: true, data: { workflows: [workflow({ id: 'wf1' })] } }),
+      runsFn: async () => ({ ok: true, data: { runs: [failedRun] } }),
+      runFn: async (id: string) => {
+        runCalls.push(id)
+        return { ok: true, data: { run: failedRun, mocked: true } }
+      },
+      navigate: () => {},
+    })
+    // Status badge hydrated into the last-run cell.
+    await new Promise(r => setTimeout(r, 0))
+    const badge = mount.querySelector('.publisher-workflows-runstatus')
+    expect(badge?.textContent).toBe('Failed')
+
+    // Run now posts to the run endpoint and reports queued.
+    const runBtn = mount.querySelector<HTMLButtonElement>('.publisher-workflows-run')!
+    runBtn.click()
+    await new Promise(r => setTimeout(r, 0))
+    expect(runCalls).toEqual(['wf1'])
+    expect(mount.querySelector('.publisher-row-action-status')?.textContent).toBe('Queued ✓')
+  })
+
   it('renders the empty state when no workflows exist', async () => {
     await renderWorkflowsPage(mount, {
       listFn: async () => ({ ok: true, data: { workflows: [] } }),

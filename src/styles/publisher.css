@@ -4284,3 +4284,13 @@
   border-color: var(--accent-o30, rgba(77, 166, 255, 0.3));
   color: var(--color-accent, #4da6ff);
 }
+
+/* --- Workflows run status + run-now --- */
+.publisher-workflows-lastrun {
+  display: flex;
+  align-items: center;
+  gap: calc(0.4rem * var(--ui-scale));
+}
+.publisher-workflows-run {
+  color: var(--color-accent, #4da6ff);
+}
