@@ -37,6 +37,7 @@ describe('renderTopbar', () => {
       'a.publisher-nav-link:not(.publisher-nav-link-signout)',
     )
     expect(Array.from(links).map(a => a.textContent)).toEqual([
+      'Overview',
       'Profile',
       'Datasets',
       'Tours',

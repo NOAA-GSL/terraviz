@@ -347,6 +347,70 @@ export const scenes: Scene[] = [
   // ── Publisher portal ──────────────────────────────────────────
   // Populated via route-stub fixtures (Phase V7); see openPublish().
   {
+    name: 'publish-overview',
+    description: 'Publisher portal — command-center Overview landing (populated via fixtures)',
+    // The Overview fans out beyond publisherFixtures' coverage; these
+    // extra rules (hero / feedback / analytics / public node-profile /
+    // workflow runs) precede the base set so the workflow-runs regex
+    // wins over the general `/publish/workflows` list rule.
+    fixtures: [
+      {
+        url: /\/publish\/workflows\/[^/?]+\/runs/,
+        json: {
+          runs: [
+            {
+              status: 'failed',
+              created_at: '2026-07-06T02:14:00Z',
+              finished_at: '2026-07-06T02:15:00Z',
+              error_summary: 'exit code 1',
+            },
+          ],
+        },
+      },
+      {
+        url: '/api/v1/featured-hero',
+        json: {
+          hero: {
+            datasetId: 'ds-hero',
+            window: { start: '2026-07-01T00:00:00Z', end: '2026-07-10T00:00:00Z' },
+            headline: 'Far-Flung Filaments of Fungi',
+          },
+        },
+      },
+      {
+        url: '/api/v1/publish/feedback',
+        json: {
+          data: {
+            byDay: [{ up: 22, down: 2 }],
+            recentFeedback: [
+              {
+                rating: 'thumbs-up',
+                comment: 'Orbit explained the temperature ramp perfectly.',
+                dataset_id: 'sst-2026-04',
+                created_at: '2026-07-08T09:00:00Z',
+              },
+              {
+                rating: 'thumbs-down',
+                comment: "Sea ice dataset wouldn't load on mobile.",
+                created_at: '2026-07-08T06:00:00Z',
+              },
+            ],
+          },
+        },
+      },
+      { url: '/api/v1/publish/analytics', json: { data: { totals: { sessions: 44200 } } } },
+      {
+        url: '/api/v1/node-profile',
+        json: { profile: { orgName: 'The Zyra Project', logoUrl: null } },
+      },
+      ...publisherFixtures({ admin: true }),
+    ],
+    async setup(page) {
+      await openPublish(page, '/publish/overview')
+      await page.locator('.publisher-overview').waitFor({ state: 'visible' })
+    },
+  },
+  {
     name: 'publish-datasets',
     description: 'Publisher portal — datasets list (populated via fixtures)',
     fixtures: publisherFixtures(),

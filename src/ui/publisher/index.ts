@@ -22,6 +22,7 @@ import { emit } from '../../analytics'
 import { logger } from '../../utils/logger'
 import { t } from '../../i18n'
 import { PublisherRouter, type RouteHandler } from './router'
+import { renderOverviewPage } from './pages/overview'
 import { renderMePage } from './pages/me'
 import { renderDatasetsPage } from './pages/datasets'
 import { renderDatasetDetailPage } from './pages/dataset-detail'
@@ -59,6 +60,7 @@ const PORTAL_CONTENT_ID = 'publisher-content'
 export function routeForPath(
   pathname: string,
 ):
+  | 'overview'
   | 'me'
   | 'datasets'
   | 'tours'
@@ -73,7 +75,8 @@ export function routeForPath(
   | 'feedback'
   | 'users'
   | 'unknown' {
-  if (pathname === '/publish' || pathname.startsWith('/publish/me')) return 'me'
+  if (pathname === '/publish' || pathname.startsWith('/publish/overview')) return 'overview'
+  if (pathname.startsWith('/publish/me')) return 'me'
   if (pathname.startsWith('/publish/datasets')) return 'datasets'
   if (pathname.startsWith('/publish/tours')) return 'tours'
   if (pathname.startsWith('/publish/workflows')) return 'workflows'
@@ -168,6 +171,13 @@ function renderPlaceholder(mount: HTMLElement, sectionLabel: string, subPhase: s
   shell.appendChild(comingSoon)
 
   mount.replaceChildren(shell)
+}
+
+function overviewPage(mount: HTMLElement, router: () => PublisherRouter): RouteHandler {
+  return () =>
+    renderOverviewPage(mount, {
+      routerNavigate: path => void router().navigate(path),
+    })
 }
 
 function mePage(mount: HTMLElement): RouteHandler {
@@ -350,7 +360,8 @@ export async function bootPublisherPortal(): Promise<void> {
   }
   activeRouter = new PublisherRouter(
     [
-      { pattern: '/publish', handler: mePage(content) },
+      { pattern: '/publish', handler: overviewPage(content, getRouter) },
+      { pattern: '/publish/overview', handler: overviewPage(content, getRouter) },
       { pattern: '/publish/me', handler: mePage(content) },
       { pattern: '/publish/datasets', handler: datasetsPage(content, getRouter) },
       // `/publish/datasets/new` must come BEFORE the `:id` pattern

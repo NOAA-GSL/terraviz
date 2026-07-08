@@ -13,7 +13,8 @@ import {
 
 describe('routeForPath', () => {
   it.each<[string, ReturnType<typeof routeForPath>]>([
-    ['/publish', 'me'],
+    ['/publish', 'overview'],
+    ['/publish/overview', 'overview'],
     ['/publish/me', 'me'],
     ['/publish/me/', 'me'],
     ['/publish/datasets', 'datasets'],

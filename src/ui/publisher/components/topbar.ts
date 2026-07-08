@@ -23,6 +23,7 @@ import {
 export interface NavLink {
   path: string
   labelKey:
+    | 'publisher.nav.overview'
     | 'publisher.nav.profile'
     | 'publisher.nav.datasets'
     | 'publisher.nav.tours'
@@ -41,6 +42,7 @@ export interface NavLink {
 }
 
 const NAV_LINKS: ReadonlyArray<NavLink> = [
+  { path: '/publish/overview', labelKey: 'publisher.nav.overview' },
   { path: '/publish/me', labelKey: 'publisher.nav.profile' },
   { path: '/publish/datasets', labelKey: 'publisher.nav.datasets' },
   { path: '/publish/tours', labelKey: 'publisher.nav.tours' },
