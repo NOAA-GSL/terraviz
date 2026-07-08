@@ -4265,3 +4265,22 @@
   font-size: calc(0.84rem * var(--ui-scale));
   color: var(--color-text-secondary, #b8c0cc);
 }
+
+/* --- Feedback tag filter chips --- */
+.publisher-feedback-tag-chips {
+  flex-wrap: wrap;
+  border-block-end: 0;
+  gap: calc(0.4rem * var(--ui-scale));
+  margin-block-end: calc(0.75rem * var(--ui-scale));
+}
+.publisher-feedback-tag-chips .publisher-tab {
+  border: 1px solid var(--white-o10, rgba(255, 255, 255, 0.1));
+  border-radius: var(--radius-pill, 999px);
+  padding: calc(0.3rem * var(--ui-scale)) calc(0.7rem * var(--ui-scale));
+  margin-block-end: 0;
+}
+.publisher-feedback-tag-chips .publisher-tab-active {
+  background: var(--accent-o12, rgba(77, 166, 255, 0.12));
+  border-color: var(--accent-o30, rgba(77, 166, 255, 0.3));
+  color: var(--color-accent, #4da6ff);
+}

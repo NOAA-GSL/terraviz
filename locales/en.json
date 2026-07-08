@@ -1087,6 +1087,8 @@
   "publisher.feedback.tab.ai": "AI feedback",
   "publisher.feedback.tab.general": "General feedback",
   "publisher.feedback.tabsAria": "Feedback views",
+  "publisher.feedback.tags.all": "All",
+  "publisher.feedback.tags.aria": "Filter feedback by tag",
   "publisher.feedback.title": "Feedback",
   "publisher.feeds.add": "Add",
   "publisher.feeds.addedBadge": "Added ✓",

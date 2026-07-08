@@ -218,23 +218,60 @@ export async function renderFeedbackPage(
         ]),
       )
     }
+    const recentTable = aiTable(data.recentFeedback)
     if (data.topTags.length > 0) {
       children.push(
         el('h3', { className: 'publisher-analytics-subheading', textContent: t('publisher.feedback.ai.topTags') }),
-        el(
-          'ul',
-          { className: 'publisher-feedback-tags' },
-          data.topTags.map(tag =>
-            // Tag values are the fixed thumbs-feedback vocabulary,
-            // shown verbatim. i18n-exempt: technical identifier
-            el('li', { textContent: `${tag.tag} · ${formatNumber(tag.count)}` }),
-          ),
-        ),
+        buildTagChips(data.topTags, recentTable),
       )
     }
-    children.push(aiTable(data.recentFeedback))
+    children.push(recentTable)
     children.push(exportLink(AI_EXPORT_URL, t('publisher.feedback.exportJsonl')))
     contentHost.replaceChildren(...children)
+  }
+
+  /**
+   * Interactive tag filter chips (deck's TAGS row): an "All" chip
+   * plus one per top tag, filtering the recent-feedback table's rows
+   * in place by their `data-tags` — no refetch.
+   */
+  function buildTagChips(topTags: Array<{ tag: string; count: number }>, table: HTMLElement): HTMLElement {
+    const bar = el('div', { className: 'publisher-tabs publisher-feedback-tag-chips', role: 'tablist' })
+    bar.setAttribute('aria-label', t('publisher.feedback.tags.aria'))
+
+    const apply = (tag: string | null): void => {
+      for (const row of Array.from(table.querySelectorAll<HTMLElement>('tbody tr'))) {
+        const tags = (row.dataset.tags ?? '').split('|').filter(Boolean)
+        row.hidden = tag !== null && !tags.includes(tag)
+      }
+    }
+
+    const makeChip = (label: string, tag: string | null, active: boolean): HTMLElement => {
+      const chip = el('button', {
+        type: 'button',
+        className: active ? 'publisher-tab publisher-tab-active' : 'publisher-tab',
+        textContent: label,
+      }) as HTMLButtonElement
+      chip.setAttribute('role', 'tab')
+      chip.setAttribute('aria-selected', active ? 'true' : 'false')
+      chip.addEventListener('click', () => {
+        apply(tag)
+        for (const btn of Array.from(bar.children)) {
+          const isThis = btn === chip
+          btn.classList.toggle('publisher-tab-active', isThis)
+          btn.setAttribute('aria-selected', isThis ? 'true' : 'false')
+        }
+      })
+      return chip
+    }
+
+    bar.append(makeChip(t('publisher.feedback.tags.all'), null, true))
+    for (const tag of topTags) {
+      // Tag values are the fixed thumbs-feedback vocabulary, shown
+      // verbatim. i18n-exempt: technical identifier
+      bar.append(makeChip(`${tag.tag} · ${formatNumber(tag.count)}`, tag.tag, false))
+    }
+    return bar
   }
 
   function renderGeneral(data: GeneralData): void {
@@ -304,6 +341,7 @@ export async function renderFeedbackPage(
         el('td', { textContent: row.dataset_id || '—' }),
         el('td', { className: 'publisher-feedback-when', textContent: formatWhen(row.created_at) }),
       ])
+      tr.dataset.tags = row.tags.join('|')
       wireRowActivation(tr, () => showAiDetail(row))
       body.append(tr)
     }
