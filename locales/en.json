@@ -1488,6 +1488,7 @@
   "publisher.workflows.enabled.off": "Disabled",
   "publisher.workflows.enabled.on": "Enabled",
   "publisher.workflows.error": "Could not load workflows. Check your access and try again.",
+  "publisher.workflows.form.back": "Back to workflows",
   "publisher.workflows.form.createTarget": "Create draft dataset",
   "publisher.workflows.form.createTarget.creating": "Creating…",
   "publisher.workflows.form.createTarget.done": "Draft created and linked.",
