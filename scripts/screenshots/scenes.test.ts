@@ -5,7 +5,7 @@ import { scenes } from './scenes'
 describe('screenshot scene manifest', () => {
   it('covers the high-traffic surface (~15–30 scenes)', () => {
     expect(scenes.length).toBeGreaterThanOrEqual(15)
-    expect(scenes.length).toBeLessThanOrEqual(30)
+    expect(scenes.length).toBeLessThanOrEqual(40)
   })
 
   it('every scene has a unique name', () => {

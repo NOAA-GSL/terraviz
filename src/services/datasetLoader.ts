@@ -19,6 +19,8 @@ import { updatePlayButton, loadCaptions } from '../ui/playbackController'
 import { startDwell, type DwellHandle } from '../analytics'
 import { addViewSeconds } from './visitMemory'
 import { recommendRelated, normalizeTitle as normalizeRelatedTitle } from './relatedDatasets'
+import { fetchSemanticRelatedIds, RELATED_DEFAULT_LIMIT } from './relatedDatasetsService'
+import { fetchEventsForDataset, type PublicEvent } from './eventsService'
 import { openAddToPlaylistPopover } from '../ui/playlistUI'
 import { openDownloadDialog } from '../ui/downloadDialogUI'
 import { t, tAttr } from '../i18n'
@@ -411,17 +413,30 @@ function renderCreditRow(label: string, value: string, affiliationUrl?: string):
 /**
  * Build the related-datasets section. Combines the manually-curated
  * `EnrichedMetadata.relatedDatasets` (rendered first, in author
- * order) with algorithmic recommendations from `relatedDatasets.ts`
- * filling in up to the §4.2 cap. Returns an empty string when
- * nothing surfaces.
+ * order) with algorithmic recommendations filling in up to the §4.2
+ * cap. Returns an empty string when nothing surfaces.
+ *
+ * The algorithmic portion is either the pure lexical scorer from
+ * `relatedDatasets.ts` (the default + offline fallback) or, when
+ * `algorithmicOverride` is supplied, the semantic "more like this"
+ * ordering from `relatedDatasetsService.ts` (`docs/CURRENT_EVENTS_PLAN.md`
+ * Phase 3b). The override is filtered here against the same
+ * manual/self/hidden exclusions the lexical path applies, so a swap is
+ * apples-to-apples.
  *
  * Manual entries that don't resolve to a catalog row render as
  * grayed-out text (off-catalog references — preserved from the
  * pre-§4.2 behaviour so a curator's notes about external context
  * still show). Algorithmic recommendations always resolve, so they
- * always render as live links.
+ * always render as live links. The whole block is wrapped in
+ * `.info-related-section` so the async semantic enhancement can replace
+ * it in place.
  */
-function renderRelatedDatasetsHtml(target: Dataset, datasets: Dataset[]): string {
+function renderRelatedDatasetsHtml(
+  target: Dataset,
+  datasets: Dataset[],
+  algorithmicOverride: Dataset[] | null = null,
+): string {
   const manual = target.enriched?.relatedDatasets ?? []
   const manualLinks: Array<{ label: string; match: Dataset | null }> = manual.map((rd) => {
     const wanted = normalizeRelatedTitle(rd.title)
@@ -436,11 +451,24 @@ function renderRelatedDatasetsHtml(target: Dataset, datasets: Dataset[]): string
     manualTitles.add(normalizeRelatedTitle(entry.label))
   }
 
-  const algorithmic = recommendRelated(target, datasets, manualIds, manualTitles)
+  const algorithmic = algorithmicOverride
+    ? algorithmicOverride.filter(
+        d =>
+          d.id !== target.id &&
+          !manualIds.has(d.id) &&
+          // Same title-based exclusion the lexical path applies, so a
+          // semantic candidate whose title matches a manual entry
+          // (including an off-catalog one with a different id) doesn't
+          // duplicate it — keeps the swap apples-to-apples.
+          !manualTitles.has(normalizeRelatedTitle(d.title)) &&
+          !d.isHidden,
+      )
+    : recommendRelated(target, datasets, manualIds, manualTitles)
 
   if (manualLinks.length === 0 && algorithmic.length === 0) return ''
 
-  let html = `<p class="info-section-label">${escapeHtml(t('infoPanel.relatedDatasets'))}</p>`
+  let html = `<div class="info-related-section">`
+  html += `<p class="info-section-label">${escapeHtml(t('infoPanel.relatedDatasets'))}</p>`
   html += `<ul class="info-related">`
   for (const entry of manualLinks) {
     if (entry.match) {
@@ -452,8 +480,190 @@ function renderRelatedDatasetsHtml(target: Dataset, datasets: Dataset[]): string
   for (const candidate of algorithmic) {
     html += `<li><a href="?dataset=${encodeURIComponent(candidate.id)}" data-dataset-id="${escapeAttr(candidate.id)}">${escapeHtml(candidate.title)}</a></li>`
   }
-  html += `</ul>`
+  html += `</ul></div>`
   return html
+}
+
+/**
+ * Wire related-dataset links within `scope` to load in-place. The URL
+ * update preserves any existing `?catalog=true` flag (Phase 1 §3.2) so
+ * a related-link click while in catalog mode keeps the catalog↔sphere
+ * tab control visible — same contract as `selectDatasetFromBrowse` in
+ * main.ts. Extracted so the async semantic enhancement can re-wire its
+ * freshly-rendered links.
+ */
+function wireRelatedLinks(scope: ParentNode, onLoadDataset: (id: string) => void): void {
+  scope.querySelectorAll('a[data-dataset-id]').forEach(link => {
+    link.addEventListener('click', (ev) => {
+      ev.preventDefault()
+      const id = (link as HTMLElement).dataset.datasetId
+      if (id) {
+        const params = new URLSearchParams(window.location.search)
+        params.set('dataset', id)
+        window.history.pushState({}, '', `?${params.toString()}`)
+        onLoadDataset(id)
+      }
+    })
+  })
+}
+
+/**
+ * Outcome of navigating the globe to a related current event, returned by
+ * the {@link NavigateToEvent} callback so the card can surface the
+ * out-of-range note (per the "fly + note when out of range" decision).
+ */
+export interface EventNavResult {
+  /** The camera moved to the event's geometry. */
+  navigated: boolean
+  /**
+   * Time-seek outcome:
+   * - `'seeked'` — the loaded dataset was moved to the event's time.
+   * - `'out-of-range'` — the event's time lies outside this dataset's
+   *   coverage; the caller reveals a small note (we still fly to place).
+   * - `'none'` — the event has no time, or the dataset has no time axis
+   *   (static image), so there is nothing to seek and nothing to note.
+   */
+  time: 'seeked' | 'out-of-range' | 'none'
+}
+
+/** Fly the active globe to an event's place and seek to its time. */
+export type NavigateToEvent = (ev: PublicEvent) => EventNavResult
+
+/** True when an event carries a place or a time we could navigate to. */
+function eventHasNavTarget(ev: PublicEvent): boolean {
+  const g = ev.geometry
+  return !!(g.point || g.boundingBox || g.regionName || ev.occurredStart)
+}
+
+/**
+ * One "In the news" card: headline + cited source link + when, plus a
+ * "View on globe" action when the event has a place/time to jump to. The
+ * action button is wired by index in {@link renderInTheNews} (it needs the
+ * live `PublicEvent` + the navigate callback, neither available in a pure
+ * HTML string). An empty, hidden note element rides along so the click
+ * handler can reveal it when the event's time is outside the dataset range.
+ */
+function renderNewsItemHtml(ev: PublicEvent): string {
+  const when = ev.occurredStart ?? ev.source.publishedAt
+  const dateLabel = when ? escapeHtml(when.slice(0, 10)) : ''
+  // `ev.source.url` is guaranteed http(s) by `sanitizePublicEvent`.
+  let html = `<li class="info-news-item">`
+  html += `<p class="info-news-title">${escapeHtml(ev.title)}</p>`
+  html += `<p class="info-news-meta">`
+  html += `<a href="${escapeAttr(ev.source.url)}" target="_blank" rel="noopener noreferrer" class="info-news-source">`
+    + `${escapeHtml(ev.source.name)} ↗</a>`
+  if (dateLabel) html += `<span class="info-news-date"> · ${dateLabel}</span>`
+  html += `</p>`
+  if (eventHasNavTarget(ev)) {
+    html += `<button type="button" class="info-news-locate"`
+      + ` aria-label="${escapeAttr(t('infoPanel.news.viewOnGlobe.aria', { title: ev.title }))}">`
+      + escapeHtml(t('infoPanel.news.viewOnGlobe'))
+      + `</button>`
+    html += `<p class="info-news-note" role="status" hidden>`
+      + escapeHtml(t('infoPanel.news.timeOutOfRange'))
+      + `</p>`
+  }
+  html += `</li>`
+  return html
+}
+
+/**
+ * Fill the "In the news" placeholder with the approved current events
+ * linked to this dataset. Graceful absence: on no events / any failure
+ * the placeholder is removed so no empty section lingers. Mirrors
+ * `enhanceRelatedDatasets`' progressive, never-regress contract.
+ *
+ * When `onNavigateToEvent` is provided, each card's "View on globe" button
+ * flies the active globe to the event's place and seeks the loaded dataset
+ * to its time; if the time is outside the dataset's coverage the card's
+ * note is revealed (the fly still happens).
+ */
+async function renderInTheNews(
+  infoBody: HTMLElement,
+  datasetId: string,
+  onNavigateToEvent?: NavigateToEvent,
+): Promise<void> {
+  const slot = infoBody.querySelector('.info-in-the-news-section')
+  if (!slot) return
+  const events = await fetchEventsForDataset(datasetId)
+  // The panel may have been re-rendered for another dataset while we
+  // awaited — bail if our slot is gone or now belongs to a different id.
+  if (!infoBody.contains(slot) || slot.getAttribute('data-dataset-id') !== datasetId) return
+  if (events.length === 0) {
+    slot.remove()
+    return
+  }
+  let html = `<p class="info-section-label">${escapeHtml(t('infoPanel.inTheNews'))}</p>`
+  html += `<ul class="info-in-the-news">${events.map(renderNewsItemHtml).join('')}</ul>`
+  slot.innerHTML = html
+  if (onNavigateToEvent) wireNewsLocateButtons(slot, events, onNavigateToEvent)
+}
+
+/**
+ * Wire each card's "View on globe" button to fly-and-seek. Buttons are
+ * matched to events positionally — `renderNewsItemHtml` emits at most one
+ * `.info-news-locate` per card in list order — so the Nth button drives the
+ * Nth navigable event. Reveals the card's out-of-range note only when the
+ * event's time falls outside the dataset's coverage.
+ */
+function wireNewsLocateButtons(
+  slot: Element,
+  events: readonly PublicEvent[],
+  onNavigateToEvent: NavigateToEvent,
+): void {
+  const navigable = events.filter(eventHasNavTarget)
+  slot.querySelectorAll<HTMLButtonElement>('.info-news-locate').forEach((btn, i) => {
+    const ev = navigable[i]
+    if (!ev) return
+    btn.addEventListener('click', () => {
+      const result = onNavigateToEvent(ev)
+      const note = btn.parentElement?.querySelector<HTMLElement>('.info-news-note')
+      if (note) note.hidden = result.time !== 'out-of-range'
+    })
+  })
+}
+
+/**
+ * Progressively enhance the related-datasets list with the semantic
+ * "more like this" ordering. Renders nothing new on its own — the
+ * lexical list is already on screen — and silently no-ops on any
+ * backend failure / degraded response (the service returns `null`), so
+ * the panel never regresses below the offline behaviour. On success it
+ * replaces the `.info-related-section` block in place and re-wires the
+ * new links.
+ */
+async function enhanceRelatedDatasets(
+  infoBody: HTMLElement,
+  dataset: Dataset,
+  datasets: Dataset[],
+  onLoadDataset: (id: string) => void,
+): Promise<void> {
+  const section = infoBody.querySelector('.info-related-section')
+  if (!section) return // no related block rendered → nothing to enhance
+
+  const ids = await fetchSemanticRelatedIds(dataset.id, RELATED_DEFAULT_LIMIT)
+  if (!ids) return // degraded / empty / error → keep the lexical list
+
+  const byId = new Map(datasets.map(d => [d.id, d]))
+  const semantic = ids
+    .map(id => byId.get(id))
+    .filter((d): d is Dataset => d !== undefined)
+  if (semantic.length === 0) return
+
+  const newHtml = renderRelatedDatasetsHtml(dataset, datasets, semantic)
+  if (!newHtml) return
+
+  // The panel may have been re-rendered (a new dataset loaded) while
+  // the fetch was in flight — only replace the section if it's still
+  // attached to the live info body.
+  if (!infoBody.contains(section)) return
+
+  const tmp = document.createElement('div')
+  tmp.innerHTML = newHtml
+  const fresh = tmp.firstElementChild
+  if (!fresh) return
+  section.replaceWith(fresh)
+  wireRelatedLinks(fresh, onLoadDataset)
 }
 
 /** Populate and display the dataset info panel with metadata, legend, related datasets, and event wiring. */
@@ -461,6 +671,7 @@ export function displayDatasetInfo(
   dataset: Dataset,
   datasets: Dataset[],
   onLoadDataset: (id: string) => void,
+  onNavigateToEvent?: NavigateToEvent,
 ): void {
   const infoPanel = document.getElementById('info-panel')
   const infoTitle = document.getElementById('info-title')
@@ -593,6 +804,11 @@ export function displayDatasetInfo(
     html += `<dl class="info-credits">${creditRows.join('')}</dl>`
   }
 
+  // --- "In the news" — approved current events linked to this dataset.
+  // Placeholder filled async by `renderInTheNews` after the panel mounts;
+  // removed entirely when the dataset has no events (graceful absence). --
+  html += `<div class="info-in-the-news-section" data-dataset-id="${escapeAttr(dataset.id)}"></div>`
+
   // --- Related datasets — manual entries first, then algorithmic
   // recommendations to fill the list up to the §4.2 cap. ----------
   const relatedHtml = renderRelatedDatasetsHtml(dataset, datasets)
@@ -690,23 +906,17 @@ export function displayDatasetInfo(
     })
   }
 
-  // Wire up related dataset links to load in-place. The URL update
-  // preserves any existing `?catalog=true` flag (Phase 1 §3.2) so
-  // a related-link click while in catalog mode keeps the
-  // catalog↔sphere tab control visible — same contract as
-  // `selectDatasetFromBrowse` in main.ts.
-  infoBody.querySelectorAll('a[data-dataset-id]').forEach(link => {
-    link.addEventListener('click', (ev) => {
-      ev.preventDefault()
-      const id = (link as HTMLElement).dataset.datasetId
-      if (id) {
-        const params = new URLSearchParams(window.location.search)
-        params.set('dataset', id)
-        window.history.pushState({}, '', `?${params.toString()}`)
-        onLoadDataset(id)
-      }
-    })
-  })
+  // Wire up related dataset links to load in-place (lexical list,
+  // rendered synchronously above), then progressively enhance the list
+  // with the semantic "more like this" ordering when the backend is
+  // available (Phase 3b). The enhancement no-ops on any failure, so the
+  // lexical list stands as the fallback.
+  wireRelatedLinks(infoBody, onLoadDataset)
+  void enhanceRelatedDatasets(infoBody, dataset, datasets, onLoadDataset)
+
+  // "In the news" — fill the placeholder with approved current events for
+  // this dataset (or remove it if there are none). Non-blocking; graceful.
+  void renderInTheNews(infoBody, dataset.id, onNavigateToEvent)
 
   // Wire up the description show-more / show-less toggle.
   const descWrap = infoBody.querySelector('.info-description-wrap[data-truncated="true"]') as HTMLElement | null

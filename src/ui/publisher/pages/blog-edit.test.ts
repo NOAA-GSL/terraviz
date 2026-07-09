@@ -1,0 +1,508 @@
+/**
+ * Tests for the blog editor page — the Generate flow filling the
+ * content fields, Save composing the create body from the grounding
+ * selections, and the publish transition.
+ */
+
+import { describe, it, expect, vi } from 'vitest'
+import { renderBlogEditPage } from './blog-edit'
+
+const ADMIN_ME = { role: 'admin', is_admin: true }
+const DATASETS = {
+  datasets: [
+    { id: 'DS_SST', slug: 'sst', title: 'Sea Surface Temperature', abstract: null, organization: 'NOAA', format: 'video/mp4', visibility: 'public', created_at: '', updated_at: '', published_at: '2026-01-01', retracted_at: null, publisher_id: null, legacy_id: null },
+  ],
+  next_cursor: null,
+}
+const EVENTS = {
+  events: [
+    {
+      id: 'EVT1',
+      title: 'Gulf marine heatwave',
+      // Media-seed fields (the Media tab feeds these to the suggestion
+      // engine): a date + a location light up the Worldview snapshot,
+      // and the event's own story image becomes a candidate card.
+      summary: 'Record sea-surface temperatures across the Gulf.',
+      source: { name: 'NOAA', url: 'https://example.gov/heatwave', publishedAt: '2026-07-01T00:00:00Z' },
+      occurredStart: '2026-07-01T00:00:00Z',
+      status: 'approved',
+      geometry: { point: { lat: 27, lon: -90 } },
+      keywords: ['heatwave', 'gulf'],
+      imageUrl: 'https://img.example.gov/heatwave.jpg',
+      imageAlt: 'SST anomaly over the Gulf',
+      links: [
+        // Approved link to the dataset the tests pick manually — the
+        // seed dedupes against it; the proposed link must NOT seed.
+        { datasetId: 'DS_SST', datasetTitle: 'Sea Surface Temperature', status: 'approved' },
+        { datasetId: 'DS_PROPOSED', datasetTitle: 'Unvetted pairing', status: 'proposed' },
+      ],
+    },
+  ],
+}
+const DRAFT = { draft: { title: 'AI Title', summary: 'AI summary.', bodyMd: '## AI body' }, tour: null, tourError: null }
+
+interface Captured {
+  posts: Array<{ url: string; body: unknown }>
+  /** Every requested URL, in order — for asserting query params. */
+  urls?: string[]
+}
+
+function mockFetch(capture: Captured, overrides: Record<string, unknown> = {}) {
+  return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : (input as Request).url
+    ;(capture.urls ??= []).push(url)
+    const method = init?.method ?? 'GET'
+    let body: unknown = {}
+    if (method === 'POST' || method === 'PUT') {
+      capture.posts.push({ url, body: JSON.parse(String(init?.body)) })
+      if (url.includes('/blog/generate')) body = overrides['generate'] ?? DRAFT
+      else body = { post: { id: 'POST1', slug: 'ai-title', title: 'AI Title', summary: null, bodyMd: '## AI body', datasetIds: ['DS_SST'], eventId: null, status: url.includes('POST1') ? 'published' : 'draft', publishedAt: null, tourId: null } }
+    } else if (url.includes('/publish/me')) body = ADMIN_ME
+    else if (url.includes('/publish/datasets')) body = DATASETS
+    else if (url.includes('/publish/events')) body = EVENTS
+    return { ok: true, status: 200, type: 'basic', json: async () => body, text: async () => JSON.stringify(body) } as unknown as Response
+  })
+}
+
+const flush = () => new Promise<void>(r => setTimeout(r, 0))
+
+async function mountEditor(capture: Captured) {
+  const mount = document.createElement('div')
+  await renderBlogEditPage(mount, { fetchFn: mockFetch(capture), navigate: vi.fn() })
+  await flush() // catalog + events lazy loads
+  return mount
+}
+
+function pickDataset(mount: HTMLElement): void {
+  const search = mount.querySelector('input[type="search"]') as HTMLInputElement
+  search.value = 'sea'
+  search.dispatchEvent(new Event('input'))
+  ;(mount.querySelector('.publisher-blog-candidate') as HTMLButtonElement).click()
+}
+
+describe('renderBlogEditPage', () => {
+  it('Generate posts the grounding selections and fills the content fields', async () => {
+    const capture: Captured = { posts: [] }
+    const mount = await mountEditor(capture)
+
+    pickDataset(mount)
+    const evSelect = mount.querySelector('.publisher-blog-event-select') as HTMLSelectElement
+    evSelect.value = 'EVT1'
+    evSelect.dispatchEvent(new Event('change'))
+    ;(mount.querySelector('#blog-include-tour') as HTMLInputElement).checked = true
+
+    ;(mount.querySelector('.publisher-blog-generate-btn') as HTMLButtonElement).click()
+    await flush()
+
+    const gen = capture.posts.find(p => p.url.includes('/blog/generate'))!
+    expect(gen.body).toEqual({
+      datasetIds: ['DS_SST'],
+      eventId: 'EVT1',
+      length: 'medium',
+      includeTour: true,
+    })
+    // The event picker offers curator-approved events only — a cited
+    // proposed event would generate from unvetted text and its public
+    // citation would silently never render.
+    const eventsCall = capture.urls?.find(u => u.includes('/publish/events'))
+    expect(eventsCall).toContain('status=approved')
+    expect((mount.querySelector('#blog-title') as HTMLInputElement).value).toBe('AI Title')
+    expect((mount.querySelector('#blog-body') as HTMLTextAreaElement).value).toBe('## AI body')
+  })
+
+  it('Generate refreshes an open Preview pane with the drafted body', async () => {
+    const capture: Captured = { posts: [] }
+    const mount = await mountEditor(capture)
+    pickDataset(mount)
+
+    // Open Preview first (empty body → empty-state hint).
+    ;(mount.querySelector('.publisher-form-toggle') as HTMLButtonElement).click()
+    const preview = mount.querySelector('.publisher-form-markdown-preview') as HTMLElement
+    expect(preview.hidden).toBe(false)
+
+    ;(mount.querySelector('.publisher-blog-generate-btn') as HTMLButtonElement).click()
+    await flush()
+
+    // The visible preview must reflect the generated markdown, not the
+    // pre-generate empty state.
+    expect(preview.querySelector('h2')?.textContent).toBe('AI body')
+  })
+
+  it('a generate-with-tour reveals the tour-preview link into the authoring dock', async () => {
+    const capture: Captured = { posts: [] }
+    const mount = document.createElement('div')
+    await renderBlogEditPage(mount, {
+      fetchFn: mockFetch(capture, {
+        generate: { draft: DRAFT.draft, tour: { id: 'TOUR1' }, tourError: null },
+      }),
+      navigate: vi.fn(),
+    })
+    await flush()
+
+    const link = mount.querySelector('.publisher-blog-tour-link') as HTMLAnchorElement
+    expect(link.hidden).toBe(true)
+
+    pickDataset(mount)
+    ;(mount.querySelector('.publisher-blog-generate-btn') as HTMLButtonElement).click()
+    await flush()
+
+    expect(link.hidden).toBe(false)
+    expect(link.getAttribute('href')).toBe('/?tourEdit=TOUR1')
+  })
+
+  it('a generated tour id is persisted with Save and shown on an existing post', async () => {
+    const capture: Captured = { posts: [] }
+    const mount = document.createElement('div')
+    await renderBlogEditPage(mount, {
+      fetchFn: mockFetch(capture, {
+        generate: { draft: DRAFT.draft, tour: { id: 'TR000AAAAAAAAAAAAAAAAAAAAA' }, tourError: null },
+      }),
+      navigate: vi.fn(),
+    })
+    await flush()
+
+    pickDataset(mount)
+    ;(mount.querySelector('.publisher-blog-generate-btn') as HTMLButtonElement).click()
+    await flush()
+    ;(mount.querySelector('.publisher-blog-save-btn') as HTMLButtonElement).click()
+    await flush()
+
+    const save = capture.posts.find(p => p.url.endsWith('/publish/blog'))!
+    expect((save.body as { tourId: string | null }).tourId).toBe('TR000AAAAAAAAAAAAAAAAAAAAA')
+  })
+
+  it('editing a post that has a saved companion tour shows the preview link at once', async () => {
+    const mount = document.createElement('div')
+    const withTour = { post: { id: 'POST1', slug: 's', title: 'T', summary: null, bodyMd: 'b', datasetIds: [], eventId: null, status: 'draft', publishedAt: null, tourId: 'TR000AAAAAAAAAAAAAAAAAAAAA' } }
+    const fetchFn = vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : (input as Request).url
+      let body: unknown = {}
+      if (url.includes('/publish/me')) body = ADMIN_ME
+      else if (url.includes('/publish/blog/POST1')) body = withTour
+      else if (url.includes('/publish/datasets')) body = DATASETS
+      else if (url.includes('/publish/events')) body = EVENTS
+      return { ok: true, status: 200, type: 'basic', json: async () => body, text: async () => JSON.stringify(body) } as unknown as Response
+    })
+    await renderBlogEditPage(mount, { fetchFn, navigate: vi.fn(), postId: 'POST1' })
+    await flush()
+
+    const link = mount.querySelector('.publisher-blog-tour-link') as HTMLAnchorElement
+    expect(link.hidden).toBe(false)
+    expect(link.getAttribute('href')).toBe('/?tourEdit=TR000AAAAAAAAAAAAAAAAAAAAA')
+  })
+
+  it('the tour link mirrors the persisted linkage — a failed regenerate keeps it', async () => {
+    const capture: Captured = { posts: [] }
+    const mount = document.createElement('div')
+    let failNext = false
+    const failure = { error: 'generation_failed', message: 'The model call failed or timed out — try again.' }
+    const fetchFn = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : (input as Request).url
+      const method = init?.method ?? 'GET'
+      if (method === 'POST' && url.includes('/blog/generate')) {
+        if (failNext) {
+          return { ok: false, status: 502, type: 'basic', json: async () => failure, text: async () => JSON.stringify(failure) } as unknown as Response
+        }
+        const body = { draft: DRAFT.draft, tour: { id: 'TOUR1' }, tourError: null }
+        return { ok: true, status: 200, type: 'basic', json: async () => body, text: async () => JSON.stringify(body) } as unknown as Response
+      }
+      let body: unknown = {}
+      if (url.includes('/publish/me')) body = ADMIN_ME
+      else if (url.includes('/publish/datasets')) body = DATASETS
+      else if (url.includes('/publish/events')) body = EVENTS
+      return { ok: true, status: 200, type: 'basic', json: async () => body, text: async () => JSON.stringify(body) } as unknown as Response
+    })
+    await renderBlogEditPage(mount, { fetchFn, navigate: vi.fn() })
+    await flush()
+    void capture
+
+    pickDataset(mount)
+    const genBtn = mount.querySelector('.publisher-blog-generate-btn') as HTMLButtonElement
+    const link = mount.querySelector('.publisher-blog-tour-link') as HTMLAnchorElement
+    genBtn.click()
+    await flush()
+    expect(link.hidden).toBe(false)
+
+    failNext = true
+    genBtn.click()
+    await flush()
+    // The linkage is persisted post state, not a per-attempt artifact:
+    // a failed regenerate does not remove the companion tour, so the
+    // link (and the tourId a later Save persists) both survive.
+    expect(link.hidden).toBe(false)
+    expect(link.getAttribute('href')).toBe('/?tourEdit=TOUR1')
+  })
+
+  it('citing an event seeds its APPROVED dataset links as chips (proposed excluded)', async () => {
+    const capture: Captured = { posts: [] }
+    const mount = await mountEditor(capture)
+
+    // No chips yet; select the event.
+    const evSelect = mount.querySelector('.publisher-blog-event-select') as HTMLSelectElement
+    evSelect.value = 'EVT1'
+    evSelect.dispatchEvent(new Event('change'))
+
+    const chips = Array.from(mount.querySelectorAll('.publisher-blog-chip')).map(c => c.textContent)
+    expect(chips.some(c => c?.includes('Sea Surface Temperature'))).toBe(true)
+    // The unvetted pairing must not be seeded.
+    expect(chips.some(c => c?.includes('Unvetted pairing'))).toBe(false)
+    expect(chips).toHaveLength(1)
+  })
+
+  it('Generate surfaces the server\'s typed failure message (503 ai_unavailable)', async () => {
+    const capture: Captured = { posts: [] }
+    const mount = document.createElement('div')
+    const failure = { error: 'ai_unavailable', message: 'Workers AI is not bound on this deployment.' }
+    const fetchFn = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : (input as Request).url
+      const method = init?.method ?? 'GET'
+      if (method === 'POST' && url.includes('/blog/generate')) {
+        capture.posts.push({ url, body: JSON.parse(String(init?.body)) })
+        return { ok: false, status: 503, type: 'basic', json: async () => failure, text: async () => JSON.stringify(failure) } as unknown as Response
+      }
+      let body: unknown = {}
+      if (url.includes('/publish/me')) body = ADMIN_ME
+      else if (url.includes('/publish/datasets')) body = DATASETS
+      else if (url.includes('/publish/events')) body = EVENTS
+      return { ok: true, status: 200, type: 'basic', json: async () => body, text: async () => JSON.stringify(body) } as unknown as Response
+    })
+    await renderBlogEditPage(mount, { fetchFn, navigate: vi.fn() })
+    await flush()
+
+    pickDataset(mount)
+    ;(mount.querySelector('.publisher-blog-generate-btn') as HTMLButtonElement).click()
+    await flush()
+
+    // The route's curator-facing message must reach the status line —
+    // not the generic "Something went wrong."
+    const statuses = Array.from(mount.querySelectorAll('.publisher-blog-status'))
+    expect(statuses.some(s => s.textContent === 'Workers AI is not bound on this deployment.')).toBe(true)
+  })
+
+  it('Generate without datasets is blocked client-side', async () => {
+    const capture: Captured = { posts: [] }
+    const mount = await mountEditor(capture)
+    ;(mount.querySelector('.publisher-blog-generate-btn') as HTMLButtonElement).click()
+    await flush()
+    expect(capture.posts).toHaveLength(0)
+  })
+
+  it('Save creates the post with the grounding citations', async () => {
+    const capture: Captured = { posts: [] }
+    const mount = await mountEditor(capture)
+    pickDataset(mount)
+    ;(mount.querySelector('#blog-title') as HTMLInputElement).value = 'Hand-written'
+    ;(mount.querySelector('#blog-body') as HTMLTextAreaElement).value = 'Body text'
+    ;(mount.querySelector('.publisher-blog-save-btn') as HTMLButtonElement).click()
+    await flush()
+    const save = capture.posts.find(p => p.url.endsWith('/publish/blog'))!
+    expect(save.body).toEqual({
+      title: 'Hand-written',
+      summary: null,
+      bodyMd: 'Body text',
+      datasetIds: ['DS_SST'],
+      eventId: null,
+      tourId: null,
+      coverImageUrl: null,
+      coverImageAlt: null,
+    })
+  })
+
+  it('Media tab: needs a cited event, then offers set-cover + insert from suggestions', async () => {
+    const capture: Captured = { posts: [] }
+    const mount = await mountEditor(capture)
+    const openMedia = () =>
+      (mount.querySelector('.publisher-form-nav-link[data-section="blog-media"]') as HTMLButtonElement).click()
+
+    // No event cited yet → the grid shows the "cite an event" hint.
+    openMedia()
+    expect(mount.querySelector('.publisher-blog-media-card')).toBeNull()
+    expect((mount.querySelector('.publisher-blog-media-grid') as HTMLElement).textContent).toContain('Cite a current event')
+
+    // Cite the event (on the Sources tab), then reopen Media — the
+    // event's story image + the Worldview snapshot render synchronously.
+    const evSelect = mount.querySelector('.publisher-blog-event-select') as HTMLSelectElement
+    evSelect.value = 'EVT1'
+    evSelect.dispatchEvent(new Event('change'))
+    openMedia()
+    const cards = mount.querySelectorAll('.publisher-blog-media-card')
+    expect(cards.length).toBeGreaterThanOrEqual(2)
+
+    // "Set as cover" reflects into the cover preview.
+    const cover = mount.querySelector('.publisher-blog-cover') as HTMLElement
+    expect(cover.textContent).toContain('No cover image set')
+    ;(cards[0].querySelector('.publisher-button-primary') as HTMLButtonElement).click()
+    expect(mount.querySelector('.publisher-blog-cover-img')).toBeTruthy()
+
+    // "Insert into post" drops markdown into the body.
+    const body = mount.querySelector('#blog-body') as HTMLTextAreaElement
+    ;(cards[1].querySelector('.publisher-blog-media-actions button') as HTMLButtonElement).click()
+    expect(body.value).toMatch(/!\[.*\]\(https?:\/\/.+\)/)
+
+    // Save carries the picked cover into the create body.
+    ;(mount.querySelector('#blog-title') as HTMLInputElement).value = 'Heatwave'
+    ;(mount.querySelector('.publisher-blog-save-btn') as HTMLButtonElement).click()
+    await flush()
+    const save = capture.posts.find(p => p.url.endsWith('/publish/blog')) as { body: { coverImageUrl: string | null } }
+    expect(save.body.coverImageUrl).toMatch(/^https?:\/\//)
+  })
+
+  it('Media tab re-pulls the events list so geometry/date attached after load flow in', async () => {
+    // Opening Media refetches /publish/events; the first (mount-time)
+    // response has no geometry/date (no Worldview possible), the second
+    // (Events-tab edit landed) attaches an Iowa bbox + date — the tab
+    // must rebuild from the fresh copy and surface the Worldview card.
+    const capture: Captured = { posts: [] }
+    let eventsCalls = 0
+    const fetchFn = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : (input as Request).url
+      const method = init?.method ?? 'GET'
+      let body: unknown = {}
+      if (method === 'POST' || method === 'PUT') {
+        capture.posts.push({ url, body: JSON.parse(String(init?.body)) })
+      } else if (url.includes('/publish/me')) body = ADMIN_ME
+      else if (url.includes('/publish/datasets')) body = DATASETS
+      else if (url.includes('/publish/events')) {
+        eventsCalls++
+        const base = { id: 'EVT1', title: 'Iowa wildfire smoke', source: { name: 'NOAA', url: 'https://x' }, status: 'approved', links: [] }
+        // Second call onwards: the curator has attached location + date.
+        body = {
+          events: [
+            eventsCalls === 1
+              ? base
+              : { ...base, occurredStart: '2026-07-01T00:00:00Z', geometry: { boundingBox: { n: 43.5, s: 40.4, w: -96.6, e: -90.1 }, regionName: 'Iowa' } },
+          ],
+        }
+      }
+      return { ok: true, status: 200, type: 'basic', json: async () => body, text: async () => JSON.stringify(body) } as unknown as Response
+    })
+    const mount = document.createElement('div')
+    await renderBlogEditPage(mount, { fetchFn, navigate: vi.fn() })
+    await flush()
+
+    const evSelect = mount.querySelector('.publisher-blog-event-select') as HTMLSelectElement
+    evSelect.value = 'EVT1'
+    evSelect.dispatchEvent(new Event('change'))
+    ;(mount.querySelector('.publisher-form-nav-link[data-section="blog-media"]') as HTMLButtonElement).click()
+    await flush()
+
+    // The refetched event has an Iowa bbox + date → a Worldview snapshot
+    // card (wvs.earthdata.nasa.gov preview) is now present.
+    const worldview = mount.querySelector('.publisher-blog-media-preview[src*="wvs.earthdata.nasa.gov"]')
+    expect(worldview).toBeTruthy()
+    expect(eventsCalls).toBeGreaterThanOrEqual(2)
+  })
+
+  it('Media tab resolves a region NAME (no bbox) to a location so satellite view fires', async () => {
+    // The event carries only geometry.regionName = 'Iowa' (no bbox) plus
+    // a date — regions.ts must resolve it to a box so Worldview builds.
+    const capture: Captured = { posts: [] }
+    const fetchFn = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : (input as Request).url
+      const method = init?.method ?? 'GET'
+      let body: unknown = {}
+      if (method === 'POST' || method === 'PUT') capture.posts.push({ url, body: JSON.parse(String(init?.body)) })
+      else if (url.includes('/publish/me')) body = ADMIN_ME
+      else if (url.includes('/publish/datasets')) body = DATASETS
+      else if (url.includes('/publish/events')) {
+        body = { events: [{ id: 'EVT1', title: 'Upper Midwest wildfire smoke', source: { name: 'NOAA', url: 'https://x' }, status: 'approved', occurredStart: '2026-07-01T00:00:00Z', geometry: { regionName: 'Iowa' }, links: [] }] }
+      }
+      return { ok: true, status: 200, type: 'basic', json: async () => body, text: async () => JSON.stringify(body) } as unknown as Response
+    })
+    const mount = document.createElement('div')
+    await renderBlogEditPage(mount, { fetchFn, navigate: vi.fn() })
+    await flush()
+
+    const evSelect = mount.querySelector('.publisher-blog-event-select') as HTMLSelectElement
+    evSelect.value = 'EVT1'
+    evSelect.dispatchEvent(new Event('change'))
+    ;(mount.querySelector('.publisher-form-nav-link[data-section="blog-media"]') as HTMLButtonElement).click()
+    await flush()
+
+    // Region name resolved → satellite snapshot present, no "add a
+    // location" note.
+    expect(mount.querySelector('.publisher-blog-media-preview[src*="wvs.earthdata.nasa.gov"]')).toBeTruthy()
+    const notes = (mount.querySelector('.publisher-blog-media-notes') as HTMLElement).textContent ?? ''
+    expect(notes.toLowerCase()).not.toContain('add a location')
+  })
+
+  it('Media tab names an unrecognized region name in the location note', async () => {
+    // The event's stored region is a string regions.ts can't resolve —
+    // the note must name it so the curator knows the place looks set but
+    // isn't recognized.
+    const capture: Captured = { posts: [] }
+    const fetchFn = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : (input as Request).url
+      const method = init?.method ?? 'GET'
+      let body: unknown = {}
+      if (method === 'POST' || method === 'PUT') capture.posts.push({ url, body: JSON.parse(String(init?.body)) })
+      else if (url.includes('/publish/me')) body = ADMIN_ME
+      else if (url.includes('/publish/datasets')) body = DATASETS
+      else if (url.includes('/publish/events')) {
+        // A deliberately unknown region string (not in regions.ts) so it
+        // stays unresolvable — the note must name it.
+        body = { events: [{ id: 'EVT1', title: 'Wildfire smoke', source: { name: 'NOAA', url: 'https://x' }, status: 'approved', occurredStart: '2026-07-01T00:00:00Z', geometry: { regionName: 'Nowhereland' }, links: [] }] }
+      }
+      return { ok: true, status: 200, type: 'basic', json: async () => body, text: async () => JSON.stringify(body) } as unknown as Response
+    })
+    const mount = document.createElement('div')
+    await renderBlogEditPage(mount, { fetchFn, navigate: vi.fn() })
+    await flush()
+    const evSelect = mount.querySelector('.publisher-blog-event-select') as HTMLSelectElement
+    evSelect.value = 'EVT1'
+    evSelect.dispatchEvent(new Event('change'))
+    ;(mount.querySelector('.publisher-form-nav-link[data-section="blog-media"]') as HTMLButtonElement).click()
+    await flush()
+
+    expect(mount.querySelector('.publisher-blog-media-preview[src*="wvs.earthdata.nasa.gov"]')).toBeNull()
+    const notes = (mount.querySelector('.publisher-blog-media-notes') as HTMLElement).textContent ?? ''
+    expect(notes).toContain('Nowhereland')
+    expect(notes.toLowerCase()).toContain("isn't a recognized region")
+  })
+
+  it('Media tab explains why sources were skipped (missing date/location prerequisites)', async () => {
+    // Event has neither a location nor a date on every fetch, so the
+    // grid stays empty and the notes must say what to add.
+    const capture: Captured = { posts: [] }
+    const fetchFn = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : (input as Request).url
+      const method = init?.method ?? 'GET'
+      let body: unknown = {}
+      if (method === 'POST' || method === 'PUT') capture.posts.push({ url, body: JSON.parse(String(init?.body)) })
+      else if (url.includes('/publish/me')) body = ADMIN_ME
+      else if (url.includes('/publish/datasets')) body = DATASETS
+      else if (url.includes('/publish/events')) {
+        body = { events: [{ id: 'EVT1', title: 'A press release with no place or date', source: { name: 'NOAA', url: 'https://x' }, status: 'approved', links: [] }] }
+      }
+      return { ok: true, status: 200, type: 'basic', json: async () => body, text: async () => JSON.stringify(body) } as unknown as Response
+    })
+    const mount = document.createElement('div')
+    await renderBlogEditPage(mount, { fetchFn, navigate: vi.fn() })
+    await flush()
+
+    const evSelect = mount.querySelector('.publisher-blog-event-select') as HTMLSelectElement
+    evSelect.value = 'EVT1'
+    evSelect.dispatchEvent(new Event('change'))
+    ;(mount.querySelector('.publisher-form-nav-link[data-section="blog-media"]') as HTMLButtonElement).click()
+    await flush()
+
+    // No Worldview (no date/location); the notes name the prerequisites.
+    expect(mount.querySelector('.publisher-blog-media-preview[src*="wvs.earthdata.nasa.gov"]')).toBeNull()
+    const notes = (mount.querySelector('.publisher-blog-media-notes') as HTMLElement).textContent ?? ''
+    expect(notes).toContain('Not shown for this event')
+    expect(notes.toLowerCase()).toContain('occurred date')
+    expect(notes.toLowerCase()).toContain('add a location')
+  })
+
+  it('shows the restricted card for a non-privileged caller', async () => {
+    const mount = document.createElement('div')
+    const fetchFn = vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : (input as Request).url
+      const body = url.includes('/publish/me') ? { role: 'publisher', is_admin: false } : {}
+      return { ok: true, status: 200, type: 'basic', json: async () => body, text: async () => JSON.stringify(body) } as unknown as Response
+    })
+    await renderBlogEditPage(mount, { fetchFn })
+    expect(mount.querySelector('.publisher-blog-restricted')).toBeTruthy()
+    expect(mount.querySelector('#blog-title')).toBeNull()
+  })
+})

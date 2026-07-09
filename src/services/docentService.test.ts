@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import type { Dataset, ChatMessage, DocentConfig } from '../types'
-import { processMessage, loadConfig, saveConfig, getDefaultConfig, validateAndCleanText, captureViewContext, readCurrentTime, executeSearchDatasets, executeListFeaturedDatasets, clearPreSearchCache } from './docentService'
+import { processMessage, loadConfig, saveConfig, getDefaultConfig, validateAndCleanText, captureViewContext, readCurrentTime, executeSearchDatasets, executeListFeaturedDatasets, executeSearchEvents, clearPreSearchCache } from './docentService'
+import type { PublicEvent } from './eventsService'
 import { getDegradedReason, resetForTests as resetDegradedForTests } from './docentDegradedState'
 import type { DocentStreamChunk } from './docentService'
 
@@ -1883,6 +1884,129 @@ describe('validateAndCleanText — Phase 5 markers', () => {
       expect(cleanedText).toContain('<<LOAD:TEST_001>>')
       expect(cleanedText).not.toContain('LOAD_FRAME')
     })
+  })
+})
+
+describe('validateAndCleanText — <<EVENT:ID>> markers', () => {
+  function makeEvent(overrides: Partial<PublicEvent> = {}): PublicEvent {
+    return {
+      id: 'EVT_0001',
+      title: 'Marine heatwave off the coast',
+      source: { name: 'NOAA', url: 'https://example.gov/heatwave', publishedAt: '2026-06-25T00:00:00Z' },
+      occurredStart: '2026-06-25T12:00:00Z',
+      geometry: { point: { lat: 34.0, lon: -120.0 } },
+      datasetIds: ['TEST_001'],
+      ...overrides,
+    }
+  }
+  // TEST_001 as a seekable video dataset (format video/mp4 + a time range),
+  // so the time-seek path emits. The module-level `datasets` fixture is a
+  // video with no range, which is intentionally NOT seekable.
+  const seekable = [makeDataset({ startTime: '2026-01-01T00:00:00Z', endTime: '2026-12-31T23:59:59Z' })]
+
+  it('expands a valid <<EVENT:ID>> into citation + load + fly + seek', () => {
+    const text = 'Big news.\n<<EVENT:EVT_0001>>\nWorth a look.'
+    const { cleanedText, validIds, globeActions } = validateAndCleanText(text, seekable, [makeEvent()])
+    // The explaining dataset loads.
+    expect(validIds.has('TEST_001')).toBe(true)
+    // A cited card is emitted.
+    const citation = globeActions.find(g => g.type === 'event-citation')
+    expect(citation).toBeDefined()
+    if (citation?.type === 'event-citation') {
+      expect(citation.title).toBe('Marine heatwave off the coast')
+      expect(citation.sourceName).toBe('NOAA')
+      expect(citation.sourceUrl).toBe('https://example.gov/heatwave')
+    }
+    // Point geometry → fly-to; occurredStart → set-time.
+    expect(globeActions.some(g => g.type === 'fly-to')).toBe(true)
+    expect(globeActions.some(g => g.type === 'set-time')).toBe(true)
+    // The marker never shows in the rendered text.
+    expect(cleanedText).not.toContain('EVENT')
+  })
+
+  it('uses fit-bounds for a bounding-box event', () => {
+    const ev = makeEvent({ geometry: { boundingBox: { n: 40, s: 30, w: -125, e: -115 } } })
+    const { globeActions } = validateAndCleanText('<<EVENT:EVT_0001>>', datasets, [ev])
+    const fit = globeActions.find(g => g.type === 'fit-bounds')
+    expect(fit).toBeDefined()
+    if (fit?.type === 'fit-bounds') expect(fit.bounds).toEqual([-125, 30, -115, 40])
+    expect(globeActions.some(g => g.type === 'fly-to')).toBe(false)
+  })
+
+  it('matches the event id case-insensitively', () => {
+    const { globeActions } = validateAndCleanText('<<EVENT:evt_0001>>', datasets, [makeEvent()])
+    expect(globeActions.some(g => g.type === 'event-citation')).toBe(true)
+  })
+
+  it('strips an unknown <<EVENT:ID>> and emits nothing (anti-hallucination)', () => {
+    const { cleanedText, validIds, globeActions } = validateAndCleanText('<<EVENT:NOT_REAL>>', datasets, [makeEvent()])
+    expect(globeActions.some(g => g.type === 'event-citation')).toBe(false)
+    expect(validIds.size).toBe(0)
+    expect(cleanedText).not.toContain('EVENT')
+  })
+
+  it('omits the seek when the event has no time', () => {
+    const ev = makeEvent({ occurredStart: undefined })
+    const { globeActions } = validateAndCleanText('<<EVENT:EVT_0001>>', seekable, [ev])
+    expect(globeActions.some(g => g.type === 'set-time')).toBe(false)
+    expect(globeActions.some(g => g.type === 'event-citation')).toBe(true)
+  })
+
+  it('omits the seek when the explaining dataset is not seekable video', () => {
+    // Real-time image / sequence datasets (e.g. clouds) have no HLS video —
+    // a set-time there would only surface "no video dataset loaded". Still
+    // load + fly, just no time action.
+    const imageDs = [makeDataset({ id: 'TEST_001', format: 'image/png', startTime: '2026-01-01T00:00:00Z', endTime: '2026-12-31T00:00:00Z' })]
+    const { validIds, globeActions } = validateAndCleanText('<<EVENT:EVT_0001>>', imageDs, [makeEvent()])
+    expect(validIds.has('TEST_001')).toBe(true)
+    expect(globeActions.some(g => g.type === 'event-citation')).toBe(true)
+    expect(globeActions.some(g => g.type === 'fly-to')).toBe(true)
+    expect(globeActions.some(g => g.type === 'set-time')).toBe(false)
+  })
+
+  it('drops the whole event when its dataset is not in the client catalog', () => {
+    // No Load button could anchor the card, so emit nothing (the card +
+    // fly/seek without a load would break the "one tap loads it" contract).
+    const ev = makeEvent({ datasetIds: ['NOT_IN_CATALOG'] })
+    const { cleanedText, validIds, globeActions } = validateAndCleanText('<<EVENT:EVT_0001>>', datasets, [ev])
+    expect(globeActions).toHaveLength(0)
+    expect(validIds.size).toBe(0)
+    expect(cleanedText).not.toContain('EVENT')
+  })
+})
+
+describe('executeSearchEvents', () => {
+  const events: PublicEvent[] = [
+    { id: 'E1', title: 'Wildfire outbreak in the Sierra', source: { name: 'InciWeb', url: 'https://inciweb.example/1' }, occurredStart: '2026-06-20T00:00:00Z', geometry: {}, datasetIds: ['D1'] },
+    { id: 'E2', title: 'Atlantic hurricane forms', summary: 'Tropical storm strengthens', source: { name: 'NHC', url: 'https://nhc.example/2' }, occurredStart: '2026-06-22T00:00:00Z', geometry: {}, datasetIds: ['D2'] },
+  ]
+
+  it('lists all events for an empty query, capped by limit', () => {
+    expect(executeSearchEvents({}, events).events).toHaveLength(2)
+    expect(executeSearchEvents({ limit: 1 }, events).events).toHaveLength(1)
+  })
+
+  it('filters by a case-insensitive title/summary substring', () => {
+    const res = executeSearchEvents({ query: 'hurricane' }, events)
+    expect(res.events).toHaveLength(1)
+    expect(res.events[0].id).toBe('E2')
+    // Summary is searched too.
+    expect(executeSearchEvents({ query: 'tropical' }, events).events[0].id).toBe('E2')
+  })
+
+  it('returns the compact tool shape (no dataset id exposed)', () => {
+    const [hit] = executeSearchEvents({ query: 'wildfire' }, events).events
+    expect(hit).toEqual({
+      id: 'E1',
+      title: 'Wildfire outbreak in the Sierra',
+      source_name: 'InciWeb',
+      occurred: '2026-06-20',
+    })
+    expect(hit).not.toHaveProperty('dataset_id')
+  })
+
+  it('returns an empty list when nothing matches', () => {
+    expect(executeSearchEvents({ query: 'zzz-nope' }, events).events).toEqual([])
   })
 })
 

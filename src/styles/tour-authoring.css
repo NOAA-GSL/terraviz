@@ -78,6 +78,20 @@
     line-height: 1.3;
 }
 
+/* Media-capture status line (task: tour media authoring) —
+   upload progress + validation feedback under the Media group. */
+.tour-authoring-dock-media-status {
+    color: var(--color-text-muted);
+    font-size: calc(0.7rem * var(--ui-scale));
+    padding-block: calc(0.2rem * var(--ui-scale)) calc(0.4rem * var(--ui-scale));
+    padding-inline: calc(0.1rem * var(--ui-scale));
+    line-height: 1.3;
+}
+
+.tour-authoring-dock-media-status-error {
+    color: #ff8a8a;
+}
+
 /* Phase 3pt-review/D — description + visibility row under the
    dock header. Stacked block so the textarea can grow without
    shoving the visibility chip off-edge on a narrow dock. */

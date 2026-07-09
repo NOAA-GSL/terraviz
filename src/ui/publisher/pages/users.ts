@@ -24,6 +24,7 @@ import {
   type PublisherSendResult,
 } from '../api'
 import { buildErrorCard } from '../components/error-card'
+import { initialsOf } from '../components/sidebar'
 import type { ListPublishersResponse, PublisherSummary, UpdatePublisherPayload } from '../types'
 
 const ME_ENDPOINT = '/api/v1/publish/me'
@@ -165,9 +166,35 @@ function renderList(
 ): HTMLElement {
   const root = shell()
 
+  const header = document.createElement('header')
+  header.className = 'publisher-page-header'
+  const titles = document.createElement('div')
+  titles.className = 'publisher-page-titles'
   const h1 = document.createElement('h1')
-  h1.textContent = t('publisher.users.title')
-  root.appendChild(h1)
+  h1.className = 'publisher-page-title'
+  h1.textContent = t('publisher.team.title')
+  const sub = document.createElement('p')
+  sub.className = 'publisher-page-subtitle'
+  sub.textContent = t('publisher.team.subtitle')
+  titles.append(h1, sub)
+  header.appendChild(titles)
+
+  // Members are provisioned by the identity provider on first
+  // sign-in — there is no in-app invite flow — so the deck's
+  // "Invite member" affordance is shown but disabled, with a note.
+  const inviteWrap = document.createElement('div')
+  inviteWrap.className = 'publisher-team-invite-wrap'
+  const invite = document.createElement('button')
+  invite.type = 'button'
+  invite.className = 'publisher-button publisher-button-primary'
+  invite.textContent = t('publisher.team.invite')
+  invite.disabled = true
+  const inviteNote = document.createElement('p')
+  inviteNote.className = 'publisher-team-invite-note'
+  inviteNote.textContent = t('publisher.team.inviteNote')
+  inviteWrap.append(invite, inviteNote)
+  header.appendChild(inviteWrap)
+  root.appendChild(header)
 
   // Status filter tabs — navigate by ?status= so the view is
   // bookmarkable, mirroring the datasets page.
@@ -224,6 +251,11 @@ function renderList(
   }
   table.appendChild(tbody)
   root.appendChild(table)
+
+  const rolesNote = document.createElement('p')
+  rolesNote.className = 'publisher-team-roles-note'
+  rolesNote.textContent = t('publisher.team.rolesNote')
+  root.appendChild(rolesNote)
   return root
 }
 
@@ -241,27 +273,39 @@ function renderRow(
   const isSelf = publisher.id === me.id
   const tr = document.createElement('tr')
 
-  // User cell — display name over email.
+  // User cell — avatar + display name over email.
   const userCell = document.createElement('td')
+  const userWrap = document.createElement('div')
+  userWrap.className = 'publisher-users-identity'
+  const avatar = document.createElement('span')
+  avatar.className = 'publisher-users-avatar'
+  avatar.textContent = initialsOf(publisher.display_name || publisher.email)
+  avatar.setAttribute('aria-hidden', 'true')
+  const nameCol = document.createElement('div')
   const name = document.createElement('div')
   name.className = 'publisher-users-name'
   name.textContent = publisher.display_name
   const email = document.createElement('div')
   email.className = 'publisher-users-email'
   email.textContent = publisher.email
-  userCell.append(name, email)
+  nameCol.append(name, email)
+  userWrap.append(avatar, nameCol)
+  userCell.appendChild(userWrap)
   tr.appendChild(userCell)
 
   // Role cell — a select for promote/demote/edit-role. The service
   // role is never offered (machine-token only); a current service
-  // row renders read-only text instead.
+  // row renders a read-only "Service key" badge instead.
   const roleCell = document.createElement('td')
   const statusBadge = document.createElement('span')
   const actionStatus = document.createElement('span')
   actionStatus.className = 'publisher-row-action-status'
 
   if (publisher.role === 'service') {
-    roleCell.textContent = localizedRole(publisher.role)
+    const keyBadge = document.createElement('span')
+    keyBadge.className = 'publisher-badge publisher-team-service-badge'
+    keyBadge.textContent = t('publisher.team.serviceKey')
+    roleCell.appendChild(keyBadge)
   } else {
     const select = document.createElement('select')
     select.className = 'publisher-users-role-select'

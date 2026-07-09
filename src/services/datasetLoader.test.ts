@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { displayDatasetInfo } from './datasetLoader'
 import type { Dataset } from '../types'
 
@@ -32,6 +32,18 @@ function setupInfoDOM(): void {
 describe('displayDatasetInfo', () => {
   beforeEach(() => {
     setupInfoDOM()
+    // `displayDatasetInfo` fires an async semantic-related fetch
+    // (Phase 3b progressive enhancement). Stub it to a degraded
+    // response so the enhancement no-ops on the lexical list these
+    // tests assert on — and so no real socket is opened in CI.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ datasets: [], degraded: 'unconfigured' }) }) as unknown as Response),
+    )
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
   })
 
   it('shows the info panel and sets the title', () => {
@@ -149,6 +161,43 @@ describe('displayDatasetInfo', () => {
     link.click()
 
     expect(onLoad).toHaveBeenCalledWith('related-1')
+  })
+
+  it('swaps in the semantic ordering and re-wires the new links when the endpoint returns matches', async () => {
+    // Non-degraded semantic response, deliberately reversed vs. the
+    // lexical (alphabetical) order so the assertion proves the SEMANTIC
+    // ordering won, not just that some list rendered.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({ datasets: [{ id: 'sem-B' }, { id: 'sem-A' }] }),
+      }) as unknown as Response),
+    )
+
+    const onLoad = vi.fn()
+    const target = makeDataset({ id: 'target', enriched: { categories: { Ocean: ['Temperature'] } } })
+    const catalog = [
+      target,
+      makeDataset({ id: 'sem-A', title: 'Aaa Semantic', enriched: { categories: { Ocean: ['Temperature'] } } }),
+      makeDataset({ id: 'sem-B', title: 'Bbb Semantic', enriched: { categories: { Ocean: ['Temperature'] } } }),
+    ]
+
+    displayDatasetInfo(target, catalog, onLoad)
+    // The lexical list renders synchronously in catalog order (A, B);
+    // drain the async semantic enhancement (fetch → json → re-render).
+    for (let i = 0; i < 6; i++) await new Promise(r => setTimeout(r, 0))
+
+    const ids = Array.from(document.querySelectorAll('.info-related a[data-dataset-id]')).map(
+      l => l.getAttribute('data-dataset-id'),
+    )
+    expect(ids).toEqual(['sem-B', 'sem-A']) // semantic ordering, replacing the lexical A,B
+
+    // The freshly-rendered links are wired to onLoadDataset.
+    const first = document.querySelector('.info-related a[data-dataset-id="sem-B"]') as HTMLAnchorElement
+    first.click()
+    expect(onLoad).toHaveBeenCalledWith('sem-B')
   })
 
   it('renders catalog link when available', () => {
@@ -341,5 +390,99 @@ describe('displayDatasetInfo', () => {
   it('does nothing when DOM elements are missing', () => {
     document.body.innerHTML = ''
     expect(() => displayDatasetInfo(makeDataset(), [], vi.fn())).not.toThrow()
+  })
+})
+
+describe('displayDatasetInfo — "In the news"', () => {
+  const flush = async () => { for (let i = 0; i < 4; i++) await new Promise(r => setTimeout(r, 0)) }
+  const NEWS_EVENT = {
+    id: 'E1',
+    title: 'Marine heatwave off the coast',
+    source: { name: 'NOAA', url: 'https://example.gov/heatwave', publishedAt: '2026-06-25T00:00:00Z' },
+    occurredStart: '2026-06-25T12:00:00Z',
+    geometry: {},
+    datasetIds: ['ds-news'],
+  }
+
+  /** Route the per-dataset events endpoint to `events`; everything else
+   *  (the semantic-related enhancement) degrades. */
+  function stubFetchWithEvents(events: unknown[]): void {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      const body = url.includes('/events') ? { events } : { datasets: [], degraded: 'unconfigured' }
+      return { ok: true, status: 200, json: async () => body } as unknown as Response
+    }))
+  }
+
+  beforeEach(() => { setupInfoDOM() })
+  afterEach(async () => { vi.unstubAllGlobals(); await import('./eventsService').then(m => m.resetDatasetEventsCacheForTests()) })
+
+  it('renders an "In the news" section when the dataset has approved events', async () => {
+    stubFetchWithEvents([NEWS_EVENT])
+    displayDatasetInfo(makeDataset({ id: 'ds-news' }), [], vi.fn())
+    await flush()
+    const body = document.getElementById('info-body')!
+    const section = body.querySelector('.info-in-the-news-section')
+    expect(section).not.toBeNull()
+    expect(section!.querySelector('.info-news-title')!.textContent).toBe('Marine heatwave off the coast')
+    const link = section!.querySelector('.info-news-source') as HTMLAnchorElement
+    expect(link.href).toContain('example.gov/heatwave')
+  })
+
+  it('removes the placeholder when the dataset has no events (graceful absence)', async () => {
+    stubFetchWithEvents([])
+    displayDatasetInfo(makeDataset({ id: 'ds-quiet' }), [], vi.fn())
+    await flush()
+    expect(document.getElementById('info-body')!.querySelector('.info-in-the-news-section')).toBeNull()
+  })
+
+  it('renders a "View on globe" button when the event has a place/time', async () => {
+    stubFetchWithEvents([NEWS_EVENT])
+    displayDatasetInfo(makeDataset({ id: 'ds-news' }), [], vi.fn(), vi.fn())
+    await flush()
+    const body = document.getElementById('info-body')!
+    expect(body.querySelector('.info-news-locate')).not.toBeNull()
+    // The out-of-range note ships hidden until a click reports it.
+    expect((body.querySelector('.info-news-note') as HTMLElement).hidden).toBe(true)
+  })
+
+  it('omits the button for an event with neither geometry nor time', async () => {
+    stubFetchWithEvents([{ ...NEWS_EVENT, occurredStart: undefined, geometry: {} }])
+    displayDatasetInfo(makeDataset({ id: 'ds-news' }), [], vi.fn(), vi.fn())
+    await flush()
+    expect(document.getElementById('info-body')!.querySelector('.info-news-locate')).toBeNull()
+  })
+
+  it('invokes onNavigateToEvent with the event when the button is clicked', async () => {
+    stubFetchWithEvents([NEWS_EVENT])
+    const onNav = vi.fn(() => ({ navigated: true, time: 'seeked' as const }))
+    displayDatasetInfo(makeDataset({ id: 'ds-news' }), [], vi.fn(), onNav)
+    await flush()
+    ;(document.querySelector('.info-news-locate') as HTMLButtonElement).click()
+    expect(onNav).toHaveBeenCalledTimes(1)
+    expect(onNav).toHaveBeenCalledWith(expect.objectContaining({ id: 'E1' }))
+  })
+
+  it('reveals the note only when the seek reports out-of-range', async () => {
+    stubFetchWithEvents([NEWS_EVENT])
+    const onNav = vi.fn(() => ({ navigated: true, time: 'out-of-range' as const }))
+    displayDatasetInfo(makeDataset({ id: 'ds-news' }), [], vi.fn(), onNav)
+    await flush()
+    const btn = document.querySelector('.info-news-locate') as HTMLButtonElement
+    const note = btn.parentElement!.querySelector('.info-news-note') as HTMLElement
+    expect(note.hidden).toBe(true)
+    btn.click()
+    expect(note.hidden).toBe(false)
+  })
+
+  it('keeps the note hidden when the seek succeeds', async () => {
+    stubFetchWithEvents([NEWS_EVENT])
+    const onNav = vi.fn(() => ({ navigated: true, time: 'seeked' as const }))
+    displayDatasetInfo(makeDataset({ id: 'ds-news' }), [], vi.fn(), onNav)
+    await flush()
+    const btn = document.querySelector('.info-news-locate') as HTMLButtonElement
+    btn.click()
+    const note = btn.parentElement!.querySelector('.info-news-note') as HTMLElement
+    expect(note.hidden).toBe(true)
   })
 })

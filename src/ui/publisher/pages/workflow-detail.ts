@@ -73,15 +73,33 @@ export async function renderWorkflowDetailPage(
   const shell = document.createElement('main')
   shell.className = 'publisher-shell'
 
-  const header = document.createElement('div')
-  header.className = 'publisher-tour-list-header'
-  const h2 = document.createElement('h2')
-  h2.textContent = workflow.name
-  header.appendChild(h2)
+  // Page header: back link + workflow name on the start side, the
+  // Edit / Run now buttons on the end side (mirrors the dataset form
+  // chrome and the rest of the reworked portal).
+  const header = document.createElement('header')
+  header.className = 'publisher-dataset-form-header'
+  const headerMain = document.createElement('div')
+  headerMain.className = 'publisher-dataset-form-header-main'
+  const back = document.createElement('a')
+  back.href = '/publish/workflows'
+  back.className = 'publisher-back-link'
+  back.textContent = `← ${t('publisher.workflows.form.back')}`
+  back.addEventListener('click', e => {
+    if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return
+    e.preventDefault()
+    navigate('/publish/workflows')
+  })
+  headerMain.appendChild(back)
+  const h1 = document.createElement('h1')
+  h1.className = 'publisher-detail-title'
+  h1.textContent = workflow.name
+  headerMain.appendChild(h1)
+  header.appendChild(headerMain)
 
   const actions = document.createElement('div')
+  actions.className = 'publisher-detail-actions'
   const editLink = document.createElement('a')
-  editLink.className = 'publisher-tab'
+  editLink.className = 'publisher-button publisher-button-secondary'
   editLink.href = `/publish/workflows/${encodeURIComponent(id)}/edit`
   editLink.textContent = t('publisher.workflows.action.edit')
   editLink.addEventListener('click', e => {
@@ -93,7 +111,7 @@ export async function renderWorkflowDetailPage(
 
   const runBtn = document.createElement('button')
   runBtn.type = 'button'
-  runBtn.className = 'publisher-tab publisher-tab-active'
+  runBtn.className = 'publisher-button publisher-button-primary'
   runBtn.textContent = t('publisher.workflows.runNow')
   const runStatus = document.createElement('span')
   runStatus.className = 'publisher-row-action-status'

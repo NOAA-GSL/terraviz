@@ -29,7 +29,8 @@ import type { Page } from 'playwright'
 import { gotoApp } from './core/browser'
 import type { FixtureRule } from './core/fixtures'
 import { analyticsFixtures, feedbackFixtures } from './fixtures/admin'
-import { publisherFixtures } from './fixtures/publisher'
+import { catalogReportFixtures } from './fixtures/catalog'
+import { blogPublicFixtures, publisherFixtures } from './fixtures/publisher'
 
 export interface Scene {
   /** Stable id — used as the screenshot filename and Weblate name. */
@@ -108,7 +109,7 @@ async function openCatalog(page: Page): Promise<void> {
  * The portal lives behind Cloudflare Access with a Pages-Functions
  * API backend — neither exists against a local dev server. What
  * *does* render without a backend is the part translators most need
- * context for: the topbar + section tabs, page headings, and (for
+ * context for: the sidebar + section nav, page headings, and (for
  * the static-form pages) field labels/placeholders. Every page
  * mounts its chrome synchronously before fetching data.
  *
@@ -121,7 +122,7 @@ async function openCatalog(page: Page): Promise<void> {
  */
 async function openPublish(page: Page, path: string): Promise<void> {
   await gotoApp(page, path)
-  await page.locator('#publisher-root .publisher-topbar').waitFor({ state: 'visible' })
+  await page.locator('#publisher-root .publisher-sidebar').waitFor({ state: 'visible' })
 }
 
 /**
@@ -181,6 +182,7 @@ export const scenes: Scene[] = [
     // fresh capture, so its thumbnail/title differ run-to-run — mask it
     // out of the diff (it's prominent on mobile and flapped the gate).
     masks: ['#hero-panel'],
+    fixtures: catalogReportFixtures(),
     async setup(page) {
       await openCatalog(page)
     },
@@ -189,6 +191,7 @@ export const scenes: Scene[] = [
     name: 'browse-filters-open',
     description:
       'Browse overlay with the inline filter rail and an active facet filter applied',
+    fixtures: catalogReportFixtures(),
     async setup(page) {
       await openCatalog(page)
       // At the capturer's 1440px desktop viewport the Cards view shows
@@ -206,6 +209,7 @@ export const scenes: Scene[] = [
   {
     name: 'browse-search-active',
     description: 'Browse overlay with an active search query and the clear button shown',
+    fixtures: catalogReportFixtures(),
     async setup(page) {
       await openCatalog(page)
       await page.locator('#browse-search').fill('ocean')
@@ -216,6 +220,7 @@ export const scenes: Scene[] = [
   {
     name: 'orbit-chat-open',
     description: 'Orbit (digital docent) chat panel opened from the browser',
+    fixtures: catalogReportFixtures(),
     async setup(page) {
       await openCatalog(page)
       await page.locator('#browse-chat-btn').click()
@@ -225,6 +230,7 @@ export const scenes: Scene[] = [
   {
     name: 'help-panel',
     description: 'Help & feedback panel (Guide tab + feedback form)',
+    fixtures: catalogReportFixtures(),
     async setup(page) {
       await openCatalog(page)
       await page.locator('#help-trigger-browse').click()
@@ -237,6 +243,7 @@ export const scenes: Scene[] = [
     // The cytoscape force layout settles to slightly different pixel
     // positions per run; mask it so the diff doesn't flap.
     masks: ['#browse-graph'],
+    fixtures: catalogReportFixtures(),
     // The Graph toggle is dropped on portrait phones (Cards + Map only),
     // so only capture this on wider viewports.
     minWidth: 769,
@@ -249,6 +256,7 @@ export const scenes: Scene[] = [
   {
     name: 'browse-timeline-view',
     description: 'Browse overlay switched to the Timeline view',
+    fixtures: catalogReportFixtures(),
     // Like Graph, the Timeline toggle is absent on portrait phones.
     minWidth: 769,
     async setup(page) {
@@ -263,6 +271,7 @@ export const scenes: Scene[] = [
     // MapLibre renders tiles asynchronously and non-deterministically;
     // mask the map canvas so only the surrounding chrome is diffed.
     masks: ['#browse-map'],
+    fixtures: catalogReportFixtures(),
     async setup(page) {
       await openCatalog(page)
       await page.locator('#browse-view-mode [data-view-mode="map"]').click()
@@ -279,12 +288,15 @@ export const scenes: Scene[] = [
     name: 'tools-menu',
     description:
       'Globe view — Tools popover (view toggles, layout picker, Orbit settings entry)',
-    // The WebGL globe renders behind the popover and is
-    // non-deterministic (rotation, tiles) — mask it out of the diff.
-    masks: ['#map-grid'],
+    // The WebGL globe renders behind the popover and is non-deterministic
+    // (rotation, tiles). The report capturer hides `#map-grid` before
+    // every shot (`stabilizeBackdrop`), so no per-scene mask is needed —
+    // and dropping it lets the full-viewport shot diff the popover instead
+    // of being painted over by a full-viewport mask.
     // The popover is the focus; emit a tight crop of it alongside the
     // full-viewport shot.
     crop: '#tools-menu-popover',
+    fixtures: catalogReportFixtures(),
     // The full globe renders behind the popover. In the Weblate
     // capturer (long-lived shared browser, full-page screenshots) that
     // GPU load makes the *following* scenes' captures fail, so opt this
@@ -300,6 +312,7 @@ export const scenes: Scene[] = [
     name: 'orbit-settings',
     description:
       'Orbit chat — settings form (LLM endpoint, model, reading level)',
+    fixtures: catalogReportFixtures(),
     async setup(page) {
       await openCatalog(page)
       await page.locator('#browse-chat-btn').click()
@@ -308,15 +321,125 @@ export const scenes: Scene[] = [
       await page.locator('#chat-settings').waitFor({ state: 'visible' })
     },
   },
+  {
+    name: 'embed-globe',
+    description:
+      'Embed mode (?embed=1) — globe with the app shell stripped for iframe hosting (no tools bar, help, chat trigger, or home button)',
+    fixtures: catalogReportFixtures(),
+    // Boots the full WebGL globe (embed mode is presentational — the same
+    // app, minus chrome), so it carries the same GPU pressure that
+    // destabilizes the Weblate capturer's shared browser as the other
+    // globe scenes; and embed mode renders no unique translatable strings.
+    // Report-capturer only. The report capturer hides `#map-grid` via
+    // stabilizeBackdrop, so the shot is the stripped shell, not the globe.
+    skipWeblate: true,
+    async setup(page) {
+      await gotoApp(page, '/?embed=1')
+      // The mode class is applied synchronously at boot (before the WebGL
+      // check), so it is set even on a headless capture.
+      await page.locator('body.embed-mode').waitFor()
+      // Assert the app-shell chrome stays suppressed, so a regression that
+      // re-introduces it fails the capture loudly rather than silently.
+      await page.locator('#map-controls').waitFor({ state: 'hidden' })
+    },
+  },
 
   // ── Publisher portal ──────────────────────────────────────────
   // Populated via route-stub fixtures (Phase V7); see openPublish().
+  {
+    name: 'publish-overview',
+    description: 'Publisher portal — command-center Overview landing (populated via fixtures)',
+    // The Overview fans out beyond publisherFixtures' coverage; these
+    // extra rules (hero / feedback / analytics / public node-profile /
+    // workflow runs) precede the base set so the workflow-runs regex
+    // wins over the general `/publish/workflows` list rule.
+    fixtures: [
+      {
+        url: /\/publish\/workflows\/[^/?]+\/runs/,
+        json: {
+          runs: [
+            {
+              status: 'failed',
+              created_at: '2026-07-06T02:14:00Z',
+              finished_at: '2026-07-06T02:15:00Z',
+              error_summary: 'exit code 1',
+            },
+          ],
+        },
+      },
+      {
+        url: '/api/v1/featured-hero',
+        json: {
+          hero: {
+            datasetId: 'ds-hero',
+            window: { start: '2026-07-01T00:00:00Z', end: '2026-07-10T00:00:00Z' },
+            headline: 'Far-Flung Filaments of Fungi',
+          },
+        },
+      },
+      {
+        url: '/api/v1/publish/feedback',
+        json: {
+          data: {
+            byDay: [{ up: 22, down: 2 }],
+            recentFeedback: [
+              {
+                rating: 'thumbs-up',
+                comment: 'Orbit explained the temperature ramp perfectly.',
+                dataset_id: 'sst-2026-04',
+                created_at: '2026-07-08T09:00:00Z',
+              },
+              {
+                rating: 'thumbs-down',
+                comment: "Sea ice dataset wouldn't load on mobile.",
+                created_at: '2026-07-08T06:00:00Z',
+              },
+            ],
+          },
+        },
+      },
+      { url: '/api/v1/publish/analytics', json: { data: { totals: { sessions: 44200 } } } },
+      {
+        url: '/api/v1/node-profile',
+        json: { profile: { orgName: 'The Zyra Project', logoUrl: null } },
+      },
+      ...publisherFixtures({ admin: true }),
+    ],
+    async setup(page) {
+      await openPublish(page, '/publish/overview')
+      await page.locator('.publisher-overview').waitFor({ state: 'visible' })
+    },
+  },
   {
     name: 'publish-datasets',
     description: 'Publisher portal — datasets list (populated via fixtures)',
     fixtures: publisherFixtures(),
     async setup(page) {
       await openPublish(page, '/publish/datasets')
+    },
+  },
+  {
+    name: 'publish-import',
+    description: 'Publisher portal — bulk import: method cards + validated manifest preview',
+    fixtures: publisherFixtures({ admin: true }),
+    async setup(page) {
+      await openPublish(page, '/publish/import')
+      // Inject a manifest so the ready/warning/error preview renders
+      // populated (the page parses + validates client-side; no backend).
+      const csv = [
+        'title,slug,format,data_ref,license',
+        'Sea Surface Temp — May 2026,sst-2026-05,mp4,https://example.org/sst.mp4,CC-BY-4.0',
+        'Arctic Sea Ice Extent — 2026,sea-ice-2026,mp4,https://example.org/ice.mp4,CC0-1.0',
+        'Global Nightlights 2026,nightlights-2026,png,https://example.org/nl.png,',
+        'Drought Risk — Q2 2026,drought-q2-2026,,,',
+        'CO2 Concentration 2026,co2-2026,png,https://example.org/co2.png,CC-BY-4.0',
+      ].join('\n')
+      await page.setInputFiles('.publisher-import-file-input', {
+        name: 'publisher-datasets.csv',
+        mimeType: 'text/csv',
+        buffer: Buffer.from(csv, 'utf-8'),
+      })
+      await page.locator('.publisher-import-preview').waitFor({ state: 'visible' })
     },
   },
   {
@@ -341,6 +464,9 @@ export const scenes: Scene[] = [
     masks: ['.publisher-asset-uploader-generate-preview'],
     async setup(page) {
       await openPublish(page, '/publish/datasets/01HEXAMPLEDATASET00000001/edit')
+      // The dataset form is a stepper — open the Media section (where
+      // the thumbnail uploader lives) before interacting with it.
+      await page.locator('.publisher-form-nav-link[data-section="ds-section-media"]').click()
       // The thumbnail uploader's generator block (thumbnail kind only).
       await page.locator('.publisher-asset-uploader-generate').first().waitFor()
       // Feed a 2:1 equirectangular frame (the bundled Earth specular
@@ -379,19 +505,82 @@ export const scenes: Scene[] = [
     },
   },
   {
-    name: 'publish-import',
-    description: 'Publisher portal — import page',
-    fixtures: publisherFixtures(),
-    async setup(page) {
-      await openPublish(page, '/publish/import')
-    },
-  },
-  {
     name: 'publish-featured-hero',
     description: 'Publisher portal — "Right now" featured-hero override',
     fixtures: publisherFixtures({ admin: true }),
     async setup(page) {
       await openPublish(page, '/publish/featured-hero')
+    },
+  },
+  {
+    name: 'publish-events',
+    description: 'Publisher portal — current-events review queue (populated via fixtures)',
+    fixtures: publisherFixtures({ admin: true }),
+    async setup(page) {
+      // The detail pane's Suggested-media sources hit external hosts
+      // (Worldview snapshot preview, Commons geosearch) — stub them so
+      // the scene is deterministic and free of failed-request noise.
+      // An empty/invalid image body makes the card self-remove.
+      await page.route('https://wvs.earthdata.nasa.gov/**', r => r.fulfill({ status: 204, body: '' }))
+      await page.route('https://commons.wikimedia.org/**', r =>
+        r.fulfill({ status: 200, contentType: 'application/json', body: '{"query":{"pages":{}}}' }),
+      )
+      await page.route('https://earthquake.usgs.gov/**', r =>
+        r.fulfill({ status: 200, contentType: 'application/json', body: '{"features":[]}' }),
+      )
+      await openPublish(page, '/publish/events')
+      // Direction A master–detail: wait for the detail title (the first
+      // event auto-selects) so the capture includes the populated panes.
+      await page.locator('.publisher-events-detail-title').first().waitFor()
+    },
+  },
+  {
+    name: 'publish-feeds',
+    description: 'Publisher portal — current-events feed console (connectors + preset gallery)',
+    fixtures: publisherFixtures({ admin: true }),
+    async setup(page) {
+      await openPublish(page, '/publish/feeds')
+      await page.locator('.publisher-feeds-row').first().waitFor()
+    },
+  },
+  {
+    name: 'publish-node-profile',
+    description: 'Publisher portal — node / host-organization profile form (Phase 3d)',
+    fixtures: publisherFixtures({ admin: true }),
+    async setup(page) {
+      await openPublish(page, '/publish/node-profile')
+      await page.locator('#nodeprofile-org').waitFor()
+    },
+  },
+  {
+    name: 'publish-blog',
+    description: 'Publisher portal — blog authoring list (Phase 3d)',
+    fixtures: publisherFixtures({ admin: true }),
+    async setup(page) {
+      await openPublish(page, '/publish/blog')
+      await page.locator('.publisher-blog-badge').first().waitFor()
+    },
+  },
+  {
+    name: 'publish-blog-edit',
+    description: 'Publisher portal — tabbed blog editor (Content / Sources / Media / AI draft)',
+    fixtures: publisherFixtures({ admin: true }),
+    async setup(page) {
+      await openPublish(page, '/publish/blog/new')
+      // Tabbed stepper — the Content tab is the default capture; the
+      // rail nav confirms the Sources/Media/AI-draft sections mounted.
+      await page.locator('#blog-title').waitFor()
+      await page.locator('.publisher-form-nav-link[data-section="blog-media"]').waitFor()
+      await page.locator('.publisher-form-nav-link[data-section="blog-aidraft"]').waitFor()
+    },
+  },
+  {
+    name: 'blog-public-post',
+    description: 'Public blog post page — sanitized markdown + dataset deep links + citation (Phase 3d)',
+    fixtures: blogPublicFixtures(),
+    async setup(page) {
+      await gotoApp(page, '/blog/city-lights-spread')
+      await page.locator('.blog-post-body h2').waitFor()
     },
   },
   {

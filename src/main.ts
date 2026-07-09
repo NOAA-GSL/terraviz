@@ -58,14 +58,18 @@ import {
 } from './ui/playbackController'
 import {
   loadImageDataset, loadVideoDataset, displayDatasetInfo,
+  type EventNavResult,
 } from './services/datasetLoader'
+import { resolveRegion } from './data/regions'
+import type { PublicEvent } from './services/eventsService'
 import { TourEngine, type TourTelemetryMeta } from './services/tourEngine'
 import { showTourControls, hideTourControls, hideAllTourTextBoxes, hideAllTourImages, hideAllTourVideos, hideAllTourPopups, hideAllTourQuestions } from './ui/tourUI'
 import { initLegendForDataset, clearLegendCache, loadConfig } from './services/docentService'
 import { isMobile, IS_MOBILE_NATIVE, getCloudTextureUrl } from './utils/deviceCapability'
-import { initDeepLinks } from './services/deepLinkService'
+import { initDeepLinks, parseDatasetPathname } from './services/deepLinkService'
 import { recordVisit, writeLastSession } from './services/visitMemory'
 import { getCatalogMode, setCatalogMode } from './utils/catalogMode'
+import { applyEmbedMode } from './utils/embedMode'
 import {
   hideCatalogTabs,
   initCatalogTabs,
@@ -332,6 +336,13 @@ class InteractiveSphere {
       const catalogModeActive = getCatalogMode()
       if (catalogModeActive) document.body.classList.add('catalog-mode')
 
+      // Embed mode (`?embed=1`) strips app chrome for iframe hosting
+      // (WordPress blocks, kiosk, the poster). Apply before any UI
+      // renders — same first-paint reasoning as catalog mode — so the
+      // chrome never flashes in. Composes with `?dataset=`/`?tour=`/
+      // `?catalog=true`. See `docs/EMBED_URL_GRAMMAR.md`.
+      const embedModeActive = applyEmbedMode()
+
       if (!this.checkWebGLSupport()) return
 
       const container = document.getElementById('container')
@@ -408,8 +419,11 @@ class InteractiveSphere {
       onPlaylistPlaybackChange(syncPlaylistNextBtn)
       syncPlaylistNextBtn()
       // First-session privacy disclosure. No-ops on every launch
-      // after the user dismisses it.
-      showDisclosureBannerIfNeeded()
+      // after the user dismisses it. Skipped inside an embed — the
+      // host page owns consent, and a privacy banner popping up in a
+      // third-party iframe is both wrong and intrusive (§J of
+      // `docs/WORDPRESS_INTEGRATION_PLAN.md`).
+      if (!embedModeActive) showDisclosureBannerIfNeeded()
       // Telemetry transport — skipped entirely when the compile-time
       // flag is off (telemetry-free builds) and when console mode
       // is on (dev convenience: events log locally, no POSTs).
@@ -499,6 +513,12 @@ class InteractiveSphere {
 
       const datasetId = previewFailed ? null : this.getDatasetIdFromUrl()
       if (datasetId) {
+        // Canonicalize a path-form deep link (`/dataset/<id>`) to the
+        // query form so in-app `?dataset=` pushState navigation doesn't
+        // stack a query onto the old path.
+        if (parseDatasetPathname(window.location.pathname)) {
+          window.history.replaceState({}, '', `/?dataset=${encodeURIComponent(datasetId)}`)
+        }
         this.setLoadingStatus('Loading dataset\u2026', 50)
         await this.loadDataset(datasetId, 'url')
         this.setLoading(false)
@@ -699,10 +719,12 @@ class InteractiveSphere {
     }
   }
 
-  /** Extract the `dataset` query parameter from the current URL. */
+  /** Extract the dataset to boot with from the current URL — the
+   *  `?dataset=` query param, or the `/dataset/<id>` path form that
+   *  share links and blog posts emit (served via the SPA fallback). */
   private getDatasetIdFromUrl(): string | null {
     const params = new URLSearchParams(window.location.search)
-    return params.get('dataset')
+    return params.get('dataset') ?? parseDatasetPathname(window.location.pathname)
   }
 
   /**
@@ -1186,6 +1208,12 @@ class InteractiveSphere {
       setPlaybackRate: (rate) => {
         if (this.hlsService) this.hlsService.playbackRate = rate
       },
+      // The `setTime` task — same seek the docent's set_time action and
+      // the In-the-news jump use. Best-effort: an unseekable dataset or
+      // out-of-range time is a quiet no-op mid-tour.
+      setTime: (isoTime) => {
+        seekToDate(isoTime, this.hlsService, this.appState, this.playback)
+      },
       onTourEnd: () => this.endTour(),
       onStop: () => {
         // User-initiated stop. Release a playlist that was waiting
@@ -1389,6 +1417,59 @@ class InteractiveSphere {
   }
 
   /**
+   * Fly the primary globe to a related current event's place and seek the
+   * loaded dataset to its time — the "In the news" card's "View on globe"
+   * action (`docs/CURRENT_EVENTS_PLAN.md` §6). Reuses the same primitives
+   * Orbit's docent drives: `renderer.flyTo` / `fitBounds` for place,
+   * `seekToDate` for time. Point geometry flies in to a regional altitude;
+   * a bounding box or a named region fits its extent. The time seek only
+   * runs when the event's start falls inside the loaded dataset's coverage;
+   * outside it (common for rolling real-time windows) we still fly to the
+   * place and report `out-of-range` so the card can note it.
+   */
+  private navigateToEvent(ev: PublicEvent): EventNavResult {
+    // A point event flies to ~regional altitude (km → MapLibre zoom in
+    // `MapRenderer.flyTo`); box/region events fit their extent instead.
+    const EVENT_FLY_ALTITUDE_KM = 3000
+    let navigated = false
+    const g = ev.geometry
+    if (g.point) {
+      void this.renderer?.flyTo(g.point.lat, g.point.lon, EVENT_FLY_ALTITUDE_KM)
+      if (isVrActive()) void flyToOnGlobe(g.point.lat, g.point.lon)
+      navigated = true
+    } else if (g.boundingBox) {
+      const { n, s, w, e } = g.boundingBox
+      this.renderer?.fitBounds([w, s, e, n])
+      navigated = true
+    } else if (g.regionName) {
+      const region = resolveRegion(g.regionName)
+      if (region) {
+        this.renderer?.fitBounds(region.bounds)
+        navigated = true
+      }
+    }
+
+    let time: EventNavResult['time'] = 'none'
+    if (ev.occurredStart) {
+      const ds = this.appState.currentDataset
+      const start = ds?.startTime ? new Date(ds.startTime).getTime() : NaN
+      const end = ds?.endTime ? new Date(ds.endTime).getTime() : NaN
+      const target = new Date(ev.occurredStart).getTime()
+      // Only temporal datasets can be seeked or reported out-of-range; a
+      // static image has no time axis, so there is nothing to note.
+      if (!isNaN(start) && !isNaN(end) && end > start && !isNaN(target)) {
+        if (target >= start && target <= end) {
+          seekToDate(ev.occurredStart, this.hlsService, this.appState, this.playback)
+          time = 'seeked'
+        } else {
+          time = 'out-of-range'
+        }
+      }
+    }
+    return { navigated, time }
+  }
+
+  /**
    * Render the info panel for whichever slot `getInfoDisplayIndex`
    * points at, repopulate the picker dropdown with all loaded
    * datasets, and show/hide the picker based on how many are loaded.
@@ -1408,7 +1489,12 @@ class InteractiveSphere {
     }
 
     // Render the currently-selected dataset into the info panel body.
-    displayDatasetInfo(dataset, this.appState.datasets, (id) => this.loadDataset(id, 'browse'))
+    displayDatasetInfo(
+      dataset,
+      this.appState.datasets,
+      (id) => this.loadDataset(id, 'browse'),
+      (ev) => this.navigateToEvent(ev),
+    )
 
     // Repopulate the picker with every loaded dataset (in panel order)
     // and wire the change handler once.
@@ -3243,6 +3329,15 @@ document.addEventListener('DOMContentLoaded', async () => {
   if (location.pathname.startsWith('/publish')) {
     const { bootPublisherPortal } = await import('./ui/publisher')
     await bootPublisherPortal()
+    return
+  }
+
+  // Public blog route gate — same lazy-chunk shape as the portal:
+  // `/blog` and `/blog/:slug` render static content pages and skip
+  // the globe boot entirely (docs/CURRENT_EVENTS_PLAN.md §7).
+  if (location.pathname === '/blog' || location.pathname.startsWith('/blog/')) {
+    const { bootBlogPage } = await import('./ui/blog')
+    await bootBlogPage()
     return
   }
 

@@ -419,6 +419,22 @@ export type ChatAction =
       frameQuery: string
       displayName: string
     }
+  /**
+   * A cited current-event card the docent surfaces from an `<<EVENT:ID>>`
+   * marker (`docs/CURRENT_EVENTS_PLAN.md` §6.2). Display-only — the
+   * accompanying dataset load + globe fly/seek ride on the ordinary
+   * `load-dataset` / `fly-to` / `fit-bounds` / `set-time` actions the
+   * marker expands into (all derived client-side from the approved event,
+   * so the coordinates and time are never LLM-authored). `sourceUrl` is
+   * guaranteed http(s) by the events client's sanitizer.
+   */
+  | {
+      type: 'event-citation'
+      eventId: string
+      title: string
+      sourceName: string
+      sourceUrl: string
+    }
 
 /**
  * Snapshot of the LLM context used to generate an AI response.
@@ -553,11 +569,13 @@ export type VoiceProvider = Exclude<VoiceProviderPreference, 'auto'>
 /**
  * Realtime hands-free interaction model (Phase 3). `off` keeps the
  * Phase 1 single-tap mic; `push-to-talk` opens the mic while a control
- * is held; `open-mic` listens continuously with local VAD gating.
- * §9.1 has us ship both `push-to-talk` and `open-mic` so a real
- * install can pick. Default `off`.
+ * is held; `open-mic` listens continuously with local VAD gating;
+ * `wake-word` stays silent until an on-device wake phrase arms a single
+ * turn (the privacy-preserving exhibit path — no audio streams until a
+ * wake fires; §9.1). §9.1 has us ship these so a real install can pick.
+ * Default `off`.
  */
-export type VoiceHandsFreeMode = 'off' | 'push-to-talk' | 'open-mic'
+export type VoiceHandsFreeMode = 'off' | 'push-to-talk' | 'open-mic' | 'wake-word'
 
 export interface DocentConfig {
   apiUrl: string         // default: '/api'
@@ -685,6 +703,19 @@ export type TourTaskDef =
    * Distinct from `unloadAllDatasets`, which wipes every panel.
    */
   | { unloadDataset: string }
+  /**
+   * Seek the loaded (video) dataset to a moment in time — the tour
+   * analogue of the docent's `set_time` action, added for the
+   * auto-generated current-events tours (`docs/CURRENT_EVENTS_PLAN.md`
+   * §7: event occurred time → setTime). A no-op when no seekable
+   * dataset is loaded or the time is outside its range.
+   */
+  | { setTime: SetTimeTaskParams }
+
+export interface SetTimeTaskParams {
+  /** ISO-8601 instant (or date) to seek the loaded dataset to. */
+  time: string
+}
 
 export interface FlyToTaskParams {
   lat: number
@@ -901,6 +932,12 @@ export interface TourCallbacks {
   togglePlayPause(): void
   isPlaying(): boolean
   setPlaybackRate(rate: number): void
+  /**
+   * Seek the loaded dataset to an ISO time (the `setTime` task).
+   * Optional — hosts without seekable playback (or older wiring)
+   * simply skip the task.
+   */
+  setTime?(isoTime: string): void
   onTourEnd(): void
   /** Called when the user clicks the stop button in tour controls */
   onStop(): void
@@ -1568,10 +1605,15 @@ export interface PublisherPortalLoadedEvent extends TelemetryEventBase {
    * stale bookmarks); the router's notFound handler still emits
    * this event because the visit counts toward portal usage. */
   route:
+    | 'overview'
     | 'me'
     | 'datasets'
     | 'tours'
     | 'featured_hero'
+    | 'node_profile'
+    | 'blog'
+    | 'events'
+    | 'feeds'
     | 'import'
     | 'workflows'
     | 'analytics'
@@ -1833,8 +1875,10 @@ export interface VoiceInteractionEvent extends TelemetryEventBase {
   provider: VoiceProvider
   /** How it was initiated: push-to-talk mic, auto-speak, the per-message
    *  replay button, or a hands-free realtime turn (open-mic / push-to-talk
-   *  — the §10.4 numbers that decide the exhibit interaction model). */
-  trigger: 'mic' | 'autospeak' | 'replay' | 'open-mic' | 'push-to-talk'
+   *  / wake-word — the §10.4 numbers that decide the exhibit interaction
+   *  model, incl. the wake-word false-fire rate: a `wake-word` STT row
+   *  with `success:false` is a wake that produced no turn). */
+  trigger: 'mic' | 'autospeak' | 'replay' | 'open-mic' | 'push-to-talk' | 'wake-word'
   /** Recognition / synthesis wall-clock duration in ms; `0` when not measured (e.g. TTS start). */
   duration_ms: number
   /** BCP-47 base language (e.g. `en`, `es`). Low-cardinality, not free text. */

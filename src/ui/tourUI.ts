@@ -373,6 +373,58 @@ export function hideTourLegend(): void {
   document.getElementById('tour-legend-float')?.remove()
 }
 
+// ── Media rail — positionless showImage / playVideo ─────────────────
+//
+// The SOS coordinate fields (`xPct`/`yPct`/…) were designed for a
+// fixed 4K touchscreen where the author controlled the display. On
+// the web that assumption fails — one coordinate pair can't look
+// right across desktop, phone-portrait, and a resized window. So
+// new-style tours simply OMIT the position fields, and those
+// overlays render into a designed, responsive **media rail** the
+// layout owns (same philosophy as the phone-portrait bottom-sheet
+// override in `showTourTextBox`). Legacy tours with explicit
+// coordinates keep the positioned path untouched.
+//
+// The rail is a stack, not a singleton: each positionless show*
+// appends a card keyed by its overlay ID, so two media at once
+// coexist, and hide* removes exactly its own card. Text boxes keep
+// their separate caption region, so media + text never collide.
+
+/**
+ * Does this show-task belong in the media rail? True when the tour
+ * JSON carries no explicit SOS position/size fields at all.
+ */
+export function usesMediaRail(params: {
+  xPct?: number
+  yPct?: number
+  widthPct?: number
+  heightPct?: number
+  sizePct?: number
+}): boolean {
+  return (
+    params.xPct == null &&
+    params.yPct == null &&
+    params.widthPct == null &&
+    params.heightPct == null &&
+    params.sizePct == null
+  )
+}
+
+const MEDIA_RAIL_ID = 'tour-media-rail'
+
+/** Get or create the media-rail container (inside the overlay
+ *  container; positioned entirely by CSS — see tour.css). */
+function getMediaRail(): HTMLElement {
+  let rail = document.getElementById(MEDIA_RAIL_ID)
+  if (!rail) {
+    rail = document.createElement('div')
+    rail.id = MEDIA_RAIL_ID
+    rail.className = 'tour-media-rail'
+    getOverlayContainer().appendChild(rail)
+  }
+  return rail
+}
+
 // ── Text-box overlays (showRect / hideRect) ──────────────────────────
 
 /** Show a text box overlay at the specified screen-percentage position. */
@@ -486,6 +538,32 @@ export function hideAllTourTextBoxes(): void {
 export function showTourImage(params: ShowImageTaskParams): void {
   hideTourImage(params.imageID)
 
+  // Positionless (new-style) → the responsive media rail.
+  if (usesMediaRail(params)) {
+    const card = document.createElement('div')
+    card.className = 'tour-media-card tour-image-overlay'
+    const img = document.createElement('img')
+    img.src = params.filename
+    img.alt = params.caption || t('tour.image.alt')
+    card.appendChild(img)
+    if (params.caption) {
+      const cap = document.createElement('div')
+      cap.className = 'tour-media-card-caption'
+      cap.innerHTML = parseCaptionMarkup(params.caption)
+      cap.style.color = sanitizeCaptionColor(params.fontColor || '') || ''
+      card.appendChild(cap)
+    }
+    if (params.isClosable) {
+      addCloseButton(card, () => hideTourImage(params.imageID))
+    }
+    // Newest first — the freshest media reads from the top of the rail.
+    getMediaRail().prepend(card)
+    images.add(params.imageID, card)
+    activeImageOverlays.set(params.imageID, params)
+    vrOverlaySink?.showImage(params)
+    return
+  }
+
   const container = getOverlayContainer()
   const wrapper = document.createElement('div')
   wrapper.className = 'tour-image-overlay'
@@ -572,10 +650,64 @@ export function hideAllTourImages(): void {
 
 // ── Video overlays (playVideo / hideVideo) ───────────────────────────
 
+/**
+ * Create the tour `<video>` element and start playback, falling back
+ * to muted autoplay + visible controls when the browser blocks
+ * autoplay with sound (no media-engagement history yet). Shared by
+ * the positioned overlay and the media-rail card.
+ */
+function createTourVideoElement(params: PlayVideoTaskParams): HTMLVideoElement {
+  const video = document.createElement('video')
+  // A live VR session wraps this element in a THREE.VideoTexture,
+  // and WebGL refuses cross-origin uploads unless the element is
+  // CORS-enabled — must be set BEFORE src. Scoped to sink-active so
+  // 2D-only playback keeps working against hosts that send no CORS
+  // headers (our R2 sends them; an external hot-link may not).
+  // Entering VR mid-playback replays the same element and inherits
+  // whatever mode it started with — a pre-existing limitation.
+  if (vrOverlaySink) video.crossOrigin = 'anonymous'
+  video.src = params.filename
+  video.playsInline = true
+  // Don't set the autoplay attribute — we call play() explicitly so we can
+  // handle a NotAllowedError (browsers block autoplay with sound unless the
+  // tab has a media-engagement history).
+  video.controls = params.showControls ?? false
+  const startVideo = async () => {
+    try {
+      await video.play()
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'NotAllowedError') {
+        video.muted = true
+        video.controls = true
+        try { await video.play() } catch { /* give up — controls are visible */ }
+      }
+    }
+  }
+  void startVideo()
+  return video
+}
+
 export function showTourVideo(params: PlayVideoTaskParams): void {
   // Use filename as the ID for video overlays
   const videoID = params.filename
   hideTourVideo(videoID)
+
+  // Positionless (new-style) → the responsive media rail.
+  if (usesMediaRail(params)) {
+    const card = document.createElement('div')
+    card.className = 'tour-media-card tour-video-overlay'
+    card.dataset.overlayId = `video-${videoID}`
+    const video = createTourVideoElement(params)
+    card.appendChild(video)
+    addCloseButton(card, () => hideTourVideo(videoID))
+    getMediaRail().prepend(card)
+    videos.add(videoID, card)
+    activeVideoOverlays.set(videoID, { params, video, videoID })
+    // Share the same <video> element with VR so both paths render
+    // from one decoded stream (see VrTourOverlaySink.showVideo doc).
+    vrOverlaySink?.showVideo(params, video, videoID)
+    return
+  }
 
   const container = getOverlayContainer()
   const wrapper = document.createElement('div')
@@ -631,13 +763,7 @@ export function showTourVideo(params: PlayVideoTaskParams): void {
   }
   wrapper.style.cssText += 'visibility: hidden;'
 
-  const video = document.createElement('video')
-  video.src = params.filename
-  video.playsInline = true
-  // Don't set the autoplay attribute — we call play() explicitly so we can
-  // handle a NotAllowedError (browsers block autoplay with sound unless the
-  // tab has a media-engagement history).
-  video.controls = params.showControls ?? false
+  const video = createTourVideoElement(params)
   if (mode === 'phone-portrait') {
     video.style.cssText = `
       width: 100%;
@@ -657,21 +783,6 @@ export function showTourVideo(params: PlayVideoTaskParams): void {
   // Show wrapper once video has dimensions, or on error so it can be closed
   video.onloadedmetadata = () => { wrapper.style.visibility = '' }
   video.onerror = () => { wrapper.style.visibility = '' }
-  // Start playback. If the browser blocks autoplay (typically because the
-  // video has audio and the user hasn't interacted yet), fall back to muted
-  // autoplay and expose controls so the user can unmute.
-  const startVideo = async () => {
-    try {
-      await video.play()
-    } catch (err) {
-      if (err instanceof DOMException && err.name === 'NotAllowedError') {
-        video.muted = true
-        video.controls = true
-        try { await video.play() } catch { /* give up — controls are visible */ }
-      }
-    }
-  }
-  void startVideo()
   wrapper.appendChild(video)
 
   addCloseButton(wrapper, () => hideTourVideo(videoID))
@@ -705,8 +816,48 @@ export function hideAllTourVideos(): void {
 
 // ── Popup HTML overlays (showPopupHtml / hidePopupHtml) ──────────────
 
+/**
+ * Build the sandboxed iframe a popup task renders. URL popups default
+ * to the most restrictive sandbox — no scripts, no same-origin, no
+ * forms; `allowScripts` opts in for known-trusted targets (the dock's
+ * embed capture sets it for YouTube/Vimeo players, which can't run
+ * without it). Inline HTML renders via srcdoc with an empty sandbox.
+ */
+function buildPopupIframe(params: ShowPopupHtmlTaskParams): HTMLIFrameElement | null {
+  if (params.url) {
+    const iframe = document.createElement('iframe')
+    iframe.src = params.url
+    const sandboxFlags = params.allowScripts ? 'allow-scripts' : ''
+    iframe.setAttribute('sandbox', sandboxFlags)
+    iframe.setAttribute('referrerpolicy', 'no-referrer')
+    return iframe
+  }
+  if (params.html) {
+    const iframe = document.createElement('iframe')
+    iframe.setAttribute('sandbox', '')
+    iframe.srcdoc = `<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;padding:1rem;background:transparent;color:#ddd;font-size:0.85rem;line-height:1.5;font-family:system-ui,sans-serif;overflow:auto;height:100%;box-sizing:border-box;}</style></head><body>${params.html}</body></html>`
+    return iframe
+  }
+  return null
+}
+
 export function showTourPopup(params: ShowPopupHtmlTaskParams): void {
   hideTourPopup(params.popupID)
+
+  // Positionless (new-style) → an embed card in the media rail. The
+  // 16:9 sizing lives in CSS (.tour-media-card iframe).
+  if (usesMediaRail(params)) {
+    const card = document.createElement('div')
+    card.className = 'tour-media-card tour-popup-overlay'
+    const railFrame = buildPopupIframe(params)
+    if (railFrame) card.appendChild(railFrame)
+    addCloseButton(card, () => hideTourPopup(params.popupID))
+    getMediaRail().prepend(card)
+    popups.add(params.popupID, card)
+    activePopupOverlays.set(params.popupID, params)
+    vrOverlaySink?.showPopup(params)
+    return
+  }
 
   const container = getOverlayContainer()
   const wrapper = document.createElement('div')
@@ -720,23 +871,9 @@ export function showTourPopup(params: ShowPopupHtmlTaskParams): void {
   applyGlassPosition(wrapper, xPct, yPct, widthPct, heightPct)
   wrapper.style.padding = '0'
 
-  if (params.url) {
-    const iframe = document.createElement('iframe')
-    iframe.src = params.url
+  const iframe = buildPopupIframe(params)
+  if (iframe) {
     iframe.style.cssText = 'width:100%;height:100%;border:none;border-radius:10px;'
-    // Default to the most restrictive sandbox — no scripts, no same-origin,
-    // no forms. Tour authors can opt in to scripts via allowScripts on the
-    // task params when the target URL is known-trusted.
-    const sandboxFlags = params.allowScripts ? 'allow-scripts' : ''
-    iframe.setAttribute('sandbox', sandboxFlags)
-    iframe.setAttribute('referrerpolicy', 'no-referrer')
-    wrapper.appendChild(iframe)
-  } else if (params.html) {
-    // Render untrusted HTML in a sandboxed iframe via srcdoc
-    const iframe = document.createElement('iframe')
-    iframe.style.cssText = 'width:100%;height:100%;border:none;border-radius:10px;'
-    iframe.setAttribute('sandbox', '')
-    iframe.srcdoc = `<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;padding:1rem;background:transparent;color:#ddd;font-size:0.85rem;line-height:1.5;font-family:system-ui,sans-serif;overflow:auto;height:100%;box-sizing:border-box;}</style></head><body>${params.html}</body></html>`
     wrapper.appendChild(iframe)
   }
 

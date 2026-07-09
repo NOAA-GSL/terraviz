@@ -24,7 +24,7 @@ import { setLogLevel, logger } from '../utils/logger'
 import { emit, startDwell, type DwellHandle } from '../analytics'
 import { enMessages, t, getLocale, type MessageKey } from '../i18n'
 import { resolveSttEngine, resolveTtsEngine, resolveStreamingSttEngine, voiceSupportForLocale, splitIntoSpokenChunks, baseLanguage, listVoiceLanguageOptions, type SttSession, type TtsEngine } from '../services/voiceService'
-import { HandsFreeController } from './voiceHandsFree'
+import { HandsFreeController, isWakeWordConfigured } from './voiceHandsFree'
 import { registerBrowserVoiceEngines, primeBrowserTts, listBrowserVoices, curateVoices, onBrowserVoicesChanged } from '../services/voiceBrowserEngines'
 import { registerCloudVoiceEngines } from '../services/voiceCloudEngines'
 
@@ -560,6 +560,7 @@ function initVoiceInput(): void {
   // never picks them; web-only (no /api proxy in the desktop shell).
   registerCloudVoiceEngines()
   updateMicVisibility()
+  revealWakeWordOption()
   populateVoiceOptions()
   // System voices load asynchronously — refresh the picker when they
   // arrive. Release any prior subscription first so a re-init (hot
@@ -579,6 +580,7 @@ function initVoiceInput(): void {
       // ducked through send + reply; released at the resume point).
       if (state === 'capturing') { handsFreeCaptureStartedAt = Date.now(); setVoiceAudioFocus(true) }
     },
+    onWakeMisfire: () => emitWakeMisfire(),
   })
   syncHandsFree()
 }
@@ -614,6 +616,27 @@ function emitHandsFreeTurn(transcript: string): void {
     // An empty final transcript (the streaming engine can emit one) is
     // not a successful turn — derive success from real text.
     success: transcript.trim().length > 0,
+  })
+}
+
+/**
+ * Tier B: record a wake-word false fire — the wake phrase armed a turn
+ * but no speech followed. A `wake-word` STT row with `success:false` and
+ * no duration; the false-fire rate is the §10.4 metric that tells the
+ * exhibit whether the wake threshold is tuned for the hall.
+ */
+function emitWakeMisfire(): void {
+  const cfg = loadConfig()
+  const lang = cfg.voiceLang || getLocale()
+  const provider = resolveStreamingSttEngine(cfg.voiceProvider ?? 'auto', lang)?.provider ?? 'browser'
+  emit({
+    event_type: 'voice_interaction',
+    mode: 'stt',
+    provider,
+    trigger: 'wake-word',
+    duration_ms: 0,
+    lang: baseLanguage(lang),
+    success: false, // a wake with no turn — the false-fire signal
   })
 }
 
@@ -670,6 +693,17 @@ function syncHandsFree(): void {
     setMicListening(false)
     setVoiceAudioFocus(false)
   }
+}
+
+/**
+ * Reveal the wake-word hands-free option only when a deploy has
+ * configured the on-device model (`VITE_VOICE_WAKEWORD_MODEL_URL`,
+ * web-only). Otherwise it stays hidden so it isn't offered as a dead
+ * choice. (docs/ORBIT_WAKEWORD.md)
+ */
+function revealWakeWordOption(): void {
+  const opt = document.querySelector<HTMLOptionElement>('#chat-settings-voice-handsfree option[value="wake-word"]')
+  if (opt) opt.hidden = !isWakeWordConfigured()
 }
 
 /** Show the mic only when an STT engine resolves for the active locale (§3 matrix). */
@@ -748,11 +782,12 @@ function toggleListening(): void {
   // still be spoken aloud.
   primeBrowserTts()
   const mode = loadConfig().voiceHandsFree ?? 'off'
-  // Open-mic: the mic button is a mute toggle for the always-on session.
-  // Don't set the indicator here — unmute arms asynchronously and can
-  // fail (permission denied); the controller's state-change hook drives
-  // setMicListening so the UI never gets stuck showing "listening".
-  if (mode === 'open-mic' && handsFree?.isActive()) {
+  // Open-mic and wake-word: the mic button mutes/unmutes the always-on
+  // session (the wake listener, for wake-word). Don't set the indicator
+  // here — unmute arms asynchronously and can fail (permission denied);
+  // the controller's state-change hook drives setMicListening so the UI
+  // never gets stuck showing "listening".
+  if ((mode === 'open-mic' || mode === 'wake-word') && handsFree?.isActive()) {
     const muted = handsFree.toggleMute()
     callbacks?.announce(t(muted ? 'chat.announce.voiceMuted' : 'chat.announce.voiceListening'))
     return
@@ -1130,8 +1165,13 @@ function readSettingsForm(): DocentConfig {
     : current.voiceProvider
   // "" (Same as app) clears the override so voice tracks the UI locale.
   const voiceLang = voiceLangSelect ? (voiceLangSelect.value || undefined) : current.voiceLang
-  const handsFreeValue = handsFreeSelect?.value
-  const voiceHandsFree = handsFreeValue === 'push-to-talk' || handsFreeValue === 'open-mic' || handsFreeValue === 'off'
+  // A stale/persisted 'wake-word' on a deploy that no longer configures
+  // it (or Tauri) falls back to 'off' — the option is hidden, so it
+  // can't be re-selected and would otherwise strand a dead mode.
+  let handsFreeValue = handsFreeSelect?.value
+  if (handsFreeValue === 'wake-word' && !isWakeWordConfigured()) handsFreeValue = 'off'
+  const voiceHandsFree = handsFreeValue === 'push-to-talk' || handsFreeValue === 'open-mic'
+    || handsFreeValue === 'wake-word' || handsFreeValue === 'off'
     ? handsFreeValue
     : current.voiceHandsFree
   return {
@@ -1341,10 +1381,28 @@ async function handleSend(): Promise<void> {
           // happens later via executeGlobeAction. If the host
           // doesn't expose canSetTime, we fall through to the
           // optimistic render as before.
+          //
+          // But suppress the eager failure when this same message
+          // carries a Load button for a dataset that isn't on the
+          // globe yet: the seek is deferred and re-evaluates (and
+          // succeeds, or fails with a real reason) once the user taps
+          // Load. Flagging "no dataset loaded" before they've had the
+          // chance to load one is misleading — e.g. an Orbit
+          // current-event card streams Load + Fly + Seek together, so
+          // at app-start nothing is loaded yet but the seek will work
+          // right after the Load tap. The load-dataset action always
+          // streams before its sibling set-time, so it is already in
+          // `docentMsg.actions` here.
           if (action.type === 'set-time' && callbacks.canSetTime) {
-            const probe = callbacks.canSetTime(action.isoDate)
-            if (!probe.ok) {
-              action = { ...action, error: probe.message }
+            const currentId = callbacks.getCurrentDataset()?.id
+            const pendingLoad = docentMsg.actions.some(
+              a => a.type === 'load-dataset' && a.datasetId !== currentId,
+            )
+            if (!pendingLoad) {
+              const probe = callbacks.canSetTime(action.isoDate)
+              if (!probe.ok) {
+                action = { ...action, error: probe.message }
+              }
             }
           }
           docentMsg.actions.push(action)
@@ -1354,7 +1412,11 @@ async function handleSend(): Promise<void> {
           // gets queued so it can re-evaluate after the user loads
           // a dataset that might satisfy it (different time-enabled
           // dataset → different success conditions).
-          if (action.type !== 'load-dataset') {
+          // `event-citation` is display-only (the load + fly/seek ride on
+          // the sibling load-dataset / fly-to / set-time actions the
+          // <<EVENT:ID>> marker expanded into), so it renders but is never
+          // deferred for execution.
+          if (action.type !== 'load-dataset' && action.type !== 'event-citation') {
             pendingGlobeActions.push(action)
           }
           updateStreamingMessage(docentMsg)
@@ -1419,6 +1481,21 @@ async function handleSend(): Promise<void> {
             && loadActions.every(a => a.type === 'load-dataset' && a.datasetId === currentDataset?.id)
           if (loadActions.length === 0 || allAlreadyLoaded) {
             flushPendingGlobeActions()
+          } else {
+            // A load is pending, so the deferred set-time seek hasn't run —
+            // it flushes once the user taps Load. Any set-time error stamped
+            // by the streaming eager dry-check is therefore premature (the
+            // seek will re-evaluate post-load). This also catches the case
+            // the stream-time check can't: an inline `set_time` tool call
+            // arrives *before* the turn-end load-dataset, so its eager check
+            // saw no pending load. Clear those premature errors now that the
+            // full action set is known; a genuine failure re-stamps after
+            // load via executeGlobeAction.
+            let cleared = false
+            for (const a of docentMsg.actions ?? []) {
+              if (a.type === 'set-time' && a.error) { delete a.error; cleared = true }
+            }
+            if (cleared) updateStreamingMessage(docentMsg)
           }
           break
         }
@@ -1715,6 +1792,17 @@ function renderActions(actions: ChatAction[]): string {
       // SPA side); render it verbatim so all consumers agree on
       // the label.
       return `<button class="chat-action-btn chat-action-frame" data-dataset-id="${escapeAttr(a.datasetId)}" data-frame-query="${escapeAttr(a.frameQuery)}" aria-label="${escapeAttr(t('chat.action.loadFrame.aria', { name: a.displayName }))}"><span class="chat-action-title">${escapeHtml(a.displayName)}</span> <span class="chat-action-load">${escapeHtml(t('chat.action.loadFrame'))}</span></button>`
+    }
+    if (a.type === 'event-citation') {
+      // Cited current-event card. Display-only: the sibling load-dataset /
+      // fly-to / set-time actions (expanded from the same <<EVENT:ID>>
+      // marker) do the loading and globe move. `sourceUrl` is guaranteed
+      // http(s) by the events client's sanitizer.
+      return `<div class="chat-event-citation">
+        <span class="chat-event-eyebrow">${escapeHtml(t('chat.event.eyebrow'))}</span>
+        <p class="chat-event-title">${escapeHtml(a.title)}</p>
+        <a class="chat-event-source" href="${escapeAttr(a.sourceUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(a.sourceName)} ↗</a>
+      </div>`
     }
     return ''
   }).join('')

@@ -32,6 +32,11 @@ export type AuditSubjectKind =
   | 'workflow'
   | 'analytics_day'
   | 'publisher'
+  | 'event'
+  | 'feed'
+  | 'node_profile'
+  | 'blog_post'
+  | 'youtube_channel'
 
 /**
  * `action` is a free-form, dotted token recording *what happened*.
@@ -57,6 +62,23 @@ export type AuditAction =
   | 'publisher.suspend'
   | 'publisher.reactivate'
   | 'publisher.role_change'
+  | 'event.reviewed'
+  | 'event.ingested'
+  | 'event.refreshed'
+  | 'event.tour_generated'
+  | 'event.image_upload'
+  | 'youtube_channel.add'
+  | 'youtube_channel.remove'
+  | 'feed.created'
+  | 'feed.updated'
+  | 'feed.deleted'
+  | 'node_profile.update'
+  | 'node_profile.logo_update'
+  | 'blog.create'
+  | 'blog.update'
+  | 'blog.publish'
+  | 'blog.unpublish'
+  | 'blog.generate'
 
 export interface AuditEventInput {
   actor_kind: AuditActorKind

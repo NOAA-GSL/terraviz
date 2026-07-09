@@ -114,16 +114,26 @@ function buildShell(
   const shell = document.createElement('main')
   shell.className = 'publisher-shell'
 
-  const header = document.createElement('div')
-  header.className = 'publisher-tour-list-header'
+  // Page header mirrors the datasets/workflows lists (deck layout):
+  // stacked title + subtitle on the start side, a primary action
+  // button on the end side.
+  const header = document.createElement('header')
+  header.className = 'publisher-page-header'
 
-  const h2 = document.createElement('h2')
-  h2.textContent = t('publisher.tours.heading')
-  header.appendChild(h2)
+  const titles = document.createElement('div')
+  titles.className = 'publisher-page-titles'
+  const h1 = document.createElement('h1')
+  h1.className = 'publisher-page-title'
+  h1.textContent = t('publisher.tours.heading')
+  const sub = document.createElement('p')
+  sub.className = 'publisher-page-subtitle'
+  sub.textContent = t('publisher.tours.intro')
+  titles.append(h1, sub)
+  header.appendChild(titles)
 
   const newBtn = document.createElement('button')
   newBtn.type = 'button'
-  newBtn.className = 'publisher-tab publisher-tab-active publisher-tour-new-btn'
+  newBtn.className = 'publisher-button publisher-button-primary publisher-tour-new-btn'
   newBtn.setAttribute('aria-label', t('publisher.tours.new.aria'))
   newBtn.textContent = t('publisher.tours.new')
   newBtn.addEventListener('click', () => {
@@ -150,11 +160,6 @@ function buildShell(
   header.appendChild(newBtn)
   shell.appendChild(header)
 
-  const intro = document.createElement('p')
-  intro.className = 'publisher-tour-intro'
-  intro.textContent = t('publisher.tours.intro')
-  shell.appendChild(intro)
-
   if (tours.length === 0) {
     const empty = document.createElement('section')
     empty.className = 'publisher-card publisher-glass publisher-empty'
@@ -170,8 +175,72 @@ function buildShell(
     return shell
   }
 
-  shell.appendChild(buildTable(tours, navigate, del, retract, confirmFn))
+  const table = buildTable(tours, navigate, del, retract, confirmFn)
+  shell.appendChild(buildStatusFilter(tours, table))
+  shell.appendChild(table)
   return shell
+}
+
+type TourStatus = 'draft' | 'published' | 'retracted'
+
+function statusOf(tour: TourListItem): TourStatus {
+  return tour.retracted_at ? 'retracted' : tour.published_at ? 'published' : 'draft'
+}
+
+/**
+ * Status filter row with per-status counts (All / Draft / Published /
+ * Retracted), matching the deck. Filters the already-loaded table's
+ * rows in place by their `data-status` — no refetch.
+ */
+function buildStatusFilter(tours: TourListItem[], table: HTMLElement): HTMLElement {
+  const counts: Record<'all' | TourStatus, number> = {
+    all: tours.length,
+    draft: 0,
+    published: 0,
+    retracted: 0,
+  }
+  for (const tour of tours) counts[statusOf(tour)]++
+
+  const bar = document.createElement('div')
+  bar.className = 'publisher-tabs publisher-tours-filter'
+  bar.setAttribute('role', 'tablist')
+  bar.setAttribute('aria-label', t('publisher.tours.filter.aria'))
+
+  const entries: Array<['all' | TourStatus, 'publisher.tours.filter.all' | 'publisher.tours.filter.draft' | 'publisher.tours.filter.published' | 'publisher.tours.filter.retracted']> = [
+    ['all', 'publisher.tours.filter.all'],
+    ['draft', 'publisher.tours.filter.draft'],
+    ['published', 'publisher.tours.filter.published'],
+    ['retracted', 'publisher.tours.filter.retracted'],
+  ]
+
+  const apply = (value: 'all' | TourStatus): void => {
+    for (const row of Array.from(table.querySelectorAll<HTMLElement>('tbody tr'))) {
+      row.hidden = value !== 'all' && row.dataset.status !== value
+    }
+  }
+
+  entries.forEach(([value, labelKey], i) => {
+    const tab = document.createElement('button')
+    tab.type = 'button'
+    tab.className = i === 0 ? 'publisher-tab publisher-tab-active' : 'publisher-tab'
+    tab.setAttribute('role', 'tab')
+    tab.setAttribute('aria-selected', i === 0 ? 'true' : 'false')
+    tab.append(document.createTextNode(t(labelKey)))
+    const badge = document.createElement('span')
+    badge.className = 'publisher-tab-count'
+    badge.textContent = String(counts[value])
+    tab.append(badge)
+    tab.addEventListener('click', () => {
+      apply(value)
+      for (const btn of Array.from(bar.children)) {
+        const isThis = btn === tab
+        btn.classList.toggle('publisher-tab-active', isThis)
+        btn.setAttribute('aria-selected', isThis ? 'true' : 'false')
+      }
+    })
+    bar.append(tab)
+  })
+  return bar
 }
 
 function buildTable(
@@ -188,9 +257,10 @@ function buildTable(
 
   const thead = document.createElement('thead')
   const headRow = document.createElement('tr')
+  // Deck layout: no standalone Status column — the status badge sits
+  // under the title (same fold as the datasets list).
   for (const key of [
     'publisher.tours.col.title',
-    'publisher.tours.col.status',
     'publisher.tours.col.updated',
     'publisher.tours.col.actions',
   ] as const) {
@@ -225,19 +295,6 @@ function buildRow(
 ): HTMLElement {
   const tr = document.createElement('tr')
 
-  const titleCell = document.createElement('td')
-  const titleLink = document.createElement('a')
-  titleLink.className = 'publisher-row-link'
-  titleLink.href = `/?tourEdit=${encodeURIComponent(tour.id)}`
-  titleLink.textContent = tour.title
-  titleLink.addEventListener('click', e => {
-    if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return
-    e.preventDefault()
-    navigate(`/?tourEdit=${encodeURIComponent(tour.id)}`)
-  })
-  titleCell.appendChild(titleLink)
-  tr.appendChild(titleCell)
-
   // Phase 3pt/G follow-up — three-way status. A retracted row
   // keeps `published_at` set (history) and adds `retracted_at`;
   // it should read as "Retracted" in the list so the publisher
@@ -248,7 +305,22 @@ function buildRow(
     : tour.published_at
       ? 'published'
       : 'draft'
-  const statusCell = document.createElement('td')
+  tr.dataset.status = statusKind
+
+  const titleCell = document.createElement('td')
+  // Title link + status badge stacked (deck fold — no separate column).
+  const titleStack = document.createElement('div')
+  titleStack.className = 'publisher-cell-title'
+  const titleLink = document.createElement('a')
+  titleLink.className = 'publisher-row-link'
+  titleLink.href = `/?tourEdit=${encodeURIComponent(tour.id)}`
+  titleLink.textContent = tour.title
+  titleLink.addEventListener('click', e => {
+    if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return
+    e.preventDefault()
+    navigate(`/?tourEdit=${encodeURIComponent(tour.id)}`)
+  })
+  titleStack.appendChild(titleLink)
   const badge = document.createElement('span')
   badge.className = `publisher-badge publisher-badge-status publisher-badge-${statusKind}`
   badge.textContent =
@@ -257,8 +329,9 @@ function buildRow(
       : statusKind === 'published'
         ? t('publisher.tours.status.published')
         : t('publisher.tours.status.draft')
-  statusCell.appendChild(badge)
-  tr.appendChild(statusCell)
+  titleStack.appendChild(badge)
+  titleCell.appendChild(titleStack)
+  tr.appendChild(titleCell)
 
   const updatedCell = document.createElement('td')
   updatedCell.className = 'publisher-cell-updated'
@@ -325,35 +398,44 @@ function buildRow(
   // success removes the row from the DOM rather than re-
   // rendering the whole list. Server-side errors land in an
   // inline status next to the actions.
-  const deleteBtn = document.createElement('button')
-  deleteBtn.type = 'button'
-  deleteBtn.className = 'publisher-row-action publisher-row-delete'
-  deleteBtn.textContent = t('publisher.tours.action.delete')
-  deleteBtn.setAttribute(
-    'aria-label',
-    t('publisher.tours.action.delete.aria', { title: tour.title }),
-  )
-  const statusSpan = document.createElement('span')
-  statusSpan.className = 'publisher-row-action-status'
-  deleteBtn.addEventListener('click', () => {
-    const confirmed = confirmFn(
-      t('publisher.tours.delete.confirm', { title: tour.title }),
+  //
+  // Only offered on rows that are NOT currently published (draft or
+  // retracted) — a live row must be retracted before it can be
+  // deleted (the API enforces this with a 409), and the deck shows
+  // published rows with Edit + Retract only. This also keeps the
+  // action set to two buttons so it doesn't wrap.
+  if (statusKind !== 'published') {
+    const deleteBtn = document.createElement('button')
+    deleteBtn.type = 'button'
+    deleteBtn.className = 'publisher-row-action publisher-row-delete'
+    deleteBtn.textContent = t('publisher.tours.action.delete')
+    deleteBtn.setAttribute(
+      'aria-label',
+      t('publisher.tours.action.delete.aria', { title: tour.title }),
     )
-    if (!confirmed) return
-    deleteBtn.disabled = true
-    statusSpan.textContent = ''
-    void del(tour.id).then(result => {
-      if ('error' in result) {
-        deleteBtn.disabled = false
-        statusSpan.textContent = result.error
-        statusSpan.classList.add('publisher-row-action-status-error')
-        return
-      }
-      tr.remove()
+    const statusSpan = document.createElement('span')
+    statusSpan.className = 'publisher-row-action-status'
+    deleteBtn.addEventListener('click', () => {
+      const confirmed = confirmFn(
+        t('publisher.tours.delete.confirm', { title: tour.title }),
+      )
+      if (!confirmed) return
+      deleteBtn.disabled = true
+      statusSpan.textContent = ''
+      statusSpan.classList.remove('publisher-row-action-status-error')
+      void del(tour.id).then(result => {
+        if ('error' in result) {
+          deleteBtn.disabled = false
+          statusSpan.textContent = result.error
+          statusSpan.classList.add('publisher-row-action-status-error')
+          return
+        }
+        tr.remove()
+      })
     })
-  })
-  actionsCell.appendChild(deleteBtn)
-  actionsCell.appendChild(statusSpan)
+    actionsCell.appendChild(deleteBtn)
+    actionsCell.appendChild(statusSpan)
+  }
   tr.appendChild(actionsCell)
 
   return tr

@@ -29,7 +29,11 @@ import {
 import { buildErrorCard, type ErrorCardDetails } from './error-card'
 import { attachToolbar, renderMarkdownToolbar } from './markdown-toolbar'
 import { renderChipInput } from './chip-input'
-import { renderAssetUploader, type AuxAssetKind } from './asset-uploader'
+import {
+  renderAssetUploader,
+  type AssetUploadOutcome,
+  type AuxAssetKind,
+} from './asset-uploader'
 import { renderMarkdown } from '../../../services/markdownRenderer'
 import type { PublisherDatasetDetail } from '../types'
 import type { DatasetOverlayOptions } from '../../../types'
@@ -126,6 +130,12 @@ interface FormState {
   licenseSpdx: string
   licenseUrl: string
   licenseStatement: string
+  /** Guided license-chooser UI state (persists across re-renders).
+   *  `licenseAdapt`: '' | 'yes' | 'sharealike' | 'no';
+   *  `licenseCommercial`: '' | 'yes' | 'no'. */
+  licenseChooserOpen: boolean
+  licenseAdapt: string
+  licenseCommercial: string
   attributionText: string
   rightsHolder: string
   doi: string
@@ -167,6 +177,10 @@ interface FormState {
   // matches the validator.
   keywords: ReadonlyArray<string>
   tags: ReadonlyArray<string>
+  /** DOM id of the section card currently shown — the deck's form is
+   *  a stepper, so only one section is visible at a time (the left-
+   *  rail nav switches it). */
+  activeSection: string
   isSaving: boolean
   errors: ReadonlyArray<PublisherValidationError>
   /** Non-validation top-level error (network / server / session
@@ -238,6 +252,133 @@ function backLink(): HTMLElement {
   a.className = 'publisher-back-link'
   a.textContent = `← ${t('publisher.datasetDetail.backToList')}`
   return a
+}
+
+/** Terse createElement helper for the form's chrome (nav / readiness). */
+function el(tag: string, props: { className?: string; textContent?: string } = {}): HTMLElement {
+  const node = document.createElement(tag)
+  if (props.className) node.className = props.className
+  if (props.textContent != null) node.textContent = props.textContent
+  return node
+}
+
+/** DOM ids for the form's section cards — shared by the cards
+ *  themselves and the left-rail section nav that jumps to them. */
+const FORM_SECTIONS: ReadonlyArray<{
+  id: string
+  labelKey:
+    | 'publisher.datasetForm.section.identity'
+    | 'publisher.datasetForm.section.abstract'
+    | 'publisher.datasetForm.section.media'
+    | 'publisher.datasetForm.section.licensing'
+    | 'publisher.datasetForm.section.timeSpace'
+    | 'publisher.datasetForm.section.categorization'
+}> = [
+  { id: 'ds-section-identity', labelKey: 'publisher.datasetForm.section.identity' },
+  { id: 'ds-section-abstract', labelKey: 'publisher.datasetForm.section.abstract' },
+  { id: 'ds-section-media', labelKey: 'publisher.datasetForm.section.media' },
+  { id: 'ds-section-licensing', labelKey: 'publisher.datasetForm.section.licensing' },
+  { id: 'ds-section-timespace', labelKey: 'publisher.datasetForm.section.timeSpace' },
+  { id: 'ds-section-categorization', labelKey: 'publisher.datasetForm.section.categorization' },
+]
+
+/** Map a server validation-error field to the section that holds it,
+ *  so a failed save can jump the stepper to the offending field
+ *  (otherwise an error in a hidden section is invisible). */
+function sectionForField(field: string): string {
+  if (field === 'abstract') return 'ds-section-abstract'
+  if (field === 'thumbnail_ref' || field === 'legend_ref') return 'ds-section-media'
+  if (field.startsWith('license') || field === 'attribution_text' || field === 'rights_holder' || field === 'doi' || field === 'citation_text') {
+    return 'ds-section-licensing'
+  }
+  if (field === 'start_time' || field === 'end_time' || field === 'period' || field.startsWith('bounding_box') || field === 'lon_origin' || field === 'celestial_body' || field === 'radius_mi') {
+    return 'ds-section-timespace'
+  }
+  if (field === 'keywords' || field === 'tags') return 'ds-section-categorization'
+  // title / slug / format / visibility / data_ref / organization.
+  return 'ds-section-identity'
+}
+
+/** Left-rail section nav. The form is a stepper — clicking a section
+ *  shows only that section's card(s); the active one is highlighted. */
+function buildSectionNav(activeSection: string, onSelect: (id: string) => void): HTMLElement {
+  const nav = document.createElement('nav')
+  nav.className = 'publisher-form-nav'
+  nav.setAttribute('aria-label', t('publisher.datasetForm.nav.aria'))
+  for (const section of FORM_SECTIONS) {
+    const a = document.createElement('button')
+    a.type = 'button'
+    a.className =
+      section.id === activeSection
+        ? 'publisher-form-nav-link publisher-form-nav-link-active'
+        : 'publisher-form-nav-link'
+    if (section.id === activeSection) a.setAttribute('aria-current', 'step')
+    a.dataset.section = section.id
+    a.textContent = t(section.labelKey)
+    a.addEventListener('click', () => onSelect(section.id))
+    nav.appendChild(a)
+  }
+  return nav
+}
+
+/** The five publish-readiness requirements and whether the current
+ *  form state satisfies each — the same fields `validateForPublish`
+ *  enforces server-side, surfaced as a live checklist. */
+function readinessItems(state: FormState): Array<{ labelKey: string; ready: boolean }> {
+  return [
+    { labelKey: 'publisher.datasetForm.readiness.title', ready: state.title.trim() !== '' },
+    { labelKey: 'publisher.datasetForm.readiness.format', ready: state.format.trim() !== '' },
+    { labelKey: 'publisher.datasetForm.readiness.abstract', ready: state.abstract.trim() !== '' },
+    { labelKey: 'publisher.datasetForm.readiness.dataRef', ready: state.dataRef.trim() !== '' },
+    {
+      labelKey: 'publisher.datasetForm.readiness.license',
+      ready: state.licenseSpdx.trim() !== '' || state.licenseStatement.trim() !== '',
+    },
+  ]
+}
+
+/** Left-rail "Publish readiness" checklist. */
+function buildReadiness(state: FormState): HTMLElement {
+  const items = readinessItems(state)
+  const readyCount = items.filter(i => i.ready).length
+
+  const panel = document.createElement('div')
+  panel.className = 'publisher-form-readiness'
+  panel.appendChild(
+    el('div', {
+      className: 'publisher-form-readiness-heading',
+      textContent: t('publisher.datasetForm.readiness.heading'),
+    }),
+  )
+  panel.appendChild(
+    el('div', {
+      className: 'publisher-form-readiness-count',
+      textContent: t('publisher.datasetForm.readiness.count', {
+        ready: String(readyCount),
+        total: String(items.length),
+      }),
+    }),
+  )
+  const list = document.createElement('ul')
+  list.className = 'publisher-form-readiness-list'
+  for (const item of items) {
+    const li = document.createElement('li')
+    li.className = `publisher-form-readiness-item ${item.ready ? 'is-ready' : 'is-pending'}`
+    const mark = el('span', {
+      className: 'publisher-form-readiness-mark',
+      textContent: item.ready ? '✓' : '○',
+    })
+    mark.setAttribute(
+      'aria-label',
+      item.ready
+        ? t('publisher.datasetForm.readiness.readyAria')
+        : t('publisher.datasetForm.readiness.notReadyAria'),
+    )
+    li.append(mark, el('span', { textContent: t(item.labelKey as 'publisher.datasetForm.readiness.title') }))
+    list.appendChild(li)
+  }
+  panel.appendChild(list)
+  return panel
 }
 
 function renderTopLevelError(
@@ -937,6 +1078,194 @@ function categorizationCard(state: FormState): HTMLElement {
   return card
 }
 
+/** Creative Commons 4.0 licenses keyed by `<adapt>|<commercial>`
+ *  answers — the guided chooser's suggestion table. */
+const CC_LICENSES: Record<string, { spdx: string; url: string }> = {
+  'yes|yes': { spdx: 'CC-BY-4.0', url: 'https://creativecommons.org/licenses/by/4.0/' },
+  'yes|no': { spdx: 'CC-BY-NC-4.0', url: 'https://creativecommons.org/licenses/by-nc/4.0/' },
+  'sharealike|yes': { spdx: 'CC-BY-SA-4.0', url: 'https://creativecommons.org/licenses/by-sa/4.0/' },
+  'sharealike|no': { spdx: 'CC-BY-NC-SA-4.0', url: 'https://creativecommons.org/licenses/by-nc-sa/4.0/' },
+  'no|yes': { spdx: 'CC-BY-ND-4.0', url: 'https://creativecommons.org/licenses/by-nd/4.0/' },
+  'no|no': { spdx: 'CC-BY-NC-ND-4.0', url: 'https://creativecommons.org/licenses/by-nc-nd/4.0/' },
+}
+
+/** A few common licenses offered as one-click quick-picks. */
+const COMMON_LICENSES: ReadonlyArray<{ spdx: string; url: string }> = [
+  { spdx: 'CC0-1.0', url: 'https://creativecommons.org/publicdomain/zero/1.0/' },
+  { spdx: 'CC-BY-4.0', url: 'https://creativecommons.org/licenses/by/4.0/' },
+  { spdx: 'CC-BY-SA-4.0', url: 'https://creativecommons.org/licenses/by-sa/4.0/' },
+  { spdx: 'CC-BY-NC-4.0', url: 'https://creativecommons.org/licenses/by-nc/4.0/' },
+]
+
+/** Map the two chooser answers to a suggested license, or null until
+ *  both are answered. Pure — exported for tests. */
+export function suggestedLicense(
+  adapt: string,
+  commercial: string,
+): { spdx: string; url: string } | null {
+  if (!adapt || !commercial) return null
+  return CC_LICENSES[`${adapt}|${commercial}`] ?? null
+}
+
+/** A labelled radio group for one chooser question. */
+function chooserQuestion(
+  labelKey: MessageKey,
+  name: string,
+  options: ReadonlyArray<{ value: string; labelKey: MessageKey }>,
+  selected: string,
+  onSelect: (value: string) => void,
+): HTMLElement {
+  const fieldset = document.createElement('fieldset')
+  fieldset.className = 'publisher-license-chooser-question'
+  const legend = document.createElement('legend')
+  legend.className = 'publisher-license-chooser-legend'
+  legend.textContent = t(labelKey)
+  fieldset.appendChild(legend)
+  const row = document.createElement('div')
+  row.className = 'publisher-license-chooser-options'
+  for (const opt of options) {
+    const label = document.createElement('label')
+    label.className = 'publisher-license-chooser-option'
+    const radio = document.createElement('input')
+    radio.type = 'radio'
+    radio.name = name
+    radio.value = opt.value
+    radio.checked = selected === opt.value
+    radio.addEventListener('change', () => onSelect(opt.value))
+    label.append(radio, el('span', { textContent: t(opt.labelKey) }))
+    row.appendChild(label)
+  }
+  fieldset.appendChild(row)
+  return fieldset
+}
+
+/** The guided license chooser block (deck slide 5): a Quick-pick row
+ *  of common licenses plus two questions that suggest a CC license,
+ *  all of which fill the SPDX + URL fields below. */
+function licenseChooser(state: FormState, update: () => void): HTMLElement {
+  const applyLicense = (spdx: string, url: string): void => {
+    state.licenseSpdx = spdx
+    state.licenseUrl = url
+    update()
+  }
+
+  const chooser = document.createElement('div')
+  chooser.className = 'publisher-license-chooser'
+
+  const head = document.createElement('div')
+  head.className = 'publisher-license-chooser-head'
+  head.appendChild(
+    el('span', {
+      className: 'publisher-license-chooser-title',
+      textContent: t('publisher.datasetForm.chooser.quickPick'),
+    }),
+  )
+  const toggle = document.createElement('button')
+  toggle.type = 'button'
+  toggle.className = 'publisher-license-chooser-toggle'
+  toggle.textContent = state.licenseChooserOpen
+    ? t('publisher.datasetForm.chooser.hide')
+    : t('publisher.datasetForm.chooser.show')
+  toggle.addEventListener('click', () => {
+    state.licenseChooserOpen = !state.licenseChooserOpen
+    update()
+  })
+  head.appendChild(toggle)
+  chooser.appendChild(head)
+
+  chooser.appendChild(
+    el('p', {
+      className: 'publisher-license-chooser-help',
+      textContent: t('publisher.datasetForm.chooser.help'),
+    }),
+  )
+
+  if (!state.licenseChooserOpen) return chooser
+
+  const quick = document.createElement('div')
+  quick.className = 'publisher-license-chooser-quick'
+  for (const lic of COMMON_LICENSES) {
+    const btn = document.createElement('button')
+    btn.type = 'button'
+    btn.className = 'publisher-license-chooser-chip'
+    btn.textContent = lic.spdx // i18n-exempt: SPDX identifier
+    if (state.licenseSpdx === lic.spdx) btn.classList.add('is-selected')
+    btn.addEventListener('click', () => applyLicense(lic.spdx, lic.url))
+    quick.appendChild(btn)
+  }
+  chooser.appendChild(quick)
+
+  chooser.appendChild(
+    el('h4', {
+      className: 'publisher-license-chooser-heading',
+      textContent: t('publisher.datasetForm.chooser.heading'),
+    }),
+  )
+  chooser.appendChild(
+    chooserQuestion(
+      'publisher.datasetForm.chooser.q1',
+      'dataset-license-adapt',
+      [
+        { value: 'yes', labelKey: 'publisher.datasetForm.chooser.q1.yes' },
+        { value: 'sharealike', labelKey: 'publisher.datasetForm.chooser.q1.sharealike' },
+        { value: 'no', labelKey: 'publisher.datasetForm.chooser.q1.no' },
+      ],
+      state.licenseAdapt,
+      v => {
+        state.licenseAdapt = v
+        update()
+      },
+    ),
+  )
+  chooser.appendChild(
+    chooserQuestion(
+      'publisher.datasetForm.chooser.q2',
+      'dataset-license-commercial',
+      [
+        { value: 'yes', labelKey: 'publisher.datasetForm.chooser.q2.yes' },
+        { value: 'no', labelKey: 'publisher.datasetForm.chooser.q2.no' },
+      ],
+      state.licenseCommercial,
+      v => {
+        state.licenseCommercial = v
+        update()
+      },
+    ),
+  )
+
+  const suggestion = suggestedLicense(state.licenseAdapt, state.licenseCommercial)
+  if (!suggestion) {
+    chooser.appendChild(
+      el('p', {
+        className: 'publisher-license-chooser-prompt',
+        textContent: t('publisher.datasetForm.chooser.prompt'),
+      }),
+    )
+  } else {
+    const row = document.createElement('div')
+    row.className = 'publisher-license-chooser-suggestion'
+    row.appendChild(
+      el('span', {
+        className: 'publisher-license-chooser-suggestion-label',
+        textContent: `${t('publisher.datasetForm.chooser.suggested')}: ${suggestion.spdx}`,
+      }),
+    )
+    const apply = document.createElement('button')
+    apply.type = 'button'
+    apply.className = 'publisher-button publisher-button-primary publisher-license-chooser-apply'
+    const isApplied = state.licenseSpdx === suggestion.spdx
+    apply.textContent = isApplied
+      ? t('publisher.datasetForm.chooser.applied')
+      : t('publisher.datasetForm.chooser.apply')
+    apply.disabled = isApplied
+    apply.addEventListener('click', () => applyLicense(suggestion.spdx, suggestion.url))
+    row.appendChild(apply)
+    chooser.appendChild(row)
+  }
+
+  return chooser
+}
+
 function licensingCard(state: FormState, update: () => void): HTMLElement {
   const card = document.createElement('section')
   card.className = 'publisher-card publisher-glass publisher-form-card'
@@ -945,6 +1274,8 @@ function licensingCard(state: FormState, update: () => void): HTMLElement {
   heading.className = 'publisher-card-heading'
   heading.textContent = t('publisher.datasetForm.section.licensing')
   card.appendChild(heading)
+
+  card.appendChild(licenseChooser(state, update))
 
   card.appendChild(
     inputField({
@@ -1069,6 +1400,16 @@ interface RenderContext {
   sleep: (ms: number) => Promise<void>
   navigate: (url: string) => void
   routerNavigate: (path: string) => void
+  /** Single-step create upload: save the current draft (without
+   *  navigating away) and return its new id, flipping `ctx` into edit
+   *  mode so subsequent renders mount edit-scoped uploaders. Returns
+   *  null if the draft couldn't be saved (a required field is
+   *  missing — the form surfaces the error). Bound per render by
+   *  `renderForm`; the create-mode asset uploaders pass it as their
+   *  `ensureDatasetId`. Single-flighted via `lifecycle.draftCreation`
+   *  so two slots (data + thumbnail) picked back-to-back don't mint
+   *  two rows. */
+  ensureDraftId: () => Promise<string | null>
   /** Shared lifecycle token for the form mount. `disposed` flips
    *  to true exactly once — when ROUTE_CHANGE_START_EVENT fires —
    *  and stays true. All renders within a single form mount share
@@ -1105,6 +1446,12 @@ interface RenderContext {
      *  so there's no `*Format` companion the way `data` has. */
     thumbnailUploader?: HTMLElement
     legendUploader?: HTMLElement
+    /** Single-flight latch for the create-form draft mint. Holds the
+     *  in-flight (or resolved) `ensureDraftId` promise so concurrent
+     *  first-file picks across the data / thumbnail / legend slots
+     *  share one create POST instead of racing to mint duplicate
+     *  rows. Cleared on failure so a retry can re-mint. */
+    draftCreation?: Promise<string | null>
   }
 }
 
@@ -1157,11 +1504,14 @@ function auxAssetField(
     wrap.appendChild(preview)
   }
 
-  // Guided uploader — edit mode only. The `/asset` init endpoint
-  // is scoped to a saved dataset id, so create mode (no row yet)
-  // gets only the manual input; once the draft is saved the
-  // publisher lands on the edit page where the uploader appears.
-  if (ctx.mode === 'edit' && ctx.datasetId) {
+  // Guided uploader — mounted in both modes. In edit mode it's
+  // scoped to the saved row; in create mode it's handed
+  // `ensureDatasetId`, so picking a thumbnail / legend image saves
+  // the draft first (single-step upload) exactly like the primary
+  // data slot. The manual input below stays as the paste-a-ref
+  // escape hatch.
+  {
+    const scopedId = ctx.mode === 'edit' && ctx.datasetId ? ctx.datasetId : null
     const uploaderWrap = document.createElement('div')
     uploaderWrap.className = 'publisher-field'
     const label = document.createElement('span')
@@ -1171,14 +1521,19 @@ function auxAssetField(
 
     // Reuse the previously-mounted uploader subtree across renders
     // so a parent repaint (title edit, save-in-progress) doesn't
-    // interrupt an in-flight upload. Same rationale as the `data`
-    // uploader's subtree preservation, minus the format key.
-    const cached = ctx.lifecycle[opts.cacheKey]
+    // interrupt an in-flight upload — edit mode only. Same rationale
+    // as the `data` uploader's subtree preservation, minus the format
+    // key. Create-mode uploaders are never cached: they carry an
+    // empty datasetId until the draft is minted, after which the
+    // next (edit-scoped) render must build a fresh, id-bound uploader.
+    const cached = scopedId ? ctx.lifecycle[opts.cacheKey] : undefined
     if (cached) {
       uploaderWrap.appendChild(cached)
     } else {
       const uploaderEl = renderAssetUploader({
-        datasetId: ctx.datasetId,
+        datasetId: scopedId ?? '',
+        // Create mode resolves the id lazily on first file pick.
+        ensureDatasetId: scopedId ? undefined : ctx.ensureDraftId,
         kind: opts.kind,
         format: state.format,
         currentDataRef: opts.refValue || null,
@@ -1198,7 +1553,7 @@ function auxAssetField(
           if (manual) manual.value = outcome.ref
         },
       })
-      ctx.lifecycle[opts.cacheKey] = uploaderEl
+      if (scopedId) ctx.lifecycle[opts.cacheKey] = uploaderEl
       uploaderWrap.appendChild(uploaderEl)
     }
     wrap.appendChild(uploaderWrap)
@@ -1351,22 +1706,52 @@ function renderForm(
   state: FormState,
   ctx: RenderContext,
 ): void {
+  // Rebind the create-mode single-step draft mint to this render's
+  // `persistDataset` closure (function declarations below are hoisted,
+  // so the reference resolves). The single-flight latch lives on
+  // `ctx.lifecycle`, which persists across renders.
+  ctx.ensureDraftId = ensureDraftId
+
   const shell = document.createElement('main')
-  shell.className = 'publisher-shell'
+  shell.className = 'publisher-shell publisher-dataset-form'
 
-  shell.appendChild(backLink())
+  // Top header: back link + title on the left, action buttons on the
+  // right (the deck moves Cancel / Save here from the form footer).
+  const header = document.createElement('header')
+  header.className = 'publisher-dataset-form-header'
 
+  const headerMain = document.createElement('div')
+  headerMain.className = 'publisher-dataset-form-header-main'
+  headerMain.appendChild(backLink())
   const heading = document.createElement('h1')
   heading.className = 'publisher-detail-title'
   heading.textContent =
     ctx.mode === 'edit'
       ? t('publisher.datasetForm.headingEdit')
       : t('publisher.datasetForm.headingNew')
-  shell.appendChild(heading)
+  headerMain.appendChild(heading)
+  header.appendChild(headerMain)
+  header.appendChild(buildActions())
+  shell.appendChild(header)
 
   if (state.topLevelError) {
     shell.appendChild(renderTopLevelError(state.topLevelError, state.topLevelErrorDetails))
   }
+
+  // Two-column layout: a sticky left rail (section nav + publish
+  // readiness) and the form cards on the right.
+  const layout = document.createElement('div')
+  layout.className = 'publisher-dataset-form-layout'
+  const rail = document.createElement('aside')
+  rail.className = 'publisher-dataset-form-rail'
+  rail.appendChild(
+    buildSectionNav(state.activeSection, id => {
+      state.activeSection = id
+      update()
+    }),
+  )
+  rail.appendChild(buildReadiness(state))
+  layout.appendChild(rail)
 
   const form = document.createElement('form')
   form.className = 'publisher-form'
@@ -1468,13 +1853,24 @@ function renderForm(
     }),
   )
 
-  // data_ref is required by `validateForPublish` server-side but
-  // draft-saveable empty. In create mode the dataset id doesn't
-  // exist yet — the uploader needs an id to scope its
-  // /asset endpoint against — so we keep the manual ref input as
+  // The primary dataset-data upload lives in the Media section
+  // (alongside thumbnail + legend), built here into `dataUploadEl`
+  // and inserted into the media card below. data_ref is required by
+  // `validateForPublish` server-side but draft-saveable empty. In
+  // create mode the dataset id doesn't exist yet — the uploader
+  // needs an id to scope its /asset endpoint against — so we show a
+  // clear "save a draft first" notice plus the manual ref input as
   // a fallback for `vimeo:` / external URLs. In edit mode we hand
   // off to the asset uploader (3pd/C); the manual ref input stays
   // available for the non-upload paths (legacy / external).
+  const dataUploadEl = document.createElement('div')
+  dataUploadEl.className = 'publisher-form-data-upload'
+  dataUploadEl.appendChild(
+    el('h3', {
+      className: 'publisher-form-subheading',
+      textContent: t('publisher.datasetForm.dataUpload.heading'),
+    }),
+  )
   if (ctx.mode === 'edit' && ctx.datasetId && ctx.isTranscoding) {
     // Row is currently mid-transcode. The detail page has the
     // 5-second poller (it auto-refreshes when transcoding
@@ -1517,100 +1913,95 @@ function renderForm(
       current.textContent = state.dataRef
       refDisplay.appendChild(current)
     }
-    identityCard.appendChild(refDisplay)
-  } else if (ctx.mode === 'edit' && ctx.datasetId) {
-    // Edit mode mounts BOTH the guided uploader and the manual
-    // text input. The uploader covers the "I have an MP4 / PNG
-    // on my disk" case; the manual input covers the
-    // "swap to a `vimeo:` legacy URL or paste an existing
-    // `r2:videos/...` ref" case, which the uploader can't
-    // express (its flow always uploads bytes). Fix for PR #112
-    // Copilot #5 — the prior single-uploader layout left
-    // editors no way to change a `vimeo:` / `url:` /
-    // already-transcoded `r2:` ref short of round-tripping
-    // through the API.
+    dataUploadEl.appendChild(refDisplay)
+  } else {
+    // Both edit (the row exists) and create (the draft is minted
+    // lazily the moment the publisher picks their first file) mount
+    // the guided uploader. In create mode the uploader has no scoped
+    // id yet, so it's handed `ensureDatasetId` — picking a file saves
+    // the draft, flips the form into edit mode, and continues the
+    // upload against the freshly-minted row (single-step upload). The
+    // manual ref input stays in both modes as the escape hatch for a
+    // `vimeo:` / external URL / already-encoded `r2:videos/...` ref
+    // the byte-uploading flow can't express (PR #112 Copilot #5).
+    const scopedId = ctx.mode === 'edit' && ctx.datasetId ? ctx.datasetId : null
+
+    const handleDataUploaded = (outcome: AssetUploadOutcome): void => {
+      // Bail if the user navigated away during the upload (which can
+      // take minutes for a multi-GB video) — the deferred callback
+      // would otherwise mutate the next page's DOM. `ctx.lifecycle`
+      // flips `disposed` only on route navigation, not on internal
+      // re-renders, so an upload in flight across input changes still
+      // resolves correctly. PR #112 followup.
+      if (ctx.lifecycle.disposed) return
+      // Direct upload (image): the server already wrote `data_ref`;
+      // mirror it into form state + the manual input so a later Save
+      // doesn't clobber it. Video upload: the server stamped
+      // `transcoding=1` and cleared `data_ref` — flip
+      // `ctx.isTranscoding` and re-render so the manual input + Save
+      // are replaced by the read-only transcoding notice. (Extended
+      // from PR #112 to cover the create single-step path, where `ctx`
+      // has just been flipped into edit mode by `ensureDraftId`.)
+      if (outcome.mode === 'direct') {
+        state.dataRef = outcome.dataRef
+        const manual = content.querySelector<HTMLInputElement>('#dataset-data-ref')
+        if (manual) manual.value = outcome.dataRef
+        ctx.lifecycle.uploader = undefined
+        ctx.lifecycle.uploaderFormat = undefined
+      } else if (outcome.mode === 'transcoding') {
+        state.dataRef = ''
+        ctx.isTranscoding = true
+        ctx.lifecycle.uploader = undefined
+        ctx.lifecycle.uploaderFormat = undefined
+        update()
+      }
+    }
+
     const uploaderWrap = document.createElement('div')
     uploaderWrap.className = 'publisher-field'
     const label = document.createElement('span')
     label.className = 'publisher-field-label'
     label.textContent = t('publisher.datasetForm.field.dataRef')
     uploaderWrap.appendChild(label)
-    // Reuse the previously-mounted uploader DOM across renders
-    // when the format is unchanged. This preserves the
-    // uploader's internal state (in-flight XHR, progress,
-    // mid-flight promise chain) so a parent re-render — e.g.
-    // the publisher edits the title while a multi-GB upload is
-    // progressing — doesn't tear down the upload UI. Format
-    // changes still recreate the uploader: its mime-acceptance
-    // logic is set at construction time, and a publisher
-    // switching format mid-upload is a meaningful state
-    // change. PR #112 followup — dataset-form.ts:asset uploader
-    // subtree preservation.
-    if (ctx.lifecycle.uploader && ctx.lifecycle.uploaderFormat === state.format) {
+    // Reuse the previously-mounted uploader DOM across renders when
+    // the format is unchanged — edit mode only. This preserves the
+    // uploader's in-flight XHR / progress / promise chain so a parent
+    // re-render (e.g. a title edit during a multi-GB upload) doesn't
+    // tear down the upload UI. Create-mode uploaders are never cached:
+    // the cached instance carries an empty datasetId, and once the
+    // draft is minted the next render is edit-scoped and must build a
+    // fresh, id-bound uploader rather than reuse the placeholder. PR
+    // #112 followup — dataset-form.ts:asset uploader subtree
+    // preservation.
+    if (
+      scopedId &&
+      ctx.lifecycle.uploader &&
+      ctx.lifecycle.uploaderFormat === state.format
+    ) {
       uploaderWrap.appendChild(ctx.lifecycle.uploader)
     } else {
       const uploaderEl = renderAssetUploader({
-        datasetId: ctx.datasetId,
+        datasetId: scopedId ?? '',
+        // Create mode resolves the id lazily on first file pick.
+        ensureDatasetId: scopedId ? undefined : ctx.ensureDraftId,
         format: state.format,
         currentDataRef: state.dataRef || null,
         navigate: ctx.navigate,
         fetchFn: ctx.fetchFn,
         sleep: ctx.sleep,
-        onUploaded: outcome => {
-          // Bail if the user navigated away during the upload
-          // (which can take minutes for a multi-GB video). Without
-          // this guard, the deferred callback would call update()
-          // or mutate #dataset-data-ref on the next page's DOM.
-          // `ctx.lifecycle` is the shared per-mount token — flips
-          // only on route navigation, not on internal re-renders,
-          // so an upload in flight across input changes still
-          // resolves correctly. PR #112 followup —
-          // dataset-form.ts:disposed race.
-          if (ctx.lifecycle.disposed) return
-          // On a direct upload (image), the server already wrote
-          // `data_ref` to the row. Mirror the field-state so a
-          // subsequent form save doesn't clobber it with an empty
-          // string. On a video upload the server stamped
-          // `transcoding=1` and cleared data_ref — flip
-          // `ctx.isTranscoding` and rerender so the manual ref
-          // input + Save button are replaced with the read-only
-          // transcoding notice. Without the rerender the publisher
-          // could type a fresh data_ref into the still-mounted
-          // manual input and Save would clobber the in-flight
-          // transcode's eventual master.m3u8 — PR #112 followup
-          // (dataset-form.ts:1007).
-          if (outcome.mode === 'direct') {
-            state.dataRef = outcome.dataRef
-            // Reflect the new ref in the manual input below so
-            // the publisher sees what the row now points at.
-            const manual = content.querySelector<HTMLInputElement>('#dataset-data-ref')
-            if (manual) manual.value = outcome.dataRef
-            // The uploader's job is done — drop the cache so a
-            // future format change or new upload starts fresh.
-            ctx.lifecycle.uploader = undefined
-            ctx.lifecycle.uploaderFormat = undefined
-          } else {
-            state.dataRef = ''
-            ctx.isTranscoding = true
-            // Cache cleared by the isTranscoding branch on next
-            // render (transcoding-locked branch doesn't mount
-            // an uploader at all); the in-flight upload's
-            // completion has already arrived here.
-            ctx.lifecycle.uploader = undefined
-            ctx.lifecycle.uploaderFormat = undefined
-            update()
-          }
-        },
+        onUploaded: handleDataUploaded,
       })
-      ctx.lifecycle.uploader = uploaderEl
-      ctx.lifecycle.uploaderFormat = state.format
+      if (scopedId) {
+        ctx.lifecycle.uploader = uploaderEl
+        ctx.lifecycle.uploaderFormat = state.format
+      }
       uploaderWrap.appendChild(uploaderEl)
     }
-    identityCard.appendChild(uploaderWrap)
-    // Manual ref input — for editors who want to swap to a
-    // legacy `vimeo:` / `url:` ref or paste an already-encoded
-    // `r2:videos/...` value without re-uploading bytes.
-    identityCard.appendChild(
+    dataUploadEl.appendChild(uploaderWrap)
+    // Manual ref input — swap to a legacy `vimeo:` / `url:` ref or
+    // paste an already-encoded `r2:videos/...` value without
+    // re-uploading bytes.
+    dataUploadEl.appendChild(
       inputField({
         id: 'dataset-data-ref',
         labelKey: 'publisher.datasetForm.field.dataRefManual',
@@ -1618,25 +2009,6 @@ function renderForm(
         value: state.dataRef,
         placeholder: t('publisher.datasetForm.placeholder.dataRef'),
         helpKey: 'publisher.datasetForm.help.dataRefManual',
-        error: findError(state.errors, 'data_ref'),
-        onChange: v => {
-          state.dataRef = v
-        },
-      }),
-    )
-  } else {
-    // Create-mode fallback — the publisher can still paste a
-    // `vimeo:` ref or an external URL by hand. Once the draft
-    // saves and they navigate to the edit page, the uploader
-    // shows up.
-    identityCard.appendChild(
-      inputField({
-        id: 'dataset-data-ref',
-        labelKey: 'publisher.datasetForm.field.dataRef',
-        required: false,
-        value: state.dataRef,
-        placeholder: t('publisher.datasetForm.placeholder.dataRef'),
-        helpKey: 'publisher.datasetForm.help.dataRef',
         error: findError(state.errors, 'data_ref'),
         onChange: v => {
           state.dataRef = v
@@ -1659,48 +2031,78 @@ function renderForm(
     }),
   )
 
-  form.appendChild(identityCard)
-  form.appendChild(abstractCard(state, update))
-  form.appendChild(mediaCard(content, state, ctx))
-  form.appendChild(licensingCard(state, update))
-  form.appendChild(timeRangeCard(state))
-  form.appendChild(geographyCard(state))
-  form.appendChild(categorizationCard(state))
+  identityCard.id = 'ds-section-identity'
+  identityCard.dataset.section = 'ds-section-identity'
+  const abstractEl = abstractCard(state, update)
+  abstractEl.id = 'ds-section-abstract'
+  abstractEl.dataset.section = 'ds-section-abstract'
+  const mediaEl = mediaCard(content, state, ctx)
+  mediaEl.id = 'ds-section-media'
+  mediaEl.dataset.section = 'ds-section-media'
+  // Primary dataset-data upload leads the Media section (before the
+  // thumbnail + legend). Insert it right after the section heading.
+  mediaEl.insertBefore(dataUploadEl, mediaEl.children[1] ?? null)
+  const licensingEl = licensingCard(state, update)
+  licensingEl.id = 'ds-section-licensing'
+  licensingEl.dataset.section = 'ds-section-licensing'
+  const timeEl = timeRangeCard(state)
+  timeEl.id = 'ds-section-timespace'
+  timeEl.dataset.section = 'ds-section-timespace'
+  // Geography shares the "Time & space" step with the time-range card.
+  const geoEl = geographyCard(state)
+  geoEl.dataset.section = 'ds-section-timespace'
+  const catEl = categorizationCard(state)
+  catEl.id = 'ds-section-categorization'
+  catEl.dataset.section = 'ds-section-categorization'
+  const cards = [identityCard, abstractEl, mediaEl, licensingEl, timeEl, geoEl, catEl]
+  for (const card of cards) {
+    // Stepper: only the active section's card(s) are shown. Use inline
+    // display (not the `hidden` attribute) because the card classes
+    // set `display`, which would override `[hidden]`.
+    if (card.dataset.section !== state.activeSection) card.style.display = 'none'
+    form.appendChild(card)
+  }
 
-  // Submit row.
-  const actions = document.createElement('div')
-  actions.className = 'publisher-form-actions'
-
-  const cancel = document.createElement('a')
-  cancel.href = '/publish/datasets'
-  cancel.className = 'publisher-button publisher-button-secondary'
-  cancel.textContent = t('publisher.datasetForm.action.cancel')
-  cancel.addEventListener('click', e => {
-    if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return
-    e.preventDefault()
-    // In edit mode the natural cancel target is the detail page
-    // the publisher arrived from; in create mode it's the list.
-    if (ctx.mode === 'edit' && ctx.datasetId) {
-      ctx.routerNavigate(`/publish/datasets/${encodeURIComponent(ctx.datasetId)}`)
-    } else {
-      ctx.routerNavigate('/publish/datasets')
-    }
-  })
-  actions.appendChild(cancel)
-
-  const submit = document.createElement('button')
-  submit.type = 'submit'
-  submit.className = 'publisher-button publisher-button-primary'
-  submit.textContent = state.isSaving
-    ? t('publisher.datasetForm.action.saving')
-    : t('publisher.datasetForm.action.saveDraft')
-  submit.disabled = state.isSaving
-  actions.appendChild(submit)
-
-  form.appendChild(actions)
-
-  shell.appendChild(form)
+  layout.appendChild(form)
+  shell.appendChild(layout)
   content.replaceChildren(shell)
+
+  /** Cancel + Save-draft buttons, mounted in the top header. They
+   *  live outside the <form>, so Save is a plain button that calls
+   *  the same submit path the form's submit event used to. */
+  function buildActions(): HTMLElement {
+    const actions = document.createElement('div')
+    actions.className = 'publisher-form-actions publisher-dataset-form-header-actions'
+
+    const cancel = document.createElement('a')
+    cancel.href = '/publish/datasets'
+    cancel.className = 'publisher-button publisher-button-secondary'
+    cancel.textContent = t('publisher.datasetForm.action.cancel')
+    cancel.addEventListener('click', e => {
+      if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return
+      e.preventDefault()
+      // In edit mode the natural cancel target is the detail page the
+      // publisher arrived from; in create mode it's the list.
+      if (ctx.mode === 'edit' && ctx.datasetId) {
+        ctx.routerNavigate(`/publish/datasets/${encodeURIComponent(ctx.datasetId)}`)
+      } else {
+        ctx.routerNavigate('/publish/datasets')
+      }
+    })
+    actions.appendChild(cancel)
+
+    const submit = document.createElement('button')
+    submit.type = 'button'
+    submit.className = 'publisher-button publisher-button-primary'
+    submit.textContent = state.isSaving
+      ? t('publisher.datasetForm.action.saving')
+      : t('publisher.datasetForm.action.saveDraft')
+    submit.disabled = state.isSaving
+    submit.addEventListener('click', () => void onSubmit())
+    actions.appendChild(submit)
+
+    return actions
+  }
 
   // Internal re-render. The lifecycle/disposed bookkeeping lives
   // ONE level up (in `renderDatasetForm`), so this function just
@@ -1719,12 +2121,10 @@ function renderForm(
     renderForm(content, state, ctx)
   }
 
-  async function onSubmit(): Promise<void> {
-    state.isSaving = true
-    state.errors = []
-    state.topLevelError = null
-    update()
-
+  /** Build the create/edit request body from the current form
+   *  state. Shared by the Save-draft button (`onSubmit`) and the
+   *  single-step create upload (`ensureDraftId`). */
+  function buildRequestBody(): Record<string, unknown> {
     const body: Record<string, unknown> = {
       title: state.title.trim(),
       format: state.format,
@@ -1793,7 +2193,31 @@ function renderForm(
     // instead of carrying placeholder rows.
     if (state.keywords.length > 0) body.keywords = [...state.keywords]
     if (state.tags.length > 0) body.tags = [...state.tags]
+    return body
+  }
 
+  /**
+   * POST/PUT the current form state to the catalog.
+   *
+   * - `navigateOnSuccess` routes to the edit (create) / detail (edit)
+   *   page after a successful save — the Save-draft button's flow.
+   * - `keepMounted` suppresses the in-flight + success re-renders so
+   *   a live asset upload driving this save (the create-form
+   *   single-step path) isn't torn down mid-flight; validation /
+   *   server / network failures still re-render to surface the error.
+   *
+   * Returns the saved dataset id on success, else null.
+   */
+  async function persistDataset(opts: {
+    navigateOnSuccess: boolean
+    keepMounted?: boolean
+  }): Promise<string | null> {
+    state.isSaving = true
+    state.errors = []
+    state.topLevelError = null
+    if (!opts.keepMounted) update()
+
+    const body = buildRequestBody()
     const endpoint =
       ctx.mode === 'edit' && ctx.datasetId
         ? editEndpoint(ctx.datasetId)
@@ -1813,29 +2237,37 @@ function renderForm(
 
     if (result.ok) {
       clearWarmupFlag()
-      // On create, send the publisher straight to the edit page
-      // (which mounts the asset uploader) rather than the read-only
-      // detail page. The structural reason the uploader can't live
-      // on /new is that the asset-init endpoint is scoped by
-      // dataset id — there's no row to attach the upload to yet.
-      // Navigating to detail then forcing an Edit click is two
-      // extra clicks of friction; jumping to /edit lets the
-      // publisher pick a file as their next action, which is
-      // almost certainly what they want after Save Draft on a
-      // greenfield row. Edit-mode saves keep the existing
-      // navigate-to-detail behavior — the publisher was already
-      // editing, the natural next step is to review.
-      const id = encodeURIComponent(result.data.dataset.id)
-      const target = ctx.mode === 'create'
-        ? `/publish/datasets/${id}/edit`
-        : `/publish/datasets/${id}`
-      ctx.routerNavigate(target)
-      return
+      if (opts.navigateOnSuccess) {
+        // On create, send the publisher straight to the edit page
+        // (which mounts the asset uploader) rather than the read-only
+        // detail page. The structural reason the uploader can't live
+        // on /new is that the asset-init endpoint is scoped by
+        // dataset id — there's no row to attach the upload to yet.
+        // Navigating to detail then forcing an Edit click is two
+        // extra clicks of friction; jumping to /edit lets the
+        // publisher pick a file as their next action, which is
+        // almost certainly what they want after Save Draft on a
+        // greenfield row. Edit-mode saves keep the existing
+        // navigate-to-detail behavior — the publisher was already
+        // editing, the natural next step is to review.
+        const id = encodeURIComponent(result.data.dataset.id)
+        const target =
+          ctx.mode === 'create'
+            ? `/publish/datasets/${id}/edit`
+            : `/publish/datasets/${id}`
+        ctx.routerNavigate(target)
+      }
+      return result.data.dataset.id
     }
     if (result.kind === 'validation') {
       state.errors = result.errors
+      // Jump the stepper to the first offending field's section so the
+      // error isn't hidden in a collapsed section.
+      if (result.errors.length > 0) {
+        state.activeSection = sectionForField(result.errors[0].field)
+      }
       update()
-      return
+      return null
     }
     if (result.kind === 'session') {
       if (handleSessionError({ navigate: ctx.navigate }) === 'show-error') {
@@ -1843,18 +2275,69 @@ function renderForm(
         state.topLevelErrorDetails = {}
         update()
       }
-      return
+      return null
     }
     if (result.kind === 'server') {
       state.topLevelError = 'server'
       state.topLevelErrorDetails = { status: result.status, body: result.body }
       update()
-      return
+      return null
     }
     // network / not_found — surface as a transient network error.
     state.topLevelError = 'network'
     state.topLevelErrorDetails = {}
     update()
+    return null
+  }
+
+  async function onSubmit(): Promise<void> {
+    await persistDataset({ navigateOnSuccess: true })
+  }
+
+  /**
+   * Single-step create upload: save the draft (without navigating)
+   * and hand its new id back to the asset uploader that triggered
+   * it, flipping `ctx` into edit mode so later renders mount
+   * edit-scoped uploaders and a reload lands on the edit page.
+   * Single-flighted via `ctx.lifecycle.draftCreation` so two slots
+   * (data + thumbnail) picked back-to-back share one create POST.
+   */
+  async function ensureDraftId(): Promise<string | null> {
+    if (ctx.mode === 'edit' && ctx.datasetId) return ctx.datasetId
+    if (ctx.lifecycle.draftCreation) return ctx.lifecycle.draftCreation
+    const creation = (async (): Promise<string | null> => {
+      const id = await persistDataset({ navigateOnSuccess: false, keepMounted: true })
+      if (!id) return null
+      // Flip into edit mode in place — subsequent renders (triggered
+      // when the upload finishes) mount an edit-scoped uploader, and
+      // the address bar reflects the row so a reload lands on /edit.
+      // Deliberately no re-render here: the live uploader that called
+      // us must stay mounted to finish its in-flight PUT.
+      ctx.mode = 'edit'
+      ctx.datasetId = id
+      try {
+        window.history.replaceState(
+          window.history.state,
+          '',
+          `/publish/datasets/${encodeURIComponent(id)}/edit`,
+        )
+      } catch {
+        /* replaceState can throw in exotic embeddings — non-fatal */
+      }
+      return id
+    })()
+    ctx.lifecycle.draftCreation = creation
+    // Release the latch on failure so a fixed-up retry can re-mint;
+    // on success we keep it (the early-return above short-circuits
+    // once `ctx.datasetId` is set anyway).
+    void creation
+      .then(id => {
+        if (!id) ctx.lifecycle.draftCreation = undefined
+      })
+      .catch(() => {
+        ctx.lifecycle.draftCreation = undefined
+      })
+    return creation
   }
 }
 
@@ -1889,6 +2372,7 @@ function initialState(
       title: '',
       slug: '',
       slugLocked: false,
+      activeSection: 'ds-section-identity',
       format: 'video/mp4',
       visibility: 'public',
       dataRef: '',
@@ -1904,6 +2388,9 @@ function initialState(
       licenseSpdx: '',
       licenseUrl: '',
       licenseStatement: '',
+      licenseChooserOpen: true,
+      licenseAdapt: '',
+      licenseCommercial: '',
       attributionText: '',
       rightsHolder: '',
       doi: '',
@@ -1938,6 +2425,7 @@ function initialState(
     // ago) already committed to a slug — treat it as manually
     // chosen so subsequent title edits don't clobber it.
     slugLocked: true,
+    activeSection: 'ds-section-identity',
     format: row.format,
     visibility: row.visibility,
     dataRef: row.data_ref ?? '',
@@ -1953,6 +2441,11 @@ function initialState(
     licenseSpdx: row.license_spdx ?? '',
     licenseUrl: row.license_url ?? '',
     licenseStatement: row.license_statement ?? '',
+    // Open the chooser only when no license is set yet (nothing to
+    // overwrite); an already-licensed row starts collapsed.
+    licenseChooserOpen: !(row.license_spdx ?? '').trim(),
+    licenseAdapt: '',
+    licenseCommercial: '',
     attributionText: row.attribution_text ?? '',
     rightsHolder: row.rights_holder ?? '',
     doi: row.doi ?? '',
@@ -2029,6 +2522,10 @@ export function renderDatasetForm(
       (path => {
         window.location.href = path
       }),
+    // Overwritten at the top of every `renderForm` with a closure
+    // bound to the current render's `persistDataset`. The stub keeps
+    // the initial literal type-complete before that first bind.
+    ensureDraftId: async () => null,
     lifecycle,
   })
 }

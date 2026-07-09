@@ -157,11 +157,29 @@ function buildForm(
   const shell = document.createElement('main')
   shell.className = 'publisher-shell'
 
-  const h2 = document.createElement('h2')
-  h2.textContent = existing
+  // Page header: back link + title, mirroring the dataset form chrome.
+  const header = document.createElement('header')
+  header.className = 'publisher-dataset-form-header'
+  const headerMain = document.createElement('div')
+  headerMain.className = 'publisher-dataset-form-header-main'
+  const back = document.createElement('a')
+  back.href = '/publish/workflows'
+  back.className = 'publisher-back-link'
+  back.textContent = `← ${t('publisher.workflows.form.back')}`
+  back.addEventListener('click', e => {
+    if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return
+    e.preventDefault()
+    navigate('/publish/workflows')
+  })
+  headerMain.appendChild(back)
+  const h1 = document.createElement('h1')
+  h1.className = 'publisher-detail-title'
+  h1.textContent = existing
     ? t('publisher.workflows.form.heading.edit')
     : t('publisher.workflows.form.heading.new')
-  shell.appendChild(h2)
+  headerMain.appendChild(h1)
+  header.appendChild(headerMain)
+  shell.appendChild(header)
 
   const form = document.createElement('form')
   form.className = 'publisher-card publisher-glass publisher-form'
@@ -213,7 +231,8 @@ function buildForm(
   // Phase Z3 — create the draft shell without leaving the form.
   const createTargetBtn = document.createElement('button')
   createTargetBtn.type = 'button'
-  createTargetBtn.className = 'publisher-tab publisher-workflow-create-target'
+  createTargetBtn.className =
+    'publisher-button publisher-button-secondary publisher-workflow-create-target'
   createTargetBtn.textContent = t('publisher.workflows.form.createTarget')
   const createTargetStatus = document.createElement('span')
   createTargetStatus.className = 'publisher-row-action-status'
@@ -386,13 +405,13 @@ function buildForm(
 
   const validateBtn = document.createElement('button')
   validateBtn.type = 'button'
-  validateBtn.className = 'publisher-tab'
+  validateBtn.className = 'publisher-button publisher-button-secondary'
   validateBtn.textContent = t('publisher.workflows.form.validate')
   buttons.appendChild(validateBtn)
 
   const saveBtn = document.createElement('button')
   saveBtn.type = 'submit'
-  saveBtn.className = 'publisher-tab publisher-tab-active'
+  saveBtn.className = 'publisher-button publisher-button-primary'
   saveBtn.textContent = t('publisher.workflows.form.save')
   buttons.appendChild(saveBtn)
   form.appendChild(buttons)

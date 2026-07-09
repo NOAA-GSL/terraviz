@@ -107,7 +107,8 @@ npm run screenshots:smoke   # gating interaction tests (search, Orbit, nav)
 | `src/services/downloadService.ts` | Offline dataset download manager (desktop only, Tauri commands) |
 | `src/services/tilePreloader.ts` | Eagerly fetches low-zoom GIBS tiles into cache on startup |
 | `src/services/catalogSource.ts` | Build-time switch for where `dataService` / `datasetLoader` source catalog data (SOS snapshot vs node catalog) |
-| `src/services/relatedDatasets.ts` | Algorithmic related-dataset recommendations |
+| `src/services/relatedDatasets.ts` | Algorithmic (lexical) related-dataset recommendations — the offline fallback |
+| `src/services/relatedDatasetsService.ts` | Client for the semantic "more like this" endpoint (`GET /api/v1/datasets/:id/related`); the info panel renders the lexical list, then progressively enhances it with this. Degrades to `null` (keep lexical) on any failure |
 | `src/services/visitMemory.ts` | Local-only log of which datasets the user has opened (localStorage) |
 | `src/services/qaService.ts` | Loads / queries the preprocessed Q&A knowledge base (local docent path) |
 | `src/services/deepLinkService.ts` | Deep-link handler — `zyra://` URLs and `/dataset/…` links |
@@ -123,6 +124,8 @@ npm run screenshots:smoke   # gating interaction tests (search, Orbit, nav)
 | `src/services/catalogGraph.ts` | Catalog **Graph** view — pure transform from a filtered catalog to a cytoscape node/edge graph (facet/keyword co-occurrence) |
 | `src/services/catalogMap.ts` | Catalog **Map** view — pure transform to one bbox overlay per dataset (geographic coverage) |
 | `src/services/catalogTimeline.ts` | Catalog **Timeline** view — pure transform to one row per dataset on a shared time axis |
+| `src/services/catalogEvents.ts` | Catalog **events overlay** — pure transform from public approved events + the visible dataset set to event overlays for the Map/Timeline views (`docs/CURRENT_EVENTS_PLAN.md` §6.3) |
+| `src/services/eventsService.ts` | Client for the public approved-events reads — the catalog list (`GET /api/v1/events`) and the per-dataset "In the news" list (`fetchEventsForDataset` → `GET /api/v1/datasets/:id/events`); shared fetch + sanitize (http(s) source-url guard) + 60s cache |
 | `src/services/datasetOverlayOptions.ts` | Pure helpers for the dataset-overlay rendering path (Phase 3e) |
 | `src/services/markdownRenderer.ts` | Markdown → safe HTML renderer (Orbit messages, doc content) |
 | `src/services/docentDegradedState.ts` | Session-scoped degraded-mode state for the docent |
@@ -146,7 +149,7 @@ npm run screenshots:smoke   # gating interaction tests (search, Orbit, nav)
 | `src/services/vrTourControls.ts` | In-VR tour control strip — prev / play-pause / next / stop + step counter |
 | `src/services/vrTourOverlay.ts` | In-VR tour overlay manager — CanvasTexture + VideoTexture panels replacing the 2D `tourUI` surface |
 | `src/ui/chatUI.ts` | Orbit chat panel — rendering, settings, trigger positioning |
-| `src/ui/voiceHandsFree.ts` | Phase 3 hands-free wiring — `HandsFreeController` bridges `RealtimeVoiceSession` to the chat input/send path (partials→input, turn→send, suspend during think/speak), drives open-mic mute + push-to-talk press; inert until opted in and a streaming engine resolves (`docs/ORBIT_VOICE_PLAN.md` §9.1) |
+| `src/ui/voiceHandsFree.ts` | Phase 3 hands-free wiring — `HandsFreeController` bridges `RealtimeVoiceSession` to the chat input/send path (partials→input, turn→send, suspend during think/speak), drives open-mic mute, push-to-talk press, and the **wake-word** model (an on-device wake phrase — built-in default "Hey Jarvis" — arms a single turn via `startWakeWord`; `isWakeWordConfigured()` gates it on `VITE_VOICE_WAKEWORD_MODEL_URL`); inert until opted in and a streaming engine resolves (`docs/ORBIT_VOICE_PLAN.md` §9.1, `docs/ORBIT_WAKEWORD.md`) |
 | `src/ui/browseUI.ts` | Dataset browse/search overlay |
 | `src/ui/downloadUI.ts` | Download manager panel — view/delete cached datasets (desktop only) |
 | `src/ui/mapControlsUI.ts` | Map controls positioning helper — keeps the Tools bar above the playback transport |
@@ -205,6 +208,7 @@ npm run screenshots:smoke   # gating interaction tests (search, Orbit, nav)
 | `src/ui/orbitPostMessageBridge.ts` | postMessage bridge between the host SPA and the embedded Orbit page |
 | `src/ui/domUtils.ts` | Small DOM helpers shared across UI modules |
 | `src/ui/sanitizeHtml.ts` | Allowlist-based HTML sanitizer for untrusted input |
+| `src/ui/blog/index.ts` | Public blog surface — lazy-booted on `/blog` + `/blog/:slug` (same chunk gate as the portal): published-post cards, the sanitized-markdown post page, per-dataset `/dataset/:id` deep links, and the approved-event source citation (`docs/CURRENT_EVENTS_PLAN.md` §7) |
 | `src/ui/publisher/index.ts` | Publisher portal entry point — lazy-loaded on `/publish/*`; mounts the History-API router + pages |
 | `src/ui/publisher/router.ts` | Tiny History-API router for the publisher portal |
 | `src/ui/publisher/api.ts` | Shared HTTP client for the publisher portal |
@@ -214,19 +218,35 @@ npm run screenshots:smoke   # gating interaction tests (search, Orbit, nav)
 | `src/ui/publisher/components/asset-uploader.ts` | Asset uploader component (Phase 3pd image-sequence pipeline) |
 | `src/ui/publisher/components/chip-input.ts` | Chip-input control — entries become removable chips as the user types |
 | `src/ui/publisher/components/markdown-toolbar.ts` | GitHub-issue-style markdown toolbar over a `<textarea>` |
-| `src/ui/publisher/components/topbar.ts` | Glass-surface top bar with section tabs |
+| `src/ui/publisher/components/sidebar.ts` | Glass-surface left sidebar — grouped section nav (Catalog / Newsroom / Insights / Settings) with a standalone Overview entry, an Events count badge, and a user-identity footer (signed-in user's avatar + name + role + Sign out) |
 | `src/ui/publisher/components/error-card.ts` | Shared error-card renderer used by every portal page |
+| `src/ui/publisher/components/events/match-badge.ts` | Events-tab **Match Badge** primitive — Topic/Time/Geo facet tags + composite %, threshold-toned (`docs/events-tab-handoff/EVENTS_TAB_IMPLEMENTATION_BRIEF.md` §5) |
+| `src/ui/publisher/components/events/events-model.ts` | Events-tab wire types + pure helpers (`AUTO_PAIR_THRESHOLD`, `autoPairTargets`, `compositePercent`, `locatorPoint`, `primaryCategory`) shared by the queue/detail components |
+| `src/ui/publisher/components/events/dataset-search.ts` | Shared catalog-search helpers for the Events-tab pairing UIs (`loadPublishedDatasets` paginated fetch + `filterDatasetsByTitle`) — used by the new-event drawer's pair pane and the detail pane's "+ Add dataset" control |
+| `src/ui/publisher/components/events/event-queue.ts` | Events-tab Direction A **left master list** — one row per event (status dot + title + `source · N datasets to review`), selection-highlighted |
+| `src/ui/publisher/components/events/media-suggest.ts` | Events-tab **media suggestions** — image-candidate builders for imageless events: the pure NASA Worldview Snapshots source (keyless, public-domain satellite imagery for the event's bbox + date) and the fetched Wikimedia Commons nearby-photos source (geosearch, kept only when public-domain/CC0 — the stored `image_url` carries no attribution field), and the hazard-gated USGS ShakeMap (fdsnws two-step, earthquake events) + NHC forecast-cone (CurrentStorms via the same-origin proxy, storm-name match) sources + the agency-YouTube VIDEO source (via the key-gated `youtube-search` proxy → curator-picked nocookie embed stored on `video_embed_url`, framed by the generated tour); the detail pane's "Use as event image" writes the pick through the review endpoint's `edits.imageUrl` |
+| `src/ui/publisher/components/events/event-detail.ts` | Events-tab Direction A **right detail pane** — two-level approval (heavy event Approve/Reject + light per-dataset ✓/✕ + Approve-all-≥90%), meta strip, Match Badge rows, locator slot |
+| `src/ui/publisher/components/events/event-locator-map.ts` | Events-tab detail **locator** — lazy MapLibre mini-map (GIBS Blue Marble raster + accent marker) centred on the event; web-only, disposed on detail swap |
+| `src/ui/publisher/components/events/new-event-drawer.ts` | Events-tab Direction D **"+ New event" slide-in drawer** — compose-the-event fields (left) + search/pair published datasets (right); posts the compose body plus hand-picked `datasetIds` to the create endpoint (seeded as proposed links); focus-trapped, Escape/backdrop close |
+| `src/ui/publisher/pages/overview.ts` | `/publish` + `/publish/overview` — command-center landing: Needs-you attention cards, At-a-glance 7-day stats, newsroom pipeline, recent activity + latest feedback; composes per-feature reads client-side (no overview endpoint), degrades for non-privileged callers |
 | `src/ui/publisher/pages/datasets.ts` | `/publish/datasets` — dataset list visible to the caller |
 | `src/ui/publisher/pages/dataset-detail.ts` | `/publish/datasets/:id` — read-only dataset detail |
 | `src/ui/publisher/pages/dataset-edit.ts` | `/publish/datasets/:id/edit` — edit an existing draft |
 | `src/ui/publisher/pages/dataset-new.ts` | `/publish/datasets/new` — wrapper around the shared dataset form |
+| `src/ui/publisher/pages/import.ts` | `/publish/import` — bulk manifest import: method chooser (manifest / remote node / CLI), drag-drop CSV/JSON upload with real client-side parsing + per-row validation preview (ready/warning/error), default-visibility + attach-workflow controls. Submit is disabled pending the server-side bulk-import endpoint; parsing/validation helpers are pure and unit-tested |
 | `src/ui/publisher/pages/tours.ts` | `/publish/tours` — tour-creator landing page |
 | `src/ui/publisher/workflows-api.ts` | Typed API wrappers for the Zyra workflow surface (Phase Z2 of `docs/ZYRA_INTEGRATION_PLAN.md`) |
 | `src/ui/publisher/workflow-templates.ts` | Curated workflow templates + insert-stage snippets for guided authoring (Phase Z3) |
+| `src/ui/publisher/feed-presets.ts` | Curated feed-preset catalog for the feeds console — reputable suggested feeds grouped by category (hazards / science news / general news), one-click addable (`docs/CURRENT_EVENTS_PLAN.md` §9) |
 | `src/ui/publisher/pages/workflows.ts` | `/publish/workflows` — Zyra workflow list |
 | `src/ui/publisher/pages/workflow-detail.ts` | `/publish/workflows/:id` — workflow summary + run history + Run now |
 | `src/ui/publisher/pages/workflow-edit.ts` | `/publish/workflows/new` + `…/:id/edit` — workflow form (YAML→JSON client-side, server-side Validate) |
 | `src/ui/publisher/pages/featured-hero.ts` | `/publish/featured-hero` — set the "Right now" hero override (`docs/HERO_ADMIN_SCOPING.md`) |
+| `src/ui/publisher/pages/node-profile.ts` | `/publish/node-profile` — edit the node / host-organization profile (org name, mission, about, region focus, tone, links) — the "about the host" context Phase 3d AI drafts ground themselves in |
+| `src/ui/publisher/pages/blog.ts` | `/publish/blog` — blog authoring list (drafts + published, status badges, New post) |
+| `src/ui/publisher/pages/blog-edit.ts` | `/publish/blog/new` + `…/:id/edit` — tabbed blog editor (Content / Sources / Media / AI draft): dataset/event grounding pickers, the **Media** tab (reuses the Events-tab `media-suggest` engine — Worldview / Commons / ShakeMap / NHC / agency YouTube + the cited event's story image — to insert imagery into the body or set the post's cover image), the AI Generate panel (tone/length/companion-tour → `POST /publish/blog/generate`), markdown body with the shared toolbar + sanitized Preview, Save/Publish/Unpublish |
+| `src/ui/publisher/pages/feeds.ts` | `/publish/feeds` — the current-events feed console: registered connectors (pause/resume/remove, Run now, last-run status), the curated preset gallery, and the bring-your-own RSS/Atom form (`docs/CURRENT_EVENTS_PLAN.md` §9) |
+| `src/ui/publisher/pages/events.ts` | `/publish/events` — current-events review queue: curator approve/reject of proposed events + their dataset links (`docs/CURRENT_EVENTS_PLAN.md` §5) |
 | `src/ui/publisher/pages/analytics.ts` | `/publish/analytics` — privileged analytics dashboard over the D1 rollups, incl. the MapLibre spatial-attention heatmap (Phase B of `docs/ANALYTICS_STORAGE_AND_ADMIN_PLAN.md`) |
 | `src/ui/publisher/pages/feedback.ts` | `/publish/feedback` — privileged feedback review (AI thumbs + bug/feature reports) over the D1 feedback tables; replaces the feedback-admin HTML dashboard (Phase C of `docs/ANALYTICS_STORAGE_AND_ADMIN_PLAN.md`) |
 | `src/ui/publisher/pages/me.ts` | `/publish/me` — current-user identity + role display |
@@ -235,6 +255,7 @@ npm run screenshots:smoke   # gating interaction tests (search, Orbit, nav)
 | `src/ui/tourAuthoring/dock.ts` | Floating tour-authoring dock — attaches to SPA chrome on `/?tourEdit=<id>` (or `=new`) |
 | `src/ui/tourAuthoring/state.ts` | In-memory tour-authoring state — dock reads/writes here; `autosave.ts` flushes it |
 | `src/ui/tourAuthoring/autosave.ts` | Debounced autosave for the tour-authoring dock |
+| `src/ui/tourAuthoring/mediaCapture.ts` | Pure capture helpers for the dock's Media group — positionless `showImage`/`showVideo` builders (→ the player's responsive media rail), `media{N}` ID minting, and the hide-latest pairing walk |
 | `src/ui/tourAuthoring/api.ts` | Publisher-side API client for the tour-authoring dock |
 | `src/utils/logger.ts` | Log-level gating so production builds stay silent |
 | `src/utils/debounce.ts` | Debounced-function wrapper |
@@ -245,6 +266,7 @@ npm run screenshots:smoke   # gating interaction tests (search, Orbit, nav)
 | `src/utils/captionProxy.ts` | Caption-URL proxying helper |
 | `src/utils/catalogFilters.ts` | URL round-trip for catalog filter state |
 | `src/utils/catalogMode.ts` | Catalog mode — `?catalog=true` URL routing |
+| `src/utils/embedMode.ts` | Embed mode — `?embed=1` minimal-chrome URL routing for iframe hosting (`docs/EMBED_URL_GRAMMAR.md`) |
 | `src/utils/posterDeepLinks.ts` | Poster deep-link handlers |
 | `functions/api/ingest.ts` | Cloudflare Pages Function — receives telemetry batches, stamps `event_type` / `environment` / `country` / `internal` server-side, writes to Workers Analytics Engine |
 
@@ -621,6 +643,7 @@ The tour engine (`src/services/tourEngine.ts`) plays back SOS-format tour JSON f
 | `setEnvView` | `callbacks.setEnvView()` — switches layout (1globe/2globes/4globes) |
 | `unloadDataset` | `callbacks.unloadDatasetAt()` — unloads a specific dataset by tour handle |
 | `worldIndex` on `loadDataset` | Routes dataset load to a specific panel slot (1-indexed) |
+| `setTime` | `callbacks.setTime()` — seeks the loaded (video) dataset to an ISO time (`seekToDate`); best-effort no-op when unseekable / out of range. Added for the auto-generated current-events tours (`docs/CURRENT_EVENTS_PLAN.md` §7) |
 
 ---
 

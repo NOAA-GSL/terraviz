@@ -37,8 +37,21 @@ import {
   removeTaskAt,
   updateTaskAt,
 } from './state'
-import { fetchTourJson, publishTour, updateTourMetadata } from './api'
+import { fetchTourJson, publishTour, updateTourMetadata, uploadTourMedia } from './api'
+import {
+  buildEmbedTask,
+  buildHideLatestMediaTask,
+  buildShowImageTask,
+  buildShowVideoTask,
+  isHttpMediaUrl,
+} from './mediaCapture'
 import { createAutosaveManager, type AutosaveStatus } from './autosave'
+
+/** Client-side caps for the media upload — keep in sync with the
+ *  route (`functions/api/v1/publish/tours/[id]/media.ts`); the API
+ *  is the hard gate, these just stop bad picks early. */
+const MEDIA_UPLOAD_MAX_BYTES = 4 * 1024 * 1024
+const MEDIA_UPLOAD_TYPES = ['image/png', 'image/jpeg', 'image/webp']
 
 /**
  * Host-supplied callbacks. The dock only needs:
@@ -131,6 +144,14 @@ export function mountTourAuthoringDock(
   // typing round-trips cleanly. Copilot discussion_r3285756544.
   let rotationValue = '1'
   let pauseValue = '5'
+  // Media captures (task: tour media authoring) — URL/caption fields
+  // held in closure state like rotation/pause; status line for
+  // upload progress + validation feedback.
+  let mediaUrlValue = ''
+  let mediaCaptionValue = ''
+  let mediaStatus = ''
+  let mediaStatusIsError = false
+  let mediaUploading = false
   // Phase 3pt-review/A — per-mount input ids so duplicate-id
   // label associations can't happen if a second dock ever
   // coexists.
@@ -430,6 +451,32 @@ export function mountTourAuthoringDock(
         ${renderUnloadByHandleRow()}
       </div>
       <div class="tour-authoring-dock-group">
+        <label class="tour-authoring-dock-group-label" for="${inputIds.mediaUrl}">${escapeHtml(t('tour.dock.group.media'))}</label>
+        <div class="tour-authoring-dock-inputrow">
+          <input id="${inputIds.mediaUrl}" class="tour-authoring-input" type="url"
+                 data-dock-field="mediaUrl"
+                 placeholder="https://" ${/* i18n-exempt: URL scheme hint, not prose */ ''}
+                 value="${escapeAttr(mediaUrlValue)}" aria-label="${escapeAttr(t('tour.dock.media.url.aria'))}">
+        </div>
+        <div class="tour-authoring-dock-inputrow">
+          <input id="${inputIds.mediaCaption}" class="tour-authoring-input" type="text"
+                 data-dock-field="mediaCaption"
+                 placeholder="${escapeAttr(t('tour.dock.media.caption.placeholder'))}"
+                 value="${escapeAttr(mediaCaptionValue)}" aria-label="${escapeAttr(t('tour.dock.media.caption.placeholder'))}">
+        </div>
+        <div class="tour-authoring-dock-chiprow">
+          <button type="button" class="tour-authoring-chip" data-action="capture-media-upload" ${mediaUploading ? 'disabled' : ''}>${escapeHtml(t('tour.dock.media.upload'))}</button>
+          <button type="button" class="tour-authoring-chip" data-action="capture-media-image">${escapeHtml(t('tour.dock.media.addImage'))}</button>
+          <button type="button" class="tour-authoring-chip" data-action="capture-media-video">${escapeHtml(t('tour.dock.media.addVideo'))}</button>
+          <button type="button" class="tour-authoring-chip" data-action="capture-media-embed">${escapeHtml(t('tour.dock.media.addEmbed'))}</button>
+          <button type="button" class="tour-authoring-chip" data-action="capture-media-hide">${escapeHtml(t('tour.dock.media.hideLatest'))}</button>
+        </div>
+        <input id="${inputIds.mediaFile}" type="file" accept="image/png,image/jpeg,image/webp" hidden>
+        ${mediaStatus
+          ? `<div class="tour-authoring-dock-media-status${mediaStatusIsError ? ' tour-authoring-dock-media-status-error' : ''}" role="${mediaStatusIsError ? 'alert' : 'status'}">${escapeHtml(mediaStatus)}</div>`
+          : ''}
+      </div>
+      <div class="tour-authoring-dock-group">
         <span class="tour-authoring-dock-group-label">${escapeHtml(t('tour.dock.group.player'))}</span>
         ${renderEnvRow('enableTourPlayer', 'tour.dock.player.enable')}
         ${renderEnvRow('tourPlayerWindow', 'tour.dock.player.window')}
@@ -538,6 +585,76 @@ export function mountTourAuthoringDock(
     state = appendTask(state, task)
     requestAutosave()
     render()
+  }
+
+  function setMediaStatus(message: string, isError: boolean): void {
+    mediaStatus = message
+    mediaStatusIsError = isError
+    render()
+  }
+
+  function clearMediaFields(): void {
+    mediaUrlValue = ''
+    mediaCaptionValue = ''
+    mediaStatus = ''
+    mediaStatusIsError = false
+    render()
+  }
+
+  /**
+   * Upload a picked image to the tour-media endpoint and capture the
+   * resulting `showImage` task. Needs a real tour id — a `'new'`
+   * draft is promoted through the autosave loop first (same dance
+   * `runPublish` does).
+   */
+  async function uploadMediaFile(file: File): Promise<void> {
+    if (!MEDIA_UPLOAD_TYPES.includes(file.type)) {
+      setMediaStatus(t('tour.dock.media.error.type'), true)
+      return
+    }
+    if (file.size > MEDIA_UPLOAD_MAX_BYTES) {
+      setMediaStatus(t('tour.dock.media.error.size'), true)
+      return
+    }
+    mediaUploading = true
+    setMediaStatus(t('tour.dock.media.uploading'), false)
+    try {
+      if (autosave.getTourId() === 'new') {
+        autosave.requestSave({ tourTasks: state.tasks })
+      }
+      await autosave.flush()
+      const id = autosave.getTourId()
+      if (id === 'new') {
+        setMediaStatus(autosaveError || t('tour.dock.media.error.generic'), true)
+        return
+      }
+      const buf = await file.arrayBuffer()
+      // Chunked btoa — String.fromCharCode(...allBytes) overflows the
+      // argument limit past ~100 KB.
+      const bytes = new Uint8Array(buf)
+      const chunks: string[] = []
+      const CHUNK = 0x8000
+      for (let i = 0; i < bytes.length; i += CHUNK) {
+        chunks.push(String.fromCharCode(...bytes.subarray(i, i + CHUNK)))
+      }
+      const bin = chunks.join('')
+      const result = await uploadTourMedia(id, {
+        contentType: file.type,
+        dataBase64: btoa(bin),
+      })
+      if ('error' in result) {
+        setMediaStatus(result.error, true)
+        return
+      }
+      pushCaptured(buildShowImageTask(result.url, mediaCaptionValue, state.tasks))
+      clearMediaFields()
+    } catch (err) {
+      logger.warn('[tourAuthoring] media upload failed', err)
+      setMediaStatus(t('tour.dock.media.error.generic'), true)
+    } finally {
+      mediaUploading = false
+      render()
+    }
   }
 
   function wireButtons(): void {
@@ -659,6 +776,80 @@ export function mountTourAuthoringDock(
         )
         if (!select || !select.value) return
         pushCaptured({ unloadDataset: select.value })
+      })
+
+    // Media captures (task: tour media authoring). URL adds reference
+    // the pasted http(s) URL directly; Upload sends the picked image
+    // to the tour-media endpoint (our R2 — CORS-safe for the VR
+    // texture path) and captures the returned URL.
+    root
+      .querySelector<HTMLInputElement>(`#${inputIds.mediaUrl}`)
+      ?.addEventListener('input', e => {
+        mediaUrlValue = (e.target as HTMLInputElement).value
+      })
+    root
+      .querySelector<HTMLInputElement>(`#${inputIds.mediaCaption}`)
+      ?.addEventListener('input', e => {
+        mediaCaptionValue = (e.target as HTMLInputElement).value
+      })
+    root
+      .querySelector<HTMLButtonElement>('[data-action="capture-media-image"]')
+      ?.addEventListener('click', () => {
+        const url = mediaUrlValue.trim()
+        if (!isHttpMediaUrl(url)) {
+          setMediaStatus(t('tour.dock.media.error.url'), true)
+          return
+        }
+        pushCaptured(buildShowImageTask(url, mediaCaptionValue, state.tasks))
+        clearMediaFields()
+      })
+    root
+      .querySelector<HTMLButtonElement>('[data-action="capture-media-video"]')
+      ?.addEventListener('click', () => {
+        const url = mediaUrlValue.trim()
+        if (!isHttpMediaUrl(url)) {
+          setMediaStatus(t('tour.dock.media.error.url'), true)
+          return
+        }
+        pushCaptured(buildShowVideoTask(url))
+        clearMediaFields()
+      })
+    root
+      .querySelector<HTMLButtonElement>('[data-action="capture-media-embed"]')
+      ?.addEventListener('click', () => {
+        // Embeds cover the big-video case: YouTube/Vimeo (page URLs
+        // are normalized to their embeddable player form) or any
+        // https page, framed fully sandboxed.
+        const task = buildEmbedTask(mediaUrlValue.trim(), state.tasks)
+        if (!task) {
+          setMediaStatus(t('tour.dock.media.error.embedUrl'), true)
+          return
+        }
+        pushCaptured(task)
+        clearMediaFields()
+      })
+    root
+      .querySelector<HTMLButtonElement>('[data-action="capture-media-hide"]')
+      ?.addEventListener('click', () => {
+        const task = buildHideLatestMediaTask(state.tasks)
+        if (!task) {
+          setMediaStatus(t('tour.dock.media.error.noVisible'), true)
+          return
+        }
+        pushCaptured(task)
+      })
+    root
+      .querySelector<HTMLButtonElement>('[data-action="capture-media-upload"]')
+      ?.addEventListener('click', () => {
+        root.querySelector<HTMLInputElement>(`#${inputIds.mediaFile}`)?.click()
+      })
+    root
+      .querySelector<HTMLInputElement>(`#${inputIds.mediaFile}`)
+      ?.addEventListener('change', e => {
+        const input = e.target as HTMLInputElement
+        const file = input.files?.[0]
+        input.value = ''
+        if (file) void uploadMediaFile(file)
       })
 
     // Phase 3pt/D — task-row controls. Per-row click handlers for
@@ -843,12 +1034,18 @@ function nextDockInputIds(): {
   rotation: string
   pause: string
   unloadHandle: string
+  mediaUrl: string
+  mediaCaption: string
+  mediaFile: string
 } {
   const n = ++dockInstanceCounter
   return {
     rotation: `tour-authoring-rotation-input-${n}`,
     pause: `tour-authoring-pause-input-${n}`,
     unloadHandle: `tour-authoring-unload-handle-select-${n}`,
+    mediaUrl: `tour-authoring-media-url-input-${n}`,
+    mediaCaption: `tour-authoring-media-caption-input-${n}`,
+    mediaFile: `tour-authoring-media-file-input-${n}`,
   }
 }
 
