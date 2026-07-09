@@ -41,6 +41,7 @@ import {
   type MediaSuggestion,
 } from '../components/events/media-suggest'
 import type { ReviewEvent } from '../components/events/events-model'
+import { resolveRegion } from '../../../data/regions'
 import { renderMarkdown } from '../../../services/markdownRenderer'
 import type { PublisherDataset } from '../types'
 
@@ -151,6 +152,25 @@ function handleWriteError(
     }
   }
   setStatus(status, t('publisher.blog.error.generic'), true)
+}
+
+/**
+ * The media engine reads `geometry.boundingBox` / `geometry.point`, but
+ * an event can carry a region *name* with no bbox (ingest inferred a
+ * region string, or a curator typed one) — the geo-gated sources would
+ * then stay dark even though the place is known. Resolve the name to a
+ * bbox client-side via the same `regions.ts` the events backend uses on
+ * edit, so a named region ("Iowa") behaves like an explicit box. Leaves
+ * the event untouched when it already has a box/point, or the name isn't
+ * a known region.
+ */
+function withResolvedGeometry(ev: ReviewEvent): ReviewEvent {
+  const g = ev.geometry
+  if (!g || g.boundingBox || g.point || !g.regionName) return ev
+  const region = resolveRegion(g.regionName)
+  if (!region) return ev
+  const [w, s, e, n] = region.bounds
+  return { ...ev, geometry: { ...g, boundingBox: { n, s, w, e } } }
 }
 
 export async function renderBlogEditPage(mount: HTMLElement, options: BlogEditPageOptions = {}): Promise<void> {
@@ -520,7 +540,10 @@ export async function renderBlogEditPage(mount: HTMLElement, options: BlogEditPa
   const rebuildMedia = (): void => {
     const token = ++mediaToken
     mediaRenderedFor = citedEventId
-    const ev = citedEventId ? events.find(e => e.id === citedEventId) ?? null : null
+    const rawEv = citedEventId ? events.find(e => e.id === citedEventId) ?? null : null
+    // Resolve a region name to a bbox so named-region events light up the
+    // geo-gated sources just like explicitly-boxed ones.
+    const ev = rawEv ? withResolvedGeometry(rawEv) : null
     mediaGrid.replaceChildren()
     mediaNotes.replaceChildren()
     if (!ev) {
