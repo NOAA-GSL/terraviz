@@ -439,7 +439,9 @@ describe('renderBlogEditPage', () => {
       else if (url.includes('/publish/me')) body = ADMIN_ME
       else if (url.includes('/publish/datasets')) body = DATASETS
       else if (url.includes('/publish/events')) {
-        body = { events: [{ id: 'EVT1', title: 'Wildfire smoke', source: { name: 'NOAA', url: 'https://x' }, status: 'approved', occurredStart: '2026-07-01T00:00:00Z', geometry: { regionName: 'U.S. Midwest' }, links: [] }] }
+        // A deliberately unknown region string (not in regions.ts) so it
+        // stays unresolvable — the note must name it.
+        body = { events: [{ id: 'EVT1', title: 'Wildfire smoke', source: { name: 'NOAA', url: 'https://x' }, status: 'approved', occurredStart: '2026-07-01T00:00:00Z', geometry: { regionName: 'Nowhereland' }, links: [] }] }
       }
       return { ok: true, status: 200, type: 'basic', json: async () => body, text: async () => JSON.stringify(body) } as unknown as Response
     })
@@ -454,7 +456,7 @@ describe('renderBlogEditPage', () => {
 
     expect(mount.querySelector('.publisher-blog-media-preview[src*="wvs.earthdata.nasa.gov"]')).toBeNull()
     const notes = (mount.querySelector('.publisher-blog-media-notes') as HTMLElement).textContent ?? ''
-    expect(notes).toContain('U.S. Midwest')
+    expect(notes).toContain('Nowhereland')
     expect(notes.toLowerCase()).toContain("isn't a recognized region")
   })
 
