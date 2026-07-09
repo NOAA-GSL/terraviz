@@ -393,6 +393,40 @@ describe('renderBlogEditPage', () => {
     expect(eventsCalls).toBeGreaterThanOrEqual(2)
   })
 
+  it('Media tab explains why sources were skipped (missing date/location prerequisites)', async () => {
+    // Event has neither a location nor a date on every fetch, so the
+    // grid stays empty and the notes must say what to add.
+    const capture: Captured = { posts: [] }
+    const fetchFn = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : (input as Request).url
+      const method = init?.method ?? 'GET'
+      let body: unknown = {}
+      if (method === 'POST' || method === 'PUT') capture.posts.push({ url, body: JSON.parse(String(init?.body)) })
+      else if (url.includes('/publish/me')) body = ADMIN_ME
+      else if (url.includes('/publish/datasets')) body = DATASETS
+      else if (url.includes('/publish/events')) {
+        body = { events: [{ id: 'EVT1', title: 'A press release with no place or date', source: { name: 'NOAA', url: 'https://x' }, status: 'approved', links: [] }] }
+      }
+      return { ok: true, status: 200, type: 'basic', json: async () => body, text: async () => JSON.stringify(body) } as unknown as Response
+    })
+    const mount = document.createElement('div')
+    await renderBlogEditPage(mount, { fetchFn, navigate: vi.fn() })
+    await flush()
+
+    const evSelect = mount.querySelector('.publisher-blog-event-select') as HTMLSelectElement
+    evSelect.value = 'EVT1'
+    evSelect.dispatchEvent(new Event('change'))
+    ;(mount.querySelector('.publisher-form-nav-link[data-section="blog-media"]') as HTMLButtonElement).click()
+    await flush()
+
+    // No Worldview (no date/location); the notes name the prerequisites.
+    expect(mount.querySelector('.publisher-blog-media-preview[src*="wvs.earthdata.nasa.gov"]')).toBeNull()
+    const notes = (mount.querySelector('.publisher-blog-media-notes') as HTMLElement).textContent ?? ''
+    expect(notes).toContain('Not shown for this event')
+    expect(notes.toLowerCase()).toContain('occurred date')
+    expect(notes.toLowerCase()).toContain('add a location')
+  })
+
   it('shows the restricted card for a non-privileged caller', async () => {
     const mount = document.createElement('div')
     const fetchFn = vi.fn(async (input: RequestInfo | URL) => {

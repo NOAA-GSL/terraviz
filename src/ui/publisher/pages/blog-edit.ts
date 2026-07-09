@@ -36,6 +36,8 @@ import {
   fetchNhcConeSuggestion,
   fetchShakemapSuggestion,
   fetchYoutubeSuggestions,
+  looksLikeQuake,
+  looksLikeTropical,
   type MediaSuggestion,
 } from '../components/events/media-suggest'
 import type { ReviewEvent } from '../components/events/events-model'
@@ -456,6 +458,10 @@ export async function renderBlogEditPage(mount: HTMLElement, options: BlogEditPa
   }
 
   const mediaGrid = el('div', { className: 'publisher-blog-media-grid' })
+  // Explains, per source, why a suggestion didn't appear — a missing
+  // date/location prerequisite, or an empty result — so a sparse grid
+  // reads as "nothing matched" rather than "broken".
+  const mediaNotes = el('div', { className: 'publisher-blog-media-notes' })
   // A suggestion card: preview + provenance + "Insert into post" and
   // (image sources only) "Set as cover". The agency-YouTube card is a
   // video — it inserts a linked thumbnail, never a cover.
@@ -516,6 +522,7 @@ export async function renderBlogEditPage(mount: HTMLElement, options: BlogEditPa
     mediaRenderedFor = citedEventId
     const ev = citedEventId ? events.find(e => e.id === citedEventId) ?? null : null
     mediaGrid.replaceChildren()
+    mediaNotes.replaceChildren()
     if (!ev) {
       mediaGrid.append(el('p', { className: 'publisher-blog-picker-hint', textContent: t('publisher.blog.media.needEvent') }))
       return
@@ -523,6 +530,30 @@ export async function renderBlogEditPage(mount: HTMLElement, options: BlogEditPa
     const append = (s: MediaSuggestion, badge: string): void => {
       if (token === mediaToken) mediaGrid.append(mediaCard(s, badge))
     }
+
+    // Per-source "why it didn't show" reasons. Each source owns one key
+    // so a late async result can clear or set its own line; the block
+    // re-renders (token-guarded) whenever the set changes.
+    const reasons = new Map<string, string>()
+    const renderNotes = (): void => {
+      if (token !== mediaToken) return
+      mediaNotes.replaceChildren()
+      if (reasons.size === 0) return
+      mediaNotes.append(el('p', { className: 'publisher-blog-media-note-label', textContent: t('publisher.blog.media.notShownLabel') }))
+      const list = el('ul', { className: 'publisher-blog-media-note-list' })
+      for (const msg of reasons.values()) list.append(el('li', { textContent: msg }))
+      mediaNotes.append(list)
+    }
+    const setReason = (key: string, msg: string): void => {
+      if (token !== mediaToken) return
+      reasons.set(key, msg)
+      renderNotes()
+    }
+
+    const hasLocation = Boolean(ev.geometry?.boundingBox ?? ev.geometry?.point)
+    const hasDate = Boolean(ev.occurredStart ?? ev.source.publishedAt)
+    const ff = fetchFn ?? fetch
+
     // The event's own vetted story image (the feed's enclosure / og:image
     // / a prior curator pick) — the most on-topic candidate when present.
     if (ev.imageUrl && /^https?:\/\//i.test(ev.imageUrl)) {
@@ -531,13 +562,50 @@ export async function renderBlogEditPage(mount: HTMLElement, options: BlogEditPa
         t('publisher.blog.media.eventImage'),
       )
     }
+
+    // Satellite view — needs both a date and a location.
     const worldview = buildWorldviewSnapshot(ev)
     if (worldview) append(worldview, mediaBadge('worldview'))
-    const ff = fetchFn ?? fetch
-    void fetchShakemapSuggestion(ev, ff).then(r => { if (r) append(r, mediaBadge(r.kind)) })
-    void fetchNhcConeSuggestion(ev, ff).then(r => { if (r) append(r, mediaBadge(r.kind)) })
-    void fetchCommonsSuggestions(ev, ff).then(rs => { for (const r of rs) append(r, mediaBadge(r.kind)) })
-    void fetchYoutubeSuggestions(ev, ff).then(rs => { for (const r of rs) append(r, mediaBadge(r.kind)) })
+    else if (!hasDate) reasons.set('worldview', t('publisher.blog.media.hintNeedsDate'))
+    else if (!hasLocation) reasons.set('worldview', t('publisher.blog.media.hintNeedsLocation'))
+
+    // Nearby photos — need a location; empty when nothing public-domain
+    // is near the point.
+    if (!hasLocation) {
+      reasons.set('commons', t('publisher.blog.media.commonsNeedsLocation'))
+    } else {
+      void fetchCommonsSuggestions(ev, ff).then(rs => {
+        if (token !== mediaToken) return
+        if (rs.length) for (const r of rs) append(r, mediaBadge(r.kind))
+        else setReason('commons', t('publisher.blog.media.commonsEmpty'))
+      })
+    }
+
+    // Hazard maps — only relevant to their event type; the note only
+    // appears when the event reads like that hazard but nothing matched.
+    if (looksLikeQuake(ev)) {
+      void fetchShakemapSuggestion(ev, ff).then(r => {
+        if (token !== mediaToken) return
+        if (r) append(r, mediaBadge(r.kind))
+        else setReason('shakemap', t('publisher.blog.media.shakemapEmpty'))
+      })
+    }
+    if (looksLikeTropical(ev)) {
+      void fetchNhcConeSuggestion(ev, ff).then(r => {
+        if (token !== mediaToken) return
+        if (r) append(r, mediaBadge(r.kind))
+        else setReason('nhc', t('publisher.blog.media.nhcEmpty'))
+      })
+    }
+
+    // Agency video — key-gated + allowlist-matched; empty is common.
+    void fetchYoutubeSuggestions(ev, ff).then(rs => {
+      if (token !== mediaToken) return
+      if (rs.length) for (const r of rs) append(r, mediaBadge(r.kind))
+      else setReason('youtube', t('publisher.blog.media.youtubeEmpty'))
+    })
+
+    renderNotes()
   }
 
   // Re-pull the approved-events list so the Media tab reflects edits the
@@ -682,6 +750,7 @@ export async function renderBlogEditPage(mount: HTMLElement, options: BlogEditPa
     coverPreview,
     el('h3', { className: 'publisher-blog-subheading', textContent: t('publisher.blog.media.suggestionsLabel') }),
     mediaGrid,
+    mediaNotes,
   )
   // Section 4 — AI draft: generate the body from the sources.
   const aiCard = card(
