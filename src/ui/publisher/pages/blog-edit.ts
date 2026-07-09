@@ -473,17 +473,35 @@ export async function renderBlogEditPage(mount: HTMLElement, options: BlogEditPa
       })
   })
 
-  // ----- Layout -----
-  const grounding = card(
-    el('h2', { className: 'publisher-card-heading', textContent: t('publisher.blog.grounding.title') }),
+  // ----- Layout: tabbed stepper (left-rail nav + one section shown) —
+  // mirrors the dataset form so the editor isn't one long page. -----
+  const bodyField = el('div', { className: 'publisher-blog-field' })
+  const bodyLabelRow = el('div', { className: 'publisher-form-label-row' }, [
+    el('span', { className: 'publisher-field-label', textContent: t('publisher.blog.field.body') }),
+    previewToggle,
+  ])
+  bodyField.append(bodyLabelRow, toolbar, bodyInput, preview)
+
+  // Section 1 — Content: the post itself (title, summary, body).
+  const contentCard = card(
+    el('h2', { className: 'publisher-card-heading', textContent: t('publisher.blog.tab.content') }),
+    labelled(t('publisher.blog.field.title'), titleInput),
+    labelled(t('publisher.blog.field.summary'), summaryInput),
+    bodyField,
+  )
+  // Section 2 — Sources: the datasets + event the post is grounded in.
+  const sourcesCard = card(
+    el('h2', { className: 'publisher-card-heading', textContent: t('publisher.blog.tab.sources') }),
     el('p', { className: 'publisher-blog-intro', textContent: t('publisher.blog.grounding.intro') }),
     labelled(t('publisher.blog.picker.label'), dsSearch),
     dsCandidates,
     chips,
     labelled(t('publisher.blog.event.label'), evSelect),
   )
-  const generate = card(
-    el('h2', { className: 'publisher-card-heading', textContent: t('publisher.blog.generate.title') }),
+  // Section 3 — AI draft: generate the body from the sources.
+  const aiCard = card(
+    el('h2', { className: 'publisher-card-heading', textContent: t('publisher.blog.tab.aiDraft') }),
+    el('p', { className: 'publisher-blog-intro', textContent: t('publisher.blog.generate.intro') }),
     labelled(t('publisher.blog.generate.tone'), toneInput),
     labelled(t('publisher.blog.generate.length'), lengthSelect),
     tourWrap,
@@ -491,21 +509,80 @@ export async function renderBlogEditPage(mount: HTMLElement, options: BlogEditPa
     genStatus,
     genTourLink,
   )
-  const bodyField = el('div', { className: 'publisher-blog-field' })
-  const bodyLabelRow = el('div', { className: 'publisher-form-label-row' }, [
-    el('span', { className: 'publisher-field-label', textContent: t('publisher.blog.field.body') }),
-    previewToggle,
+
+  const SECTIONS: ReadonlyArray<{
+    id: string
+    labelKey: 'publisher.blog.tab.content' | 'publisher.blog.tab.sources' | 'publisher.blog.tab.aiDraft'
+    card: HTMLElement
+  }> = [
+    { id: 'blog-content', labelKey: 'publisher.blog.tab.content', card: contentCard },
+    { id: 'blog-sources', labelKey: 'publisher.blog.tab.sources', card: sourcesCard },
+    { id: 'blog-aidraft', labelKey: 'publisher.blog.tab.aiDraft', card: aiCard },
+  ]
+  const navLinks = new Map<string, HTMLButtonElement>()
+  // Toggle visibility in place (no re-render) so field state, an
+  // in-flight generate, and the open Preview all survive a tab switch.
+  const showSection = (id: string): void => {
+    for (const s of SECTIONS) s.card.style.display = s.id === id ? '' : 'none'
+    for (const [sid, btn] of navLinks) {
+      const on = sid === id
+      btn.className = on
+        ? 'publisher-form-nav-link publisher-form-nav-link-active'
+        : 'publisher-form-nav-link'
+      if (on) btn.setAttribute('aria-current', 'step')
+      else btn.removeAttribute('aria-current')
+    }
+  }
+  const nav = el('nav', { className: 'publisher-form-nav' })
+  nav.setAttribute('aria-label', t('publisher.blog.editor.navAria'))
+  for (const s of SECTIONS) {
+    s.card.classList.add('publisher-form-card')
+    s.card.dataset.section = s.id
+    const btn = el('button', {
+      type: 'button',
+      className: 'publisher-form-nav-link',
+      textContent: t(s.labelKey),
+    })
+    btn.dataset.section = s.id
+    btn.addEventListener('click', () => showSection(s.id))
+    navLinks.set(s.id, btn)
+    nav.append(btn)
+  }
+
+  // Page header: back link + title on the start side; Save / Publish on
+  // the end side so they're reachable from any tab.
+  const back = el('a', {
+    className: 'publisher-back-link',
+    href: '/publish/blog',
+    textContent: `← ${t('publisher.blog.editor.back')}`,
+  })
+  back.addEventListener('click', e => {
+    if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return
+    e.preventDefault()
+    navigate('/publish/blog')
+  })
+  const headerMain = el('div', { className: 'publisher-dataset-form-header-main' }, [
+    back,
+    el('h1', {
+      className: 'publisher-detail-title',
+      textContent: existing
+        ? t('publisher.blog.editor.headingEdit')
+        : t('publisher.blog.editor.headingNew'),
+    }),
   ])
-  bodyField.append(bodyLabelRow, toolbar, bodyInput, preview)
-  const content = card(
-    el('h2', { className: 'publisher-card-heading', textContent: t('publisher.blog.editor.title') }),
-    labelled(t('publisher.blog.field.title'), titleInput),
-    labelled(t('publisher.blog.field.summary'), summaryInput),
-    bodyField,
-    el('div', { className: 'publisher-blog-actions' }, [saveBtn, publishBtn]),
-    saveStatus,
+  const header = el('header', { className: 'publisher-dataset-form-header' }, [
+    headerMain,
+    el('div', { className: 'publisher-detail-actions' }, [saveBtn, publishBtn, saveStatus]),
+  ])
+
+  const rail = el('aside', { className: 'publisher-dataset-form-rail' }, [nav])
+  const formCol = el('div', { className: 'publisher-form' }, [contentCard, sourcesCard, aiCard])
+  const layout = el('div', { className: 'publisher-dataset-form-layout' }, [rail, formCol])
+
+  mount.replaceChildren(
+    el('main', { className: 'publisher-shell publisher-dataset-form' }, [header, layout]),
   )
-  mount.replaceChildren(shell(grounding, generate, content))
+  showSection('blog-content')
   renderChips()
   renderEventOptions()
 
