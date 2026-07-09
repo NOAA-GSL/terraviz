@@ -197,10 +197,10 @@ export function openNewEventDrawer(options: NewEventDrawerOptions): () => void {
   const status = el('p', 'publisher-events-drawer-status', [])
   status.setAttribute('role', 'status')
   const saveBtn = Object.assign(document.createElement('button'), {
-    type: 'button', className: 'publisher-btn publisher-btn-primary', textContent: t('publisher.events.drawer.save'),
+    type: 'button', className: 'publisher-button publisher-button-primary', textContent: t('publisher.events.drawer.save'),
   })
   const cancelBtn = Object.assign(document.createElement('button'), {
-    type: 'button', className: 'publisher-btn', textContent: t('publisher.events.form.cancel'),
+    type: 'button', className: 'publisher-button', textContent: t('publisher.events.form.cancel'),
   })
 
   // --- Shell ---

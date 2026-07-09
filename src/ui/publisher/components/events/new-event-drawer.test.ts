@@ -93,7 +93,7 @@ describe('openNewEventDrawer', () => {
     inputs[2].value = 'https://example.gov/manual'
 
     const saveBtn = Array.from(document.querySelectorAll<HTMLButtonElement>('.publisher-events-drawer-actions button'))
-      .find(b => b.classList.contains('publisher-btn-primary'))!
+      .find(b => b.classList.contains('publisher-button-primary'))!
     saveBtn.click()
     await settle()
 
@@ -128,7 +128,7 @@ describe('openNewEventDrawer', () => {
     timeInput.value = '12:00'
 
     ;(Array.from(document.querySelectorAll<HTMLButtonElement>('.publisher-events-drawer-actions button'))
-      .find(b => b.classList.contains('publisher-btn-primary')) as HTMLButtonElement).click()
+      .find(b => b.classList.contains('publisher-button-primary')) as HTMLButtonElement).click()
     await settle()
 
     const createPost = fetchFn.mock.calls.find(
@@ -159,7 +159,7 @@ describe('openNewEventDrawer', () => {
     await settle()
     // Leave title/source empty; click Save.
     const saveBtn = Array.from(document.querySelectorAll<HTMLButtonElement>('.publisher-events-drawer-actions button'))
-      .find(b => b.classList.contains('publisher-btn-primary'))!
+      .find(b => b.classList.contains('publisher-button-primary'))!
     saveBtn.click()
     await settle()
     const createPost = fetchFn.mock.calls.find(

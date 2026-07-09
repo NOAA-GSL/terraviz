@@ -218,7 +218,7 @@ npm run screenshots:smoke   # gating interaction tests (search, Orbit, nav)
 | `src/ui/publisher/components/asset-uploader.ts` | Asset uploader component (Phase 3pd image-sequence pipeline) |
 | `src/ui/publisher/components/chip-input.ts` | Chip-input control — entries become removable chips as the user types |
 | `src/ui/publisher/components/markdown-toolbar.ts` | GitHub-issue-style markdown toolbar over a `<textarea>` |
-| `src/ui/publisher/components/topbar.ts` | Glass-surface top bar with section tabs |
+| `src/ui/publisher/components/sidebar.ts` | Glass-surface left sidebar — grouped section nav (Catalog / Newsroom / Insights / Settings) with a standalone Overview entry, an Events count badge, and a user-identity footer (signed-in user's avatar + name + role + Sign out) |
 | `src/ui/publisher/components/error-card.ts` | Shared error-card renderer used by every portal page |
 | `src/ui/publisher/components/events/match-badge.ts` | Events-tab **Match Badge** primitive — Topic/Time/Geo facet tags + composite %, threshold-toned (`docs/events-tab-handoff/EVENTS_TAB_IMPLEMENTATION_BRIEF.md` §5) |
 | `src/ui/publisher/components/events/events-model.ts` | Events-tab wire types + pure helpers (`AUTO_PAIR_THRESHOLD`, `autoPairTargets`, `compositePercent`, `locatorPoint`, `primaryCategory`) shared by the queue/detail components |
@@ -228,10 +228,12 @@ npm run screenshots:smoke   # gating interaction tests (search, Orbit, nav)
 | `src/ui/publisher/components/events/event-detail.ts` | Events-tab Direction A **right detail pane** — two-level approval (heavy event Approve/Reject + light per-dataset ✓/✕ + Approve-all-≥90%), meta strip, Match Badge rows, locator slot |
 | `src/ui/publisher/components/events/event-locator-map.ts` | Events-tab detail **locator** — lazy MapLibre mini-map (GIBS Blue Marble raster + accent marker) centred on the event; web-only, disposed on detail swap |
 | `src/ui/publisher/components/events/new-event-drawer.ts` | Events-tab Direction D **"+ New event" slide-in drawer** — compose-the-event fields (left) + search/pair published datasets (right); posts the compose body plus hand-picked `datasetIds` to the create endpoint (seeded as proposed links); focus-trapped, Escape/backdrop close |
+| `src/ui/publisher/pages/overview.ts` | `/publish` + `/publish/overview` — command-center landing: Needs-you attention cards, At-a-glance 7-day stats, newsroom pipeline, recent activity + latest feedback; composes per-feature reads client-side (no overview endpoint), degrades for non-privileged callers |
 | `src/ui/publisher/pages/datasets.ts` | `/publish/datasets` — dataset list visible to the caller |
 | `src/ui/publisher/pages/dataset-detail.ts` | `/publish/datasets/:id` — read-only dataset detail |
 | `src/ui/publisher/pages/dataset-edit.ts` | `/publish/datasets/:id/edit` — edit an existing draft |
 | `src/ui/publisher/pages/dataset-new.ts` | `/publish/datasets/new` — wrapper around the shared dataset form |
+| `src/ui/publisher/pages/import.ts` | `/publish/import` — bulk manifest import: method chooser (manifest / remote node / CLI), drag-drop CSV/JSON upload with real client-side parsing + per-row validation preview (ready/warning/error), default-visibility + attach-workflow controls. Submit is disabled pending the server-side bulk-import endpoint; parsing/validation helpers are pure and unit-tested |
 | `src/ui/publisher/pages/tours.ts` | `/publish/tours` — tour-creator landing page |
 | `src/ui/publisher/workflows-api.ts` | Typed API wrappers for the Zyra workflow surface (Phase Z2 of `docs/ZYRA_INTEGRATION_PLAN.md`) |
 | `src/ui/publisher/workflow-templates.ts` | Curated workflow templates + insert-stage snippets for guided authoring (Phase Z3) |
@@ -242,7 +244,7 @@ npm run screenshots:smoke   # gating interaction tests (search, Orbit, nav)
 | `src/ui/publisher/pages/featured-hero.ts` | `/publish/featured-hero` — set the "Right now" hero override (`docs/HERO_ADMIN_SCOPING.md`) |
 | `src/ui/publisher/pages/node-profile.ts` | `/publish/node-profile` — edit the node / host-organization profile (org name, mission, about, region focus, tone, links) — the "about the host" context Phase 3d AI drafts ground themselves in |
 | `src/ui/publisher/pages/blog.ts` | `/publish/blog` — blog authoring list (drafts + published, status badges, New post) |
-| `src/ui/publisher/pages/blog-edit.ts` | `/publish/blog/new` + `…/:id/edit` — blog editor: dataset/event grounding pickers, the AI Generate panel (tone/length/companion-tour → `POST /publish/blog/generate`), markdown body with the shared toolbar + sanitized Preview, Save/Publish/Unpublish |
+| `src/ui/publisher/pages/blog-edit.ts` | `/publish/blog/new` + `…/:id/edit` — tabbed blog editor (Content / Sources / Media / AI draft): dataset/event grounding pickers, the **Media** tab (reuses the Events-tab `media-suggest` engine — Worldview / Commons / ShakeMap / NHC / agency YouTube + the cited event's story image — to insert imagery into the body or set the post's cover image), the AI Generate panel (tone/length/companion-tour → `POST /publish/blog/generate`), markdown body with the shared toolbar + sanitized Preview, Save/Publish/Unpublish |
 | `src/ui/publisher/pages/feeds.ts` | `/publish/feeds` — the current-events feed console: registered connectors (pause/resume/remove, Run now, last-run status), the curated preset gallery, and the bring-your-own RSS/Atom form (`docs/CURRENT_EVENTS_PLAN.md` §9) |
 | `src/ui/publisher/pages/events.ts` | `/publish/events` — current-events review queue: curator approve/reject of proposed events + their dataset links (`docs/CURRENT_EVENTS_PLAN.md` §5) |
 | `src/ui/publisher/pages/analytics.ts` | `/publish/analytics` — privileged analytics dashboard over the D1 rollups, incl. the MapLibre spatial-attention heatmap (Phase B of `docs/ANALYTICS_STORAGE_AND_ADMIN_PLAN.md`) |

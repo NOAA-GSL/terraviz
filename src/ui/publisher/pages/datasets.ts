@@ -38,6 +38,10 @@ export interface DatasetsPageOptions {
    *  absent the tab anchors fall through to the browser's
    *  default navigation. Tests can stub it. */
   routerNavigate?: (path: string) => void
+  /** Fire the best-effort per-lifecycle count probe that fills the
+   *  tab labels. Default true; tests that assert exact fetch call
+   *  counts set it false to keep the probe out of the way. */
+  fetchCounts?: boolean
 }
 
 const DATASETS_ENDPOINT = '/api/v1/publish/datasets'
@@ -62,6 +66,11 @@ function currentStatus(): DatasetLifecycle {
 
 function buildListUrl(status: DatasetLifecycle, cursor: string | null): string {
   const params = new URLSearchParams({ status })
+  // Request the server's max page size (200) so a publisher's whole tab
+  // loads in one request in the common case — the client-side search
+  // box then filters the full set instantly. Catalogs beyond 200 still
+  // paginate via the cursor + Load more.
+  params.set('limit', '200')
   if (cursor) params.set('cursor', cursor)
   return `${DATASETS_ENDPOINT}?${params.toString()}`
 }
@@ -92,6 +101,7 @@ function renderError(
 function renderTabs(
   active: DatasetLifecycle,
   onSelect: (status: DatasetLifecycle) => void,
+  counts?: Partial<Record<DatasetLifecycle, number>> | null,
 ): HTMLElement {
   const tablist = document.createElement('div')
   tablist.className = 'publisher-tabs'
@@ -105,7 +115,16 @@ function renderTabs(
     a.setAttribute('role', 'tab')
     a.setAttribute('aria-selected', status.value === active ? 'true' : 'false')
     if (status.value === active) a.classList.add('publisher-tab-active')
-    a.textContent = t(status.labelKey)
+    a.appendChild(document.createTextNode(t(status.labelKey)))
+    // Fold the deck's lifecycle counts into the tab labels once the
+    // best-effort count probe resolves.
+    const n = counts?.[status.value]
+    if (typeof n === 'number') {
+      const badge = document.createElement('span')
+      badge.className = 'publisher-tab-count'
+      badge.textContent = String(n)
+      a.appendChild(badge)
+    }
     a.addEventListener('click', e => {
       if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return
       e.preventDefault()
@@ -155,13 +174,14 @@ function renderTable(
 
   const thead = document.createElement('thead')
   const headerRow = document.createElement('tr')
+  // Deck layout (no standalone Status column) — the lifecycle badge
+  // sits under the title in the Title cell.
   const headerKeys: ReadonlyArray<TableHeaderKey> = [
     'publisher.datasets.col.thumbnail',
     'publisher.datasets.col.title',
     'publisher.datasets.col.slug',
     'publisher.datasets.col.format',
     'publisher.datasets.col.updated',
-    'publisher.datasets.col.status',
     'publisher.datasets.col.actions',
   ]
   for (const key of headerKeys) {
@@ -176,6 +196,8 @@ function renderTable(
   const tbody = document.createElement('tbody')
   for (const d of datasets) {
     const tr = document.createElement('tr')
+    // Haystack for the client-side search box (title + slug, lowered).
+    tr.dataset.search = `${d.title} ${d.slug}`.toLowerCase()
 
     // Thumbnail cell — a small preview when the row has a resolved
     // thumbnail, empty otherwise.
@@ -192,6 +214,10 @@ function renderTable(
     tr.appendChild(thumbCell)
 
     const titleCell = document.createElement('td')
+    // Title + lifecycle badge stacked (deck layout — the badge lives
+    // under the title rather than in a standalone Status column).
+    const titleStack = document.createElement('div')
+    titleStack.className = 'publisher-cell-title'
     const titleLink = document.createElement('a')
     const detailHref = `/publish/datasets/${encodeURIComponent(d.id)}`
     titleLink.href = detailHref
@@ -215,7 +241,22 @@ function renderTable(
         }
       })
     }
-    titleCell.appendChild(titleLink)
+    titleStack.appendChild(titleLink)
+
+    const status = lifecycleOf(d)
+    const statusBadge = document.createElement('span')
+    statusBadge.className = 'publisher-badge publisher-badge-status'
+    statusBadge.dataset.status =
+      status === 'draft' ? 'pending' : status === 'retracted' ? 'suspended' : 'active'
+    statusBadge.textContent =
+      status === 'draft'
+        ? t('publisher.datasets.status.draft')
+        : status === 'published'
+          ? t('publisher.datasets.status.published')
+          : t('publisher.datasets.status.retracted')
+    titleStack.appendChild(statusBadge)
+
+    titleCell.appendChild(titleStack)
     tr.appendChild(titleCell)
 
     const slugCell = document.createElement('td')
@@ -233,39 +274,72 @@ function renderTable(
     updatedCell.textContent = formatDate(d.updated_at)
     tr.appendChild(updatedCell)
 
-    const statusCell = document.createElement('td')
-    const status = lifecycleOf(d)
-    const statusBadge = document.createElement('span')
-    statusBadge.className = 'publisher-badge publisher-badge-status'
-    statusBadge.dataset.status = status === 'draft' ? 'pending' : status === 'retracted' ? 'suspended' : 'active'
-    statusBadge.textContent =
-      status === 'draft'
-        ? t('publisher.datasets.status.draft')
-        : status === 'published'
-          ? t('publisher.datasets.status.published')
-          : t('publisher.datasets.status.retracted')
-    statusCell.appendChild(statusBadge)
-    tr.appendChild(statusCell)
-
-    // Delete (×) — non-published rows only (mirrors the tours-list
-    // delete; live rows must be retracted first, which the API
-    // enforces with a 409 regardless of what the UI shows).
+    // Actions: Edit (all rows) + Retract (published) / Delete
+    // (drafts & retracted). Live rows must be retracted before they
+    // can be deleted, which the API enforces with a 409 regardless
+    // of what the UI shows.
     const actionsCell = document.createElement('td')
-    if (status !== 'published') {
+    actionsCell.className = 'publisher-cell-actions'
+    const statusSpan = document.createElement('span')
+    statusSpan.className = 'publisher-row-action-status'
+
+    const editHref = `/publish/datasets/${encodeURIComponent(d.id)}/edit`
+    const editLink = document.createElement('a')
+    editLink.href = editHref
+    editLink.className = 'publisher-row-action publisher-row-edit'
+    editLink.textContent = t('publisher.datasets.action.edit')
+    editLink.setAttribute('aria-label', t('publisher.datasets.action.edit.aria', { title: d.title }))
+    if (routerNavigate) {
+      editLink.addEventListener('click', event => {
+        if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
+        event.preventDefault()
+        routerNavigate(editHref)
+      })
+    }
+    actionsCell.appendChild(editLink)
+
+    if (status === 'published') {
+      const retractBtn = document.createElement('button')
+      retractBtn.type = 'button'
+      retractBtn.className = 'publisher-row-action publisher-row-retract'
+      retractBtn.textContent = t('publisher.datasets.action.retract')
+      retractBtn.setAttribute('aria-label', t('publisher.datasets.action.retract.aria', { title: d.title }))
+      retractBtn.addEventListener('click', () => {
+        if (!confirmFn(t('publisher.datasets.retract.confirm', { title: d.title }))) return
+        retractBtn.disabled = true
+        statusSpan.textContent = ''
+        // Clear any error styling from a prior failed attempt so a
+        // retry doesn't inherit the red status text.
+        statusSpan.classList.remove('publisher-row-action-status-error')
+        void publisherSend<{ dataset: unknown }>(
+          `/api/v1/publish/datasets/${encodeURIComponent(d.id)}/retract`,
+          {},
+          { method: 'POST', fetchFn },
+        ).then(result => {
+          if (!result.ok) {
+            retractBtn.disabled = false
+            statusSpan.textContent = t('publisher.datasets.retract.failed')
+            statusSpan.classList.add('publisher-row-action-status-error')
+            return
+          }
+          // No longer published — drop it from the Published tab.
+          tr.remove()
+        })
+      })
+      actionsCell.appendChild(retractBtn)
+    } else {
       const deleteBtn = document.createElement('button')
       deleteBtn.type = 'button'
       deleteBtn.className = 'publisher-row-action publisher-row-delete'
       deleteBtn.textContent = t('publisher.datasets.action.delete')
-      deleteBtn.setAttribute(
-        'aria-label',
-        t('publisher.datasets.action.delete.aria', { title: d.title }),
-      )
-      const statusSpan = document.createElement('span')
-      statusSpan.className = 'publisher-row-action-status'
+      deleteBtn.setAttribute('aria-label', t('publisher.datasets.action.delete.aria', { title: d.title }))
       deleteBtn.addEventListener('click', () => {
         if (!confirmFn(t('publisher.datasets.delete.confirm', { title: d.title }))) return
         deleteBtn.disabled = true
         statusSpan.textContent = ''
+        // Clear any error styling from a prior failed attempt so a
+        // retry doesn't inherit the red status text.
+        statusSpan.classList.remove('publisher-row-action-status-error')
         void publisherSend<{ deleted_id: string }>(
           `/api/v1/publish/datasets/${encodeURIComponent(d.id)}`,
           undefined,
@@ -281,8 +355,8 @@ function renderTable(
         })
       })
       actionsCell.appendChild(deleteBtn)
-      actionsCell.appendChild(statusSpan)
     }
+    actionsCell.appendChild(statusSpan)
     tr.appendChild(actionsCell)
 
     tbody.appendChild(tr)
@@ -298,7 +372,6 @@ type TableHeaderKey =
   | 'publisher.datasets.col.slug'
   | 'publisher.datasets.col.format'
   | 'publisher.datasets.col.updated'
-  | 'publisher.datasets.col.status'
   | 'publisher.datasets.col.actions'
 
 function renderCount(n: number): HTMLElement {
@@ -340,13 +413,29 @@ interface PageState {
   datasets: PublisherDataset[]
   nextCursor: string | null
   isLoadingMore: boolean
+  /** Per-lifecycle totals shown in the tab labels; null until the
+   *  best-effort count probe resolves. A status with more rows than the
+   *  server max is omitted (count unknowable), so this is partial. */
+  counts: Partial<Record<DatasetLifecycle, number>> | null
+  /** Client-side search query — filters the loaded rows by title/slug.
+   *  Persisted on the state so it survives Load-more / tab re-renders. */
+  search: string
 }
 
-function renderActionBar(
-  routerNavigate: (path: string) => void,
-): HTMLElement {
-  const bar = document.createElement('div')
-  bar.className = 'publisher-list-actions'
+function renderHeader(routerNavigate: (path: string) => void): HTMLElement {
+  const header = document.createElement('header')
+  header.className = 'publisher-page-header'
+
+  const titles = document.createElement('div')
+  titles.className = 'publisher-page-titles'
+  const h1 = document.createElement('h1')
+  h1.className = 'publisher-page-title'
+  h1.textContent = t('publisher.datasets.title')
+  const sub = document.createElement('p')
+  sub.className = 'publisher-page-subtitle'
+  sub.textContent = t('publisher.datasets.subtitle')
+  titles.append(h1, sub)
+  header.appendChild(titles)
 
   const newButton = document.createElement('a')
   newButton.href = '/publish/datasets/new'
@@ -357,8 +446,8 @@ function renderActionBar(
     e.preventDefault()
     routerNavigate('/publish/datasets/new')
   })
-  bar.appendChild(newButton)
-  return bar
+  header.appendChild(newButton)
+  return header
 }
 
 function renderListShell(
@@ -372,11 +461,15 @@ function renderListShell(
   const shell = document.createElement('main')
   shell.className = 'publisher-shell'
 
-  shell.appendChild(renderActionBar(options.routerNavigate))
+  shell.appendChild(renderHeader(options.routerNavigate))
   shell.appendChild(
-    renderTabs(state.status, status => {
-      options.routerNavigate(`/publish/datasets?status=${status}`)
-    }),
+    renderTabs(
+      state.status,
+      status => {
+        options.routerNavigate(`/publish/datasets?status=${status}`)
+      },
+      state.counts,
+    ),
   )
 
   if (state.datasets.length === 0) {
@@ -385,8 +478,59 @@ function renderListShell(
     return
   }
 
-  shell.appendChild(renderCount(state.datasets.length))
-  shell.appendChild(renderTable(state.datasets, options.routerNavigate, options.fetchFn, options.confirm))
+  // Search box — filters the loaded rows client-side by title/slug so a
+  // large tab (150+ datasets) is quick to navigate.
+  const searchWrap = document.createElement('div')
+  searchWrap.className = 'publisher-datasets-search-wrap'
+  const search = document.createElement('input')
+  search.type = 'search'
+  search.className = 'publisher-datasets-search'
+  search.placeholder = t('publisher.datasets.search.placeholder')
+  search.setAttribute('aria-label', t('publisher.datasets.search.aria'))
+  search.value = state.search
+  searchWrap.appendChild(search)
+  shell.appendChild(searchWrap)
+
+  const count = renderCount(state.datasets.length)
+  shell.appendChild(count)
+
+  const table = renderTable(state.datasets, options.routerNavigate, options.fetchFn, options.confirm)
+  shell.appendChild(table)
+
+  const noMatch = document.createElement('p')
+  noMatch.className = 'publisher-empty-message publisher-datasets-nomatch'
+  noMatch.hidden = true
+  shell.appendChild(noMatch)
+
+  // Apply the (persisted) query: hide non-matching rows, update the
+  // count, and swap in a no-match message when nothing matches. Runs on
+  // every keystroke without re-rendering the shell, so focus is kept.
+  const applyFilter = (): void => {
+    const q = state.search.trim().toLowerCase()
+    const rows = Array.from(table.querySelectorAll<HTMLElement>('tbody tr'))
+    let shown = 0
+    for (const row of rows) {
+      const match = !q || (row.dataset.search ?? '').includes(q)
+      row.hidden = !match
+      if (match) shown++
+    }
+    count.textContent = q
+      ? t('publisher.datasets.count.filtered', { shown: String(shown), total: String(rows.length) })
+      : plural(
+          rows.length,
+          { one: 'publisher.datasets.count.one', other: 'publisher.datasets.count.other' },
+          { count: rows.length },
+        )
+    const empty = q.length > 0 && shown === 0
+    table.hidden = empty
+    noMatch.hidden = !empty
+    if (empty) noMatch.textContent = t('publisher.datasets.search.noMatch', { query: state.search.trim() })
+  }
+  search.addEventListener('input', () => {
+    state.search = search.value
+    applyFilter()
+  })
+  applyFilter()
 
   if (state.nextCursor) {
     shell.appendChild(
@@ -465,16 +609,63 @@ export async function renderDatasetsPage(
     datasets: result.data.datasets,
     nextCursor: result.data.next_cursor,
     isLoadingMore: false,
+    counts: null,
+    search: '',
   }
-  renderListShell(content, state, {
+  const shellOptions = {
     confirm: options.confirm,
     fetchFn: options.fetchFn ?? globalThis.fetch,
-    sleep: options.sleep ?? (ms => new Promise(r => setTimeout(r, ms))),
-    navigate: options.navigate ?? (url => {
-      window.location.href = url
-    }),
-    routerNavigate: options.routerNavigate ?? (path => {
-      window.location.href = path
-    }),
+    sleep: options.sleep ?? ((ms: number) => new Promise(r => setTimeout(r, ms))),
+    navigate:
+      options.navigate ??
+      ((url: string) => {
+        window.location.href = url
+      }),
+    routerNavigate:
+      options.routerNavigate ??
+      ((path: string) => {
+        window.location.href = path
+      }),
+  }
+  renderListShell(content, state, shellOptions)
+
+  // Best-effort per-lifecycle counts for the tab labels. Fired after
+  // the first paint so the list never blocks on them; re-renders the
+  // shell in place when they resolve.
+  if (options.fetchCounts !== false) {
+    void fetchLifecycleCounts(shellOptions.fetchFn).then(counts => {
+      if (!counts) return
+      state.counts = counts
+      renderListShell(content, state, shellOptions)
+    })
+  }
+}
+
+/**
+ * Fetch per-lifecycle totals (draft / published / retracted) for the
+ * tab labels. Each status is one capped list read whose length is the
+ * count — but only when the page wasn't truncated: a `next_cursor`
+ * means the status has more rows than the server's 200 max, so the
+ * length would undercount. Such a status is omitted (its label stays
+ * count-less) rather than shown wrong. Returns null if any read fails.
+ */
+async function fetchLifecycleCounts(
+  fetchFn: typeof fetch,
+): Promise<Partial<Record<DatasetLifecycle, number>> | null> {
+  const statuses: DatasetLifecycle[] = ['draft', 'published', 'retracted']
+  const results = await Promise.all(
+    // 200 = the server's max page size (see buildListUrl); asking for
+    // more just gets clamped.
+    statuses.map(s =>
+      publisherGet<ListDatasetsResponse>(`${DATASETS_ENDPOINT}?status=${s}&limit=200`, { fetchFn }),
+    ),
+  )
+  if (results.some(r => !r.ok)) return null
+  const counts: Partial<Record<DatasetLifecycle, number>> = {}
+  statuses.forEach((s, i) => {
+    const r = results[i]
+    // Only a full (untruncated) page gives a true count.
+    if (r.ok && !r.data.next_cursor) counts[s] = r.data.datasets.length
   })
+  return counts
 }

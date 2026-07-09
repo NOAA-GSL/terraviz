@@ -101,10 +101,15 @@ export async function renderBlogPage(mount: HTMLElement, options: BlogPageOption
   }
 
   const header = el('div', { className: 'publisher-blog-header' })
-  header.append(el('h2', { className: 'publisher-card-heading', textContent: t('publisher.blog.title') }))
+  header.append(
+    el('div', { className: 'publisher-page-titles' }, [
+      el('h2', { className: 'publisher-card-heading', textContent: t('publisher.blog.title') }),
+      el('p', { className: 'publisher-page-subtitle', textContent: t('publisher.blog.subtitle') }),
+    ]),
+  )
   const newBtn = el('button', {
     type: 'button',
-    className: 'publisher-btn publisher-btn-primary publisher-blog-new-btn',
+    className: 'publisher-button publisher-button-primary publisher-blog-new-btn',
     textContent: t('publisher.blog.new'),
   })
   newBtn.addEventListener('click', () => navigate('/publish/blog/new'))
@@ -118,7 +123,9 @@ export async function renderBlogPage(mount: HTMLElement, options: BlogPageOption
     const table = el('table', { className: 'publisher-table' })
     const thead = el('thead')
     const headRow = el('tr')
-    for (const key of ['publisher.blog.col.title', 'publisher.blog.col.status', 'publisher.blog.col.updated', 'publisher.blog.col.link'] as const) {
+    // Deck layout: status badge folded under the title, no standalone
+    // Status column.
+    for (const key of ['publisher.blog.col.title', 'publisher.blog.col.updated', 'publisher.blog.col.link'] as const) {
       headRow.append(el('th', { textContent: t(key) }))
     }
     thead.append(headRow)
@@ -127,6 +134,9 @@ export async function renderBlogPage(mount: HTMLElement, options: BlogPageOption
     for (const post of posts) {
       const tr = el('tr')
       const titleCell = el('td')
+      // Title link + status badge stacked (deck fold — no separate
+      // Status column).
+      const titleStack = el('div', { className: 'publisher-cell-title' })
       const link = el('a', {
         className: 'publisher-row-link',
         href: `/publish/blog/${encodeURIComponent(post.id)}/edit`,
@@ -137,31 +147,42 @@ export async function renderBlogPage(mount: HTMLElement, options: BlogPageOption
         e.preventDefault()
         navigate(`/publish/blog/${encodeURIComponent(post.id)}/edit`)
       })
-      titleCell.append(link)
-      tr.append(titleCell)
-      tr.append(
-        el('td', {}, [
-          el('span', {
-            className: `publisher-blog-badge publisher-blog-badge-${post.status}`,
-            textContent: post.status === 'published' ? t('publisher.blog.status.published') : t('publisher.blog.status.draft'),
-          }),
-        ]),
+      titleStack.append(link)
+      titleStack.append(
+        el('span', {
+          className: `publisher-blog-badge publisher-blog-badge-${post.status}`,
+          textContent: post.status === 'published' ? t('publisher.blog.status.published') : t('publisher.blog.status.draft'),
+        }),
       )
-      tr.append(el('td', { textContent: post.updatedAt.slice(0, 10) }))
-      // Published posts link straight to their public page; drafts
-      // have nothing public to link to.
-      const viewCell = el('td')
+      titleCell.append(titleStack)
+      tr.append(titleCell)
+      tr.append(el('td', { className: 'publisher-cell-updated', textContent: post.updatedAt.slice(0, 10) }))
+      // Actions: Edit (all rows, opens the editor) + View (published
+      // only — a public page to link to). Consistent action pills with
+      // the other list pages.
+      const actionsCell = el('td', { className: 'publisher-cell-actions' })
+      const edit = el('a', {
+        className: 'publisher-row-action publisher-row-edit',
+        href: `/publish/blog/${encodeURIComponent(post.id)}/edit`,
+        textContent: t('publisher.blog.list.edit'),
+      })
+      edit.addEventListener('click', e => {
+        if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return
+        e.preventDefault()
+        navigate(`/publish/blog/${encodeURIComponent(post.id)}/edit`)
+      })
+      actionsCell.append(edit)
       if (post.status === 'published') {
         const view = el('a', {
-          className: 'publisher-row-link publisher-blog-view-link',
+          className: 'publisher-row-action publisher-blog-view-link',
           href: `/blog/${encodeURIComponent(post.slug)}`,
           textContent: t('publisher.blog.list.view'),
         })
         view.target = '_blank'
         view.rel = 'noopener'
-        viewCell.append(view)
+        actionsCell.append(view)
       }
-      tr.append(viewCell)
+      tr.append(actionsCell)
       tbody.append(tr)
     }
     table.append(tbody)

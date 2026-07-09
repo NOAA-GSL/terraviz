@@ -10,12 +10,28 @@
 
 import { t } from '../../../i18n'
 import { clearWarmupFlag, handleSessionError } from '../api'
-import { listWorkflows, type PublisherWorkflow } from '../workflows-api'
+import {
+  listWorkflows,
+  listWorkflowRuns,
+  runWorkflow,
+  type PublisherWorkflow,
+  type PublisherWorkflowRun,
+} from '../workflows-api'
 
 export interface WorkflowsPageOptions {
   navigate?: (url: string) => void
   /** Override the list call — tests inject a stub. */
   listFn?: typeof listWorkflows
+  /** Override the per-workflow runs call (last-run status probe). */
+  runsFn?: typeof listWorkflowRuns
+  /** Override the run-now call. */
+  runFn?: typeof runWorkflow
+}
+
+interface RowCtx {
+  navigate: (url: string) => void
+  runsFn: typeof listWorkflowRuns
+  runFn: typeof runWorkflow
 }
 
 export async function renderWorkflowsPage(
@@ -37,7 +53,64 @@ export async function renderWorkflowsPage(
   }
   clearWarmupFlag()
 
-  content.replaceChildren(buildShell(result.data.workflows, navigate))
+  const ctx: RowCtx = {
+    navigate,
+    runsFn: options.runsFn ?? listWorkflowRuns,
+    runFn: options.runFn ?? runWorkflow,
+  }
+  content.replaceChildren(buildShell(result.data.workflows, ctx))
+
+  // Best-effort last-run status: the list endpoint carries only a
+  // timestamp, so probe each workflow's newest run and stamp a
+  // Success/Failed/Running badge into its last-run cell. Bounded by
+  // the (small) workflow count; failures leave the cell as-is.
+  void hydrateRunStatuses(content, result.data.workflows, ctx.runsFn)
+}
+
+const RUN_STATUS_LABEL: Record<PublisherWorkflowRun['status'], string> = {
+  succeeded: t('publisher.workflows.runStatus.success'),
+  failed: t('publisher.workflows.runStatus.failed'),
+  running: t('publisher.workflows.runStatus.running'),
+  queued: t('publisher.workflows.runStatus.queued'),
+  canceled: t('publisher.workflows.runStatus.canceled'),
+}
+
+const RUN_STATUS_KIND: Record<PublisherWorkflowRun['status'], 'published' | 'draft' | 'retracted'> = {
+  succeeded: 'published',
+  failed: 'retracted',
+  running: 'draft',
+  queued: 'draft',
+  canceled: 'draft',
+}
+
+async function hydrateRunStatuses(
+  content: HTMLElement,
+  workflows: PublisherWorkflow[],
+  runsFn: typeof listWorkflowRuns,
+): Promise<void> {
+  await Promise.all(
+    workflows.map(async wf => {
+      const res = await runsFn(wf.id)
+      if (!res.ok) return
+      // Single pass for the newest run — no need to sort the whole list
+      // (listWorkflowRuns can return up to 50) just to take the max.
+      let newest: (typeof res.data.runs)[number] | undefined
+      for (const run of res.data.runs) {
+        if (!newest || (Date.parse(run.created_at) || 0) > (Date.parse(newest.created_at) || 0)) {
+          newest = run
+        }
+      }
+      if (!newest) return
+      const cell = content.querySelector<HTMLElement>(
+        `[data-workflow-lastrun="${CSS.escape(wf.id)}"]`,
+      )
+      if (!cell) return
+      const badge = document.createElement('span')
+      badge.className = `publisher-badge publisher-badge-status publisher-badge-${RUN_STATUS_KIND[newest.status]} publisher-workflows-runstatus`
+      badge.textContent = RUN_STATUS_LABEL[newest.status]
+      cell.prepend(badge)
+    }),
+  )
 }
 
 function buildMessageShell(message: string): HTMLElement {
@@ -53,31 +126,33 @@ function buildMessageShell(message: string): HTMLElement {
   return shell
 }
 
-function buildShell(
-  workflows: PublisherWorkflow[],
-  navigate: (url: string) => void,
-): HTMLElement {
+function buildShell(workflows: PublisherWorkflow[], ctx: RowCtx): HTMLElement {
   const shell = document.createElement('main')
   shell.className = 'publisher-shell'
 
-  const header = document.createElement('div')
-  header.className = 'publisher-tour-list-header'
-  const h2 = document.createElement('h2')
-  h2.textContent = t('publisher.workflows.heading')
-  header.appendChild(h2)
+  // Page header mirrors the datasets list (deck layout): stacked
+  // title + subtitle on the start side, a primary "New workflow"
+  // button on the end side.
+  const header = document.createElement('header')
+  header.className = 'publisher-page-header'
+  const titles = document.createElement('div')
+  titles.className = 'publisher-page-titles'
+  const h1 = document.createElement('h1')
+  h1.className = 'publisher-page-title'
+  h1.textContent = t('publisher.workflows.heading')
+  const sub = document.createElement('p')
+  sub.className = 'publisher-page-subtitle'
+  sub.textContent = t('publisher.workflows.intro')
+  titles.append(h1, sub)
+  header.appendChild(titles)
 
   const newLink = document.createElement('a')
   newLink.href = '/publish/workflows/new'
-  newLink.className = 'publisher-tab publisher-tab-active publisher-tour-new-btn'
+  newLink.className = 'publisher-button publisher-button-primary publisher-workflows-new'
   newLink.textContent = t('publisher.workflows.new')
-  interceptNav(newLink, navigate)
+  interceptNav(newLink, ctx.navigate)
   header.appendChild(newLink)
   shell.appendChild(header)
-
-  const intro = document.createElement('p')
-  intro.className = 'publisher-tour-intro'
-  intro.textContent = t('publisher.workflows.intro')
-  shell.appendChild(intro)
 
   if (workflows.length === 0) {
     const empty = document.createElement('section')
@@ -94,14 +169,11 @@ function buildShell(
     return shell
   }
 
-  shell.appendChild(buildTable(workflows, navigate))
+  shell.appendChild(buildTable(workflows, ctx))
   return shell
 }
 
-function buildTable(
-  workflows: PublisherWorkflow[],
-  navigate: (url: string) => void,
-): HTMLElement {
+function buildTable(workflows: PublisherWorkflow[], ctx: RowCtx): HTMLElement {
   const wrap = document.createElement('div')
   wrap.className = 'publisher-table-wrap publisher-glass'
   const table = document.createElement('table')
@@ -109,11 +181,12 @@ function buildTable(
 
   const thead = document.createElement('thead')
   const headRow = document.createElement('tr')
+  // Deck layout: no standalone Enabled column — the enabled badge sits
+  // under the workflow name (same fold as the datasets status badge).
   for (const key of [
     'publisher.workflows.col.name',
     'publisher.workflows.col.schedule',
     'publisher.workflows.col.target',
-    'publisher.workflows.col.enabled',
     'publisher.workflows.col.lastRun',
     'publisher.workflows.col.actions',
   ] as const) {
@@ -127,24 +200,34 @@ function buildTable(
 
   const tbody = document.createElement('tbody')
   for (const workflow of workflows) {
-    tbody.appendChild(buildRow(workflow, navigate))
+    tbody.appendChild(buildRow(workflow, ctx))
   }
   table.appendChild(tbody)
   wrap.appendChild(table)
   return wrap
 }
 
-function buildRow(workflow: PublisherWorkflow, navigate: (url: string) => void): HTMLElement {
+function buildRow(workflow: PublisherWorkflow, ctx: RowCtx): HTMLElement {
   const tr = document.createElement('tr')
   const detailPath = `/publish/workflows/${encodeURIComponent(workflow.id)}`
 
   const nameCell = document.createElement('td')
+  // Name + enabled badge stacked (deck fold — no separate column).
+  const nameStack = document.createElement('div')
+  nameStack.className = 'publisher-cell-title'
   const nameLink = document.createElement('a')
   nameLink.className = 'publisher-row-link'
   nameLink.href = detailPath
   nameLink.textContent = workflow.name
-  interceptNav(nameLink, navigate)
-  nameCell.appendChild(nameLink)
+  interceptNav(nameLink, ctx.navigate)
+  nameStack.appendChild(nameLink)
+  const badge = document.createElement('span')
+  badge.className = `publisher-badge publisher-badge-status publisher-badge-${workflow.enabled ? 'published' : 'draft'}`
+  badge.textContent = workflow.enabled
+    ? t('publisher.workflows.enabled.on')
+    : t('publisher.workflows.enabled.off')
+  nameStack.appendChild(badge)
+  nameCell.appendChild(nameStack)
   tr.appendChild(nameCell)
 
   const scheduleCell = document.createElement('td')
@@ -156,33 +239,58 @@ function buildRow(workflow: PublisherWorkflow, navigate: (url: string) => void):
   targetLink.className = 'publisher-row-action'
   targetLink.href = `/publish/datasets/${encodeURIComponent(workflow.target_dataset_id)}`
   targetLink.textContent = workflow.target_dataset_id
-  interceptNav(targetLink, navigate)
+  interceptNav(targetLink, ctx.navigate)
   targetCell.appendChild(targetLink)
   tr.appendChild(targetCell)
 
-  const enabledCell = document.createElement('td')
-  const badge = document.createElement('span')
-  badge.className = `publisher-badge publisher-badge-status publisher-badge-${workflow.enabled ? 'published' : 'draft'}`
-  badge.textContent = workflow.enabled
-    ? t('publisher.workflows.enabled.on')
-    : t('publisher.workflows.enabled.off')
-  enabledCell.appendChild(badge)
-  tr.appendChild(enabledCell)
-
   const lastRunCell = document.createElement('td')
   lastRunCell.className = 'publisher-cell-updated'
-  lastRunCell.textContent = workflow.last_run_at
+  // Inner flex wrapper (NOT the <td> itself) holds the hydrated status
+  // badge + timestamp. Setting display:flex on a <td> drops it from the
+  // table's column model, which is what pushed the actions out of line.
+  const lastRunWrap = document.createElement('div')
+  lastRunWrap.className = 'publisher-workflows-lastrun'
+  lastRunWrap.dataset.workflowLastrun = workflow.id
+  const when = document.createElement('span')
+  when.textContent = workflow.last_run_at
     ? formatDate(workflow.last_run_at)
     : t('publisher.workflows.lastRun.never')
+  lastRunWrap.appendChild(when)
+  lastRunCell.appendChild(lastRunWrap)
   tr.appendChild(lastRunCell)
 
   const actionsCell = document.createElement('td')
+  actionsCell.className = 'publisher-cell-actions'
+
+  const runBtn = document.createElement('button')
+  runBtn.type = 'button'
+  runBtn.className = 'publisher-row-action publisher-workflows-run'
+  runBtn.textContent = t('publisher.workflows.action.runNow')
+  const runStatus = document.createElement('span')
+  runStatus.className = 'publisher-row-action-status'
+  runBtn.addEventListener('click', () => {
+    runBtn.disabled = true
+    runStatus.textContent = ''
+    runStatus.classList.remove('publisher-row-action-status-error')
+    void ctx.runFn(workflow.id).then(res => {
+      runBtn.disabled = false
+      if (res.ok) {
+        runStatus.textContent = t('publisher.workflows.run.queued')
+      } else {
+        runStatus.textContent = t('publisher.workflows.run.failed')
+        runStatus.classList.add('publisher-row-action-status-error')
+      }
+    })
+  })
+  actionsCell.appendChild(runBtn)
+
   const editLink = document.createElement('a')
   editLink.href = `${detailPath}/edit`
-  editLink.className = 'publisher-row-action'
+  editLink.className = 'publisher-row-action publisher-row-edit'
   editLink.textContent = t('publisher.workflows.action.edit')
-  interceptNav(editLink, navigate)
+  interceptNav(editLink, ctx.navigate)
   actionsCell.appendChild(editLink)
+  actionsCell.appendChild(runStatus)
   tr.appendChild(actionsCell)
 
   return tr

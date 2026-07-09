@@ -109,7 +109,7 @@ async function openCatalog(page: Page): Promise<void> {
  * The portal lives behind Cloudflare Access with a Pages-Functions
  * API backend — neither exists against a local dev server. What
  * *does* render without a backend is the part translators most need
- * context for: the topbar + section tabs, page headings, and (for
+ * context for: the sidebar + section nav, page headings, and (for
  * the static-form pages) field labels/placeholders. Every page
  * mounts its chrome synchronously before fetching data.
  *
@@ -122,7 +122,7 @@ async function openCatalog(page: Page): Promise<void> {
  */
 async function openPublish(page: Page, path: string): Promise<void> {
   await gotoApp(page, path)
-  await page.locator('#publisher-root .publisher-topbar').waitFor({ state: 'visible' })
+  await page.locator('#publisher-root .publisher-sidebar').waitFor({ state: 'visible' })
 }
 
 /**
@@ -347,11 +347,99 @@ export const scenes: Scene[] = [
   // ── Publisher portal ──────────────────────────────────────────
   // Populated via route-stub fixtures (Phase V7); see openPublish().
   {
+    name: 'publish-overview',
+    description: 'Publisher portal — command-center Overview landing (populated via fixtures)',
+    // The Overview fans out beyond publisherFixtures' coverage; these
+    // extra rules (hero / feedback / analytics / public node-profile /
+    // workflow runs) precede the base set so the workflow-runs regex
+    // wins over the general `/publish/workflows` list rule.
+    fixtures: [
+      {
+        url: /\/publish\/workflows\/[^/?]+\/runs/,
+        json: {
+          runs: [
+            {
+              status: 'failed',
+              created_at: '2026-07-06T02:14:00Z',
+              finished_at: '2026-07-06T02:15:00Z',
+              error_summary: 'exit code 1',
+            },
+          ],
+        },
+      },
+      {
+        url: '/api/v1/featured-hero',
+        json: {
+          hero: {
+            datasetId: 'ds-hero',
+            window: { start: '2026-07-01T00:00:00Z', end: '2026-07-10T00:00:00Z' },
+            headline: 'Far-Flung Filaments of Fungi',
+          },
+        },
+      },
+      {
+        url: '/api/v1/publish/feedback',
+        json: {
+          data: {
+            byDay: [{ up: 22, down: 2 }],
+            recentFeedback: [
+              {
+                rating: 'thumbs-up',
+                comment: 'Orbit explained the temperature ramp perfectly.',
+                dataset_id: 'sst-2026-04',
+                created_at: '2026-07-08T09:00:00Z',
+              },
+              {
+                rating: 'thumbs-down',
+                comment: "Sea ice dataset wouldn't load on mobile.",
+                created_at: '2026-07-08T06:00:00Z',
+              },
+            ],
+          },
+        },
+      },
+      { url: '/api/v1/publish/analytics', json: { data: { totals: { sessions: 44200 } } } },
+      {
+        url: '/api/v1/node-profile',
+        json: { profile: { orgName: 'The Zyra Project', logoUrl: null } },
+      },
+      ...publisherFixtures({ admin: true }),
+    ],
+    async setup(page) {
+      await openPublish(page, '/publish/overview')
+      await page.locator('.publisher-overview').waitFor({ state: 'visible' })
+    },
+  },
+  {
     name: 'publish-datasets',
     description: 'Publisher portal — datasets list (populated via fixtures)',
     fixtures: publisherFixtures(),
     async setup(page) {
       await openPublish(page, '/publish/datasets')
+    },
+  },
+  {
+    name: 'publish-import',
+    description: 'Publisher portal — bulk import: method cards + validated manifest preview',
+    fixtures: publisherFixtures({ admin: true }),
+    async setup(page) {
+      await openPublish(page, '/publish/import')
+      // Inject a manifest so the ready/warning/error preview renders
+      // populated (the page parses + validates client-side; no backend).
+      const csv = [
+        'title,slug,format,data_ref,license',
+        'Sea Surface Temp — May 2026,sst-2026-05,mp4,https://example.org/sst.mp4,CC-BY-4.0',
+        'Arctic Sea Ice Extent — 2026,sea-ice-2026,mp4,https://example.org/ice.mp4,CC0-1.0',
+        'Global Nightlights 2026,nightlights-2026,png,https://example.org/nl.png,',
+        'Drought Risk — Q2 2026,drought-q2-2026,,,',
+        'CO2 Concentration 2026,co2-2026,png,https://example.org/co2.png,CC-BY-4.0',
+      ].join('\n')
+      await page.setInputFiles('.publisher-import-file-input', {
+        name: 'publisher-datasets.csv',
+        mimeType: 'text/csv',
+        buffer: Buffer.from(csv, 'utf-8'),
+      })
+      await page.locator('.publisher-import-preview').waitFor({ state: 'visible' })
     },
   },
   {
@@ -376,6 +464,9 @@ export const scenes: Scene[] = [
     masks: ['.publisher-asset-uploader-generate-preview'],
     async setup(page) {
       await openPublish(page, '/publish/datasets/01HEXAMPLEDATASET00000001/edit')
+      // The dataset form is a stepper — open the Media section (where
+      // the thumbnail uploader lives) before interacting with it.
+      await page.locator('.publisher-form-nav-link[data-section="ds-section-media"]').click()
       // The thumbnail uploader's generator block (thumbnail kind only).
       await page.locator('.publisher-asset-uploader-generate').first().waitFor()
       // Feed a 2:1 equirectangular frame (the bundled Earth specular
@@ -411,14 +502,6 @@ export const scenes: Scene[] = [
     fixtures: publisherFixtures(),
     async setup(page) {
       await openPublish(page, '/publish/tours')
-    },
-  },
-  {
-    name: 'publish-import',
-    description: 'Publisher portal — import page',
-    fixtures: publisherFixtures(),
-    async setup(page) {
-      await openPublish(page, '/publish/import')
     },
   },
   {
@@ -480,12 +563,15 @@ export const scenes: Scene[] = [
   },
   {
     name: 'publish-blog-edit',
-    description: 'Publisher portal — blog editor with the AI Generate panel (Phase 3d)',
+    description: 'Publisher portal — tabbed blog editor (Content / Sources / Media / AI draft)',
     fixtures: publisherFixtures({ admin: true }),
     async setup(page) {
       await openPublish(page, '/publish/blog/new')
+      // Tabbed stepper — the Content tab is the default capture; the
+      // rail nav confirms the Sources/Media/AI-draft sections mounted.
       await page.locator('#blog-title').waitFor()
-      await page.locator('.publisher-blog-generate-btn').waitFor()
+      await page.locator('.publisher-form-nav-link[data-section="blog-media"]').waitFor()
+      await page.locator('.publisher-form-nav-link[data-section="blog-aidraft"]').waitFor()
     },
   },
   {

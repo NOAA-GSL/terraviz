@@ -142,6 +142,10 @@ export const onRequestGet: PagesFunction<CatalogEnv, 'slug'> = async context => 
       summary: pub.summary,
       bodyMd: pub.bodyMd,
       publishedAt: pub.publishedAt,
+      // The post's own lead image (curator pick), already http(s)-guarded
+      // by toPublicPost. The public page prefers it over the event image.
+      coverImageUrl: pub.coverImageUrl,
+      coverImageAlt: pub.coverImageAlt,
       datasets,
       event,
       tour,

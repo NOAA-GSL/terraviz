@@ -1,26 +1,35 @@
 /**
- * /publish/me — the publisher's own profile page.
+ * /publish/me — the publisher's Account page.
  *
  * Fetches `GET /api/v1/publish/me` via the shared `publisherGet`
  * helper in `../api.ts`, which handles the auth-retry +
- * opaqueredirect detection logic uniformly across the portal.
- * On a session-error result the page delegates to
- * `handleSessionError`, which either auto-navigates through the
- * redirect-back endpoint (typical) or surfaces the error card
- * when the warmup loop guard fires (genuine auth gap).
+ * opaqueredirect detection logic uniformly across the portal. On a
+ * session-error result the page delegates to `handleSessionError`,
+ * which either auto-navigates through the redirect-back endpoint
+ * (typical) or surfaces the error card when the warmup loop guard
+ * fires (genuine auth gap). Other error kinds render the local error
+ * card with a Refresh button.
  *
- * Other error kinds (network / server) render the local error
- * card with a Refresh button — the user's auth state is fine,
- * only the connection or backend is hiccupping.
+ * Layout follows the UI/UX review deck's Account page: an identity
+ * header, an editable Profile section, an Account & security
+ * section, and an Active-sessions section. Sign-in, password, and
+ * 2FA are owned by the identity provider (Cloudflare Access), so
+ * those controls are shown for parity with the deck but are inert,
+ * with a note pointing at the provider — no fabricated session list.
+ * The profile edit reuses the admin `PATCH /publish/publishers/{id}`
+ * route, which the server restricts to admins; non-admins see the
+ * fields read-only with a note.
  */
 
 import { t } from '../../../i18n'
 import {
   publisherGet,
+  publisherSend,
   handleSessionError,
   clearWarmupFlag,
 } from '../api'
 import { buildErrorCard, type ErrorCardDetails } from '../components/error-card'
+import { initialsOf } from '../components/sidebar'
 
 interface PublisherMeResponse {
   id: string
@@ -37,75 +46,38 @@ type ErrorKind = 'session' | 'server' | 'network' | 'not_found'
 
 const ME_ENDPOINT = '/api/v1/publish/me'
 
-interface PublisherMeFetchOptions {
+interface MePageOptions {
   fetchFn?: typeof fetch
   sleep?: (ms: number) => Promise<void>
   navigate?: (url: string) => void
 }
 
-/** Render a glass-surface card with the given child nodes. */
+// --- Small DOM helpers --------------------------------------------
+
+function el(tag: string, className?: string, text?: string): HTMLElement {
+  const node = document.createElement(tag)
+  if (className) node.className = className
+  if (text != null) node.textContent = text
+  return node
+}
+
 function card(...children: HTMLElement[]): HTMLElement {
-  const el = document.createElement('section')
-  el.className = 'publisher-card publisher-glass'
-  for (const child of children) el.appendChild(child)
-  return el
+  const c = el('section', 'publisher-card publisher-glass')
+  for (const child of children) c.appendChild(child)
+  return c
 }
 
 function heading(text: string): HTMLElement {
-  const h = document.createElement('h2')
-  h.className = 'publisher-card-heading'
-  h.textContent = text
-  return h
-}
-
-function field(label: string, value: string, extraValueClass = ''): HTMLElement {
-  const row = document.createElement('div')
-  row.className = 'publisher-field'
-
-  const labelEl = document.createElement('span')
-  labelEl.className = 'publisher-field-label'
-  labelEl.textContent = label
-
-  const valueEl = document.createElement('span')
-  valueEl.className = `publisher-field-value ${extraValueClass}`.trim()
-  valueEl.textContent = value
-
-  row.appendChild(labelEl)
-  row.appendChild(valueEl)
-  return row
+  return el('h2', 'publisher-card-heading', text)
 }
 
 function badge(text: string, kind: 'admin' | 'role' | 'status'): HTMLElement {
-  const el = document.createElement('span')
-  el.className = `publisher-badge publisher-badge-${kind}`
-  el.textContent = text
-  return el
+  return el('span', `publisher-badge publisher-badge-${kind}`, text)
 }
 
-function renderLoading(mount: HTMLElement): void {
-  const shell = document.createElement('main')
-  shell.className = 'publisher-shell'
-  shell.setAttribute('aria-busy', 'true')
-  const status = document.createElement('p')
-  status.className = 'publisher-loading'
-  status.setAttribute('role', 'status')
-  status.textContent = t('publisher.me.loading')
-  shell.appendChild(status)
-  mount.replaceChildren(shell)
-}
-
-function renderError(
-  mount: HTMLElement,
-  kind: ErrorKind,
-  details: ErrorCardDetails = {},
-): void {
-  const shell = document.createElement('main')
-  shell.className = 'publisher-shell'
-  shell.appendChild(buildErrorCard(kind, details))
-  mount.replaceChildren(shell)
-}
-
-function localizedRole(role: string): string {
+/** Localize a publisher role. Exported so the sidebar footer reuses
+ *  the single source of truth (avoids a drifting second copy). */
+export function localizedRole(role: string): string {
   switch (role) {
     case 'admin':
       return t('publisher.me.role.admin')
@@ -133,96 +105,196 @@ function localizedStatus(status: string): string {
   }
 }
 
-/**
- * Format an ISO 8601 timestamp using the active locale.
- * Falls back to the raw string if `Date` can't parse it.
- */
-function formatCreatedAt(iso: string): string {
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return iso
-  return d.toLocaleDateString(undefined, {
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric',
-  })
+function renderLoading(mount: HTMLElement): void {
+  const shell = el('main', 'publisher-shell')
+  shell.setAttribute('aria-busy', 'true')
+  const status = el('p', 'publisher-loading', t('publisher.me.loading'))
+  status.setAttribute('role', 'status')
+  shell.appendChild(status)
+  mount.replaceChildren(shell)
 }
 
-function renderProfile(mount: HTMLElement, me: PublisherMeResponse): void {
-  const shell = document.createElement('main')
-  shell.className = 'publisher-shell'
+function renderError(mount: HTMLElement, kind: ErrorKind, details: ErrorCardDetails = {}): void {
+  const shell = el('main', 'publisher-shell')
+  shell.appendChild(buildErrorCard(kind, details))
+  mount.replaceChildren(shell)
+}
 
-  const head = heading(t('publisher.me.heading'))
-  const fields = document.createElement('div')
-  fields.className = 'publisher-fields'
+// --- Sections -----------------------------------------------------
 
-  fields.appendChild(field(t('publisher.me.field.email'), me.email))
+function renderIdentityCard(me: PublisherMeResponse): HTMLElement {
+  const head = el('div', 'publisher-account-identity')
 
-  // Role badge. Under the two-tier model the role itself encodes
-  // admin-ness (role === 'admin'), so there's no separate admin
-  // badge — `is_admin` is just a legacy mirror of the role.
-  const roleRow = document.createElement('div')
-  roleRow.className = 'publisher-field'
-  const roleLabel = document.createElement('span')
-  roleLabel.className = 'publisher-field-label'
-  roleLabel.textContent = t('publisher.me.field.role')
-  const roleValue = document.createElement('span')
-  roleValue.className = 'publisher-field-value'
-  roleValue.appendChild(badge(localizedRole(me.role), me.role === 'admin' ? 'admin' : 'role'))
-  roleRow.appendChild(roleLabel)
-  roleRow.appendChild(roleValue)
-  fields.appendChild(roleRow)
+  const avatar = el('span', 'publisher-account-avatar', initialsOf(me.display_name || me.email))
+  avatar.setAttribute('aria-hidden', 'true')
+  head.appendChild(avatar)
 
-  // Affiliation. Empty/null renders an explicit "not set" rather
-  // than an empty value so the publisher knows the field exists.
-  fields.appendChild(
-    field(
-      t('publisher.me.field.affiliation'),
-      me.affiliation && me.affiliation.length > 0
-        ? me.affiliation
-        : t('publisher.me.affiliation.none'),
-    ),
-  )
+  const meta = el('div', 'publisher-account-identity-meta')
+  meta.appendChild(el('div', 'publisher-account-name', me.display_name || me.email))
+  meta.appendChild(el('div', 'publisher-account-email', me.email))
+  head.appendChild(meta)
 
-  // Status with a coloured badge.
-  const statusRow = document.createElement('div')
-  statusRow.className = 'publisher-field'
-  const statusLabel = document.createElement('span')
-  statusLabel.className = 'publisher-field-label'
-  statusLabel.textContent = t('publisher.me.field.status')
-  const statusValue = document.createElement('span')
-  statusValue.className = 'publisher-field-value'
+  const badges = el('div', 'publisher-account-badges')
+  badges.appendChild(badge(localizedRole(me.role), me.role === 'admin' ? 'admin' : 'role'))
   const statusBadge = badge(localizedStatus(me.status), 'status')
   statusBadge.dataset.status = me.status
-  statusValue.appendChild(statusBadge)
-  statusRow.appendChild(statusLabel)
-  statusRow.appendChild(statusValue)
-  fields.appendChild(statusRow)
+  badges.appendChild(statusBadge)
+  head.appendChild(badges)
 
-  fields.appendChild(
-    field(t('publisher.me.field.memberSince'), formatCreatedAt(me.created_at)),
+  return card(head)
+}
+
+function renderProfileCard(
+  me: PublisherMeResponse,
+  options: MePageOptions,
+  onSaved: () => void,
+): HTMLElement {
+  const canEdit = me.is_admin === true || me.role === 'admin'
+
+  const form = el('div', 'publisher-account-form')
+
+  const nameField = el('div', 'publisher-account-field')
+  const nameLabel = el('label', 'publisher-account-label', t('publisher.account.field.displayName'))
+  const nameInput = document.createElement('input')
+  nameInput.type = 'text'
+  nameInput.className = 'publisher-form-input'
+  nameInput.id = 'publisher-account-display-name'
+  nameInput.value = me.display_name
+  nameInput.disabled = !canEdit
+  nameLabel.setAttribute('for', nameInput.id)
+  nameField.append(nameLabel, nameInput, el('p', 'publisher-account-hint', t('publisher.account.field.displayName.hint')))
+  form.appendChild(nameField)
+
+  const affField = el('div', 'publisher-account-field')
+  const affLabel = el('label', 'publisher-account-label', t('publisher.account.field.affiliation'))
+  const affInput = document.createElement('input')
+  affInput.type = 'text'
+  affInput.className = 'publisher-form-input'
+  affInput.id = 'publisher-account-affiliation'
+  affInput.value = me.affiliation ?? ''
+  affInput.disabled = !canEdit
+  affLabel.setAttribute('for', affInput.id)
+  affField.append(affLabel, affInput, el('p', 'publisher-account-hint', t('publisher.account.field.affiliation.hint')))
+  form.appendChild(affField)
+
+  const actions = el('div', 'publisher-account-actions')
+  const status = el('span', 'publisher-account-save-status')
+  status.setAttribute('role', 'status')
+
+  if (!canEdit) {
+    actions.appendChild(el('p', 'publisher-account-readonly-note', t('publisher.account.readonlyNote')))
+  } else {
+    const cancel = el('button', 'publisher-button', t('publisher.account.cancel')) as HTMLButtonElement
+    cancel.type = 'button'
+    cancel.addEventListener('click', () => {
+      nameInput.value = me.display_name
+      affInput.value = me.affiliation ?? ''
+      status.textContent = ''
+      status.className = 'publisher-account-save-status'
+    })
+
+    const save = el('button', 'publisher-button publisher-button-primary', t('publisher.account.save')) as HTMLButtonElement
+    save.type = 'button'
+    save.addEventListener('click', () => {
+      void (async () => {
+        save.disabled = true
+        cancel.disabled = true
+        save.textContent = t('publisher.account.saving')
+        status.textContent = ''
+        status.className = 'publisher-account-save-status'
+        const res = await publisherSend<{ publisher: unknown }>(
+          `/api/v1/publish/publishers/${encodeURIComponent(me.id)}`,
+          { display_name: nameInput.value.trim(), affiliation: affInput.value.trim() || null },
+          { method: 'PATCH', fetchFn: options.fetchFn },
+        )
+        save.disabled = false
+        cancel.disabled = false
+        save.textContent = t('publisher.account.save')
+        if (res.ok) {
+          me.display_name = nameInput.value.trim()
+          me.affiliation = affInput.value.trim() || null
+          status.textContent = t('publisher.account.saved')
+          status.className = 'publisher-account-save-status publisher-account-save-ok'
+          // Keep the identity header (name + avatar initials) in sync
+          // with the just-saved values.
+          onSaved()
+        } else {
+          status.textContent = t('publisher.account.saveError')
+          status.className = 'publisher-account-save-status publisher-account-save-error'
+        }
+      })()
+    })
+    actions.append(cancel, save, status)
+  }
+
+  return card(heading(t('publisher.account.profile.heading')), form, actions)
+}
+
+/** A security row: label + current value + an inert action button. */
+function securityRow(label: string, value: string, action: string): HTMLElement {
+  const row = el('div', 'publisher-account-security-row')
+  const info = el('div', 'publisher-account-security-info')
+  info.appendChild(el('span', 'publisher-account-security-label', label))
+  info.appendChild(el('span', 'publisher-account-security-value', value))
+  row.appendChild(info)
+  const btn = el('button', 'publisher-button', action) as HTMLButtonElement
+  btn.type = 'button'
+  btn.disabled = true
+  row.appendChild(btn)
+  return row
+}
+
+function renderSecurityCard(me: PublisherMeResponse): HTMLElement {
+  const rows = el('div', 'publisher-account-security')
+  rows.appendChild(securityRow(t('publisher.account.security.email'), me.email, t('publisher.account.security.change')))
+  rows.appendChild(
+    securityRow(
+      t('publisher.account.security.password'),
+      t('publisher.account.security.passwordMasked'),
+      t('publisher.account.security.changePassword'),
+    ),
   )
+  rows.appendChild(
+    securityRow(
+      t('publisher.account.security.twofa'),
+      t('publisher.account.security.twofaStatus'),
+      t('publisher.account.security.enable2fa'),
+    ),
+  )
+  const note = el('p', 'publisher-account-idp-note', t('publisher.account.security.idpNote'))
+  return card(heading(t('publisher.account.security.heading')), rows, note)
+}
 
-  const profileCard = card(head, fields)
-  shell.appendChild(profileCard)
+function renderSessionsCard(): HTMLElement {
+  return card(
+    heading(t('publisher.account.sessions.heading')),
+    el('p', 'publisher-account-sessions-empty', t('publisher.account.sessions.unavailable')),
+  )
+}
+
+function renderAccount(mount: HTMLElement, me: PublisherMeResponse, options: MePageOptions): void {
+  const shell = el('main', 'publisher-shell publisher-account')
+  let identityCard = renderIdentityCard(me)
+  shell.appendChild(identityCard)
+  shell.appendChild(
+    renderProfileCard(me, options, () => {
+      const next = renderIdentityCard(me)
+      identityCard.replaceWith(next)
+      identityCard = next
+    }),
+  )
+  shell.appendChild(renderSecurityCard(me))
+  shell.appendChild(renderSessionsCard())
   mount.replaceChildren(shell)
 }
 
 /**
- * Boot the /publish/me page. Renders a loading state, kicks off
- * the fetch via the shared `publisherGet` helper, then swaps in
- * the profile card or an error card based on the result.
- * Idempotent — calling it again replaces the current contents
- * in-place.
- *
- * The auth-handling complexity (opaqueredirect retry + auto-
- * warmup + sessionStorage loop guard) lives in `../api.ts`. This
- * function just maps the helper's discriminated result onto the
- * page's render functions. `options` is injectable for tests.
+ * Boot the /publish/me (Account) page. Renders a loading state,
+ * kicks off the fetch via the shared `publisherGet` helper, then
+ * swaps in the account view or an error card based on the result.
+ * Idempotent. The auth-handling complexity lives in `../api.ts`.
  */
-export async function renderMePage(
-  mount: HTMLElement,
-  options: PublisherMeFetchOptions = {},
-): Promise<void> {
+export async function renderMePage(mount: HTMLElement, options: MePageOptions = {}): Promise<void> {
   renderLoading(mount)
   const result = await publisherGet<PublisherMeResponse>(ME_ENDPOINT, {
     fetchFn: options.fetchFn,
@@ -230,7 +302,7 @@ export async function renderMePage(
   })
   if (result.ok) {
     clearWarmupFlag()
-    renderProfile(mount, result.data)
+    renderAccount(mount, result.data, options)
     return
   }
   if (result.kind === 'session') {
@@ -243,8 +315,7 @@ export async function renderMePage(
     renderError(mount, 'server', { status: result.status, body: result.body })
     return
   }
-  // `not_found` is an unexpected response for /me — the route
-  // never 404s if the publisher is authenticated. Treat as a
-  // generic network error so the user sees a Refresh option.
+  // `not_found` is unexpected for /me — treat as a generic network
+  // error so the user sees a Refresh option.
   renderError(mount, result.kind)
 }

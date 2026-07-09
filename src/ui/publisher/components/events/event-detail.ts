@@ -173,7 +173,7 @@ function suggestionCard(
   const status = el('span', 'publisher-events-edit-status')
   const use = document.createElement('button')
   use.type = 'button'
-  use.className = 'publisher-btn publisher-btn-small publisher-btn-primary'
+  use.className = 'publisher-button publisher-button-small publisher-button-primary'
   use.textContent = isVideo ? t('publisher.events.suggest.useVideo') : t('publisher.events.suggest.use')
   use.addEventListener('click', () => {
     use.disabled = true
@@ -256,7 +256,7 @@ function renderImageUpload(
   if (mode === 'replace' && event.imageAlt) alt.value = event.imageAlt
   const btn = document.createElement('button')
   btn.type = 'button'
-  btn.className = 'publisher-btn publisher-btn-small'
+  btn.className = 'publisher-button publisher-button-small'
   btn.textContent =
     mode === 'replace' ? t('publisher.events.suggest.replacePhoto') : t('publisher.events.suggest.uploadPhoto')
   btn.addEventListener('click', () => input.click())
@@ -363,7 +363,7 @@ function renderAttachedVideo(event: ReviewEvent, cb: EventDetailCallbacks): HTML
   const status = el('span', 'publisher-events-edit-status')
   const remove = document.createElement('button')
   remove.type = 'button'
-  remove.className = 'publisher-btn publisher-btn-small'
+  remove.className = 'publisher-button publisher-button-small'
   remove.textContent = t('publisher.events.suggest.removeVideo')
   remove.addEventListener('click', () => {
     remove.disabled = true
@@ -446,7 +446,7 @@ function renderMetadataEdit(event: ReviewEvent, cb: EventDetailCallbacks): HTMLE
   const status = el('span', 'publisher-events-edit-status')
   const save = document.createElement('button')
   save.type = 'button'
-  save.className = 'publisher-btn publisher-btn-small publisher-btn-primary'
+  save.className = 'publisher-button publisher-button-small publisher-button-primary'
   save.textContent = t('publisher.events.edit.save')
   save.addEventListener('click', () => {
     const edits: { occurredStart?: string; regionName?: string; point?: { lat: number; lon: number } } = {}
@@ -677,11 +677,11 @@ export function renderEventDetail(event: ReviewEvent, cb: EventDetailCallbacks):
   decisionStatus.setAttribute('role', 'status')
   const approveEvent = document.createElement('button')
   approveEvent.type = 'button'
-  approveEvent.className = 'publisher-btn publisher-btn-primary publisher-events-decision-approve'
+  approveEvent.className = 'publisher-button publisher-button-primary publisher-events-decision-approve'
   approveEvent.textContent = t('publisher.events.approve')
   const rejectEvent = document.createElement('button')
   rejectEvent.type = 'button'
-  rejectEvent.className = 'publisher-btn publisher-btn-danger publisher-events-decision-reject'
+  rejectEvent.className = 'publisher-button publisher-button-danger publisher-events-decision-reject'
   rejectEvent.textContent = t('publisher.events.reject')
 
   const submitEvent = (decision: 'approve' | 'reject'): void => {
@@ -735,7 +735,7 @@ export function renderEventDetail(event: ReviewEvent, cb: EventDetailCallbacks):
   if (targets.length > 0) {
     const bulkBtn = document.createElement('button')
     bulkBtn.type = 'button'
-    bulkBtn.className = 'publisher-btn publisher-btn-small publisher-events-bulk-btn'
+    bulkBtn.className = 'publisher-button publisher-button-small publisher-events-bulk-btn'
     bulkBtn.textContent = t('publisher.events.bulkApprove', { count: String(targets.length) })
     bulkBtn.addEventListener('click', () => {
       // Recompute against the live link statuses: a curator may have
@@ -779,7 +779,7 @@ export function renderEventDetail(event: ReviewEvent, cb: EventDetailCallbacks):
   tourStatus.setAttribute('role', 'status')
   const tourBtn = document.createElement('button')
   tourBtn.type = 'button'
-  tourBtn.className = 'publisher-btn publisher-btn-small publisher-events-tour-btn'
+  tourBtn.className = 'publisher-button publisher-button-small publisher-events-tour-btn'
   tourBtn.textContent = t('publisher.events.generateTour')
   tourBtn.addEventListener('click', () => {
     tourBtn.disabled = true
@@ -814,7 +814,7 @@ export function renderEventDetail(event: ReviewEvent, cb: EventDetailCallbacks):
   // candidate POSTs `addDatasetIds` and appends a fresh proposed row.
   const addBtn = document.createElement('button')
   addBtn.type = 'button'
-  addBtn.className = 'publisher-btn publisher-btn-small publisher-events-add-btn'
+  addBtn.className = 'publisher-button publisher-button-small publisher-events-add-btn'
   addBtn.textContent = t('publisher.events.addDataset')
   addBtn.setAttribute('aria-expanded', 'false')
   headActions.append(addBtn)

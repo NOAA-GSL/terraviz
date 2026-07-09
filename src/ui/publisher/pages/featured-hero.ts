@@ -236,8 +236,8 @@ function renderForm(mount: HTMLElement, state: FormState): void {
   updatePreview()
 
   // ----- Buttons -----
-  const setBtn = el('button', { type: 'button', className: 'publisher-btn publisher-btn-primary', textContent: t('publisher.hero.set') })
-  const clearBtn = el('button', { type: 'button', className: 'publisher-btn', textContent: t('publisher.hero.clear') })
+  const setBtn = el('button', { type: 'button', className: 'publisher-button publisher-button-primary', textContent: t('publisher.hero.set') })
+  const clearBtn = el('button', { type: 'button', className: 'publisher-button', textContent: t('publisher.hero.clear') })
   // Track whether a pin actually exists server-side, updated only on
   // a confirmed Set/Clear. Clear is enabled iff there's a real pin —
   // not derived from the (locally-mutable) select value, which would

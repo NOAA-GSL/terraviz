@@ -254,7 +254,7 @@ function renderConsole(
     })
     const button = el('button', {
       type: 'button',
-      className: 'publisher-btn publisher-btn-small',
+      className: 'publisher-button publisher-button-small',
       textContent: t('publisher.feeds.preview'),
     })
     button.setAttribute('aria-expanded', 'false')
@@ -325,7 +325,7 @@ function renderConsole(
   // ── Card 1: your feeds ─────────────────────────────────────────
   const runBtn = el('button', {
     type: 'button',
-    className: 'publisher-btn publisher-btn-primary',
+    className: 'publisher-button publisher-button-primary',
     textContent: t('publisher.feeds.runNow'),
   })
   runBtn.addEventListener('click', () => {
@@ -374,7 +374,7 @@ function renderConsole(
 
     const toggleBtn = el('button', {
       type: 'button',
-      className: 'publisher-btn publisher-btn-small',
+      className: 'publisher-button publisher-button-small',
       textContent: feed.enabled ? t('publisher.feeds.pause') : t('publisher.feeds.resume'),
     })
     toggleBtn.addEventListener('click', () => {
@@ -387,7 +387,7 @@ function renderConsole(
 
     const removeBtn = el('button', {
       type: 'button',
-      className: 'publisher-btn publisher-btn-small publisher-btn-danger',
+      className: 'publisher-button publisher-button-small publisher-button-danger',
       textContent: t('publisher.feeds.remove'),
     })
     removeBtn.addEventListener('click', () => {
@@ -431,7 +431,7 @@ function renderConsole(
       const added = registeredUrls.has(preset.url)
       const addBtn = el('button', {
         type: 'button',
-        className: 'publisher-btn publisher-btn-small',
+        className: 'publisher-button publisher-button-small',
         textContent: added ? t('publisher.feeds.addedBadge') : t('publisher.feeds.add'),
         disabled: added,
       })
@@ -475,15 +475,58 @@ function renderConsole(
     id: 'feeds-custom-url',
     placeholder: 'https://…', // i18n-exempt: URL shape hint, not prose
   })
-  const categorySelect = el('select', { className: 'publisher-feeds-input', id: 'feeds-custom-category' })
-  for (const c of FEED_PRESET_CATEGORIES) {
-    categorySelect.append(el('option', { value: c, textContent: categoryLabel(c) }))
+  // Category is a free-text combobox: the three curated presets plus
+  // any categories already in use on existing feeds are offered as
+  // datalist suggestions, but the publisher can type a new one. The
+  // backend stores an arbitrary string (`feed_connectors.category`
+  // TEXT, capped at 60 chars server-side, no enum), so a custom
+  // category persists and reappears here on the next render.
+  const presetByLabel = new Map<string, string>()
+  const categoryOptions: string[] = []
+  const seenCategoryLabels = new Set<string>()
+  const addCategoryOption = (value: string): void => {
+    const label = categoryLabel(value)
+    const key = label.toLowerCase()
+    if (seenCategoryLabels.has(key)) return
+    seenCategoryLabels.add(key)
+    categoryOptions.push(label)
   }
-  categorySelect.append(el('option', { value: '', textContent: t('publisher.feeds.category.other') }))
+  for (const c of FEED_PRESET_CATEGORIES) {
+    presetByLabel.set(categoryLabel(c).toLowerCase(), c)
+    addCategoryOption(c)
+  }
+  // Distinct categories already stored on the publisher's feeds — this
+  // is what makes a previously-created custom category reappear.
+  for (const f of feeds) {
+    if (f.category) addCategoryOption(f.category)
+  }
+
+  const categoryList = el('datalist', { id: 'feeds-category-list' })
+  for (const label of categoryOptions) {
+    categoryList.append(el('option', { value: label }))
+  }
+  const categoryInput = el('input', {
+    type: 'text',
+    className: 'publisher-feeds-input',
+    id: 'feeds-custom-category',
+    maxLength: 60,
+    placeholder: t('publisher.feeds.custom.category.placeholder'),
+  })
+  categoryInput.setAttribute('list', 'feeds-category-list')
+
+  /** Map the typed/selected display label back to the stored category:
+   *  a preset label collapses to its key ('Natural hazards' →
+   *  'hazards') so it groups with feeds added from the preset gallery;
+   *  anything else is stored verbatim; empty → no category. */
+  const resolveCategory = (): string | null => {
+    const typed = categoryInput.value.trim()
+    if (!typed) return null
+    return presetByLabel.get(typed.toLowerCase()) ?? typed
+  }
 
   const addCustomBtn = el('button', {
     type: 'button',
-    className: 'publisher-btn publisher-btn-primary',
+    className: 'publisher-button publisher-button-primary',
     textContent: t('publisher.feeds.custom.add'),
   })
   addCustomBtn.addEventListener('click', () => {
@@ -493,10 +536,11 @@ function renderConsole(
       showError(t('publisher.feeds.custom.invalid'))
       return
     }
+    const category = resolveCategory()
     addCustomBtn.disabled = true
     void send(
       FEEDS_ENDPOINT,
-      { kind: 'rss', label, url, ...(categorySelect.value ? { category: categorySelect.value } : {}) },
+      { kind: 'rss', label, url, ...(category ? { category } : {}) },
       'POST',
     ).then(ok => {
       if (ok) void reload(mount, options)
@@ -511,25 +555,76 @@ function renderConsole(
     return wrap
   }
 
+  // Category field carries a hint + the datalist that backs the combobox.
+  const categoryField = labelled(t('publisher.feeds.custom.category'), categoryInput)
+  categoryField.append(
+    el('span', {
+      className: 'publisher-feeds-hint',
+      textContent: t('publisher.feeds.custom.category.hint'),
+    }),
+    categoryList,
+  )
+
   const customPreview = previewControl('rss', () => urlInput.value.trim())
   const custom = card(
     heading(t('publisher.feeds.custom.title')),
     el('p', { className: 'publisher-feeds-intro', textContent: t('publisher.feeds.custom.intro') }),
     labelled(t('publisher.feeds.custom.label'), labelInput),
     labelled(t('publisher.feeds.custom.url'), urlInput),
-    labelled(t('publisher.feeds.custom.category'), categorySelect),
+    categoryField,
     el('div', { className: 'publisher-feeds-actions' }, [customPreview.button, addCustomBtn]),
     customPreview.panel,
   )
 
   // ── Card 4: agency-YouTube channel allowlist ───────────────────
-  // Omit the card entirely when the channels endpoint is unavailable
-  // (older deploy) — an allowlist UI whose Add/Remove would 404 is
-  // worse than no card.
-  const cards = [yourFeeds, suggested, custom]
-  if (channels !== null) cards.push(renderChannelsCard(mount, channels, options, showError, send))
+  // When the channels endpoint is unavailable (older deploy), the
+  // Media channels tab shows a note instead of an allowlist UI whose
+  // Add/Remove would 404.
+  const mediaContent =
+    channels !== null
+      ? renderChannelsCard(mount, channels, options, showError, send)
+      : card(
+          heading(t('publisher.feeds.channels.title')),
+          el('p', { className: 'publisher-feeds-restricted', textContent: t('publisher.feeds.channels.unavailable') }),
+        )
 
-  mount.replaceChildren(shell(...cards))
+  // Page header + two tabs (News feeds / Media channels), matching
+  // the review deck. Tabs toggle panel visibility in place — no
+  // refetch — so switching tabs is instant.
+  const header = el('header', { className: 'publisher-page-header' }, [
+    el('div', { className: 'publisher-page-titles' }, [
+      el('h1', { className: 'publisher-page-title', textContent: t('publisher.feeds.pageTitle') }),
+      el('p', { className: 'publisher-page-subtitle', textContent: t('publisher.feeds.pageSubtitle') }),
+    ]),
+  ])
+
+  const newsPanel = el('div', { className: 'publisher-feeds-panel' }, [yourFeeds, suggested, custom])
+  const mediaPanel = el('div', { className: 'publisher-feeds-panel' }, [mediaContent])
+  mediaPanel.hidden = true
+
+  const tabs = el('div', { className: 'publisher-tabs', role: 'tablist' }) as HTMLElement
+  const makeTab = (labelKey: 'publisher.feeds.tab.news' | 'publisher.feeds.tab.media', panel: HTMLElement, active: boolean): HTMLElement => {
+    const tab = el('button', {
+      type: 'button',
+      className: active ? 'publisher-tab publisher-tab-active' : 'publisher-tab',
+      textContent: t(labelKey),
+    }) as HTMLButtonElement
+    tab.setAttribute('role', 'tab')
+    tab.setAttribute('aria-selected', active ? 'true' : 'false')
+    tab.addEventListener('click', () => {
+      newsPanel.hidden = panel !== newsPanel
+      mediaPanel.hidden = panel !== mediaPanel
+      for (const el2 of Array.from(tabs.children)) {
+        const isThis = el2 === tab
+        el2.classList.toggle('publisher-tab-active', isThis)
+        el2.setAttribute('aria-selected', isThis ? 'true' : 'false')
+      }
+    })
+    return tab
+  }
+  tabs.append(makeTab('publisher.feeds.tab.news', newsPanel, true), makeTab('publisher.feeds.tab.media', mediaPanel, false))
+
+  mount.replaceChildren(shell(header, tabs, newsPanel, mediaPanel))
 }
 
 /** The "Trusted video channels" card — the reputable-source allowlist
@@ -562,7 +657,7 @@ function renderChannelsCard(
     if (!ch.builtin) {
       const remove = el('button', {
         type: 'button',
-        className: 'publisher-btn publisher-btn-small',
+        className: 'publisher-button publisher-button-small',
         textContent: t('publisher.feeds.channels.remove'),
       })
       remove.addEventListener('click', () => {
@@ -589,7 +684,7 @@ function renderChannelsCard(
   })
   const addBtn = el('button', {
     type: 'button',
-    className: 'publisher-btn publisher-btn-primary',
+    className: 'publisher-button publisher-button-primary',
     textContent: t('publisher.feeds.channels.add'),
   })
   addBtn.addEventListener('click', () => {

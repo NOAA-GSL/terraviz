@@ -166,7 +166,7 @@ CREATE TABLE blog_posts (
   -- column-def line of the stored CREATE TABLE text, and a trailing
   -- comment would read as if it documented the appended column
   -- (same convention as 0024's reviewed_by and 0028's updated_at).
-  published_at TEXT, tour_id TEXT,
+  published_at TEXT, tour_id TEXT, cover_image_url TEXT, cover_image_alt TEXT,
   FOREIGN KEY (author_id) REFERENCES publishers(id),
   FOREIGN KEY (event_id)  REFERENCES current_events(id) ON DELETE SET NULL
 );

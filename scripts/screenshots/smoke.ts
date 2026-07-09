@@ -197,7 +197,7 @@ const checks: Check[] = [
     fixtures: publisherFixtures({ admin: true }),
     async run(page) {
       await gotoApp(page, '/publish/datasets')
-      await page.locator('#publisher-root .publisher-topbar').waitFor({ state: 'visible' })
+      await page.locator('#publisher-root .publisher-sidebar').waitFor({ state: 'visible' })
       await page
         .locator('#publisher-root', { hasText: 'Global Sea Surface Temperature' })
         .waitFor({ timeout: 15_000 })
@@ -208,7 +208,7 @@ const checks: Check[] = [
     fixtures: publisherFixtures({ admin: true }),
     async run(page) {
       await gotoApp(page, '/publish/events')
-      await page.locator('#publisher-root .publisher-topbar').waitFor({ state: 'visible' })
+      await page.locator('#publisher-root .publisher-sidebar').waitFor({ state: 'visible' })
       // Direction A master–detail: the queue (left) lists events; the
       // first auto-selects into the detail (right).
       await page.locator('.publisher-events-queue-list').first().waitFor({ timeout: 15_000 })
@@ -250,7 +250,7 @@ const checks: Check[] = [
     fixtures: publisherFixtures({ admin: true }),
     async run(page) {
       await gotoApp(page, '/publish/node-profile')
-      await page.locator('#publisher-root .publisher-topbar').waitFor({ state: 'visible' })
+      await page.locator('#publisher-root .publisher-sidebar').waitFor({ state: 'visible' })
       const org = page.locator('#nodeprofile-org')
       await org.waitFor({ timeout: 15_000 })
       assert(
@@ -267,13 +267,23 @@ const checks: Check[] = [
     name: 'blog editor renders grounding pickers + Generate; public post renders sanitized markdown',
     fixtures: [...publisherFixtures({ admin: true }), ...blogPublicFixtures()],
     async run(page) {
-      // Authoring: the editor's three sections mount, with the picker
-      // enabled once the catalog fixture loads.
+      // Authoring: the editor is a tabbed stepper (Content / Sources /
+      // Media / AI draft). Content is the default tab; the picker,
+      // Media grid, and Generate live behind their tabs, so open each
+      // before asserting on it.
       await gotoApp(page, '/publish/blog/new')
-      await page.locator('#publisher-root .publisher-topbar').waitFor({ state: 'visible' })
+      await page.locator('#publisher-root .publisher-sidebar').waitFor({ state: 'visible' })
       await page.locator('#blog-title').waitFor({ timeout: 15_000 })
-      await page.locator('.publisher-blog-generate-btn').waitFor()
+      // Sources tab — the dataset picker enables once the catalog loads.
+      await page.locator('.publisher-form-nav-link[data-section="blog-sources"]').click()
       await page.locator('#publisher-root input[type="search"]:not([disabled])').first().waitFor({ timeout: 10_000 })
+      // Media tab — the cover picker + suggestion grid (empty until an
+      // event is cited, so it shows the "cite an event" hint here).
+      await page.locator('.publisher-form-nav-link[data-section="blog-media"]').click()
+      await page.locator('.publisher-blog-media-grid').waitFor()
+      // AI draft tab — the Generate control.
+      await page.locator('.publisher-form-nav-link[data-section="blog-aidraft"]').click()
+      await page.locator('.publisher-blog-generate-btn').waitFor()
 
       // Public: the post page renders the sanitized body, the dataset
       // deep link, and the event citation.
@@ -292,7 +302,7 @@ const checks: Check[] = [
     fixtures: publisherFixtures({ admin: true }),
     async run(page) {
       await gotoApp(page, '/publish/feeds')
-      await page.locator('#publisher-root .publisher-topbar').waitFor({ state: 'visible' })
+      await page.locator('#publisher-root .publisher-sidebar').waitFor({ state: 'visible' })
       // The registered connectors render with state dots + bookkeeping.
       await page
         .locator('.publisher-feeds-row', { hasText: 'NASA EONET' })
@@ -331,7 +341,7 @@ const checks: Check[] = [
     fixtures: publisherFixtures(),
     async run(page) {
       await gotoApp(page, '/publish/workflows/new')
-      await page.locator('#publisher-root .publisher-topbar').waitFor({ state: 'visible' })
+      await page.locator('#publisher-root .publisher-sidebar').waitFor({ state: 'visible' })
 
       // Pick the curated drought template via the template <select>,
       // identified by its option value (the visible label is i18n).
@@ -369,7 +379,10 @@ const checks: Check[] = [
     fixtures: publisherFixtures(),
     async run(page) {
       await gotoApp(page, '/publish/datasets/01HEXAMPLEDATASET00000001/edit')
-      await page.locator('#publisher-root .publisher-topbar').waitFor({ state: 'visible' })
+      await page.locator('#publisher-root .publisher-sidebar').waitFor({ state: 'visible' })
+      // The dataset form is a stepper — open the Media section (where
+      // the thumbnail uploader lives) before interacting with it.
+      await page.locator('.publisher-form-nav-link[data-section="ds-section-media"]').click()
       // The thumbnail uploader's globe-thumbnail generator block.
       await page
         .locator('.publisher-asset-uploader-generate')

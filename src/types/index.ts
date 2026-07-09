@@ -1605,6 +1605,7 @@ export interface PublisherPortalLoadedEvent extends TelemetryEventBase {
    * stale bookmarks); the router's notFound handler still emits
    * this event because the visit counts toward portal usage. */
   route:
+    | 'overview'
     | 'me'
     | 'datasets'
     | 'tours'

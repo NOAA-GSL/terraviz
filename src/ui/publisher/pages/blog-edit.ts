@@ -2,17 +2,22 @@
  * /publish/blog/new + /publish/blog/:id/edit — the blog post editor
  * (Phase 3d; `docs/CURRENT_EVENTS_PLAN.md` §7).
  *
- * Three sections:
- *   1. **Grounding** — pick the datasets the post draws on (the same
+ * Tabbed sections:
+ *   1. **Content** — title, summary, and the markdown body with the
+ *      shared toolbar + sanitized Preview.
+ *   2. **Sources** — pick the datasets the post draws on (the same
  *      catalog search the events tab uses) and optionally cite a
  *      current event; these selections feed both the AI Generate call
  *      and the saved post's citations.
- *   2. **Generate** — tone / length / companion-tour controls around
+ *   3. **Media** — suggested imagery for the cited event (the same
+ *      engine as the Events tab: NASA Worldview, Wikimedia Commons,
+ *      USGS ShakeMap, NHC cones, agency YouTube, plus the event's own
+ *      story image). Each card can be inserted into the post body as
+ *      markdown, or set as the post's cover image.
+ *   4. **AI draft** — tone / length / companion-tour controls around
  *      `POST /api/v1/publish/blog/generate`; a successful draft fills
  *      the content fields (the curator edits from there — nothing is
  *      saved until they say so).
- *   3. **Content** — title, summary, and the markdown body with the
- *      shared toolbar + sanitized Preview.
  *
  * Save creates (`POST /publish/blog`) or updates (`PUT
  * /publish/blog/:id`); Publish / Unpublish are the explicit status
@@ -25,6 +30,18 @@ import { publisherGet, publisherSend, handleSessionError } from '../api'
 import { buildErrorCard } from '../components/error-card'
 import { attachToolbar, renderMarkdownToolbar } from '../components/markdown-toolbar'
 import { loadPublishedDatasets, filterDatasetsByTitle } from '../components/events/dataset-search'
+import {
+  buildWorldviewSnapshot,
+  fetchCommonsSuggestions,
+  fetchNhcConeSuggestion,
+  fetchShakemapSuggestion,
+  fetchYoutubeSuggestions,
+  looksLikeQuake,
+  looksLikeTropical,
+  type MediaSuggestion,
+} from '../components/events/media-suggest'
+import type { ReviewEvent } from '../components/events/events-model'
+import { resolveRegion } from '../../../data/regions'
 import { renderMarkdown } from '../../../services/markdownRenderer'
 import type { PublisherDataset } from '../types'
 
@@ -44,14 +61,8 @@ interface PostWire {
   status: 'draft' | 'published'
   publishedAt: string | null
   tourId: string | null
-}
-
-interface ReviewEventLite {
-  id: string
-  title: string
-  /** The event's dataset pairings from the review queue — approved
-   *  ones seed the grounding chips when the event is cited. */
-  links?: Array<{ datasetId: string; datasetTitle: string; status: string }>
+  coverImageUrl: string | null
+  coverImageAlt: string | null
 }
 
 const ME_ENDPOINT = '/api/v1/publish/me'
@@ -143,6 +154,25 @@ function handleWriteError(
   setStatus(status, t('publisher.blog.error.generic'), true)
 }
 
+/**
+ * The media engine reads `geometry.boundingBox` / `geometry.point`, but
+ * an event can carry a region *name* with no bbox (ingest inferred a
+ * region string, or a curator typed one) — the geo-gated sources would
+ * then stay dark even though the place is known. Resolve the name to a
+ * bbox client-side via the same `regions.ts` the events backend uses on
+ * edit, so a named region ("Iowa") behaves like an explicit box. Leaves
+ * the event untouched when it already has a box/point, or the name isn't
+ * a known region.
+ */
+function withResolvedGeometry(ev: ReviewEvent): ReviewEvent {
+  const g = ev.geometry
+  if (!g || g.boundingBox || g.point || !g.regionName) return ev
+  const region = resolveRegion(g.regionName)
+  if (!region) return ev
+  const [w, s, e, n] = region.bounds
+  return { ...ev, geometry: { ...g, boundingBox: { n, s, w, e } } }
+}
+
 export async function renderBlogEditPage(mount: HTMLElement, options: BlogEditPageOptions = {}): Promise<void> {
   const fetchFn = options.fetchFn
   const navigate = options.navigate ?? ((url: string) => { window.location.href = url })
@@ -191,7 +221,11 @@ export async function renderBlogEditPage(mount: HTMLElement, options: BlogEditPa
   const selected = new Map<string, string>() // dataset id → title
   let citedEventId: string | null = existing?.eventId ?? null
   let catalog: PublisherDataset[] = []
-  let events: ReviewEventLite[] = []
+  let events: ReviewEvent[] = []
+
+  // ----- Cover-image state (Media tab) -----
+  let coverImageUrl: string | null = existing?.coverImageUrl ?? null
+  let coverImageAlt: string | null = existing?.coverImageAlt ?? null
 
   // ----- Content fields -----
   const titleInput = el('input', {
@@ -293,7 +327,7 @@ export async function renderBlogEditPage(mount: HTMLElement, options: BlogEditPa
     let added = false
     for (const link of ev?.links ?? []) {
       if (link.status !== 'approved' || selected.has(link.datasetId)) continue
-      selected.set(link.datasetId, link.datasetTitle)
+      selected.set(link.datasetId, link.datasetTitle ?? link.datasetId)
       added = true
     }
     if (added) {
@@ -344,7 +378,7 @@ export async function renderBlogEditPage(mount: HTMLElement, options: BlogEditPa
   }
   refreshTourLink()
   const genBtn = el('button', {
-    type: 'button', className: 'publisher-btn publisher-btn-primary publisher-blog-generate-btn',
+    type: 'button', className: 'publisher-button publisher-button-primary publisher-blog-generate-btn',
     textContent: t('publisher.blog.generate.run'),
   })
   genBtn.addEventListener('click', () => {
@@ -391,15 +425,255 @@ export async function renderBlogEditPage(mount: HTMLElement, options: BlogEditPa
       })
   })
 
+  // ----- Media tab: suggested imagery + cover picker -----
+  // Insert markdown at the body cursor, on its own line, keeping any
+  // open Preview in sync. Reuses the same textarea the toolbar drives.
+  const insertIntoBody = (markdown: string): void => {
+    const ta = bodyInput
+    const start = ta.selectionStart ?? ta.value.length
+    const end = ta.selectionEnd ?? start
+    const before = ta.value.slice(0, start)
+    const needsLead = before.length > 0 && !before.endsWith('\n')
+    ta.setRangeText((needsLead ? '\n\n' : '') + markdown + '\n', start, end, 'end')
+    ta.focus()
+    if (!preview.hidden) renderPreview()
+  }
+
+  // Source label for a suggestion badge — reuses the Events-tab strings
+  // (they name the media SOURCE, not anything event-specific).
+  const mediaBadge = (kind: MediaSuggestion['kind']): string => {
+    switch (kind) {
+      case 'commons': return t('publisher.events.suggest.commons')
+      case 'shakemap': return t('publisher.events.suggest.shakemap')
+      case 'nhc': return t('publisher.events.suggest.nhc')
+      case 'youtube': return t('publisher.events.suggest.youtube')
+      case 'worldview': return t('publisher.events.suggest.worldview')
+    }
+  }
+
+  const coverPreview = el('div', { className: 'publisher-blog-cover' })
+  const renderCover = (): void => {
+    coverPreview.replaceChildren()
+    if (!coverImageUrl) {
+      coverPreview.append(el('p', { className: 'publisher-blog-picker-hint', textContent: t('publisher.blog.media.noCover') }))
+      return
+    }
+    const fig = el('figure', { className: 'publisher-blog-cover-figure' })
+    const img = document.createElement('img')
+    img.className = 'publisher-blog-cover-img'
+    img.src = coverImageUrl
+    img.alt = coverImageAlt ?? ''
+    img.loading = 'lazy'
+    const remove = el('button', {
+      type: 'button', className: 'publisher-button publisher-button-small publisher-button-danger',
+      textContent: t('publisher.blog.media.removeCover'),
+    })
+    remove.addEventListener('click', () => {
+      coverImageUrl = null
+      coverImageAlt = null
+      renderCover()
+    })
+    fig.append(img, remove)
+    coverPreview.append(fig)
+  }
+
+  const mediaGrid = el('div', { className: 'publisher-blog-media-grid' })
+  // Explains, per source, why a suggestion didn't appear — a missing
+  // date/location prerequisite, or an empty result — so a sparse grid
+  // reads as "nothing matched" rather than "broken".
+  const mediaNotes = el('div', { className: 'publisher-blog-media-notes' })
+  // A suggestion card: preview + provenance + "Insert into post" and
+  // (image sources only) "Set as cover". The agency-YouTube card is a
+  // video — it inserts a linked thumbnail, never a cover.
+  const mediaCard = (s: MediaSuggestion, badge: string): HTMLElement => {
+    const isVideo = s.kind === 'youtube' && typeof s.embedUrl === 'string'
+    const altText = s.title ?? badge
+    const wrap = el('div', { className: 'publisher-blog-media-card' })
+    const img = document.createElement('img')
+    img.className = 'publisher-blog-media-preview'
+    img.src = s.url
+    img.alt = altText
+    img.loading = 'lazy'
+    // A candidate whose preview 404s removes itself (same as the Events tab).
+    img.addEventListener('error', () => wrap.remove())
+    wrap.append(img)
+    wrap.append(
+      el('div', { className: 'publisher-blog-media-meta' }, [
+        el('span', { className: 'publisher-blog-media-badge', textContent: badge }),
+        el('span', { className: 'publisher-blog-media-attribution', textContent: s.attribution }),
+      ]),
+    )
+    const actions = el('div', { className: 'publisher-blog-media-actions' })
+    const insertBtn = el('button', {
+      type: 'button', className: 'publisher-button publisher-button-small',
+      textContent: t('publisher.blog.media.insert'),
+    })
+    insertBtn.addEventListener('click', () => {
+      insertIntoBody(
+        isVideo && s.embedUrl ? `[![${altText}](${s.url})](${s.embedUrl})` : `![${altText}](${s.url})`,
+      )
+    })
+    actions.append(insertBtn)
+    if (!isVideo) {
+      const coverBtn = el('button', {
+        type: 'button', className: 'publisher-button publisher-button-small publisher-button-primary',
+        textContent: t('publisher.blog.media.setCover'),
+      })
+      coverBtn.addEventListener('click', () => {
+        coverImageUrl = s.url
+        coverImageAlt = altText
+        renderCover()
+      })
+      actions.append(coverBtn)
+    }
+    wrap.append(actions)
+    return wrap
+  }
+
+  // Rebuild the suggestion grid for the currently-cited event. Cheap
+  // sources render synchronously; the fetched ones append as they
+  // resolve, each guarded by a token so a stale in-flight fetch (the
+  // curator changed the cited event meanwhile) can't append into a
+  // grid that has moved on.
+  let mediaRenderedFor: string | null | undefined = undefined
+  let mediaToken = 0
+  const rebuildMedia = (): void => {
+    const token = ++mediaToken
+    mediaRenderedFor = citedEventId
+    const rawEv = citedEventId ? events.find(e => e.id === citedEventId) ?? null : null
+    // Resolve a region name to a bbox so named-region events light up the
+    // geo-gated sources just like explicitly-boxed ones.
+    const ev = rawEv ? withResolvedGeometry(rawEv) : null
+    mediaGrid.replaceChildren()
+    mediaNotes.replaceChildren()
+    if (!ev) {
+      mediaGrid.append(el('p', { className: 'publisher-blog-picker-hint', textContent: t('publisher.blog.media.needEvent') }))
+      return
+    }
+    const append = (s: MediaSuggestion, badge: string): void => {
+      if (token === mediaToken) mediaGrid.append(mediaCard(s, badge))
+    }
+
+    // Per-source "why it didn't show" reasons. Each source owns one key
+    // so a late async result can clear or set its own line; the block
+    // re-renders (token-guarded) whenever the set changes.
+    const reasons = new Map<string, string>()
+    const renderNotes = (): void => {
+      if (token !== mediaToken) return
+      mediaNotes.replaceChildren()
+      if (reasons.size === 0) return
+      mediaNotes.append(el('p', { className: 'publisher-blog-media-note-label', textContent: t('publisher.blog.media.notShownLabel') }))
+      const list = el('ul', { className: 'publisher-blog-media-note-list' })
+      for (const msg of reasons.values()) list.append(el('li', { textContent: msg }))
+      mediaNotes.append(list)
+    }
+    const setReason = (key: string, msg: string): void => {
+      if (token !== mediaToken) return
+      reasons.set(key, msg)
+      renderNotes()
+    }
+
+    const hasLocation = Boolean(ev.geometry?.boundingBox ?? ev.geometry?.point)
+    const hasDate = Boolean(ev.occurredStart ?? ev.source.publishedAt)
+    const ff = fetchFn ?? fetch
+    // A region NAME that didn't resolve to a box (it survived
+    // withResolvedGeometry with no bbox/point) — name the culprit so the
+    // curator knows the stored region isn't recognized, rather than
+    // seeing a generic "add a location" for a place that looks set.
+    const unresolvedRegion = !hasLocation ? (rawEv?.geometry?.regionName ?? null) : null
+    const noLocationHint = unresolvedRegion
+      ? t('publisher.blog.media.hintUnknownRegion', { region: unresolvedRegion })
+      : t('publisher.blog.media.hintNeedsLocation')
+
+    // The event's own vetted story image (the feed's enclosure / og:image
+    // / a prior curator pick) — the most on-topic candidate when present.
+    if (ev.imageUrl && /^https?:\/\//i.test(ev.imageUrl)) {
+      append(
+        { kind: 'commons', url: ev.imageUrl, attribution: ev.source.name, title: ev.imageAlt ?? ev.title },
+        t('publisher.blog.media.eventImage'),
+      )
+    }
+
+    // A missing/unrecognized location blocks both the satellite view and
+    // nearby photos — surface it once (naming the culprit region when the
+    // event has one) rather than repeating it per source.
+    if (!hasLocation) reasons.set('location', noLocationHint)
+
+    // Satellite view — needs both a date and a location.
+    const worldview = buildWorldviewSnapshot(ev)
+    if (worldview) append(worldview, mediaBadge('worldview'))
+    else if (!hasDate) reasons.set('worldview', t('publisher.blog.media.hintNeedsDate'))
+
+    // Nearby photos — need a location; empty when nothing public-domain
+    // is near the point.
+    if (hasLocation) {
+      void fetchCommonsSuggestions(ev, ff).then(rs => {
+        if (token !== mediaToken) return
+        if (rs.length) for (const r of rs) append(r, mediaBadge(r.kind))
+        else setReason('commons', t('publisher.blog.media.commonsEmpty'))
+      })
+    }
+
+    // Hazard maps — only relevant to their event type; the note only
+    // appears when the event reads like that hazard but nothing matched.
+    if (looksLikeQuake(ev)) {
+      void fetchShakemapSuggestion(ev, ff).then(r => {
+        if (token !== mediaToken) return
+        if (r) append(r, mediaBadge(r.kind))
+        else setReason('shakemap', t('publisher.blog.media.shakemapEmpty'))
+      })
+    }
+    if (looksLikeTropical(ev)) {
+      void fetchNhcConeSuggestion(ev, ff).then(r => {
+        if (token !== mediaToken) return
+        if (r) append(r, mediaBadge(r.kind))
+        else setReason('nhc', t('publisher.blog.media.nhcEmpty'))
+      })
+    }
+
+    // Agency video — key-gated + allowlist-matched; empty is common.
+    void fetchYoutubeSuggestions(ev, ff).then(rs => {
+      if (token !== mediaToken) return
+      if (rs.length) for (const r of rs) append(r, mediaBadge(r.kind))
+      else setReason('youtube', t('publisher.blog.media.youtubeEmpty'))
+    })
+
+    renderNotes()
+  }
+
+  // Re-pull the approved-events list so the Media tab reflects edits the
+  // curator made in the Events tab (a location or date attached after
+  // this editor loaded) — otherwise the suggestions seed off the stale
+  // mount-time snapshot and geo/date-gated sources never appear. Fires
+  // on each Media-tab open when an event is cited; single-flight.
+  let refreshingEvents = false
+  const refreshEventsForMedia = (): void => {
+    if (refreshingEvents) return
+    refreshingEvents = true
+    void publisherGet<{ events: ReviewEvent[] }>(EVENTS_ENDPOINT, { fetchFn })
+      .then(res => {
+        if (res.ok) {
+          events = res.data.events
+          renderEventOptions()
+        }
+      })
+      .finally(() => {
+        refreshingEvents = false
+        // Rebuild against the freshest event data (or leave the instant
+        // snapshot render in place if the refresh failed).
+        rebuildMedia()
+      })
+  }
+
   // ----- Save / publish actions -----
   const saveStatus = el('span', { className: 'publisher-blog-status' })
   saveStatus.setAttribute('role', 'status')
   const saveBtn = el('button', {
-    type: 'button', className: 'publisher-btn publisher-btn-primary publisher-blog-save-btn',
+    type: 'button', className: 'publisher-button publisher-button-primary publisher-blog-save-btn',
     textContent: t('publisher.blog.save'),
   })
   const publishBtn = el('button', {
-    type: 'button', className: 'publisher-btn publisher-blog-publish-btn',
+    type: 'button', className: 'publisher-button publisher-blog-publish-btn',
   })
   const refreshPublishBtn = (): void => {
     publishBtn.textContent = postStatus === 'published' ? t('publisher.blog.unpublish') : t('publisher.blog.publish')
@@ -414,6 +688,8 @@ export async function renderBlogEditPage(mount: HTMLElement, options: BlogEditPa
     datasetIds: [...selected.keys()],
     eventId: citedEventId,
     tourId: companionTourId,
+    coverImageUrl,
+    coverImageAlt,
   })
 
   saveBtn.addEventListener('click', () => {
@@ -473,17 +749,46 @@ export async function renderBlogEditPage(mount: HTMLElement, options: BlogEditPa
       })
   })
 
-  // ----- Layout -----
-  const grounding = card(
-    el('h2', { className: 'publisher-card-heading', textContent: t('publisher.blog.grounding.title') }),
+  // ----- Layout: tabbed stepper (left-rail nav + one section shown) —
+  // mirrors the dataset form so the editor isn't one long page. -----
+  const bodyField = el('div', { className: 'publisher-blog-field' })
+  const bodyLabelRow = el('div', { className: 'publisher-form-label-row' }, [
+    el('span', { className: 'publisher-field-label', textContent: t('publisher.blog.field.body') }),
+    previewToggle,
+  ])
+  bodyField.append(bodyLabelRow, toolbar, bodyInput, preview)
+
+  // Section 1 — Content: the post itself (title, summary, body).
+  const contentCard = card(
+    el('h2', { className: 'publisher-card-heading', textContent: t('publisher.blog.tab.content') }),
+    labelled(t('publisher.blog.field.title'), titleInput),
+    labelled(t('publisher.blog.field.summary'), summaryInput),
+    bodyField,
+  )
+  // Section 2 — Sources: the datasets + event the post is grounded in.
+  const sourcesCard = card(
+    el('h2', { className: 'publisher-card-heading', textContent: t('publisher.blog.tab.sources') }),
     el('p', { className: 'publisher-blog-intro', textContent: t('publisher.blog.grounding.intro') }),
     labelled(t('publisher.blog.picker.label'), dsSearch),
     dsCandidates,
     chips,
     labelled(t('publisher.blog.event.label'), evSelect),
   )
-  const generate = card(
-    el('h2', { className: 'publisher-card-heading', textContent: t('publisher.blog.generate.title') }),
+  // Section 3 — Media: suggested imagery for the cited event, plus the
+  // post's cover-image picker.
+  const mediaCardSection = card(
+    el('h2', { className: 'publisher-card-heading', textContent: t('publisher.blog.tab.media') }),
+    el('p', { className: 'publisher-blog-intro', textContent: t('publisher.blog.media.intro') }),
+    el('h3', { className: 'publisher-blog-subheading', textContent: t('publisher.blog.media.coverLabel') }),
+    coverPreview,
+    el('h3', { className: 'publisher-blog-subheading', textContent: t('publisher.blog.media.suggestionsLabel') }),
+    mediaGrid,
+    mediaNotes,
+  )
+  // Section 4 — AI draft: generate the body from the sources.
+  const aiCard = card(
+    el('h2', { className: 'publisher-card-heading', textContent: t('publisher.blog.tab.aiDraft') }),
+    el('p', { className: 'publisher-blog-intro', textContent: t('publisher.blog.generate.intro') }),
     labelled(t('publisher.blog.generate.tone'), toneInput),
     labelled(t('publisher.blog.generate.length'), lengthSelect),
     tourWrap,
@@ -491,23 +796,98 @@ export async function renderBlogEditPage(mount: HTMLElement, options: BlogEditPa
     genStatus,
     genTourLink,
   )
-  const bodyField = el('div', { className: 'publisher-blog-field' })
-  const bodyLabelRow = el('div', { className: 'publisher-form-label-row' }, [
-    el('span', { className: 'publisher-field-label', textContent: t('publisher.blog.field.body') }),
-    previewToggle,
+
+  const SECTIONS: ReadonlyArray<{
+    id: string
+    labelKey:
+      | 'publisher.blog.tab.content'
+      | 'publisher.blog.tab.sources'
+      | 'publisher.blog.tab.media'
+      | 'publisher.blog.tab.aiDraft'
+    card: HTMLElement
+  }> = [
+    { id: 'blog-content', labelKey: 'publisher.blog.tab.content', card: contentCard },
+    { id: 'blog-sources', labelKey: 'publisher.blog.tab.sources', card: sourcesCard },
+    { id: 'blog-media', labelKey: 'publisher.blog.tab.media', card: mediaCardSection },
+    { id: 'blog-aidraft', labelKey: 'publisher.blog.tab.aiDraft', card: aiCard },
+  ]
+  const navLinks = new Map<string, HTMLButtonElement>()
+  // Toggle visibility in place (no re-render) so field state, an
+  // in-flight generate, and the open Preview all survive a tab switch.
+  const showSection = (id: string): void => {
+    if (id === 'blog-media') {
+      // Render instantly from the current snapshot when the cited event
+      // changed since the last build (fetched sources aren't re-hit on an
+      // unchanged revisit)…
+      if (mediaRenderedFor !== citedEventId) rebuildMedia()
+      // …then, when an event is cited, re-pull the events list so edits
+      // made in the Events tab (a location/date attached after this
+      // editor loaded) flow in and rebuild against the fresh data.
+      if (citedEventId) refreshEventsForMedia()
+    }
+    for (const s of SECTIONS) s.card.style.display = s.id === id ? '' : 'none'
+    for (const [sid, btn] of navLinks) {
+      const on = sid === id
+      btn.className = on
+        ? 'publisher-form-nav-link publisher-form-nav-link-active'
+        : 'publisher-form-nav-link'
+      if (on) btn.setAttribute('aria-current', 'step')
+      else btn.removeAttribute('aria-current')
+    }
+  }
+  const nav = el('nav', { className: 'publisher-form-nav' })
+  nav.setAttribute('aria-label', t('publisher.blog.editor.navAria'))
+  for (const s of SECTIONS) {
+    s.card.classList.add('publisher-form-card')
+    s.card.dataset.section = s.id
+    const btn = el('button', {
+      type: 'button',
+      className: 'publisher-form-nav-link',
+      textContent: t(s.labelKey),
+    })
+    btn.dataset.section = s.id
+    btn.addEventListener('click', () => showSection(s.id))
+    navLinks.set(s.id, btn)
+    nav.append(btn)
+  }
+
+  // Page header: back link + title on the start side; Save / Publish on
+  // the end side so they're reachable from any tab.
+  const back = el('a', {
+    className: 'publisher-back-link',
+    href: '/publish/blog',
+    textContent: `← ${t('publisher.blog.editor.back')}`,
+  })
+  back.addEventListener('click', e => {
+    if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return
+    e.preventDefault()
+    navigate('/publish/blog')
+  })
+  const headerMain = el('div', { className: 'publisher-dataset-form-header-main' }, [
+    back,
+    el('h1', {
+      className: 'publisher-detail-title',
+      textContent: existing
+        ? t('publisher.blog.editor.headingEdit')
+        : t('publisher.blog.editor.headingNew'),
+    }),
   ])
-  bodyField.append(bodyLabelRow, toolbar, bodyInput, preview)
-  const content = card(
-    el('h2', { className: 'publisher-card-heading', textContent: t('publisher.blog.editor.title') }),
-    labelled(t('publisher.blog.field.title'), titleInput),
-    labelled(t('publisher.blog.field.summary'), summaryInput),
-    bodyField,
-    el('div', { className: 'publisher-blog-actions' }, [saveBtn, publishBtn]),
-    saveStatus,
+  const header = el('header', { className: 'publisher-dataset-form-header' }, [
+    headerMain,
+    el('div', { className: 'publisher-detail-actions' }, [saveBtn, publishBtn, saveStatus]),
+  ])
+
+  const rail = el('aside', { className: 'publisher-dataset-form-rail' }, [nav])
+  const formCol = el('div', { className: 'publisher-form' }, [contentCard, sourcesCard, mediaCardSection, aiCard])
+  const layout = el('div', { className: 'publisher-dataset-form-layout' }, [rail, formCol])
+
+  mount.replaceChildren(
+    el('main', { className: 'publisher-shell publisher-dataset-form' }, [header, layout]),
   )
-  mount.replaceChildren(shell(grounding, generate, content))
+  showSection('blog-content')
   renderChips()
   renderEventOptions()
+  renderCover()
 
   // ----- Lazy loads: the catalog for the picker + the events list -----
   void loadPublishedDatasets(fetchFn, options.navigate).then(list => {
@@ -523,15 +903,21 @@ export async function renderBlogEditPage(mount: HTMLElement, options: BlogEditPa
       renderChips()
     }
   })
-  void publisherGet<{ events: ReviewEventLite[] }>(EVENTS_ENDPOINT, { fetchFn }).then(res => {
+  void publisherGet<{ events: ReviewEvent[] }>(EVENTS_ENDPOINT, { fetchFn }).then(res => {
     if (!res.ok) {
       // Mirror loadPublishedDatasets: route a session error through the
       // shared recovery flow; other failures leave the picker disabled.
       if (res.kind === 'session') handleSessionError({ navigate: options.navigate })
       return
     }
-    events = res.data.events.map(e => ({ id: e.id, title: e.title, links: e.links }))
+    // Keep the full ReviewEvent objects — the Media tab seeds its
+    // suggestion engine off each event's geometry / date / keywords.
+    events = res.data.events
     evSelect.disabled = false
     renderEventOptions()
+    // If the Media tab was opened before the events arrived, its grid
+    // is showing the "cite an event" hint against a not-yet-loaded
+    // event; refresh it now that the cited event can resolve.
+    if (mediaRenderedFor !== undefined && mediaRenderedFor === citedEventId && citedEventId) rebuildMedia()
   })
 }

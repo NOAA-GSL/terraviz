@@ -203,6 +203,25 @@ const entries: Array<[string[], RegionEntry]> = [
   [['wisconsin'], { name: 'Wisconsin', bounds: [-92.9, 42.5, -86.8, 47.1] }],
   [['wyoming'], { name: 'Wyoming', bounds: [-111.1, 41, -104, 45] }],
 
+  // US multi-state regions — the directional / coastal descriptors news
+  // headlines (and the events AI) use for a place that spans several
+  // states, so a "Midwest" / "Pacific Northwest" event still resolves to
+  // a box. Aliases include the "U.S." / "US" prefixed and "-ern United
+  // States" forms the AI commonly emits.
+  [['midwest', 'u.s. midwest', 'us midwest', 'american midwest', 'midwestern united states', 'middle west', 'the midwest'], { name: 'Midwest', bounds: [-104, 36, -80.5, 49.4] }],
+  [['upper midwest'], { name: 'Upper Midwest', bounds: [-104, 41.5, -82, 49.4] }],
+  [['northeast', 'northeastern united states', 'u.s. northeast', 'us northeast', 'american northeast', 'the northeast'], { name: 'Northeast', bounds: [-80.5, 38.5, -66.9, 47.5] }],
+  [['new england'], { name: 'New England', bounds: [-73.7, 41, -66.9, 47.5] }],
+  [['mid-atlantic', 'mid atlantic', 'middle atlantic'], { name: 'Mid-Atlantic', bounds: [-83.7, 36.5, -73.9, 45] }],
+  [['southeast us', 'southeast united states', 'southeastern united states', 'southeastern us', 'u.s. southeast', 'us southeast', 'american southeast', 'the southeast'], { name: 'Southeast US', bounds: [-94.6, 24.5, -75.2, 39.1] }],
+  [['american south', 'the south', 'southern united states', 'deep south'], { name: 'American South', bounds: [-94.6, 24.5, -75.2, 37] }],
+  [['gulf coast', 'u.s. gulf coast', 'us gulf coast', 'gulf coast states'], { name: 'Gulf Coast', bounds: [-97.5, 25.8, -81, 31] }],
+  [['southwest', 'southwestern united states', 'u.s. southwest', 'us southwest', 'american southwest', 'desert southwest', 'the southwest'], { name: 'Southwest', bounds: [-124.5, 31.3, -103, 42] }],
+  [['pacific northwest', 'pnw', 'u.s. northwest', 'us northwest', 'northwest', 'northwestern united states', 'the northwest'], { name: 'Pacific Northwest', bounds: [-124.8, 42, -111, 49] }],
+  [['west coast', 'u.s. west coast', 'us west coast'], { name: 'West Coast', bounds: [-124.8, 32.5, -114.1, 49] }],
+  [['east coast', 'u.s. east coast', 'us east coast', 'eastern seaboard', 'atlantic seaboard'], { name: 'East Coast', bounds: [-81.5, 24.5, -66.9, 47.5] }],
+  [['mountain west', 'intermountain west'], { name: 'Mountain West', bounds: [-117.2, 31.3, -102, 49] }],
+
   // Major geographic regions (commonly discussed in Earth science)
   [['amazon', 'amazon basin', 'amazon rainforest'], { name: 'Amazon Basin', bounds: [-79, -20, -44, 5] }],
   [['sahara', 'sahara desert'], { name: 'Sahara Desert', bounds: [-16, 15, 35, 37] }],

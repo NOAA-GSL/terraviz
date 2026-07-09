@@ -363,3 +363,57 @@ describe('companion-tour linkage', () => {
     expect((await readJson<{ post: { tour: unknown } }>(res)).post.tour).toBeNull()
   })
 })
+
+describe('cover image (suggested media pick)', () => {
+  const COVER = 'https://wvs.earthdata.nasa.gov/api/v1/snapshot?TIME=2026-07-01'
+  const ALT = 'MODIS true-color of the Gulf on 2026-07-01'
+
+  it('round-trips a cover url + alt through create → authoring get → public read', async () => {
+    const { env } = setupEnv()
+    const post = await createDraft(env, { ...VALID, coverImageUrl: COVER, coverImageAlt: ALT })
+    // Authoring GET carries the pair back to the editor.
+    const authored = await getOne(ctx({ env, params: { id: post.id } }))
+    const { post: draft } = await readJson<{ post: { coverImageUrl: string | null; coverImageAlt: string | null } }>(authored)
+    expect(draft.coverImageUrl).toBe(COVER)
+    expect(draft.coverImageAlt).toBe(ALT)
+    // Public read (once published) surfaces it as the lead image.
+    await transition(ctx({ env, method: 'POST', params: { id: post.id }, body: { action: 'publish' } }))
+    const one = await publicPost(ctx({ env, path: `/api/v1/blog/${post.slug}`, params: { slug: post.slug } }))
+    const { post: detail } = await readJson<{ post: { coverImageUrl: string | null; coverImageAlt: string | null } }>(one)
+    expect(detail.coverImageUrl).toBe(COVER)
+    expect(detail.coverImageAlt).toBe(ALT)
+  })
+
+  it('rejects a non-http(s) cover url on write', async () => {
+    const { env } = setupEnv()
+    const res = await createPost(ctx({ env, method: 'POST', body: { ...VALID, coverImageUrl: 'javascript:alert(1)' } }))
+    expect(res.status).toBe(400)
+    const { errors } = await readJson<{ errors: Array<{ field: string }> }>(res)
+    expect(errors.some(e => e.field === 'coverImageUrl')).toBe(true)
+  })
+
+  it('an empty-string cover url clears the cover (edit removes it)', async () => {
+    const { env } = setupEnv()
+    const post = await createDraft(env, { ...VALID, coverImageUrl: COVER, coverImageAlt: ALT })
+    const res = await updateOne(
+      ctx({ env, method: 'PUT', params: { id: post.id }, body: { ...VALID, coverImageUrl: '', coverImageAlt: ALT } }),
+    )
+    expect(res.status).toBe(200)
+    const { post: updated } = await readJson<{ post: { coverImageUrl: string | null; coverImageAlt: string | null } }>(res)
+    expect(updated.coverImageUrl).toBeNull()
+    // Alt is meaningless without an image — dropped too.
+    expect(updated.coverImageAlt).toBeNull()
+  })
+
+  it('re-guards a stored non-http(s) cover to null on read (defense in depth)', async () => {
+    const { env, sqlite } = setupEnv()
+    const post = await createDraft(env, { ...VALID, coverImageUrl: COVER, coverImageAlt: ALT })
+    await transition(ctx({ env, method: 'POST', params: { id: post.id }, body: { action: 'publish' } }))
+    sqlite.prepare(`UPDATE blog_posts SET cover_image_url = 'javascript:alert(1)' WHERE id = ?`).run(post.id)
+    ;(env.CATALOG_KV as unknown as { _store: Map<string, string> })._store.clear()
+    const one = await publicPost(ctx({ env, path: `/api/v1/blog/${post.slug}`, params: { slug: post.slug } }))
+    const { post: detail } = await readJson<{ post: { coverImageUrl: string | null; coverImageAlt: string | null } }>(one)
+    expect(detail.coverImageUrl).toBeNull()
+    expect(detail.coverImageAlt).toBeNull()
+  })
+})

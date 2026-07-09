@@ -198,8 +198,7 @@ describe('renderNodeProfilePage', () => {
 
     // No POST fired — only the two initial GETs.
     expect(fetchFn.mock.calls.every(([, init]) => (init?.method ?? 'GET') === 'GET')).toBe(true)
-    const statuses = mount.querySelectorAll('.publisher-nodeprofile-status')
-    const logoStatus = statuses[statuses.length - 1]
+    const logoStatus = mount.querySelector('.publisher-nodeprofile-logo-status')!
     expect(logoStatus.classList.contains('publisher-nodeprofile-status-error')).toBe(true)
   })
 
