@@ -92,9 +92,14 @@ async function hydrateRunStatuses(
     workflows.map(async wf => {
       const res = await runsFn(wf.id)
       if (!res.ok) return
-      const newest = [...res.data.runs].sort(
-        (a, b) => (Date.parse(b.created_at) || 0) - (Date.parse(a.created_at) || 0),
-      )[0]
+      // Single pass for the newest run — no need to sort the whole list
+      // (listWorkflowRuns can return up to 50) just to take the max.
+      let newest: (typeof res.data.runs)[number] | undefined
+      for (const run of res.data.runs) {
+        if (!newest || (Date.parse(run.created_at) || 0) > (Date.parse(newest.created_at) || 0)) {
+          newest = run
+        }
+      }
       if (!newest) return
       const cell = content.querySelector<HTMLElement>(
         `[data-workflow-lastrun="${CSS.escape(wf.id)}"]`,

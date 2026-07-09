@@ -101,7 +101,7 @@ function renderError(
 function renderTabs(
   active: DatasetLifecycle,
   onSelect: (status: DatasetLifecycle) => void,
-  counts?: Record<DatasetLifecycle, number> | null,
+  counts?: Partial<Record<DatasetLifecycle, number>> | null,
 ): HTMLElement {
   const tablist = document.createElement('div')
   tablist.className = 'publisher-tabs'
@@ -414,8 +414,9 @@ interface PageState {
   nextCursor: string | null
   isLoadingMore: boolean
   /** Per-lifecycle totals shown in the tab labels; null until the
-   *  best-effort count probe resolves. */
-  counts: Record<DatasetLifecycle, number> | null
+   *  best-effort count probe resolves. A status with more rows than the
+   *  server max is omitted (count unknowable), so this is partial. */
+  counts: Partial<Record<DatasetLifecycle, number>> | null
   /** Client-side search query — filters the loaded rows by title/slug.
    *  Persisted on the state so it survives Load-more / tab re-renders. */
   search: string
@@ -641,26 +642,30 @@ export async function renderDatasetsPage(
 }
 
 /**
- * Fetch approximate per-lifecycle totals (draft / published /
- * retracted) for the tab labels. Each status is a capped list read
- * whose length is the count — the same cheap approximation the
- * dashboard uses. Returns null if any read fails (the labels then
- * stay count-less rather than showing a wrong number).
+ * Fetch per-lifecycle totals (draft / published / retracted) for the
+ * tab labels. Each status is one capped list read whose length is the
+ * count — but only when the page wasn't truncated: a `next_cursor`
+ * means the status has more rows than the server's 200 max, so the
+ * length would undercount. Such a status is omitted (its label stays
+ * count-less) rather than shown wrong. Returns null if any read fails.
  */
 async function fetchLifecycleCounts(
   fetchFn: typeof fetch,
-): Promise<Record<DatasetLifecycle, number> | null> {
+): Promise<Partial<Record<DatasetLifecycle, number>> | null> {
   const statuses: DatasetLifecycle[] = ['draft', 'published', 'retracted']
   const results = await Promise.all(
+    // 200 = the server's max page size (see buildListUrl); asking for
+    // more just gets clamped.
     statuses.map(s =>
-      publisherGet<ListDatasetsResponse>(`${DATASETS_ENDPOINT}?status=${s}&limit=500`, { fetchFn }),
+      publisherGet<ListDatasetsResponse>(`${DATASETS_ENDPOINT}?status=${s}&limit=200`, { fetchFn }),
     ),
   )
   if (results.some(r => !r.ok)) return null
-  const counts = {} as Record<DatasetLifecycle, number>
+  const counts: Partial<Record<DatasetLifecycle, number>> = {}
   statuses.forEach((s, i) => {
     const r = results[i]
-    counts[s] = r.ok ? r.data.datasets.length : 0
+    // Only a full (untruncated) page gives a true count.
+    if (r.ok && !r.data.next_cursor) counts[s] = r.data.datasets.length
   })
   return counts
 }
