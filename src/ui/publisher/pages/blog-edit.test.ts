@@ -426,6 +426,38 @@ describe('renderBlogEditPage', () => {
     expect(notes.toLowerCase()).not.toContain('add a location')
   })
 
+  it('Media tab names an unrecognized region name in the location note', async () => {
+    // The event's stored region is a string regions.ts can't resolve —
+    // the note must name it so the curator knows the place looks set but
+    // isn't recognized.
+    const capture: Captured = { posts: [] }
+    const fetchFn = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : (input as Request).url
+      const method = init?.method ?? 'GET'
+      let body: unknown = {}
+      if (method === 'POST' || method === 'PUT') capture.posts.push({ url, body: JSON.parse(String(init?.body)) })
+      else if (url.includes('/publish/me')) body = ADMIN_ME
+      else if (url.includes('/publish/datasets')) body = DATASETS
+      else if (url.includes('/publish/events')) {
+        body = { events: [{ id: 'EVT1', title: 'Wildfire smoke', source: { name: 'NOAA', url: 'https://x' }, status: 'approved', occurredStart: '2026-07-01T00:00:00Z', geometry: { regionName: 'U.S. Midwest' }, links: [] }] }
+      }
+      return { ok: true, status: 200, type: 'basic', json: async () => body, text: async () => JSON.stringify(body) } as unknown as Response
+    })
+    const mount = document.createElement('div')
+    await renderBlogEditPage(mount, { fetchFn, navigate: vi.fn() })
+    await flush()
+    const evSelect = mount.querySelector('.publisher-blog-event-select') as HTMLSelectElement
+    evSelect.value = 'EVT1'
+    evSelect.dispatchEvent(new Event('change'))
+    ;(mount.querySelector('.publisher-form-nav-link[data-section="blog-media"]') as HTMLButtonElement).click()
+    await flush()
+
+    expect(mount.querySelector('.publisher-blog-media-preview[src*="wvs.earthdata.nasa.gov"]')).toBeNull()
+    const notes = (mount.querySelector('.publisher-blog-media-notes') as HTMLElement).textContent ?? ''
+    expect(notes).toContain('U.S. Midwest')
+    expect(notes.toLowerCase()).toContain("isn't a recognized region")
+  })
+
   it('Media tab explains why sources were skipped (missing date/location prerequisites)', async () => {
     // Event has neither a location nor a date on every fetch, so the
     // grid stays empty and the notes must say what to add.

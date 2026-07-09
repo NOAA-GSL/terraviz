@@ -576,6 +576,14 @@ export async function renderBlogEditPage(mount: HTMLElement, options: BlogEditPa
     const hasLocation = Boolean(ev.geometry?.boundingBox ?? ev.geometry?.point)
     const hasDate = Boolean(ev.occurredStart ?? ev.source.publishedAt)
     const ff = fetchFn ?? fetch
+    // A region NAME that didn't resolve to a box (it survived
+    // withResolvedGeometry with no bbox/point) — name the culprit so the
+    // curator knows the stored region isn't recognized, rather than
+    // seeing a generic "add a location" for a place that looks set.
+    const unresolvedRegion = !hasLocation ? (rawEv?.geometry?.regionName ?? null) : null
+    const noLocationHint = unresolvedRegion
+      ? t('publisher.blog.media.hintUnknownRegion', { region: unresolvedRegion })
+      : t('publisher.blog.media.hintNeedsLocation')
 
     // The event's own vetted story image (the feed's enclosure / og:image
     // / a prior curator pick) — the most on-topic candidate when present.
@@ -586,17 +594,19 @@ export async function renderBlogEditPage(mount: HTMLElement, options: BlogEditPa
       )
     }
 
+    // A missing/unrecognized location blocks both the satellite view and
+    // nearby photos — surface it once (naming the culprit region when the
+    // event has one) rather than repeating it per source.
+    if (!hasLocation) reasons.set('location', noLocationHint)
+
     // Satellite view — needs both a date and a location.
     const worldview = buildWorldviewSnapshot(ev)
     if (worldview) append(worldview, mediaBadge('worldview'))
     else if (!hasDate) reasons.set('worldview', t('publisher.blog.media.hintNeedsDate'))
-    else if (!hasLocation) reasons.set('worldview', t('publisher.blog.media.hintNeedsLocation'))
 
     // Nearby photos — need a location; empty when nothing public-domain
     // is near the point.
-    if (!hasLocation) {
-      reasons.set('commons', t('publisher.blog.media.commonsNeedsLocation'))
-    } else {
+    if (hasLocation) {
       void fetchCommonsSuggestions(ev, ff).then(rs => {
         if (token !== mediaToken) return
         if (rs.length) for (const r of rs) append(r, mediaBadge(r.kind))
