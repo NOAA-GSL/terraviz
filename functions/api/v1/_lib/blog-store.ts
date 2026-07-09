@@ -58,6 +58,8 @@ export interface BlogPostRow {
   updated_at: string
   published_at: string | null
   tour_id: string | null
+  cover_image_url: string | null
+  cover_image_alt: string | null
 }
 
 /** The authoring-side wire shape (drafts included). */
@@ -76,10 +78,26 @@ export interface BlogPostPublic {
   publishedAt: string | null
   /** The AI-generated companion tour's tours-row id, when one exists. */
   tourId: string | null
+  /** The post's own lead image (curator pick from the Media tab),
+   *  re-guarded to http(s) on read; null when none was set. */
+  coverImageUrl: string | null
+  /** Alt text for `coverImageUrl` (media accessibility). */
+  coverImageAlt: string | null
 }
 
 const COLUMNS =
-  'id, slug, title, summary, body_md, dataset_ids, event_id, author_id, status, created_at, updated_at, published_at, tour_id'
+  'id, slug, title, summary, body_md, dataset_ids, event_id, author_id, status, created_at, updated_at, published_at, tour_id, cover_image_url, cover_image_alt'
+
+/** Cover-image URL length ceiling — the suggestion sources (Worldview
+ *  snapshots carry a long query string) stay well under this. */
+export const POST_COVER_URL_MAX_LEN = 2048
+export const POST_COVER_ALT_MAX_LEN = 512
+
+/** A stored cover URL only reaches the wire when it is still http(s)
+ *  — defense in depth mirroring the event story-image read guard. */
+function guardCoverUrl(raw: string | null): string | null {
+  return raw && /^https?:\/\//i.test(raw) ? raw : null
+}
 
 function parseDatasetIds(raw: string | null): string[] {
   if (!raw) return []
@@ -106,6 +124,9 @@ export function toPublicPost(row: BlogPostRow): BlogPostPublic {
     updatedAt: row.updated_at,
     publishedAt: row.published_at,
     tourId: row.tour_id,
+    coverImageUrl: guardCoverUrl(row.cover_image_url),
+    // Alt only rides along while the URL survives the guard.
+    coverImageAlt: guardCoverUrl(row.cover_image_url) ? row.cover_image_alt : null,
   }
 }
 
@@ -157,6 +178,8 @@ export interface BlogPostInput {
   datasetIds: string[]
   eventId: string | null
   tourId: string | null
+  coverImageUrl: string | null
+  coverImageAlt: string | null
 }
 
 export async function insertBlogPost(
@@ -181,16 +204,18 @@ export async function insertBlogPost(
     updated_at: now,
     published_at: null,
     tour_id: input.tourId,
+    cover_image_url: input.coverImageUrl,
+    cover_image_alt: input.coverImageUrl ? input.coverImageAlt : null,
   }
   await db
     .prepare(
       `INSERT INTO blog_posts (${COLUMNS})
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .bind(
       row.id, row.slug, row.title, row.summary, row.body_md, row.dataset_ids,
       row.event_id, row.author_id, row.status, row.created_at, row.updated_at, row.published_at,
-      row.tour_id,
+      row.tour_id, row.cover_image_url, row.cover_image_alt,
     )
     .run()
   return row
@@ -209,7 +234,8 @@ export async function updateBlogPost(
   await db
     .prepare(
       `UPDATE blog_posts
-          SET title = ?, summary = ?, body_md = ?, dataset_ids = ?, event_id = ?, tour_id = ?, updated_at = ?
+          SET title = ?, summary = ?, body_md = ?, dataset_ids = ?, event_id = ?, tour_id = ?,
+              cover_image_url = ?, cover_image_alt = ?, updated_at = ?
         WHERE id = ?`,
     )
     .bind(
@@ -219,6 +245,8 @@ export async function updateBlogPost(
       input.datasetIds.length > 0 ? JSON.stringify(input.datasetIds) : null,
       input.eventId,
       input.tourId,
+      input.coverImageUrl,
+      input.coverImageUrl ? input.coverImageAlt : null,
       now,
       id,
     )
@@ -392,8 +420,38 @@ export function validateBlogInput(
     }
   }
 
+  let coverImageUrl: string | null = null
+  if (body.coverImageUrl != null) {
+    if (typeof body.coverImageUrl !== 'string') {
+      errors.push({ field: 'coverImageUrl', code: 'invalid', message: '`coverImageUrl` must be a string.' })
+    } else if (body.coverImageUrl.trim().length === 0) {
+      // An empty string clears the cover — treat it as null, not an error.
+      coverImageUrl = null
+    } else if (body.coverImageUrl.length > POST_COVER_URL_MAX_LEN) {
+      errors.push({ field: 'coverImageUrl', code: 'too_long', message: `\`coverImageUrl\` must be at most ${POST_COVER_URL_MAX_LEN} characters.` })
+    } else if (!/^https?:\/\//i.test(body.coverImageUrl)) {
+      errors.push({ field: 'coverImageUrl', code: 'invalid', message: '`coverImageUrl` must be an http(s) URL.' })
+    } else {
+      coverImageUrl = body.coverImageUrl.trim()
+    }
+  }
+
+  let coverImageAlt: string | null = null
+  if (body.coverImageAlt != null) {
+    if (typeof body.coverImageAlt !== 'string') {
+      errors.push({ field: 'coverImageAlt', code: 'invalid', message: '`coverImageAlt` must be a string.' })
+    } else if (body.coverImageAlt.length > POST_COVER_ALT_MAX_LEN) {
+      errors.push({ field: 'coverImageAlt', code: 'too_long', message: `\`coverImageAlt\` must be at most ${POST_COVER_ALT_MAX_LEN} characters.` })
+    } else {
+      coverImageAlt = body.coverImageAlt.trim() || null
+    }
+  }
+  // Alt without an image is meaningless — drop it so the stored pair
+  // stays consistent (mirrors the row/insert normalization).
+  if (!coverImageUrl) coverImageAlt = null
+
   if (errors.length > 0) return { ok: false, errors }
-  return { ok: true, value: { title, summary, bodyMd, datasetIds, eventId, tourId } }
+  return { ok: true, value: { title, summary, bodyMd, datasetIds, eventId, tourId, coverImageUrl, coverImageAlt } }
 }
 
 /**
