@@ -7,6 +7,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mergeChannelCandidates, onRequestGet as searchGet, parseYoutubeSearch } from './youtube-search'
+import { channelName, isAllowlistedChannel } from '../../_lib/youtube-channels'
 import { asD1, makeKV, seedFixtures } from '../../_lib/test-helpers'
 import type { PublisherRow } from '../../_lib/publisher-store'
 
@@ -70,6 +71,36 @@ describe('parseYoutubeSearch', () => {
   it('returns [] for a malformed body', () => {
     expect(parseYoutubeSearch(null)).toEqual([])
     expect(parseYoutubeSearch({ items: 'nope' })).toEqual([])
+  })
+})
+
+describe('agency allowlist', () => {
+  // Verified channel ids (each confirmed against the channel's own
+  // youtube.com/feeds/videos.xml title) → guard against an accidental
+  // edit silently dropping one from the reputability gate.
+  const VERIFIED: Array<[string, string]> = [
+    ['UCLA_DiR1FfKNvjuUpBHmylQ', 'NASA'],
+    ['UCAY-SMFNfynqz1bdoaV8BeQ', 'NASA Goddard'],
+    ['UCryGec9PdUCLjpJW2mgCuLw', 'NASA Jet Propulsion Laboratory'],
+    ['UCe9IxQeBttZIYl5c43ycf9g', 'NOAA'],
+    ['UC9hQvMjzSxurMirYDgOMezw', 'National Weather Service (NWS)'],
+    ['UCv0qlvvLtEuCxAoEitAuoFg', 'NOAA/NWS National Hurricane Center'],
+    ['UCJJqaSw7Z7SD7TM80cViEGg', 'NOAA Satellites'],
+    ['UCIBaDdAbGlFDeS33shmlD0A', 'European Space Agency, ESA'],
+    ['UCdK5sfMQcJ64q8AGR_7-ZRw', 'Copernicus ECMWF'],
+    ['UChpGvNdQPdI7EI75z6oelTw', 'ECMWF'],
+    ['UCQxQlcjXuh32ctfX3QHiyRg', 'National Snow and Ice Data Center'],
+    ['UCjheKtYFOKfSgEZAHfN1iVg', 'NSF NCAR & UCAR'],
+  ]
+
+  it.each(VERIFIED)('allowlists %s → %s', (id, name) => {
+    expect(isAllowlistedChannel(id)).toBe(true)
+    expect(channelName(id)).toBe(name)
+  })
+
+  it('rejects a non-allowlisted channel', () => {
+    expect(isAllowlistedChannel('UCspoofedChannelNotAllowed')).toBe(false)
+    expect(channelName('UCspoofedChannelNotAllowed')).toBeNull()
   })
 })
 

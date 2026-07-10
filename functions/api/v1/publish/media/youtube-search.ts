@@ -51,11 +51,15 @@ const UPSTREAM_TIMEOUT_MS = 5_000
 const PER_CHANNEL_MAX_RESULTS = 5
 const SHORTLIST = 4
 /** Upper bound on channels searched per request — each is a 100-unit
- *  `search.list`, so this caps a single event's quota spend even when a
- *  node has added many custom channels. Custom channels are searched
- *  first (a node adds them because they're its most relevant sources),
- *  then the built-in agency defaults, up to this many. */
-const MAX_CHANNELS_SEARCHED = 10
+ *  `search.list`, so this caps a single event's quota spend. Sized to
+ *  cover the full built-in agency set (~18 channels) plus a couple of a
+ *  node's own custom channels. Custom channels are searched first (a
+ *  node adds them because they're its most relevant sources), then the
+ *  built-in agency defaults in priority order; a node with more channels
+ *  than this searches the highest-priority `MAX_CHANNELS_SEARCHED` and
+ *  the niche tail is skipped. See the quota note in
+ *  `docs/YOUTUBE_API_KEY.md`. */
+const MAX_CHANNELS_SEARCHED = 20
 const CACHE_TTL_SECONDS = 60 * 60 // an event's news doesn't change hourly
 /** Bound the query so a pathological title can't build a huge request. */
 const MAX_QUERY_CHARS = 200
