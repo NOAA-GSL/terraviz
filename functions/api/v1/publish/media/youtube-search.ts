@@ -5,17 +5,28 @@
  *
  * YouTube's Data API needs a key, and the key must stay server-side —
  * so, like the NHC storms proxy, the browser calls this same-origin
- * route instead. It runs one `search.list` for the caller's query,
- * keeps ONLY results whose channel is on the vetted agency allowlist
- * (`youtube-channels.ts` — the "reputable sources" gate), and returns
- * the trimmed candidates as `{ videos: [{ videoId, title, channelId,
- * channelName }] }`.
+ * route instead.
  *
- * The key is optional: absent `YOUTUBE_API_KEY` (or any upstream
- * failure) degrades to `{ videos: [] }` — the source simply offers no
- * cards, never an error. Results are KV-cached by query so re-opening
- * the same event in the review queue doesn't re-spend quota
- * (search.list is 100 units; see `docs/YOUTUBE_API_KEY.md`).
+ * **Search WITHIN the allowlist, don't filter down to it.** The naive
+ * shape — one global `search.list` for the query, then keep only the
+ * results whose channel happens to be a vetted agency — almost never
+ * yields anything: YouTube's relevance ranking fills the top of a
+ * broad query with news orgs and random uploaders, so one of a handful
+ * of specific agency channels essentially never lands in that window.
+ * Instead we run one `channelId`-scoped `search.list` per allowlisted
+ * channel (`youtube-channels.ts` defaults ∪ the node's custom
+ * channels), so every hit is by construction from a reputable source,
+ * then merge the per-channel results round-robin (channel diversity +
+ * each channel's own relevance order) into `{ videos: [{ videoId,
+ * title, channelId, channelName }] }`.
+ *
+ * The key is optional: absent `YOUTUBE_API_KEY` (or every upstream
+ * request failing) degrades to `{ videos: [] }` — the source simply
+ * offers no cards, never an error. Results are KV-cached by query so
+ * re-opening the same event in the review queue doesn't re-spend
+ * quota. Cost is now one `search.list` (100 units) PER searched
+ * channel rather than one per event; see the quota note in
+ * `docs/YOUTUBE_API_KEY.md`.
  *
  * Privileged-only — this exists for the curator review surface.
  */
@@ -23,16 +34,32 @@
 import type { CatalogEnv } from '../../_lib/env'
 import type { PublisherData } from '../_middleware'
 import { isPrivileged } from '../../_lib/publisher-store'
-import { AGENCY_ALLOWLIST_SIGNATURE, channelName, isAllowlistedChannel } from '../../_lib/youtube-channels'
-import { listCustomChannels } from '../../_lib/youtube-channels-store'
+import {
+  AGENCY_ALLOWLIST_SIGNATURE,
+  AGENCY_YOUTUBE_CHANNELS,
+  channelName,
+  isAllowlistedChannel,
+} from '../../_lib/youtube-channels'
+import { disabledBuiltinChannelIds, listCustomChannels } from '../../_lib/youtube-channels-store'
 
 const CONTENT_TYPE = 'application/json; charset=utf-8'
 const SEARCH_API = 'https://www.googleapis.com/youtube/v3/search'
 const UPSTREAM_TIMEOUT_MS = 5_000
-/** search.list pulls a page; we filter to the allowlist and keep a
- *  shortlist. 25 is one page — enough to surface a few agency hits. */
-const SEARCH_MAX_RESULTS = 25
+/** Per-channel page size. Each request is already scoped to one vetted
+ *  channel, so a handful of its most-relevant videos for the query is
+ *  plenty — we only ever surface `SHORTLIST` across all channels. */
+const PER_CHANNEL_MAX_RESULTS = 5
 const SHORTLIST = 4
+/** Upper bound on channels searched per request — each is a 100-unit
+ *  `search.list`, so this caps a single event's quota spend. Sized to
+ *  cover the full built-in agency set (~18 channels) plus a couple of a
+ *  node's own custom channels. Custom channels are searched first (a
+ *  node adds them because they're its most relevant sources), then the
+ *  built-in agency defaults in priority order; a node with more channels
+ *  than this searches the highest-priority `MAX_CHANNELS_SEARCHED` and
+ *  the niche tail is skipped. See the quota note in
+ *  `docs/YOUTUBE_API_KEY.md`. */
+const MAX_CHANNELS_SEARCHED = 20
 const CACHE_TTL_SECONDS = 60 * 60 // an event's news doesn't change hourly
 /** Bound the query so a pathological title can't build a huge request. */
 const MAX_QUERY_CHARS = 200
@@ -114,6 +141,31 @@ export function parseYoutubeSearch(json: unknown, allow: ChannelAllowlist = DEFA
   return out
 }
 
+/**
+ * Interleave per-channel candidate lists round-robin — pure, exported
+ * for tests. Taking one from each channel before a channel's second
+ * gives channel diversity (no single agency dominates the shortlist)
+ * while preserving each channel's own relevance order. Dedupes by
+ * videoId (a video cross-posted to two allowlisted channels appears
+ * once) and caps at `SHORTLIST`.
+ */
+export function mergeChannelCandidates(perChannel: VideoCandidate[][]): VideoCandidate[] {
+  const merged: VideoCandidate[] = []
+  const seen = new Set<string>()
+  const maxLen = perChannel.reduce((m, list) => Math.max(m, list.length), 0)
+  for (let round = 0; round < maxLen && merged.length < SHORTLIST; round++) {
+    for (const list of perChannel) {
+      if (round >= list.length) continue
+      const cand = list[round]
+      if (seen.has(cand.videoId)) continue
+      seen.add(cand.videoId)
+      merged.push(cand)
+      if (merged.length >= SHORTLIST) break
+    }
+  }
+  return merged
+}
+
 export const onRequestGet: PagesFunction<CatalogEnv> = async context => {
   const publisher = (context.data as unknown as PublisherData).publisher
   if (!isPrivileged(publisher)) {
@@ -129,29 +181,39 @@ export const onRequestGet: PagesFunction<CatalogEnv> = async context => {
     return ok(JSON.stringify({ videos: [] }), 'MISS')
   }
 
-  // Effective allowlist = hardcoded agency defaults ∪ the node's own
-  // custom channels. A change to the custom set changes the cache key,
-  // so a freshly-added channel's videos aren't hidden by a stale entry.
-  // A missing/failed `youtube_channels` table (e.g. an un-migrated
-  // preview D1) degrades to defaults-only — the source must never 500.
+  // Effective allowlist = (hardcoded agency defaults minus the built-ins
+  // this node has switched off) ∪ the node's own custom channels. Both
+  // sets change the cache key, so a freshly-added channel's videos aren't
+  // hidden by a stale entry and a just-disabled channel's stop appearing
+  // at once. A missing/failed `youtube_channels*` table (e.g. an
+  // un-migrated preview D1) degrades to defaults-only — never a 500.
   let custom: Awaited<ReturnType<typeof listCustomChannels>> = []
+  let disabledBuiltins = new Set<string>()
   if (context.env.CATALOG_DB) {
     try {
       custom = await listCustomChannels(context.env.CATALOG_DB)
     } catch {
       // No custom table yet → just the hardcoded agency defaults.
     }
+    try {
+      disabledBuiltins = await disabledBuiltinChannelIds(context.env.CATALOG_DB)
+    } catch {
+      // No disable table yet → nothing is disabled.
+    }
   }
   const customMap = new Map(custom.map(c => [c.channelId, c.channelName]))
   const allow: ChannelAllowlist = {
-    has: id => isAllowlistedChannel(id) || customMap.has(id),
+    has: id => !disabledBuiltins.has(id) && (isAllowlistedChannel(id) || customMap.has(id)),
     name: id => customMap.get(id) ?? channelName(id),
   }
-  // Signature = the built-in allowlist + the node's custom ids, hashed.
-  // Folding the built-in set in means removing a channel from the
-  // hardcoded defaults invalidates its previously-cached results at once
-  // rather than serving them until TTL expiry.
-  const signature = sigHash(`${AGENCY_ALLOWLIST_SIGNATURE}|${[...customMap.keys()].sort().join(',')}`)
+  // Signature = the built-in allowlist + the node's custom ids + the
+  // disabled built-in ids, hashed. Folding the built-in set in means
+  // removing a channel from the hardcoded defaults invalidates its
+  // previously-cached results at once; folding the disabled set in does
+  // the same the moment a curator toggles a channel off or on.
+  const signature = sigHash(
+    `${AGENCY_ALLOWLIST_SIGNATURE}|${[...customMap.keys()].sort().join(',')}|off:${[...disabledBuiltins].sort().join(',')}`,
+  )
 
   const cacheKey = cacheKeyFor(query, signature)
   if (context.env.CATALOG_KV) {
@@ -163,34 +225,57 @@ export const onRequestGet: PagesFunction<CatalogEnv> = async context => {
     }
   }
 
-  let videos: VideoCandidate[] = []
-  let upstreamOk = false
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS)
-  try {
-    const params = new URLSearchParams({
-      part: 'snippet',
-      type: 'video',
-      q: query,
-      maxResults: String(SEARCH_MAX_RESULTS),
-      safeSearch: 'strict',
-      relevanceLanguage: 'en',
-      key: context.env.YOUTUBE_API_KEY,
-    })
-    const res = await fetch(`${SEARCH_API}?${params.toString()}`, { signal: controller.signal })
-    if (res.ok) {
-      upstreamOk = true
-      videos = parseYoutubeSearch(await res.json(), allow)
-    }
-  } catch {
-    // Timeout / network / parse — degrade to an empty list.
-  } finally {
-    clearTimeout(timer)
+  // The channels to fan out across: custom first (node-specific, most
+  // relevant), then the built-in agency defaults, de-duped by id and
+  // capped. One `channelId`-scoped search per channel.
+  const apiKey = context.env.YOUTUBE_API_KEY
+  const searchChannelIds: string[] = []
+  const seenChannel = new Set<string>()
+  for (const id of [...customMap.keys(), ...Object.keys(AGENCY_YOUTUBE_CHANNELS)]) {
+    if (seenChannel.has(id) || disabledBuiltins.has(id)) continue
+    seenChannel.add(id)
+    searchChannelIds.push(id)
+    if (searchChannelIds.length >= MAX_CHANNELS_SEARCHED) break
   }
 
+  // One `search.list` per channel, scoped by `channelId`. Each request
+  // gets its own timeout so a single slow channel can't sink the rest,
+  // and any failure degrades to that channel contributing nothing.
+  const searchChannel = async (channelId: string): Promise<{ ok: boolean; candidates: VideoCandidate[] }> => {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS)
+    try {
+      const params = new URLSearchParams({
+        part: 'snippet',
+        type: 'video',
+        channelId,
+        q: query,
+        order: 'relevance',
+        maxResults: String(PER_CHANNEL_MAX_RESULTS),
+        safeSearch: 'strict',
+        relevanceLanguage: 'en',
+        key: apiKey,
+      })
+      const res = await fetch(`${SEARCH_API}?${params.toString()}`, { signal: controller.signal })
+      if (!res.ok) return { ok: false, candidates: [] }
+      return { ok: true, candidates: parseYoutubeSearch(await res.json(), allow) }
+    } catch {
+      // Timeout / network / parse — this channel contributes nothing.
+      return { ok: false, candidates: [] }
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
+  const settled = await Promise.all(searchChannelIds.map(searchChannel))
+  // Cache only when at least one channel actually answered — a total
+  // outage (every request failed/timed out) must not pin an empty list
+  // for the whole TTL. An honest empty (channels answered, no video
+  // matched the query) is cacheable.
+  const upstreamOk = settled.some(s => s.ok)
+  const videos = mergeChannelCandidates(settled.map(s => s.candidates))
+
   const body = JSON.stringify({ videos })
-  // Cache only real upstream answers — an outage or quota-exceeded
-  // response must not pin an empty list for the whole TTL.
   if (upstreamOk && context.env.CATALOG_KV) {
     try {
       await context.env.CATALOG_KV.put(cacheKey, body, { expirationTtl: CACHE_TTL_SECONDS })

@@ -24,6 +24,7 @@ import { writeAuditEvent } from '../../_lib/audit-store'
 import { AGENCY_YOUTUBE_CHANNELS } from '../../_lib/youtube-channels'
 import {
   addCustomChannel,
+  disabledBuiltinChannelIds,
   isChannelId,
   listCustomChannels,
   resolveChannelUrl,
@@ -52,15 +53,38 @@ export const onRequestGet: PagesFunction<CatalogEnv> = async context => {
     return jsonError(403, 'forbidden_role', 'Managing YouTube channels is restricted to admin and service callers.')
   }
 
+  // Both tables can be absent during rollout (functions deployed before
+  // the migration runs) or on an un-migrated preview D1. Degrade to empty
+  // rather than 500 the endpoint and break the Feeds UI — same handling as
+  // the search proxy.
+  let disabled = new Set<string>()
+  try {
+    disabled = await disabledBuiltinChannelIds(context.env.CATALOG_DB)
+  } catch {
+    // No youtube_channels_disabled table yet → nothing is disabled.
+  }
+  let customChannels: Awaited<ReturnType<typeof listCustomChannels>> = []
+  try {
+    customChannels = await listCustomChannels(context.env.CATALOG_DB)
+  } catch {
+    // No youtube_channels table yet → just the built-in defaults.
+  }
+
   const builtin = Object.entries(AGENCY_YOUTUBE_CHANNELS).map(([channelId, channelName]) => ({
     channelId,
     channelName,
     builtin: true,
+    // Built-in channels can be switched off per-node; the flag drives the
+    // Feeds console's disable/enable toggle.
+    disabled: disabled.has(channelId),
   }))
-  const custom = (await listCustomChannels(context.env.CATALOG_DB)).map(c => ({
+  const custom = customChannels.map(c => ({
     channelId: c.channelId,
     channelName: c.channelName,
     builtin: false,
+    // Custom channels aren't disabled — they're removed — but the field
+    // is present so the response shape is uniform.
+    disabled: false,
   }))
   return json(200, { channels: [...builtin, ...custom] })
 }

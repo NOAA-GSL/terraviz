@@ -236,15 +236,46 @@ describe('renderFeedsPage', () => {
     expect(fetchFn.mock.calls.some(c => String(c[0]).includes('/events/refresh'))).toBe(true)
   })
 
-  it('lists built-in + custom YouTube channels; only custom ones are removable', async () => {
+  it('lists built-in + custom YouTube channels; built-ins toggle, custom ones remove', async () => {
     await renderFeedsPage(mount, { fetchFn: mockFetch(baseRoutes()) })
     const rows = [...mount.querySelectorAll('.publisher-feeds-channel-row')]
     expect(rows.length).toBe(2)
     const builtinRow = rows.find(r => r.textContent?.includes('NASA'))!
     const customRow = rows.find(r => r.textContent?.includes('City Museum'))!
-    // Built-in has no Remove button; custom does.
-    expect(builtinRow.querySelector('button')).toBeNull()
+    // Built-in can't be removed — it has a Disable toggle; custom has Remove.
+    expect(builtinRow.querySelector('button')?.textContent).toBe('Disable')
     expect(customRow.querySelector('button')?.textContent).toBe('Remove')
+  })
+
+  it('shows Enable on a disabled built-in and re-enables it via POST { disabled: false }', async () => {
+    const routes = baseRoutes()
+    routes['/api/v1/publish/media/youtube-channels'] = {
+      body: {
+        channels: [
+          { channelId: NASA_CHANNEL, channelName: 'NASA', builtin: true, disabled: true },
+          { channelId: CUSTOM_CHANNEL, channelName: 'City Museum', builtin: false, disabled: false },
+        ],
+      },
+    }
+    routes[`POST /api/v1/publish/media/youtube-channels/${NASA_CHANNEL}`] = {
+      body: { channelId: NASA_CHANNEL, builtin: true, disabled: false },
+    }
+    const fetchFn = mockFetch(routes)
+    await renderFeedsPage(mount, { fetchFn })
+
+    const builtinRow = [...mount.querySelectorAll('.publisher-feeds-channel-row')].find(r =>
+      r.textContent?.includes('NASA'),
+    )!
+    expect(builtinRow.classList.contains('publisher-feeds-channel-row-off')).toBe(true)
+    const toggle = builtinRow.querySelector('button') as HTMLButtonElement
+    expect(toggle.textContent).toBe('Enable')
+
+    toggle.click()
+    await flush()
+    const call = fetchFn.mock.calls.find(c => String(c[0]).includes(`/youtube-channels/${NASA_CHANNEL}`))
+    expect(call).toBeTruthy()
+    expect((call![1] as RequestInit).method).toBe('POST')
+    expect(JSON.parse(String((call![1] as RequestInit).body))).toEqual({ disabled: false })
   })
 
   it('shows an unavailable note (no add form) when the channels endpoint is missing (older deploy)', async () => {
