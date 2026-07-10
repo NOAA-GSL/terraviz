@@ -594,6 +594,54 @@ export function renderEventDetail(event: ReviewEvent, cb: EventDetailCallbacks):
     ]),
   )
 
+  // --- Event-level decision (the heavy tier) — placed directly under the
+  // title so a curator can triage (Approve / Reject) and clean the queue
+  // without scrolling past the media, meta strip, and dataset pairings.
+  const decisionStatus = el('span', 'publisher-events-decision-status')
+  decisionStatus.setAttribute('role', 'status')
+  const approveEvent = document.createElement('button')
+  approveEvent.type = 'button'
+  approveEvent.className = 'publisher-button publisher-button-primary publisher-events-decision-approve'
+  approveEvent.textContent = t('publisher.events.approve')
+  const rejectEvent = document.createElement('button')
+  rejectEvent.type = 'button'
+  rejectEvent.className = 'publisher-button publisher-button-danger publisher-events-decision-reject'
+  rejectEvent.textContent = t('publisher.events.reject')
+
+  const submitEvent = (decision: 'approve' | 'reject'): void => {
+    decisionStatus.textContent = ''
+    decisionStatus.classList.remove('publisher-events-status-error')
+    approveEvent.disabled = true
+    rejectEvent.disabled = true
+    void publisherSend<{ event: { status: EventStatus } | null }>(
+      `${EVENTS_ENDPOINT}/${event.id}`,
+      { event: decision },
+      { method: 'POST', fetchFn: cb.fetchFn },
+    ).then(res => {
+      approveEvent.disabled = false
+      rejectEvent.disabled = false
+      if (res.ok) {
+        const next: EventStatus = res.data.event?.status ?? (decision === 'approve' ? 'approved' : 'rejected')
+        event.status = next
+        badgeEl.className = `publisher-events-badge publisher-events-badge-${next}`
+        badgeEl.textContent = statusLabel(next)
+        cb.onEventStatusChange(event.id, next)
+        return
+      }
+      handleWriteError(res, decisionStatus, cb.navigate)
+    })
+  }
+  approveEvent.addEventListener('click', () => submitEvent('approve'))
+  rejectEvent.addEventListener('click', () => submitEvent('reject'))
+
+  pane.append(
+    el('div', 'publisher-events-decision', [
+      el('p', 'publisher-events-decision-prompt', [t('publisher.events.decision.prompt')]),
+      el('div', 'publisher-events-decision-actions', [approveEvent, rejectEvent]),
+      decisionStatus,
+    ]),
+  )
+
   // --- Story image (feed enclosure / og:image) — rendered so the
   // curator vets it alongside the text; approving the event approves
   // the image that generated tours will show. http(s) re-guarded
@@ -671,52 +719,6 @@ export function renderEventDetail(event: ReviewEvent, cb: EventDetailCallbacks):
     pane.append(slot)
     if (cb.mountLocator) cb.mountLocator(slot, point)
   }
-
-  // --- Event-level decision (the heavy tier) ---
-  const decisionStatus = el('span', 'publisher-events-decision-status')
-  decisionStatus.setAttribute('role', 'status')
-  const approveEvent = document.createElement('button')
-  approveEvent.type = 'button'
-  approveEvent.className = 'publisher-button publisher-button-primary publisher-events-decision-approve'
-  approveEvent.textContent = t('publisher.events.approve')
-  const rejectEvent = document.createElement('button')
-  rejectEvent.type = 'button'
-  rejectEvent.className = 'publisher-button publisher-button-danger publisher-events-decision-reject'
-  rejectEvent.textContent = t('publisher.events.reject')
-
-  const submitEvent = (decision: 'approve' | 'reject'): void => {
-    decisionStatus.textContent = ''
-    decisionStatus.classList.remove('publisher-events-status-error')
-    approveEvent.disabled = true
-    rejectEvent.disabled = true
-    void publisherSend<{ event: { status: EventStatus } | null }>(
-      `${EVENTS_ENDPOINT}/${event.id}`,
-      { event: decision },
-      { method: 'POST', fetchFn: cb.fetchFn },
-    ).then(res => {
-      approveEvent.disabled = false
-      rejectEvent.disabled = false
-      if (res.ok) {
-        const next: EventStatus = res.data.event?.status ?? (decision === 'approve' ? 'approved' : 'rejected')
-        event.status = next
-        badgeEl.className = `publisher-events-badge publisher-events-badge-${next}`
-        badgeEl.textContent = statusLabel(next)
-        cb.onEventStatusChange(event.id, next)
-        return
-      }
-      handleWriteError(res, decisionStatus, cb.navigate)
-    })
-  }
-  approveEvent.addEventListener('click', () => submitEvent('approve'))
-  rejectEvent.addEventListener('click', () => submitEvent('reject'))
-
-  pane.append(
-    el('div', 'publisher-events-decision', [
-      el('p', 'publisher-events-decision-prompt', [t('publisher.events.decision.prompt')]),
-      el('div', 'publisher-events-decision-actions', [approveEvent, rejectEvent]),
-      decisionStatus,
-    ]),
-  )
 
   // --- Dataset pairings ---
   const pairings = el('div', 'publisher-events-pairings')
