@@ -134,10 +134,27 @@ here:
 
 The suggestion engine runs **once per event at curation time** — not
 per visitor — and only for events a curator actually opens in the
-review queue. Even a busy node reviewing 50 events a day spends
-~5,000 units, half the free quota. If the quota is ever exhausted the
-API returns 403 `quotaExceeded`, which the source will treat like any
-other failure: no card, no error surfaced to visitors.
+review queue. Each such run issues **one `search.list` per allowlisted
+channel** it searches: a global search filtered *down* to a handful of
+agency channels almost never surfaces one (YouTube's relevance ranking
+fills the top of a broad query with news orgs and random uploaders), so
+the proxy instead searches *within* each vetted channel by `channelId`
+and merges the hits. That trades quota for reliability — cost is
+`100 × channels-searched` units per event, not a flat 100.
+
+The proxy caps the fan-out at **10 channels** per request (custom
+channels first, then the built-in agency defaults), so a single event
+costs at most ~1,000 units. Results are **KV-cached for an hour** per
+query, so re-opening the same event in the review queue (or two
+curators looking at it) is free. With the default built-in set (~7
+channels), a node reviewing distinct events spends ~700 units each —
+roughly 14 fresh events before the 10,000-unit daily quota is reached;
+caching and the every-other-open pattern stretch that further in
+practice. If your node reviews many more events a day, either trim the
+allowlist or request a quota increase in the Google Cloud console (the
+YouTube Data API supports free quota-increase requests). If the quota
+is ever exhausted the API returns 403 `quotaExceeded`, which the source
+treats like any other failure: no card, no error surfaced to visitors.
 
 ## Terms-of-service note: embeds, not images
 

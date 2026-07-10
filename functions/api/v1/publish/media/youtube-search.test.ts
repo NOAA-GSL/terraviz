@@ -6,7 +6,7 @@
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { onRequestGet as searchGet, parseYoutubeSearch } from './youtube-search'
+import { mergeChannelCandidates, onRequestGet as searchGet, parseYoutubeSearch } from './youtube-search'
 import { asD1, makeKV, seedFixtures } from '../../_lib/test-helpers'
 import type { PublisherRow } from '../../_lib/publisher-store'
 
@@ -73,6 +73,35 @@ describe('parseYoutubeSearch', () => {
   })
 })
 
+describe('mergeChannelCandidates', () => {
+  const cand = (videoId: string, channelId = NASA): ReturnType<typeof parseYoutubeSearch>[number] => ({
+    videoId,
+    title: '',
+    channelId,
+    channelName: '',
+  })
+
+  it('interleaves channels round-robin and caps at the shortlist', () => {
+    const merged = mergeChannelCandidates([
+      [cand('a1'), cand('a2'), cand('a3')],
+      [cand('b1'), cand('b2')],
+      [cand('c1')],
+    ])
+    // One from each channel before any channel's second — capped at 4.
+    expect(merged.map(v => v.videoId)).toEqual(['a1', 'b1', 'c1', 'a2'])
+  })
+
+  it('de-dupes a video cross-posted to two channels', () => {
+    const merged = mergeChannelCandidates([[cand('dup')], [cand('dup')], [cand('x')]])
+    expect(merged.map(v => v.videoId)).toEqual(['dup', 'x'])
+  })
+
+  it('is empty for no channels or all-empty channels', () => {
+    expect(mergeChannelCandidates([])).toEqual([])
+    expect(mergeChannelCandidates([[], []])).toEqual([])
+  })
+})
+
 describe('GET /api/v1/publish/media/youtube-search', () => {
   it('is 403 for a publisher-role account (no upstream request)', async () => {
     const fetchFn = stubUpstream([])
@@ -96,21 +125,49 @@ describe('GET /api/v1/publish/media/youtube-search', () => {
     expect(fetchFn).not.toHaveBeenCalled()
   })
 
-  it('searches, filters to the allowlist, and caches the result', async () => {
+  it('searches per channel, filters to the allowlist, and caches the result', async () => {
     const fetchFn = stubUpstream([item('abc123XYZ', NASA), item('bad', 'UCnope')])
     const env = { YOUTUBE_API_KEY: 'k', CATALOG_KV: makeKV() }
     const first = await searchGet(ctx({ q: 'hurricane delta', env }))
     expect(first.headers.get('X-Cache')).toBe('MISS')
     const { videos } = await readJson<{ videos: Array<{ videoId: string }> }>(first)
+    // Every channel's stub returns the same NASA hit — de-duped to one.
     expect(videos.map(v => v.videoId)).toEqual(['abc123XYZ'])
-    // The upstream request carried the key + query.
+    // Each upstream request is channelId-scoped and carries the key + query.
     const upstreamUrl = String(fetchFn.mock.calls[0][0])
     expect(upstreamUrl).toContain('key=k')
     expect(upstreamUrl).toContain('q=hurricane+delta')
+    expect(upstreamUrl).toContain('channelId=')
+    // One request per built-in agency channel (fan-out, not one global search).
+    const callsAfterFirst = fetchFn.mock.calls.length
+    expect(callsAfterFirst).toBeGreaterThan(1)
 
     const second = await searchGet(ctx({ q: 'hurricane delta', env }))
     expect(second.headers.get('X-Cache')).toBe('HIT')
-    expect(fetchFn).toHaveBeenCalledTimes(1)
+    // The cache hit issues no further upstream requests.
+    expect(fetchFn.mock.calls.length).toBe(callsAfterFirst)
+  })
+
+  it('fans out one channelId-scoped search per channel and merges across them', async () => {
+    const NOAA_EDU = 'UC012BUr9u82skTv9bOfmG4w'
+    // A per-channel stub: a distinct hit for two of the agency channels,
+    // nothing for the rest — so a merged two-video result can only come
+    // from separate per-channel requests, not a single global search.
+    const fetchFn = vi.fn(async (input: RequestInfo | URL) => {
+      const channelId = new URL(String(input)).searchParams.get('channelId')
+      const vid = channelId === NASA ? 'nasaVIDabc' : channelId === NOAA_EDU ? 'noaaVIDxyz' : null
+      return { ok: true, json: async () => ({ items: vid ? [item(vid, channelId!)] : [] }) } as unknown as Response
+    })
+    vi.stubGlobal('fetch', fetchFn)
+    const res = await searchGet(ctx({ q: 'coastal storm', env: { YOUTUBE_API_KEY: 'k' } }))
+    const { videos } = await readJson<{ videos: Array<{ videoId: string }> }>(res)
+    expect(videos.map(v => v.videoId).sort()).toEqual(['nasaVIDabc', 'noaaVIDxyz'])
+    // Every request was scoped to a single channel, and both hit channels
+    // were among those queried.
+    const queried = fetchFn.mock.calls.map(c => new URL(String(c[0])).searchParams.get('channelId'))
+    expect(queried.every(id => typeof id === 'string' && id.length > 0)).toBe(true)
+    expect(queried).toContain(NASA)
+    expect(queried).toContain(NOAA_EDU)
   })
 
   it("includes a node's custom channels in the effective allowlist", async () => {
@@ -143,7 +200,7 @@ describe('GET /api/v1/publish/media/youtube-search', () => {
     expect(videos.map(v => v.videoId)).toEqual(['abc123XYZ'])
   })
 
-  it('degrades to [] on upstream failure and does not cache it', async () => {
+  it('degrades to [] when every channel search fails and does not cache it', async () => {
     const boom = vi.fn(async () => {
       throw new Error('quota exceeded')
     })
@@ -151,8 +208,11 @@ describe('GET /api/v1/publish/media/youtube-search', () => {
     const env = { YOUTUBE_API_KEY: 'k', CATALOG_KV: makeKV() }
     const res = await searchGet(ctx({ q: 'hurricane', env }))
     expect(await readJson<{ videos: unknown[] }>(res)).toEqual({ videos: [] })
+    const callsAfterFirst = boom.mock.calls.length
+    expect(callsAfterFirst).toBeGreaterThan(0)
     const again = await searchGet(ctx({ q: 'hurricane', env }))
     expect(again.headers.get('X-Cache')).toBe('MISS') // not pinned
-    expect(boom).toHaveBeenCalledTimes(2)
+    // The un-cached empty result forces a fresh fan-out on the retry.
+    expect(boom.mock.calls.length).toBeGreaterThan(callsAfterFirst)
   })
 })
