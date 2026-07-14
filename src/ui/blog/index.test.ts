@@ -176,6 +176,31 @@ describe('bootBlogPage', () => {
     expect(document.querySelector('.blog-missing')).toBeTruthy()
   })
 
+  it('renders the missing view on both routes when the blog feature is off', async () => {
+    const off = { profile: { orgName: 'The Zyra Project', logoUrl: null }, features: { blog: false } }
+    history.pushState(null, '', '/blog')
+    stubFetch(200, LIST, off)
+    await bootBlogPage()
+    expect(document.querySelector('.blog-missing')).toBeTruthy()
+    expect(document.querySelector('.blog-list')).toBeNull()
+    // Header identity still renders — the node isn't anonymous, the
+    // blog is just off.
+    expect(document.querySelector('.blog-home-link')?.textContent).toContain('The Zyra Project')
+
+    history.pushState(null, '', '/blog/gulf-warming')
+    stubFetch(200, POST, off)
+    await bootBlogPage()
+    expect(document.querySelector('.blog-missing')).toBeTruthy()
+    expect(document.querySelector('.blog-post')).toBeNull()
+  })
+
+  it('fails open (blog renders) when the identity read carries no features', async () => {
+    history.pushState(null, '', '/blog')
+    stubFetch(200, LIST, IDENTITY)
+    await bootBlogPage()
+    expect(document.querySelector('.blog-list')).toBeTruthy()
+  })
+
   it('renders the org logo + name in the header when the identity is configured', async () => {
     history.pushState(null, '', '/blog')
     stubFetch(200, LIST, IDENTITY)

@@ -17,6 +17,7 @@
 import { t } from '../../../../i18n'
 import { getRegionNames } from '../../../../data/regions'
 import { publisherSend, handleSessionError } from '../../api'
+import { fetchFeatures } from '../../features'
 import { renderMatchBadge, toDisplayScore } from './match-badge'
 import { loadPublishedDatasets, filterDatasetsByTitle } from './dataset-search'
 import type { PublisherDataset } from '../../types'
@@ -810,6 +811,12 @@ export function renderEventDetail(event: ReviewEvent, cb: EventDetailCallbacks):
     })
   })
   headActions.append(tourBtn)
+  // Generating a tour needs the tours feature (the endpoint checks it
+  // too) — hide the action when the toggle is off. The map is
+  // module-cached, so this resolves without a network round-trip.
+  void fetchFeatures().then(features => {
+    if (!features.tours) tourBtn.hidden = true
+  })
 
   // "+ Add dataset" — pair a dataset the matcher never suggested. A
   // toggle in the head reveals an inline catalog search; picking a

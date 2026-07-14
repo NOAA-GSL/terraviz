@@ -6,6 +6,7 @@
 
 import { describe, it, expect, vi } from 'vitest'
 import { renderBlogEditPage } from './blog-edit'
+import { fetchFeatures, resetFeaturesCache } from '../features'
 
 const ADMIN_ME = { role: 'admin', is_admin: true }
 const DATASETS = {
@@ -81,6 +82,35 @@ function pickDataset(mount: HTMLElement): void {
 }
 
 describe('renderBlogEditPage', () => {
+  it('hides the event picker and companion-tour option when those features are off', async () => {
+    resetFeaturesCache()
+    try {
+      await fetchFeatures({
+        fetchFn: vi.fn(async () => ({
+          ok: true,
+          status: 200,
+          type: 'basic',
+          json: async () => ({ profile: null, features: { events: false, tours: false } }),
+          text: async () => '',
+        })) as unknown as typeof fetch,
+      })
+      const capture: Captured = { posts: [] }
+      const mount = document.createElement('div')
+      const fetchFn = mockFetch(capture)
+      await renderBlogEditPage(mount, { fetchFn, navigate: vi.fn() })
+      await flush()
+
+      const evField = mount.querySelector('.publisher-blog-event-select')?.closest('label')
+      expect(evField?.hidden).toBe(true)
+      const tourWrap = mount.querySelector('#blog-include-tour')?.closest('label')
+      expect(tourWrap?.hidden).toBe(true)
+      // The events list is never fetched while the picker is hidden.
+      expect((capture.urls ?? []).some(u => u.includes('/publish/events'))).toBe(false)
+    } finally {
+      resetFeaturesCache()
+    }
+  })
+
   it('Generate posts the grounding selections and fills the content fields', async () => {
     const capture: Captured = { posts: [] }
     const mount = await mountEditor(capture)
