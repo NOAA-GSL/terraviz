@@ -3378,6 +3378,37 @@
   color: var(--color-text-muted, #aab2c0);
 }
 
+/* ---- Features card — per-feature toggle rows ---- */
+.publisher-nodeprofile-features {
+  display: flex;
+  flex-direction: column;
+  gap: calc(0.65rem * var(--ui-scale));
+  margin-block-start: calc(0.75rem * var(--ui-scale));
+}
+.publisher-nodeprofile-feature-row {
+  display: flex;
+  align-items: flex-start;
+  gap: calc(0.6rem * var(--ui-scale));
+  cursor: pointer;
+}
+.publisher-nodeprofile-feature-toggle {
+  margin-block-start: calc(0.2rem * var(--ui-scale));
+  flex-shrink: 0;
+}
+.publisher-nodeprofile-feature-text {
+  display: flex;
+  flex-direction: column;
+  gap: calc(0.1rem * var(--ui-scale));
+}
+.publisher-nodeprofile-feature-name {
+  font-size: calc(0.9rem * var(--ui-scale));
+  font-weight: 600;
+}
+.publisher-nodeprofile-feature-desc {
+  font-size: calc(0.78rem * var(--ui-scale));
+  color: var(--color-text-muted, #aab2c0);
+}
+
 /* ---- Logo block — leads the Organization section ---- */
 .publisher-nodeprofile-logo {
   display: flex;

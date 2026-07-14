@@ -31,6 +31,7 @@
 
 import type { CatalogEnv } from '../../_lib/env'
 import type { PublisherData } from '../_middleware'
+import { getEffectiveFeatures } from '../../_lib/node-settings-store'
 import { isPrivileged } from '../../_lib/publisher-store'
 import { writeAuditEvent } from '../../_lib/audit-store'
 import { parseCreate, resolveOriginNode, ingestEvent } from '../../_lib/events-ingest'
@@ -171,6 +172,27 @@ export const onRequestPost: PagesFunction<CatalogEnv> = async context => {
   const publisher = (context.data as unknown as PublisherData).publisher
   if (!isPrivileged(publisher)) {
     return jsonError(403, 'forbidden_role', 'Refreshing events is restricted to admin and service callers.')
+  }
+
+  // Feature gate — this path is exempt from the middleware gate so the
+  // six-hourly import-events GHA stays green; events off means a 200
+  // no-op summary (same field names, `skipped` flags why) and no
+  // ingestion, no expiry sweep, no cache bust.
+  if (!(await getEffectiveFeatures(context.env)).events) {
+    return new Response(
+      JSON.stringify({
+        fetched: 0,
+        mappable: 0,
+        created: 0,
+        refreshed: 0,
+        failed: 0,
+        enriched: 0,
+        expired: 0,
+        feeds: [],
+        skipped: 'feature_disabled',
+      }),
+      { status: 200, headers: { 'Content-Type': CONTENT_TYPE, 'Cache-Control': 'private, no-store' } },
+    )
   }
 
   const db = context.env.CATALOG_DB

@@ -35,6 +35,7 @@ export type AuditSubjectKind =
   | 'event'
   | 'feed'
   | 'node_profile'
+  | 'node_settings'
   | 'blog_post'
   | 'youtube_channel'
 
@@ -76,6 +77,7 @@ export type AuditAction =
   | 'feed.deleted'
   | 'node_profile.update'
   | 'node_profile.logo_update'
+  | 'node_settings.update'
   | 'blog.create'
   | 'blog.update'
   | 'blog.publish'

@@ -24,6 +24,7 @@
 
 import type { CatalogEnv } from '../../_lib/env'
 import { listApprovedEventsForDataset } from '../../_lib/events-store'
+import { getEffectiveFeatures } from '../../_lib/node-settings-store'
 
 const CONTENT_TYPE = 'application/json; charset=utf-8'
 const CACHE_TTL_SECONDS = 60
@@ -41,6 +42,15 @@ export const onRequestGet: PagesFunction<CatalogEnv, 'id'> = async context => {
   if (!id) return jsonError(400, 'invalid_request', 'Missing dataset id.')
   if (!context.env.CATALOG_DB) {
     return jsonError(503, 'binding_missing', 'CATALOG_DB binding is not configured on this deployment.')
+  }
+
+  // Feature gate — soft-empty 200 (`no-store`) so the "In the news"
+  // panel simply doesn't render while events is off. Fail-open.
+  if (!(await getEffectiveFeatures(context.env)).events) {
+    return new Response(JSON.stringify({ events: [] }), {
+      status: 200,
+      headers: { 'Content-Type': CONTENT_TYPE, 'Cache-Control': 'no-store' },
+    })
   }
 
   try {

@@ -19,6 +19,7 @@
 import type { CatalogEnv } from '../../../_lib/env'
 import type { EnrichEnv } from '../../../_lib/events-enrich'
 import type { PublisherData } from '../../_middleware'
+import { getEffectiveFeatures } from '../../../_lib/node-settings-store'
 import { isPrivileged } from '../../../_lib/publisher-store'
 import { writeAuditEvent } from '../../../_lib/audit-store'
 import { getCurrentEvent, listLinksForEvent } from '../../../_lib/events-store'
@@ -101,6 +102,20 @@ export const onRequestPost: PagesFunction<CatalogEnv & EnrichEnv, 'id'> = async 
   const publisher = (context.data as unknown as PublisherData).publisher
   if (!isPrivileged(publisher)) {
     return jsonError(403, 'forbidden_role', 'Generating event tours is restricted to admin and service callers.')
+  }
+
+  // Cross-feature coupling: the middleware gates this path on `events`
+  // (its prefix), but the handler CREATES a tour draft — that needs
+  // the tours feature too.
+  if (!(await getEffectiveFeatures(context.env)).tours) {
+    return new Response(
+      JSON.stringify({
+        error: 'feature_disabled',
+        feature: 'tours',
+        message: 'The tours feature is disabled on this node — an event tour cannot be created.',
+      }),
+      { status: 403, headers: { 'Content-Type': CONTENT_TYPE } },
+    )
   }
 
   const idParam = context.params.id

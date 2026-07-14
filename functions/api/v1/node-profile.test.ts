@@ -4,13 +4,16 @@
  * blog surface renders.
  *
  * Coverage: null profile before any write, orgName + resolved
- * logoUrl, the KV MISS→HIT cycle, and the degrade-to-null path when
- * the table is missing.
+ * logoUrl, the KV MISS→HIT cycle, the degrade-to-null path when
+ * the table is missing, and the `features` field (all-enabled
+ * defaults, stored toggles, fail-open when node_settings is
+ * missing).
  */
 
 import { describe, expect, it } from 'vitest'
 import { onRequestGet } from './node-profile'
 import { asD1, makeKV, seedFixtures } from './_lib/test-helpers'
+import { defaultFeatures, type FeatureMap } from '../../../src/types/node-features'
 
 function setupEnv() {
   const sqlite = seedFixtures({ count: 0 })
@@ -50,6 +53,7 @@ function ctx(env: Record<string, unknown>) {
 
 interface Payload {
   profile: { orgName: string; logoUrl: string | null } | null
+  features: FeatureMap
 }
 
 async function readJson(res: Response): Promise<Payload> {
@@ -57,11 +61,13 @@ async function readJson(res: Response): Promise<Payload> {
 }
 
 describe('GET /api/v1/node-profile', () => {
-  it('returns profile: null before any write', async () => {
+  it('returns profile: null and all-enabled features before any write', async () => {
     const { env } = setupEnv()
     const res = await onRequestGet(ctx(env))
     expect(res.status).toBe(200)
-    expect((await readJson(res)).profile).toBeNull()
+    const payload = await readJson(res)
+    expect(payload.profile).toBeNull()
+    expect(payload.features).toEqual(defaultFeatures())
   })
 
   it('returns orgName with a resolved logoUrl and cycles KV MISS → HIT', async () => {
@@ -92,6 +98,34 @@ describe('GET /api/v1/node-profile', () => {
     const res = await onRequestGet(ctx(env))
     expect(res.status).toBe(200)
     expect(res.headers.get('Cache-Control')).toBe('no-store')
-    expect((await readJson(res)).profile).toBeNull()
+    const payload = await readJson(res)
+    expect(payload.profile).toBeNull()
+    expect(payload.features).toEqual(defaultFeatures())
+  })
+
+  it('carries stored feature toggles in the payload', async () => {
+    const { env, sqlite } = setupEnv()
+    insertProfile(sqlite)
+    sqlite
+      .prepare(
+        `INSERT INTO node_settings (id, features_json, updated_by, updated_at)
+         VALUES (1, ?, 'PUB-1', '2026-06-01T00:00:00.000Z')`,
+      )
+      .run(JSON.stringify({ blog: false, events: false }))
+    const payload = await readJson(await onRequestGet(ctx(env)))
+    expect(payload.features.blog).toBe(false)
+    expect(payload.features.events).toBe(false)
+    expect(payload.features.datasets).toBe(true)
+  })
+
+  it('fails open to all-enabled features when node_settings is missing', async () => {
+    const { env, sqlite } = setupEnv()
+    insertProfile(sqlite)
+    sqlite.prepare('DROP TABLE node_settings').run()
+    const res = await onRequestGet(ctx(env))
+    expect(res.status).toBe(200)
+    const payload = await readJson(res)
+    expect(payload.profile?.orgName).toBe('The Zyra Project')
+    expect(payload.features).toEqual(defaultFeatures())
   })
 })

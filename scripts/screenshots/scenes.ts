@@ -545,11 +545,12 @@ export const scenes: Scene[] = [
   },
   {
     name: 'publish-node-profile',
-    description: 'Publisher portal — node / host-organization profile form (Phase 3d)',
+    description: 'Publisher portal — node / host-organization profile form + the admin Features toggles card (Phase 3d)',
     fixtures: publisherFixtures({ admin: true }),
     async setup(page) {
       await openPublish(page, '/publish/node-profile')
       await page.locator('#nodeprofile-org').waitFor()
+      await page.locator('.publisher-nodeprofile-feature-toggle').first().waitFor()
     },
   },
   {

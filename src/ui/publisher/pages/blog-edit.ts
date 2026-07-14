@@ -25,6 +25,7 @@
  * independently.
  */
 
+import { fetchFeatures, renderFeatureDisabledCard } from '../features'
 import { t } from '../../../i18n'
 import { publisherGet, publisherSend, handleSessionError } from '../api'
 import { buildErrorCard } from '../components/error-card'
@@ -174,6 +175,11 @@ function withResolvedGeometry(ev: ReviewEvent): ReviewEvent {
 }
 
 export async function renderBlogEditPage(mount: HTMLElement, options: BlogEditPageOptions = {}): Promise<void> {
+  const features = await fetchFeatures()
+  if (!features.blog) {
+    renderFeatureDisabledCard(mount, 'blog')
+    return
+  }
   const fetchFn = options.fetchFn
   const navigate = options.navigate ?? ((url: string) => { window.location.href = url })
   mount.replaceChildren(shell(el('p', { className: 'publisher-loading', textContent: t('publisher.blog.loading') })))
@@ -352,6 +358,9 @@ export async function renderBlogEditPage(mount: HTMLElement, options: BlogEditPa
   lengthSelect.value = 'medium'
   const tourCheck = el('input', { type: 'checkbox', id: 'blog-include-tour' })
   const tourWrap = el('label', { className: 'publisher-blog-check' }, [tourCheck, t('publisher.blog.generate.includeTour')])
+  // The companion tour rides the tours toggle — the generate endpoint
+  // rejects includeTour while tours is off, so don't offer it.
+  tourWrap.hidden = !features.tours
   const genStatus = el('span', { className: 'publisher-blog-status' })
   genStatus.setAttribute('role', 'status')
   // Appears after a generate-with-tour: the companion tour is a draft
@@ -766,13 +775,17 @@ export async function renderBlogEditPage(mount: HTMLElement, options: BlogEditPa
     bodyField,
   )
   // Section 2 — Sources: the datasets + event the post is grounded in.
+  // The event picker rides the events toggle — the generate endpoint
+  // rejects an eventId while events is off, so don't offer one.
+  const evField = labelled(t('publisher.blog.event.label'), evSelect)
+  evField.hidden = !features.events
   const sourcesCard = card(
     el('h2', { className: 'publisher-card-heading', textContent: t('publisher.blog.tab.sources') }),
     el('p', { className: 'publisher-blog-intro', textContent: t('publisher.blog.grounding.intro') }),
     labelled(t('publisher.blog.picker.label'), dsSearch),
     dsCandidates,
     chips,
-    labelled(t('publisher.blog.event.label'), evSelect),
+    evField,
   )
   // Section 3 — Media: suggested imagery for the cited event, plus the
   // post's cover-image picker.
@@ -903,6 +916,8 @@ export async function renderBlogEditPage(mount: HTMLElement, options: BlogEditPa
       renderChips()
     }
   })
+  // Events off: the picker is hidden and the endpoint 403s — skip.
+  if (!features.events) return
   void publisherGet<{ events: ReviewEvent[] }>(EVENTS_ENDPOINT, { fetchFn }).then(res => {
     if (!res.ok) {
       // Mirror loadPublishedDatasets: route a session error through the

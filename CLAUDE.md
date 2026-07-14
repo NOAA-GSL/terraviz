@@ -183,6 +183,7 @@ npm run screenshots:smoke   # gating interaction tests (search, Orbit, nav)
 | `src/config/endpoints.ts` | Externally-hosted endpoint configuration (catalog / proxy / NOAA / NASA base URLs) |
 | `src/types/image-sequence-constants.ts` | Constants shared by the publisher API (`functions/`), the GHA runner (`cli/`), and the portal (`src/`) for the image-sequence upload pipeline |
 | `src/types/zyra-workflow-constants.ts` | Constants shared by the publisher API (`functions/`), the GHA runner (`cli/`), and the portal (`src/`) for the Zyra workflow pipeline — stage/command allowlist, template fields, run statuses (`docs/ZYRA_INTEGRATION_PLAN.md`) |
+| `src/types/node-features.ts` | Per-node feature-toggle constants shared by the publisher API (`functions/`) and the portal + public SPA — `FEATURE_KEYS` / `FeatureMap`, all-on defaults, fail-open normalization (missing/unknown keys resolve to enabled) |
 | `src/data/regions.ts` | Common region bounding boxes for name-based region resolution |
 | `src/services/orbitCharacter/index.ts` | `OrbitController` — public API for the Orbit character (owns the Three.js scene, rAF loop, state machine) |
 | `src/services/orbitCharacter/orbitScene.ts` | Three.js scene + per-frame update for the Orbit character |
@@ -212,6 +213,7 @@ npm run screenshots:smoke   # gating interaction tests (search, Orbit, nav)
 | `src/ui/publisher/index.ts` | Publisher portal entry point — lazy-loaded on `/publish/*`; mounts the History-API router + pages |
 | `src/ui/publisher/router.ts` | Tiny History-API router for the publisher portal |
 | `src/ui/publisher/api.ts` | Shared HTTP client for the publisher portal |
+| `src/ui/publisher/features.ts` | Portal-side feature-toggle helpers — module-cached `fetchFeatures()` over the public node-profile read (fail-open to all-enabled) + the shared "feature turned off" card gated pages render instead of their content |
 | `src/ui/publisher/types.ts` | Wire types for portal-bound publisher API responses |
 | `src/ui/publisher/analytics-charts.ts` | Hand-rolled SVG chart helpers (bar series with Y-axis, mix bars, stat tiles) + CSV export helpers for the analytics tab — no charting library |
 | `src/ui/publisher/components/dataset-form.ts` | Shared dataset create / edit form |

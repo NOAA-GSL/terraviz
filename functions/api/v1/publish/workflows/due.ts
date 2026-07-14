@@ -16,6 +16,7 @@
 
 import type { CatalogEnv } from '../../_lib/env'
 import type { PublisherData } from '../_middleware'
+import { getEffectiveFeatures } from '../../_lib/node-settings-store'
 import { isPrivileged } from '../../_lib/publisher-store'
 import { getDueWorkflows } from '../../_lib/workflow-store'
 
@@ -34,6 +35,16 @@ export const onRequestGet: PagesFunction<CatalogEnv> = async context => {
       JSON.stringify({ error: 'forbidden_role', message: 'The due list is restricted to staff, admin, and service callers.' }),
       { status: 403, headers: { 'Content-Type': CONTENT_TYPE } },
     )
+  }
+
+  // Feature gate — this path is exempt from the middleware gate so
+  // the 15-minute zyra-scheduler GHA stays green; workflows off means
+  // an empty due list, so nothing is ever dispatched.
+  if (!(await getEffectiveFeatures(context.env)).workflows) {
+    return new Response(JSON.stringify({ workflows: [] }), {
+      status: 200,
+      headers: { 'Content-Type': CONTENT_TYPE, 'Cache-Control': 'private, no-store' },
+    })
   }
 
   const rows = await getDueWorkflows(context.env.CATALOG_DB)

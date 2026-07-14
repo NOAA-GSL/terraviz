@@ -20,7 +20,7 @@
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { onRequest } from './_middleware'
+import { featureForPath, onRequest } from './_middleware'
 import { asD1, makeCtx, makeKV, seedFixtures } from '../_lib/test-helpers'
 
 interface NextStub {
@@ -271,5 +271,125 @@ describe('publish/_middleware', () => {
     } finally {
       console.error = consoleSpy
     }
+  })
+})
+
+describe('featureForPath', () => {
+  it('maps each gated prefix to its feature', () => {
+    expect(featureForPath('/api/v1/publish/events')).toBe('events')
+    expect(featureForPath('/api/v1/publish/events/EV1/tour')).toBe('events')
+    expect(featureForPath('/api/v1/publish/feeds/F1')).toBe('events')
+    expect(featureForPath('/api/v1/publish/media/youtube-search')).toBe('events')
+    expect(featureForPath('/api/v1/publish/blog/generate')).toBe('blog')
+    expect(featureForPath('/api/v1/publish/featured-hero')).toBe('hero')
+    expect(featureForPath('/api/v1/publish/tours/T1/publish')).toBe('tours')
+    expect(featureForPath('/api/v1/publish/workflows/W1/run')).toBe('workflows')
+    expect(featureForPath('/api/v1/publish/analytics')).toBe('analytics')
+    expect(featureForPath('/api/v1/publish/datasets/DS1/publish')).toBe('datasets')
+    expect(featureForPath('/api/v1/publish/featured')).toBe('datasets')
+    expect(featureForPath('/api/v1/publish/featured/DS1')).toBe('datasets')
+    expect(featureForPath('/api/v1/publish/feedback')).toBe('feedback')
+  })
+
+  it('matches on segment boundaries: featured-hero is hero, not datasets', () => {
+    expect(featureForPath('/api/v1/publish/featured-hero')).toBe('hero')
+    // And analytics-export is not swallowed by the analytics prefix.
+    expect(featureForPath('/api/v1/publish/analytics-export')).toBeNull()
+  })
+
+  it('exempts the cron-invoked paths', () => {
+    expect(featureForPath('/api/v1/publish/events/refresh')).toBeNull()
+    expect(featureForPath('/api/v1/publish/workflows/due')).toBeNull()
+  })
+
+  it('never gates the identity/settings surfaces', () => {
+    for (const path of [
+      '/api/v1/publish/me',
+      '/api/v1/publish/node-profile',
+      '/api/v1/publish/node-profile/logo',
+      '/api/v1/publish/node-settings',
+      '/api/v1/publish/node-identity',
+      '/api/v1/publish/publishers',
+      '/api/v1/publish/publishers/PUB1',
+      '/api/v1/publish/redirect-back',
+    ]) {
+      expect(featureForPath(path)).toBeNull()
+    }
+  })
+})
+
+describe('publish/_middleware feature gate', () => {
+  function setupGateEnv(featuresJson: string | null) {
+    const sqlite = seedFixtures({ count: 0 })
+    sqlite
+      .prepare(
+        `INSERT INTO publishers (id, email, display_name, role, is_admin, status, created_at)
+         VALUES ('PUB-ADM', 'me@localhost', 'Me', 'admin', 1, 'active', '2026-01-01T00:00:00.000Z')`,
+      )
+      .run()
+    if (featuresJson != null) {
+      sqlite
+        .prepare(
+          `INSERT INTO node_settings (id, features_json, updated_by, updated_at)
+           VALUES (1, ?, 'PUB-ADM', '2026-06-01T00:00:00.000Z')`,
+        )
+        .run(featuresJson)
+    }
+    return {
+      sqlite,
+      env: {
+        CATALOG_DB: asD1(sqlite),
+        CATALOG_KV: makeKV(),
+        DEV_BYPASS_ACCESS: 'true',
+        DEV_PUBLISHER_EMAIL: 'me@localhost',
+      },
+    }
+  }
+
+  it('returns 403 feature_disabled for a route of a disabled feature', async () => {
+    const { env } = setupGateEnv(JSON.stringify({ blog: false }))
+    const next = stubNext()
+    const res = await onRequest(
+      ctxWithNext({ env, url: 'http://localhost:8788/api/v1/publish/blog' }, next),
+    )
+    expect(res.status).toBe(403)
+    const body = await readJson<{ error: string; feature: string }>(res)
+    expect(body.error).toBe('feature_disabled')
+    expect(body.feature).toBe('blog')
+    expect(next.fn).not.toHaveBeenCalled()
+  })
+
+  it('serves a route whose feature is enabled and ungated routes', async () => {
+    const { env } = setupGateEnv(JSON.stringify({ blog: false }))
+    for (const url of [
+      'http://localhost:8788/api/v1/publish/events', // enabled feature
+      'http://localhost:8788/api/v1/publish/me', // never gated
+    ]) {
+      const next = stubNext('downstream')
+      const res = await onRequest(ctxWithNext({ env, url }, next))
+      expect(res.status).toBe(200)
+      expect(next.fn).toHaveBeenCalledTimes(1)
+    }
+  })
+
+  it('lets the cron-exempt refresh path through even when events is off', async () => {
+    const { env } = setupGateEnv(JSON.stringify({ events: false }))
+    const next = stubNext('downstream')
+    const res = await onRequest(
+      ctxWithNext({ env, url: 'http://localhost:8788/api/v1/publish/events/refresh' }, next),
+    )
+    expect(res.status).toBe(200)
+    expect(next.fn).toHaveBeenCalledTimes(1)
+  })
+
+  it('fails open when the node_settings table is missing', async () => {
+    const { env, sqlite } = setupGateEnv(null)
+    sqlite.prepare('DROP TABLE node_settings').run()
+    const next = stubNext('downstream')
+    const res = await onRequest(
+      ctxWithNext({ env, url: 'http://localhost:8788/api/v1/publish/blog' }, next),
+    )
+    expect(res.status).toBe(200)
+    expect(next.fn).toHaveBeenCalledTimes(1)
   })
 })
