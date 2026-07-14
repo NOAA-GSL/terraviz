@@ -35,6 +35,7 @@
  */
 
 import type { CatalogEnv } from './_lib/env'
+import { getEffectiveFeatures } from './_lib/node-settings-store'
 import { listPublicTours, type TourRow } from './_lib/tour-mutations'
 import { resolveAssetRefStrict } from './_lib/r2-public-url'
 
@@ -98,6 +99,16 @@ function serializeTour(env: CatalogEnv, row: TourRow): PublicTourListItem {
 
 export const onRequestGet: PagesFunction<CatalogEnv> = async context => {
   if (!context.env.CATALOG_DB) return bindingMissingResponse()
+
+  // Feature gate — soft-empty 200 (`no-store`) so the Browse overlay
+  // simply shows no tour cards while tours is off. Fail-open.
+  if (!(await getEffectiveFeatures(context.env)).tours) {
+    return new Response(
+      JSON.stringify({ schema_version: 1, tours: [], next_cursor: null }),
+      { status: 200, headers: { 'Content-Type': CONTENT_TYPE, 'Cache-Control': 'no-store' } },
+    )
+  }
+
   const url = new URL(context.request.url)
   const limitRaw = url.searchParams.get('limit')
   let limit = DEFAULT_LIMIT

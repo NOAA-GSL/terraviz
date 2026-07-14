@@ -27,6 +27,7 @@ import type { PublisherData } from '../_middleware'
 import { isPrivileged } from '../../_lib/publisher-store'
 import { writeAuditEvent } from '../../_lib/audit-store'
 import { getNodeProfile } from '../../_lib/node-profile-store'
+import { getEffectiveFeatures } from '../../_lib/node-settings-store'
 import { getCurrentEvent } from '../../_lib/events-store'
 import { generateBlogDraft, type BlogDraftLength } from '../../_lib/blog-generate'
 import { resolveHttpAssetUrl } from '../../_lib/r2-public-url'
@@ -102,6 +103,34 @@ export const onRequestPost: PagesFunction<CatalogEnv & EnrichEnv> = async contex
   })
   if (datasets.length === 0) {
     return jsonError(400, 'no_datasets', 'None of the selected datasets are visible in the catalog.')
+  }
+
+  // Cross-feature coupling: the middleware gates this route on `blog`,
+  // but grounding in an event needs `events` and the companion tour
+  // needs `tours`. Reject explicitly (field-error envelope) rather
+  // than silently ignoring the selection — the operator sees what the
+  // form refused.
+  const features = await getEffectiveFeatures(context.env)
+  const couplingErrors: Array<{ field: string; code: string; message: string }> = []
+  if (typeof body.eventId === 'string' && body.eventId.length > 0 && !features.events) {
+    couplingErrors.push({
+      field: 'eventId',
+      code: 'feature_disabled',
+      message: 'The events feature is disabled on this node — a draft cannot cite an event.',
+    })
+  }
+  if (body.includeTour === true && !features.tours) {
+    couplingErrors.push({
+      field: 'includeTour',
+      code: 'feature_disabled',
+      message: 'The tours feature is disabled on this node — a companion tour cannot be created.',
+    })
+  }
+  if (couplingErrors.length > 0) {
+    return new Response(JSON.stringify({ errors: couplingErrors }), {
+      status: 400,
+      headers: { 'Content-Type': CONTENT_TYPE },
+    })
   }
 
   let event = null

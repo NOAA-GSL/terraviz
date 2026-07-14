@@ -12,6 +12,7 @@
 
 import type { CatalogEnv } from './_lib/env'
 import { BLOG_LIST_CACHE_KEY, listPublishedPosts, toPublicPost } from './_lib/blog-store'
+import { getEffectiveFeatures } from './_lib/node-settings-store'
 
 const CONTENT_TYPE = 'application/json; charset=utf-8'
 const CACHE_TTL_SECONDS = 60
@@ -45,6 +46,11 @@ export const onRequestGet: PagesFunction<CatalogEnv> = async context => {
   if (!context.env.CATALOG_DB) {
     return jsonError(503, 'binding_missing', 'CATALOG_DB binding is not configured on this deployment.')
   }
+
+  // Feature gate — before the KV read so a still-warm cached list is
+  // never served while the blog feature is off. Soft-empty 200 with
+  // `no-store` so re-enabling takes effect immediately. Fail-open.
+  if (!(await getEffectiveFeatures(context.env)).blog) return degraded()
 
   if (context.env.CATALOG_KV) {
     try {

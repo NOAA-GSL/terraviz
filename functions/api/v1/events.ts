@@ -25,6 +25,7 @@
 
 import type { CatalogEnv } from './_lib/env'
 import { listPublicEvents, EVENTS_LIST_CACHE_KEY } from './_lib/events-store'
+import { getEffectiveFeatures } from './_lib/node-settings-store'
 
 const CONTENT_TYPE = 'application/json; charset=utf-8'
 const CACHE_TTL_SECONDS = 60
@@ -61,6 +62,12 @@ export const onRequestGet: PagesFunction<CatalogEnv> = async context => {
   if (!context.env.CATALOG_DB) {
     return jsonError(503, 'binding_missing', 'CATALOG_DB binding is not configured on this deployment.')
   }
+
+  // Feature gate — before the KV read so a still-warm cached list is
+  // never served while the events feature is off. Soft-empty 200 (the
+  // SPA already treats an empty list as "no overlay"); `no-store` so
+  // re-enabling takes effect immediately. Fail-open on storage blips.
+  if (!(await getEffectiveFeatures(context.env)).events) return degraded()
 
   if (context.env.CATALOG_KV) {
     const cached = await context.env.CATALOG_KV.get(EVENTS_LIST_CACHE_KEY)

@@ -28,6 +28,7 @@ import {
   toPublicFeaturedEvent,
   FEATURED_EVENT_CACHE_KEY,
 } from './_lib/events-store'
+import { getEffectiveFeatures } from './_lib/node-settings-store'
 
 const CONTENT_TYPE = 'application/json; charset=utf-8'
 const CACHE_TTL_SECONDS = 60
@@ -53,6 +54,17 @@ function ok(body: string, xCache: 'HIT' | 'MISS' | 'BYPASS'): Response {
 export const onRequestGet: PagesFunction<CatalogEnv> = async context => {
   if (!context.env.CATALOG_DB) {
     return jsonError(503, 'binding_missing', 'CATALOG_DB binding is not configured on this deployment.')
+  }
+
+  // Feature gate — before the KV read so a still-warm cached event is
+  // never served while events is off. `{ event: null }` is the shape
+  // heroService already falls through on; `no-store` so re-enabling
+  // takes effect immediately. Fail-open on storage blips.
+  if (!(await getEffectiveFeatures(context.env)).events) {
+    return new Response(JSON.stringify({ event: null }), {
+      status: 200,
+      headers: { 'Content-Type': CONTENT_TYPE, 'Cache-Control': 'no-store', 'X-Cache': 'BYPASS' },
+    })
   }
 
   if (context.env.CATALOG_KV) {

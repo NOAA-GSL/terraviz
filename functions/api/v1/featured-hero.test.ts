@@ -12,7 +12,7 @@
 import { describe, expect, it } from 'vitest'
 import { onRequestGet } from './featured-hero'
 import { asD1, makeCtx, makeKV } from './_lib/test-helpers'
-import { setHeroOverride } from './_lib/hero-override-store'
+import { HERO_CACHE_KEY, setHeroOverride } from './_lib/hero-override-store'
 import { freshMigratedDb } from '../../../scripts/lib/catalog-migrations'
 import type { PublisherRow } from './_lib/publisher-store'
 
@@ -113,7 +113,9 @@ describe('GET /api/v1/featured-hero', () => {
     await pin(env, datasetId)
     const a = await onRequestGet(makeCtx({ env, url: URL_HERO }))
     expect(a.headers.get('X-Cache')).toBe('MISS')
-    expect(kv?._store.size).toBe(1)
+    // Assert on the hero key specifically — the feature gate also
+    // fills its own `node-features:v1` entry in the same namespace.
+    expect(kv?._store.has(HERO_CACHE_KEY)).toBe(true)
     const b = await onRequestGet(makeCtx({ env, url: URL_HERO }))
     expect(b.headers.get('X-Cache')).toBe('HIT')
     expect(await readJson<HeroBody>(a)).toEqual(await readJson<HeroBody>(b))
