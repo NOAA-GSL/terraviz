@@ -37,13 +37,16 @@ describe('renderSidebar', () => {
 
   it('renders the non-admin nav in grouped order', () => {
     renderSidebar(host, router)
-    // Admin-only items (Feeds/Events/Blog/Node profile/Team) are hidden.
+    // Events and Blog are visible to every publisher (read-all / write-own);
+    // admin-only items (Feeds/Node profile/Team) stay hidden.
     expect(linkLabels(host)).toEqual([
       'Overview',
       'Datasets',
       'Workflows',
       'Import',
+      'Events',
       'Right now',
+      'Blog',
       'Tours',
       'Analytics',
       'Feedback',
@@ -63,18 +66,19 @@ describe('renderSidebar', () => {
     renderSidebar(host, router, { isAdmin: true })
     const labels = linkLabels(host)
     expect(labels).toContain('Feeds')
-    expect(labels).toContain('Events')
-    expect(labels).toContain('Blog')
     expect(labels).toContain('Node profile')
     expect(labels).toContain('Team')
   })
 
-  it('hides admin-only links by default', () => {
+  it('hides admin-only links by default but shows Events + Blog to every publisher', () => {
     renderSidebar(host, router)
     const labels = linkLabels(host)
     expect(labels).not.toContain('Feeds')
-    expect(labels).not.toContain('Events')
+    expect(labels).not.toContain('Node profile')
     expect(labels).not.toContain('Team')
+    // Events + Blog are no longer admin-only.
+    expect(labels).toContain('Events')
+    expect(labels).toContain('Blog')
   })
 
   it('hides links whose feature toggle is off', () => {
@@ -111,12 +115,13 @@ describe('renderSidebar', () => {
     expect(linkLabels(host)).toContain('Tours')
   })
 
-  it('renders the events badge only when the count is positive and admin', () => {
-    renderSidebar(host, router, { isAdmin: true, eventsBadge: 8 })
+  it('renders the events badge only when the count is positive (visible to every publisher)', () => {
+    // Events is no longer admin-only, so the badge shows for any publisher.
+    renderSidebar(host, router, { eventsBadge: 8 })
     const badge = host.querySelector('.publisher-nav-badge')
     expect(badge?.textContent).toBe('8')
 
-    renderSidebar(host, router, { isAdmin: true, eventsBadge: 0 })
+    renderSidebar(host, router, { eventsBadge: 0 })
     expect(host.querySelector('.publisher-nav-badge')).toBeNull()
   })
 

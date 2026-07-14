@@ -59,8 +59,10 @@ interface LocatorHolder {
 }
 
 /** Internal page state: the public options plus the locator holder that
- *  survives across re-renders within one page session. */
-type TriageState = EventsPageOptions & { locator: LocatorHolder }
+ *  survives across re-renders within one page session, and whether the
+ *  caller is an admin (gates the feed-Refresh action; the review
+ *  controls themselves gate per-event on `can_edit`). */
+type TriageState = EventsPageOptions & { locator: LocatorHolder; isAdmin: boolean }
 
 function clientIsPrivileged(me: MeResponse): boolean {
   return me.is_admin === true || me.role === 'admin' || me.role === 'service'
@@ -100,17 +102,15 @@ export async function renderEventsPage(mount: HTMLElement, options: EventsPageOp
     mount.replaceChildren(shell(buildErrorCard(meRes.kind, details)))
     return
   }
-  if (!clientIsPrivileged(meRes.data)) {
-    mount.replaceChildren(
-      shell(card(
-        el('h2', 'publisher-card-heading', [t('publisher.events.title')]),
-        el('p', 'publisher-events-restricted', [t('publisher.events.restricted')]),
-      )),
-    )
-    return
-  }
-
-  await loadAndRenderQueue(mount, { fetchFn, navigate: options.navigate, locator: { dispose: null } })
+  // The whole events queue is readable by any active publisher. Writes
+  // (approve / reject / edit / tour) gate per-event on `can_edit`; the
+  // feed-Refresh action stays admin-only (it drives the feed connectors).
+  await loadAndRenderQueue(mount, {
+    fetchFn,
+    navigate: options.navigate,
+    locator: { dispose: null },
+    isAdmin: clientIsPrivileged(meRes.data),
+  })
 }
 
 /** Fetch the queue at `status` and render the triage view. `selectId`
@@ -282,10 +282,15 @@ function renderTopbar(
     filters.append(btn)
   }
 
+  // Feed Refresh is admin-only (it runs the feed connectors); every
+  // publisher can still compose a manual event via New event.
+  const toolbar = state.isAdmin
+    ? el('div', 'publisher-events-toolbar', [refreshBtn, newBtn])
+    : el('div', 'publisher-events-toolbar', [newBtn])
   const bar = el('div', 'publisher-events-topbar', [
     el('div', 'publisher-events-topbar-head', [
       el('h2', 'publisher-card-heading', [t('publisher.events.title')]),
-      el('div', 'publisher-events-toolbar', [refreshBtn, newBtn]),
+      toolbar,
     ]),
     el('p', 'publisher-events-intro', [t('publisher.events.subtitle')]),
     filters,

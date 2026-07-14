@@ -3,21 +3,16 @@
  * `docs/CURRENT_EVENTS_PLAN.md` §7).
  *
  * Lists every post (drafts included, newest-updated first) with a
- * status badge, linking each row into the editor
- * (`/publish/blog/:id/edit`) plus a "New post" button
- * (`/publish/blog/new`). Privileged-gated client-side — the API
- * enforces 403 on writes independently. Mirrors `tours.ts`.
+ * status badge. Readable by any active publisher; each row's authoring
+ * controls are gated on `can_edit` (the post's author, or an admin) —
+ * others get a read-only View link. Writes are enforced server-side
+ * regardless. Mirrors `tours.ts`.
  */
 
 import { fetchFeatures, renderFeatureDisabledCard } from '../features'
 import { t } from '../../../i18n'
 import { publisherGet, handleSessionError } from '../api'
 import { buildErrorCard } from '../components/error-card'
-
-interface MeResponse {
-  role: string
-  is_admin: boolean
-}
 
 export interface BlogPostListItem {
   id: string
@@ -26,22 +21,21 @@ export interface BlogPostListItem {
   status: 'draft' | 'published'
   updatedAt: string
   publishedAt: string | null
+  /** Whether the caller may edit/publish this post (author or admin).
+   *  Absent (older payload / fixture) is treated as editable; the
+   *  server is the authoritative gate. */
+  can_edit?: boolean
 }
 
 interface BlogListResponse {
   posts: BlogPostListItem[]
 }
 
-const ME_ENDPOINT = '/api/v1/publish/me'
 const BLOG_ENDPOINT = '/api/v1/publish/blog'
 
 export interface BlogPageOptions {
   fetchFn?: typeof fetch
   navigate?: (url: string) => void
-}
-
-function clientIsPrivileged(me: MeResponse): boolean {
-  return me.is_admin === true || me.role === 'admin' || me.role === 'service'
 }
 
 function el<K extends keyof HTMLElementTagNameMap>(
@@ -76,32 +70,15 @@ export async function renderBlogPage(mount: HTMLElement, options: BlogPageOption
   const navigate = options.navigate ?? ((url: string) => { window.location.href = url })
   mount.replaceChildren(shell(el('p', { className: 'publisher-loading', textContent: t('publisher.blog.loading') })))
 
-  const [meRes, listRes] = await Promise.all([
-    publisherGet<MeResponse>(ME_ENDPOINT, { fetchFn }),
-    publisherGet<BlogListResponse>(BLOG_ENDPOINT, { fetchFn }),
-  ])
-  for (const res of [meRes, listRes]) {
-    if (res.ok) continue
-    if (res.kind === 'session') {
+  const listRes = await publisherGet<BlogListResponse>(BLOG_ENDPOINT, { fetchFn })
+  if (!listRes.ok) {
+    if (listRes.kind === 'session') {
       if (handleSessionError({ navigate: options.navigate }) === 'navigating') return
       mount.replaceChildren(shell(buildErrorCard('session')))
       return
     }
-    const details = res.kind === 'server' ? { status: res.status, body: res.body } : {}
-    mount.replaceChildren(shell(buildErrorCard(res.kind, details)))
-    return
-  }
-  if (!meRes.ok || !listRes.ok) return
-
-  if (!clientIsPrivileged(meRes.data)) {
-    mount.replaceChildren(
-      shell(
-        card(
-          el('h2', { className: 'publisher-card-heading', textContent: t('publisher.blog.title') }),
-          el('p', { className: 'publisher-blog-restricted', textContent: t('publisher.blog.restricted') }),
-        ),
-      ),
-    )
+    const details = listRes.kind === 'server' ? { status: listRes.status, body: listRes.body } : {}
+    mount.replaceChildren(shell(buildErrorCard(listRes.kind, details)))
     return
   }
 
@@ -162,21 +139,24 @@ export async function renderBlogPage(mount: HTMLElement, options: BlogPageOption
       titleCell.append(titleStack)
       tr.append(titleCell)
       tr.append(el('td', { className: 'publisher-cell-updated', textContent: post.updatedAt.slice(0, 10) }))
-      // Actions: Edit (all rows, opens the editor) + View (published
-      // only — a public page to link to). Consistent action pills with
-      // the other list pages.
+      // Actions: Edit for posts the caller authored (or admin); others
+      // get read-only access via the title link + the public View link
+      // when published. Writes are enforced server-side regardless.
       const actionsCell = el('td', { className: 'publisher-cell-actions' })
-      const edit = el('a', {
-        className: 'publisher-row-action publisher-row-edit',
-        href: `/publish/blog/${encodeURIComponent(post.id)}/edit`,
-        textContent: t('publisher.blog.list.edit'),
-      })
-      edit.addEventListener('click', e => {
-        if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return
-        e.preventDefault()
-        navigate(`/publish/blog/${encodeURIComponent(post.id)}/edit`)
-      })
-      actionsCell.append(edit)
+      const canEdit = post.can_edit !== false
+      if (canEdit) {
+        const edit = el('a', {
+          className: 'publisher-row-action publisher-row-edit',
+          href: `/publish/blog/${encodeURIComponent(post.id)}/edit`,
+          textContent: t('publisher.blog.list.edit'),
+        })
+        edit.addEventListener('click', e => {
+          if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return
+          e.preventDefault()
+          navigate(`/publish/blog/${encodeURIComponent(post.id)}/edit`)
+        })
+        actionsCell.append(edit)
+      }
       if (post.status === 'published') {
         const view = el('a', {
           className: 'publisher-row-action publisher-blog-view-link',

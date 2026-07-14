@@ -81,9 +81,9 @@ const NAV_GROUPS: ReadonlyArray<NavGroup> = [
     labelKey: 'publisher.nav.group.newsroom',
     items: [
       { path: '/publish/feeds', labelKey: 'publisher.nav.feeds', adminOnly: true, feature: 'events' },
-      { path: '/publish/events', labelKey: 'publisher.nav.events', adminOnly: true, feature: 'events', badge: 'events' },
+      { path: '/publish/events', labelKey: 'publisher.nav.events', feature: 'events', badge: 'events' },
       { path: '/publish/featured-hero', labelKey: 'publisher.nav.featuredHero', feature: 'hero' },
-      { path: '/publish/blog', labelKey: 'publisher.nav.blog', adminOnly: true, feature: 'blog' },
+      { path: '/publish/blog', labelKey: 'publisher.nav.blog', feature: 'blog' },
       { path: '/publish/tours', labelKey: 'publisher.nav.tours', feature: 'tours' },
     ],
   },
