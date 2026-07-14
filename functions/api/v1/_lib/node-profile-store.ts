@@ -32,8 +32,11 @@ export const PROFILE_LINK_LABEL_MAX_LEN = 100
 export const LOGO_MAX_BYTES = 512 * 1024
 export { IMAGE_CONTENT_TYPES as LOGO_CONTENT_TYPES } from './image-upload'
 
-/** KV key for the public `GET /api/v1/node-profile` payload. */
-export const NODE_PROFILE_CACHE_KEY = 'node-profile:v1'
+/** KV key for the public `GET /api/v1/node-profile` payload.
+ *  v2: the payload gained a `features` field (per-node feature
+ *  toggles) — bumping the key means a stale v1 body (no `features`)
+ *  is never served; orphaned v1 entries expire on their own TTL. */
+export const NODE_PROFILE_CACHE_KEY = 'node-profile:v2'
 
 /** Best-effort bust of the public profile cache. */
 export async function bustNodeProfileCache(kv: KVNamespace | undefined): Promise<void> {
