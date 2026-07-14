@@ -39,9 +39,10 @@
 
 import type { CatalogEnv } from '../../_lib/env'
 import type { PublisherData } from '../_middleware'
-import { isPrivileged } from '../../_lib/publisher-store'
 import { writeAuditEvent } from '../../_lib/audit-store'
 import {
+  canMutateEvent,
+  claimEventOwner,
   getCurrentEvent,
   listLinksForEvent,
   getEventDecorations,
@@ -238,9 +239,6 @@ export const onRequestPost: PagesFunction<CatalogEnv, 'id'> = async context => {
     return jsonError(503, 'binding_missing', 'CATALOG_DB binding is not configured on this deployment.')
   }
   const publisher = (context.data as unknown as PublisherData).publisher
-  if (!isPrivileged(publisher)) {
-    return jsonError(403, 'forbidden_role', 'Reviewing events is restricted to admin and service callers.')
-  }
 
   const idParam = context.params.id
   const id = Array.isArray(idParam) ? idParam[0] : idParam
@@ -259,6 +257,13 @@ export const onRequestPost: PagesFunction<CatalogEnv, 'id'> = async context => {
   const db = context.env.CATALOG_DB
   const event = await getCurrentEvent(db, id)
   if (!event) return jsonError(404, 'not_found', `Event ${id} not found.`)
+
+  // Write-scope: an unclaimed event is open (approving it is how a
+  // publisher claims it); once owned, only the owner or an admin may
+  // review it further.
+  if (!canMutateEvent(publisher, event)) {
+    return jsonError(403, 'forbidden_owner', 'You can only review events you own.')
+  }
 
   // Apply metadata corrections before anything else, so a same-submit
   // approve acts on the corrected event, and re-run the matcher so the
@@ -321,6 +326,11 @@ export const onRequestPost: PagesFunction<CatalogEnv, 'id'> = async context => {
 
   if (parsed.value.event) {
     await setEventStatus(db, id, DECISION_TO_STATUS[parsed.value.event], publisher.id)
+    // Approving an unclaimed event claims it for the approver (no-op if
+    // it already has an owner). Reject never assigns ownership.
+    if (parsed.value.event === 'approve') {
+      await claimEventOwner(db, id, publisher.id)
+    }
   }
   for (const link of parsed.value.links) {
     await setLinkStatus(db, id, link.datasetId, DECISION_TO_STATUS[link.decision], publisher.id)
@@ -351,7 +361,9 @@ export const onRequestPost: PagesFunction<CatalogEnv, 'id'> = async context => {
   const links = await listLinksForEvent(db, id)
   return new Response(
     JSON.stringify({
-      event: updated ? toPublicEvent(updated, decorations) : null,
+      event: updated
+        ? { ...toPublicEvent(updated, decorations), can_edit: canMutateEvent(publisher, updated) }
+        : null,
       links: links.map(l => ({
         datasetId: l.dataset_id,
         score: l.match_score,

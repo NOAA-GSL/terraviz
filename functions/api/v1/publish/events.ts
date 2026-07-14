@@ -19,10 +19,10 @@
 
 import type { CatalogEnv } from '../_lib/env'
 import type { PublisherData } from './_middleware'
-import { isPrivileged } from '../_lib/publisher-store'
 import { writeAuditEvent } from '../_lib/audit-store'
 import { parseCreate, resolveOriginNode, ingestEvent, type FieldError } from '../_lib/events-ingest'
 import {
+  canMutateEvent,
   listCurrentEvents,
   listLinksForEvent,
   listLinksForEvents,
@@ -83,10 +83,11 @@ export const onRequestGet: PagesFunction<CatalogEnv> = async context => {
   if (!context.env.CATALOG_DB) {
     return jsonError(503, 'binding_missing', 'CATALOG_DB binding is not configured on this deployment.')
   }
+  // Read-only view of the whole events queue is open to any active
+  // publisher (the middleware has already rejected pending / suspended).
+  // Per-event `can_edit` below tells the portal which rows the caller
+  // may act on; the write endpoints enforce it independently.
   const publisher = (context.data as unknown as PublisherData).publisher
-  if (!isPrivileged(publisher)) {
-    return jsonError(403, 'forbidden_role', 'The events review queue is restricted to admin and service callers.')
-  }
 
   // `?status=` narrows to one bucket; `?status=all` lists every status
   // (so a curator can find + manage already-reviewed events); omitted
@@ -117,6 +118,7 @@ export const onRequestGet: PagesFunction<CatalogEnv> = async context => {
     const decorations = decorationsByEvent.get(row.id) ?? { categories: {}, keywords: [] }
     return {
       ...toPublicEvent(row, decorations),
+      can_edit: canMutateEvent(publisher, row),
       links: links.map(l => toPublicLink(l, titles.get(l.dataset_id) ?? null)),
     }
   })
@@ -140,10 +142,11 @@ export const onRequestPost: PagesFunction<CatalogEnv> = async context => {
   if (!context.env.CATALOG_DB) {
     return jsonError(503, 'binding_missing', 'CATALOG_DB binding is not configured on this deployment.')
   }
+  // Any active publisher may create a manual event, and doing so makes
+  // them its owner (symmetric with drafting a blog / creating a
+  // dataset). It still starts `proposed` and needs approval to surface
+  // publicly, but only the creator / an admin may edit it thereafter.
   const publisher = (context.data as unknown as PublisherData).publisher
-  if (!isPrivileged(publisher)) {
-    return jsonError(403, 'forbidden_role', 'Creating events is restricted to admin and service callers.')
-  }
 
   let body: unknown
   try {
@@ -156,7 +159,11 @@ export const onRequestPost: PagesFunction<CatalogEnv> = async context => {
   if (!parsed.ok) return validationFailure(parsed.errors)
 
   const db = context.env.CATALOG_DB
-  const input: NewCurrentEvent = { ...parsed.value, originNode: await resolveOriginNode(db) }
+  const input: NewCurrentEvent = {
+    ...parsed.value,
+    originNode: await resolveOriginNode(db),
+    ownerId: publisher.id,
+  }
 
   // Idempotent on the feed dedupe key, runs the matcher inline so the
   // review queue is pre-populated — shared with the refresh route. The

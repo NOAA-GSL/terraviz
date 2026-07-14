@@ -26,6 +26,7 @@
 
 import { newUlid } from './ulid'
 import { isNocookieEmbedUrl } from './youtube-channels'
+import { type PublisherRow, isPrivileged } from './publisher-store'
 
 /** KV key the public `GET /api/v1/featured-event` caches under. Shared
  *  with the review route so an approve/reject can bust it for immediate
@@ -104,6 +105,11 @@ export interface CurrentEventRow {
   updated_at: string
   reviewed_at: string | null
   reviewed_by: string | null
+  /** Durable owner (publishers.id) — the creator of a manual event, or
+   *  the publisher who first approved a feed-proposed one. NULL while a
+   *  proposed event is still unclaimed. Distinct from `reviewed_by`
+   *  (the last curator to act). Gates the write path; reads are open. */
+  owner_id: string | null
   /** JSON array of AI-filled field names ('["occurredStart","geometry"]');
    *  NULL when everything came from the source (slice C provenance). */
   inferred_fields: string | null
@@ -194,6 +200,10 @@ export interface NewCurrentEvent {
   imageAlt?: string | null
   /** Curator-picked video embed url; feeds never carry one. */
   videoEmbedUrl?: string | null
+  /** Durable owner (publishers.id). The manual-create path sets this to
+   *  the creating publisher; the ingest path leaves it null (a feed
+   *  event is unclaimed until someone approves it). */
+  ownerId?: string | null
 }
 
 /** Fields a caller supplies to {@link upsertEventDatasetLink}. */
@@ -210,7 +220,7 @@ export interface NewEventDatasetLink {
 const EVENT_COLUMNS = `id, origin_node, title, summary, source_name, source_url,
   published_at, feed_id, external_id, occurred_start, occurred_end,
   bbox_n, bbox_s, bbox_w, bbox_e, point_lat, point_lon, region_name,
-  status, created_at, updated_at, reviewed_at, reviewed_by, inferred_fields, image_url, image_alt, video_embed_url`
+  status, created_at, updated_at, reviewed_at, reviewed_by, inferred_fields, image_url, image_alt, video_embed_url, owner_id`
 
 const LINK_COLUMNS = `event_id, dataset_id, match_score, signals_json,
   status, created_at, approved_at, approved_by`
@@ -260,12 +270,13 @@ export async function insertCurrentEvent(
     image_url: input.imageUrl ?? null,
     image_alt: input.imageAlt ?? null,
     video_embed_url: input.videoEmbedUrl ?? null,
+    owner_id: input.ownerId ?? null,
   }
 
   await db
     .prepare(
       `INSERT INTO current_events (${EVENT_COLUMNS})
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .bind(
       row.id,
@@ -295,6 +306,7 @@ export async function insertCurrentEvent(
       row.image_url,
       row.image_alt,
       row.video_embed_url,
+      row.owner_id,
     )
     .run()
 
@@ -514,6 +526,38 @@ export async function expireStaleProposedEvents(
     .bind(now, cutoffIso)
     .run()
   return res.meta?.changes ?? 0
+}
+
+/**
+ * Whether `publisher` may mutate (review / edit / add image / generate
+ * tour for) the given event. Mirrors the datasets rule, with the
+ * events twist that an unclaimed event (`owner_id === null`) is open —
+ * that's what lets the first approver claim it. Once owned, only the
+ * owner or a privileged (admin / service) caller may write. Reads are
+ * always open; this only gates writes.
+ */
+export function canMutateEvent(
+  publisher: PublisherRow,
+  event: Pick<CurrentEventRow, 'owner_id'>,
+): boolean {
+  return isPrivileged(publisher) || event.owner_id == null || event.owner_id === publisher.id
+}
+
+/**
+ * Claim ownership of an as-yet-unclaimed event. Sets `owner_id` only
+ * when it is currently NULL, so a later reviewer never steals ownership
+ * from the first approver. Called when a publisher approves a proposed
+ * event. Returns nothing — idempotent for an already-owned row.
+ */
+export async function claimEventOwner(
+  db: D1Database,
+  id: string,
+  ownerId: string,
+): Promise<void> {
+  await db
+    .prepare(`UPDATE current_events SET owner_id = ? WHERE id = ? AND owner_id IS NULL`)
+    .bind(ownerId, id)
+    .run()
 }
 
 /**

@@ -2,7 +2,7 @@
  * Wire-level tests for POST /api/v1/publish/events/:id — the curator
  * review-submit.
  *
- * Coverage: privileged gate (403), 404 unknown event, 400 empty body,
+ * Coverage: owner-scoped write gate, 404 unknown event, 400 empty body,
  * 400 unknown link, event approve, per-link approve/reject, and the
  * `event.reviewed` audit row.
  */
@@ -36,12 +36,14 @@ const DS_1 = 'DS001' + 'A'.repeat(21)
 
 function setupEnv() {
   const sqlite = seedFixtures({ count: 2 })
-  sqlite
-    .prepare(
-      `INSERT INTO publishers (id, email, display_name, role, is_admin, status, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    )
-    .run(ADMIN.id, ADMIN.email, ADMIN.display_name, ADMIN.role, ADMIN.is_admin, ADMIN.status, ADMIN.created_at)
+  for (const p of [ADMIN, PUBLISHER]) {
+    sqlite
+      .prepare(
+        `INSERT INTO publishers (id, email, display_name, role, is_admin, status, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(p.id, p.email, p.display_name, p.role, p.is_admin, p.status, p.created_at)
+  }
   return { sqlite, env: { CATALOG_DB: asD1(sqlite) } }
 }
 
@@ -81,11 +83,37 @@ async function seedEventWithLink(env: { CATALOG_DB: D1Database }) {
 }
 
 describe('POST /api/v1/publish/events/:id', () => {
-  it('403 for a publisher-role account', async () => {
+  it('lets a publisher approve an unclaimed event and claims ownership for them', async () => {
     const { env } = setupEnv()
     const id = await seedEventWithLink(env)
     const res = await reviewPost(ctx({ env, id, publisher: PUBLISHER, body: { event: 'approve' } }))
+    expect(res.status).toBe(200)
+    const row = await getCurrentEvent(env.CATALOG_DB, id)
+    expect(row!.status).toBe('approved')
+    expect(row!.owner_id).toBe(PUBLISHER.id) // approving claimed it
+    const body = JSON.parse(await res.text()) as { event: { can_edit: boolean } }
+    expect(body.event.can_edit).toBe(true)
+  })
+
+  it('403 forbidden_owner when a publisher reviews an event owned by someone else', async () => {
+    const { env } = setupEnv()
+    // Seed an event already owned by the admin.
+    const id = (await insertCurrentEvent(env.CATALOG_DB, { ...SAMPLE, ownerId: 'PUB-ADMIN' })).id
+    await upsertEventDatasetLink(env.CATALOG_DB, { eventId: id, datasetId: DS_0, matchScore: 0.9 })
+    const res = await reviewPost(ctx({ env, id, publisher: PUBLISHER, body: { event: 'approve' } }))
     expect(res.status).toBe(403)
+    expect((JSON.parse(await res.text()) as { error: string }).error).toBe('forbidden_owner')
+  })
+
+  it('does not transfer ownership when a different owner-or-admin re-reviews', async () => {
+    const { env } = setupEnv()
+    // Event already owned by the publisher; an admin re-review must not steal it.
+    const id = (await insertCurrentEvent(env.CATALOG_DB, { ...SAMPLE, ownerId: PUBLISHER.id })).id
+    await upsertEventDatasetLink(env.CATALOG_DB, { eventId: id, datasetId: DS_0, matchScore: 0.9 })
+    const res = await reviewPost(ctx({ env, id, body: { event: 'approve' } })) // ctx defaults to ADMIN
+    expect(res.status).toBe(200)
+    const row = await getCurrentEvent(env.CATALOG_DB, id)
+    expect(row!.owner_id).toBe(PUBLISHER.id) // unchanged
   })
 
   it('404 for an unknown event', async () => {

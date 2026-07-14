@@ -20,9 +20,8 @@ import type { CatalogEnv } from '../../../_lib/env'
 import type { EnrichEnv } from '../../../_lib/events-enrich'
 import type { PublisherData } from '../../_middleware'
 import { getEffectiveFeatures } from '../../../_lib/node-settings-store'
-import { isPrivileged } from '../../../_lib/publisher-store'
 import { writeAuditEvent } from '../../../_lib/audit-store'
-import { getCurrentEvent, listLinksForEvent } from '../../../_lib/events-store'
+import { canMutateEvent, getCurrentEvent, listLinksForEvent } from '../../../_lib/events-store'
 import { resolveHttpAssetUrl } from '../../../_lib/r2-public-url'
 import { createDraftTour, writeTourDraftJson } from '../../../_lib/tour-mutations'
 import {
@@ -100,9 +99,6 @@ export const onRequestPost: PagesFunction<CatalogEnv & EnrichEnv, 'id'> = async 
     return jsonError(503, 'binding_missing', 'CATALOG_DB binding is not configured on this deployment.')
   }
   const publisher = (context.data as unknown as PublisherData).publisher
-  if (!isPrivileged(publisher)) {
-    return jsonError(403, 'forbidden_role', 'Generating event tours is restricted to admin and service callers.')
-  }
 
   // Cross-feature coupling: the middleware gates this path on `events`
   // (its prefix), but the handler CREATES a tour draft — that needs
@@ -125,6 +121,10 @@ export const onRequestPost: PagesFunction<CatalogEnv & EnrichEnv, 'id'> = async 
   const db = context.env.CATALOG_DB
   const event = await getCurrentEvent(db, id)
   if (!event) return jsonError(404, 'not_found', `Event ${id} not found.`)
+  // Owner-scoped write (unclaimed events are open; see canMutateEvent).
+  if (!canMutateEvent(publisher, event)) {
+    return jsonError(403, 'forbidden_owner', 'You can only build tours for events you own.')
+  }
 
   const datasets = await resolveStopDatasets(db, id, ref => resolveHttpAssetUrl(context.env, ref))
   if (datasets.length === 0) {

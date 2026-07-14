@@ -2,7 +2,7 @@
  * Wire-level tests for GET /api/v1/publish/events — the current-events
  * review queue.
  *
- * Coverage: privileged gate (403 for publisher), the assembled
+ * Coverage: read-open / create-owns access model, the assembled
  * event+links+title shape, the `?status` filter, 400 for a bad status,
  * and 503 when CATALOG_DB is unbound.
  */
@@ -71,10 +71,10 @@ const SAMPLE = {
 }
 
 describe('GET /api/v1/publish/events', () => {
-  it('403 for a publisher-role account', async () => {
+  it('is readable by a publisher-role account (whole-queue read access)', async () => {
     const { env } = setupEnv()
     const res = await eventsGet(ctx({ env, publisher: PUBLISHER }))
-    expect(res.status).toBe(403)
+    expect(res.status).toBe(200)
   })
 
   it('503 when CATALOG_DB is unbound', async () => {
@@ -177,10 +177,16 @@ const CREATE = {
 }
 
 describe('POST /api/v1/publish/events', () => {
-  it('403 for a publisher-role account', async () => {
-    const { env } = setupEnv()
+  it('lets a publisher-role account create an event and makes them the owner', async () => {
+    const { env, sqlite } = setupEnv()
     const res = await eventsPost(postCtx({ env, publisher: PUBLISHER, body: CREATE }))
-    expect(res.status).toBe(403)
+    expect(res.status).toBe(201)
+    const body = JSON.parse(await res.text()) as { event: { id: string } }
+    // The creating publisher is stamped as owner.
+    const row = sqlite
+      .prepare(`SELECT owner_id FROM current_events WHERE id = ?`)
+      .get(body.event.id) as { owner_id: string | null }
+    expect(row.owner_id).toBe(PUBLISHER.id)
   })
 
   it('400 when provenance is missing', async () => {
