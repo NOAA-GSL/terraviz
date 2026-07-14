@@ -57,6 +57,7 @@ const EXPECTED_TABLES = [
   'hero_override',
   'node_identity',
   'node_profile',
+  'node_settings',
   'publishers',
   'tour_dataset_refs',
   'tours',

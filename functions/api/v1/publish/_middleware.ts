@@ -16,6 +16,11 @@
  *   3. Attach the resolved publisher row to `context.data.publisher`
  *      so downstream handlers can authorise without re-running the
  *      lookup.
+ *   4. Enforce the per-node feature toggles centrally: a route whose
+ *      path prefix maps to a disabled feature (see
+ *      {@link featureForPath}) gets a 403 `feature_disabled` without
+ *      touching the handler. Handlers own *role* authorisation;
+ *      the middleware owns *feature* availability.
  *
  * Failure modes (typed envelopes, same shape as the rest of the API):
  *   - 503 `binding_missing` — CATALOG_DB not bound.
@@ -26,14 +31,20 @@
  *   - 403 `pending` — publisher row exists but is `status='pending'`
  *     (Phase 1a has no admin UI; an operator flips this manually).
  *   - 403 `suspended` — publisher row is `status='suspended'`.
+ *   - 403 `feature_disabled` — the route belongs to a feature the
+ *     node operator turned off (`{ error, feature, message }` so the
+ *     portal can render the right card; 403 not 404 so "disabled by
+ *     operator" is distinguishable from "no such route").
  *   - 500 `dev_bypass_unsafe` — `DEV_BYPASS_ACCESS=true` against a
  *     non-loopback hostname. Defense in depth even though the env
  *     var should never be set in production.
  */
 
+import type { FeatureKey } from '../../../../src/types/node-features'
 import { CatalogEnv } from '../_lib/env'
 import { verifyAccessJwt, type AccessIdentity } from '../_lib/access-auth'
 import { isLoopbackHost } from '../_lib/loopback'
+import { getEffectiveFeatures } from '../_lib/node-settings-store'
 import {
   getOrCreatePublisher,
   parseTrustedDomains,
@@ -51,6 +62,54 @@ function jsonError(status: number, error: string, message: string): Response {
     status,
     headers: { 'Content-Type': CONTENT_TYPE },
   })
+}
+
+/**
+ * Path-prefix → feature map for the central gate. Matching is
+ * segment-boundary (`path === prefix || path.startsWith(prefix + '/')`)
+ * — critical so `/publish/featured` (datasets) does not swallow
+ * `/publish/featured-hero` (hero).
+ *
+ * Deliberately NOT in the table (never feature-gated): `me`,
+ * `node-profile` (+logo), `node-settings`, `node-identity`,
+ * `publishers`, `redirect-back`, and `analytics-export` (the nightly
+ * rollup keeps archiving while the dashboard is hidden, so
+ * re-enabling analytics leaves no data gap).
+ */
+export const FEATURE_GATED_PREFIXES: ReadonlyArray<readonly [string, FeatureKey]> = [
+  ['/api/v1/publish/events', 'events'],
+  ['/api/v1/publish/feeds', 'events'],
+  // Media suggestions (youtube-search/channels, nhc-storms) exist to
+  // illustrate events in the review queue — they ride the events key.
+  ['/api/v1/publish/media', 'events'],
+  ['/api/v1/publish/blog', 'blog'],
+  ['/api/v1/publish/featured-hero', 'hero'],
+  ['/api/v1/publish/tours', 'tours'],
+  ['/api/v1/publish/workflows', 'workflows'],
+  ['/api/v1/publish/analytics', 'analytics'],
+  ['/api/v1/publish/datasets', 'datasets'],
+  ['/api/v1/publish/featured', 'datasets'],
+  ['/api/v1/publish/feedback', 'feedback'],
+]
+
+/**
+ * Exact paths exempt from the gate even though a prefix matches.
+ * Both are cron-invoked (GitHub Actions): a middleware 403 would
+ * turn the cron red every run, so each handler no-ops with a 200
+ * itself when its feature is off.
+ */
+export const FEATURE_GATE_EXEMPT_PATHS: ReadonlySet<string> = new Set([
+  '/api/v1/publish/events/refresh',
+  '/api/v1/publish/workflows/due',
+])
+
+/** The feature a request path belongs to, or null when ungated. */
+export function featureForPath(pathname: string): FeatureKey | null {
+  if (FEATURE_GATE_EXEMPT_PATHS.has(pathname)) return null
+  for (const [prefix, feature] of FEATURE_GATED_PREFIXES) {
+    if (pathname === prefix || pathname.startsWith(prefix + '/')) return feature
+  }
+  return null
 }
 
 /**
@@ -173,6 +232,25 @@ export const onRequest: PagesFunction<CatalogEnv> = async context => {
       'pending',
       'This publisher account is awaiting approval. Contact an operator.',
     )
+  }
+
+  // Feature gate — after identity (the toggle set is not public
+  // knowledge for unauthenticated callers on this surface), before
+  // the handler. `getEffectiveFeatures` is fail-open: a KV/D1 blip
+  // serves the route rather than erroring.
+  const gatedFeature = featureForPath(new URL(context.request.url).pathname)
+  if (gatedFeature) {
+    const features = await getEffectiveFeatures(context.env)
+    if (!features[gatedFeature]) {
+      return new Response(
+        JSON.stringify({
+          error: 'feature_disabled',
+          feature: gatedFeature,
+          message: `The ${gatedFeature} feature is disabled on this node.`,
+        }),
+        { status: 403, headers: { 'Content-Type': CONTENT_TYPE } },
+      )
+    }
   }
 
   // Stash the row so route handlers can authorise without re-querying D1.
