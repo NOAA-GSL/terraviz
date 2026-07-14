@@ -183,6 +183,7 @@ npm run screenshots:smoke   # gating interaction tests (search, Orbit, nav)
 | `src/config/endpoints.ts` | Externally-hosted endpoint configuration (catalog / proxy / NOAA / NASA base URLs) |
 | `src/types/image-sequence-constants.ts` | Constants shared by the publisher API (`functions/`), the GHA runner (`cli/`), and the portal (`src/`) for the image-sequence upload pipeline |
 | `src/types/zyra-workflow-constants.ts` | Constants shared by the publisher API (`functions/`), the GHA runner (`cli/`), and the portal (`src/`) for the Zyra workflow pipeline — stage/command allowlist, template fields, run statuses (`docs/ZYRA_INTEGRATION_PLAN.md`) |
+| `src/types/node-features.ts` | Per-node feature-toggle constants shared by the publisher API (`functions/`) and the portal + public SPA — `FEATURE_KEYS` / `FeatureMap`, all-on defaults, fail-open normalization (missing/unknown keys resolve to enabled) |
 | `src/data/regions.ts` | Common region bounding boxes for name-based region resolution |
 | `src/services/orbitCharacter/index.ts` | `OrbitController` — public API for the Orbit character (owns the Three.js scene, rAF loop, state machine) |
 | `src/services/orbitCharacter/orbitScene.ts` | Three.js scene + per-frame update for the Orbit character |

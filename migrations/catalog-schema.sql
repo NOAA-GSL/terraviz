@@ -431,6 +431,17 @@ CREATE TABLE node_profile (
   FOREIGN KEY (updated_by) REFERENCES publishers(id)
 );
 
+CREATE TABLE node_settings (
+  id            INTEGER PRIMARY KEY CHECK (id = 1),  -- singleton row
+  features_json TEXT NOT NULL DEFAULT '{}',  -- JSON object of {feature: boolean}
+  updated_by    TEXT NOT NULL,               -- publishers.id (audit)
+  -- ISO 8601. No trailing comment here: SQLite's ALTER ... ADD COLUMN
+  -- splices new columns onto the last column-def line of the stored
+  -- CREATE TABLE text (see 0028's note).
+  updated_at    TEXT NOT NULL,
+  FOREIGN KEY (updated_by) REFERENCES publishers(id)
+);
+
 CREATE TABLE publishers (
   id              TEXT PRIMARY KEY,           -- ULID
   email           TEXT NOT NULL UNIQUE,
