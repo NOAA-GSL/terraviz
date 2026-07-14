@@ -27,6 +27,10 @@ import { publisherGet } from './api'
 
 const FEATURES_ENDPOINT = '/api/v1/node-profile'
 
+/** Fired on `window` after an admin saves the toggle set, so the
+ *  portal chrome can re-resolve and re-render the sidebar. */
+export const FEATURES_CHANGE_EVENT = 'publisher:featureschange'
+
 let cached: Promise<FeatureMap> | null = null
 
 /** The node's feature toggles, cached for the life of the portal

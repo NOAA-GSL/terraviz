@@ -44,7 +44,7 @@ import { renderFeedbackPage } from './pages/feedback'
 import { renderImportPage } from './pages/import'
 import { renderSidebar, type SidebarIdentity } from './components/sidebar'
 import { publisherGet } from './api'
-import { fetchFeatures } from './features'
+import { FEATURES_CHANGE_EVENT, fetchFeatures } from './features'
 import type { FeatureMap } from '../../types/node-features'
 import '../../styles/publisher.css'
 
@@ -372,6 +372,7 @@ async function resolvePortalChrome(): Promise<PortalChrome> {
 }
 
 let activeRouter: PublisherRouter | null = null
+let featuresChangeListener: (() => void) | null = null
 
 /**
  * Boot the publisher portal. Idempotent — calling twice reuses the
@@ -457,6 +458,17 @@ export async function bootPublisherPortal(): Promise<void> {
       renderSidebar(root, bootedRouter, chrome)
     }
   })
+
+  // An admin saving the Features card resets the toggle cache and
+  // fires this event — re-resolve the chrome so hidden/re-enabled
+  // tabs appear without a reload.
+  featuresChangeListener = () => {
+    if (activeRouter !== bootedRouter) return
+    void resolvePortalChrome().then(chrome => {
+      if (activeRouter === bootedRouter) renderSidebar(root, bootedRouter, chrome)
+    })
+  }
+  window.addEventListener(FEATURES_CHANGE_EVENT, featuresChangeListener)
 }
 
 /** Tear down the portal — only used by tests. */
@@ -464,6 +476,10 @@ export function teardownPublisherPortal(): void {
   if (activeRouter) {
     activeRouter.stop()
     activeRouter = null
+  }
+  if (featuresChangeListener) {
+    window.removeEventListener(FEATURES_CHANGE_EVENT, featuresChangeListener)
+    featuresChangeListener = null
   }
   const root = document.getElementById(PORTAL_ROOT_ID)
   if (root) root.remove()
