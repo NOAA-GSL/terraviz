@@ -16,6 +16,7 @@ interface RawDataset {
   publisher_id: string | null
   legacy_id: string | null
   thumbnail_url?: string | null
+  can_edit?: boolean
 }
 
 function dataset(overrides: Partial<RawDataset> = {}): RawDataset {
@@ -56,6 +57,35 @@ describe('renderDatasetsPage', () => {
 
   afterEach(() => {
     window.history.replaceState(null, '', originalPath)
+  })
+
+  it('hides the New-draft button for a reviewer (no content.create)', async () => {
+    window.history.replaceState(null, '', '/publish/datasets')
+    const fetchFn = vi.fn().mockResolvedValue(jsonResponse({ datasets: [], next_cursor: null }))
+    const meFetchFn = vi.fn(async () => jsonResponse({ role: 'reviewer' }))
+    await renderDatasetsPage(mount, {
+      fetchFn: fetchFn as unknown as typeof fetch,
+      meFetchFn: meFetchFn as unknown as typeof fetch,
+      fetchCounts: false,
+    })
+    // Let the progressive create-gate resolve and re-render.
+    await new Promise(r => setTimeout(r, 0))
+    await new Promise(r => setTimeout(r, 0))
+    expect(mount.querySelector('.publisher-datasets-new-btn')).toBeNull()
+  })
+
+  it('keeps the New-draft button for an author (content.create)', async () => {
+    window.history.replaceState(null, '', '/publish/datasets')
+    const fetchFn = vi.fn().mockResolvedValue(jsonResponse({ datasets: [], next_cursor: null }))
+    const meFetchFn = vi.fn(async () => jsonResponse({ role: 'author' }))
+    await renderDatasetsPage(mount, {
+      fetchFn: fetchFn as unknown as typeof fetch,
+      meFetchFn: meFetchFn as unknown as typeof fetch,
+      fetchCounts: false,
+    })
+    await new Promise(r => setTimeout(r, 0))
+    await new Promise(r => setTimeout(r, 0))
+    expect(mount.querySelector('.publisher-datasets-new-btn')).not.toBeNull()
   })
 
   it('renders a thumbnail image in the row when the dataset has one', async () => {
@@ -469,6 +499,23 @@ describe('renderDatasetsPage — delete action', () => {
     expect(mount.querySelector('.publisher-row-edit')?.getAttribute('href')).toBe('/publish/datasets/P/edit')
     expect(mount.querySelector('.publisher-row-retract')).not.toBeNull()
     expect(mount.querySelector('.publisher-row-delete')).toBeNull()
+  })
+
+  it('a row the caller cannot edit shows only a View link (no Edit/Retract/Delete)', async () => {
+    window.history.replaceState(null, '', '/publish/datasets?status=published')
+    const fetchFn = vi.fn().mockResolvedValue(
+      jsonResponse({
+        datasets: [dataset({ id: 'OTHER', published_at: '2026-04-30T12:00:00Z', can_edit: false })],
+        next_cursor: null,
+      }),
+    )
+    await renderDatasetsPage(mount, { fetchFn: fetchFn as unknown as typeof fetch, fetchCounts: false })
+    expect(mount.querySelector('.publisher-row-edit')).toBeNull()
+    expect(mount.querySelector('.publisher-row-retract')).toBeNull()
+    expect(mount.querySelector('.publisher-row-delete')).toBeNull()
+    const view = mount.querySelector('.publisher-row-view')
+    expect(view).not.toBeNull()
+    expect(view?.getAttribute('href')).toBe('/publish/datasets/OTHER')
   })
 
   it('a confirmed Retract POSTs to the retract endpoint and drops the row', async () => {

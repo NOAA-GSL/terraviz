@@ -16,6 +16,7 @@ import { onRequestGet, onRequestPost } from './datasets'
 import {
   onRequestGet as datasetGet,
   onRequestPut as datasetPut,
+  onRequestDelete as datasetDelete,
 } from './datasets/[id]'
 import { onRequestPost as datasetPublish } from './datasets/[id]/publish'
 import { onRequestPost as datasetReindex } from './datasets/[id]/reindex'
@@ -36,6 +37,22 @@ const ADMIN: PublisherRow = {
   created_at: '2026-01-01T00:00:00.000Z',
 }
 
+// A second, non-privileged publisher — used to exercise the
+// read-open / write-owner-scoped split.
+const PUBLISHER: PublisherRow = {
+  ...ADMIN,
+  id: 'PUB-COMM',
+  email: 'comm@example.com',
+  display_name: 'Community',
+  role: 'author',
+  is_admin: 0,
+}
+
+// A read-only reviewer — may read but authors nothing.
+const REVIEWER: PublisherRow = { ...PUBLISHER, id: 'PUB-REVIEWER', email: 'r@e', role: 'reviewer' }
+// A contributor — may create + edit own drafts, but cannot publish.
+const CONTRIBUTOR: PublisherRow = { ...PUBLISHER, id: 'PUB-CONTRIB', email: 'co@e', role: 'contributor' }
+
 function ctxWithPublisher<P extends string = never>(opts: {
   env: Record<string, unknown>
   url?: string
@@ -43,6 +60,9 @@ function ctxWithPublisher<P extends string = never>(opts: {
   headers?: Record<string, string>
   body?: unknown
   params?: Record<string, string>
+  /** The authenticated publisher the middleware would have attached.
+   *  Defaults to ADMIN so the existing tests are unaffected. */
+  publisher?: PublisherRow
 }) {
   const url = opts.url ?? 'https://localhost/api/v1/publish/datasets'
   const headers = new Headers(opts.headers ?? {})
@@ -57,7 +77,7 @@ function ctxWithPublisher<P extends string = never>(opts: {
     request,
     env: opts.env,
     params: (opts.params ?? {}) as { [K in P]: string | string[] },
-    data: { publisher: ADMIN },
+    data: { publisher: opts.publisher ?? ADMIN },
     waitUntil: () => {},
     passThroughOnException: () => {},
     next: async () => new Response(null),
@@ -67,12 +87,14 @@ function ctxWithPublisher<P extends string = never>(opts: {
 
 function setupEnv() {
   const sqlite = seedFixtures({ count: 0 })
-  sqlite
-    .prepare(
-      `INSERT INTO publishers (id, email, display_name, role, is_admin, status, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    )
-    .run(ADMIN.id, ADMIN.email, ADMIN.display_name, ADMIN.role, ADMIN.is_admin, ADMIN.status, ADMIN.created_at)
+  for (const p of [ADMIN, PUBLISHER, CONTRIBUTOR, REVIEWER]) {
+    sqlite
+      .prepare(
+        `INSERT INTO publishers (id, email, display_name, role, is_admin, status, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(p.id, p.email, p.display_name, p.role, p.is_admin, p.status, p.created_at)
+  }
   return {
     sqlite,
     env: {
@@ -107,6 +129,15 @@ describe('POST /api/v1/publish/datasets', () => {
     expect(res.status).toBe(400)
     const body = await readJson<{ errors: Array<{ field: string; code: string }> }>(res)
     expect(body.errors.length).toBeGreaterThan(0)
+  })
+
+  it('returns 403 for a read-only reviewer (lacks content.create)', async () => {
+    const { env } = setupEnv()
+    const res = await onRequestPost(
+      ctxWithPublisher({ env, method: 'POST', body: { title: 'Nope', format: 'video/mp4' }, publisher: REVIEWER }),
+    )
+    expect(res.status).toBe(403)
+    expect((await readJson<{ error: string }>(res)).error).toBe('forbidden_role')
   })
 
   it('returns 503 identity_missing when node_identity has not been provisioned', async () => {
@@ -228,6 +259,143 @@ describe('GET / PUT /api/v1/publish/datasets/{id}', () => {
     expect(res.status).toBe(200)
     const body = await readJson<{ dataset: { title: string } }>(res)
     expect(body.dataset.title).toBe('Renamed')
+  })
+})
+
+describe('read-open / write-owner-scoped (whole-catalog visibility)', () => {
+  /** Seed one admin-owned row + one community-owned row. */
+  async function seedMixed() {
+    const { env, sqlite } = setupEnv()
+    const adminRow = await readJson<{ dataset: { id: string } }>(
+      await onRequestPost(
+        ctxWithPublisher({ env, method: 'POST', body: { title: 'Admin owned', format: 'video/mp4' } }),
+      ),
+    )
+    const commRow = await readJson<{ dataset: { id: string } }>(
+      await onRequestPost(
+        ctxWithPublisher({
+          env,
+          method: 'POST',
+          body: { title: 'Community owned', format: 'video/mp4' },
+          publisher: PUBLISHER,
+        }),
+      ),
+    )
+    return { env, sqlite, adminId: adminRow.dataset.id, commId: commRow.dataset.id }
+  }
+
+  it('GET list shows a community publisher the whole catalog with per-row can_edit', async () => {
+    const { env, adminId, commId } = await seedMixed()
+    const res = await onRequestGet(ctxWithPublisher({ env, publisher: PUBLISHER }))
+    expect(res.status).toBe(200)
+    const body = await readJson<{
+      datasets: Array<{ id: string; can_edit: boolean }>
+    }>(res)
+    // Both rows are visible, not just the community publisher's own.
+    expect(body.datasets.map(d => d.id).sort()).toEqual([adminId, commId].sort())
+    const byId = new Map(body.datasets.map(d => [d.id, d.can_edit]))
+    expect(byId.get(commId)).toBe(true) // own row → editable
+    expect(byId.get(adminId)).toBe(false) // someone else's → view-only
+  })
+
+  it('GET list marks every row can_edit for a privileged (admin) caller', async () => {
+    const { env, adminId, commId } = await seedMixed()
+    const res = await onRequestGet(ctxWithPublisher({ env, publisher: ADMIN }))
+    const body = await readJson<{ datasets: Array<{ id: string; can_edit: boolean }> }>(res)
+    for (const d of body.datasets) expect(d.can_edit).toBe(true)
+    expect(body.datasets.map(d => d.id).sort()).toEqual([adminId, commId].sort())
+  })
+
+  it('GET detail lets a community publisher read another owner’s row with can_edit=false', async () => {
+    const { env, adminId } = await seedMixed()
+    const res = await datasetGet(
+      ctxWithPublisher<'id'>({ env, params: { id: adminId }, publisher: PUBLISHER }),
+    )
+    expect(res.status).toBe(200)
+    const body = await readJson<{ dataset: { id: string; can_edit: boolean } }>(res)
+    expect(body.dataset.id).toBe(adminId)
+    expect(body.dataset.can_edit).toBe(false)
+  })
+
+  it('PUT stays owner-scoped: a community publisher gets 404 editing another owner’s row', async () => {
+    const { env, adminId } = await seedMixed()
+    const res = await datasetPut(
+      ctxWithPublisher<'id'>({
+        env,
+        method: 'PUT',
+        body: { title: 'Hijack attempt' },
+        params: { id: adminId },
+        publisher: PUBLISHER,
+      }),
+    )
+    expect(res.status).toBe(404)
+  })
+
+  it('PUT succeeds on the community publisher’s own row', async () => {
+    const { env, commId } = await seedMixed()
+    const res = await datasetPut(
+      ctxWithPublisher<'id'>({
+        env,
+        method: 'PUT',
+        body: { title: 'Renamed by owner' },
+        params: { id: commId },
+        publisher: PUBLISHER,
+      }),
+    )
+    expect(res.status).toBe(200)
+    const body = await readJson<{ dataset: { title: string } }>(res)
+    expect(body.dataset.title).toBe('Renamed by owner')
+  })
+})
+
+describe('a demoted read-only reviewer cannot edit/delete its own rows (security)', () => {
+  it('403s on PUT and DELETE for a reviewer-owned dataset', async () => {
+    const { env, sqlite } = setupEnv()
+    // Admin creates a draft, then it is reassigned to the reviewer (models
+    // an author who authored rows and was later demoted to reviewer).
+    const created = await onRequestPost(
+      ctxWithPublisher({ env, method: 'POST', body: { title: 'Was mine', format: 'video/mp4' } }),
+    )
+    const id = (await readJson<{ dataset: { id: string } }>(created)).dataset.id
+    sqlite.prepare('UPDATE datasets SET publisher_id = ? WHERE id = ?').run(REVIEWER.id, id)
+
+    const put = await datasetPut(
+      ctxWithPublisher<'id'>({ env, method: 'PUT', body: { title: 'edit' }, params: { id }, publisher: REVIEWER }),
+    )
+    expect(put.status).toBe(403)
+
+    const del = await datasetDelete(
+      ctxWithPublisher<'id'>({ env, method: 'DELETE', params: { id }, publisher: REVIEWER }),
+    )
+    expect(del.status).toBe(403)
+  })
+})
+
+describe('contributor cannot publish (R4)', () => {
+  it('lets a contributor create + edit its own draft but 403s on publish', async () => {
+    const { env } = setupEnv()
+    // Create as the contributor (content.create allowed).
+    const created = await onRequestPost(
+      ctxWithPublisher({
+        env,
+        method: 'POST',
+        body: { title: 'Contrib draft', format: 'video/mp4', data_ref: 'vimeo:1', license_spdx: 'CC-BY-4.0' },
+        publisher: CONTRIBUTOR,
+      }),
+    )
+    expect(created.status).toBe(201)
+    const id = (await readJson<{ dataset: { id: string } }>(created)).dataset.id
+    // Edit own draft → allowed.
+    const edit = await datasetPut(
+      ctxWithPublisher<'id'>({ env, method: 'PUT', body: { title: 'Edited' }, params: { id }, publisher: CONTRIBUTOR }),
+    )
+    expect(edit.status).toBe(200)
+    // Publish own draft → 403 (no content.publish.own).
+    const pub = await datasetPublish(
+      ctxWithPublisher<'id'>({ env, method: 'POST', params: { id }, publisher: CONTRIBUTOR }),
+    )
+    expect(pub.status).toBe(403)
+    expect((await readJson<{ error: string }>(pub)).error).toBe('forbidden_role')
   })
 })
 

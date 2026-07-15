@@ -46,11 +46,6 @@ import { resolveRegion } from '../../../data/regions'
 import { renderMarkdown } from '../../../services/markdownRenderer'
 import type { PublisherDataset } from '../types'
 
-interface MeResponse {
-  role: string
-  is_admin: boolean
-}
-
 interface PostWire {
   id: string
   slug: string
@@ -64,9 +59,11 @@ interface PostWire {
   tourId: string | null
   coverImageUrl: string | null
   coverImageAlt: string | null
+  /** Whether the caller may edit this post (author or admin). Absent
+   *  on create / older payloads → treated as editable. */
+  can_edit?: boolean
 }
 
-const ME_ENDPOINT = '/api/v1/publish/me'
 const BLOG_ENDPOINT = '/api/v1/publish/blog'
 // Approved only: the public post drops a citation whose event isn't
 // approved, and generation grounds itself in the event's text — the
@@ -82,10 +79,6 @@ export interface BlogEditPageOptions {
   navigate?: (url: string) => void
   /** Post id when editing; omitted on /publish/blog/new. */
   postId?: string
-}
-
-function clientIsPrivileged(me: MeResponse): boolean {
-  return me.is_admin === true || me.role === 'admin' || me.role === 'service'
 }
 
 function el<K extends keyof HTMLElementTagNameMap>(
@@ -174,6 +167,59 @@ function withResolvedGeometry(ev: ReviewEvent): ReviewEvent {
   return { ...ev, geometry: { ...g, boundingBox: { n, s, w, e } } }
 }
 
+/** View-only rendering of a post the caller doesn't own — the
+ *  read half of read-all / write-own. Title + status + a sanitized
+ *  markdown render of the body, plus the public link when published.
+ *  No form, no Save. */
+function renderReadOnlyPost(
+  mount: HTMLElement,
+  post: PostWire,
+  navigate: (url: string) => void,
+): void {
+  const back = el('button', {
+    type: 'button',
+    className: 'publisher-button publisher-blog-back',
+    textContent: t('publisher.blog.editor.back'),
+  })
+  back.addEventListener('click', () => navigate('/publish/blog'))
+
+  const head = el('div', { className: 'publisher-blog-header' }, [
+    el('div', { className: 'publisher-page-titles' }, [
+      el('h2', { className: 'publisher-card-heading', textContent: post.title }),
+      el('span', {
+        className: `publisher-blog-badge publisher-blog-badge-${post.status}`,
+        textContent:
+          post.status === 'published'
+            ? t('publisher.blog.status.published')
+            : t('publisher.blog.status.draft'),
+      }),
+    ]),
+  ])
+
+  const notice = el('p', {
+    className: 'publisher-blog-readonly-notice',
+    textContent: t('publisher.blog.readonly.notice'),
+  })
+
+  const bodyView = el('div', { className: 'publisher-blog-preview publisher-markdown-body' })
+  // renderMarkdown runs marked + sanitizeMarkdownHtml (XSS-tested).
+  bodyView.innerHTML = renderMarkdown(post.bodyMd)
+
+  const children: HTMLElement[] = [back, head, notice]
+  if (post.status === 'published') {
+    const view = el('a', {
+      className: 'publisher-row-action publisher-blog-view-link',
+      href: `/blog/${encodeURIComponent(post.slug)}`,
+      textContent: t('publisher.blog.list.view'),
+    })
+    view.target = '_blank'
+    view.rel = 'noopener'
+    children.push(view)
+  }
+  children.push(bodyView)
+  mount.replaceChildren(shell(card(...children)))
+}
+
 export async function renderBlogEditPage(mount: HTMLElement, options: BlogEditPageOptions = {}): Promise<void> {
   const features = await fetchFeatures()
   if (!features.blog) {
@@ -184,38 +230,29 @@ export async function renderBlogEditPage(mount: HTMLElement, options: BlogEditPa
   const navigate = options.navigate ?? ((url: string) => { window.location.href = url })
   mount.replaceChildren(shell(el('p', { className: 'publisher-loading', textContent: t('publisher.blog.loading') })))
 
-  const [meRes, postRes] = await Promise.all([
-    publisherGet<MeResponse>(ME_ENDPOINT, { fetchFn }),
-    options.postId
-      ? publisherGet<{ post: PostWire }>(`${BLOG_ENDPOINT}/${encodeURIComponent(options.postId)}`, { fetchFn })
-      : Promise.resolve(null),
-  ])
-  for (const res of [meRes, postRes]) {
-    if (!res || res.ok) continue
-    if (res.kind === 'session') {
+  const postRes = options.postId
+    ? await publisherGet<{ post: PostWire }>(`${BLOG_ENDPOINT}/${encodeURIComponent(options.postId)}`, { fetchFn })
+    : null
+  if (postRes && !postRes.ok) {
+    if (postRes.kind === 'session') {
       if (handleSessionError({ navigate: options.navigate }) === 'navigating') return
       mount.replaceChildren(shell(buildErrorCard('session')))
       return
     }
-    const details = res.kind === 'server' ? { status: res.status, body: res.body } : {}
-    mount.replaceChildren(shell(buildErrorCard(res.kind, details)))
-    return
-  }
-  if (!meRes.ok || (postRes && !postRes.ok)) return
-
-  if (!clientIsPrivileged(meRes.data)) {
-    mount.replaceChildren(
-      shell(
-        card(
-          el('h2', { className: 'publisher-card-heading', textContent: t('publisher.blog.editor.title') }),
-          el('p', { className: 'publisher-blog-restricted', textContent: t('publisher.blog.restricted') }),
-        ),
-      ),
-    )
+    const details = postRes.kind === 'server' ? { status: postRes.status, body: postRes.body } : {}
+    mount.replaceChildren(shell(buildErrorCard(postRes.kind, details)))
     return
   }
 
   const existing = postRes?.ok ? postRes.data.post : null
+
+  // Read-all / write-own: any active publisher may open the editor to
+  // create a draft, but a post authored by someone else is view-only.
+  // `can_edit` absent (create / older payload) is treated as editable.
+  if (existing && existing.can_edit === false) {
+    renderReadOnlyPost(mount, existing, navigate)
+    return
+  }
   let postId = existing?.id ?? null
   let postStatus: 'draft' | 'published' = existing?.status ?? 'draft'
   // The AI-generated companion tour (tours-row id). Set by a

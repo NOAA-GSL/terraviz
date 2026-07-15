@@ -58,16 +58,36 @@ beforeEach(() => {
 })
 
 describe('renderEventsPage', () => {
-  it('shows the restricted card for a non-privileged publisher without hitting the events API', async () => {
+  it('a non-admin publisher reads the queue but gets no feed-Refresh button', async () => {
     const routes = baseRoutes()
     routes['/api/v1/publish/me'] = { body: { role: 'publisher', is_admin: false } }
     const fetchFn = mockFetch(routes)
     await renderEventsPage(mount, { fetchFn })
-    expect(mount.querySelector('.publisher-events-restricted')).not.toBeNull()
-    expect(mount.querySelector('.publisher-events-card')).toBeNull()
-    // Gate happens before the events fetch — a 403 there must not surface
-    // as a generic error card.
-    expect(fetchFn.mock.calls.some(c => String(c[0]).includes('/publish/events'))).toBe(false)
+    // No restricted wall — the queue renders.
+    expect(mount.querySelector('.publisher-events-restricted')).toBeNull()
+    expect(mount.querySelector('.publisher-events-queue-title')?.textContent).toBe('Hurricane makes landfall')
+    // The events queue IS fetched (read is open).
+    expect(fetchFn.mock.calls.some(c => String(c[0]).includes('/publish/events'))).toBe(true)
+    // The feed-Refresh action is admin-only; only New event shows.
+    const toolbarButtons = mount.querySelectorAll<HTMLButtonElement>('.publisher-events-toolbar button')
+    expect(toolbarButtons).toHaveLength(1)
+    expect(toolbarButtons[0].textContent).toBe('New event')
+  })
+
+  it('a non-admin publisher sees an owned event read-only when can_edit is false', async () => {
+    const routes = baseRoutes()
+    routes['/api/v1/publish/me'] = { body: { role: 'publisher', is_admin: false } }
+    const ev = oneEvent()
+    ;(ev.events[0] as { can_edit?: boolean }).can_edit = false
+    routes['/api/v1/publish/events'] = { body: ev }
+    await renderEventsPage(mount, { fetchFn: mockFetch(routes) })
+    // The detail renders, but the approve/reject decision controls do not.
+    expect(mount.querySelector('.publisher-events-detail-title')?.textContent).toBe('Hurricane makes landfall')
+    expect(mount.querySelector('.publisher-events-decision-approve')).toBeNull()
+    expect(mount.querySelector('.publisher-events-readonly-notice')).not.toBeNull()
+    // The pairing row shows, but without its ✓ / ✕ decision buttons.
+    expect(mount.querySelector('.publisher-events-pairing-name')?.textContent).toBe('Live Storm')
+    expect(mount.querySelector('.publisher-events-icon-btn')).toBeNull()
   })
 
   it('renders the selected event detail with source, title, and a pairing row', async () => {

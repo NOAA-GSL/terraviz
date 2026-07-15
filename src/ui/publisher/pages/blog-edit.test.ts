@@ -524,15 +524,37 @@ describe('renderBlogEditPage', () => {
     expect(notes.toLowerCase()).toContain('add a location')
   })
 
-  it('shows the restricted card for a non-privileged caller', async () => {
+  it('renders the New-post editor with no client-side role gate (the server enforces content.create on save)', async () => {
     const mount = document.createElement('div')
     const fetchFn = vi.fn(async (input: RequestInfo | URL) => {
       const url = typeof input === 'string' ? input : (input as Request).url
-      const body = url.includes('/publish/me') ? { role: 'publisher', is_admin: false } : {}
+      // No postId → only feature/catalog/events reads; return empty lists.
+      const body = url.includes('/publish/datasets') || url.includes('/publish/events') ? { datasets: [], events: [], posts: [] } : {}
       return { ok: true, status: 200, type: 'basic', json: async () => body, text: async () => JSON.stringify(body) } as unknown as Response
     })
     await renderBlogEditPage(mount, { fetchFn })
-    expect(mount.querySelector('.publisher-blog-restricted')).toBeTruthy()
+    // The form renders — no restricted wall.
+    expect(mount.querySelector('#blog-title')).toBeTruthy()
+    expect(mount.querySelector('.publisher-blog-restricted')).toBeNull()
+  })
+
+  it('renders a read-only view (no form) for a post the caller does not own', async () => {
+    const mount = document.createElement('div')
+    const post = {
+      id: 'P9', slug: 'someone-elses', title: 'Not mine', summary: null,
+      bodyMd: '# Hello\n\nBody text.', datasetIds: [], eventId: null, status: 'draft',
+      publishedAt: null, tourId: null, coverImageUrl: null, coverImageAlt: null,
+      can_edit: false,
+    }
+    const fetchFn = vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : (input as Request).url
+      const body = url.includes('/publish/blog/P9') ? { post } : { datasets: [], events: [] }
+      return { ok: true, status: 200, type: 'basic', json: async () => body, text: async () => JSON.stringify(body) } as unknown as Response
+    })
+    await renderBlogEditPage(mount, { fetchFn, postId: 'P9' })
+    // View-only: the post title + notice render, but no editing form.
     expect(mount.querySelector('#blog-title')).toBeNull()
+    expect(mount.querySelector('.publisher-blog-readonly-notice')).toBeTruthy()
+    expect(mount.querySelector('.publisher-blog-preview')?.textContent).toContain('Body text.')
   })
 })

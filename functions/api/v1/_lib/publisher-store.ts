@@ -8,51 +8,71 @@
  * row.
  *
  * Role taxonomy (canonical privilege source of truth is `role`;
- * `is_admin` is a synced legacy mirror of `role === 'admin'`):
+ * `is_admin` is a synced legacy mirror of `role === 'admin'`). The
+ * capabilities each role holds live in the shared matrix
+ * `src/types/publisher-roles.ts`; this is the prose summary. See
+ * `docs/PUBLISHER_ROLES_PLAN.md`.
  *
- *   - `admin`     — full administrator (sees all rows, mutates
- *                   operator-scoped resources, manages users).
- *   - `publisher` — the secondary authoring role; sees only its own
- *                   rows, cannot manage users or operator resources.
- *   - `readonly`  — reviewer (unprivileged today; reviewer semantics
- *                   land later).
- *   - `service`   — machine credential / service token.
+ *   - `admin`       — full administrator (any content + operator
+ *                     resources + user management).
+ *   - `editor`      — publish/edit ANY content + the hero; no user or
+ *                     operator settings.
+ *   - `author`      — create + publish/edit its OWN content.
+ *   - `contributor` — create + edit its OWN drafts, but cannot
+ *                     self-publish (an editor/admin approves).
+ *   - `reviewer`    — read-only (catalog, queues, insights).
+ *   - `service`     — machine credential; admin-equivalent for content
+ *                     + operator work, but NOT user management.
  *
  * Status / role assignment:
  *
- * | Origin                                              | role        | is_admin | status   |
- * |-----------------------------------------------------|-------------|----------|----------|
- * | DEV_BYPASS_ACCESS=true                              | `admin`     | 1        | `active` |
- * | Access service token                                | `service`   | 0        | `active` |
- * | Access user, email domain in TRUSTED_PUBLISHER_DOMAINS | `admin`  | 1        | `active` |
- * | Access user, untrusted domain                       | `publisher` | 0        | `pending`|
+ * | Origin                                              | role       | is_admin | status   |
+ * |-----------------------------------------------------|------------|----------|----------|
+ * | DEV_BYPASS_ACCESS=true                              | `admin`    | 1        | `active` |
+ * | Access service token                                | `service`  | 0        | `active` |
+ * | First user on a deploy with no active admin (bootstrap) | `admin` | 1     | `active` |
+ * | Access user, email domain in TRUSTED_PUBLISHER_DOMAINS | `reviewer`| 0     | `active` |
+ * | Access user, untrusted domain                       | `reviewer` | 0        | `pending`|
  *
  * Service tokens are pre-vouched by whoever configured them in the
- * Cloudflare dashboard, so auto-`active` is safe. Trusted-domain
- * users are vouched by the operator's choice to list their domain
- * — appropriate for single-org deploys where the operator IS the
- * admin. Untrusted-domain user logins default to `publisher` /
- * `pending` so a stranger discovering the publisher API cannot start
- * authoring rows until an admin approves them in the portal's Users
- * tab.
+ * Cloudflare dashboard, so auto-`active` is safe. Trusted-domain users
+ * are vouched by the operator's choice to list their domain, so they
+ * skip the approval queue (`active`) — but start read-only (`reviewer`),
+ * NOT admin: auto-admin for a whole domain predates the role model and
+ * would silently make every colleague an admin. Untrusted-domain logins
+ * default to `reviewer` + `pending` so a stranger discovering the
+ * publisher API can author nothing until an admin approves (and
+ * optionally promotes) them in the portal's Users tab.
+ *
+ * The one exception is the **bootstrap**: the first human on a deploy
+ * with no active admin is provisioned `admin`/`active` (see
+ * {@link getOrCreatePublisher}) so there is always an operator who can
+ * approve/promote everyone else. It excludes service tokens (a machine
+ * credential must never self-elevate) and, because the last-active-admin
+ * guardrail on the Users tab keeps the admin count from ever reaching
+ * zero through normal operations, cannot re-fire as an escalation path.
  *
  * The `role` column has no SQL CHECK constraint (see
  * `migrations/catalog/0005_publishers_audit.sql`) so the role enum is
  * additive at the runtime layer without a schema migration. The
- * `0023_publisher_roles_two_tier.sql` migration backfilled the old
- * `staff`/`community` rows to `admin`/`publisher`.
+ * `0023_publisher_roles_two_tier.sql` migration backfilled
+ * `staff`/`community` → `admin`/`publisher`; `0039_publisher_roles_five.sql`
+ * renamed `publisher`/`readonly` → `author`/`reviewer`.
  */
 
 import type { AccessIdentity } from './access-auth'
 import { newUlid } from './ulid'
+import { roleCan, ASSIGNABLE_ROLES as ROLES_ASSIGNABLE, type Role } from '../../../../src/types/publisher-roles'
 
 /**
  * Roles an admin may assign to a publisher through the Users tab.
- * `service` is intentionally excluded — it is reserved for machine
- * tokens and provisioned automatically, never hand-assigned.
+ * Re-exported from the shared role matrix (`src/types/publisher-roles.ts`)
+ * so there is one source of truth. `service` is intentionally excluded —
+ * it is reserved for machine tokens and provisioned automatically,
+ * never hand-assigned.
  */
-export const ASSIGNABLE_ROLES = ['admin', 'publisher', 'readonly'] as const
-export type AssignableRole = (typeof ASSIGNABLE_ROLES)[number]
+export const ASSIGNABLE_ROLES = ROLES_ASSIGNABLE
+export type AssignableRole = Role
 
 /** Valid `status` values on the publishers table. */
 export const PUBLISHER_STATUSES = ['pending', 'active', 'suspended'] as const
@@ -121,17 +141,22 @@ export function provisioningDefaults(
 ): { role: string; is_admin: number; status: string } {
   if (opts.devBypass) return { role: 'admin', is_admin: 1, status: 'active' }
   if (identity.type === 'service') return { role: 'service', is_admin: 0, status: 'active' }
-  // Trusted-domain users are auto-promoted to admin/active. This is
-  // the supported path for single-org deploys where the operator IS
-  // the admin — pending-by-default would lock them out of their own
-  // deploy.
+  // Trusted-domain users skip the approval queue (`active`) but start
+  // read-only (`reviewer`), not admin — the operator promotes them from
+  // the Users tab as needed. (The first-ever human is bootstrapped to
+  // admin separately in getOrCreatePublisher, so a fresh deploy still
+  // gets an operator.)
   if (opts.trustedDomains && opts.trustedDomains.size > 0) {
     const domain = emailDomain(identity.email)
     if (domain && opts.trustedDomains.has(domain)) {
-      return { role: 'admin', is_admin: 1, status: 'active' }
+      return { role: 'reviewer', is_admin: 0, status: 'active' }
     }
   }
-  return { role: 'publisher', is_admin: 0, status: 'pending' }
+  // Untrusted-domain logins default to read-only `reviewer` + `pending`,
+  // so a stranger who discovers the publisher API can do nothing until
+  // an admin approves them and (if desired) promotes them to an
+  // authoring role (decision D4 in docs/PUBLISHER_ROLES_PLAN.md).
+  return { role: 'reviewer', is_admin: 0, status: 'pending' }
 }
 
 /**
@@ -151,7 +176,27 @@ export async function getOrCreatePublisher(
     .first<PublisherRow>()
   if (existing) return existing
 
-  const { role, is_admin, status } = provisioningDefaults(identity, options)
+  let { role, is_admin, status } = provisioningDefaults(identity, options)
+
+  // First-run bootstrap: if the deploy has no active admin yet, the
+  // first human to sign in becomes one, so there is always an operator
+  // who can approve/promote everyone else. Service tokens are excluded
+  // (a machine credential must never self-elevate). Gated on "no active
+  // admin" rather than "empty table" so a service-token-first deploy
+  // still bootstraps its first human; the last-active-admin guardrail on
+  // the Users tab keeps this count from dropping back to zero through
+  // normal operations, so this cannot re-fire as an escalation path.
+  if (identity.type === 'user' && is_admin === 0) {
+    const admins = await db
+      .prepare(`SELECT COUNT(*) AS n FROM publishers WHERE role = 'admin' AND status = 'active'`)
+      .first<{ n: number }>()
+    if ((admins?.n ?? 0) === 0) {
+      role = 'admin'
+      is_admin = 1
+      status = 'active'
+    }
+  }
+
   const row: PublisherRow = {
     id: newUlid(),
     email: identity.email,
@@ -198,29 +243,31 @@ export async function getOrCreatePublisher(
 }
 
 /**
- * Privileged callers see all rows and can mutate operator-scoped
- * resources (featured-list, peer config, hard delete). The role
- * table:
- *   - `admin` and `service` are privileged.
- *   - `publisher` and `readonly` are unprivileged.
+ * Privileged callers can mutate operator-scoped resources (feeds, node
+ * profile / identity, media config, featured list, hero, workflows,
+ * analytics backfill). Now a thin alias over the capability matrix:
+ * `operator.manage` is held by exactly `admin` + `service`, so this is
+ * behavior-identical to the old `role ∈ {admin, service}` check while
+ * the individual call sites are migrated to their specific capability
+ * (`hero.manage`, `content.publish.any`, …) in later phases.
  *
  * `role` is the canonical source of truth; the legacy `is_admin`
  * column is kept synced (`is_admin = 1` iff `role = 'admin'`) so it is
- * not consulted here. Read-side scoping in `dataset-mutations.ts`
- * consults this; the featured-datasets routes consult it for
- * write-side gating.
+ * not consulted here.
+ *
+ * Design: `docs/PUBLISHER_ROLES_PLAN.md`.
  */
 export function isPrivileged(publisher: PublisherRow): boolean {
-  return publisher.role === 'admin' || publisher.role === 'service'
+  return roleCan(publisher.role, 'operator.manage')
 }
 
 /**
- * Admin gate for user management. Strictly `role === 'admin'` —
- * unlike `isPrivileged`, this excludes `service` tokens, so machine
- * credentials cannot approve/suspend/promote other publishers. The
- * Users tab and its endpoints (`/api/v1/publish/publishers`) gate on
- * this.
+ * Admin gate for user management. `users.manage` is held by `admin`
+ * only (not `service`), so this preserves the old strict
+ * `role === 'admin'` semantics: machine credentials cannot
+ * approve/suspend/promote other publishers. The Users tab and its
+ * endpoints (`/api/v1/publish/publishers`) gate on this.
  */
 export function isAdmin(publisher: PublisherRow): boolean {
-  return publisher.role === 'admin'
+  return roleCan(publisher.role, 'users.manage')
 }

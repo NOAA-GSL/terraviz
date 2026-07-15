@@ -25,11 +25,10 @@
 
 import type { CatalogEnv } from '../../../_lib/env'
 import type { PublisherData } from '../../_middleware'
-import { isPrivileged } from '../../../_lib/publisher-store'
 import { writeAuditEvent } from '../../../_lib/audit-store'
 import { sha256Hex, validateImagePayload } from '../../../_lib/image-upload'
 import { isR2PublicConfigured, resolveHttpAssetUrl } from '../../../_lib/r2-public-url'
-import { applyEventEdits, bustFeaturedEventCache, getCurrentEvent } from '../../../_lib/events-store'
+import { applyEventEdits, bustFeaturedEventCache, canMutateEvent, getCurrentEvent } from '../../../_lib/events-store'
 
 const CONTENT_TYPE = 'application/json; charset=utf-8'
 
@@ -55,9 +54,6 @@ export const onRequestPost: PagesFunction<CatalogEnv, 'id'> = async context => {
     return jsonError(503, 'r2_unconfigured', 'R2 public reads are not configured on this deployment.')
   }
   const publisher = (context.data as unknown as PublisherData).publisher
-  if (!isPrivileged(publisher)) {
-    return jsonError(403, 'forbidden_role', 'Uploading event images is restricted to admin and service callers.')
-  }
 
   const idParam = context.params.id
   const id = Array.isArray(idParam) ? idParam[0] : idParam
@@ -66,6 +62,12 @@ export const onRequestPost: PagesFunction<CatalogEnv, 'id'> = async context => {
   const db = context.env.CATALOG_DB
   const event = await getCurrentEvent(db, id)
   if (!event) return jsonError(404, 'not_found', `Event ${id} not found.`)
+  // Owner-scoped write: the owner writes via content.edit.own; an
+  // unclaimed event (owner_id null) requires content.edit.any
+  // (editor/admin/service). See canMutateEvent.
+  if (!canMutateEvent(publisher, event)) {
+    return jsonError(403, 'forbidden_owner', 'You can only edit events you own.')
+  }
 
   let body: { contentType?: unknown; dataBase64?: unknown; altText?: unknown }
   try {

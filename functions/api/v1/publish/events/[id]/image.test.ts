@@ -42,6 +42,15 @@ function makeBucket() {
 
 function setupEnv() {
   const sqlite = seedFixtures({ count: 0 })
+  // Seed publisher rows so an event's owner_id FK resolves.
+  for (const p of [ADMIN, PUBLISHER]) {
+    sqlite
+      .prepare(
+        `INSERT INTO publishers (id, email, display_name, role, is_admin, status, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(p.id, p.email, p.display_name, p.role, p.is_admin, p.status, p.created_at)
+  }
   const { bucket, puts } = makeBucket()
   const env = { CATALOG_DB: asD1(sqlite), CATALOG_R2: bucket, MOCK_R2: 'true' }
   return { sqlite, env, puts }
@@ -81,11 +90,12 @@ const toB64 = (bytes: Uint8Array): string => Buffer.from(bytes).toString('base64
 const PNG_BODY = { contentType: 'image/png', dataBase64: toB64(pngBytes()) }
 
 describe('POST /api/v1/publish/events/:id/image', () => {
-  it('is 403 for a publisher-role account', async () => {
+  it('is 403 forbidden_owner when a publisher targets an event owned by someone else', async () => {
     const { env } = setupEnv()
-    const id = (await insertCurrentEvent(env.CATALOG_DB, SAMPLE)).id
+    const id = (await insertCurrentEvent(env.CATALOG_DB, { ...SAMPLE, ownerId: 'PUB-ADMIN' })).id
     const res = await imagePost(ctx({ env, id, publisher: PUBLISHER, body: PNG_BODY }))
     expect(res.status).toBe(403)
+    expect((JSON.parse(await res.text()) as { error: string }).error).toBe('forbidden_owner')
   })
 
   it('is 404 for an unknown event', async () => {

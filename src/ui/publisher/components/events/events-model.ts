@@ -64,6 +64,13 @@ export interface ReviewEvent {
    *  generated tour frames it; independent of the story image. */
   videoEmbedUrl?: string
   links: ReviewLink[]
+  /** Whether the caller may review/edit this event: its owner (with
+   *  `content.edit.own`), or an `content.edit.any` holder
+   *  (editor / admin / service) — the latter also covers as-yet-unclaimed
+   *  events (`owner_id === null`), which are editable only at the `.any`
+   *  tier, not by any active publisher. Absent (older payload / fixture)
+   *  is treated as editable; the server is the authoritative gate. */
+  can_edit?: boolean
 }
 
 export interface EventsResponse {

@@ -24,7 +24,7 @@
 import type { CatalogEnv } from '../../_lib/env'
 import type { EnrichEnv } from '../../_lib/events-enrich'
 import type { PublisherData } from '../_middleware'
-import { isPrivileged } from '../../_lib/publisher-store'
+import { can } from '../../_lib/capabilities'
 import { writeAuditEvent } from '../../_lib/audit-store'
 import { getNodeProfile } from '../../_lib/node-profile-store'
 import { getEffectiveFeatures } from '../../_lib/node-settings-store'
@@ -56,9 +56,12 @@ export const onRequestPost: PagesFunction<CatalogEnv & EnrichEnv> = async contex
   if (!context.env.CATALOG_DB) {
     return jsonError(503, 'binding_missing', 'CATALOG_DB binding is not configured on this deployment.')
   }
+  // Authoring helper — open to any authoring role (they're drafting
+  // their own post; the companion tour it may create is owned by them).
+  // Reviewers (read-only) are refused.
   const publisher = (context.data as unknown as PublisherData).publisher
-  if (!isPrivileged(publisher)) {
-    return jsonError(403, 'forbidden_role', 'Generating blog drafts is restricted to admin and service callers.')
+  if (!can(publisher, 'content.create')) {
+    return jsonError(403, 'forbidden_role', 'Generating blog drafts requires an authoring role.')
   }
 
   let body: GenerateBody

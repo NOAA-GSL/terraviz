@@ -350,7 +350,11 @@ function renderMediaSuggestions(event: ReviewEvent, cb: EventDetailCallbacks): H
  * as the generated tour will show it, with a Remove control. The embed
  * host is re-guarded by the caller before this renders.
  */
-function renderAttachedVideo(event: ReviewEvent, cb: EventDetailCallbacks): HTMLElement {
+function renderAttachedVideo(
+  event: ReviewEvent,
+  cb: EventDetailCallbacks,
+  canEdit: boolean,
+): HTMLElement {
   const wrap = el('div', 'publisher-events-video')
   const frame = document.createElement('iframe')
   frame.className = 'publisher-events-video-frame'
@@ -360,6 +364,12 @@ function renderAttachedVideo(event: ReviewEvent, cb: EventDetailCallbacks): HTML
   frame.setAttribute('allowfullscreen', '')
   frame.setAttribute('referrerpolicy', 'strict-origin-when-cross-origin')
   frame.setAttribute('allow', 'accelerometer; encrypted-media; gyroscope; picture-in-picture')
+
+  // Non-editable callers can watch the video but get no Remove control.
+  if (!canEdit) {
+    wrap.append(frame)
+    return wrap
+  }
 
   const status = el('span', 'publisher-events-edit-status')
   const remove = document.createElement('button')
@@ -515,8 +525,10 @@ function renderMetadataEdit(event: ReviewEvent, cb: EventDetailCallbacks): HTMLE
   return wrap
 }
 
-/** One dataset pairing row: name · Match Badge · ✓ / ✕ icon buttons. */
-function renderLinkRow(eventId: string, link: ReviewLink, cb: EventDetailCallbacks): HTMLElement {
+/** One dataset pairing row: name · Match Badge · ✓ / ✕ icon buttons.
+ *  When `canEdit` is false the row is display-only (no decision
+ *  buttons) — the read half of read-all / write-own. */
+function renderLinkRow(eventId: string, link: ReviewLink, cb: EventDetailCallbacks, canEdit = true): HTMLElement {
   const row = el('div', `publisher-events-pairing publisher-events-pairing-${link.status}`)
   const name = el('span', 'publisher-events-pairing-name')
   name.textContent = link.datasetTitle ?? link.datasetId
@@ -573,18 +585,23 @@ function renderLinkRow(eventId: string, link: ReviewLink, cb: EventDetailCallbac
   const approveBtn = iconBtn('approve')
   const rejectBtn = iconBtn('reject')
 
-  row.append(
-    name,
-    badgeEl,
-    el('span', 'publisher-events-pairing-actions', [approveBtn, rejectBtn]),
-    rowStatus,
-  )
+  const actions = canEdit
+    ? el('span', 'publisher-events-pairing-actions', [approveBtn, rejectBtn])
+    : el('span', 'publisher-events-pairing-actions')
+  row.append(name, badgeEl, actions, rowStatus)
   return row
 }
 
 /** Build the detail pane for `event`. */
 export function renderEventDetail(event: ReviewEvent, cb: EventDetailCallbacks): HTMLElement {
   const pane = el('div', 'publisher-events-detail')
+
+  // Read-all / write-own: every publisher sees the full detail, but the
+  // review + edit affordances only appear on events the caller may
+  // mutate (its owner / an admin / an unclaimed event). `can_edit`
+  // absent (older payload / fixture) is treated as editable; the server
+  // enforces every write regardless.
+  const canEdit = event.can_edit !== false
 
   // --- Header: title + status badge ---
   const badgeEl = badge(event.status)
@@ -594,6 +611,10 @@ export function renderEventDetail(event: ReviewEvent, cb: EventDetailCallbacks):
       badgeEl,
     ]),
   )
+
+  if (!canEdit) {
+    pane.append(el('p', 'publisher-events-readonly-notice', [t('publisher.events.readonly.notice')]))
+  }
 
   // --- Event-level decision (the heavy tier) — placed directly under the
   // title so a curator can triage (Approve / Reject) and clean the queue
@@ -635,13 +656,15 @@ export function renderEventDetail(event: ReviewEvent, cb: EventDetailCallbacks):
   approveEvent.addEventListener('click', () => submitEvent('approve'))
   rejectEvent.addEventListener('click', () => submitEvent('reject'))
 
-  pane.append(
-    el('div', 'publisher-events-decision', [
-      el('p', 'publisher-events-decision-prompt', [t('publisher.events.decision.prompt')]),
-      el('div', 'publisher-events-decision-actions', [approveEvent, rejectEvent]),
-      decisionStatus,
-    ]),
-  )
+  if (canEdit) {
+    pane.append(
+      el('div', 'publisher-events-decision', [
+        el('p', 'publisher-events-decision-prompt', [t('publisher.events.decision.prompt')]),
+        el('div', 'publisher-events-decision-actions', [approveEvent, rejectEvent]),
+        decisionStatus,
+      ]),
+    )
+  }
 
   // --- Story image (feed enclosure / og:image) — rendered so the
   // curator vets it alongside the text; approving the event approves
@@ -655,22 +678,25 @@ export function renderEventDetail(event: ReviewEvent, cb: EventDetailCallbacks):
     img.loading = 'lazy'
     // A dead image link should vanish, not show a broken-image glyph.
     img.addEventListener('error', () => img.remove())
-    pane.append(img, renderImageUpload(event, cb, 'replace'))
-  } else {
+    pane.append(img)
+    if (canEdit) pane.append(renderImageUpload(event, cb, 'replace'))
+  } else if (canEdit) {
     // The publisher's own photo is always an option, located or not.
     pane.append(renderImageUpload(event, cb, 'upload'))
   }
 
   // --- Attached agency video (the picked YouTube embed) — framed for
-  // the curator to vet, with a Remove control. Independent of the image.
+  // the curator to vet. Independent of the image. Read-all/write-own:
+  // everyone can watch the attached video; only editable callers get the
+  // Remove control.
   if (event.videoEmbedUrl && isNocookieEmbedUrl(event.videoEmbedUrl)) {
-    pane.append(renderAttachedVideo(event, cb))
+    pane.append(renderAttachedVideo(event, cb, canEdit))
   }
 
   // --- Suggested media (task: media suggestion engine) — image
   // sources while imageless, the agency-YouTube source while videoless;
   // each pick writes through the review endpoint's edits.
-  const suggest = renderMediaSuggestions(event, cb)
+  const suggest = canEdit ? renderMediaSuggestions(event, cb) : null
   if (suggest) pane.append(suggest)
 
   // --- Meta strip: source / first observed / detail ---
@@ -707,7 +733,7 @@ export function renderEventDetail(event: ReviewEvent, cb: EventDetailCallbacks):
   // Location is constrained to the same regions.ts vocabulary the
   // enrichment uses (offered via a datalist); the backend re-runs the
   // matcher so the pairing signals score the corrected values.
-  pane.append(renderMetadataEdit(event, cb))
+  if (canEdit) pane.append(renderMetadataEdit(event, cb))
 
   // --- Locator: live map slot, coordinates as text fallback ---
   const point = locatorPoint(event.geometry)
@@ -734,7 +760,7 @@ export function renderEventDetail(event: ReviewEvent, cb: EventDetailCallbacks):
 
   const bulkStatus = el('span', 'publisher-events-bulk-status')
   bulkStatus.setAttribute('role', 'status')
-  const targets = autoPairTargets(event)
+  const targets = canEdit ? autoPairTargets(event) : []
   if (targets.length > 0) {
     const bulkBtn = document.createElement('button')
     bulkBtn.type = 'button'
@@ -810,7 +836,7 @@ export function renderEventDetail(event: ReviewEvent, cb: EventDetailCallbacks):
       tourBtn.disabled = false
     })
   })
-  headActions.append(tourBtn)
+  if (canEdit) headActions.append(tourBtn)
   // Generating a tour needs the tours feature (the endpoint checks it
   // too) — hide the action when the toggle is off. The map is
   // module-cached, so this resolves without a network round-trip.
@@ -826,7 +852,7 @@ export function renderEventDetail(event: ReviewEvent, cb: EventDetailCallbacks):
   addBtn.className = 'publisher-button publisher-button-small publisher-events-add-btn'
   addBtn.textContent = t('publisher.events.addDataset')
   addBtn.setAttribute('aria-expanded', 'false')
-  headActions.append(addBtn)
+  if (canEdit) headActions.append(addBtn)
 
   pairings.append(head, bulkStatus, tourStatus)
 
@@ -837,7 +863,7 @@ export function renderEventDetail(event: ReviewEvent, cb: EventDetailCallbacks):
       rowsHost.append(el('p', 'publisher-events-nolinks', [t('publisher.events.noLinks')]))
       return
     }
-    for (const link of event.links) rowsHost.append(renderLinkRow(event.id, link, cb))
+    for (const link of event.links) rowsHost.append(renderLinkRow(event.id, link, cb, canEdit))
   }
   rebuildRows()
 
@@ -929,7 +955,10 @@ export function renderEventDetail(event: ReviewEvent, cb: EventDetailCallbacks):
     })
   })
 
-  pairings.append(addPanel, rowsHost)
+  // The add-dataset panel is a write affordance — only mount it (and its
+  // toggle) for editable events; read-only sees just the pairing rows.
+  if (canEdit) pairings.append(addPanel, rowsHost)
+  else pairings.append(rowsHost)
   pane.append(pairings)
 
   return pane

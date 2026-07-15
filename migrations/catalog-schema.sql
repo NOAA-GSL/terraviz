@@ -207,7 +207,7 @@ CREATE TABLE current_events (
   -- column line so a later ALTER ADD COLUMN doesn't splice a new column
   -- after it and inherit this comment in the schema snapshot.)
   reviewed_at    TEXT,
-  reviewed_by    TEXT, external_id TEXT, inferred_fields TEXT, image_url TEXT, image_alt TEXT, video_embed_url TEXT,
+  reviewed_by    TEXT, external_id TEXT, inferred_fields TEXT, image_url TEXT, image_alt TEXT, video_embed_url TEXT, owner_id TEXT REFERENCES publishers(id),
   FOREIGN KEY (reviewed_by) REFERENCES publishers(id)
 );
 
@@ -553,6 +553,7 @@ CREATE UNIQUE INDEX idx_current_events_feed_external
   ON current_events(feed_id, external_id)
   WHERE feed_id IS NOT NULL AND external_id IS NOT NULL;
 CREATE INDEX idx_current_events_origin_node ON current_events(origin_node);
+CREATE INDEX idx_current_events_owner ON current_events(owner_id);
 CREATE INDEX idx_current_events_status      ON current_events(status, created_at);
 CREATE UNIQUE INDEX idx_datasets_legacy_id
   ON datasets(legacy_id)

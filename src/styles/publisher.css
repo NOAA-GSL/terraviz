@@ -4025,6 +4025,12 @@
   font-size: calc(0.9rem * var(--ui-scale));
 }
 
+.publisher-import-restricted {
+  margin-block-start: calc(1.5rem * var(--ui-scale));
+  color: var(--color-text-muted, #aab2c0);
+  font-size: calc(0.85rem * var(--ui-scale));
+}
+
 .publisher-import-methods {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(calc(14rem * var(--ui-scale)), 1fr));
@@ -4465,6 +4471,36 @@
   margin: calc(1rem * var(--ui-scale)) 0 0;
   font-size: calc(0.8rem * var(--ui-scale));
   color: var(--color-text-muted, #999999);
+}
+
+/* Role → capability reference (collapsible) on the Team tab. */
+.publisher-role-guide {
+  margin-block: calc(1rem * var(--ui-scale)) calc(1.25rem * var(--ui-scale));
+}
+.publisher-role-guide-summary {
+  cursor: pointer;
+  font-weight: 600;
+  font-size: calc(0.9rem * var(--ui-scale));
+  padding-block: calc(0.35rem * var(--ui-scale));
+}
+.publisher-role-guide-intro {
+  margin: calc(0.5rem * var(--ui-scale)) 0 calc(0.75rem * var(--ui-scale));
+  max-inline-size: calc(46rem * var(--ui-scale));
+  font-size: calc(0.8rem * var(--ui-scale));
+  color: var(--color-text-muted, #999999);
+}
+/* Role columns are narrow yes/no marks; the capability label carries the row. */
+.publisher-role-guide-table th:not(:first-child),
+.publisher-role-guide-cell {
+  text-align: center;
+}
+.publisher-role-guide-cell {
+  color: var(--color-text-muted, #999999);
+  font-size: calc(0.95rem * var(--ui-scale));
+}
+.publisher-role-guide-yes {
+  color: var(--color-accent, #4ea1ff);
+  font-weight: 700;
 }
 .publisher-users-identity {
   display: flex;

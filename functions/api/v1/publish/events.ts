@@ -19,10 +19,11 @@
 
 import type { CatalogEnv } from '../_lib/env'
 import type { PublisherData } from './_middleware'
-import { isPrivileged } from '../_lib/publisher-store'
 import { writeAuditEvent } from '../_lib/audit-store'
 import { parseCreate, resolveOriginNode, ingestEvent, type FieldError } from '../_lib/events-ingest'
+import { can } from '../_lib/capabilities'
 import {
+  canMutateEvent,
   listCurrentEvents,
   listLinksForEvent,
   listLinksForEvents,
@@ -83,10 +84,11 @@ export const onRequestGet: PagesFunction<CatalogEnv> = async context => {
   if (!context.env.CATALOG_DB) {
     return jsonError(503, 'binding_missing', 'CATALOG_DB binding is not configured on this deployment.')
   }
+  // Read-only view of the whole events queue is open to any active
+  // publisher (the middleware has already rejected pending / suspended).
+  // Per-event `can_edit` below tells the portal which rows the caller
+  // may act on; the write endpoints enforce it independently.
   const publisher = (context.data as unknown as PublisherData).publisher
-  if (!isPrivileged(publisher)) {
-    return jsonError(403, 'forbidden_role', 'The events review queue is restricted to admin and service callers.')
-  }
 
   // `?status=` narrows to one bucket; `?status=all` lists every status
   // (so a curator can find + manage already-reviewed events); omitted
@@ -117,6 +119,7 @@ export const onRequestGet: PagesFunction<CatalogEnv> = async context => {
     const decorations = decorationsByEvent.get(row.id) ?? { categories: {}, keywords: [] }
     return {
       ...toPublicEvent(row, decorations),
+      can_edit: canMutateEvent(publisher, row),
       links: links.map(l => toPublicLink(l, titles.get(l.dataset_id) ?? null)),
     }
   })
@@ -140,9 +143,14 @@ export const onRequestPost: PagesFunction<CatalogEnv> = async context => {
   if (!context.env.CATALOG_DB) {
     return jsonError(503, 'binding_missing', 'CATALOG_DB binding is not configured on this deployment.')
   }
+  // Any authoring role may create a manual event, and doing so makes
+  // them its owner (symmetric with drafting a blog / creating a
+  // dataset). It still starts `proposed` and needs approval to surface
+  // publicly, but only the creator / an editor / admin may edit it
+  // thereafter. Reviewers (read-only) are refused.
   const publisher = (context.data as unknown as PublisherData).publisher
-  if (!isPrivileged(publisher)) {
-    return jsonError(403, 'forbidden_role', 'Creating events is restricted to admin and service callers.')
+  if (!can(publisher, 'content.create')) {
+    return jsonError(403, 'forbidden_role', 'Creating events requires an authoring role.')
   }
 
   let body: unknown
@@ -156,7 +164,24 @@ export const onRequestPost: PagesFunction<CatalogEnv> = async context => {
   if (!parsed.ok) return validationFailure(parsed.errors)
 
   const db = context.env.CATALOG_DB
-  const input: NewCurrentEvent = { ...parsed.value, originNode: await resolveOriginNode(db) }
+  // The `(feedId, externalId)` pair makes `ingestEvent` idempotent — a
+  // second POST with a matching pair UPDATES the existing row's content
+  // in place, with no ownership check. That upsert is only safe for a
+  // caller who may edit any event (feed connectors run under the
+  // service token; an editor/admin manages the whole queue). A lower
+  // authoring role (author / contributor) must not be able to supply a
+  // feed key and overwrite an event it does not own — including a
+  // curator-approved, publicly-surfaced one. So we strip the feed key
+  // for anyone without `content.publish.any`: their POST always mints a
+  // fresh, feed-less manual event they own.
+  const mayUpsertFeedEvent = can(publisher, 'content.publish.any')
+  const input: NewCurrentEvent = {
+    ...parsed.value,
+    feedId: mayUpsertFeedEvent ? parsed.value.feedId : null,
+    externalId: mayUpsertFeedEvent ? parsed.value.externalId : null,
+    originNode: await resolveOriginNode(db),
+    ownerId: publisher.id,
+  }
 
   // Idempotent on the feed dedupe key, runs the matcher inline so the
   // review queue is pre-populated — shared with the refresh route. The

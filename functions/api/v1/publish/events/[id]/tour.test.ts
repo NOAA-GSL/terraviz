@@ -2,7 +2,7 @@
  * Wire-level tests for POST /api/v1/publish/events/:id/tour — the
  * generate-a-tour-draft action.
  *
- * Coverage: privileged gate (403), 404 unknown event, 400 when no
+ * Coverage: owner-scoped write gate, 404 unknown event, 400 when no
  * visible dataset pairings exist, the approved-links-beat-proposed
  * stop selection, the happy path (201, D1 tour row, R2 draft blob
  * whose tasks include the event's flyTo/setTime/captions), template
@@ -105,11 +105,12 @@ async function readJson<T>(res: Response): Promise<T> {
 }
 
 describe('POST /api/v1/publish/events/:id/tour', () => {
-  it('403 for a publisher-role account', async () => {
+  it('403 forbidden_owner when a publisher targets an event owned by someone else', async () => {
     const { env } = setupEnv()
-    const id = (await insertCurrentEvent(env.CATALOG_DB, SAMPLE)).id
+    const id = (await insertCurrentEvent(env.CATALOG_DB, { ...SAMPLE, ownerId: 'PUB-ADMIN' })).id
     const res = await tourPost(ctx({ env, id, publisher: PUBLISHER }))
     expect(res.status).toBe(403)
+    expect((JSON.parse(await res.text()) as { error: string }).error).toBe('forbidden_owner')
   })
 
   it('404 for an unknown event', async () => {

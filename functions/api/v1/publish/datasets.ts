@@ -19,10 +19,12 @@ import type { PublisherData } from './_middleware'
 import { writeDatasetAudit } from '../_lib/audit-store'
 import { getNodeIdentity } from '../_lib/catalog-store'
 import {
+  canMutateDataset,
   createDataset,
   listDatasetsForPublisher,
   type ListOptions,
 } from '../_lib/dataset-mutations'
+import { can, canOwnOrAny } from '../_lib/capabilities'
 import { resolveHttpAssetUrl } from '../_lib/r2-public-url'
 
 const CONTENT_TYPE = 'application/json; charset=utf-8'
@@ -69,10 +71,16 @@ export const onRequestGet: PagesFunction<CatalogEnv> = async context => {
     options,
   )
   // Resolve each row's `thumbnail_ref` to a public URL so the list
-  // table can render a thumbnail cell (null when none / unresolvable).
+  // table can render a thumbnail cell (null when none / unresolvable),
+  // and stamp `can_edit` so the portal only shows the Edit / Retract /
+  // Delete controls on rows the caller may actually mutate. The whole
+  // catalog is now visible to every publisher, but writes stay
+  // owner-scoped.
   const withThumbnails = datasets.map(d => ({
     ...d,
     thumbnail_url: resolveHttpAssetUrl(context.env, d.thumbnail_ref),
+    can_edit: canMutateDataset(publisher, d),
+    can_publish: canOwnOrAny(publisher, d.publisher_id, 'content.publish.own', 'content.publish.any'),
   }))
   return new Response(JSON.stringify({ datasets: withThumbnails, next_cursor }), {
     status: 200,
@@ -82,6 +90,9 @@ export const onRequestGet: PagesFunction<CatalogEnv> = async context => {
 
 export const onRequestPost: PagesFunction<CatalogEnv> = async context => {
   const publisher = (context.data as unknown as PublisherData).publisher
+  if (!can(publisher, 'content.create')) {
+    return jsonError(403, 'forbidden_role', 'Creating datasets requires an authoring role.')
+  }
   // The mutation embeds the node_identity row id as `origin_node`
   // via `(SELECT node_id FROM node_identity LIMIT 1)`. If a
   // contributor hits POST before running `gen:node-key`, that
