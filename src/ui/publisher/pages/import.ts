@@ -518,17 +518,22 @@ function restrictedShell(): HTMLElement {
 export function renderImportPage(mount: HTMLElement, options: ImportPageOptions = {}): void {
   const state: PageState = { method: 'manifest', rows: null, parseErrorKey: undefined, fileName: '' }
 
-  // Sync render first (this page has no loading state); swap in the
+  // Sync render first (this page has no loading state); then swap in the
   // disabled card if the toggles resolve off, or the restricted card if
-  // the caller can't create datasets. Fail-open on any fetch error —
-  // the server stays the authoritative gate on the real endpoint.
+  // the caller can't create datasets. The two probes are sequenced (not
+  // run in parallel) so the feature-disabled card takes precedence and a
+  // later-resolving role gate can't overwrite it. Fail-open on any fetch
+  // error — the server stays the authoritative gate on the real endpoint.
   void fetchFeatures().then(features => {
-    if (!features.datasets) renderFeatureDisabledCard(mount, 'datasets')
-  })
-  void publisherGet<MeResponse>(ME_ENDPOINT, { fetchFn: options.fetchFn }).then(res => {
-    if (res.ok && !roleCan(res.data.role, 'content.create')) {
-      mount.replaceChildren(restrictedShell())
+    if (!features.datasets) {
+      renderFeatureDisabledCard(mount, 'datasets')
+      return
     }
+    return publisherGet<MeResponse>(ME_ENDPOINT, { fetchFn: options.fetchFn }).then(res => {
+      if (res.ok && !roleCan(res.data.role, 'content.create')) {
+        mount.replaceChildren(restrictedShell())
+      }
+    })
   })
 
   const rerender = (): void => {

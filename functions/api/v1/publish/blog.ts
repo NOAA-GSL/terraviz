@@ -7,10 +7,12 @@
  *        each post carries `can_edit` so the portal knows whether to
  *        offer the authoring controls.
  * POST → Create a draft post. Body: `{ title, bodyMd, summary?,
- *        datasetIds?, eventId? }`. Open to any active publisher —
- *        drafting a post makes them its author/owner (only they, or an
- *        admin, may edit it thereafter). 400 `{ errors }` for body
- *        problems, audit-logged (`blog.create`). Posts are born
+ *        datasetIds?, eventId? }`. Requires `content.create` (an
+ *        authoring role — contributor and up); reviewers are 403.
+ *        Drafting a post makes them its author/owner; thereafter the
+ *        author (via `content.edit.own`) or any `content.edit.any`
+ *        holder (editor / admin / service) may edit it. 400 `{ errors }`
+ *        for body problems, audit-logged (`blog.create`). Posts are born
  *        `draft`; publishing is a separate action on
  *        `/publish/blog/:id` — nothing auto-publishes.
  */

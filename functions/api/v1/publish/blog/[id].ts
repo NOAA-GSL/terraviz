@@ -6,12 +6,15 @@
  *        `can_edit` so the portal knows whether to offer authoring.
  * PUT  → Update content fields (`{ title, bodyMd, summary?,
  *        datasetIds?, eventId? }`). The slug never changes — published
- *        URLs stay stable across edits. Owner-scoped: only the post's
- *        author (or an admin) may edit.
+ *        URLs stay stable across edits. Owner-scoped via
+ *        `canMutateBlogPost`: the post's author (`content.edit.own`) or
+ *        any `content.edit.any` holder (editor / admin / service) may
+ *        edit.
  * POST → `{ action: 'publish' | 'unpublish' }` — the status
  *        transition. Publish is idempotent and keeps the first
- *        publish time; unpublish returns the post to draft.
- *        Owner-scoped, same rule as PUT.
+ *        publish time; unpublish returns the post to draft. Gated on
+ *        publish capability: the author (`content.publish.own`) or any
+ *        `content.publish.any` holder (editor / admin / service).
  *
  * Every write is audit-logged (`blog.update` / `blog.publish` /
  * `blog.unpublish`) and busts the public blog caches so the change is

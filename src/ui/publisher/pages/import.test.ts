@@ -9,6 +9,21 @@ import {
   countByStatus,
 } from './import'
 
+// Keep the feature toggles deterministic: fetchFeatures otherwise does a
+// live no-store network read (ECONNREFUSED in tests, with racy timing),
+// which the sequenced role-gate now awaits. Return all-features-on so the
+// gate runs; renderFeatureDisabledCard stays real for the sync tests.
+vi.mock('../features', async importOriginal => {
+  const actual = await importOriginal<typeof import('../features')>()
+  return {
+    ...actual,
+    fetchFeatures: vi.fn(async () => {
+      const { defaultFeatures } = await import('../../../types/node-features')
+      return defaultFeatures()
+    }),
+  }
+})
+
 describe('import pure helpers', () => {
   it('parseCsv keys rows by lower-cased headers and handles quotes', () => {
     const rows = parseCsv('Title,Format\n"Sea, Surface","mp4"\nArctic Ice,png\n')
@@ -143,6 +158,9 @@ describe('renderImportPage', () => {
 
   it('shows a restricted card for a reviewer (no content.create) and hides the import UI', async () => {
     renderImportPage(mount, { fetchFn: meFetch('reviewer') })
+    // Sequenced probes: fetchFeatures resolves, then the /me gate — two
+    // async hops, so settle both before asserting.
+    await flush()
     await flush()
     expect(mount.querySelector('.publisher-import-restricted')).not.toBeNull()
     expect(mount.querySelector('.publisher-import-dropzone')).toBeNull()
@@ -151,6 +169,7 @@ describe('renderImportPage', () => {
 
   it('leaves the import UI in place for a role that can create (author)', async () => {
     renderImportPage(mount, { fetchFn: meFetch('author') })
+    await flush()
     await flush()
     expect(mount.querySelector('.publisher-import-restricted')).toBeNull()
     expect(mount.querySelector('.publisher-import-dropzone')).not.toBeNull()

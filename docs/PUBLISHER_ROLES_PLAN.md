@@ -14,10 +14,13 @@ already points here).
 > `src/types/publisher-roles.ts` (shared) with the server adapter in
 > `functions/api/v1/_lib/capabilities.ts`. `isPrivileged` / `isAdmin`
 > are retained as thin aliases (`operator.manage` / `users.manage`).
-> The one deviation from §7.4: create-button hiding on the datasets /
-> blog pages is left to the server 403 (a per-page capability fetch
-> collided with fetch-sequence tests); events / hero / users gate in
-> the UI as specified.
+> Every create surface now gates in the UI on `content.create`:
+> events / hero / users as originally specified, plus datasets / blog /
+> tours / import, which hide (or, for import, replace with a restricted
+> card) their create affordance after a `/me` probe. The datasets probe
+> runs on a dedicated `meFetchFn` seam so it doesn't perturb the
+> list's fetch-sequence tests. The server 403 remains the authoritative
+> gate behind every one of these.
 
 A design for a WordPress-style five-role model for the publisher
 portal, replacing today's effectively-binary (`admin` vs everyone)
