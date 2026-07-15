@@ -110,7 +110,7 @@ async function readJson<T>(res: Response): Promise<T> {
 }
 
 describe('POST /api/v1/publish/blog/generate', () => {
-  it('is allowed for a publisher-role account (authoring helper, open to any active publisher)', async () => {
+  it('is allowed for an authoring-role account (gated on content.create; reviewers are refused)', async () => {
     const { env } = setupEnv(aiStub())
     const res = await generate(ctx({ env, publisher: PUBLISHER, body: { datasetIds: [DS_0] } }))
     expect(res.status).toBe(200)

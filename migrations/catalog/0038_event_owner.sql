@@ -10,11 +10,12 @@
 --   - A publisher who approves an as-yet-unclaimed proposed event
 --     becomes its owner.
 --
--- Once `owner_id` is set, only that owner (or an admin / service
--- caller) may mutate the event; an unclaimed event (owner_id IS NULL)
--- is open for any active publisher to act on, which is what lets the
--- first approver claim it. Read access is unconditional — the whole
--- events queue is visible to every active publisher.
+-- Write access is capability-gated (see `canMutateEvent` /
+-- `canReviewEvent`): the owner writes via `content.edit.own`, while an
+-- unclaimed event (owner_id IS NULL) requires `content.edit.any` to
+-- edit and `content.publish.any` to claim/review — i.e. editor / admin /
+-- service, not any active publisher. Read access is unconditional — the
+-- whole events queue is visible to every active publisher.
 --
 -- Distinct from `reviewed_by` (the last curator to act, set on every
 -- review including a reject): `owner_id` is the durable owner, set once

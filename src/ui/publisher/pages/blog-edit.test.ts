@@ -524,7 +524,7 @@ describe('renderBlogEditPage', () => {
     expect(notes.toLowerCase()).toContain('add a location')
   })
 
-  it('lets any active publisher open the New-post editor (create is open)', async () => {
+  it('renders the New-post editor with no client-side role gate (the server enforces content.create on save)', async () => {
     const mount = document.createElement('div')
     const fetchFn = vi.fn(async (input: RequestInfo | URL) => {
       const url = typeof input === 'string' ? input : (input as Request).url
