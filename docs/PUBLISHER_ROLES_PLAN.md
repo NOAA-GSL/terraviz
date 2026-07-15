@@ -290,9 +290,11 @@ the caller's `role` (it already does) and gains a derived
   New rows (`editor`, `contributor`) need no backfill. `is_admin` stays
   the synced mirror of `role='admin'`.
 - `ASSIGNABLE_ROLES` → `['admin','editor','author','contributor','reviewer']`.
-- Provisioning defaults unchanged (untrusted-domain logins →
-  `contributor`/`pending`? — **Decision D4**, §8; today it's
-  `publisher`/`pending`).
+- Provisioning defaults tightened to least-privilege (**Decision D4**,
+  §8): untrusted-domain logins → `reviewer`/`pending`; trusted-domain
+  logins → `reviewer`/`active` (auto-approved, no longer auto-admin);
+  the first human on a deploy with no active admin is bootstrapped to
+  `admin`/`active` so a fresh deploy still has an operator.
 
 ### 7.4 Portal UI
 
@@ -322,9 +324,14 @@ the caller's `role` (it already does) and gains a derived
   Alternative: keep the wire strings, relabel in i18n only.
 - **D3 — `hero.manage` for Editor?** Recommended: yes (editorial call).
   Alternative: keep hero admin-only.
-- **D4 — default role for a new untrusted-domain login.** Recommended:
-  `contributor`/`pending` (least privilege; an admin promotes).
-  Today's default is `publisher`(author)/`pending`.
+- **D4 — default role for a new login.** Resolved (least privilege):
+  untrusted-domain → `reviewer`/`pending`; trusted-domain → `reviewer`/
+  `active` (auto-approved, read-only — no longer auto-admin). To keep a
+  fresh deploy operable, the first human signing in while no active
+  admin exists is bootstrapped to `admin`/`active` (service tokens
+  excepted; the last-active-admin guardrail keeps this from re-firing).
+  This supersedes the earlier draft (`contributor`/`pending`) and the
+  legacy behavior (`publisher`/`pending`, trusted-domain → admin).
 - **D5 — first-class "submitted for review" status** for Contributor
   drafts, vs. just "a draft an Editor can publish." Recommended: ship
   the plain version first, add the sub-status only if the review

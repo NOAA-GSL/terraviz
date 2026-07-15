@@ -704,11 +704,16 @@ Phase 3 ships a two-tier human role model behind Cloudflare Access:
 
 - Cloudflare Access protects `/publish/**` and `/api/v1/publish/**`.
 - On first login, the API handler reads the Access JWT and finds an
-  existing `publishers` row by email or JIT-provisions one. A login
-  from a `TRUSTED_PUBLISHER_DOMAINS` domain (or dev-bypass) provisions
-  as `role='admin', status='active'`; any other user login provisions
-  as `role='publisher', status='pending'`; service tokens as
-  `role='service', status='active'`.
+  existing `publishers` row by email or JIT-provisions one. Defaults are
+  least-privilege: a login from a `TRUSTED_PUBLISHER_DOMAINS` domain
+  provisions as `role='reviewer', status='active'` (auto-approved,
+  read-only); any other user login as `role='reviewer',
+  status='pending'`; service tokens as `role='service',
+  status='active'`; dev-bypass as `role='admin', status='active'`. The
+  one exception is the bootstrap: the first human on a deploy with **no
+  active admin** is provisioned `role='admin', status='active'` (service
+  tokens excepted) so there is always an operator to approve/promote the
+  rest.
 - `affiliation` defaults to the deploying organisation's name (a
   Wrangler env var) and is editable in the portal's profile page.
 - **Admins** have full administrative authority over the deploying

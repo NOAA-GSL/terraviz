@@ -26,21 +26,31 @@
  *
  * Status / role assignment:
  *
- * | Origin                                              | role          | is_admin | status   |
- * |-----------------------------------------------------|---------------|----------|----------|
- * | DEV_BYPASS_ACCESS=true                              | `admin`       | 1        | `active` |
- * | Access service token                                | `service`     | 0        | `active` |
- * | Access user, email domain in TRUSTED_PUBLISHER_DOMAINS | `admin`    | 1        | `active` |
- * | Access user, untrusted domain                       | `contributor` | 0        | `pending`|
+ * | Origin                                              | role       | is_admin | status   |
+ * |-----------------------------------------------------|------------|----------|----------|
+ * | DEV_BYPASS_ACCESS=true                              | `admin`    | 1        | `active` |
+ * | Access service token                                | `service`  | 0        | `active` |
+ * | First user on a deploy with no active admin (bootstrap) | `admin` | 1     | `active` |
+ * | Access user, email domain in TRUSTED_PUBLISHER_DOMAINS | `reviewer`| 0     | `active` |
+ * | Access user, untrusted domain                       | `reviewer` | 0        | `pending`|
  *
  * Service tokens are pre-vouched by whoever configured them in the
- * Cloudflare dashboard, so auto-`active` is safe. Trusted-domain
- * users are vouched by the operator's choice to list their domain
- * — appropriate for single-org deploys where the operator IS the
- * admin. Untrusted-domain user logins default to the least-privileged
- * authoring role (`contributor`) + `pending` so a stranger discovering
- * the publisher API cannot author anything until an admin approves and
- * (optionally) promotes them in the portal's Users tab.
+ * Cloudflare dashboard, so auto-`active` is safe. Trusted-domain users
+ * are vouched by the operator's choice to list their domain, so they
+ * skip the approval queue (`active`) — but start read-only (`reviewer`),
+ * NOT admin: auto-admin for a whole domain predates the role model and
+ * would silently make every colleague an admin. Untrusted-domain logins
+ * default to `reviewer` + `pending` so a stranger discovering the
+ * publisher API can author nothing until an admin approves (and
+ * optionally promotes) them in the portal's Users tab.
+ *
+ * The one exception is the **bootstrap**: the first human on a deploy
+ * with no active admin is provisioned `admin`/`active` (see
+ * {@link getOrCreatePublisher}) so there is always an operator who can
+ * approve/promote everyone else. It excludes service tokens (a machine
+ * credential must never self-elevate) and, because the last-active-admin
+ * guardrail on the Users tab keeps the admin count from ever reaching
+ * zero through normal operations, cannot re-fire as an escalation path.
  *
  * The `role` column has no SQL CHECK constraint (see
  * `migrations/catalog/0005_publishers_audit.sql`) so the role enum is
@@ -131,22 +141,22 @@ export function provisioningDefaults(
 ): { role: string; is_admin: number; status: string } {
   if (opts.devBypass) return { role: 'admin', is_admin: 1, status: 'active' }
   if (identity.type === 'service') return { role: 'service', is_admin: 0, status: 'active' }
-  // Trusted-domain users are auto-promoted to admin/active. This is
-  // the supported path for single-org deploys where the operator IS
-  // the admin — pending-by-default would lock them out of their own
-  // deploy.
+  // Trusted-domain users skip the approval queue (`active`) but start
+  // read-only (`reviewer`), not admin — the operator promotes them from
+  // the Users tab as needed. (The first-ever human is bootstrapped to
+  // admin separately in getOrCreatePublisher, so a fresh deploy still
+  // gets an operator.)
   if (opts.trustedDomains && opts.trustedDomains.size > 0) {
     const domain = emailDomain(identity.email)
     if (domain && opts.trustedDomains.has(domain)) {
-      return { role: 'admin', is_admin: 1, status: 'active' }
+      return { role: 'reviewer', is_admin: 0, status: 'active' }
     }
   }
-  // Untrusted-domain logins default to the least-privileged authoring
-  // role (`contributor`) and `pending` status, so a stranger who
-  // discovers the publisher API can author nothing until an admin
-  // approves them and (if desired) promotes them to author/editor
-  // (decision D4 in docs/PUBLISHER_ROLES_PLAN.md).
-  return { role: 'contributor', is_admin: 0, status: 'pending' }
+  // Untrusted-domain logins default to read-only `reviewer` + `pending`,
+  // so a stranger who discovers the publisher API can do nothing until
+  // an admin approves them and (if desired) promotes them to an
+  // authoring role (decision D4 in docs/PUBLISHER_ROLES_PLAN.md).
+  return { role: 'reviewer', is_admin: 0, status: 'pending' }
 }
 
 /**
@@ -166,7 +176,27 @@ export async function getOrCreatePublisher(
     .first<PublisherRow>()
   if (existing) return existing
 
-  const { role, is_admin, status } = provisioningDefaults(identity, options)
+  let { role, is_admin, status } = provisioningDefaults(identity, options)
+
+  // First-run bootstrap: if the deploy has no active admin yet, the
+  // first human to sign in becomes one, so there is always an operator
+  // who can approve/promote everyone else. Service tokens are excluded
+  // (a machine credential must never self-elevate). Gated on "no active
+  // admin" rather than "empty table" so a service-token-first deploy
+  // still bootstraps its first human; the last-active-admin guardrail on
+  // the Users tab keeps this count from dropping back to zero through
+  // normal operations, so this cannot re-fire as an escalation path.
+  if (identity.type === 'user' && is_admin === 0) {
+    const admins = await db
+      .prepare(`SELECT COUNT(*) AS n FROM publishers WHERE role = 'admin' AND status = 'active'`)
+      .first<{ n: number }>()
+    if ((admins?.n ?? 0) === 0) {
+      role = 'admin'
+      is_admin = 1
+      status = 'active'
+    }
+  }
+
   const row: PublisherRow = {
     id: newUlid(),
     email: identity.email,
