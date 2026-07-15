@@ -13,6 +13,7 @@ import { fetchFeatures, renderFeatureDisabledCard } from '../features'
 import { t } from '../../../i18n'
 import { publisherGet, handleSessionError } from '../api'
 import { buildErrorCard } from '../components/error-card'
+import { roleCan } from '../../../types/publisher-roles'
 
 export interface BlogPostListItem {
   id: string
@@ -32,6 +33,7 @@ interface BlogListResponse {
 }
 
 const BLOG_ENDPOINT = '/api/v1/publish/blog'
+const ME_ENDPOINT = '/api/v1/publish/me'
 
 export interface BlogPageOptions {
   fetchFn?: typeof fetch
@@ -89,13 +91,21 @@ export async function renderBlogPage(mount: HTMLElement, options: BlogPageOption
       el('p', { className: 'publisher-page-subtitle', textContent: t('publisher.blog.subtitle') }),
     ]),
   )
-  const newBtn = el('button', {
-    type: 'button',
-    className: 'publisher-button publisher-button-primary publisher-blog-new-btn',
-    textContent: t('publisher.blog.new'),
-  })
-  newBtn.addEventListener('click', () => navigate('/publish/blog/new'))
-  header.append(newBtn)
+  // Drafting a blog post needs `content.create`; a reviewer can read
+  // the list but not author, so omit the New-post button rather than
+  // send them into an editor they can't save. Fail-open on a `/me`
+  // error — the server stays the authoritative gate.
+  const meRes = await publisherGet<{ role: string }>(ME_ENDPOINT, { fetchFn })
+  const canCreate = !meRes.ok || roleCan(meRes.data.role, 'content.create')
+  if (canCreate) {
+    const newBtn = el('button', {
+      type: 'button',
+      className: 'publisher-button publisher-button-primary publisher-blog-new-btn',
+      textContent: t('publisher.blog.new'),
+    })
+    newBtn.addEventListener('click', () => navigate('/publish/blog/new'))
+    header.append(newBtn)
+  }
 
   const body = card(header)
   const posts = listRes.data.posts
