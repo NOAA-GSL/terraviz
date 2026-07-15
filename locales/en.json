@@ -1291,6 +1291,7 @@
   "publisher.import.preview.warning": "{count} warning",
   "publisher.import.remote.body": "Federated node-to-node import arrives with Phase 4 federation. You'll paste a remote node URL and choose which published datasets to pull in as drafts.",
   "publisher.import.remote.comingSoon": "Coming with federation",
+  "publisher.import.restricted": "Importing datasets needs a role that can create content (contributor, author, editor, or admin). Your reviewer role has read-only access — contact an admin if you need to import.",
   "publisher.import.status.error": "Error",
   "publisher.import.status.ready": "Ready",
   "publisher.import.status.warning": "Warning",

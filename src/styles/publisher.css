@@ -4025,6 +4025,12 @@
   font-size: calc(0.9rem * var(--ui-scale));
 }
 
+.publisher-import-restricted {
+  margin-block-start: calc(1.5rem * var(--ui-scale));
+  color: var(--color-text-muted, #aab2c0);
+  font-size: calc(0.85rem * var(--ui-scale));
+}
+
 .publisher-import-methods {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(calc(14rem * var(--ui-scale)), 1fr));
