@@ -59,6 +59,35 @@ describe('renderDatasetsPage', () => {
     window.history.replaceState(null, '', originalPath)
   })
 
+  it('hides the New-draft button for a reviewer (no content.create)', async () => {
+    window.history.replaceState(null, '', '/publish/datasets')
+    const fetchFn = vi.fn().mockResolvedValue(jsonResponse({ datasets: [], next_cursor: null }))
+    const meFetchFn = vi.fn(async () => jsonResponse({ role: 'reviewer' }))
+    await renderDatasetsPage(mount, {
+      fetchFn: fetchFn as unknown as typeof fetch,
+      meFetchFn: meFetchFn as unknown as typeof fetch,
+      fetchCounts: false,
+    })
+    // Let the progressive create-gate resolve and re-render.
+    await new Promise(r => setTimeout(r, 0))
+    await new Promise(r => setTimeout(r, 0))
+    expect(mount.querySelector('.publisher-datasets-new-btn')).toBeNull()
+  })
+
+  it('keeps the New-draft button for an author (content.create)', async () => {
+    window.history.replaceState(null, '', '/publish/datasets')
+    const fetchFn = vi.fn().mockResolvedValue(jsonResponse({ datasets: [], next_cursor: null }))
+    const meFetchFn = vi.fn(async () => jsonResponse({ role: 'author' }))
+    await renderDatasetsPage(mount, {
+      fetchFn: fetchFn as unknown as typeof fetch,
+      meFetchFn: meFetchFn as unknown as typeof fetch,
+      fetchCounts: false,
+    })
+    await new Promise(r => setTimeout(r, 0))
+    await new Promise(r => setTimeout(r, 0))
+    expect(mount.querySelector('.publisher-datasets-new-btn')).not.toBeNull()
+  })
+
   it('renders a thumbnail image in the row when the dataset has one', async () => {
     window.history.replaceState(null, '', '/publish/datasets')
     const fetchFn = vi.fn().mockResolvedValue(
