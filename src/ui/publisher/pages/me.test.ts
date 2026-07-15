@@ -75,13 +75,14 @@ describe('renderMePage', () => {
     expect(adminBadge?.textContent).toBe('Admin')
   })
 
-  it('renders a publisher role with the plain role badge (no admin styling)', async () => {
+  it('renders a legacy publisher role as its canonical Author badge (no admin styling)', async () => {
     const payload = samplePayload({ role: 'publisher', is_admin: false })
     const fetchFn = vi.fn().mockResolvedValue(jsonResponse(payload))
     await renderMePage(mount, { fetchFn: fetchFn as unknown as typeof fetch })
 
     expect(mount.querySelector('.publisher-badge-admin')).toBeNull()
-    expect(mount.querySelector('.publisher-badge-role')?.textContent).toBe('Publisher')
+    // The retired `publisher` label never surfaces — it renders as Author.
+    expect(mount.querySelector('.publisher-badge-role')?.textContent).toBe('Author')
   })
 
   it('renders an empty affiliation input when affiliation is null', async () => {

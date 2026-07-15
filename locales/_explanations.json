@@ -209,8 +209,6 @@
   "publisher.me.heading": "H2 heading at the top of the publisher profile card (/publish/me). Internal context: only the publisher viewing it sees this string.",
   "publisher.me.loading": "Live-region status text shown while the profile fetch is in flight. Should imply work-in-progress, brief.",
   "publisher.me.role.admin": "Role badge text for admin publishers — full administrative authority over the deploying node's catalog, including approving and managing other publishers. Keep short — fits inside a badge.",
-  "publisher.me.role.publisher": "Role badge text for publisher accounts — the secondary authoring role that can publish and edit its own datasets but not manage other users. Keep short — fits inside a badge.",
-  "publisher.me.role.readonly": "Role badge text for read-only publishers (auditors, assigned reviewers without write access). Keep short — fits inside a badge.",
   "publisher.me.role.service": "Role badge text for non-interactive service accounts (CI pipelines, scheduled jobs using a Cloudflare Access service token). Keep short.",
   "publisher.me.status.active": "Status badge text for an active publisher (can publish, edit, retract). Keep short — fits inside a badge.",
   "publisher.me.status.pending": "Status badge text for a publisher account whose row exists but hasn't been approved yet (publisher accounts default to this; an admin approves them in the portal's Users tab). 'Pending approval' is two words — keep it tight.",

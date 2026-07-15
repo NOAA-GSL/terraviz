@@ -1344,8 +1344,6 @@
   "publisher.me.role.author": "Author",
   "publisher.me.role.contributor": "Contributor",
   "publisher.me.role.editor": "Editor",
-  "publisher.me.role.publisher": "Publisher",
-  "publisher.me.role.readonly": "Read-only",
   "publisher.me.role.reviewer": "Reviewer",
   "publisher.me.role.service": "Service",
   "publisher.me.status.active": "Active",
