@@ -6,13 +6,13 @@
  * catalog datasets for the picker (`/api/v1/publish/datasets`), and
  * the current pin (`/api/v1/featured-hero`).
  *
- * Privileged callers (staff / admin / service) get the editing form:
- * dataset picker, mandatory activation window, optional headline, a
- * live preview of the real hero card, and Set / Clear buttons wired to
+ * Callers with `hero.manage` (editor / admin / service) get the editing
+ * form: dataset picker, mandatory activation window, optional headline,
+ * a live preview of the real hero card, and Set / Clear buttons wired to
  * `PUT` / `DELETE /api/v1/publish/featured-hero`.
  *
- * Non-privileged (but active) publishers get a read-only view of the
- * currently-featured dataset — no editing controls. The write
+ * Everyone else (author / contributor / reviewer) gets a read-only view
+ * of the currently-featured dataset — no editing controls. The write
  * endpoints stay 403 server-side regardless.
  *
  * The preview reuses the live hero-panel stylesheet so the curator
@@ -26,6 +26,7 @@ import { formatDate } from '../../../i18n/format'
 import { publisherGet, publisherSend, handleSessionError } from '../api'
 import { buildErrorCard } from '../components/error-card'
 import { dateTimeToIso } from '../components/dataset-form'
+import { roleCan } from '../../../types/publisher-roles'
 import '../../../styles/hero-panel.css'
 
 /** Keep in sync with `HERO_HEADLINE_MAX_LEN` in the backend store
@@ -58,8 +59,10 @@ export interface FeaturedHeroPageOptions {
   navigate?: (url: string) => void
 }
 
-function clientIsPrivileged(me: MeResponse): boolean {
-  return me.is_admin === true || me.role === 'admin' || me.role === 'service'
+/** The hero is an editorial curation call — editors and admins may set
+ *  it (`hero.manage`), authors and below get the read-only view. */
+function clientCanManageHero(me: MeResponse): boolean {
+  return roleCan(me.role, 'hero.manage')
 }
 
 /** Split an ISO timestamp into the local-time `YYYY-MM-DD` value an
@@ -135,7 +138,7 @@ export async function renderFeaturedHeroPage(
   // After the guard above, all three are ok — narrow the types.
   if (!meRes.ok || !datasetsRes.ok || !heroRes.ok) return
 
-  if (!clientIsPrivileged(meRes.data)) {
+  if (!clientCanManageHero(meRes.data)) {
     // Read-only view: a non-admin publisher can see which dataset is
     // currently featured (and its window / headline) but not change
     // it. The write endpoints stay 403 server-side regardless.

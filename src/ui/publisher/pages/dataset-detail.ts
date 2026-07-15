@@ -210,18 +210,23 @@ function renderHeader(d: PublisherDatasetDetail, hooks: HeaderHooks): HTMLElemen
     // published rows surface "Retract". The route handlers accept
     // re-publishing a retracted row (it clears retracted_at and
     // re-stamps published_at) so the same button does double duty.
+    // Publishing is a privilege above editing: a contributor edits its
+    // own draft but can't publish it (`can_publish === false`), so the
+    // control is hidden for them. The server also 403s.
     //
     // While a row is transcoding (Phase 3pd video upload in flight)
     // the Publish button is gated: data_ref is empty until the GHA
     // workflow finishes, so the publish-readiness validator would
     // reject anyway. Disabling here gives the publisher a clearer
     // signal than "submit-then-error."
-    if (status === 'published') {
-      titleRow.appendChild(renderActionButton('retract', hooks.onAction))
-    } else {
-      titleRow.appendChild(
-        renderActionButton('publish', hooks.onAction, { disabled: !!d.transcoding }),
-      )
+    if (d.can_publish !== false) {
+      if (status === 'published') {
+        titleRow.appendChild(renderActionButton('retract', hooks.onAction))
+      } else {
+        titleRow.appendChild(
+          renderActionButton('publish', hooks.onAction, { disabled: !!d.transcoding }),
+        )
+      }
     }
   }
 

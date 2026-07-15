@@ -55,6 +55,10 @@ export interface PublisherDataset {
    *  server is the authoritative gate regardless of what the UI
    *  shows. */
   can_edit?: boolean
+  /** Whether the caller may publish/retract this row (author-own or
+   *  editor/admin-any). Distinct from `can_edit`: a contributor edits
+   *  its own draft but can't publish it. Absent → treated as allowed. */
+  can_publish?: boolean
 }
 
 /**

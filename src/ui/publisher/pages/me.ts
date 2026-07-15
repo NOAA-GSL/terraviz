@@ -77,14 +77,27 @@ function badge(text: string, kind: 'admin' | 'role' | 'status'): HTMLElement {
 
 /** Localize a publisher role. Exported so the sidebar footer reuses
  *  the single source of truth (avoids a drifting second copy). */
+// Switch on the raw stored string (not the authz-normalized role): the
+// legacy `publisher` / `readonly` values keep their own labels, and a
+// genuinely unknown role shows verbatim rather than being mislabeled as
+// the fail-closed `reviewer` (which is right for gating, wrong for a
+// human-facing badge).
 export function localizedRole(role: string): string {
   switch (role) {
     case 'admin':
       return t('publisher.me.role.admin')
-    case 'publisher':
-      return t('publisher.me.role.publisher')
+    case 'editor':
+      return t('publisher.me.role.editor')
+    case 'author':
+      return t('publisher.me.role.author')
+    case 'contributor':
+      return t('publisher.me.role.contributor')
+    case 'reviewer':
+      return t('publisher.me.role.reviewer')
     case 'service':
       return t('publisher.me.role.service')
+    case 'publisher':
+      return t('publisher.me.role.publisher')
     case 'readonly':
       return t('publisher.me.role.readonly')
     default:

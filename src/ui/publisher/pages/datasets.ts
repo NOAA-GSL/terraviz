@@ -326,34 +326,40 @@ function renderTable(
     actionsCell.appendChild(editLink)
 
     if (status === 'published') {
-      const retractBtn = document.createElement('button')
-      retractBtn.type = 'button'
-      retractBtn.className = 'publisher-row-action publisher-row-retract'
-      retractBtn.textContent = t('publisher.datasets.action.retract')
-      retractBtn.setAttribute('aria-label', t('publisher.datasets.action.retract.aria', { title: d.title }))
-      retractBtn.addEventListener('click', () => {
-        if (!confirmFn(t('publisher.datasets.retract.confirm', { title: d.title }))) return
-        retractBtn.disabled = true
-        statusSpan.textContent = ''
-        // Clear any error styling from a prior failed attempt so a
-        // retry doesn't inherit the red status text.
-        statusSpan.classList.remove('publisher-row-action-status-error')
-        void publisherSend<{ dataset: unknown }>(
-          `/api/v1/publish/datasets/${encodeURIComponent(d.id)}/retract`,
-          {},
-          { method: 'POST', fetchFn },
-        ).then(result => {
-          if (!result.ok) {
-            retractBtn.disabled = false
-            statusSpan.textContent = t('publisher.datasets.retract.failed')
-            statusSpan.classList.add('publisher-row-action-status-error')
-            return
-          }
-          // No longer published — drop it from the Published tab.
-          tr.remove()
+      // Retract is a publish-tier action — hidden for a caller who
+      // can't publish this row (e.g. a contributor whose draft an editor
+      // published). No Delete on a live row either; it must be retracted
+      // first, which such a caller can't do.
+      if (d.can_publish !== false) {
+        const retractBtn = document.createElement('button')
+        retractBtn.type = 'button'
+        retractBtn.className = 'publisher-row-action publisher-row-retract'
+        retractBtn.textContent = t('publisher.datasets.action.retract')
+        retractBtn.setAttribute('aria-label', t('publisher.datasets.action.retract.aria', { title: d.title }))
+        retractBtn.addEventListener('click', () => {
+          if (!confirmFn(t('publisher.datasets.retract.confirm', { title: d.title }))) return
+          retractBtn.disabled = true
+          statusSpan.textContent = ''
+          // Clear any error styling from a prior failed attempt so a
+          // retry doesn't inherit the red status text.
+          statusSpan.classList.remove('publisher-row-action-status-error')
+          void publisherSend<{ dataset: unknown }>(
+            `/api/v1/publish/datasets/${encodeURIComponent(d.id)}/retract`,
+            {},
+            { method: 'POST', fetchFn },
+          ).then(result => {
+            if (!result.ok) {
+              retractBtn.disabled = false
+              statusSpan.textContent = t('publisher.datasets.retract.failed')
+              statusSpan.classList.add('publisher-row-action-status-error')
+              return
+            }
+            // No longer published — drop it from the Published tab.
+            tr.remove()
+          })
         })
-      })
-      actionsCell.appendChild(retractBtn)
+        actionsCell.appendChild(retractBtn)
+      }
     } else {
       const deleteBtn = document.createElement('button')
       deleteBtn.type = 'button'

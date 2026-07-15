@@ -318,6 +318,20 @@ describe('renderDatasetDetailPage', () => {
     expect(mount.querySelector('.publisher-detail-publish')).toBeNull()
   })
 
+  it('hides Publish for a contributor who can edit but not publish (can_publish=false)', async () => {
+    // A contributor's own draft: editable, but no publish rights.
+    const fetchFn = vi.fn().mockResolvedValue(
+      detailResponse(dataset({ published_at: null, can_edit: true, can_publish: false })),
+    )
+    await renderDatasetDetailPage(mount, '01ABC', {
+      fetchFn: fetchFn as unknown as typeof fetch,
+    })
+    // Edit is still offered (they can edit their draft)…
+    expect(mount.querySelector('.publisher-detail-edit')).not.toBeNull()
+    // …but the Publish control is hidden (server also 403s).
+    expect(mount.querySelector('.publisher-detail-publish')).toBeNull()
+  })
+
   it('renders a Publish button on a retracted row (re-publish path)', async () => {
     const fetchFn = vi
       .fn()

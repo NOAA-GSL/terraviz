@@ -25,6 +25,7 @@ import {
 } from '../api'
 import { buildErrorCard } from '../components/error-card'
 import { initialsOf } from '../components/sidebar'
+import { ASSIGNABLE_ROLES, normalizeRole } from '../../../types/publisher-roles'
 import type { ListPublishersResponse, PublisherSummary, UpdatePublisherPayload } from '../types'
 
 const ME_ENDPOINT = '/api/v1/publish/me'
@@ -58,15 +59,19 @@ function shell(...children: HTMLElement[]): HTMLElement {
 }
 
 function localizedRole(role: string): string {
-  switch (role) {
+  switch (normalizeRole(role)) {
     case 'admin':
       return t('publisher.me.role.admin')
-    case 'publisher':
-      return t('publisher.me.role.publisher')
+    case 'editor':
+      return t('publisher.me.role.editor')
+    case 'author':
+      return t('publisher.me.role.author')
+    case 'contributor':
+      return t('publisher.me.role.contributor')
+    case 'reviewer':
+      return t('publisher.me.role.reviewer')
     case 'service':
       return t('publisher.me.role.service')
-    case 'readonly':
-      return t('publisher.me.role.readonly')
     default:
       return role
   }
@@ -310,11 +315,12 @@ function renderRow(
     const select = document.createElement('select')
     select.className = 'publisher-users-role-select'
     if (isSelf) select.disabled = true
-    for (const r of ['admin', 'publisher', 'readonly'] as const) {
+    const currentRole = normalizeRole(publisher.role)
+    for (const r of ASSIGNABLE_ROLES) {
       const opt = document.createElement('option')
       opt.value = r
       opt.textContent = localizedRole(r)
-      if (r === publisher.role) opt.selected = true
+      if (r === currentRole) opt.selected = true
       select.appendChild(opt)
     }
     select.addEventListener('change', () => {

@@ -24,7 +24,7 @@ import {
   listDatasetsForPublisher,
   type ListOptions,
 } from '../_lib/dataset-mutations'
-import { can } from '../_lib/capabilities'
+import { can, canOwnOrAny } from '../_lib/capabilities'
 import { resolveHttpAssetUrl } from '../_lib/r2-public-url'
 
 const CONTENT_TYPE = 'application/json; charset=utf-8'
@@ -80,6 +80,7 @@ export const onRequestGet: PagesFunction<CatalogEnv> = async context => {
     ...d,
     thumbnail_url: resolveHttpAssetUrl(context.env, d.thumbnail_ref),
     can_edit: canMutateDataset(publisher, d),
+    can_publish: canOwnOrAny(publisher, d.publisher_id, 'content.publish.own', 'content.publish.any'),
   }))
   return new Response(JSON.stringify({ datasets: withThumbnails, next_cursor }), {
     status: 200,

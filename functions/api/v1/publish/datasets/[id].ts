@@ -29,6 +29,7 @@ import {
   getDatasetForPublisher,
   updateDataset,
 } from '../../_lib/dataset-mutations'
+import { canOwnOrAny } from '../../_lib/capabilities'
 import { resolveHttpAssetUrl } from '../../_lib/r2-public-url'
 import { type JobQueue, WaitUntilJobQueue } from '../../_lib/job-queue'
 
@@ -74,9 +75,15 @@ export const onRequestGet: PagesFunction<CatalogEnv, 'id'> = async context => {
   const legendUrl = resolveHttpAssetUrl(context.env, row.legend_ref)
   return new Response(
     JSON.stringify({
-      // `can_edit` rides on the dataset object (as it does in the list
-      // response) so the portal reads `dataset.can_edit` uniformly.
-      dataset: { ...row, can_edit: canMutateDataset(publisher, row) },
+      // `can_edit` / `can_publish` ride on the dataset object so the
+      // portal gates edit vs publish controls independently — a
+      // contributor edits its own draft (can_edit) but cannot publish
+      // it (can_publish false).
+      dataset: {
+        ...row,
+        can_edit: canMutateDataset(publisher, row),
+        can_publish: canOwnOrAny(publisher, row.publisher_id, 'content.publish.own', 'content.publish.any'),
+      },
       data_url: dataUrl,
       thumbnail_url: thumbnailUrl,
       legend_url: legendUrl,

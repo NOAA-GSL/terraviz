@@ -17,6 +17,7 @@
  */
 
 import { fetchFeatures, renderFeatureDisabledCard } from '../features'
+import { roleCan } from '../../../types/publisher-roles'
 import { t } from '../../../i18n'
 import { publisherGet, publisherSend, handleSessionError } from '../api'
 import { buildErrorCard } from '../components/error-card'
@@ -62,7 +63,7 @@ interface LocatorHolder {
  *  survives across re-renders within one page session, and whether the
  *  caller is an admin (gates the feed-Refresh action; the review
  *  controls themselves gate per-event on `can_edit`). */
-type TriageState = EventsPageOptions & { locator: LocatorHolder; isAdmin: boolean }
+type TriageState = EventsPageOptions & { locator: LocatorHolder; isAdmin: boolean; canCreate: boolean }
 
 function clientIsPrivileged(me: MeResponse): boolean {
   return me.is_admin === true || me.role === 'admin' || me.role === 'service'
@@ -110,6 +111,9 @@ export async function renderEventsPage(mount: HTMLElement, options: EventsPageOp
     navigate: options.navigate,
     locator: { dispose: null },
     isAdmin: clientIsPrivileged(meRes.data),
+    // Composing a manual event needs an authoring role — derived from
+    // the `me` read the page already made (no extra request).
+    canCreate: roleCan(meRes.data.role, 'content.create'),
   })
 }
 
@@ -282,11 +286,12 @@ function renderTopbar(
     filters.append(btn)
   }
 
-  // Feed Refresh is admin-only (it runs the feed connectors); every
-  // publisher can still compose a manual event via New event.
-  const toolbar = state.isAdmin
-    ? el('div', 'publisher-events-toolbar', [refreshBtn, newBtn])
-    : el('div', 'publisher-events-toolbar', [newBtn])
+  // Feed Refresh is admin-only (it runs the feed connectors); New event
+  // needs an authoring role (reviewers get neither).
+  const toolbarBtns: HTMLElement[] = []
+  if (state.isAdmin) toolbarBtns.push(refreshBtn)
+  if (state.canCreate) toolbarBtns.push(newBtn)
+  const toolbar = el('div', 'publisher-events-toolbar', toolbarBtns)
   const bar = el('div', 'publisher-events-topbar', [
     el('div', 'publisher-events-topbar-head', [
       el('h2', 'publisher-card-heading', [t('publisher.events.title')]),
