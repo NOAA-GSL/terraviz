@@ -1,11 +1,23 @@
 # Publisher roles & capabilities — scoping
 
-**Status:** draft for review
+**Status:** implemented (R1–R5 landed); this doc is now the reference
+for the model. All five open decisions were resolved as recommended
+(D1 tighter events approval, D2 rename, D3 editor hero, D4 contributor
+default, D5 plain drafts).
 **Last reviewed:** 2026-07-15
 **Owner:** catalog / publisher-portal track
-**Supersedes when:** Phases R1–R5 below ship and the role/capability
-matrix is folded into `CATALOG_PUBLISHING_TOOLS.md` + the
-`publisher-store.ts` taxonomy comment.
+**Supersedes when:** the role/capability matrix is folded into
+`CATALOG_PUBLISHING_TOOLS.md` (the `publisher-store.ts` taxonomy comment
+already points here).
+
+> **Implementation note.** The matrix lives in
+> `src/types/publisher-roles.ts` (shared) with the server adapter in
+> `functions/api/v1/_lib/capabilities.ts`. `isPrivileged` / `isAdmin`
+> are retained as thin aliases (`operator.manage` / `users.manage`).
+> The one deviation from §7.4: create-button hiding on the datasets /
+> blog pages is left to the server 403 (a per-page capability fetch
+> collided with fetch-sequence tests); events / hero / users gate in
+> the UI as specified.
 
 A design for a WordPress-style five-role model for the publisher
 portal, replacing today's effectively-binary (`admin` vs everyone)
