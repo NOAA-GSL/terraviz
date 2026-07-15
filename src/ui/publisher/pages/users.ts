@@ -5,7 +5,13 @@
  * publisher accounts with a status filter and lets an admin:
  *   - approve / reject a pending account,
  *   - suspend / reactivate,
- *   - change role (promote to admin, demote to publisher, read-only).
+ *   - change role across the five assignable tiers (admin / editor /
+ *     author / contributor / reviewer).
+ *
+ * A collapsible role → capability guide (`buildRoleGuide`, rendered
+ * from the shared matrix in `src/types/publisher-roles.ts`) sits at the
+ * top so an admin can see exactly what a role grants before assigning
+ * it.
  *
  * Mutations go through `PATCH /api/v1/publish/publishers/{id}` via the
  * shared `publisherSend` helper, which surfaces validation (the
@@ -25,7 +31,13 @@ import {
 } from '../api'
 import { buildErrorCard } from '../components/error-card'
 import { initialsOf } from '../components/sidebar'
-import { ASSIGNABLE_ROLES, normalizeRole } from '../../../types/publisher-roles'
+import {
+  ASSIGNABLE_ROLES,
+  normalizeRole,
+  roleCan,
+  type Capability,
+  type Role,
+} from '../../../types/publisher-roles'
 import type { ListPublishersResponse, PublisherSummary, UpdatePublisherPayload } from '../types'
 
 const ME_ENDPOINT = '/api/v1/publish/me'
@@ -56,6 +68,94 @@ function shell(...children: HTMLElement[]): HTMLElement {
   main.className = 'publisher-shell publisher-users'
   main.append(...children)
   return main
+}
+
+// Decorative grant/deny glyphs — each cell also carries a translated
+// aria-label so the yes/no reaches assistive tech.
+const YES_GLYPH = '✓' // i18n-exempt: decorative; aria-label carries the meaning
+const NO_GLYPH = '·' // i18n-exempt: decorative; aria-label carries the meaning
+
+// Assignable roles ordered least → most privileged so the guide reads
+// as a cumulative ladder (each column can do everything the ones before
+// it can, plus more — the matrix is strictly monotonic).
+const ROLE_GUIDE_COLUMNS: readonly Role[] = ['reviewer', 'contributor', 'author', 'editor', 'admin']
+
+// One display row per meaningful distinction, keyed to a representative
+// capability. Rendered straight from `roleCan` against the shared
+// matrix, so this guide can never drift from what the server enforces.
+const ROLE_GUIDE_ROWS = [
+  { cap: 'content.read', labelKey: 'publisher.team.roleGuide.cap.read' },
+  { cap: 'content.create', labelKey: 'publisher.team.roleGuide.cap.create' },
+  { cap: 'content.edit.own', labelKey: 'publisher.team.roleGuide.cap.editOwn' },
+  { cap: 'content.publish.own', labelKey: 'publisher.team.roleGuide.cap.publishOwn' },
+  { cap: 'content.publish.any', labelKey: 'publisher.team.roleGuide.cap.editAny' },
+  { cap: 'hero.manage', labelKey: 'publisher.team.roleGuide.cap.hero' },
+  { cap: 'operator.manage', labelKey: 'publisher.team.roleGuide.cap.operator' },
+  { cap: 'users.manage', labelKey: 'publisher.team.roleGuide.cap.users' },
+] as const satisfies ReadonlyArray<{ cap: Capability; labelKey: Parameters<typeof t>[0] }>
+
+/** Collapsible "what each role can do" reference, mounted at the top of
+ *  the Team tab so an admin sees exactly what a role grants before
+ *  assigning it. Built from the shared capability matrix. */
+function buildRoleGuide(): HTMLElement {
+  const details = document.createElement('details')
+  details.className = 'publisher-role-guide'
+
+  const summary = document.createElement('summary')
+  summary.className = 'publisher-role-guide-summary'
+  summary.textContent = t('publisher.team.roleGuide.title')
+  details.appendChild(summary)
+
+  const intro = document.createElement('p')
+  intro.className = 'publisher-role-guide-intro'
+  intro.textContent = t('publisher.team.roleGuide.intro')
+  details.appendChild(intro)
+
+  const wrap = document.createElement('div')
+  wrap.className = 'publisher-table-wrap'
+  const table = document.createElement('table')
+  table.className = 'publisher-table publisher-role-guide-table'
+
+  const thead = document.createElement('thead')
+  const headRow = document.createElement('tr')
+  const capHead = document.createElement('th')
+  capHead.scope = 'col'
+  capHead.textContent = t('publisher.team.roleGuide.capHeader')
+  headRow.appendChild(capHead)
+  for (const role of ROLE_GUIDE_COLUMNS) {
+    const th = document.createElement('th')
+    th.scope = 'col'
+    th.textContent = localizedRole(role)
+    headRow.appendChild(th)
+  }
+  thead.appendChild(headRow)
+  table.appendChild(thead)
+
+  const tbody = document.createElement('tbody')
+  for (const row of ROLE_GUIDE_ROWS) {
+    const tr = document.createElement('tr')
+    const rowHead = document.createElement('th')
+    rowHead.scope = 'row'
+    rowHead.textContent = t(row.labelKey)
+    tr.appendChild(rowHead)
+    for (const role of ROLE_GUIDE_COLUMNS) {
+      const td = document.createElement('td')
+      td.className = 'publisher-role-guide-cell'
+      const granted = roleCan(role, row.cap)
+      if (granted) td.classList.add('publisher-role-guide-yes')
+      td.textContent = granted ? YES_GLYPH : NO_GLYPH
+      td.setAttribute(
+        'aria-label',
+        t(granted ? 'publisher.team.roleGuide.yes' : 'publisher.team.roleGuide.no'),
+      )
+      tr.appendChild(td)
+    }
+    tbody.appendChild(tr)
+  }
+  table.appendChild(tbody)
+  wrap.appendChild(table)
+  details.appendChild(wrap)
+  return details
 }
 
 function localizedRole(role: string): string {
@@ -200,6 +300,10 @@ function renderList(
   inviteWrap.append(invite, inviteNote)
   header.appendChild(inviteWrap)
   root.appendChild(header)
+
+  // Role reference — collapsible so it stays out of the way, but on
+  // hand when an admin is deciding which role to assign.
+  root.appendChild(buildRoleGuide())
 
   // Status filter tabs — navigate by ?status= so the view is
   // bookmarkable, mirroring the datasets page.
