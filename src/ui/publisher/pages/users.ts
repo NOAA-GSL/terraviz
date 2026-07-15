@@ -159,16 +159,23 @@ function buildRoleGuide(): HTMLElement {
 }
 
 function localizedRole(role: string): string {
-  switch (normalizeRole(role)) {
+  // Switch on the raw stored string (not the normalized role) so a
+  // genuinely unknown / future role renders verbatim rather than being
+  // mislabelled as the fail-closed `reviewer` — matching `pages/me.ts`.
+  // Legacy aliases are mapped explicitly; auth still fails closed
+  // server-side via `normalizeRole`.
+  switch (role) {
     case 'admin':
       return t('publisher.me.role.admin')
     case 'editor':
       return t('publisher.me.role.editor')
     case 'author':
+    case 'publisher': // legacy alias
       return t('publisher.me.role.author')
     case 'contributor':
       return t('publisher.me.role.contributor')
     case 'reviewer':
+    case 'readonly': // legacy alias
       return t('publisher.me.role.reviewer')
     case 'service':
       return t('publisher.me.role.service')

@@ -531,11 +531,12 @@ export async function expireStaleProposedEvents(
 
 /**
  * Whether `publisher` may mutate (review / edit / add image / generate
- * tour for) the given event. Mirrors the datasets rule, with the
- * events twist that an unclaimed event (`owner_id === null`) is open —
- * that's what lets the first approver claim it. Once owned, only the
- * owner or a privileged (admin / service) caller may write. Reads are
- * always open; this only gates writes.
+ * tour for) the given event. Mirrors the datasets rule via
+ * `canOwnOrAny`: the owner writes with `content.edit.own`, and an
+ * unclaimed event (`owner_id === null`) requires `content.edit.any`
+ * (editor / admin / service) — a null owner has no `.own` match, so
+ * unclaimed events are editable only at the `.any` tier, not by any
+ * active publisher. Reads are always open; this only gates writes.
  */
 export function canMutateEvent(
   publisher: PublisherRow,

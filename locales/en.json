@@ -1247,7 +1247,7 @@
   "publisher.hero.readonly.current": "Currently featured",
   "publisher.hero.readonly.headline": "Headline: {headline}",
   "publisher.hero.readonly.none": "No dataset is currently featured. The catalog falls back to an auto-derived real-time dataset.",
-  "publisher.hero.readonly.notice": "You have view-only access. Only admin publishers can change the featured hero.",
+  "publisher.hero.readonly.notice": "You have view-only access. Only editors and admins can change the featured hero.",
   "publisher.hero.readonly.window": "Active {start} – {end}",
   "publisher.hero.saved": "Hero set.",
   "publisher.hero.set": "Set hero",
