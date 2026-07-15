@@ -103,6 +103,12 @@ export const onRequestPut: PagesFunction<CatalogEnv, 'id'> = async context => {
   if (!id) return jsonError(400, 'invalid_request', 'Missing dataset id.')
   const existing = await getDatasetForPublisher(context.env.CATALOG_DB!, publisher, id)
   if (!existing) return jsonError(404, 'not_found', `Dataset ${id} not found.`)
+  // Ownership alone isn't enough: a caller must hold an edit capability
+  // (a read-only reviewer demoted after authoring still owns rows). This
+  // matches the blog/events write gates (canMutateBlogPost / canMutateEvent).
+  if (!canMutateDataset(publisher, existing)) {
+    return jsonError(403, 'forbidden_role', 'Editing this dataset requires an authoring role.')
+  }
 
   let body: unknown
   try {

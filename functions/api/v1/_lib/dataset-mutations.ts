@@ -979,6 +979,11 @@ export async function deleteDataset(
   if (!row) {
     return { ok: false, status: 404, error: 'not_found', message: `Dataset ${id} not found.` }
   }
+  // Ownership alone isn't enough — the caller must hold a delete/edit
+  // capability (a demoted read-only reviewer still owns its old rows).
+  if (!canMutateDataset(publisher, row)) {
+    return { ok: false, status: 403, error: 'forbidden_role', message: 'Deleting this dataset requires an authoring role.' }
+  }
   if (row.published_at && !row.retracted_at) {
     return {
       ok: false,

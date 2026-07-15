@@ -47,6 +47,7 @@
 import type { CatalogEnv } from '../../_lib/env'
 import type { PublisherData } from '../_middleware'
 import { createDraftTour } from '../../_lib/tour-mutations'
+import { can } from '../../_lib/capabilities'
 
 const CONTENT_TYPE = 'application/json; charset=utf-8'
 
@@ -59,6 +60,13 @@ function jsonError(status: number, error: string, message: string): Response {
 
 export const onRequestPost: PagesFunction<CatalogEnv> = async context => {
   const publisher = (context.data as unknown as PublisherData).publisher
+  // Creating a draft tour requires an authoring role — a read-only
+  // reviewer is refused (mirrors the tours.ts / datasets.ts create gate;
+  // without this a reviewer could mint a tour it owns and then author +
+  // publish it through the ownership-gated tour routes).
+  if (!can(publisher, 'content.create')) {
+    return jsonError(403, 'forbidden_role', 'Creating tours requires an authoring role.')
+  }
   let body: { title?: string } = {}
   const text = await context.request.text()
   if (text) {

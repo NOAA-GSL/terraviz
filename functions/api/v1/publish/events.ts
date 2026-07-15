@@ -164,8 +164,21 @@ export const onRequestPost: PagesFunction<CatalogEnv> = async context => {
   if (!parsed.ok) return validationFailure(parsed.errors)
 
   const db = context.env.CATALOG_DB
+  // The `(feedId, externalId)` pair makes `ingestEvent` idempotent — a
+  // second POST with a matching pair UPDATES the existing row's content
+  // in place, with no ownership check. That upsert is only safe for a
+  // caller who may edit any event (feed connectors run under the
+  // service token; an editor/admin manages the whole queue). A lower
+  // authoring role (author / contributor) must not be able to supply a
+  // feed key and overwrite an event it does not own — including a
+  // curator-approved, publicly-surfaced one. So we strip the feed key
+  // for anyone without `content.publish.any`: their POST always mints a
+  // fresh, feed-less manual event they own.
+  const mayUpsertFeedEvent = can(publisher, 'content.publish.any')
   const input: NewCurrentEvent = {
     ...parsed.value,
+    feedId: mayUpsertFeedEvent ? parsed.value.feedId : null,
+    externalId: mayUpsertFeedEvent ? parsed.value.externalId : null,
     originNode: await resolveOriginNode(db),
     ownerId: publisher.id,
   }

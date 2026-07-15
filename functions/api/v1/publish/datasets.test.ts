@@ -16,6 +16,7 @@ import { onRequestGet, onRequestPost } from './datasets'
 import {
   onRequestGet as datasetGet,
   onRequestPut as datasetPut,
+  onRequestDelete as datasetDelete,
 } from './datasets/[id]'
 import { onRequestPost as datasetPublish } from './datasets/[id]/publish'
 import { onRequestPost as datasetReindex } from './datasets/[id]/reindex'
@@ -86,7 +87,7 @@ function ctxWithPublisher<P extends string = never>(opts: {
 
 function setupEnv() {
   const sqlite = seedFixtures({ count: 0 })
-  for (const p of [ADMIN, PUBLISHER, CONTRIBUTOR]) {
+  for (const p of [ADMIN, PUBLISHER, CONTRIBUTOR, REVIEWER]) {
     sqlite
       .prepare(
         `INSERT INTO publishers (id, email, display_name, role, is_admin, status, created_at)
@@ -344,6 +345,29 @@ describe('read-open / write-owner-scoped (whole-catalog visibility)', () => {
     expect(res.status).toBe(200)
     const body = await readJson<{ dataset: { title: string } }>(res)
     expect(body.dataset.title).toBe('Renamed by owner')
+  })
+})
+
+describe('a demoted read-only reviewer cannot edit/delete its own rows (security)', () => {
+  it('403s on PUT and DELETE for a reviewer-owned dataset', async () => {
+    const { env, sqlite } = setupEnv()
+    // Admin creates a draft, then it is reassigned to the reviewer (models
+    // an author who authored rows and was later demoted to reviewer).
+    const created = await onRequestPost(
+      ctxWithPublisher({ env, method: 'POST', body: { title: 'Was mine', format: 'video/mp4' } }),
+    )
+    const id = (await readJson<{ dataset: { id: string } }>(created)).dataset.id
+    sqlite.prepare('UPDATE datasets SET publisher_id = ? WHERE id = ?').run(REVIEWER.id, id)
+
+    const put = await datasetPut(
+      ctxWithPublisher<'id'>({ env, method: 'PUT', body: { title: 'edit' }, params: { id }, publisher: REVIEWER }),
+    )
+    expect(put.status).toBe(403)
+
+    const del = await datasetDelete(
+      ctxWithPublisher<'id'>({ env, method: 'DELETE', params: { id }, publisher: REVIEWER }),
+    )
+    expect(del.status).toBe(403)
   })
 })
 

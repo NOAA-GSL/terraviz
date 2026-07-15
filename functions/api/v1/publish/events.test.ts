@@ -15,6 +15,7 @@ import {
   upsertEventDatasetLink,
   setEventStatus,
   listCurrentEvents,
+  getCurrentEvent,
   listLinksForEvent,
   getEventDecorations,
 } from '../_lib/events-store'
@@ -231,6 +232,35 @@ describe('POST /api/v1/publish/events', () => {
     const all = await listCurrentEvents(env.CATALOG_DB)
     expect(all).toHaveLength(1)
     expect(all[0].title).toBe('Hurricane Lena (updated)')
+  })
+
+  it('a non-publish.any author cannot overwrite an existing feed event via (feedId, externalId)', async () => {
+    // Security: the idempotent upsert must not let a lower authoring
+    // role rewrite an event it does not own. Admin seeds a feed event…
+    const { env } = setupEnv()
+    const seeded = JSON.parse(
+      await (await eventsPost(postCtx({ env, body: CREATE }))).text(),
+    ) as { event: { id: string } }
+
+    // …an author POSTs the SAME feed key with hijacked content.
+    const res = await eventsPost(
+      postCtx({
+        env,
+        publisher: PUBLISHER, // role 'publisher' → author (no publish.any)
+        body: { ...CREATE, title: 'HIJACKED', source: { name: 'Evil', url: 'https://evil.example/x' } },
+      }),
+    )
+    expect(res.status).toBe(201) // a fresh manual event, not an update
+    const body = JSON.parse(await res.text()) as { created: boolean; event: { id: string } }
+    expect(body.created).toBe(true)
+    expect(body.event.id).not.toBe(seeded.event.id)
+
+    // The original event is untouched, and the author's row carries no feed key.
+    const original = await getCurrentEvent(env.CATALOG_DB, seeded.event.id)
+    expect(original!.title).toBe(CREATE.title)
+    const hijack = await getCurrentEvent(env.CATALOG_DB, body.event.id)
+    expect(hijack!.feed_id).toBeNull()
+    expect(hijack!.external_id).toBeNull()
   })
 
   it('persists published_at from source.publishedAt', async () => {

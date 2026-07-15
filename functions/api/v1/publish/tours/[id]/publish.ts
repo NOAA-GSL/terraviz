@@ -25,7 +25,8 @@
 
 import type { CatalogEnv } from '../../../_lib/env'
 import type { PublisherData } from '../../_middleware'
-import { publishTour } from '../../../_lib/tour-mutations'
+import { getTourForPublisher, publishTour } from '../../../_lib/tour-mutations'
+import { canOwnOrAny } from '../../../_lib/capabilities'
 
 const CONTENT_TYPE = 'application/json; charset=utf-8'
 
@@ -45,6 +46,15 @@ export const onRequestPost: PagesFunction<CatalogEnv, 'id'> = async context => {
   const publisher = (context.data as unknown as PublisherData).publisher
   const id = pickId(context.params.id)
   if (!id) return jsonError(400, 'invalid_request', 'Missing tour id.')
+  // Publishing is a privilege above authoring: a contributor may create
+  // + edit its own draft tour but cannot make it public. Gate on the
+  // publish capability against the tour's owner (author-own or
+  // editor/admin-any), mirroring datasets/blog.
+  const existing = await getTourForPublisher(context.env.CATALOG_DB!, publisher, id)
+  if (!existing) return jsonError(404, 'not_found', `Tour ${id} not found.`)
+  if (!canOwnOrAny(publisher, existing.publisher_id, 'content.publish.own', 'content.publish.any')) {
+    return jsonError(403, 'forbidden_role', 'Publishing a tour requires a publishing role.')
+  }
   const result = await publishTour(context.env, publisher, id)
   if (!result.ok) return jsonError(result.status, result.error, result.message)
   return new Response(
