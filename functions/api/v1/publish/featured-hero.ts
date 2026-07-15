@@ -46,7 +46,7 @@ function forbidden(): Response {
   return jsonError(
     403,
     'forbidden_role',
-    'Setting the hero requires the editor or admin role.',
+    'Setting the hero requires the editor, admin, or service role.',
   )
 }
 

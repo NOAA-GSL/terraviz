@@ -62,7 +62,9 @@ export const onRequestPost: PagesFunction<CatalogEnv, 'id'> = async context => {
   const db = context.env.CATALOG_DB
   const event = await getCurrentEvent(db, id)
   if (!event) return jsonError(404, 'not_found', `Event ${id} not found.`)
-  // Owner-scoped write (unclaimed events are open; see canMutateEvent).
+  // Owner-scoped write: the owner writes via content.edit.own; an
+  // unclaimed event (owner_id null) requires content.edit.any
+  // (editor/admin/service). See canMutateEvent.
   if (!canMutateEvent(publisher, event)) {
     return jsonError(403, 'forbidden_owner', 'You can only edit events you own.')
   }
