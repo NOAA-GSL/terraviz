@@ -43,6 +43,10 @@ jobs:
             src-tauri/gen/**
             **/node_modules/**
             **/dist/**
+            # Self-contained design-review mockup: a generated artifact-export
+            # bundle (vendored React UMD + the export bootstrap loader), not
+            # hand-written application code and never imported into the app.
+            public/design-preview.html
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v4
