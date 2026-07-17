@@ -99,6 +99,40 @@ describe('video-proxy', () => {
     }
   })
 
+  it('neutralizes a non-media content-type and forbids MIME sniffing', async () => {
+    const env = await envWithAllowlistedHost('oceantoday.noaa.gov')
+    const orig = globalThis.fetch
+    // An allowlisted host (or a redirect it followed) serving HTML must
+    // NOT be rendered as HTML on the app origin.
+    globalThis.fetch = vi.fn(async () => new Response('<script>alert(1)</script>', {
+      status: 200,
+      headers: { 'content-type': 'text/html' },
+    })) as unknown as typeof fetch
+    try {
+      const res = await onRequestGet(ctx(env, `${PROXY}?url=${encodeURIComponent('https://oceantoday.noaa.gov/a.mp4')}`))
+      expect(res.headers.get('content-type')).toBe('application/octet-stream')
+      expect(res.headers.get('x-content-type-options')).toBe('nosniff')
+    } finally {
+      globalThis.fetch = orig
+    }
+  })
+
+  it('passes a real media content-type through', async () => {
+    const env = await envWithAllowlistedHost('oceantoday.noaa.gov')
+    const orig = globalThis.fetch
+    globalThis.fetch = vi.fn(async () => new Response('bytes', {
+      status: 200,
+      headers: { 'content-type': 'video/mp4' },
+    })) as unknown as typeof fetch
+    try {
+      const res = await onRequestGet(ctx(env, `${PROXY}?url=${encodeURIComponent('https://oceantoday.noaa.gov/a.mp4')}`))
+      expect(res.headers.get('content-type')).toBe('video/mp4')
+      expect(res.headers.get('x-content-type-options')).toBe('nosniff')
+    } finally {
+      globalThis.fetch = orig
+    }
+  })
+
   it('HEAD returns headers with no body', async () => {
     const env = await envWithAllowlistedHost('oceantoday.noaa.gov')
     const orig = globalThis.fetch

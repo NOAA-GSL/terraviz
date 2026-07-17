@@ -28,9 +28,9 @@ import { allowlistedContentHosts } from '../_lib/video-index-store'
 const UPSTREAM_TIMEOUT_MS = 15_000
 
 /** Response headers copied from upstream when present — everything a
- *  media element needs to play + seek. */
+ *  media element needs to play + seek. `content-type` is handled
+ *  separately (restricted to a media allowlist), NOT blindly forwarded. */
 const FORWARD_HEADERS = [
-  'content-type',
   'content-length',
   'content-range',
   'accept-ranges',
@@ -38,6 +38,20 @@ const FORWARD_HEADERS = [
   'etag',
   'cache-control',
 ]
+
+/** Content types this proxy will pass through verbatim. Anything else
+ *  (notably `text/html`) is neutralized to `application/octet-stream` so
+ *  an upstream — reached directly or via a redirect — can never have its
+ *  body executed as HTML/script on THIS app's origin. Matched on the
+ *  media type only (parameters like `; charset` are ignored). */
+const ALLOWED_CONTENT_TYPE_RE = /^(?:video\/|audio\/|image\/|application\/(?:vnd\.apple\.mpegurl|x-mpegurl|dash\+xml|octet-stream)\b)/i
+
+/** The content-type to advertise: the upstream value when it's a media
+ *  type, else a non-renderable default. */
+function safeContentType(upstream: string | null): string {
+  if (upstream && ALLOWED_CONTENT_TYPE_RE.test(upstream.trim())) return upstream
+  return 'application/octet-stream'
+}
 
 function corsHeaders(): Record<string, string> {
   return {
@@ -101,6 +115,11 @@ async function handle(context: Parameters<PagesFunction<CatalogEnv>>[0], method:
     const value = upstream.headers.get(name)
     if (value) headers.set(name, value)
   }
+  // Restrict content-type to media + forbid MIME sniffing, so a body
+  // served through this same-origin proxy can never execute as HTML on
+  // the app's origin (the upstream, or a redirect target, is untrusted).
+  headers.set('Content-Type', safeContentType(upstream.headers.get('content-type')))
+  headers.set('X-Content-Type-Options', 'nosniff')
   // A HEAD has no body; a GET streams the upstream body straight through.
   return new Response(method === 'HEAD' ? null : upstream.body, {
     status: upstream.status,
