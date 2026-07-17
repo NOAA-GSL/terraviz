@@ -36,6 +36,8 @@ const FEEDS_ENDPOINT = '/api/v1/publish/feeds'
 const PREVIEW_ENDPOINT = '/api/v1/publish/feeds/preview'
 const REFRESH_ENDPOINT = '/api/v1/publish/events/refresh'
 const YOUTUBE_CHANNELS_ENDPOINT = '/api/v1/publish/media/youtube-channels'
+const VIDEO_SOURCES_ENDPOINT = '/api/v1/publish/media/video-sources'
+const VIDEO_SOURCES_REFRESH_ENDPOINT = '/api/v1/publish/media/video-sources/refresh'
 
 interface MeResponse {
   role: string
@@ -79,6 +81,29 @@ interface YoutubeChannel {
 
 interface YoutubeChannelsResponse {
   channels: YoutubeChannel[]
+}
+
+interface VideoSource {
+  id: string
+  label: string
+  url: string
+  attribution: string | null
+  enabled: boolean
+  lastRunAt: string | null
+  lastRunStatus: 'ok' | 'error' | null
+  lastRunError: string | null
+  lastRunCount: number | null
+}
+
+interface VideoSourcesResponse {
+  sources: VideoSource[]
+}
+
+interface VideoRefreshResponse {
+  fetched: number
+  indexed: number
+  embedded: number
+  pruned: number
 }
 
 export interface FeedsPageOptions {
@@ -140,12 +165,15 @@ export async function renderFeedsPage(mount: HTMLElement, options: FeedsPageOpti
   const fetchFn = options.fetchFn
   mount.replaceChildren(shell(el('p', { className: 'publisher-loading', textContent: t('publisher.feeds.loading') })))
 
-  const [meRes, feedsRes, channelsRes] = await Promise.all([
+  const [meRes, feedsRes, channelsRes, videoSourcesRes] = await Promise.all([
     publisherGet<MeResponse>(ME_ENDPOINT, { fetchFn }),
     publisherGet<FeedsResponse>(FEEDS_ENDPOINT, { fetchFn }),
     // The YouTube channel allowlist is a secondary card; a failure here
     // (e.g. an older deploy without the route) must not sink the page.
     publisherGet<YoutubeChannelsResponse>(YOUTUBE_CHANNELS_ENDPOINT, { fetchFn }),
+    // The video-sitemap source registry is likewise a secondary card;
+    // an older deploy without the route degrades to omitting it.
+    publisherGet<VideoSourcesResponse>(VIDEO_SOURCES_ENDPOINT, { fetchFn }),
   ])
 
   const renderFailure = (res: { kind: ErrorKind; status?: number; body?: string }): void => {
@@ -189,7 +217,9 @@ export async function renderFeedsPage(mount: HTMLElement, options: FeedsPageOpti
   // than showing an allowlist UI whose Add/Remove actions would 404.
   const channels =
     channelsRes.ok && Array.isArray(channelsRes.data.channels) ? channelsRes.data.channels : null
-  renderConsole(mount, feedsRes.data.feeds, channels, options)
+  const videoSources =
+    videoSourcesRes.ok && Array.isArray(videoSourcesRes.data.sources) ? videoSourcesRes.data.sources : null
+  renderConsole(mount, feedsRes.data.feeds, channels, videoSources, options)
 }
 
 /** Re-fetch the connector list and re-render — after every mutation. */
@@ -201,6 +231,7 @@ function renderConsole(
   mount: HTMLElement,
   feeds: FeedRow[],
   channels: YoutubeChannel[] | null,
+  videoSources: VideoSource[] | null,
   options: FeedsPageOptions,
 ): void {
   const status = el('div', { className: 'publisher-feeds-status', role: 'status' })
@@ -588,13 +619,20 @@ function renderConsole(
   // When the channels endpoint is unavailable (older deploy), the
   // Media channels tab shows a note instead of an allowlist UI whose
   // Add/Remove would 404.
-  const mediaContent =
+  const channelsContent =
     channels !== null
       ? renderChannelsCard(mount, channels, options, showError, send)
       : card(
           heading(t('publisher.feeds.channels.title')),
           el('p', { className: 'publisher-feeds-restricted', textContent: t('publisher.feeds.channels.unavailable') }),
         )
+  // The non-YouTube video-sitemap registry sits above the channel
+  // allowlist in the Media tab. Omitted entirely on an older deploy whose
+  // route 404s (videoSources === null).
+  const mediaContent =
+    videoSources !== null
+      ? [renderVideoSourcesCard(mount, videoSources, options, showError, send), channelsContent]
+      : [channelsContent]
 
   // Page header + two tabs (News feeds / Media channels), matching
   // the review deck. Tabs toggle panel visibility in place — no
@@ -607,7 +645,7 @@ function renderConsole(
   ])
 
   const newsPanel = el('div', { className: 'publisher-feeds-panel' }, [yourFeeds, suggested, custom])
-  const mediaPanel = el('div', { className: 'publisher-feeds-panel' }, [mediaContent])
+  const mediaPanel = el('div', { className: 'publisher-feeds-panel' }, mediaContent)
   mediaPanel.hidden = true
 
   const tabs = el('div', { className: 'publisher-tabs', role: 'tablist' }) as HTMLElement
@@ -633,6 +671,163 @@ function renderConsole(
   tabs.append(makeTab('publisher.feeds.tab.news', newsPanel, true), makeTab('publisher.feeds.tab.media', mediaPanel, false))
 
   mount.replaceChildren(shell(header, tabs, newsPanel, mediaPanel))
+}
+
+/** The "Agency video sources" card — the node's registered non-YouTube
+ *  Video Sitemaps. Each is listed with its enabled state + last-index
+ *  bookkeeping (pause/resume, remove); an "Index now" button pulls the
+ *  latest videos into the index; a form adds a sitemap by URL. The
+ *  indexed videos become topic-matched *suggestions* in the events / blog
+ *  editors — nothing surfaces publicly on its own. */
+function renderVideoSourcesCard(
+  mount: HTMLElement,
+  sources: VideoSource[],
+  options: FeedsPageOptions,
+  showError: (message: string) => void,
+  send: (endpoint: string, body: unknown, method: 'POST' | 'DELETE') => Promise<boolean>,
+): HTMLElement {
+  const wrap = card(
+    heading(t('publisher.feeds.videoSources.title')),
+    el('p', { className: 'publisher-feeds-intro', textContent: t('publisher.feeds.videoSources.intro') }),
+  )
+
+  const status = el('div', { className: 'publisher-feeds-status', role: 'status' })
+
+  const list = el('div', { className: 'publisher-feeds-list' })
+  if (sources.length === 0) {
+    list.append(el('p', { className: 'publisher-empty-message', textContent: t('publisher.feeds.videoSources.empty') }))
+  }
+  for (const source of sources) {
+    const dot = el('span', {
+      className: `publisher-feeds-dot ${source.enabled ? 'publisher-feeds-dot-on' : 'publisher-feeds-dot-off'}`,
+    })
+    const lastRun = source.lastRunAt
+      ? source.lastRunStatus === 'error'
+        ? t('publisher.feeds.lastRun.error', { detail: source.lastRunError ?? '' })
+        : t('publisher.feeds.videoSources.lastRun.ok', {
+            when: source.lastRunAt.slice(0, 16).replace('T', ' '),
+            count: String(source.lastRunCount ?? 0),
+          })
+      : t('publisher.feeds.lastRun.never')
+    const meta = el('span', { className: 'publisher-feeds-row-meta' }, [lastRun])
+    if (source.lastRunStatus === 'error') meta.classList.add('publisher-feeds-row-meta-error')
+
+    const toggleBtn = el('button', {
+      type: 'button',
+      className: 'publisher-button publisher-button-small',
+      textContent: source.enabled ? t('publisher.feeds.pause') : t('publisher.feeds.resume'),
+    })
+    toggleBtn.addEventListener('click', () => {
+      toggleBtn.disabled = true
+      void send(`${VIDEO_SOURCES_ENDPOINT}/${source.id}`, { enabled: !source.enabled }, 'POST').then(ok => {
+        if (ok) void reload(mount, options)
+        else toggleBtn.disabled = false
+      })
+    })
+
+    const removeBtn = el('button', {
+      type: 'button',
+      className: 'publisher-button publisher-button-small publisher-button-danger',
+      textContent: t('publisher.feeds.remove'),
+    })
+    removeBtn.addEventListener('click', () => {
+      removeBtn.disabled = true
+      void send(`${VIDEO_SOURCES_ENDPOINT}/${source.id}`, null, 'DELETE').then(ok => {
+        if (ok) void reload(mount, options)
+        else removeBtn.disabled = false
+      })
+    })
+
+    list.append(
+      el('div', { className: 'publisher-feeds-entry' }, [
+        el('div', { className: 'publisher-feeds-row' }, [
+          dot,
+          el('span', { className: 'publisher-feeds-row-main' }, [
+            el('span', { className: 'publisher-feeds-row-label', textContent: source.label }),
+            meta,
+          ]),
+          el('span', { className: 'publisher-feeds-row-actions' }, [toggleBtn, removeBtn]),
+        ]),
+      ]),
+    )
+  }
+
+  // "Index now" — pull the latest videos from every enabled source.
+  const indexBtn = el('button', {
+    type: 'button',
+    className: 'publisher-button publisher-button-primary',
+    textContent: t('publisher.feeds.videoSources.indexNow'),
+  })
+  indexBtn.addEventListener('click', () => {
+    indexBtn.disabled = true
+    status.textContent = t('publisher.feeds.videoSources.indexing')
+    status.classList.remove('publisher-feeds-status-error')
+    void publisherSend<VideoRefreshResponse>(VIDEO_SOURCES_REFRESH_ENDPOINT, {}, { method: 'POST', fetchFn: options.fetchFn }).then(
+      res => {
+        indexBtn.disabled = false
+        if (res.ok) {
+          status.textContent = t('publisher.feeds.videoSources.indexDone', {
+            indexed: String(res.data.indexed),
+            embedded: String(res.data.embedded),
+          })
+          void reload(mount, options)
+          return
+        }
+        status.textContent = t('publisher.feeds.videoSources.indexError')
+        status.classList.add('publisher-feeds-status-error')
+      },
+    )
+  })
+
+  // Add-a-source form: label + sitemap URL + optional attribution.
+  const labelInput = el('input', { type: 'text', className: 'publisher-feeds-input', maxLength: 120 })
+  const urlInput = el('input', {
+    type: 'url',
+    className: 'publisher-feeds-input',
+    placeholder: 'https://…/videositemap.xml', // i18n-exempt: URL shape hint
+  })
+  const attributionInput = el('input', { type: 'text', className: 'publisher-feeds-input', maxLength: 120 })
+  const addBtn = el('button', {
+    type: 'button',
+    className: 'publisher-button publisher-button-primary',
+    textContent: t('publisher.feeds.videoSources.add'),
+  })
+  addBtn.addEventListener('click', () => {
+    const label = labelInput.value.trim()
+    const url = urlInput.value.trim()
+    if (!label || !/^https?:\/\//i.test(url)) {
+      showError(t('publisher.feeds.videoSources.invalid'))
+      return
+    }
+    const attribution = attributionInput.value.trim()
+    addBtn.disabled = true
+    void send(
+      VIDEO_SOURCES_ENDPOINT,
+      { label, url, ...(attribution ? { attribution } : {}) },
+      'POST',
+    ).then(ok => {
+      if (ok) void reload(mount, options)
+      else addBtn.disabled = false
+    })
+  })
+
+  const labelled = (label: string, control: HTMLElement): HTMLElement => {
+    const field = el('label', { className: 'publisher-feeds-field' })
+    field.append(el('span', { className: 'publisher-field-label', textContent: label }), control)
+    return field
+  }
+
+  wrap.append(
+    list,
+    el('div', { className: 'publisher-feeds-actions' }, [indexBtn]),
+    status,
+    el('h3', { className: 'publisher-feeds-group', textContent: t('publisher.feeds.videoSources.addTitle') }),
+    labelled(t('publisher.feeds.videoSources.label'), labelInput),
+    labelled(t('publisher.feeds.videoSources.url'), urlInput),
+    labelled(t('publisher.feeds.videoSources.attribution'), attributionInput),
+    el('div', { className: 'publisher-feeds-actions' }, [addBtn]),
+  )
+  return wrap
 }
 
 /** The "Trusted video channels" card — the reputable-source allowlist
