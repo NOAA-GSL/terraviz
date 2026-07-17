@@ -53,7 +53,7 @@ export interface VideoIndexRow {
   thumbnail_url: string | null
   duration_sec: number | null
   published_at: string | null
-  embedding: ArrayBuffer | Uint8Array | null
+  embedding: ArrayBuffer | Uint8Array | number[] | null
   embedding_version: number | null
   embed_text_hash: string | null
   created_at: string
@@ -91,14 +91,20 @@ export function packEmbedding(values: number[]): Uint8Array {
   return new Uint8Array(f32.buffer, f32.byteOffset, f32.byteLength)
 }
 
-/** Unpack a BLOB (ArrayBuffer | Uint8Array | Buffer) back to number[].
- *  Returns null for a null/empty or wrong-sized blob so a corrupt row is
- *  skipped, never a throw. */
-export function unpackEmbedding(blob: ArrayBuffer | Uint8Array | null | undefined): number[] | null {
+/** Unpack a stored embedding BLOB back to number[]. Handles every shape
+ *  the value arrives in across runtimes: a plain `number[]` of byte
+ *  values (**what real Cloudflare D1 returns for a BLOB column**), an
+ *  `ArrayBuffer`, or a `Uint8Array`/Node `Buffer` (better-sqlite3, used
+ *  in tests). Returns null for a null/empty or wrong-sized blob so a
+ *  corrupt row is skipped, never a throw. */
+export function unpackEmbedding(
+  blob: ArrayBuffer | Uint8Array | number[] | null | undefined,
+): number[] | null {
   if (!blob) return null
   let bytes: Uint8Array
   if (blob instanceof Uint8Array) bytes = blob
   else if (blob instanceof ArrayBuffer) bytes = new Uint8Array(blob)
+  else if (Array.isArray(blob)) bytes = Uint8Array.from(blob) // D1 returns BLOB as number[]
   else return null
   if (bytes.byteLength !== VECTORIZE_EMBEDDING_DIMENSIONS * 4) return null
   // Copy into an aligned buffer — a Uint8Array view may not be 4-byte

@@ -65,6 +65,19 @@ describe('embedding BLOB helpers', () => {
     expect(unpackEmbedding(new Uint8Array(10))).toBeNull()
   })
 
+  it('unpacks a number[] BLOB — the shape real Cloudflare D1 returns', () => {
+    const v = unit(7).map((x, i) => x + i * 1e-4)
+    // Real D1 hands back a BLOB column as a plain array of byte values,
+    // not a Uint8Array/ArrayBuffer (better-sqlite3's shape). Simulate it.
+    const asNumberArray = Array.from(packEmbedding(v))
+    const back = unpackEmbedding(asNumberArray)
+    expect(back).not.toBeNull()
+    expect(back!).toHaveLength(VECTORIZE_EMBEDDING_DIMENSIONS)
+    for (let i = 0; i < v.length; i++) expect(back![i]).toBeCloseTo(v[i], 5)
+    // A wrong-sized number[] is still rejected.
+    expect(unpackEmbedding([1, 2, 3])).toBeNull()
+  })
+
   it('cosine is 1 for identical, 0 for orthogonal unit vectors', () => {
     expect(cosineSimilarity(unit(1), unit(1))).toBeCloseTo(1, 6)
     expect(cosineSimilarity(unit(1), unit(2))).toBeCloseTo(0, 6)
