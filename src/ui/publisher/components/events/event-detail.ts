@@ -390,8 +390,11 @@ function renderAttachedVideo(
 ): HTMLElement {
   const wrap = el('div', 'publisher-events-video')
   // Which video is attached decides the element + which field Remove
-  // clears. Embed wins if somehow both are set (shouldn't happen).
-  const isFile = !event.videoEmbedUrl && Boolean(event.videoFileUrl)
+  // clears. The embed wins only when it's a VALID nocookie URL — an
+  // invalid/legacy embed must not render an unguarded iframe when a
+  // direct file is present; fall back to the native <video> instead.
+  const hasValidEmbed = Boolean(event.videoEmbedUrl && isNocookieEmbedUrl(event.videoEmbedUrl))
+  const isFile = !hasValidEmbed && Boolean(event.videoFileUrl)
   let media: HTMLElement
   if (isFile) {
     const video = document.createElement('video')

@@ -236,6 +236,20 @@ describe('buildEventTourTasks', () => {
     expect(noList.some(t => 'showVideo' in t)).toBe(false)
   })
 
+  it('gives the embed precedence when both video fields are set (no double video)', () => {
+    const embed = 'https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ'
+    const file = 'https://oceantoday.noaa.gov/coral/bleach_720p.mp4'
+    const tasks = buildEventTourTasks(
+      makeEvent({ video_embed_url: embed, video_file_url: file }),
+      [makeDataset('DS1')],
+      captions,
+      { allowedVideoHosts: new Set(['oceantoday.noaa.gov']) },
+    )
+    // The embed is framed; the direct-file video is suppressed.
+    expect(tasks.some(t => 'showPopupHtml' in t)).toBe(true)
+    expect(tasks.some(t => 'showVideo' in t)).toBe(false)
+  })
+
   it('caps the stops at MAX_TOUR_STOPS and falls back per-stop for missing captions', () => {
     const datasets = Array.from({ length: MAX_TOUR_STOPS + 2 }, (_, i) => makeDataset(`DS${i}`))
     const tasks = buildEventTourTasks(makeEvent(), datasets, { intro: 'i', stops: {} })

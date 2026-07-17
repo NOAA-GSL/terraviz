@@ -61,7 +61,7 @@ interface WireSuggestion {
 export const onRequestGet: PagesFunction<CatalogEnv> = async context => {
   const publisher = (context.data as unknown as PublisherData).publisher
   if (!isPrivileged(publisher)) {
-    return json(403, { error: 'forbidden_role', message: 'The media proxy is restricted to admin and service callers.' })
+    return json(403, { error: 'forbidden_role', message: 'Video suggestions are restricted to admin and service callers.' })
   }
   // Missing DB or AI → empty, never an error (the card just shows nothing).
   if (!context.env.CATALOG_DB) return json(200, { videos: [] })

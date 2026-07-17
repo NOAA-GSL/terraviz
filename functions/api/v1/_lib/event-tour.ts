@@ -218,10 +218,12 @@ export function buildEventTourTasks(
   // iframe. Only a file whose host is on the registered-source allowlist
   // (injected — this builder is pure) is emitted, and it plays through
   // the same-origin media-proxy so the VR path gets CORS. The proxy URL
-  // is the video's id for the paired hide.
+  // is the video's id for the paired hide. The embed takes precedence:
+  // an event carries one video, so inconsistent/legacy data with both set
+  // never emits two intro videos.
   const allowedHosts = opts.allowedVideoHosts
   let videoFile: string | null = null
-  if (event.video_file_url && /^https?:\/\//i.test(event.video_file_url) && allowedHosts && allowedHosts.size > 0) {
+  if (!videoEmbed && event.video_file_url && /^https?:\/\//i.test(event.video_file_url) && allowedHosts && allowedHosts.size > 0) {
     try {
       const host = new URL(event.video_file_url).hostname.toLowerCase()
       if (allowedHosts.has(host)) videoFile = videoProxyUrl(event.video_file_url)
