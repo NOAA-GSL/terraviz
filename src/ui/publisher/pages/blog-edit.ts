@@ -37,6 +37,7 @@ import {
   fetchNhcConeSuggestion,
   fetchShakemapSuggestion,
   fetchYoutubeSuggestions,
+  fetchVideoSitemapSuggestions,
   looksLikeQuake,
   looksLikeTropical,
   type MediaSuggestion,
@@ -493,6 +494,7 @@ export async function renderBlogEditPage(mount: HTMLElement, options: BlogEditPa
       case 'shakemap': return t('publisher.events.suggest.shakemap')
       case 'nhc': return t('publisher.events.suggest.nhc')
       case 'youtube': return t('publisher.events.suggest.youtube')
+      case 'video-sitemap': return t('publisher.events.suggest.videoSitemap')
       case 'worldview': return t('publisher.events.suggest.worldview')
     }
   }
@@ -532,7 +534,11 @@ export async function renderBlogEditPage(mount: HTMLElement, options: BlogEditPa
   // (image sources only) "Set as cover". The agency-YouTube card is a
   // video — it inserts a linked thumbnail, never a cover.
   const mediaCard = (s: MediaSuggestion, badge: string): HTMLElement => {
-    const isVideo = s.kind === 'youtube' && typeof s.embedUrl === 'string'
+    // Both video sources link their thumbnail to the playable video: the
+    // agency-YouTube embed, or the non-YouTube direct file.
+    const videoTarget = s.embedUrl ?? s.videoFileUrl
+    const isVideo =
+      (s.kind === 'youtube' || s.kind === 'video-sitemap') && typeof videoTarget === 'string'
     const altText = s.title ?? badge
     const wrap = el('div', { className: 'publisher-blog-media-card' })
     const img = document.createElement('img')
@@ -556,7 +562,7 @@ export async function renderBlogEditPage(mount: HTMLElement, options: BlogEditPa
     })
     insertBtn.addEventListener('click', () => {
       insertIntoBody(
-        isVideo && s.embedUrl ? `[![${altText}](${s.url})](${s.embedUrl})` : `![${altText}](${s.url})`,
+        isVideo && videoTarget ? `[![${altText}](${s.url})](${videoTarget})` : `![${altText}](${s.url})`,
       )
     })
     actions.append(insertBtn)
@@ -682,6 +688,17 @@ export async function renderBlogEditPage(mount: HTMLElement, options: BlogEditPa
       if (token !== mediaToken) return
       if (rs.length) for (const r of rs) append(r, mediaBadge(r.kind))
       else setReason('youtube', t('publisher.blog.media.youtubeEmpty'))
+    })
+
+    // Non-YouTube agency video from the node's registered sitemaps —
+    // topic-matched against the cited event's text.
+    void fetchVideoSitemapSuggestions(
+      { title: ev.title, summary: ev.summary, keywords: ev.keywords },
+      ff,
+    ).then(rs => {
+      if (token !== mediaToken) return
+      if (rs.length) for (const r of rs) append(r, mediaBadge(r.kind))
+      else setReason('videoSitemap', t('publisher.blog.media.videoSitemapEmpty'))
     })
 
     renderNotes()

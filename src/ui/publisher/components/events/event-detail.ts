@@ -35,6 +35,7 @@ import {
   fetchNhcConeSuggestion,
   fetchShakemapSuggestion,
   fetchYoutubeSuggestions,
+  fetchVideoSitemapSuggestions,
   isNocookieEmbedUrl,
   looksLikeTropical,
   type MediaSuggestion,
@@ -118,6 +119,7 @@ function suggestionBadge(kind: MediaSuggestion['kind']): string {
     case 'shakemap': return t('publisher.events.suggest.shakemap')
     case 'nhc': return t('publisher.events.suggest.nhc')
     case 'youtube': return t('publisher.events.suggest.youtube')
+    case 'video-sitemap': return t('publisher.events.suggest.videoSitemap')
     case 'worldview': return t('publisher.events.suggest.worldview')
   }
 }
@@ -128,6 +130,7 @@ function suggestionAlt(kind: MediaSuggestion['kind']): string {
     case 'shakemap': return t('publisher.events.suggest.shakemapAlt')
     case 'nhc': return t('publisher.events.suggest.nhcAlt')
     case 'youtube': return t('publisher.events.suggest.youtubeAlt')
+    case 'video-sitemap': return t('publisher.events.suggest.videoSitemapAlt')
     case 'worldview': return t('publisher.events.suggest.worldviewAlt')
   }
 }
@@ -138,9 +141,13 @@ function suggestionCard(
   cb: EventDetailCallbacks,
   onCardGone: () => void,
 ): HTMLElement {
-  // The agency-YouTube source is a VIDEO: it stores `video_embed_url`,
-  // not the event image, and its preview is a play-badged thumbnail.
-  const isVideo = suggestion.kind === 'youtube' && typeof suggestion.embedUrl === 'string'
+  // Two VIDEO sources store a video (not the event image) and preview as
+  // a play-badged thumbnail: agency-YouTube → `video_embed_url` (an
+  // iframe embed), and the non-YouTube video-sitemap → `video_file_url`
+  // (a direct file played natively).
+  const isEmbedVideo = suggestion.kind === 'youtube' && typeof suggestion.embedUrl === 'string'
+  const isFileVideo = suggestion.kind === 'video-sitemap' && typeof suggestion.videoFileUrl === 'string'
+  const isVideo = isEmbedVideo || isFileVideo
   const card = el('div', `publisher-events-suggest-card${isVideo ? ' publisher-events-suggest-card-video' : ''}`)
   // One description serves the preview and, on an image pick, the
   // stored alt text (media accessibility) every surface renders with.
@@ -180,11 +187,13 @@ function suggestionCard(
     use.disabled = true
     status.textContent = ''
     status.classList.remove('publisher-events-status-error')
-    // Video → `edits.videoEmbedUrl` (the embed); image → `edits.imageUrl`
-    // (the URL itself) plus its alt text.
-    const edits = isVideo
+    // Embed video → `edits.videoEmbedUrl`; direct-file video →
+    // `edits.videoFileUrl`; image → `edits.imageUrl` + its alt text.
+    const edits = isEmbedVideo
       ? { videoEmbedUrl: suggestion.embedUrl }
-      : { imageUrl: suggestion.url, imageAlt: altText }
+      : isFileVideo
+        ? { videoFileUrl: suggestion.videoFileUrl }
+        : { imageUrl: suggestion.url, imageAlt: altText }
     void publisherSend<{ event?: Partial<ReviewEvent> }>(
       `${EVENTS_ENDPOINT}/${encodeURIComponent(event.id)}`,
       { edits },
@@ -195,10 +204,13 @@ function suggestionCard(
         handleWriteError(res, status, cb.navigate)
         return
       }
-      if (isVideo) {
+      if (isEmbedVideo) {
         // A video attaches without displacing the image; reflect it and
         // let the card show its "attached" state via re-render.
         event.videoEmbedUrl = res.data?.event?.videoEmbedUrl ?? suggestion.embedUrl
+        cb.onEventStatusChange(event.id, event.status)
+      } else if (isFileVideo) {
+        event.videoFileUrl = res.data?.event?.videoFileUrl ?? suggestion.videoFileUrl
         cb.onEventStatusChange(event.id, event.status)
       } else {
         // The event now has a vetted image — the pane yields to the
@@ -300,7 +312,10 @@ function renderMediaSuggestions(event: ReviewEvent, cb: EventDetailCallbacks): H
   // while videoless — an event can accept both.
   const located = Boolean(event.geometry?.point ?? event.geometry?.boundingBox)
   const wantImage = !event.imageUrl && (located || looksLikeTropical(event))
-  const wantVideo = !event.videoEmbedUrl && Boolean((event.title ?? '').trim())
+  // An event carries at most one video — offer the video sources only
+  // while it has neither an embed nor a direct file attached.
+  const hasVideo = Boolean(event.videoEmbedUrl || event.videoFileUrl)
+  const wantVideo = !hasVideo && Boolean((event.title ?? '').trim())
   if (!wantImage && !wantVideo) return null
 
   const wrap = el('div', 'publisher-events-suggest')
@@ -327,7 +342,10 @@ function renderMediaSuggestions(event: ReviewEvent, cb: EventDetailCallbacks): H
       if (!result) return
       const suggestions = Array.isArray(result) ? result : [result]
       for (const s of suggestions) {
-        const stillWanted = s.kind === 'youtube' ? !event.videoEmbedUrl : !event.imageUrl
+        const isVideoKind = s.kind === 'youtube' || s.kind === 'video-sitemap'
+        const stillWanted = isVideoKind
+          ? !event.videoEmbedUrl && !event.videoFileUrl
+          : !event.imageUrl
         if (stillWanted) wrap.append(suggestionCard(s, event, cb, syncWithCards))
       }
       syncWithCards()
@@ -340,15 +358,30 @@ function renderMediaSuggestions(event: ReviewEvent, cb: EventDetailCallbacks): H
   }
   if (wantVideo) {
     appendLater(fetchYoutubeSuggestions(event, fetchFn))
+    // Non-YouTube agency video from the node's registered sitemaps.
+    appendLater(
+      fetchVideoSitemapSuggestions(
+        { title: event.title, summary: event.summary, keywords: event.keywords },
+        fetchFn,
+      ),
+    )
   }
 
   return wrap
 }
 
+/** The same-origin media-proxy path a direct-file video plays through
+ *  (mirrors the server-side `videoProxyUrl`) — adds CORS for a
+ *  consistent element and the eventual VR path. */
+function videoProxyUrl(fileUrl: string): string {
+  return `/api/v1/media/video-proxy?url=${encodeURIComponent(fileUrl)}`
+}
+
 /**
- * The attached agency video (a curator-picked YouTube embed) — framed
- * as the generated tour will show it, with a Remove control. The embed
- * host is re-guarded by the caller before this renders.
+ * The attached event video — a curator-picked YouTube embed (iframe) or
+ * a direct-file agency video (native <video> through the media-proxy),
+ * framed as the generated tour will show it, with a Remove control. The
+ * embed host is re-guarded by the caller before this renders.
  */
 function renderAttachedVideo(
   event: ReviewEvent,
@@ -356,18 +389,33 @@ function renderAttachedVideo(
   canEdit: boolean,
 ): HTMLElement {
   const wrap = el('div', 'publisher-events-video')
-  const frame = document.createElement('iframe')
-  frame.className = 'publisher-events-video-frame'
-  frame.src = event.videoEmbedUrl! // caller guarded isNocookieEmbedUrl
-  frame.title = t('publisher.events.suggest.videoAttached')
-  frame.setAttribute('loading', 'lazy')
-  frame.setAttribute('allowfullscreen', '')
-  frame.setAttribute('referrerpolicy', 'strict-origin-when-cross-origin')
-  frame.setAttribute('allow', 'accelerometer; encrypted-media; gyroscope; picture-in-picture')
+  // Which video is attached decides the element + which field Remove
+  // clears. Embed wins if somehow both are set (shouldn't happen).
+  const isFile = !event.videoEmbedUrl && Boolean(event.videoFileUrl)
+  let media: HTMLElement
+  if (isFile) {
+    const video = document.createElement('video')
+    video.className = 'publisher-events-video-frame'
+    video.src = videoProxyUrl(event.videoFileUrl!)
+    video.controls = true
+    video.preload = 'metadata'
+    video.setAttribute('playsinline', '')
+    media = video
+  } else {
+    const frame = document.createElement('iframe')
+    frame.className = 'publisher-events-video-frame'
+    frame.src = event.videoEmbedUrl! // caller guarded isNocookieEmbedUrl
+    frame.title = t('publisher.events.suggest.videoAttached')
+    frame.setAttribute('loading', 'lazy')
+    frame.setAttribute('allowfullscreen', '')
+    frame.setAttribute('referrerpolicy', 'strict-origin-when-cross-origin')
+    frame.setAttribute('allow', 'accelerometer; encrypted-media; gyroscope; picture-in-picture')
+    media = frame
+  }
 
   // Non-editable callers can watch the video but get no Remove control.
   if (!canEdit) {
-    wrap.append(frame)
+    wrap.append(media)
     return wrap
   }
 
@@ -382,7 +430,8 @@ function renderAttachedVideo(
     status.classList.remove('publisher-events-status-error')
     void publisherSend<{ event?: Partial<ReviewEvent> }>(
       `${EVENTS_ENDPOINT}/${encodeURIComponent(event.id)}`,
-      { edits: { videoEmbedUrl: '' } }, // empty string clears it
+      // Empty string clears whichever video field is attached.
+      { edits: isFile ? { videoFileUrl: '' } : { videoEmbedUrl: '' } },
       { fetchFn: cb.fetchFn },
     ).then(res => {
       remove.disabled = false
@@ -390,14 +439,15 @@ function renderAttachedVideo(
         handleWriteError(res, status, cb.navigate)
         return
       }
-      event.videoEmbedUrl = undefined
+      if (isFile) event.videoFileUrl = undefined
+      else event.videoEmbedUrl = undefined
       cb.onEventStatusChange(event.id, event.status)
     })
   })
 
   const foot = el('div', 'publisher-events-video-foot')
   foot.append(remove, status)
-  wrap.append(frame, foot)
+  wrap.append(media, foot)
   return wrap
 }
 
@@ -685,11 +735,13 @@ export function renderEventDetail(event: ReviewEvent, cb: EventDetailCallbacks):
     pane.append(renderImageUpload(event, cb, 'upload'))
   }
 
-  // --- Attached agency video (the picked YouTube embed) — framed for
-  // the curator to vet. Independent of the image. Read-all/write-own:
-  // everyone can watch the attached video; only editable callers get the
-  // Remove control.
-  if (event.videoEmbedUrl && isNocookieEmbedUrl(event.videoEmbedUrl)) {
+  // --- Attached event video (the picked YouTube embed or a direct-file
+  // agency video) — framed for the curator to vet. Independent of the
+  // image. Read-all/write-own: everyone can watch the attached video;
+  // only editable callers get the Remove control.
+  const hasEmbedVideo = Boolean(event.videoEmbedUrl && isNocookieEmbedUrl(event.videoEmbedUrl))
+  const hasFileVideo = Boolean(event.videoFileUrl && /^https?:\/\//i.test(event.videoFileUrl))
+  if (hasEmbedVideo || hasFileVideo) {
     pane.append(renderAttachedVideo(event, cb, canEdit))
   }
 

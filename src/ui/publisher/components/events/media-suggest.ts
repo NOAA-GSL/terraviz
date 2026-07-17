@@ -26,10 +26,10 @@ import type { EventGeometry } from './events-model'
 
 export interface MediaSuggestion {
   /** Provenance tier — drives the badge + alt text. */
-  kind: 'worldview' | 'commons' | 'shakemap' | 'nhc' | 'youtube'
+  kind: 'worldview' | 'commons' | 'shakemap' | 'nhc' | 'youtube' | 'video-sitemap'
   /** The card's preview image URL. For image sources this is also the
-   *  value stored as the event image; for the `youtube` video source
-   *  it's the thumbnail (a preview only — never stored). */
+   *  value stored as the event image; for the video sources it's the
+   *  thumbnail (a preview only — never stored). */
   url: string
   /** Attribution shown on the card and stored in curator memory. */
   attribution: string
@@ -37,6 +37,10 @@ export interface MediaSuggestion {
    *  URL stored as the event's `video_embed_url` (not `image_url`) —
    *  YouTube's ToS forbids restoring its thumbnails as node content. */
   embedUrl?: string
+  /** Present ONLY for the `video-sitemap` video source: the DIRECT media
+   *  file URL stored as the event's `video_file_url` (played as a native
+   *  <video> through the media-proxy), distinct from `embedUrl`. */
+  videoFileUrl?: string
   /** The video/image's own title, when the source provides one. */
   title?: string
 }
@@ -544,6 +548,67 @@ export async function fetchYoutubeSuggestions(
         url: youtubeThumbUrl(v.videoId),
         embedUrl: youtubeEmbedUrl(v.videoId),
         attribution: typeof v.channelName === 'string' && v.channelName ? v.channelName : 'YouTube', // i18n-exempt: proper noun / channel name
+        ...(typeof v.title === 'string' && v.title ? { title: v.title } : {}),
+      })
+    }
+    return out
+  } catch {
+    return []
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Non-YouTube video-sitemap suggestions (agency self-hosted video)
+// ---------------------------------------------------------------------------
+
+/** Server-side proxy that embeds the story text and cosine-ranks the
+ *  node's indexed sitemap videos (`video_index`). Topic-only matching —
+ *  an ocean story surfaces ocean videos, others get nothing. */
+export const VIDEO_SUGGEST_ENDPOINT = '/api/v1/publish/media/video-suggest'
+export const VIDEO_SITEMAP_TIMEOUT_MS = 6_000
+
+/**
+ * Fetch non-YouTube video candidates for a story (event or blog) from
+ * the node's registered Video Sitemaps. Each becomes a `video-sitemap`
+ * suggestion: `url` is the thumbnail (card preview), `videoFileUrl` is
+ * the direct file the pick stores (played natively through the
+ * media-proxy). Degrades to `[]` on no query text, an empty index, or
+ * any failure. Only candidates that carry a thumbnail are kept — the
+ * card needs a preview image.
+ */
+export async function fetchVideoSitemapSuggestions(
+  story: { title?: string; summary?: string; keywords?: string[] },
+  fetchFn: typeof fetch = fetch,
+): Promise<MediaSuggestion[]> {
+  const query = [story.title ?? '', story.summary ?? '', (story.keywords ?? []).join(' ')]
+    .map(s => s.trim())
+    .filter(Boolean)
+    .join(' ')
+    .trim()
+  if (!query) return []
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), VIDEO_SITEMAP_TIMEOUT_MS)
+  try {
+    const res = await fetchFn(`${VIDEO_SUGGEST_ENDPOINT}?q=${encodeURIComponent(query)}`, {
+      signal: controller.signal,
+    })
+    if (!res.ok) return []
+    const { videos } = (await res.json()) as {
+      videos?: Array<{ contentUrl?: unknown; thumbnailUrl?: unknown; title?: unknown; attribution?: unknown }>
+    }
+    if (!Array.isArray(videos)) return []
+    const out: MediaSuggestion[] = []
+    for (const v of videos) {
+      if (typeof v?.contentUrl !== 'string' || !/^https?:\/\//i.test(v.contentUrl)) continue
+      // The card preview needs a thumbnail image; skip candidates without one.
+      if (typeof v?.thumbnailUrl !== 'string' || !/^https?:\/\//i.test(v.thumbnailUrl)) continue
+      out.push({
+        kind: 'video-sitemap',
+        url: v.thumbnailUrl,
+        videoFileUrl: v.contentUrl,
+        attribution: typeof v.attribution === 'string' && v.attribution ? v.attribution : 'Video source', // i18n-exempt: server-provided source name
         ...(typeof v.title === 'string' && v.title ? { title: v.title } : {}),
       })
     }
