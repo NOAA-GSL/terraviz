@@ -30,6 +30,7 @@ import {
   MAX_TOUR_STOPS,
   type EventTourDataset,
 } from '../../../_lib/event-tour'
+import { allowlistedContentHosts } from '../../../_lib/video-index-store'
 
 const CONTENT_TYPE = 'application/json; charset=utf-8'
 
@@ -147,7 +148,11 @@ export const onRequestPost: PagesFunction<CatalogEnv & EnrichEnv, 'id'> = async 
   // Captions: AI-written when the binding exists, deterministic
   // templates otherwise — the tour generator never blocks on the model.
   const captions = await generateTourCaptions(context.env, event, datasets)
-  const tourTasks = buildEventTourTasks(event, datasets, captions)
+  // The registered-source host allowlist authoritatively guards a
+  // curator-picked direct-file video before it's emitted as a native
+  // <video> stop (played through the media-proxy for VR CORS).
+  const allowedVideoHosts = await allowlistedContentHosts(context.env.CATALOG_DB)
+  const tourTasks = buildEventTourTasks(event, datasets, captions, { allowedVideoHosts })
 
   const created = await createDraftTour(context.env, publisher, {
     title: `Event: ${event.title}`.slice(0, 200),

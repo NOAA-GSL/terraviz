@@ -32,6 +32,7 @@ import { getCurrentEvent } from '../../_lib/events-store'
 import { generateBlogDraft, type BlogDraftLength } from '../../_lib/blog-generate'
 import { resolveHttpAssetUrl } from '../../_lib/r2-public-url'
 import { buildEventTourTasks, generateTourCaptions, type EventTourDataset } from '../../_lib/event-tour'
+import { allowlistedContentHosts } from '../../_lib/video-index-store'
 import { createDraftTour, deleteTour, writeTourDraftJson } from '../../_lib/tour-mutations'
 import { POST_MAX_DATASETS } from '../../_lib/blog-store'
 
@@ -171,7 +172,8 @@ export const onRequestPost: PagesFunction<CatalogEnv & EnrichEnv> = async contex
         thumbnailUrl: resolveHttpAssetUrl(context.env, d.thumbnail_ref),
       }))
       const captions = await generateTourCaptions(context.env, event, tourDatasets)
-      const tourTasks = buildEventTourTasks(event, tourDatasets, captions)
+      const allowedVideoHosts = await allowlistedContentHosts(context.env.CATALOG_DB)
+      const tourTasks = buildEventTourTasks(event, tourDatasets, captions, { allowedVideoHosts })
       const created = await createDraftTour(context.env, publisher, {
         title: `Event: ${event.title}`.slice(0, 200),
         // The vetted story image doubles as the tour's catalog-card

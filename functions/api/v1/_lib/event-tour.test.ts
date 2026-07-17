@@ -30,6 +30,7 @@ function makeEvent(overrides: Partial<EventTourEvent> = {}): EventTourEvent {
     occurred_start: '2026-06-25T12:00:00.000Z',
     image_url: null,
     video_embed_url: null,
+    video_file_url: null,
     bbox_n: null,
     bbox_s: null,
     bbox_w: null,
@@ -210,6 +211,29 @@ describe('buildEventTourTasks', () => {
       captions,
     )
     expect(noVideo.some(t => 'showPopupHtml' in t)).toBe(false)
+  })
+
+  it('plays a curator-picked direct video through the proxy — only for an allowlisted host', () => {
+    const file = 'https://oceantoday.noaa.gov/coral/bleach_720p.mp4'
+    const allowed = new Set(['oceantoday.noaa.gov'])
+    const tasks = buildEventTourTasks(makeEvent({ video_file_url: file }), [makeDataset('DS1')], captions, {
+      allowedVideoHosts: allowed,
+    })
+    const show = tasks.find(t => 'showVideo' in t) as unknown as { showVideo: { filename: string } }
+    // Played through the same-origin media-proxy (CORS for VR), not the raw file.
+    expect(show.showVideo.filename).toBe(`/api/v1/media/video-proxy?url=${encodeURIComponent(file)}`)
+    // Shown then hidden within the intro.
+    expect(tasks.find(t => 'hideVideo' in t)).toEqual({ hideVideo: show.showVideo.filename })
+
+    // A host NOT on the allowlist is never emitted (the authoritative guard).
+    const blocked = buildEventTourTasks(makeEvent({ video_file_url: 'https://evil.example/x.mp4' }), [makeDataset('DS1')], captions, {
+      allowedVideoHosts: allowed,
+    })
+    expect(blocked.some(t => 'showVideo' in t)).toBe(false)
+
+    // No allowlist provided → nothing emitted, even for a real host.
+    const noList = buildEventTourTasks(makeEvent({ video_file_url: file }), [makeDataset('DS1')], captions)
+    expect(noList.some(t => 'showVideo' in t)).toBe(false)
   })
 
   it('caps the stops at MAX_TOUR_STOPS and falls back per-stop for missing captions', () => {
