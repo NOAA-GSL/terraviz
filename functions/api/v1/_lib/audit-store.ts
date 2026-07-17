@@ -38,6 +38,7 @@ export type AuditSubjectKind =
   | 'node_settings'
   | 'blog_post'
   | 'youtube_channel'
+  | 'video_source'
 
 /**
  * `action` is a free-form, dotted token recording *what happened*.
@@ -72,6 +73,10 @@ export type AuditAction =
   | 'youtube_channel.remove'
   | 'youtube_channel.disable'
   | 'youtube_channel.enable'
+  | 'video_source.add'
+  | 'video_source.update'
+  | 'video_source.remove'
+  | 'video_source.refresh'
   | 'feed.created'
   | 'feed.updated'
   | 'feed.deleted'

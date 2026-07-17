@@ -55,6 +55,7 @@ const baseRoutes = (): Record<string, RouteSpec> => ({
       ],
     },
   },
+  '/api/v1/publish/media/video-sources': { body: { sources: [] } },
 })
 
 const flush = () => new Promise<void>(r => setTimeout(r, 0))
@@ -348,6 +349,68 @@ describe('renderFeedsPage', () => {
     expect(
       fetchFn.mock.calls.some(
         c => String(c[0]).includes(`/youtube-channels/${CUSTOM_CHANNEL}`) && c[1]?.method === 'DELETE',
+      ),
+    ).toBe(true)
+  })
+
+  it('renders registered video sources and adds a new one', async () => {
+    const routes = baseRoutes()
+    routes['/api/v1/publish/media/video-sources'] = {
+      body: {
+        sources: [
+          {
+            id: 'VS1',
+            label: 'NOAA Ocean Today',
+            url: 'https://oceantoday.noaa.gov/videositemap.xml',
+            attribution: 'NOAA Ocean Today',
+            enabled: true,
+            lastRunAt: '2026-07-17T10:00:00.000Z',
+            lastRunStatus: 'ok',
+            lastRunError: null,
+            lastRunCount: 283,
+          },
+        ],
+      },
+    }
+    routes['POST /api/v1/publish/media/video-sources'] = { status: 201, body: { source: {} } }
+    const fetchFn = mockFetch(routes)
+    await renderFeedsPage(mount, { fetchFn })
+
+    // The registered source is listed with its indexed count.
+    expect(mount.textContent).toContain('NOAA Ocean Today')
+    expect(mount.textContent).toContain('283')
+
+    // Add a new source via the form — scoped to the video-sources card
+    // (its inputs share classes with the news-tab custom-feed form).
+    const addBtn = [...mount.querySelectorAll('button')].find(b => b.textContent === 'Add video source')!
+    const cardEl = addBtn.closest('.publisher-card')!
+    const inputs = [...cardEl.querySelectorAll('.publisher-feeds-input')] as HTMLInputElement[]
+    const urlInput = inputs.find(i => i.type === 'url')!
+    const labelInput = inputs.find(i => i.type === 'text' && i.maxLength === 120)!
+    labelInput.value = 'USGS Video'
+    urlInput.value = 'https://usgs.example/videositemap.xml'
+    addBtn.click()
+    await flush()
+    const post = fetchFn.mock.calls.find(
+      c => String(c[0]).endsWith('/media/video-sources') && (c[1]?.method ?? 'GET') === 'POST',
+    )
+    expect(post).toBeTruthy()
+    expect(JSON.parse(String(post![1]!.body))).toMatchObject({ label: 'USGS Video', url: 'https://usgs.example/videositemap.xml' })
+  })
+
+  it('Index now POSTs the refresh endpoint', async () => {
+    const routes = baseRoutes()
+    routes['POST /api/v1/publish/media/video-sources/refresh'] = {
+      body: { fetched: 283, indexed: 283, embedded: 12, pruned: 0 },
+    }
+    const fetchFn = mockFetch(routes)
+    await renderFeedsPage(mount, { fetchFn })
+    const indexBtn = [...mount.querySelectorAll('button')].find(b => b.textContent === 'Index now')!
+    indexBtn.click()
+    await flush()
+    expect(
+      fetchFn.mock.calls.some(
+        c => String(c[0]).endsWith('/video-sources/refresh') && c[1]?.method === 'POST',
       ),
     ).toBe(true)
   })

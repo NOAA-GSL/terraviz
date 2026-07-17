@@ -15,6 +15,7 @@ import {
   fetchNhcConeSuggestion,
   fetchShakemapSuggestion,
   fetchYoutubeSuggestions,
+  fetchVideoSitemapSuggestions,
   isNocookieEmbedUrl,
   looksLikeQuake,
   looksLikeTropical,
@@ -406,5 +407,60 @@ describe('agency YouTube source', () => {
       throw new Error('offline')
     })
     expect(await fetchYoutubeSuggestions({ title: 'x' }, boom as unknown as typeof fetch)).toEqual([])
+  })
+})
+
+describe('non-YouTube video-sitemap source', () => {
+  it('maps suggest results to video-sitemap suggestions (thumb + direct file)', async () => {
+    const fetchFn = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      expect(url).toContain('/api/v1/publish/media/video-suggest?q=')
+      expect(url).toContain('Coral')
+      return {
+        ok: true,
+        json: async () => ({
+          videos: [
+            {
+              title: 'Coral Bleaching',
+              pageUrl: 'https://oceantoday.noaa.gov/coral.html',
+              contentUrl: 'https://oceantoday.noaa.gov/coral.mp4',
+              thumbnailUrl: 'https://oceantoday.noaa.gov/coral.jpg',
+              attribution: 'NOAA Ocean Today',
+            },
+            // No thumbnail → dropped (the card needs a preview image).
+            { title: 'No thumb', contentUrl: 'https://oceantoday.noaa.gov/x.mp4', thumbnailUrl: null },
+            // Non-http content → dropped.
+            { title: 'Bad', contentUrl: 'ftp://x/y.mp4', thumbnailUrl: 'https://x/y.jpg' },
+          ],
+        }),
+      } as unknown as Response
+    })
+    const out = await fetchVideoSitemapSuggestions(
+      { title: 'Coral Bleaching', summary: 'Reefs warming.', keywords: ['Coral'] },
+      fetchFn as unknown as typeof fetch,
+    )
+    expect(out).toHaveLength(1)
+    expect(out[0]).toMatchObject({
+      kind: 'video-sitemap',
+      url: 'https://oceantoday.noaa.gov/coral.jpg',
+      videoFileUrl: 'https://oceantoday.noaa.gov/coral.mp4',
+      attribution: 'NOAA Ocean Today',
+      title: 'Coral Bleaching',
+    })
+    expect(out[0].embedUrl).toBeUndefined()
+  })
+
+  it('degrades to [] with no query text or on any failure', async () => {
+    const idle = vi.fn()
+    expect(await fetchVideoSitemapSuggestions({}, idle as unknown as typeof fetch)).toEqual([])
+    expect(idle).not.toHaveBeenCalled()
+
+    const empty = vi.fn(async () => ({ ok: true, json: async () => ({ videos: [] }) }) as unknown as Response)
+    expect(await fetchVideoSitemapSuggestions({ title: 'x' }, empty as unknown as typeof fetch)).toEqual([])
+
+    const boom = vi.fn(async () => {
+      throw new Error('offline')
+    })
+    expect(await fetchVideoSitemapSuggestions({ title: 'x' }, boom as unknown as typeof fetch)).toEqual([])
   })
 })

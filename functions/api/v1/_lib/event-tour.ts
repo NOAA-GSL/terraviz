@@ -25,6 +25,23 @@ import type { CurrentEventRow } from './events-store'
 import { isNocookieEmbedUrl } from './youtube-channels'
 import { extractModelText, ENRICH_MODEL_ID, type EnrichEnv } from './events-enrich'
 
+/** The same-origin media-proxy path a direct-file video plays through,
+ *  so the immersive (VR) path gets the `Access-Control-Allow-Origin` a
+ *  `THREE.VideoTexture` upload needs (agency CDNs send none). The proxy
+ *  re-validates the host against the registered-source allowlist. */
+export function videoProxyUrl(fileUrl: string): string {
+  return `/api/v1/media/video-proxy?url=${encodeURIComponent(fileUrl)}`
+}
+
+/** Options for {@link buildEventTourTasks}. `allowedVideoHosts` is the
+ *  registered-source host allowlist (`allowlistedContentHosts`) the
+ *  caller reads from D1 — the authoritative guard on `video_file_url`,
+ *  injected so the builder stays pure. Empty/omitted → no direct-file
+ *  video is emitted. */
+export interface EventTourOptions {
+  allowedVideoHosts?: ReadonlySet<string>
+}
+
 /** Stops beyond this add length, not clarity — the plan pitches a
  *  ~30-second explainer, not a lecture. */
 export const MAX_TOUR_STOPS = 4
@@ -70,6 +87,7 @@ export type EventTourEvent = Pick<
   | 'occurred_start'
   | 'image_url'
   | 'video_embed_url'
+  | 'video_file_url'
   | 'bbox_n'
   | 'bbox_s'
   | 'bbox_w'
@@ -143,6 +161,7 @@ export function buildEventTourTasks(
   event: EventTourEvent,
   datasets: readonly EventTourDataset[],
   captions: EventTourCaptions,
+  opts: EventTourOptions = {},
 ): TourTaskDef[] {
   const tasks: TourTaskDef[] = []
   const target = eventFlyTarget(event)
@@ -194,12 +213,36 @@ export function buildEventTourTasks(
   if (videoEmbed) {
     tasks.push({ showPopupHtml: { popupID: 'event-intro-video', url: videoEmbed, allowScripts: true } })
   }
+  // A curator-picked DIRECT video file (a non-YouTube agency MP4) rides
+  // the media rail as a native <video> — distinct from the embed's
+  // iframe. Only a file whose host is on the registered-source allowlist
+  // (injected — this builder is pure) is emitted, and it plays through
+  // the same-origin media-proxy so the VR path gets CORS. The proxy URL
+  // is the video's id for the paired hide. The embed takes precedence:
+  // an event carries one video, so inconsistent/legacy data with both set
+  // never emits two intro videos.
+  const allowedHosts = opts.allowedVideoHosts
+  let videoFile: string | null = null
+  if (!videoEmbed && event.video_file_url && /^https?:\/\//i.test(event.video_file_url) && allowedHosts && allowedHosts.size > 0) {
+    try {
+      const host = new URL(event.video_file_url).hostname.toLowerCase()
+      if (allowedHosts.has(host)) videoFile = videoProxyUrl(event.video_file_url)
+    } catch {
+      videoFile = null
+    }
+  }
+  if (videoFile) {
+    tasks.push({ showVideo: { filename: videoFile } })
+  }
   tasks.push({ pauseSeconds: INTRO_HOLD_S }, { hideRect: 'event-intro' })
   if (introUrl) {
     tasks.push({ hideImage: 'event-intro-media' })
   }
   if (videoEmbed) {
     tasks.push({ hidePopupHtml: 'event-intro-video' })
+  }
+  if (videoFile) {
+    tasks.push({ hideVideo: videoFile })
   }
   datasets.slice(0, MAX_TOUR_STOPS).forEach((d, i) => {
     tasks.push({ loadDataset: { id: d.id, worldIndex: 1 } })

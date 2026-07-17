@@ -1,0 +1,80 @@
+# Video-source indexing (task: video-sitemap media source). Every 12
+# hours this triggers the backend's registry-driven video refresh
+# (POST /api/v1/publish/media/video-sources/refresh): the server iterates
+# its **enabled video sources** — the non-YouTube Video Sitemaps an
+# operator added in /publish/feeds (Media tab) — fetches each sitemap
+# itself, parses + embeds the entries whose text changed, and upserts
+# them into the video_index the "suggested media" engine matches against.
+#
+# The refresh is idempotent on (source_id, external_id) and only
+# re-embeds changed entries, so re-runs are cheap. Nothing here surfaces
+# publicly: indexed videos are only ever *suggestions* a curator picks in
+# the events / blog editors.
+#
+# Which sources run is an operator decision made in the Media tab, not
+# something this workflow hardcodes. Auth is the CF Access service token
+# (the same secrets the events importer uses). When TERRAVIZ_SERVER is
+# unset the run exits quietly — a fork without publisher infrastructure
+# shouldn't collect red runs.
+name: Refresh Video Sources
+
+on:
+  schedule:
+    # Off-minute, every 12 hours (agency video catalogs change slowly).
+    - cron: '41 */12 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  # The keepalive step PUTs .../actions/workflows/{id}/enable.
+  actions: write
+
+concurrency:
+  group: refresh-video-sources
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Trigger video-source refresh
+        env:
+          TERRAVIZ_SERVER: ${{ secrets.TERRAVIZ_SERVER }}
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${TERRAVIZ_SERVER:-}" ]]; then
+            echo "TERRAVIZ_SERVER secret is not configured — nothing to refresh."
+            exit 0
+          fi
+          endpoint="${TERRAVIZ_SERVER%/}/api/v1/publish/media/video-sources/refresh"
+          echo "POST ${endpoint}"
+          http_code=$(curl -sS -o /tmp/refresh-body.json -w '%{http_code}' \
+            -X POST "${endpoint}" \
+            -H "CF-Access-Client-Id: ${CF_ACCESS_CLIENT_ID}" \
+            -H "CF-Access-Client-Secret: ${CF_ACCESS_CLIENT_SECRET}" \
+            -H 'Content-Type: application/json' \
+            --data '{}')
+          echo "HTTP ${http_code}"
+          cat /tmp/refresh-body.json || true
+          echo
+          # 200 = per-source summary (individual source errors are recorded
+          # server-side, not fatal). Anything else fails the run.
+          if [[ "${http_code}" != "200" ]]; then
+            echo "::error::video-source refresh returned HTTP ${http_code}"
+            exit 1
+          fi
+
+      # Reset the 60-day scheduled-workflow inactivity timer (same pattern
+      # as import-events.yml).
+      - name: Keepalive
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --method PUT \
+            "repos/${{ github.repository }}/actions/workflows/refresh-video-sources.yml/enable" \
+            && echo "keepalive ok" \
+            || echo "::warning::keepalive failed — the 60-day disable timer was not reset"
