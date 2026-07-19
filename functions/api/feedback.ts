@@ -147,7 +147,12 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
   let body: unknown
   try {
     const raw = await context.request.text()
-    if (raw.length > MAX_STANDALONE_BODY_BYTES) {
+    // `raw.length` counts UTF-16 code units, and UTF-8 encodes each
+    // as 1-3 bytes — so length > cap always means bytes > cap (cheap
+    // fast path), but length <= cap still needs the encoded check to
+    // stop non-ASCII payloads sneaking past the byte cap.
+    if (raw.length > MAX_STANDALONE_BODY_BYTES
+      || new TextEncoder().encode(raw).byteLength > MAX_STANDALONE_BODY_BYTES) {
       return new Response(JSON.stringify({ error: 'Payload too large' }), {
         status: 413,
         headers: { ...standaloneCorsHeaders(), 'Content-Type': 'application/json' },

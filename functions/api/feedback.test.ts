@@ -193,6 +193,11 @@ describe('POST /api/feedback — standalone widget branch', () => {
     expect(
       (await feedbackPost(stubCtx({ env, rawBody: '9'.repeat(12_500_001) }))).status,
     ).toBe(413)
+    // The backstop counts UTF-8 bytes, not UTF-16 code units: 6.5M
+    // '✓' chars are 6.5M code units but 19.5MB encoded.
+    expect(
+      (await feedbackPost(stubCtx({ env, rawBody: '✓'.repeat(6_500_000) }))).status,
+    ).toBe(413)
   })
 
   it('decodes a PNG screenshot into R2 and stores only the key', async () => {

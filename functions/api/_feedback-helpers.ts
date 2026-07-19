@@ -324,8 +324,9 @@ function csvEscape(value: unknown): string {
   let s = String(value)
   // Formula-injection guard: several columns are visitor-controlled
   // free text, and spreadsheet apps execute cells starting with these
-  // characters. Prefix with a quote so they import as literal text.
-  if (/^[=+\-@\t\r]/.test(s)) {
+  // characters — including after leading whitespace (" =1+1").
+  // Prefix with a quote so they import as literal text.
+  if (/^[\t\r]/.test(s) || /^\s*[=+\-@]/.test(s)) {
     s = `'${s}`
   }
   if (/[",\r\n]/.test(s)) {
