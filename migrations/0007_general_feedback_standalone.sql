@@ -19,6 +19,16 @@
 --                     old rows and the small in-SPA captures
 --   status            triage state; every submission starts 'new'
 --   country           coarse reporter location from CF-IPCountry
+--
+-- destructive: reviewed
+-- Rollout reasoning: the DROP/RENAME is the SQLite CHECK-widening
+-- rebuild, applied as one migration batch — every row is copied into
+-- the replacement table (same column names/order, ids preserved via
+-- explicit id copy) before the old table is dropped. Code running
+-- against either schema version keeps working: pre-0007 code inserts
+-- and selects only columns that survive unchanged, and every added
+-- column is defaulted. Feedback volume is tiny, so the swap window
+-- carries no meaningful write risk.
 
 CREATE TABLE general_feedback_new (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
