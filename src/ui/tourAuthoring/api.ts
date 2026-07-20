@@ -262,8 +262,21 @@ function errorLabel(
       return 'Session expired — please sign in again'
     case 'not_found':
       return 'Tour not found'
-    case 'server':
-      return result.body || `Server error (${result.status ?? 'unknown'})`
+    case 'server': {
+      // The API sends `{ error, message }`; surface the human-readable
+      // message, never the raw JSON envelope (a 403 for a reviewer was
+      // rendering `{"error":"forbidden_role","message":"…"}` verbatim).
+      if (result.body) {
+        try {
+          const parsed = JSON.parse(result.body) as { message?: unknown }
+          if (typeof parsed.message === 'string' && parsed.message.trim()) return parsed.message
+        } catch {
+          // Not JSON — fall through to the raw body.
+        }
+        return result.body
+      }
+      return `Server error (${result.status ?? 'unknown'})`
+    }
     case 'validation':
       return result.errors[0]?.message ?? 'Validation failed'
   }

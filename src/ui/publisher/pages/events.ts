@@ -16,6 +16,8 @@
  * 403; gating here avoids a fetch-then-reject round-trip).
  */
 
+import { fetchFeatures, renderFeatureDisabledCard } from '../features'
+import { roleCan } from '../../../types/publisher-roles'
 import { t } from '../../../i18n'
 import { publisherGet, publisherSend, handleSessionError } from '../api'
 import { buildErrorCard } from '../components/error-card'
@@ -58,8 +60,10 @@ interface LocatorHolder {
 }
 
 /** Internal page state: the public options plus the locator holder that
- *  survives across re-renders within one page session. */
-type TriageState = EventsPageOptions & { locator: LocatorHolder }
+ *  survives across re-renders within one page session, and whether the
+ *  caller is an admin (gates the feed-Refresh action; the review
+ *  controls themselves gate per-event on `can_edit`). */
+type TriageState = EventsPageOptions & { locator: LocatorHolder; isAdmin: boolean; canCreate: boolean }
 
 function clientIsPrivileged(me: MeResponse): boolean {
   return me.is_admin === true || me.role === 'admin' || me.role === 'service'
@@ -81,6 +85,10 @@ function card(...children: HTMLElement[]): HTMLElement {
 }
 
 export async function renderEventsPage(mount: HTMLElement, options: EventsPageOptions = {}): Promise<void> {
+  if (!(await fetchFeatures()).events) {
+    renderFeatureDisabledCard(mount, 'events')
+    return
+  }
   const fetchFn = options.fetchFn
   mount.replaceChildren(shell(el('p', 'publisher-loading', [t('publisher.events.loading')])))
 
@@ -95,17 +103,18 @@ export async function renderEventsPage(mount: HTMLElement, options: EventsPageOp
     mount.replaceChildren(shell(buildErrorCard(meRes.kind, details)))
     return
   }
-  if (!clientIsPrivileged(meRes.data)) {
-    mount.replaceChildren(
-      shell(card(
-        el('h2', 'publisher-card-heading', [t('publisher.events.title')]),
-        el('p', 'publisher-events-restricted', [t('publisher.events.restricted')]),
-      )),
-    )
-    return
-  }
-
-  await loadAndRenderQueue(mount, { fetchFn, navigate: options.navigate, locator: { dispose: null } })
+  // The whole events queue is readable by any active publisher. Writes
+  // (approve / reject / edit / tour) gate per-event on `can_edit`; the
+  // feed-Refresh action stays admin-only (it drives the feed connectors).
+  await loadAndRenderQueue(mount, {
+    fetchFn,
+    navigate: options.navigate,
+    locator: { dispose: null },
+    isAdmin: clientIsPrivileged(meRes.data),
+    // Composing a manual event needs an authoring role — derived from
+    // the `me` read the page already made (no extra request).
+    canCreate: roleCan(meRes.data.role, 'content.create'),
+  })
 }
 
 /** Fetch the queue at `status` and render the triage view. `selectId`
@@ -277,10 +286,16 @@ function renderTopbar(
     filters.append(btn)
   }
 
+  // Feed Refresh is admin-only (it runs the feed connectors); New event
+  // needs an authoring role (reviewers get neither).
+  const toolbarBtns: HTMLElement[] = []
+  if (state.isAdmin) toolbarBtns.push(refreshBtn)
+  if (state.canCreate) toolbarBtns.push(newBtn)
+  const toolbar = el('div', 'publisher-events-toolbar', toolbarBtns)
   const bar = el('div', 'publisher-events-topbar', [
     el('div', 'publisher-events-topbar-head', [
       el('h2', 'publisher-card-heading', [t('publisher.events.title')]),
-      el('div', 'publisher-events-toolbar', [refreshBtn, newBtn]),
+      toolbar,
     ]),
     el('p', 'publisher-events-intro', [t('publisher.events.subtitle')]),
     filters,

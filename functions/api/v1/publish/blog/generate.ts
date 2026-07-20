@@ -24,13 +24,15 @@
 import type { CatalogEnv } from '../../_lib/env'
 import type { EnrichEnv } from '../../_lib/events-enrich'
 import type { PublisherData } from '../_middleware'
-import { isPrivileged } from '../../_lib/publisher-store'
+import { can } from '../../_lib/capabilities'
 import { writeAuditEvent } from '../../_lib/audit-store'
 import { getNodeProfile } from '../../_lib/node-profile-store'
+import { getEffectiveFeatures } from '../../_lib/node-settings-store'
 import { getCurrentEvent } from '../../_lib/events-store'
 import { generateBlogDraft, type BlogDraftLength } from '../../_lib/blog-generate'
 import { resolveHttpAssetUrl } from '../../_lib/r2-public-url'
 import { buildEventTourTasks, generateTourCaptions, type EventTourDataset } from '../../_lib/event-tour'
+import { allowlistedContentHosts } from '../../_lib/video-index-store'
 import { createDraftTour, deleteTour, writeTourDraftJson } from '../../_lib/tour-mutations'
 import { POST_MAX_DATASETS } from '../../_lib/blog-store'
 
@@ -55,9 +57,12 @@ export const onRequestPost: PagesFunction<CatalogEnv & EnrichEnv> = async contex
   if (!context.env.CATALOG_DB) {
     return jsonError(503, 'binding_missing', 'CATALOG_DB binding is not configured on this deployment.')
   }
+  // Authoring helper — open to any authoring role (they're drafting
+  // their own post; the companion tour it may create is owned by them).
+  // Reviewers (read-only) are refused.
   const publisher = (context.data as unknown as PublisherData).publisher
-  if (!isPrivileged(publisher)) {
-    return jsonError(403, 'forbidden_role', 'Generating blog drafts is restricted to admin and service callers.')
+  if (!can(publisher, 'content.create')) {
+    return jsonError(403, 'forbidden_role', 'Generating blog drafts requires an authoring role.')
   }
 
   let body: GenerateBody
@@ -104,6 +109,34 @@ export const onRequestPost: PagesFunction<CatalogEnv & EnrichEnv> = async contex
     return jsonError(400, 'no_datasets', 'None of the selected datasets are visible in the catalog.')
   }
 
+  // Cross-feature coupling: the middleware gates this route on `blog`,
+  // but grounding in an event needs `events` and the companion tour
+  // needs `tours`. Reject explicitly (field-error envelope) rather
+  // than silently ignoring the selection — the operator sees what the
+  // form refused.
+  const features = await getEffectiveFeatures(context.env)
+  const couplingErrors: Array<{ field: string; code: string; message: string }> = []
+  if (typeof body.eventId === 'string' && body.eventId.length > 0 && !features.events) {
+    couplingErrors.push({
+      field: 'eventId',
+      code: 'feature_disabled',
+      message: 'The events feature is disabled on this node — a draft cannot cite an event.',
+    })
+  }
+  if (body.includeTour === true && !features.tours) {
+    couplingErrors.push({
+      field: 'includeTour',
+      code: 'feature_disabled',
+      message: 'The tours feature is disabled on this node — a companion tour cannot be created.',
+    })
+  }
+  if (couplingErrors.length > 0) {
+    return new Response(JSON.stringify({ errors: couplingErrors }), {
+      status: 400,
+      headers: { 'Content-Type': CONTENT_TYPE },
+    })
+  }
+
   let event = null
   if (typeof body.eventId === 'string' && body.eventId.length > 0) {
     event = await getCurrentEvent(db, body.eventId)
@@ -139,7 +172,8 @@ export const onRequestPost: PagesFunction<CatalogEnv & EnrichEnv> = async contex
         thumbnailUrl: resolveHttpAssetUrl(context.env, d.thumbnail_ref),
       }))
       const captions = await generateTourCaptions(context.env, event, tourDatasets)
-      const tourTasks = buildEventTourTasks(event, tourDatasets, captions)
+      const allowedVideoHosts = await allowlistedContentHosts(context.env.CATALOG_DB)
+      const tourTasks = buildEventTourTasks(event, tourDatasets, captions, { allowedVideoHosts })
       const created = await createDraftTour(context.env, publisher, {
         title: `Event: ${event.title}`.slice(0, 200),
         // The vetted story image doubles as the tour's catalog-card

@@ -25,6 +25,7 @@
  * independently.
  */
 
+import { fetchFeatures, renderFeatureDisabledCard } from '../features'
 import { t } from '../../../i18n'
 import { publisherGet, publisherSend, handleSessionError } from '../api'
 import { buildErrorCard } from '../components/error-card'
@@ -36,6 +37,7 @@ import {
   fetchNhcConeSuggestion,
   fetchShakemapSuggestion,
   fetchYoutubeSuggestions,
+  fetchVideoSitemapSuggestions,
   looksLikeQuake,
   looksLikeTropical,
   type MediaSuggestion,
@@ -44,11 +46,6 @@ import type { ReviewEvent } from '../components/events/events-model'
 import { resolveRegion } from '../../../data/regions'
 import { renderMarkdown } from '../../../services/markdownRenderer'
 import type { PublisherDataset } from '../types'
-
-interface MeResponse {
-  role: string
-  is_admin: boolean
-}
 
 interface PostWire {
   id: string
@@ -63,9 +60,11 @@ interface PostWire {
   tourId: string | null
   coverImageUrl: string | null
   coverImageAlt: string | null
+  /** Whether the caller may edit this post (author or admin). Absent
+   *  on create / older payloads → treated as editable. */
+  can_edit?: boolean
 }
 
-const ME_ENDPOINT = '/api/v1/publish/me'
 const BLOG_ENDPOINT = '/api/v1/publish/blog'
 // Approved only: the public post drops a citation whose event isn't
 // approved, and generation grounds itself in the event's text — the
@@ -81,10 +80,6 @@ export interface BlogEditPageOptions {
   navigate?: (url: string) => void
   /** Post id when editing; omitted on /publish/blog/new. */
   postId?: string
-}
-
-function clientIsPrivileged(me: MeResponse): boolean {
-  return me.is_admin === true || me.role === 'admin' || me.role === 'service'
 }
 
 function el<K extends keyof HTMLElementTagNameMap>(
@@ -173,43 +168,92 @@ function withResolvedGeometry(ev: ReviewEvent): ReviewEvent {
   return { ...ev, geometry: { ...g, boundingBox: { n, s, w, e } } }
 }
 
+/** View-only rendering of a post the caller doesn't own — the
+ *  read half of read-all / write-own. Title + status + a sanitized
+ *  markdown render of the body, plus the public link when published.
+ *  No form, no Save. */
+function renderReadOnlyPost(
+  mount: HTMLElement,
+  post: PostWire,
+  navigate: (url: string) => void,
+): void {
+  const back = el('button', {
+    type: 'button',
+    className: 'publisher-button publisher-blog-back',
+    textContent: t('publisher.blog.editor.back'),
+  })
+  back.addEventListener('click', () => navigate('/publish/blog'))
+
+  const head = el('div', { className: 'publisher-blog-header' }, [
+    el('div', { className: 'publisher-page-titles' }, [
+      el('h2', { className: 'publisher-card-heading', textContent: post.title }),
+      el('span', {
+        className: `publisher-blog-badge publisher-blog-badge-${post.status}`,
+        textContent:
+          post.status === 'published'
+            ? t('publisher.blog.status.published')
+            : t('publisher.blog.status.draft'),
+      }),
+    ]),
+  ])
+
+  const notice = el('p', {
+    className: 'publisher-blog-readonly-notice',
+    textContent: t('publisher.blog.readonly.notice'),
+  })
+
+  const bodyView = el('div', { className: 'publisher-blog-preview publisher-markdown-body' })
+  // renderMarkdown runs marked + sanitizeMarkdownHtml (XSS-tested).
+  bodyView.innerHTML = renderMarkdown(post.bodyMd)
+
+  const children: HTMLElement[] = [back, head, notice]
+  if (post.status === 'published') {
+    const view = el('a', {
+      className: 'publisher-row-action publisher-blog-view-link',
+      href: `/blog/${encodeURIComponent(post.slug)}`,
+      textContent: t('publisher.blog.list.view'),
+    })
+    view.target = '_blank'
+    view.rel = 'noopener'
+    children.push(view)
+  }
+  children.push(bodyView)
+  mount.replaceChildren(shell(card(...children)))
+}
+
 export async function renderBlogEditPage(mount: HTMLElement, options: BlogEditPageOptions = {}): Promise<void> {
+  const features = await fetchFeatures()
+  if (!features.blog) {
+    renderFeatureDisabledCard(mount, 'blog')
+    return
+  }
   const fetchFn = options.fetchFn
   const navigate = options.navigate ?? ((url: string) => { window.location.href = url })
   mount.replaceChildren(shell(el('p', { className: 'publisher-loading', textContent: t('publisher.blog.loading') })))
 
-  const [meRes, postRes] = await Promise.all([
-    publisherGet<MeResponse>(ME_ENDPOINT, { fetchFn }),
-    options.postId
-      ? publisherGet<{ post: PostWire }>(`${BLOG_ENDPOINT}/${encodeURIComponent(options.postId)}`, { fetchFn })
-      : Promise.resolve(null),
-  ])
-  for (const res of [meRes, postRes]) {
-    if (!res || res.ok) continue
-    if (res.kind === 'session') {
+  const postRes = options.postId
+    ? await publisherGet<{ post: PostWire }>(`${BLOG_ENDPOINT}/${encodeURIComponent(options.postId)}`, { fetchFn })
+    : null
+  if (postRes && !postRes.ok) {
+    if (postRes.kind === 'session') {
       if (handleSessionError({ navigate: options.navigate }) === 'navigating') return
       mount.replaceChildren(shell(buildErrorCard('session')))
       return
     }
-    const details = res.kind === 'server' ? { status: res.status, body: res.body } : {}
-    mount.replaceChildren(shell(buildErrorCard(res.kind, details)))
-    return
-  }
-  if (!meRes.ok || (postRes && !postRes.ok)) return
-
-  if (!clientIsPrivileged(meRes.data)) {
-    mount.replaceChildren(
-      shell(
-        card(
-          el('h2', { className: 'publisher-card-heading', textContent: t('publisher.blog.editor.title') }),
-          el('p', { className: 'publisher-blog-restricted', textContent: t('publisher.blog.restricted') }),
-        ),
-      ),
-    )
+    const details = postRes.kind === 'server' ? { status: postRes.status, body: postRes.body } : {}
+    mount.replaceChildren(shell(buildErrorCard(postRes.kind, details)))
     return
   }
 
   const existing = postRes?.ok ? postRes.data.post : null
+
+  // Read-all / write-own: any active publisher may open the editor to
+  // create a draft, but a post authored by someone else is view-only.
+  // `can_edit` absent (create / older payload) is treated as editable.
+  if (existing && existing.can_edit === false) {
+    renderReadOnlyPost(mount, existing, navigate)
+    return
+  }
   let postId = existing?.id ?? null
   let postStatus: 'draft' | 'published' = existing?.status ?? 'draft'
   // The AI-generated companion tour (tours-row id). Set by a
@@ -352,6 +396,9 @@ export async function renderBlogEditPage(mount: HTMLElement, options: BlogEditPa
   lengthSelect.value = 'medium'
   const tourCheck = el('input', { type: 'checkbox', id: 'blog-include-tour' })
   const tourWrap = el('label', { className: 'publisher-blog-check' }, [tourCheck, t('publisher.blog.generate.includeTour')])
+  // The companion tour rides the tours toggle — the generate endpoint
+  // rejects includeTour while tours is off, so don't offer it.
+  tourWrap.hidden = !features.tours
   const genStatus = el('span', { className: 'publisher-blog-status' })
   genStatus.setAttribute('role', 'status')
   // Appears after a generate-with-tour: the companion tour is a draft
@@ -447,6 +494,7 @@ export async function renderBlogEditPage(mount: HTMLElement, options: BlogEditPa
       case 'shakemap': return t('publisher.events.suggest.shakemap')
       case 'nhc': return t('publisher.events.suggest.nhc')
       case 'youtube': return t('publisher.events.suggest.youtube')
+      case 'video-sitemap': return t('publisher.events.suggest.videoSitemap')
       case 'worldview': return t('publisher.events.suggest.worldview')
     }
   }
@@ -486,7 +534,11 @@ export async function renderBlogEditPage(mount: HTMLElement, options: BlogEditPa
   // (image sources only) "Set as cover". The agency-YouTube card is a
   // video — it inserts a linked thumbnail, never a cover.
   const mediaCard = (s: MediaSuggestion, badge: string): HTMLElement => {
-    const isVideo = s.kind === 'youtube' && typeof s.embedUrl === 'string'
+    // Both video sources link their thumbnail to the playable video: the
+    // agency-YouTube embed, or the non-YouTube direct file.
+    const videoTarget = s.embedUrl ?? s.videoFileUrl
+    const isVideo =
+      (s.kind === 'youtube' || s.kind === 'video-sitemap') && typeof videoTarget === 'string'
     const altText = s.title ?? badge
     const wrap = el('div', { className: 'publisher-blog-media-card' })
     const img = document.createElement('img')
@@ -510,7 +562,7 @@ export async function renderBlogEditPage(mount: HTMLElement, options: BlogEditPa
     })
     insertBtn.addEventListener('click', () => {
       insertIntoBody(
-        isVideo && s.embedUrl ? `[![${altText}](${s.url})](${s.embedUrl})` : `![${altText}](${s.url})`,
+        isVideo && videoTarget ? `[![${altText}](${s.url})](${videoTarget})` : `![${altText}](${s.url})`,
       )
     })
     actions.append(insertBtn)
@@ -636,6 +688,17 @@ export async function renderBlogEditPage(mount: HTMLElement, options: BlogEditPa
       if (token !== mediaToken) return
       if (rs.length) for (const r of rs) append(r, mediaBadge(r.kind))
       else setReason('youtube', t('publisher.blog.media.youtubeEmpty'))
+    })
+
+    // Non-YouTube agency video from the node's registered sitemaps —
+    // topic-matched against the cited event's text.
+    void fetchVideoSitemapSuggestions(
+      { title: ev.title, summary: ev.summary, keywords: ev.keywords },
+      ff,
+    ).then(rs => {
+      if (token !== mediaToken) return
+      if (rs.length) for (const r of rs) append(r, mediaBadge(r.kind))
+      else setReason('videoSitemap', t('publisher.blog.media.videoSitemapEmpty'))
     })
 
     renderNotes()
@@ -766,13 +829,17 @@ export async function renderBlogEditPage(mount: HTMLElement, options: BlogEditPa
     bodyField,
   )
   // Section 2 — Sources: the datasets + event the post is grounded in.
+  // The event picker rides the events toggle — the generate endpoint
+  // rejects an eventId while events is off, so don't offer one.
+  const evField = labelled(t('publisher.blog.event.label'), evSelect)
+  evField.hidden = !features.events
   const sourcesCard = card(
     el('h2', { className: 'publisher-card-heading', textContent: t('publisher.blog.tab.sources') }),
     el('p', { className: 'publisher-blog-intro', textContent: t('publisher.blog.grounding.intro') }),
     labelled(t('publisher.blog.picker.label'), dsSearch),
     dsCandidates,
     chips,
-    labelled(t('publisher.blog.event.label'), evSelect),
+    evField,
   )
   // Section 3 — Media: suggested imagery for the cited event, plus the
   // post's cover-image picker.
@@ -903,6 +970,8 @@ export async function renderBlogEditPage(mount: HTMLElement, options: BlogEditPa
       renderChips()
     }
   })
+  // Events off: the picker is hidden and the endpoint 403s — skip.
+  if (!features.events) return
   void publisherGet<{ events: ReviewEvent[] }>(EVENTS_ENDPOINT, { fetchFn }).then(res => {
     if (!res.ok) {
       // Mirror loadPublishedDatasets: route a session error through the

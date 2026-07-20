@@ -183,6 +183,8 @@ npm run screenshots:smoke   # gating interaction tests (search, Orbit, nav)
 | `src/config/endpoints.ts` | Externally-hosted endpoint configuration (catalog / proxy / NOAA / NASA base URLs) |
 | `src/types/image-sequence-constants.ts` | Constants shared by the publisher API (`functions/`), the GHA runner (`cli/`), and the portal (`src/`) for the image-sequence upload pipeline |
 | `src/types/zyra-workflow-constants.ts` | Constants shared by the publisher API (`functions/`), the GHA runner (`cli/`), and the portal (`src/`) for the Zyra workflow pipeline — stage/command allowlist, template fields, run statuses (`docs/ZYRA_INTEGRATION_PLAN.md`) |
+| `src/types/node-features.ts` | Per-node feature-toggle constants shared by the publisher API (`functions/`) and the portal + public SPA — `FEATURE_KEYS` / `FeatureMap`, all-on defaults, fail-open normalization (missing/unknown keys resolve to enabled) |
+| `src/types/publisher-roles.ts` | Publisher role → capability matrix shared by the publisher API (`functions/`) and the portal — `CAPABILITIES` / `ROLES` / `ROLE_CAPABILITIES`, `roleCan` / `capabilitiesForRole`, legacy-string `normalizeRole` (fail-closed to `reviewer`). The single source of truth for authorization (`docs/PUBLISHER_ROLES_PLAN.md`) |
 | `src/data/regions.ts` | Common region bounding boxes for name-based region resolution |
 | `src/services/orbitCharacter/index.ts` | `OrbitController` — public API for the Orbit character (owns the Three.js scene, rAF loop, state machine) |
 | `src/services/orbitCharacter/orbitScene.ts` | Three.js scene + per-frame update for the Orbit character |
@@ -212,6 +214,7 @@ npm run screenshots:smoke   # gating interaction tests (search, Orbit, nav)
 | `src/ui/publisher/index.ts` | Publisher portal entry point — lazy-loaded on `/publish/*`; mounts the History-API router + pages |
 | `src/ui/publisher/router.ts` | Tiny History-API router for the publisher portal |
 | `src/ui/publisher/api.ts` | Shared HTTP client for the publisher portal |
+| `src/ui/publisher/features.ts` | Portal-side feature-toggle helpers — module-cached `fetchFeatures()` over the authed no-store `publish/node-settings` read (fresh after every save; fail-open to all-enabled) + the org-name read off the public node-profile payload + the shared "feature turned off" card gated pages render instead of their content |
 | `src/ui/publisher/types.ts` | Wire types for portal-bound publisher API responses |
 | `src/ui/publisher/analytics-charts.ts` | Hand-rolled SVG chart helpers (bar series with Y-axis, mix bars, stat tiles) + CSV export helpers for the analytics tab — no charting library |
 | `src/ui/publisher/components/dataset-form.ts` | Shared dataset create / edit form |
@@ -241,14 +244,14 @@ npm run screenshots:smoke   # gating interaction tests (search, Orbit, nav)
 | `src/ui/publisher/pages/workflows.ts` | `/publish/workflows` — Zyra workflow list |
 | `src/ui/publisher/pages/workflow-detail.ts` | `/publish/workflows/:id` — workflow summary + run history + Run now |
 | `src/ui/publisher/pages/workflow-edit.ts` | `/publish/workflows/new` + `…/:id/edit` — workflow form (YAML→JSON client-side, server-side Validate) |
-| `src/ui/publisher/pages/featured-hero.ts` | `/publish/featured-hero` — set the "Right now" hero override (`docs/HERO_ADMIN_SCOPING.md`) |
+| `src/ui/publisher/pages/featured-hero.ts` | `/publish/featured-hero` — set the "Right now" hero override (`hero.manage`: editors / admins); callers without it get a read-only view of the current pin (`docs/HERO_ADMIN_SCOPING.md`) |
 | `src/ui/publisher/pages/node-profile.ts` | `/publish/node-profile` — edit the node / host-organization profile (org name, mission, about, region focus, tone, links) — the "about the host" context Phase 3d AI drafts ground themselves in |
 | `src/ui/publisher/pages/blog.ts` | `/publish/blog` — blog authoring list (drafts + published, status badges, New post) |
 | `src/ui/publisher/pages/blog-edit.ts` | `/publish/blog/new` + `…/:id/edit` — tabbed blog editor (Content / Sources / Media / AI draft): dataset/event grounding pickers, the **Media** tab (reuses the Events-tab `media-suggest` engine — Worldview / Commons / ShakeMap / NHC / agency YouTube + the cited event's story image — to insert imagery into the body or set the post's cover image), the AI Generate panel (tone/length/companion-tour → `POST /publish/blog/generate`), markdown body with the shared toolbar + sanitized Preview, Save/Publish/Unpublish |
 | `src/ui/publisher/pages/feeds.ts` | `/publish/feeds` — the current-events feed console: registered connectors (pause/resume/remove, Run now, last-run status), the curated preset gallery, and the bring-your-own RSS/Atom form (`docs/CURRENT_EVENTS_PLAN.md` §9) |
 | `src/ui/publisher/pages/events.ts` | `/publish/events` — current-events review queue: curator approve/reject of proposed events + their dataset links (`docs/CURRENT_EVENTS_PLAN.md` §5) |
-| `src/ui/publisher/pages/analytics.ts` | `/publish/analytics` — privileged analytics dashboard over the D1 rollups, incl. the MapLibre spatial-attention heatmap (Phase B of `docs/ANALYTICS_STORAGE_AND_ADMIN_PLAN.md`) |
-| `src/ui/publisher/pages/feedback.ts` | `/publish/feedback` — privileged feedback review (AI thumbs + bug/feature reports) over the D1 feedback tables; replaces the feedback-admin HTML dashboard (Phase C of `docs/ANALYTICS_STORAGE_AND_ADMIN_PLAN.md`) |
+| `src/ui/publisher/pages/analytics.ts` | `/publish/analytics` — read-only analytics dashboard over the D1 rollups (open to any active publisher), incl. the MapLibre spatial-attention heatmap (Phase B of `docs/ANALYTICS_STORAGE_AND_ADMIN_PLAN.md`) |
+| `src/ui/publisher/pages/feedback.ts` | `/publish/feedback` — read-only feedback review (AI thumbs + bug/feature reports; open to any active publisher) over the D1 feedback tables; replaces the feedback-admin HTML dashboard (Phase C of `docs/ANALYTICS_STORAGE_AND_ADMIN_PLAN.md`) |
 | `src/ui/publisher/pages/me.ts` | `/publish/me` — current-user identity + role display |
 | `src/ui/publisher/pages/users.ts` | `/publish/users` — admin-only Users tab: approve / reject / suspend / reactivate publishers and change roles (admin / publisher / readonly) |
 | `src/ui/tourAuthoring/index.ts` | Tour-authoring public surface — detects `?tourEdit=` and mounts the dock |

@@ -2011,6 +2011,8 @@
 .publisher-feedback-kind-bug { color: #ff8a8a; border-color: rgba(255, 138, 138, 0.4); }
 .publisher-feedback-kind-feature { color: #4ea1ff; border-color: rgba(78, 161, 255, 0.4); }
 .publisher-feedback-kind-other { color: #f2b34c; border-color: rgba(242, 179, 76, 0.4); }
+.publisher-feedback-kind-idea { color: #6fd08c; border-color: rgba(111, 208, 140, 0.4); }
+.publisher-feedback-kind-content { color: #c99cff; border-color: rgba(201, 156, 255, 0.4); }
 .publisher-feedback-tags {
   list-style: none;
   display: flex;
@@ -2087,6 +2089,32 @@
   border-radius: calc(6px * var(--ui-scale));
   border: 1px solid rgba(255, 255, 255, 0.1);
   display: block;
+}
+/* R2-backed screenshots render as a bounded thumbnail; clicking the
+   wrapping link opens the full-size image in a new tab. */
+.publisher-feedback-screenshot-link {
+  display: block;
+  cursor: zoom-in;
+}
+.publisher-feedback-screenshot-link .publisher-feedback-screenshot {
+  max-block-size: calc(240px * var(--ui-scale));
+  object-fit: contain;
+}
+.publisher-feedback-appstate {
+  margin-block-start: calc(0.75rem * var(--ui-scale));
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: calc(6px * var(--ui-scale));
+  padding: calc(0.5rem * var(--ui-scale)) calc(0.75rem * var(--ui-scale));
+}
+.publisher-feedback-appstate summary {
+  cursor: pointer;
+  font-size: calc(0.75rem * var(--ui-scale));
+  color: var(--color-text-muted, #999999);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.publisher-feedback-appstate[open] summary {
+  margin-block-end: calc(0.6rem * var(--ui-scale));
 }
 .publisher-feedback-row:focus-visible td {
   background: rgba(255, 255, 255, 0.06);
@@ -3241,6 +3269,12 @@
     border-block-end: none;
 }
 
+/* A built-in channel switched off for this node — dimmed, but its
+   label stays legible so the row reads as "present but paused". */
+.publisher-feeds-channel-row-off .publisher-feeds-row-label {
+    opacity: 0.55;
+}
+
 .publisher-feeds-preview {
     margin: 0.25rem 0 0.15rem;
     padding: 0.45rem 0.65rem;
@@ -3368,6 +3402,37 @@
 }
 /* One-line field hint (deck fields like "Geographic focus"). */
 .publisher-nodeprofile-hint {
+  font-size: calc(0.78rem * var(--ui-scale));
+  color: var(--color-text-muted, #aab2c0);
+}
+
+/* ---- Features card — per-feature toggle rows ---- */
+.publisher-nodeprofile-features {
+  display: flex;
+  flex-direction: column;
+  gap: calc(0.65rem * var(--ui-scale));
+  margin-block-start: calc(0.75rem * var(--ui-scale));
+}
+.publisher-nodeprofile-feature-row {
+  display: flex;
+  align-items: flex-start;
+  gap: calc(0.6rem * var(--ui-scale));
+  cursor: pointer;
+}
+.publisher-nodeprofile-feature-toggle {
+  margin-block-start: calc(0.2rem * var(--ui-scale));
+  flex-shrink: 0;
+}
+.publisher-nodeprofile-feature-text {
+  display: flex;
+  flex-direction: column;
+  gap: calc(0.1rem * var(--ui-scale));
+}
+.publisher-nodeprofile-feature-name {
+  font-size: calc(0.9rem * var(--ui-scale));
+  font-weight: 600;
+}
+.publisher-nodeprofile-feature-desc {
   font-size: calc(0.78rem * var(--ui-scale));
   color: var(--color-text-muted, #aab2c0);
 }
@@ -3988,6 +4053,12 @@
   font-size: calc(0.9rem * var(--ui-scale));
 }
 
+.publisher-import-restricted {
+  margin-block-start: calc(1.5rem * var(--ui-scale));
+  color: var(--color-text-muted, #aab2c0);
+  font-size: calc(0.85rem * var(--ui-scale));
+}
+
 .publisher-import-methods {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(calc(14rem * var(--ui-scale)), 1fr));
@@ -4428,6 +4499,36 @@
   margin: calc(1rem * var(--ui-scale)) 0 0;
   font-size: calc(0.8rem * var(--ui-scale));
   color: var(--color-text-muted, #999999);
+}
+
+/* Role → capability reference (collapsible) on the Team tab. */
+.publisher-role-guide {
+  margin-block: calc(1rem * var(--ui-scale)) calc(1.25rem * var(--ui-scale));
+}
+.publisher-role-guide-summary {
+  cursor: pointer;
+  font-weight: 600;
+  font-size: calc(0.9rem * var(--ui-scale));
+  padding-block: calc(0.35rem * var(--ui-scale));
+}
+.publisher-role-guide-intro {
+  margin: calc(0.5rem * var(--ui-scale)) 0 calc(0.75rem * var(--ui-scale));
+  max-inline-size: calc(46rem * var(--ui-scale));
+  font-size: calc(0.8rem * var(--ui-scale));
+  color: var(--color-text-muted, #999999);
+}
+/* Role columns are narrow yes/no marks; the capability label carries the row. */
+.publisher-role-guide-table th:not(:first-child),
+.publisher-role-guide-cell {
+  text-align: center;
+}
+.publisher-role-guide-cell {
+  color: var(--color-text-muted, #999999);
+  font-size: calc(0.95rem * var(--ui-scale));
+}
+.publisher-role-guide-yes {
+  color: var(--color-accent, #4ea1ff);
+  font-weight: 700;
 }
 .publisher-users-identity {
   display: flex;

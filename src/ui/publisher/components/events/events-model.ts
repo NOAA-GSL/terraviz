@@ -63,7 +63,18 @@ export interface ReviewEvent {
   /** Curator-picked agency video embed (youtube-nocookie/embed) — the
    *  generated tour frames it; independent of the story image. */
   videoEmbedUrl?: string
+  /** Curator-picked DIRECT video file (non-YouTube agency MP4) — the
+   *  generated tour plays it natively via the media-proxy. Mutually
+   *  exclusive with `videoEmbedUrl` in practice (an event has one video). */
+  videoFileUrl?: string
   links: ReviewLink[]
+  /** Whether the caller may review/edit this event: its owner (with
+   *  `content.edit.own`), or an `content.edit.any` holder
+   *  (editor / admin / service) — the latter also covers as-yet-unclaimed
+   *  events (`owner_id === null`), which are editable only at the `.any`
+   *  tier, not by any active publisher. Absent (older payload / fixture)
+   *  is treated as editable; the server is the authoritative gate. */
+  can_edit?: boolean
 }
 
 export interface EventsResponse {

@@ -4,9 +4,9 @@
  *
  * Replaces the hand-rolled HTML dashboard the legacy
  * `/api/feedback-admin` endpoint served (its `?action=` CSV/JSONL
- * machine exports survive and are linked from here). Privileged-only,
- * same client gate as featured-hero/analytics; data comes from
- * `GET /api/v1/publish/feedback`, which fronts the same
+ * machine exports survive and are linked from here). Read-only for
+ * any active publisher — the page never mutates feedback; data comes
+ * from `GET /api/v1/publish/feedback`, which fronts the same
  * `_feedback-helpers` data layer the old dashboard used.
  *
  * Two views, switched by tabs:
@@ -23,6 +23,7 @@
  * exact rows.
  */
 
+import { fetchFeatures, renderFeatureDisabledCard } from '../features'
 import { t } from '../../../i18n'
 import { formatDate, formatNumber } from '../../../i18n/format'
 import { publisherGet, handleSessionError, type PublisherApiResult } from '../api'
@@ -30,16 +31,10 @@ import { buildErrorCard } from '../components/error-card'
 import { ROUTE_CHANGE_START_EVENT } from '../router'
 import { renderBarSeries, renderStatTile } from '../analytics-charts'
 
-const ME_ENDPOINT = '/api/v1/publish/me'
 const FEEDBACK_ENDPOINT = '/api/v1/publish/feedback'
 const AI_EXPORT_URL = '/api/feedback-admin?action=ai-export&include_prompt=true'
 const GENERAL_EXPORT_URL = '/api/feedback-admin?action=general-export'
 const RANGE_CHOICES = [7, 30, 90, 365] as const
-
-interface MeResponse {
-  role: string
-  is_admin: boolean
-}
 
 interface AiRow {
   rating: string
@@ -76,6 +71,16 @@ interface GeneralRow {
   dataset_id: string | null
   created_at: string
   hasScreenshot: boolean
+  /** True when the screenshot is an R2-backed binary (standalone
+   *  widget) served by `view=screenshot-file`, rather than an inline
+   *  data URL from the JSON screenshot view. */
+  screenshotIsFile: boolean
+  source: string
+  rating: number | null
+  reporter_name: string
+  status: string
+  country: string
+  meta: Record<string, unknown> | null
 }
 
 interface GeneralData {
@@ -83,7 +88,9 @@ interface GeneralData {
   bugCount: number
   featureCount: number
   otherCount: number
-  byDay: Array<{ date: string; bugs: number; features: number; other: number }>
+  ideaCount: number
+  contentCount: number
+  byDay: Array<{ date: string; bugs: number; features: number; other: number; ideas: number; content: number }>
   recentFeedback: GeneralRow[]
 }
 
@@ -96,10 +103,6 @@ interface Envelope<T> {
 export interface FeedbackPageOptions {
   fetchFn?: typeof fetch
   navigate?: (url: string) => void
-}
-
-function clientIsPrivileged(me: MeResponse): boolean {
-  return me.is_admin === true || me.role === 'admin' || me.role === 'service'
 }
 
 function el<K extends keyof HTMLElementTagNameMap>(
@@ -130,34 +133,18 @@ export async function renderFeedbackPage(
   mount: HTMLElement,
   options: FeedbackPageOptions = {},
 ): Promise<void> {
+  if (!(await fetchFeatures()).feedback) {
+    renderFeatureDisabledCard(mount, 'feedback')
+    return
+  }
   const fetchFn = options.fetchFn
   mount.replaceChildren(
     shell(el('p', { className: 'publisher-loading', textContent: t('publisher.feedback.loading') })),
   )
 
-  const meRes = await publisherGet<MeResponse>(ME_ENDPOINT, { fetchFn })
-  if (!meRes.ok) {
-    if (meRes.kind === 'session') {
-      if (handleSessionError({ navigate: options.navigate }) === 'navigating') return
-      mount.replaceChildren(shell(buildErrorCard('session')))
-      return
-    }
-    const details = meRes.kind === 'server' ? { status: meRes.status, body: meRes.body } : {}
-    mount.replaceChildren(shell(buildErrorCard(meRes.kind, details)))
-    return
-  }
-  if (!clientIsPrivileged(meRes.data)) {
-    mount.replaceChildren(
-      shell(
-        el('h1', { textContent: t('publisher.feedback.title') }),
-        el('p', {
-          className: 'publisher-hero-restricted',
-          textContent: t('publisher.feedback.restricted'),
-        }),
-      ),
-    )
-    return
-  }
+  // Feedback review is a read-only surface, open to any active
+  // publisher. The per-view data reads below surface any session /
+  // server error; there's no separate role gate here.
 
   const state = { view: 'ai' as 'ai' | 'general', days: 30 as (typeof RANGE_CHOICES)[number] }
   const contentHost = el('section', { className: 'publisher-feedback-content' })
@@ -279,18 +266,27 @@ export async function renderFeedbackPage(
       renderStatTile(t('publisher.feedback.general.total'), formatNumber(data.totalCount)),
       renderStatTile(t('publisher.feedback.general.bugs'), formatNumber(data.bugCount)),
       renderStatTile(t('publisher.feedback.general.features'), formatNumber(data.featureCount)),
+      renderStatTile(t('publisher.feedback.general.ideas'), formatNumber(data.ideaCount)),
+      renderStatTile(t('publisher.feedback.general.content'), formatNumber(data.contentCount)),
       renderStatTile(t('publisher.feedback.general.other'), formatNumber(data.otherCount)),
     ])
     const children: HTMLElement[] = [tiles]
     const byDay = [...data.byDay].reverse()
     if (byDay.length > 0) {
-      children.push(
-        el('div', { className: 'publisher-analytics-funnel' }, [
-          seriesBlock(t('publisher.feedback.general.bugsPerDay'), byDay.map(d => ({ label: d.date, value: d.bugs }))),
-          seriesBlock(t('publisher.feedback.general.featuresPerDay'), byDay.map(d => ({ label: d.date, value: d.features }))),
-          seriesBlock(t('publisher.feedback.general.otherPerDay'), byDay.map(d => ({ label: d.date, value: d.other }))),
-        ]),
-      )
+      const blocks = [
+        seriesBlock(t('publisher.feedback.general.bugsPerDay'), byDay.map(d => ({ label: d.date, value: d.bugs }))),
+        seriesBlock(t('publisher.feedback.general.featuresPerDay'), byDay.map(d => ({ label: d.date, value: d.features }))),
+        seriesBlock(t('publisher.feedback.general.otherPerDay'), byDay.map(d => ({ label: d.date, value: d.other }))),
+      ]
+      // Standalone-widget kinds — only shown once such feedback exists
+      // so long-standing deploys don't grow two permanently-flat charts.
+      if (data.ideaCount > 0) {
+        blocks.push(seriesBlock(t('publisher.feedback.general.ideasPerDay'), byDay.map(d => ({ label: d.date, value: d.ideas ?? 0 }))))
+      }
+      if (data.contentCount > 0) {
+        blocks.push(seriesBlock(t('publisher.feedback.general.contentPerDay'), byDay.map(d => ({ label: d.date, value: d.content ?? 0 }))))
+      }
+      children.push(el('div', { className: 'publisher-analytics-funnel' }, blocks))
     }
     children.push(generalTable(data.recentFeedback))
     children.push(exportLink(GENERAL_EXPORT_URL, t('publisher.feedback.exportCsv')))
@@ -358,6 +354,7 @@ export async function renderFeedbackPage(
       el('thead', {}, [
         el('tr', {}, [
           el('th', { textContent: t('publisher.feedback.general.kind') }),
+          el('th', { textContent: t('publisher.feedback.general.rating') }),
           el('th', { textContent: t('publisher.feedback.general.message') }),
           el('th', { textContent: t('publisher.feedback.general.contact') }),
           el('th', { textContent: t('publisher.feedback.general.screenshot') }),
@@ -369,8 +366,9 @@ export async function renderFeedbackPage(
     for (const row of rows) {
       const tr = el('tr', { className: 'publisher-feedback-row' }, [
         el('td', {}, [kindPill(row.kind)]),
+        el('td', { textContent: ratingLabel(row.rating) }),
         clippedCell(row.message),
-        clippedCell(row.contact || '—'),
+        clippedCell(row.reporter_name || row.contact || '—'),
         el('td', { textContent: row.hasScreenshot ? '📷' : '' }), // i18n-exempt: pictographic indicator
         el('td', { className: 'publisher-feedback-when', textContent: formatWhen(row.created_at) }),
       ])
@@ -405,16 +403,42 @@ export async function renderFeedbackPage(
   function showGeneralDetail(row: GeneralRow): void {
     const fields: Array<[string, string]> = [
       [t('publisher.feedback.date'), formatWhen(row.created_at)],
+      [t('publisher.feedback.detail.status'), row.status || '—'],
+    ]
+    if (row.rating != null) fields.push([t('publisher.feedback.general.rating'), ratingLabel(row.rating)])
+    fields.push(
       [t('publisher.feedback.detail.platform'), row.platform || '—'],
       [t('publisher.feedback.dataset'), row.dataset_id || '—'],
       [t('publisher.feedback.general.message'), row.message],
-    ]
-    if (row.contact) fields.push([t('publisher.feedback.general.contact'), row.contact])
+    )
+    const reporter = [row.reporter_name, row.contact].filter(Boolean).join(' · ')
+    if (reporter) fields.push([t('publisher.feedback.detail.reporter'), reporter])
+    if (row.source) fields.push([t('publisher.feedback.detail.source'), row.source])
+    if (row.country) fields.push([t('publisher.feedback.detail.country'), row.country])
     if (row.url) fields.push([t('publisher.feedback.detail.url'), row.url])
     if (row.app_version) fields.push([t('publisher.feedback.detail.appVersion'), row.app_version])
     const panel = openOverlay(row.kind, fields, kindPill(row.kind))
 
-    if (row.hasScreenshot) {
+    if (row.hasScreenshot && row.screenshotIsFile) {
+      // R2-backed binary (standalone widget): the <img> streams it
+      // straight off the file view; clicking opens it full-size.
+      const fileUrl = `${FEEDBACK_ENDPOINT}?view=screenshot-file&id=${row.id}`
+      const img = el('img', { className: 'publisher-feedback-screenshot' })
+      img.src = fileUrl
+      img.loading = 'lazy'
+      img.alt = t('publisher.feedback.general.screenshotAlt')
+      const link = el('a', { className: 'publisher-feedback-screenshot-link' }, [img])
+      link.href = fileUrl
+      link.target = '_blank'
+      link.rel = 'noopener'
+      link.title = t('publisher.feedback.detail.openFullSize')
+      panel.append(
+        el('div', { className: 'publisher-feedback-detail-field' }, [
+          el('div', { className: 'publisher-feedback-detail-label', textContent: t('publisher.feedback.general.screenshotLabel') }),
+          link,
+        ]),
+      )
+    } else if (row.hasScreenshot) {
       const slot = el('div', { className: 'publisher-feedback-detail-field' }, [
         el('div', { className: 'publisher-feedback-detail-label', textContent: t('publisher.feedback.general.screenshotLabel') }),
         el('p', { className: 'publisher-loading', textContent: t('publisher.feedback.loading') }),
@@ -439,6 +463,21 @@ export async function renderFeedbackPage(
           img,
         )
       })
+    }
+
+    const metaEntries = row.meta ? Object.entries(row.meta) : []
+    if (metaEntries.length > 0) {
+      const appState = el('details', { className: 'publisher-feedback-appstate' })
+      appState.append(el('summary', { textContent: t('publisher.feedback.detail.appState') }))
+      for (const [key, value] of metaEntries) {
+        appState.append(
+          el('div', { className: 'publisher-feedback-detail-field' }, [
+            el('div', { className: 'publisher-feedback-detail-label', textContent: key }),
+            el('div', { className: 'publisher-feedback-detail-value', textContent: String(value) }),
+          ]),
+        )
+      }
+      panel.append(appState)
     }
   }
 
@@ -481,6 +520,11 @@ export async function renderFeedbackPage(
 
 function closeOverlay(): void {
   document.getElementById('publisher-feedback-overlay')?.remove()
+}
+
+function ratingLabel(rating: number | null): string {
+  if (rating == null) return '—'
+  return t('publisher.feedback.general.ratingValue', { rating: String(rating) })
 }
 
 function kindPill(kind: string): HTMLElement {

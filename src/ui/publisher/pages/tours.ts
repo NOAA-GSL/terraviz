@@ -8,8 +8,10 @@
  * for fresh publishers + a "New tour" button.
  */
 
+import { fetchFeatures, renderFeatureDisabledCard } from '../features'
 import { t } from '../../../i18n'
-import { clearWarmupFlag, handleSessionError } from '../api'
+import { clearWarmupFlag, handleSessionError, publisherGet } from '../api'
+import { roleCan } from '../../../types/publisher-roles'
 import {
   createDraftTour,
   deleteTour,
@@ -34,12 +36,24 @@ export interface ToursPageOptions {
   /** Confirmation hook — defaults to `window.confirm`. Tests
    *  inject a stub that auto-accepts or auto-cancels. */
   confirm?: (message: string) => boolean
+  /** Injectable for the create-gate's `/me` fetch (tests). */
+  fetchFn?: typeof fetch
 }
+
+interface MeResponse {
+  role: string
+}
+
+const ME_ENDPOINT = '/api/v1/publish/me'
 
 export async function renderToursPage(
   content: HTMLElement,
   options: ToursPageOptions = {},
 ): Promise<void> {
+  if (!(await fetchFeatures()).tours) {
+    renderFeatureDisabledCard(content, 'tours')
+    return
+  }
   const navigate = options.navigate ?? ((url: string) => {
     window.location.assign(url)
   })
@@ -78,6 +92,16 @@ export async function renderToursPage(
   content.replaceChildren(
     buildShell(result.tours, navigate, createDraft, del, retract, confirmFn),
   )
+
+  // Creating a tour needs `content.create` (contributor / author /
+  // editor / admin / service). A reviewer can read the list but not
+  // author, so drop the New-tour button rather than let the click 403.
+  // Progressive + fail-open — the server stays the authoritative gate.
+  void publisherGet<MeResponse>(ME_ENDPOINT, { fetchFn: options.fetchFn }).then(res => {
+    if (res.ok && !roleCan(res.data.role, 'content.create')) {
+      content.querySelector('.publisher-tour-new-btn')?.remove()
+    }
+  })
 }
 
 function buildLoadingShell(): HTMLElement {

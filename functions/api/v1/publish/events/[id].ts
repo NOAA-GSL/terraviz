@@ -39,9 +39,11 @@
 
 import type { CatalogEnv } from '../../_lib/env'
 import type { PublisherData } from '../_middleware'
-import { isPrivileged } from '../../_lib/publisher-store'
 import { writeAuditEvent } from '../../_lib/audit-store'
 import {
+  canMutateEvent,
+  canReviewEvent,
+  claimEventOwner,
   getCurrentEvent,
   listLinksForEvent,
   getEventDecorations,
@@ -85,7 +87,7 @@ interface ParsedReview {
    *  resolved from `edits.regionName` via `regions.ts` and/or a raw
    *  `edits.point`; `pointOnly` marks a point-without-region edit so the
    *  handler can preserve the event's existing bbox/region. */
-  edits?: { occurredStart?: string; geometry?: EventGeometry; pointOnly?: boolean; imageUrl?: string; imageAlt?: string | null; videoEmbedUrl?: string | null }
+  edits?: { occurredStart?: string; geometry?: EventGeometry; pointOnly?: boolean; imageUrl?: string; imageAlt?: string | null; videoEmbedUrl?: string | null; videoFileUrl?: string | null }
 }
 
 function jsonError(status: number, error: string, message: string): Response {
@@ -222,7 +224,21 @@ function parseReview(
         out.videoEmbedUrl = v
       }
     }
-    if (out.occurredStart !== undefined || out.geometry !== undefined || out.imageUrl !== undefined || out.imageAlt !== undefined || out.videoEmbedUrl !== undefined) edits = out
+    // Curator-picked DIRECT video file (the non-YouTube video-sitemap
+    // suggestion). http(s) + bounded at write, mirroring imageUrl; the
+    // registered-source host allowlist is enforced authoritatively where
+    // it plays (the tour emitter + the media-proxy). Empty string clears.
+    if (e.videoFileUrl != null) {
+      const v = typeof e.videoFileUrl === 'string' ? e.videoFileUrl.trim() : ''
+      if (v === '') {
+        out.videoFileUrl = null
+      } else if (!looksLikeUrl(v) || v.length > 2048) {
+        errors.push({ field: 'edits.videoFileUrl', code: 'invalid', message: '`edits.videoFileUrl` must be an http(s) URL of at most 2048 characters.' })
+      } else {
+        out.videoFileUrl = v
+      }
+    }
+    if (out.occurredStart !== undefined || out.geometry !== undefined || out.imageUrl !== undefined || out.imageAlt !== undefined || out.videoEmbedUrl !== undefined || out.videoFileUrl !== undefined) edits = out
   }
 
   if (event === undefined && links.length === 0 && addDatasetIds.length === 0 && edits === undefined && errors.length === 0) {
@@ -238,9 +254,6 @@ export const onRequestPost: PagesFunction<CatalogEnv, 'id'> = async context => {
     return jsonError(503, 'binding_missing', 'CATALOG_DB binding is not configured on this deployment.')
   }
   const publisher = (context.data as unknown as PublisherData).publisher
-  if (!isPrivileged(publisher)) {
-    return jsonError(403, 'forbidden_role', 'Reviewing events is restricted to admin and service callers.')
-  }
 
   const idParam = context.params.id
   const id = Array.isArray(idParam) ? idParam[0] : idParam
@@ -259,6 +272,21 @@ export const onRequestPost: PagesFunction<CatalogEnv, 'id'> = async context => {
   const db = context.env.CATALOG_DB
   const event = await getCurrentEvent(db, id)
   if (!event) return jsonError(404, 'not_found', `Event ${id} not found.`)
+
+  // Two-tier write gate (decision D1). Baseline: the caller must be able
+  // to *edit* this event at all (its owner with edit.own, or an editor
+  // with edit.any). Additionally, any approve/reject decision — on the
+  // event itself or its dataset links — is a *publish* action, so it
+  // needs a publishing role. A contributor may correct its own event's
+  // metadata (edits-only submit) but cannot approve it; approving an
+  // unclaimed feed event requires content.publish.any (editor/admin).
+  if (!canMutateEvent(publisher, event)) {
+    return jsonError(403, 'forbidden_owner', 'You can only edit events you own.')
+  }
+  const hasDecision = parsed.value.event != null || parsed.value.links.length > 0
+  if (hasDecision && !canReviewEvent(publisher, event)) {
+    return jsonError(403, 'forbidden_role', 'Approving or rejecting an event requires a publishing role.')
+  }
 
   // Apply metadata corrections before anything else, so a same-submit
   // approve acts on the corrected event, and re-run the matcher so the
@@ -282,6 +310,7 @@ export const onRequestPost: PagesFunction<CatalogEnv, 'id'> = async context => {
       imageUrl: edits.imageUrl,
       imageAlt: edits.imageAlt,
       videoEmbedUrl: edits.videoEmbedUrl,
+      videoFileUrl: edits.videoFileUrl,
     })
     // The matcher scores on date/place — an image-only edit changes
     // no signal, so skip the re-run for it.
@@ -321,6 +350,11 @@ export const onRequestPost: PagesFunction<CatalogEnv, 'id'> = async context => {
 
   if (parsed.value.event) {
     await setEventStatus(db, id, DECISION_TO_STATUS[parsed.value.event], publisher.id)
+    // Approving an unclaimed event claims it for the approver (no-op if
+    // it already has an owner). Reject never assigns ownership.
+    if (parsed.value.event === 'approve') {
+      await claimEventOwner(db, id, publisher.id)
+    }
   }
   for (const link of parsed.value.links) {
     await setLinkStatus(db, id, link.datasetId, DECISION_TO_STATUS[link.decision], publisher.id)
@@ -351,7 +385,9 @@ export const onRequestPost: PagesFunction<CatalogEnv, 'id'> = async context => {
   const links = await listLinksForEvent(db, id)
   return new Response(
     JSON.stringify({
-      event: updated ? toPublicEvent(updated, decorations) : null,
+      event: updated
+        ? { ...toPublicEvent(updated, decorations), can_edit: canMutateEvent(publisher, updated) }
+        : null,
       links: links.map(l => ({
         datasetId: l.dataset_id,
         score: l.match_score,

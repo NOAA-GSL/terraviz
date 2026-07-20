@@ -14,17 +14,21 @@
  * it (see `../api.ts` and the 3pb/A commit).
  */
 
+import { fetchFeatures, renderFeatureDisabledCard } from '../features'
 import { t } from '../../../i18n'
 import { plural } from '../../../i18n'
 import { clearWarmupFlag, handleSessionError, publisherGet, publisherSend,
 } from '../api'
 import { buildErrorCard, type ErrorCardDetails } from '../components/error-card'
+import { roleCan } from '../../../types/publisher-roles'
 import type {
   DatasetLifecycle,
   ListDatasetsResponse,
   PublisherDataset,
 } from '../types'
 import { lifecycleOf } from '../types'
+
+const ME_ENDPOINT = '/api/v1/publish/me'
 
 export interface DatasetsPageOptions {
   fetchFn?: typeof fetch
@@ -42,6 +46,11 @@ export interface DatasetsPageOptions {
    *  tab labels. Default true; tests that assert exact fetch call
    *  counts set it false to keep the probe out of the way. */
   fetchCounts?: boolean
+  /** Separate fetch seam for the create-gate's `/me` probe. Kept
+   *  distinct from `fetchFn` so the list-call-count assertions (which
+   *  chain `mockResolvedValueOnce` on `fetchFn`) are never perturbed by
+   *  the role lookup. Defaults to the standard authed fetch. */
+  meFetchFn?: typeof fetch
 }
 
 const DATASETS_ENDPOINT = '/api/v1/publish/datasets'
@@ -274,14 +283,40 @@ function renderTable(
     updatedCell.textContent = formatDate(d.updated_at)
     tr.appendChild(updatedCell)
 
-    // Actions: Edit (all rows) + Retract (published) / Delete
-    // (drafts & retracted). Live rows must be retracted before they
-    // can be deleted, which the API enforces with a 409 regardless
-    // of what the UI shows.
+    // Actions: for a row the caller can mutate, Edit (all rows) +
+    // Retract (published) / Delete (drafts & retracted). Live rows
+    // must be retracted before they can be deleted, which the API
+    // enforces with a 409 regardless of what the UI shows. The whole
+    // catalog is visible to every publisher, but writes stay
+    // owner-scoped — a row the caller can't mutate (`can_edit ===
+    // false`) shows only a View link. `can_edit` absent (older
+    // payload / fixture) is treated as editable; the server is the
+    // authoritative gate regardless of what the UI shows.
     const actionsCell = document.createElement('td')
     actionsCell.className = 'publisher-cell-actions'
     const statusSpan = document.createElement('span')
     statusSpan.className = 'publisher-row-action-status'
+
+    const canEdit = d.can_edit !== false
+    if (!canEdit) {
+      const detailHrefRO = `/publish/datasets/${encodeURIComponent(d.id)}`
+      const viewLink = document.createElement('a')
+      viewLink.href = detailHrefRO
+      viewLink.className = 'publisher-row-action publisher-row-view'
+      viewLink.textContent = t('publisher.datasets.action.view')
+      viewLink.setAttribute('aria-label', t('publisher.datasets.action.view.aria', { title: d.title }))
+      if (routerNavigate) {
+        viewLink.addEventListener('click', event => {
+          if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
+          event.preventDefault()
+          routerNavigate(detailHrefRO)
+        })
+      }
+      actionsCell.appendChild(viewLink)
+      tr.appendChild(actionsCell)
+      tbody.appendChild(tr)
+      continue
+    }
 
     const editHref = `/publish/datasets/${encodeURIComponent(d.id)}/edit`
     const editLink = document.createElement('a')
@@ -299,34 +334,40 @@ function renderTable(
     actionsCell.appendChild(editLink)
 
     if (status === 'published') {
-      const retractBtn = document.createElement('button')
-      retractBtn.type = 'button'
-      retractBtn.className = 'publisher-row-action publisher-row-retract'
-      retractBtn.textContent = t('publisher.datasets.action.retract')
-      retractBtn.setAttribute('aria-label', t('publisher.datasets.action.retract.aria', { title: d.title }))
-      retractBtn.addEventListener('click', () => {
-        if (!confirmFn(t('publisher.datasets.retract.confirm', { title: d.title }))) return
-        retractBtn.disabled = true
-        statusSpan.textContent = ''
-        // Clear any error styling from a prior failed attempt so a
-        // retry doesn't inherit the red status text.
-        statusSpan.classList.remove('publisher-row-action-status-error')
-        void publisherSend<{ dataset: unknown }>(
-          `/api/v1/publish/datasets/${encodeURIComponent(d.id)}/retract`,
-          {},
-          { method: 'POST', fetchFn },
-        ).then(result => {
-          if (!result.ok) {
-            retractBtn.disabled = false
-            statusSpan.textContent = t('publisher.datasets.retract.failed')
-            statusSpan.classList.add('publisher-row-action-status-error')
-            return
-          }
-          // No longer published — drop it from the Published tab.
-          tr.remove()
+      // Retract is a publish-tier action — hidden for a caller who
+      // can't publish this row (e.g. a contributor whose draft an editor
+      // published). No Delete on a live row either; it must be retracted
+      // first, which such a caller can't do.
+      if (d.can_publish !== false) {
+        const retractBtn = document.createElement('button')
+        retractBtn.type = 'button'
+        retractBtn.className = 'publisher-row-action publisher-row-retract'
+        retractBtn.textContent = t('publisher.datasets.action.retract')
+        retractBtn.setAttribute('aria-label', t('publisher.datasets.action.retract.aria', { title: d.title }))
+        retractBtn.addEventListener('click', () => {
+          if (!confirmFn(t('publisher.datasets.retract.confirm', { title: d.title }))) return
+          retractBtn.disabled = true
+          statusSpan.textContent = ''
+          // Clear any error styling from a prior failed attempt so a
+          // retry doesn't inherit the red status text.
+          statusSpan.classList.remove('publisher-row-action-status-error')
+          void publisherSend<{ dataset: unknown }>(
+            `/api/v1/publish/datasets/${encodeURIComponent(d.id)}/retract`,
+            {},
+            { method: 'POST', fetchFn },
+          ).then(result => {
+            if (!result.ok) {
+              retractBtn.disabled = false
+              statusSpan.textContent = t('publisher.datasets.retract.failed')
+              statusSpan.classList.add('publisher-row-action-status-error')
+              return
+            }
+            // No longer published — drop it from the Published tab.
+            tr.remove()
+          })
         })
-      })
-      actionsCell.appendChild(retractBtn)
+        actionsCell.appendChild(retractBtn)
+      }
     } else {
       const deleteBtn = document.createElement('button')
       deleteBtn.type = 'button'
@@ -420,9 +461,13 @@ interface PageState {
   /** Client-side search query — filters the loaded rows by title/slug.
    *  Persisted on the state so it survives Load-more / tab re-renders. */
   search: string
+  /** Whether the caller may create datasets (`content.create`). Drives
+   *  the New-draft button's presence. Defaults true (fail-open); flipped
+   *  off when the `/me` probe resolves as a non-authoring role. */
+  canCreate: boolean
 }
 
-function renderHeader(routerNavigate: (path: string) => void): HTMLElement {
+function renderHeader(routerNavigate: (path: string) => void, canCreate: boolean): HTMLElement {
   const header = document.createElement('header')
   header.className = 'publisher-page-header'
 
@@ -437,16 +482,21 @@ function renderHeader(routerNavigate: (path: string) => void): HTMLElement {
   titles.append(h1, sub)
   header.appendChild(titles)
 
-  const newButton = document.createElement('a')
-  newButton.href = '/publish/datasets/new'
-  newButton.className = 'publisher-button publisher-button-primary'
-  newButton.textContent = t('publisher.datasets.newDraft')
-  newButton.addEventListener('click', e => {
-    if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return
-    e.preventDefault()
-    routerNavigate('/publish/datasets/new')
-  })
-  header.appendChild(newButton)
+  // Creating a dataset needs `content.create`; a reviewer can read the
+  // catalog but not author, so omit the New-draft button rather than
+  // send them into a form they can't save.
+  if (canCreate) {
+    const newButton = document.createElement('a')
+    newButton.href = '/publish/datasets/new'
+    newButton.className = 'publisher-button publisher-button-primary publisher-datasets-new-btn'
+    newButton.textContent = t('publisher.datasets.newDraft')
+    newButton.addEventListener('click', e => {
+      if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return
+      e.preventDefault()
+      routerNavigate('/publish/datasets/new')
+    })
+    header.appendChild(newButton)
+  }
   return header
 }
 
@@ -461,7 +511,7 @@ function renderListShell(
   const shell = document.createElement('main')
   shell.className = 'publisher-shell'
 
-  shell.appendChild(renderHeader(options.routerNavigate))
+  shell.appendChild(renderHeader(options.routerNavigate, state.canCreate))
   shell.appendChild(
     renderTabs(
       state.status,
@@ -579,6 +629,10 @@ export async function renderDatasetsPage(
   content: HTMLElement,
   options: DatasetsPageOptions = {},
 ): Promise<void> {
+  if (!(await fetchFeatures()).datasets) {
+    renderFeatureDisabledCard(content, 'datasets')
+    return
+  }
   const status = currentStatus()
   renderLoading(content)
 
@@ -611,6 +665,7 @@ export async function renderDatasetsPage(
     isLoadingMore: false,
     counts: null,
     search: '',
+    canCreate: true,
   }
   const shellOptions = {
     confirm: options.confirm,
@@ -628,6 +683,17 @@ export async function renderDatasetsPage(
       }),
   }
   renderListShell(content, state, shellOptions)
+
+  // Create-gate: drop the New-draft button for a caller without
+  // `content.create` (a reviewer). Progressive + fail-open, and on a
+  // dedicated `meFetchFn` seam so the list-call-count assertions stay
+  // pristine. Re-renders the shell in place if the role gates it off.
+  void publisherGet<{ role: string }>(ME_ENDPOINT, { fetchFn: options.meFetchFn }).then(res => {
+    if (res.ok && res.data.role && !roleCan(res.data.role, 'content.create')) {
+      state.canCreate = false
+      renderListShell(content, state, shellOptions)
+    }
+  })
 
   // Best-effort per-lifecycle counts for the tab labels. Fired after
   // the first paint so the list never blocks on them; re-renders the

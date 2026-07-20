@@ -2,6 +2,19 @@ import { describe, expect, it, vi } from 'vitest'
 import { renderToursPage } from './tours'
 import type { TourListItem } from '../../tourAuthoring/api'
 
+/** Minimal `/me` fetch stub returning the given role. */
+function meFetch(role: string) {
+  return vi.fn(async () => ({
+    ok: true,
+    status: 200,
+    type: 'basic',
+    json: async () => ({ role }),
+    text: async () => JSON.stringify({ role }),
+  }) as unknown as Response)
+}
+
+const flush = () => new Promise<void>(r => setTimeout(r, 0))
+
 function makeTour(overrides: Partial<TourListItem> = {}): TourListItem {
   return {
     id: '01HXAAAAAAAAAAAAAAAAAAAAAA',
@@ -29,6 +42,30 @@ describe('renderToursPage (tour/A → /G)', () => {
     })
     expect(content.querySelector('.publisher-page-title')?.textContent).toBe('Tours')
     expect(content.querySelector('.publisher-empty')?.textContent).toContain('No tours yet')
+  })
+
+  it('hides the New-tour button for a reviewer (no content.create)', async () => {
+    const content = document.createElement('div')
+    await renderToursPage(content, {
+      navigate: () => {},
+      createDraft: vi.fn(),
+      listFn: vi.fn(async () => ({ tours: [], next_cursor: null })),
+      fetchFn: meFetch('reviewer'),
+    })
+    await flush()
+    expect(content.querySelector('.publisher-tour-new-btn')).toBeNull()
+  })
+
+  it('keeps the New-tour button for an author (content.create)', async () => {
+    const content = document.createElement('div')
+    await renderToursPage(content, {
+      navigate: () => {},
+      createDraft: vi.fn(),
+      listFn: vi.fn(async () => ({ tours: [], next_cursor: null })),
+      fetchFn: meFetch('author'),
+    })
+    await flush()
+    expect(content.querySelector('.publisher-tour-new-btn')).not.toBeNull()
   })
 
   it('renders a table of tours when the list has rows', async () => {

@@ -3,27 +3,32 @@
  * `docs/CURRENT_EVENTS_PLAN.md` §7 companion work).
  *
  * GET  → All posts (drafts included), newest-updated first; optional
- *        `?status=draft|published`. Any signed-in publisher may read
- *        the authoring list.
+ *        `?status=draft|published`. Readable by any active publisher;
+ *        each post carries `can_edit` so the portal knows whether to
+ *        offer the authoring controls.
  * POST → Create a draft post. Body: `{ title, bodyMd, summary?,
- *        datasetIds?, eventId? }`. Privileged-only (admin / service),
- *        400 `{ errors }` for body problems, audit-logged
- *        (`blog.create`). Posts are born `draft`; publishing is a
- *        separate action on `/publish/blog/:id` — nothing
- *        auto-publishes.
+ *        datasetIds?, eventId? }`. Requires `content.create` (an
+ *        authoring role — contributor and up); reviewers are 403.
+ *        Drafting a post makes them its author/owner; thereafter the
+ *        author (via `content.edit.own`) or any `content.edit.any`
+ *        holder (editor / admin / service) may edit it. 400 `{ errors }`
+ *        for body problems, audit-logged (`blog.create`). Posts are born
+ *        `draft`; publishing is a separate action on
+ *        `/publish/blog/:id` — nothing auto-publishes.
  */
 
 import type { CatalogEnv } from '../_lib/env'
 import type { PublisherData } from './_middleware'
-import { isPrivileged } from '../_lib/publisher-store'
 import { writeAuditEvent } from '../_lib/audit-store'
 import {
+  canMutateBlogPost,
   insertBlogPost,
   listBlogPosts,
   toPublicPost,
   validateBlogInput,
   type BlogPostStatus,
 } from '../_lib/blog-store'
+import { can } from '../_lib/capabilities'
 
 const CONTENT_TYPE = 'application/json; charset=utf-8'
 
@@ -46,8 +51,16 @@ export const onRequestGet: PagesFunction<CatalogEnv> = async context => {
     }
     status = statusParam
   }
+  const publisher = (context.data as unknown as PublisherData).publisher
   const rows = await listBlogPosts(context.env.CATALOG_DB, { status })
-  return new Response(JSON.stringify({ posts: rows.map(toPublicPost) }), {
+  // Stamp per-post `can_edit` so the portal only offers the authoring
+  // controls on posts the caller may mutate (their own, or any as an
+  // admin). The whole list is readable regardless.
+  const posts = rows.map(row => ({
+    ...toPublicPost(row),
+    can_edit: canMutateBlogPost(publisher, row),
+  }))
+  return new Response(JSON.stringify({ posts }), {
     status: 200,
     headers: { 'Content-Type': CONTENT_TYPE, 'Cache-Control': 'private, no-store' },
   })
@@ -57,9 +70,12 @@ export const onRequestPost: PagesFunction<CatalogEnv> = async context => {
   if (!context.env.CATALOG_DB) {
     return jsonError(503, 'binding_missing', 'CATALOG_DB binding is not configured on this deployment.')
   }
+  // Any authoring role may create a draft; `insertBlogPost` stamps them
+  // as author, and only the author (or an editor/admin) may edit it
+  // after. Reviewers (read-only) are refused here.
   const publisher = (context.data as unknown as PublisherData).publisher
-  if (!isPrivileged(publisher)) {
-    return jsonError(403, 'forbidden_role', 'Creating blog posts is restricted to admin and service callers.')
+  if (!can(publisher, 'content.create')) {
+    return jsonError(403, 'forbidden_role', 'Creating blog posts requires an authoring role.')
   }
 
   let body: unknown

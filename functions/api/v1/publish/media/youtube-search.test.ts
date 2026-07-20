@@ -6,7 +6,8 @@
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { onRequestGet as searchGet, parseYoutubeSearch } from './youtube-search'
+import { mergeChannelCandidates, onRequestGet as searchGet, parseYoutubeSearch } from './youtube-search'
+import { channelName, isAllowlistedChannel } from '../../_lib/youtube-channels'
 import { asD1, makeKV, seedFixtures } from '../../_lib/test-helpers'
 import type { PublisherRow } from '../../_lib/publisher-store'
 
@@ -73,6 +74,65 @@ describe('parseYoutubeSearch', () => {
   })
 })
 
+describe('agency allowlist', () => {
+  // Verified channel ids (each confirmed against the channel's own
+  // youtube.com/feeds/videos.xml title) → guard against an accidental
+  // edit silently dropping one from the reputability gate.
+  const VERIFIED: Array<[string, string]> = [
+    ['UCLA_DiR1FfKNvjuUpBHmylQ', 'NASA'],
+    ['UCAY-SMFNfynqz1bdoaV8BeQ', 'NASA Goddard'],
+    ['UCryGec9PdUCLjpJW2mgCuLw', 'NASA Jet Propulsion Laboratory'],
+    ['UCe9IxQeBttZIYl5c43ycf9g', 'NOAA'],
+    ['UC9hQvMjzSxurMirYDgOMezw', 'National Weather Service (NWS)'],
+    ['UCv0qlvvLtEuCxAoEitAuoFg', 'NOAA/NWS National Hurricane Center'],
+    ['UCJJqaSw7Z7SD7TM80cViEGg', 'NOAA Satellites'],
+    ['UCIBaDdAbGlFDeS33shmlD0A', 'European Space Agency, ESA'],
+    ['UCdK5sfMQcJ64q8AGR_7-ZRw', 'Copernicus ECMWF'],
+    ['UChpGvNdQPdI7EI75z6oelTw', 'ECMWF'],
+    ['UCQxQlcjXuh32ctfX3QHiyRg', 'National Snow and Ice Data Center'],
+    ['UCjheKtYFOKfSgEZAHfN1iVg', 'NSF NCAR & UCAR'],
+  ]
+
+  it.each(VERIFIED)('allowlists %s → %s', (id, name) => {
+    expect(isAllowlistedChannel(id)).toBe(true)
+    expect(channelName(id)).toBe(name)
+  })
+
+  it('rejects a non-allowlisted channel', () => {
+    expect(isAllowlistedChannel('UCspoofedChannelNotAllowed')).toBe(false)
+    expect(channelName('UCspoofedChannelNotAllowed')).toBeNull()
+  })
+})
+
+describe('mergeChannelCandidates', () => {
+  const cand = (videoId: string, channelId = NASA): ReturnType<typeof parseYoutubeSearch>[number] => ({
+    videoId,
+    title: '',
+    channelId,
+    channelName: '',
+  })
+
+  it('interleaves channels round-robin and caps at the shortlist', () => {
+    const merged = mergeChannelCandidates([
+      [cand('a1'), cand('a2'), cand('a3')],
+      [cand('b1'), cand('b2')],
+      [cand('c1')],
+    ])
+    // One from each channel before any channel's second — capped at 4.
+    expect(merged.map(v => v.videoId)).toEqual(['a1', 'b1', 'c1', 'a2'])
+  })
+
+  it('de-dupes a video cross-posted to two channels', () => {
+    const merged = mergeChannelCandidates([[cand('dup')], [cand('dup')], [cand('x')]])
+    expect(merged.map(v => v.videoId)).toEqual(['dup', 'x'])
+  })
+
+  it('is empty for no channels or all-empty channels', () => {
+    expect(mergeChannelCandidates([])).toEqual([])
+    expect(mergeChannelCandidates([[], []])).toEqual([])
+  })
+})
+
 describe('GET /api/v1/publish/media/youtube-search', () => {
   it('is 403 for a publisher-role account (no upstream request)', async () => {
     const fetchFn = stubUpstream([])
@@ -96,21 +156,49 @@ describe('GET /api/v1/publish/media/youtube-search', () => {
     expect(fetchFn).not.toHaveBeenCalled()
   })
 
-  it('searches, filters to the allowlist, and caches the result', async () => {
+  it('searches per channel, filters to the allowlist, and caches the result', async () => {
     const fetchFn = stubUpstream([item('abc123XYZ', NASA), item('bad', 'UCnope')])
     const env = { YOUTUBE_API_KEY: 'k', CATALOG_KV: makeKV() }
     const first = await searchGet(ctx({ q: 'hurricane delta', env }))
     expect(first.headers.get('X-Cache')).toBe('MISS')
     const { videos } = await readJson<{ videos: Array<{ videoId: string }> }>(first)
+    // Every channel's stub returns the same NASA hit — de-duped to one.
     expect(videos.map(v => v.videoId)).toEqual(['abc123XYZ'])
-    // The upstream request carried the key + query.
+    // Each upstream request is channelId-scoped and carries the key + query.
     const upstreamUrl = String(fetchFn.mock.calls[0][0])
     expect(upstreamUrl).toContain('key=k')
     expect(upstreamUrl).toContain('q=hurricane+delta')
+    expect(upstreamUrl).toContain('channelId=')
+    // One request per built-in agency channel (fan-out, not one global search).
+    const callsAfterFirst = fetchFn.mock.calls.length
+    expect(callsAfterFirst).toBeGreaterThan(1)
 
     const second = await searchGet(ctx({ q: 'hurricane delta', env }))
     expect(second.headers.get('X-Cache')).toBe('HIT')
-    expect(fetchFn).toHaveBeenCalledTimes(1)
+    // The cache hit issues no further upstream requests.
+    expect(fetchFn.mock.calls.length).toBe(callsAfterFirst)
+  })
+
+  it('fans out one channelId-scoped search per channel and merges across them', async () => {
+    const NOAA_EDU = 'UC012BUr9u82skTv9bOfmG4w'
+    // A per-channel stub: a distinct hit for two of the agency channels,
+    // nothing for the rest — so a merged two-video result can only come
+    // from separate per-channel requests, not a single global search.
+    const fetchFn = vi.fn(async (input: RequestInfo | URL) => {
+      const channelId = new URL(String(input)).searchParams.get('channelId')
+      const vid = channelId === NASA ? 'nasaVIDabc' : channelId === NOAA_EDU ? 'noaaVIDxyz' : null
+      return { ok: true, json: async () => ({ items: vid ? [item(vid, channelId!)] : [] }) } as unknown as Response
+    })
+    vi.stubGlobal('fetch', fetchFn)
+    const res = await searchGet(ctx({ q: 'coastal storm', env: { YOUTUBE_API_KEY: 'k' } }))
+    const { videos } = await readJson<{ videos: Array<{ videoId: string }> }>(res)
+    expect(videos.map(v => v.videoId).sort()).toEqual(['nasaVIDabc', 'noaaVIDxyz'])
+    // Every request was scoped to a single channel, and both hit channels
+    // were among those queried.
+    const queried = fetchFn.mock.calls.map(c => new URL(String(c[0])).searchParams.get('channelId'))
+    expect(queried.every(id => typeof id === 'string' && id.length > 0)).toBe(true)
+    expect(queried).toContain(NASA)
+    expect(queried).toContain(NOAA_EDU)
   })
 
   it("includes a node's custom channels in the effective allowlist", async () => {
@@ -124,6 +212,24 @@ describe('GET /api/v1/publish/media/youtube-search', () => {
     const res = await searchGet(ctx({ q: 'local flood', env }))
     const { videos } = await readJson<{ videos: Array<{ videoId: string; channelName: string }> }>(res)
     expect(videos).toEqual([{ videoId: 'cust123XYZ', title: 'A briefing', channelId: CUSTOM, channelName: 'City Museum' }])
+  })
+
+  it('excludes a built-in channel the node has switched off', async () => {
+    const sqlite = seedFixtures({ count: 0 })
+    sqlite
+      .prepare(`INSERT INTO youtube_channels_disabled (channel_id, disabled_by, created_at) VALUES (?, NULL, ?)`)
+      .run(NASA, '2026-07-01T00:00:00.000Z')
+    // NASA would match, but it's disabled → never queried, never surfaced.
+    const fetchFn = vi.fn(async (input: RequestInfo | URL) => {
+      const channelId = new URL(String(input)).searchParams.get('channelId')
+      const vid = channelId === NASA ? 'nasaVIDabc' : null
+      return { ok: true, json: async () => ({ items: vid ? [item(vid, channelId!)] : [] }) } as unknown as Response
+    })
+    vi.stubGlobal('fetch', fetchFn)
+    const res = await searchGet(ctx({ q: 'hurricane', env: { YOUTUBE_API_KEY: 'k', CATALOG_DB: asD1(sqlite) } }))
+    expect(await readJson<{ videos: unknown[] }>(res)).toEqual({ videos: [] })
+    const queried = fetchFn.mock.calls.map(c => new URL(String(c[0])).searchParams.get('channelId'))
+    expect(queried).not.toContain(NASA)
   })
 
   it('degrades to defaults-only (not a 500) when the custom-channels table is missing', async () => {
@@ -143,7 +249,7 @@ describe('GET /api/v1/publish/media/youtube-search', () => {
     expect(videos.map(v => v.videoId)).toEqual(['abc123XYZ'])
   })
 
-  it('degrades to [] on upstream failure and does not cache it', async () => {
+  it('degrades to [] when every channel search fails and does not cache it', async () => {
     const boom = vi.fn(async () => {
       throw new Error('quota exceeded')
     })
@@ -151,8 +257,11 @@ describe('GET /api/v1/publish/media/youtube-search', () => {
     const env = { YOUTUBE_API_KEY: 'k', CATALOG_KV: makeKV() }
     const res = await searchGet(ctx({ q: 'hurricane', env }))
     expect(await readJson<{ videos: unknown[] }>(res)).toEqual({ videos: [] })
+    const callsAfterFirst = boom.mock.calls.length
+    expect(callsAfterFirst).toBeGreaterThan(0)
     const again = await searchGet(ctx({ q: 'hurricane', env }))
     expect(again.headers.get('X-Cache')).toBe('MISS') // not pinned
-    expect(boom).toHaveBeenCalledTimes(2)
+    // The un-cached empty result forces a fresh fan-out on the retry.
+    expect(boom.mock.calls.length).toBeGreaterThan(callsAfterFirst)
   })
 })

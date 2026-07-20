@@ -12,9 +12,11 @@
  */
 
 import { t } from '../../../i18n'
+import { FEATURE_KEYS, normalizeFeatures, type FeatureKey, type FeatureMap } from '../../../types/node-features'
 import { publisherGet, publisherSend, handleSessionError } from '../api'
 import { buildErrorCard } from '../components/error-card'
 import { attachToolbar, renderMarkdownToolbar } from '../components/markdown-toolbar'
+import { FEATURES_CHANGE_EVENT, featureLabel, resetFeaturesCache } from '../features'
 import { renderMarkdown } from '../../../services/markdownRenderer'
 
 /** Keep in sync with the backend store bounds
@@ -52,6 +54,7 @@ interface ProfileResponse {
 const ME_ENDPOINT = '/api/v1/publish/me'
 const PROFILE_ENDPOINT = '/api/v1/publish/node-profile'
 const LOGO_ENDPOINT = '/api/v1/publish/node-profile/logo'
+const SETTINGS_ENDPOINT = '/api/v1/publish/node-settings'
 
 /** Keep in sync with `LOGO_MAX_BYTES` / `LOGO_CONTENT_TYPES` in the
  *  backend store — the API is the hard cap; these stop bad picks
@@ -86,9 +89,12 @@ export async function renderNodeProfilePage(
   const fetchFn = options.fetchFn
   mount.replaceChildren(shell(el('p', { className: 'publisher-loading', textContent: t('publisher.nodeProfile.loading') })))
 
-  const [meRes, profileRes] = await Promise.all([
+  const [meRes, profileRes, settingsRes] = await Promise.all([
     publisherGet<MeResponse>(ME_ENDPOINT, { fetchFn }),
     publisherGet<ProfileResponse>(PROFILE_ENDPOINT, { fetchFn }),
+    // Best-effort — an older deploy without the route (404) just
+    // hides the Features card rather than failing the page.
+    publisherGet<{ features: unknown }>(SETTINGS_ENDPOINT, { fetchFn }),
   ])
 
   for (const res of [meRes, profileRes]) {
@@ -118,6 +124,13 @@ export async function renderNodeProfilePage(
 
   renderForm(mount, {
     profile: profileRes.data.profile,
+    // Toggle writes are admin-only (stricter than this page's
+    // privileged gate) — a service caller sees the profile form but
+    // not the Features card.
+    features:
+      settingsRes.ok && (meRes.data.is_admin === true || meRes.data.role === 'admin')
+        ? normalizeFeatures(settingsRes.data.features)
+        : null,
     fetchFn,
     navigate: options.navigate,
   })
@@ -131,6 +144,9 @@ function shell(...children: HTMLElement[]): HTMLElement {
 
 interface FormState {
   profile: ProfileResponse['profile']
+  /** Current toggle set, or null to hide the Features card (older
+   *  deploy, or a non-admin caller). */
+  features: FeatureMap | null
   fetchFn?: typeof fetch
   navigate?: (url: string) => void
 }
@@ -338,7 +354,100 @@ function renderForm(mount: HTMLElement, state: FormState): void {
 
   const actions = el('div', { className: 'publisher-nodeprofile-actions' }, [saveBtn, status])
 
-  mount.replaceChildren(shell(header, callout, organization, missionAbout, links, actions))
+  const sections: HTMLElement[] = [header, callout, organization, missionAbout, links, actions]
+  if (state.features) sections.push(buildFeaturesCard(state.features, state))
+  mount.replaceChildren(shell(...sections))
+}
+
+/**
+ * The Features card — one toggle per feature area, with its own Save
+ * (independent of the profile PUT, so an unfilled profile never
+ * blocks toggle changes). Admin-only: the API enforces `isAdmin` on
+ * the PUT; the card simply isn't built for other callers. Saving
+ * resets the portal's cached toggle map and fires
+ * {@link FEATURES_CHANGE_EVENT} so the sidebar re-renders without a
+ * reload. Server-side propagation to the public surfaces is
+ * KV-cached, so the saved-state hint mentions the short delay.
+ */
+function buildFeaturesCard(features: FeatureMap, state: FormState): HTMLElement {
+  const checkboxes = new Map<FeatureKey, HTMLInputElement>()
+
+  const rows = FEATURE_KEYS.map(key => {
+    const checkbox = el('input', {
+      type: 'checkbox',
+      className: 'publisher-nodeprofile-feature-toggle',
+      checked: features[key],
+    })
+    checkboxes.set(key, checkbox)
+    const text = el('span', { className: 'publisher-nodeprofile-feature-text' }, [
+      el('span', { className: 'publisher-nodeprofile-feature-name', textContent: featureLabel(key) }),
+      el('span', { className: 'publisher-nodeprofile-feature-desc', textContent: featureDescription(key) }),
+    ])
+    return el('label', { className: 'publisher-nodeprofile-feature-row' }, [checkbox, text])
+  })
+
+  const status = el('div', { className: 'publisher-nodeprofile-status', role: 'status' })
+  const saveBtn = el('button', {
+    type: 'button',
+    className: 'publisher-button publisher-button-primary',
+    textContent: t('publisher.nodeProfile.features.save'),
+  })
+  saveBtn.addEventListener('click', () => {
+    status.textContent = ''
+    status.classList.remove('publisher-nodeprofile-status-error')
+    const body: { features: Record<string, boolean> } = { features: {} }
+    for (const [key, checkbox] of checkboxes) body.features[key] = checkbox.checked
+    saveBtn.disabled = true
+    void publisherSend<{ features: unknown }>(SETTINGS_ENDPOINT, body, { method: 'PUT', fetchFn: state.fetchFn })
+      .then(res => {
+        if (res.ok) {
+          status.textContent = t('publisher.nodeProfile.features.saved')
+          resetFeaturesCache()
+          window.dispatchEvent(new CustomEvent(FEATURES_CHANGE_EVENT))
+          return
+        }
+        if (res.kind === 'session') {
+          if (handleSessionError({ navigate: state.navigate }) === 'navigating') return
+          status.textContent = t('publisher.nodeProfile.error.session')
+        } else if (res.kind === 'validation' && res.errors && res.errors.length > 0) {
+          status.textContent = res.errors[0].message
+        } else {
+          status.textContent = t('publisher.nodeProfile.error.generic')
+        }
+        status.classList.add('publisher-nodeprofile-status-error')
+      })
+      .finally(() => {
+        saveBtn.disabled = false
+      })
+  })
+
+  return card(
+    heading(t('publisher.nodeProfile.features.heading')),
+    el('p', { className: 'publisher-nodeprofile-hint', textContent: t('publisher.nodeProfile.features.intro') }),
+    el('div', { className: 'publisher-nodeprofile-features' }, rows),
+    el('div', { className: 'publisher-nodeprofile-actions' }, [saveBtn, status]),
+  )
+}
+
+function featureDescription(key: FeatureKey): string {
+  switch (key) {
+    case 'events':
+      return t('publisher.nodeProfile.features.desc.events')
+    case 'blog':
+      return t('publisher.nodeProfile.features.desc.blog')
+    case 'hero':
+      return t('publisher.nodeProfile.features.desc.hero')
+    case 'tours':
+      return t('publisher.nodeProfile.features.desc.tours')
+    case 'workflows':
+      return t('publisher.nodeProfile.features.desc.workflows')
+    case 'analytics':
+      return t('publisher.nodeProfile.features.desc.analytics')
+    case 'feedback':
+      return t('publisher.nodeProfile.features.desc.feedback')
+    case 'datasets':
+      return t('publisher.nodeProfile.features.desc.datasets')
+  }
 }
 
 /**

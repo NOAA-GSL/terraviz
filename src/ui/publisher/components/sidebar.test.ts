@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { renderSidebar, teardownSidebar, initialsOf } from './sidebar'
+import { defaultFeatures } from '../../../types/node-features'
 import { PublisherRouter, ROUTE_CHANGE_EVENT } from '../router'
 
 function clickWith(el: HTMLElement, init: Partial<MouseEventInit> = {}): MouseEvent {
@@ -36,13 +37,16 @@ describe('renderSidebar', () => {
 
   it('renders the non-admin nav in grouped order', () => {
     renderSidebar(host, router)
-    // Admin-only items (Feeds/Events/Blog/Node profile/Team) are hidden.
+    // Events and Blog are visible to every publisher (read-all / write-own);
+    // admin-only items (Feeds/Node profile/Team) stay hidden.
     expect(linkLabels(host)).toEqual([
       'Overview',
       'Datasets',
       'Workflows',
       'Import',
+      'Events',
       'Right now',
+      'Blog',
       'Tours',
       'Analytics',
       'Feedback',
@@ -62,26 +66,62 @@ describe('renderSidebar', () => {
     renderSidebar(host, router, { isAdmin: true })
     const labels = linkLabels(host)
     expect(labels).toContain('Feeds')
-    expect(labels).toContain('Events')
-    expect(labels).toContain('Blog')
     expect(labels).toContain('Node profile')
     expect(labels).toContain('Team')
   })
 
-  it('hides admin-only links by default', () => {
+  it('hides admin-only links by default but shows Events + Blog to every publisher', () => {
     renderSidebar(host, router)
     const labels = linkLabels(host)
     expect(labels).not.toContain('Feeds')
-    expect(labels).not.toContain('Events')
+    expect(labels).not.toContain('Node profile')
     expect(labels).not.toContain('Team')
+    // Events + Blog are no longer admin-only.
+    expect(labels).toContain('Events')
+    expect(labels).toContain('Blog')
   })
 
-  it('renders the events badge only when the count is positive and admin', () => {
-    renderSidebar(host, router, { isAdmin: true, eventsBadge: 8 })
+  it('hides links whose feature toggle is off', () => {
+    renderSidebar(host, router, {
+      isAdmin: true,
+      features: { ...defaultFeatures(), blog: false, tours: false, datasets: false },
+    })
+    const labels = linkLabels(host)
+    expect(labels).not.toContain('Blog')
+    expect(labels).not.toContain('Tours')
+    expect(labels).not.toContain('Datasets')
+    expect(labels).not.toContain('Import') // rides the datasets toggle
+    // Untagged + enabled items stay.
+    expect(labels).toContain('Overview')
+    expect(labels).toContain('Workflows')
+    expect(labels).toContain('Node profile')
+  })
+
+  it('drops a whole group when every item in it is toggled off', () => {
+    renderSidebar(host, router, {
+      isAdmin: true,
+      features: { ...defaultFeatures(), events: false, hero: false, blog: false, tours: false },
+    })
+    const headers = Array.from(host.querySelectorAll('.publisher-nav-group-label')).map(
+      h => h.textContent,
+    )
+    expect(headers).not.toContain('Newsroom')
+    expect(headers).toContain('Catalog')
+  })
+
+  it('undefined features (optimistic first render) shows everything', () => {
+    renderSidebar(host, router, { isAdmin: true })
+    expect(linkLabels(host)).toContain('Blog')
+    expect(linkLabels(host)).toContain('Tours')
+  })
+
+  it('renders the events badge only when the count is positive (visible to every publisher)', () => {
+    // Events is no longer admin-only, so the badge shows for any publisher.
+    renderSidebar(host, router, { eventsBadge: 8 })
     const badge = host.querySelector('.publisher-nav-badge')
     expect(badge?.textContent).toBe('8')
 
-    renderSidebar(host, router, { isAdmin: true, eventsBadge: 0 })
+    renderSidebar(host, router, { eventsBadge: 0 })
     expect(host.querySelector('.publisher-nav-badge')).toBeNull()
   })
 

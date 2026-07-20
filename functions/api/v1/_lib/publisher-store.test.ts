@@ -3,8 +3,11 @@
  *
  * Coverage:
  *   - Lookup by email returns an existing row unchanged.
- *   - JIT defaults: user → publisher/pending, service → service/active,
- *     dev-bypass → admin/active.
+ *   - JIT defaults (steady state, an admin already seated): user →
+ *     reviewer/pending, trusted-domain → reviewer/active, service →
+ *     service/active, dev-bypass → admin/active.
+ *   - First-run bootstrap: the first human on a deploy with no active
+ *     admin is provisioned admin/active; service tokens are not.
  *   - Display name fallback uses the local-part of the email.
  *   - The minted ULID is 26 chars in Crockford-base32.
  */
@@ -13,6 +16,17 @@ import { describe, expect, it } from 'vitest'
 import { getOrCreatePublisher, parseTrustedDomains } from './publisher-store'
 import { newUlid } from './ulid'
 import { asD1, seedFixtures } from './test-helpers'
+
+/** Seed one active admin so the first-run bootstrap does NOT fire and
+ *  the test exercises the steady-state provisioning defaults. */
+function seedActiveAdmin(sqlite: ReturnType<typeof seedFixtures>): void {
+  sqlite
+    .prepare(
+      `INSERT INTO publishers (id, email, display_name, role, is_admin, status, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run('PUB-SEED-ADMIN', 'seed-admin@example.com', 'Seed Admin', 'admin', 1, 'active', '2026-01-01T00:00:00.000Z')
+}
 
 const ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ'
 
@@ -81,20 +95,64 @@ describe('getOrCreatePublisher', () => {
     expect(count.n).toBe(1)
   })
 
-  it('JIT-provisions publisher/pending for a new user identity', async () => {
+  it('JIT-provisions reviewer/pending for a new user identity (admin already seated)', async () => {
     const sqlite = seedFixtures({ count: 0 })
+    seedActiveAdmin(sqlite)
     const db = asD1(sqlite)
     const row = await getOrCreatePublisher(db, {
       email: 'newcomer@example.com',
       sub: 'sub-2',
       type: 'user',
     })
-    expect(row.role).toBe('publisher')
+    expect(row.role).toBe('reviewer')
     expect(row.is_admin).toBe(0)
     expect(row.status).toBe('pending')
     expect(row.email).toBe('newcomer@example.com')
     expect(row.display_name).toBe('newcomer')
     expect(row.id).toHaveLength(26)
+  })
+
+  it('bootstraps the first human on a deploy with no active admin to admin/active', async () => {
+    const sqlite = seedFixtures({ count: 0 })
+    const db = asD1(sqlite)
+    const row = await getOrCreatePublisher(db, {
+      email: 'founder@example.com',
+      sub: 'sub-founder',
+      type: 'user',
+    })
+    expect(row.role).toBe('admin')
+    expect(row.is_admin).toBe(1)
+    expect(row.status).toBe('active')
+  })
+
+  it('does NOT bootstrap a service token as the first row', async () => {
+    const sqlite = seedFixtures({ count: 0 })
+    const db = asD1(sqlite)
+    const row = await getOrCreatePublisher(db, {
+      email: 'svc-first@service.local',
+      sub: 'svc-first',
+      type: 'service',
+    })
+    expect(row.role).toBe('service')
+    expect(row.is_admin).toBe(0)
+  })
+
+  it('bootstraps a human even when a service token is already the only row', async () => {
+    const sqlite = seedFixtures({ count: 0 })
+    const db = asD1(sqlite)
+    await getOrCreatePublisher(db, {
+      email: 'svc@service.local',
+      sub: 'svc',
+      type: 'service',
+    })
+    const human = await getOrCreatePublisher(db, {
+      email: 'operator@example.com',
+      sub: 'operator',
+      type: 'user',
+    })
+    expect(human.role).toBe('admin')
+    expect(human.is_admin).toBe(1)
+    expect(human.status).toBe('active')
   })
 
   it('JIT-provisions service/active for a service token', async () => {
@@ -140,52 +198,57 @@ describe('getOrCreatePublisher', () => {
     expect(second.created_at).toBe(first.created_at)
   })
 
-  it('JIT-provisions admin/active for a trusted-domain user', async () => {
+  it('JIT-provisions reviewer/active for a trusted-domain user (admin already seated)', async () => {
     const sqlite = seedFixtures({ count: 0 })
+    seedActiveAdmin(sqlite)
     const db = asD1(sqlite)
     const row = await getOrCreatePublisher(
       db,
       { email: 'eric@noaa.gov', sub: 'user-eric', type: 'user' },
       { trustedDomains: new Set(['noaa.gov', 'zyra-project.org']) },
     )
-    expect(row.role).toBe('admin')
-    expect(row.is_admin).toBe(1)
+    expect(row.role).toBe('reviewer')
+    expect(row.is_admin).toBe(0)
     expect(row.status).toBe('active')
     expect(row.email).toBe('eric@noaa.gov')
   })
 
   it('domain match on trusted-domain check is case-insensitive', async () => {
     const sqlite = seedFixtures({ count: 0 })
+    seedActiveAdmin(sqlite)
     const db = asD1(sqlite)
     const row = await getOrCreatePublisher(
       db,
       { email: 'eric@NOAA.GOV', sub: 'user-eric', type: 'user' },
       { trustedDomains: new Set(['noaa.gov']) },
     )
-    expect(row.role).toBe('admin')
+    expect(row.role).toBe('reviewer')
+    expect(row.status).toBe('active')
   })
 
-  it('does NOT auto-promote a user from a subdomain that is not explicitly trusted', async () => {
+  it('does NOT auto-approve a user from a subdomain that is not explicitly trusted', async () => {
     const sqlite = seedFixtures({ count: 0 })
+    seedActiveAdmin(sqlite)
     const db = asD1(sqlite)
     const row = await getOrCreatePublisher(
       db,
       { email: 'eric@subteam.noaa.gov', sub: 'user-eric', type: 'user' },
       { trustedDomains: new Set(['noaa.gov']) },
     )
-    expect(row.role).toBe('publisher')
+    expect(row.role).toBe('reviewer')
     expect(row.status).toBe('pending')
   })
 
-  it('falls back to publisher/pending when trustedDomains is empty', async () => {
+  it('falls back to reviewer/pending when trustedDomains is empty (admin already seated)', async () => {
     const sqlite = seedFixtures({ count: 0 })
+    seedActiveAdmin(sqlite)
     const db = asD1(sqlite)
     const row = await getOrCreatePublisher(
       db,
       { email: 'eric@noaa.gov', sub: 'user-eric', type: 'user' },
       { trustedDomains: new Set() },
     )
-    expect(row.role).toBe('publisher')
+    expect(row.role).toBe('reviewer')
     expect(row.status).toBe('pending')
   })
 

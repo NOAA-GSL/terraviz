@@ -74,6 +74,33 @@ describe('renderUsersPage', () => {
     expect(labels).toContain('Reject')
   })
 
+  it('renders the role → capability guide derived from the shared matrix', async () => {
+    const routes = {
+      '/api/v1/publish/me': { body: ME_ADMIN },
+      '/api/v1/publish/publishers': { body: { publishers: [publisher()], next_cursor: null } },
+    }
+    await renderUsersPage(mount, { fetchFn: mockFetch(routes) })
+    const guide = mount.querySelector('.publisher-role-guide')
+    expect(guide).not.toBeNull()
+    // Five assignable-role columns, least → most privileged.
+    const cols = Array.from(guide!.querySelectorAll('thead th')).map(th => th.textContent)
+    expect(cols).toEqual(['Can', 'Reviewer', 'Contributor', 'Author', 'Editor', 'Admin'])
+
+    // Reviewer (col index 1 → cell 0 after the row header) is read-only:
+    // only the first capability row ("Read…") is granted.
+    const rows = Array.from(guide!.querySelectorAll('tbody tr'))
+    const reviewerCells = rows.map(r => r.querySelectorAll('td')[0])
+    expect(reviewerCells[0].classList.contains('publisher-role-guide-yes')).toBe(true) // read
+    expect(reviewerCells.slice(1).every(c => !c.classList.contains('publisher-role-guide-yes'))).toBe(true)
+
+    // Admin (last column) grants every listed capability.
+    const adminCells = rows.map(r => {
+      const tds = r.querySelectorAll('td')
+      return tds[tds.length - 1]
+    })
+    expect(adminCells.every(c => c.classList.contains('publisher-role-guide-yes'))).toBe(true)
+  })
+
   it('approves a pending publisher via PATCH and updates the badge', async () => {
     const routes = {
       '/api/v1/publish/me': { body: ME_ADMIN },

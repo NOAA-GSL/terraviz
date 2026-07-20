@@ -81,6 +81,81 @@ describe('renderNodeProfilePage', () => {
     expect(mount.querySelector('#nodeprofile-org')).toBeNull()
   })
 
+  it('renders the Features card for an admin, checked from the stored map', async () => {
+    const mount = document.createElement('div')
+    await renderNodeProfilePage(mount, {
+      fetchFn: mockFetch({
+        '/publish/me': ADMIN_ME,
+        '/publish/node-profile': PROFILE,
+        '/publish/node-settings': { features: { blog: false, events: false } },
+      }),
+    })
+    const toggles = mount.querySelectorAll<HTMLInputElement>('.publisher-nodeprofile-feature-toggle')
+    expect(toggles).toHaveLength(8)
+    const byName = new Map(
+      Array.from(mount.querySelectorAll('.publisher-nodeprofile-feature-row')).map(row => [
+        row.querySelector('.publisher-nodeprofile-feature-name')?.textContent,
+        row.querySelector<HTMLInputElement>('.publisher-nodeprofile-feature-toggle')!,
+      ]),
+    )
+    expect(byName.get('Blog')?.checked).toBe(false)
+    expect(byName.get('Events')?.checked).toBe(false)
+    expect(byName.get('Datasets')?.checked).toBe(true)
+  })
+
+  it('hides the Features card for a service caller (profile form still renders)', async () => {
+    const mount = document.createElement('div')
+    await renderNodeProfilePage(mount, {
+      fetchFn: mockFetch({
+        '/publish/me': { role: 'service', is_admin: false },
+        '/publish/node-profile': PROFILE,
+        '/publish/node-settings': { features: {} },
+      }),
+    })
+    expect(mount.querySelector('#nodeprofile-org')).toBeTruthy()
+    expect(mount.querySelector('.publisher-nodeprofile-feature-toggle')).toBeNull()
+  })
+
+  it('Save features PUTs the full toggle map and fires the change event', async () => {
+    const mount = document.createElement('div')
+    const capture = { puts: [] as Array<{ url: string; body: unknown }> }
+    await renderNodeProfilePage(mount, {
+      fetchFn: mockFetch(
+        {
+          '/publish/me': ADMIN_ME,
+          '/publish/node-profile': PROFILE,
+          '/publish/node-settings': { features: {} },
+        },
+        capture,
+      ),
+    })
+    const fired = vi.fn()
+    window.addEventListener('publisher:featureschange', fired, { once: true })
+
+    const byName = new Map(
+      Array.from(mount.querySelectorAll('.publisher-nodeprofile-feature-row')).map(row => [
+        row.querySelector('.publisher-nodeprofile-feature-name')?.textContent,
+        row.querySelector<HTMLInputElement>('.publisher-nodeprofile-feature-toggle')!,
+      ]),
+    )
+    byName.get('Blog')!.checked = false
+    byName.get('Tours')!.checked = false
+
+    const saveButtons = Array.from(mount.querySelectorAll<HTMLButtonElement>('.publisher-button-primary'))
+    const featuresSave = saveButtons.find(b => b.textContent === 'Save features')!
+    featuresSave.click()
+    await flush()
+
+    const put = capture.puts.find(p => p.url.includes('/publish/node-settings'))
+    expect(put).toBeTruthy()
+    const body = put!.body as { features: Record<string, boolean> }
+    expect(body.features.blog).toBe(false)
+    expect(body.features.tours).toBe(false)
+    expect(body.features.datasets).toBe(true)
+    expect(Object.keys(body.features)).toHaveLength(8)
+    expect(fired).toHaveBeenCalledTimes(1)
+  })
+
   it('Save PUTs the composed body including added links', async () => {
     const capture = { puts: [] as Array<{ url: string; body: unknown }> }
     const mount = document.createElement('div')

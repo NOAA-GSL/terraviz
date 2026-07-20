@@ -15,13 +15,24 @@
  * page.
  */
 
+import { fetchFeatures, renderFeatureDisabledCard } from '../features'
 import { t, type MessageKey } from '../../../i18n'
 import { downloadCsv } from '../analytics-charts'
+import { publisherGet } from '../api'
+import { roleCan } from '../../../types/publisher-roles'
 
 export interface ImportPageOptions {
   /** Injectable so the copy-to-clipboard button is testable. */
   clipboard?: { writeText: (s: string) => Promise<void> }
+  /** Injectable for the role gate's `/me` fetch (tests). */
+  fetchFn?: typeof fetch
 }
+
+interface MeResponse {
+  role: string
+}
+
+const ME_ENDPOINT = '/api/v1/publish/me'
 
 const MAX_ROWS = 500
 const CLI_COMMAND = 'terraviz import ./datasets.csv --as-drafts'
@@ -489,8 +500,41 @@ function renderCliPanel(options: ImportPageOptions): HTMLElement {
  * fetch; the whole surface renders immediately and re-renders in
  * place as the user picks a method or drops a manifest.
  */
+/** Import creates draft datasets, so it requires `content.create`
+ *  (contributor / author / editor / admin / service). Reviewers — who
+ *  can read the catalog but author nothing — get a restricted card
+ *  instead of a create UI that would only 403 on submit. The future
+ *  bulk-import endpoint must enforce the same capability server-side. */
+function restrictedShell(): HTMLElement {
+  const shell = el('main', 'publisher-shell publisher-import')
+  const header = el('header', 'publisher-import-header')
+  header.appendChild(el('h1', 'publisher-import-title', t('publisher.import.title')))
+  header.appendChild(el('p', 'publisher-import-subtitle', t('publisher.import.subtitle')))
+  shell.appendChild(header)
+  shell.appendChild(el('p', 'publisher-import-restricted', t('publisher.import.restricted')))
+  return shell
+}
+
 export function renderImportPage(mount: HTMLElement, options: ImportPageOptions = {}): void {
   const state: PageState = { method: 'manifest', rows: null, parseErrorKey: undefined, fileName: '' }
+
+  // Sync render first (this page has no loading state); then swap in the
+  // disabled card if the toggles resolve off, or the restricted card if
+  // the caller can't create datasets. The two probes are sequenced (not
+  // run in parallel) so the feature-disabled card takes precedence and a
+  // later-resolving role gate can't overwrite it. Fail-open on any fetch
+  // error — the server stays the authoritative gate on the real endpoint.
+  void fetchFeatures().then(features => {
+    if (!features.datasets) {
+      renderFeatureDisabledCard(mount, 'datasets')
+      return
+    }
+    return publisherGet<MeResponse>(ME_ENDPOINT, { fetchFn: options.fetchFn }).then(res => {
+      if (res.ok && !roleCan(res.data.role, 'content.create')) {
+        mount.replaceChildren(restrictedShell())
+      }
+    })
+  })
 
   const rerender = (): void => {
     const shell = el('main', 'publisher-shell publisher-import')

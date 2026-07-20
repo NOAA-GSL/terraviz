@@ -20,15 +20,42 @@
  * unvetted content.
  */
 
-/** channelId → human-readable channel name (for the card + audit). */
+/**
+ * channelId → human-readable channel name (for the card + audit).
+ *
+ * Keys are channel ids — quoted because some contain a hyphen. Every id
+ * here was verified against the channel's own YouTube data feed
+ * (`feeds/videos.xml?channel_id=…`, whose `<title>` is the authoritative
+ * channel name) — NOT resolved by handle/name, which are spoofable.
+ *
+ * Ordered by search priority: the per-event fan-out in `youtube-search.ts`
+ * searches custom channels first, then these in order, up to
+ * `MAX_CHANNELS_SEARCHED` — so the broadest, most generally-useful
+ * agencies lead and any cap trims the niche tail.
+ */
 export const AGENCY_YOUTUBE_CHANNELS: Readonly<Record<string, string>> = {
-  // Keys are channel ids — quoted because some contain a hyphen.
+  // — NASA (broad Earth-science visualization) —
   'UCLA_DiR1FfKNvjuUpBHmylQ': 'NASA',
-  'UCeXH8GZyV3sVqAr45AvupOA': 'USGS',
-  'UC012BUr9u82skTv9bOfmG4w': 'NOAA Education',
-  'UCxK2oekvetMp6zPSTWN63_g': 'NOAA Central Library',
-  'UC-pHprdRFZMZNegDaZKFB9g': 'NOAA AOML',
+  'UCAY-SMFNfynqz1bdoaV8BeQ': 'NASA Goddard',
+  'UCryGec9PdUCLjpJW2mgCuLw': 'NASA Jet Propulsion Laboratory',
+  // — NOAA / NWS (weather, ocean, climate, hazards) —
+  'UCe9IxQeBttZIYl5c43ycf9g': 'NOAA',
+  'UC9hQvMjzSxurMirYDgOMezw': 'National Weather Service (NWS)',
+  'UCv0qlvvLtEuCxAoEitAuoFg': 'NOAA/NWS National Hurricane Center',
+  'UCJJqaSw7Z7SD7TM80cViEGg': 'NOAA Satellites',
   'UCroWPW0Wg6zZPyt42N89P7g': 'NOAA National Ocean Service',
+  'UC012BUr9u82skTv9bOfmG4w': 'NOAA Education',
+  // — USGS (geology, earthquakes, natural hazards) —
+  'UCeXH8GZyV3sVqAr45AvupOA': 'USGS',
+  // — International / research institutions (Earth observation & climate) —
+  'UCIBaDdAbGlFDeS33shmlD0A': 'European Space Agency, ESA',
+  'UCdK5sfMQcJ64q8AGR_7-ZRw': 'Copernicus ECMWF',
+  'UChpGvNdQPdI7EI75z6oelTw': 'ECMWF',
+  'UCQxQlcjXuh32ctfX3QHiyRg': 'National Snow and Ice Data Center',
+  'UCjheKtYFOKfSgEZAHfN1iVg': 'NSF NCAR & UCAR',
+  // — NOAA specialist sub-channels (niche; searched last) —
+  'UC-pHprdRFZMZNegDaZKFB9g': 'NOAA AOML',
+  'UCxK2oekvetMp6zPSTWN63_g': 'NOAA Central Library',
   'UCtC03FBKVTbM_OM3WQB-Hng': 'NOAA Sanctuaries',
 }
 

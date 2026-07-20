@@ -207,7 +207,7 @@ CREATE TABLE current_events (
   -- column line so a later ALTER ADD COLUMN doesn't splice a new column
   -- after it and inherit this comment in the schema snapshot.)
   reviewed_at    TEXT,
-  reviewed_by    TEXT, external_id TEXT, inferred_fields TEXT, image_url TEXT, image_alt TEXT, video_embed_url TEXT,
+  reviewed_by    TEXT, external_id TEXT, inferred_fields TEXT, image_url TEXT, image_alt TEXT, video_embed_url TEXT, owner_id TEXT REFERENCES publishers(id), video_file_url TEXT,
   FOREIGN KEY (reviewed_by) REFERENCES publishers(id)
 );
 
@@ -431,6 +431,17 @@ CREATE TABLE node_profile (
   FOREIGN KEY (updated_by) REFERENCES publishers(id)
 );
 
+CREATE TABLE node_settings (
+  id            INTEGER PRIMARY KEY CHECK (id = 1),  -- singleton row
+  features_json TEXT NOT NULL DEFAULT '{}',  -- JSON object of {feature: boolean}
+  updated_by    TEXT NOT NULL,               -- publishers.id (audit)
+  -- ISO 8601. No trailing comment here: SQLite's ALTER ... ADD COLUMN
+  -- splices new columns onto the last column-def line of the stored
+  -- CREATE TABLE text (see 0028's note).
+  updated_at    TEXT NOT NULL,
+  FOREIGN KEY (updated_by) REFERENCES publishers(id)
+);
+
 CREATE TABLE publishers (
   id              TEXT PRIMARY KEY,           -- ULID
   email           TEXT NOT NULL UNIQUE,
@@ -465,6 +476,46 @@ CREATE TABLE tours (
   published_at       TEXT,
   publisher_id       TEXT, retracted_at TEXT,
   FOREIGN KEY (publisher_id) REFERENCES publishers(id)
+);
+
+CREATE TABLE video_index (
+  id                TEXT PRIMARY KEY,             -- ULID
+  source_id         TEXT NOT NULL,
+  external_id       TEXT NOT NULL,                -- the entry page URL (dedupe key within a source)
+  page_url          TEXT NOT NULL,                -- citation / source link
+  title             TEXT NOT NULL,
+  description       TEXT,
+  tags_json         TEXT,                         -- JSON array of filtered tags
+  category          TEXT,
+  content_url       TEXT NOT NULL,                -- direct media file
+  content_host      TEXT NOT NULL,                -- lowercased host of content_url (allowlist unit)
+  thumbnail_url     TEXT,
+  duration_sec      INTEGER,
+  published_at      TEXT,                         -- ISO
+  embedding         BLOB,                         -- Float32 LE, 768 dims; NULL until embedded
+  embedding_version INTEGER,                      -- EMBEDDING_MODEL_VERSION stamp
+  embed_text_hash   TEXT,                         -- hash of the embed input; skip re-embed when unchanged
+  created_at        TEXT NOT NULL,
+  updated_at        TEXT NOT NULL,
+  UNIQUE (source_id, external_id),
+  FOREIGN KEY (source_id) REFERENCES video_sources(id) ON DELETE CASCADE
+);
+
+CREATE TABLE video_sources (
+  id              TEXT PRIMARY KEY,               -- ULID
+  kind            TEXT NOT NULL DEFAULT 'video-sitemap',
+  label           TEXT NOT NULL,                  -- display + provenance ("NOAA Ocean Today")
+  url             TEXT NOT NULL,                  -- the sitemap URL
+  attribution     TEXT,                           -- card attribution; defaults to label when null
+  enabled         INTEGER NOT NULL DEFAULT 1,     -- 0 = paused (kept, not indexed/matched)
+  added_by        TEXT,                           -- publishers.id (nullable for service)
+  created_at      TEXT NOT NULL,
+  updated_at      TEXT NOT NULL,
+  last_run_at     TEXT,                           -- last refresh attempt
+  last_run_status TEXT,                           -- 'ok' | 'error'
+  last_run_error  TEXT,                           -- human-readable, when status='error'
+  last_run_count  INTEGER,                        -- videos indexed on the last ok run
+  FOREIGN KEY (added_by) REFERENCES publishers(id)
 );
 
 CREATE TABLE workflow_runs (
@@ -508,6 +559,13 @@ CREATE TABLE youtube_channels (
   FOREIGN KEY (added_by) REFERENCES publishers(id)
 );
 
+CREATE TABLE youtube_channels_disabled (
+  channel_id   TEXT PRIMARY KEY,          -- a built-in agency channel id, switched off
+  disabled_by  TEXT,                      -- publishers.id (nullable for service)
+  created_at   TEXT NOT NULL,
+  FOREIGN KEY (disabled_by) REFERENCES publishers(id)
+);
+
 -- Indexes
 
 CREATE INDEX idx_analytics_daily_event
@@ -535,6 +593,7 @@ CREATE UNIQUE INDEX idx_current_events_feed_external
   ON current_events(feed_id, external_id)
   WHERE feed_id IS NOT NULL AND external_id IS NOT NULL;
 CREATE INDEX idx_current_events_origin_node ON current_events(origin_node);
+CREATE INDEX idx_current_events_owner ON current_events(owner_id);
 CREATE INDEX idx_current_events_status      ON current_events(status, created_at);
 CREATE UNIQUE INDEX idx_datasets_legacy_id
   ON datasets(legacy_id)
@@ -548,6 +607,8 @@ CREATE INDEX idx_feed_connectors_enabled ON feed_connectors(enabled);
 CREATE UNIQUE INDEX idx_node_identity_singleton ON node_identity(singleton);
 CREATE INDEX idx_renditions_dataset ON dataset_renditions(dataset_id);
 CREATE INDEX idx_tours_visibility ON tours(visibility, retracted_at, published_at);
+CREATE INDEX idx_video_index_host ON video_index (content_host);
+CREATE INDEX idx_video_index_source ON video_index (source_id);
 CREATE INDEX idx_workflow_runs_active ON workflow_runs (workflow_id, status);
 CREATE INDEX idx_workflow_runs_workflow ON workflow_runs (workflow_id, created_at DESC);
 CREATE INDEX idx_workflows_due ON workflows (enabled, next_run_at);

@@ -8,8 +8,14 @@
  * POST /api/general-feedback — JSON body matching GeneralFeedbackBody
  */
 
+import { getEffectiveFeatures } from './v1/_lib/node-settings-store'
+
 interface Env {
   FEEDBACK_DB?: D1Database
+  /** Catalog bindings — read-only here, for the per-node feature
+   *  toggles (`node_settings`). Optional like everything else. */
+  CATALOG_DB?: D1Database
+  CATALOG_KV?: KVNamespace
 }
 
 type Kind = 'bug' | 'feature' | 'other'
@@ -145,6 +151,17 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
   if (!isValidBody(body)) {
     return new Response(JSON.stringify({ error: 'Invalid feedback payload' }), {
       status: 400,
+      headers: { ...cors, 'Content-Type': 'application/json' },
+    })
+  }
+
+  // Feature gate — feedback off means soft-accept and drop: the
+  // Help → Feedback form sees its normal `{ ok: true }` and never
+  // errors, but a node that doesn't review feedback doesn't silently
+  // accumulate it. Fail-open on storage blips.
+  if (!(await getEffectiveFeatures(context.env)).feedback) {
+    return new Response(JSON.stringify({ ok: true }), {
+      status: 200,
       headers: { ...cors, 'Content-Type': 'application/json' },
     })
   }

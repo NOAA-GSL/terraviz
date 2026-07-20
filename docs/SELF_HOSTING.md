@@ -293,6 +293,64 @@ Pages → Settings → Bindings → Add binding → **D1**:
 - Variable name: `FEEDBACK_DB`
 - D1 database: select `sphere-feedback`
 
+#### Standalone feedback widget (`POST /api/feedback`)
+
+The standalone HTML build's feedback widget POSTs
+bug/idea/content reports to `/api/feedback` on the deployed
+origin (overridable via `window.TERRAVIZ_FEEDBACK_URL`). The
+route answers with wildcard CORS and requires no `Origin`
+header — the widget also runs from `file://`, and reviewers
+verify the endpoint with plain `curl`. Submissions land in the
+same `general_feedback` queue the Publisher Portal's Feedback
+tab reviews, with `status: 'new'`.
+
+Two deployment notes beyond the `FEEDBACK_DB` binding above:
+
+- **Screenshots need `CATALOG_R2`** (wired in Step 10).
+  Screenshot PNGs are decoded and stored as binaries under
+  `feedback/screenshots/` in the assets bucket; only the object
+  key lands in D1. Without the binding, reports are still
+  stored — their screenshots are dropped (logged in the
+  Function's tail).
+
+- **The endpoint must never be served a challenge.** The widget
+  runs without cookies and the fallback path is a `mailto:`
+  draft, so a `Just a moment...` interstitial silently degrades
+  every submission. JS Detections / AI Labyrinth can stay ON
+  zone-wide — JS Detections only *feeds signals* to rules, and
+  AI Labyrinth targets crawlers following hidden links — but if
+  your zone has Bot Fight Mode, Managed Rules, or custom WAF
+  rules that act on those signals, add a skip rule so
+  API-shaped POSTs to this one path pass:
+
+  1. Security → WAF → Custom rules → Create rule, e.g.
+     `standalone feedback endpoint skip`.
+  2. Expression:
+     ```
+     (http.request.uri.path eq "/api/feedback"
+       and http.request.method eq "POST")
+     ```
+  3. Action: **Skip** — tick "All managed rules", "All Super Bot
+     Fight Mode Rules", "Browser Integrity Check", and
+     "Security Level", same checklist as the transcode-complete
+     rule in Step 15c. On Free/Pro zones with plain Bot Fight
+     Mode, see 15c's Step 2 for the BFM caveat.
+
+  The endpoint carries its own abuse controls (JSON-only,
+  ~12 MB body cap, 10/hour per-IP rate limit), so the skip
+  does not leave it bare.
+
+  Verify from a cookie-less, JS-less client:
+
+  ```bash
+  curl -X POST https://<your-domain>/api/feedback \
+    -H 'Content-Type: application/json' \
+    -d '{"source":"terraviz-standalone","type":"idea","rating":4,
+         "text":"Test from curl","name":null,"email":null,
+         "meta":{"ua":"curl"},"screenshot":null}'
+  # → 200 {"ok":true,"id":"…"}   (challenge HTML = rule not matching)
+  ```
+
 ### 5b. Workers AI — Catalog enrichment + summarization
 
 Pages → Settings → Bindings → Add binding → **Workers AI**:
@@ -606,7 +664,7 @@ environments.
 | `NODE_ID_PRIVATE_KEY_PEM` | Secret | Ed25519 keypair for federation signing and `/.well-known/terraviz.json` advertisement. Generated with `npm run gen:node-key`. | Publishing anything. |
 | `PREVIEW_SIGNING_KEY` | Secret | HMAC-SHA-256 secret for preview-token signing. Without it the preview endpoints fail closed. | The CLI's `terraviz preview` command. |
 | `ACCESS_TEAM_DOMAIN` / `ACCESS_AUD` | Plaintext | Cloudflare Access app credentials for `/api/v1/publish/**`. Without them the publisher middleware 503s with `access_unconfigured`. | Publisher API access. |
-| `TRUSTED_PUBLISHER_DOMAINS` | Plaintext (optional) | Comma-separated email domains whose verified Access user logins JIT-provision as `admin/active/admin=1` instead of the default `publisher/pending`. Recommended for single-org deploys where the operator IS the admin (otherwise the first SSO sign-in lands at `pending` with no admin yet to approve it). Once one admin exists, additional users can be approved from the portal's Users tab instead. Match is exact, case-insensitive, no subdomain wildcarding. Service tokens are unaffected. | Single-org publisher portal access (Step 16). |
+| `TRUSTED_PUBLISHER_DOMAINS` | Plaintext (optional) | Comma-separated email domains whose verified Access user logins JIT-provision as `reviewer/active` — auto-approved (they skip the `pending` queue) but read-only, **not** admin. Everyone else defaults to `reviewer/pending`. An admin promotes trusted users to an authoring role from the portal's Users tab. You do **not** need this to seat your first admin: the first human to sign in on a deploy with no active admin is bootstrapped to `admin/active` automatically (service tokens excepted). Match is exact, case-insensitive, no subdomain wildcarding. Service tokens are unaffected. | Single-org publisher portal access (Step 16). |
 | `R2_PUBLIC_BASE` | Plaintext | Public origin for the catalog R2 bucket (e.g. `https://assets.terraviz.your-org.org`). The manifest endpoint and SPA build playable HLS / image / tour-asset URLs from this. Bind the domain under R2 → bucket → Settings → Connect Domain first. **Not optional for the audit** (see note below). | Serving any R2-hosted asset. |
 | `R2_S3_ENDPOINT` / `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` | Secret | R2 S3-API credentials for server-side presigned PUT minting and digest verification. Minted at R2 → Manage R2 API Tokens (Read+Write on the bucket). The same three values are also consumed shell-side by the migration CLIs and the transcode workflow. | Browser/CLI asset uploads. |
 | `GITHUB_OWNER` / `GITHUB_REPO` / `GITHUB_DISPATCH_TOKEN` | Plaintext / Plaintext / Secret | Point the video-transcode `repository_dispatch` at **your fork** (e.g. `your-org` / `terraviz`). Token is a PAT with `repo`/Contents:write on that repo. Without them video uploads 503 `github_dispatch_unconfigured`. | Video transcode (Step 15). |

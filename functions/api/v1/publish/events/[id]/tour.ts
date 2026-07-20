@@ -19,9 +19,9 @@
 import type { CatalogEnv } from '../../../_lib/env'
 import type { EnrichEnv } from '../../../_lib/events-enrich'
 import type { PublisherData } from '../../_middleware'
-import { isPrivileged } from '../../../_lib/publisher-store'
+import { getEffectiveFeatures } from '../../../_lib/node-settings-store'
 import { writeAuditEvent } from '../../../_lib/audit-store'
-import { getCurrentEvent, listLinksForEvent } from '../../../_lib/events-store'
+import { canMutateEvent, getCurrentEvent, listLinksForEvent } from '../../../_lib/events-store'
 import { resolveHttpAssetUrl } from '../../../_lib/r2-public-url'
 import { createDraftTour, writeTourDraftJson } from '../../../_lib/tour-mutations'
 import {
@@ -30,6 +30,7 @@ import {
   MAX_TOUR_STOPS,
   type EventTourDataset,
 } from '../../../_lib/event-tour'
+import { allowlistedContentHosts } from '../../../_lib/video-index-store'
 
 const CONTENT_TYPE = 'application/json; charset=utf-8'
 
@@ -99,8 +100,19 @@ export const onRequestPost: PagesFunction<CatalogEnv & EnrichEnv, 'id'> = async 
     return jsonError(503, 'binding_missing', 'CATALOG_DB binding is not configured on this deployment.')
   }
   const publisher = (context.data as unknown as PublisherData).publisher
-  if (!isPrivileged(publisher)) {
-    return jsonError(403, 'forbidden_role', 'Generating event tours is restricted to admin and service callers.')
+
+  // Cross-feature coupling: the middleware gates this path on `events`
+  // (its prefix), but the handler CREATES a tour draft — that needs
+  // the tours feature too.
+  if (!(await getEffectiveFeatures(context.env)).tours) {
+    return new Response(
+      JSON.stringify({
+        error: 'feature_disabled',
+        feature: 'tours',
+        message: 'The tours feature is disabled on this node — an event tour cannot be created.',
+      }),
+      { status: 403, headers: { 'Content-Type': CONTENT_TYPE } },
+    )
   }
 
   const idParam = context.params.id
@@ -110,6 +122,12 @@ export const onRequestPost: PagesFunction<CatalogEnv & EnrichEnv, 'id'> = async 
   const db = context.env.CATALOG_DB
   const event = await getCurrentEvent(db, id)
   if (!event) return jsonError(404, 'not_found', `Event ${id} not found.`)
+  // Owner-scoped write: the owner writes via content.edit.own; an
+  // unclaimed event (owner_id null) requires content.edit.any
+  // (editor/admin/service). See canMutateEvent.
+  if (!canMutateEvent(publisher, event)) {
+    return jsonError(403, 'forbidden_owner', 'You can only build tours for events you own.')
+  }
 
   const datasets = await resolveStopDatasets(db, id, ref => resolveHttpAssetUrl(context.env, ref))
   if (datasets.length === 0) {
@@ -130,7 +148,11 @@ export const onRequestPost: PagesFunction<CatalogEnv & EnrichEnv, 'id'> = async 
   // Captions: AI-written when the binding exists, deterministic
   // templates otherwise — the tour generator never blocks on the model.
   const captions = await generateTourCaptions(context.env, event, datasets)
-  const tourTasks = buildEventTourTasks(event, datasets, captions)
+  // The registered-source host allowlist authoritatively guards a
+  // curator-picked direct-file video before it's emitted as a native
+  // <video> stop (played through the media-proxy for VR CORS).
+  const allowedVideoHosts = await allowlistedContentHosts(context.env.CATALOG_DB)
+  const tourTasks = buildEventTourTasks(event, datasets, captions, { allowedVideoHosts })
 
   const created = await createDraftTour(context.env, publisher, {
     title: `Event: ${event.title}`.slice(0, 200),

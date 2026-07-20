@@ -15,7 +15,9 @@ down, and wiring it into a TerraViz deployment.
 
 > **Which channels count as reputable?** The search proxy keeps a
 > result only when its channel is on the effective allowlist: the
-> built-in curated set (NASA, USGS, the NOAA family) in
+> built-in curated set (the NASA family incl. Goddard & JPL, the NOAA /
+> NWS family, USGS, and international science agencies — ESA, Copernicus,
+> ECMWF, NSIDC, NCAR/UCAR) in
 > [`functions/api/v1/_lib/youtube-channels.ts`](../functions/api/v1/_lib/youtube-channels.ts),
 > **plus** the node's own custom channels. Publishers add those at
 > runtime — no redeploy — in the **Feeds console** ("Trusted video
@@ -134,10 +136,50 @@ here:
 
 The suggestion engine runs **once per event at curation time** — not
 per visitor — and only for events a curator actually opens in the
-review queue. Even a busy node reviewing 50 events a day spends
-~5,000 units, half the free quota. If the quota is ever exhausted the
-API returns 403 `quotaExceeded`, which the source will treat like any
-other failure: no card, no error surfaced to visitors.
+review queue. Each such run issues **one `search.list` per allowlisted
+channel** it searches: a global search filtered *down* to a handful of
+agency channels almost never surfaces one (YouTube's relevance ranking
+fills the top of a broad query with news orgs and random uploaders), so
+the proxy instead searches *within* each vetted channel by `channelId`
+and merges the hits. That trades quota for reliability — cost is
+`100 × channels-searched` units per event, not a flat 100.
+
+The proxy caps the fan-out at **20 channels** per request (custom
+channels first, then the built-in agency defaults in priority order),
+which comfortably covers the built-in set of ~18 vetted channels plus a
+couple of a node's own. So a single event with the full default set
+costs ~1,800 units (18 × 100).
+
+Two things bound the real spend:
+
+- **The KV cache** (1 hour, keyed by query) makes re-opening the *same*
+  event free — but note the cache does **not** help across *distinct*
+  events, since each event's title is a different query.
+- **Only opened events** trigger a search, and only while an event
+  still lacks a video.
+
+The practical implication: on the free 10,000-unit daily quota a node
+can review roughly **5 distinct events per day** with the full default
+allowlist before hitting the cap. That's fine for a small node, but a
+busy newsroom will exhaust it. If that's you, you have three levers:
+
+1. **Request a quota increase** — the YouTube Data API grants these for
+   free through the Google Cloud console; this is the intended path for
+   higher volume.
+2. **Disable channels you don't need** — in the **Feeds console →
+   "Trusted video channels"** card, each built-in channel has a
+   **Disable** toggle. A disabled channel is dropped from the search
+   fan-out (and its quota) for your node, with no source edit or
+   redeploy, and can be re-enabled anytime. This is the per-node way to
+   trim the list to your subject area.
+3. **Trim the built-in defaults** for a whole fork by editing
+   [`youtube-channels.ts`](../functions/api/v1/_lib/youtube-channels.ts).
+4. **Lower the cap** (`MAX_CHANNELS_SEARCHED` in `youtube-search.ts`) so
+   each event searches only the highest-priority channels.
+
+If the quota is ever exhausted the API returns 403 `quotaExceeded`,
+which the source treats like any other failure: no card, no error
+surfaced to visitors.
 
 ## Terms-of-service note: embeds, not images
 

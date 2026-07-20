@@ -63,22 +63,32 @@ function el<K extends keyof HTMLElementTagNameMap>(
 }
 
 /**
- * Fetch the public host-org identity for the header. Degrades to
- * null on any failure — the header just shows the app title. The
- * logo URL is re-guarded to http(s) client-side before it reaches an
- * `<img src>`, mirroring the events-source sanitize discipline.
+ * Fetch the public host-org identity for the header, plus whether the
+ * node's blog feature is enabled (the same payload carries the
+ * feature toggles). Degrades to a null identity + blog-enabled on any
+ * failure — the header just shows the app title, and a storage blip
+ * never blanks the blog (fail-open, matching the server-side gate;
+ * the gated API reads are the real enforcement). The logo URL is
+ * re-guarded to http(s) client-side before it reaches an `<img src>`,
+ * mirroring the events-source sanitize discipline.
  */
-async function fetchIdentity(): Promise<PublicIdentity | null> {
+async function fetchIdentity(): Promise<{ identity: PublicIdentity | null; blogEnabled: boolean }> {
   try {
     const res = await fetch('/api/v1/node-profile')
-    if (!res.ok) return null
-    const { profile } = (await res.json()) as { profile: PublicIdentity | null }
-    if (!profile || typeof profile.orgName !== 'string' || !profile.orgName) return null
+    if (!res.ok) return { identity: null, blogEnabled: true }
+    const { profile, features } = (await res.json()) as {
+      profile: PublicIdentity | null
+      features?: { blog?: unknown }
+    }
+    const blogEnabled = features?.blog !== false
+    if (!profile || typeof profile.orgName !== 'string' || !profile.orgName) {
+      return { identity: null, blogEnabled }
+    }
     const logoUrl =
       typeof profile.logoUrl === 'string' && /^https?:\/\//i.test(profile.logoUrl) ? profile.logoUrl : null
-    return { orgName: profile.orgName, logoUrl }
+    return { identity: { orgName: profile.orgName, logoUrl }, blogEnabled }
   } catch {
-    return null
+    return { identity: null, blogEnabled: true }
   }
 }
 
@@ -239,21 +249,28 @@ export async function bootBlogPage(): Promise<void> {
     // Inside the try so a malformed percent-encoding (`/blog/%E0%A4`)
     // renders the missing view instead of throwing out of the boot.
     const slug = path === '/blog' ? null : decodeURIComponent(path.slice('/blog/'.length))
+    const { identity, blogEnabled } = await identityPromise
+    // Blog toggled off for this node: render the missing view for both
+    // routes (the gated APIs — empty list / slug 404 — are the backstop).
+    if (!blogEnabled) {
+      document.body.replaceChildren(chrome(renderMissing(), identity))
+      return
+    }
     if (!slug) {
       const res = await fetch('/api/v1/blog')
       const { posts } = (await res.json()) as { posts: PublicPostCard[] }
-      document.body.replaceChildren(chrome(renderList(posts), await identityPromise))
+      document.body.replaceChildren(chrome(renderList(posts), identity))
       return
     }
     const res = await fetch(`/api/v1/blog/${encodeURIComponent(slug)}`)
     if (!res.ok) {
-      document.body.replaceChildren(chrome(renderMissing(), await identityPromise))
+      document.body.replaceChildren(chrome(renderMissing(), identity))
       return
     }
     const { post } = (await res.json()) as { post: PublicPost }
     document.title = post.title // i18n-exempt: the post's own title, already localized content
-    document.body.replaceChildren(chrome(renderPost(post), await identityPromise))
+    document.body.replaceChildren(chrome(renderPost(post), identity))
   } catch {
-    document.body.replaceChildren(chrome(renderMissing(), await identityPromise))
+    document.body.replaceChildren(chrome(renderMissing(), (await identityPromise).identity))
   }
 }

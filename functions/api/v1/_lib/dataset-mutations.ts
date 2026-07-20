@@ -7,9 +7,22 @@
  * upsert, role-aware visibility filters.
  *
  * Authorisation model:
- *   - `admin` and the synthetic `service` role see all rows.
- *   - `publisher` / `readonly` (and any role we don't recognise) see
- *     only rows where `publisher_id = caller.id`.
+ *   - Reads (list + single-row fetch) are open to every
+ *     authenticated publisher: everyone sees the whole node catalog.
+ *   - Writes (update / publish / retract / delete / preview / reindex)
+ *     stay owner-scoped: `admin` and the synthetic `service` role may
+ *     mutate any row; `publisher` / `readonly` (and any role we don't
+ *     recognise) may mutate only rows where `publisher_id = caller.id`.
+ *
+ * The split is enforced by two helpers:
+ *   - `getDatasetById` — unscoped read used by the list + detail
+ *     endpoints.
+ *   - `getDatasetForPublisher` — the owner-scoped gate the mutation
+ *     handlers pre-check with; returns null (→ 404) for a row the
+ *     caller may not mutate.
+ * `canMutateDataset` exposes the same rule to the route layer so the
+ * list / detail responses can stamp a per-row `can_edit` flag the
+ * portal uses to show or hide the Edit / Retract / Delete controls.
  *
  * Phase 1a is metadata-only: `data_ref` / `thumbnail_ref` /
  * `legend_ref` / `caption_ref` are bare strings supplied by the
@@ -18,6 +31,7 @@
  */
 
 import { type PublisherRow, isPrivileged } from './publisher-store'
+import { can, canOwnOrAny } from './capabilities'
 import type { DatasetRow } from './catalog-store'
 import { invalidateSnapshot } from './snapshot'
 import type { CatalogEnv } from './env'
@@ -124,14 +138,35 @@ export interface DraftCreateFailure {
 export type DraftCreateOutcome = DraftCreateResult | DraftCreateFailure
 
 /**
- * Apply the role-aware visibility predicate to an existing query.
+ * Apply the role-aware *mutation* predicate to an existing query.
  * Returns the WHERE fragment + binds to splice into the caller's
  * SQL. The fragment is a no-op (`'1=1'`) for privileged callers so
- * the caller can keep the SQL shape uniform.
+ * the caller can keep the SQL shape uniform. Reads no longer use
+ * this (the whole catalog is visible to every publisher); it now
+ * only gates the owner-scoped write path via `getDatasetForPublisher`.
  */
 function publisherScope(publisher: PublisherRow): { sql: string; binds: unknown[] } {
-  if (isPrivileged(publisher)) return { sql: '1=1', binds: [] }
+  // The mutation-visibility gate: callers who may edit any row see the
+  // whole table; everyone else only their own. (Editors gain
+  // `content.edit.any` in a later phase; today only admin/service hold
+  // it, so this is behavior-identical to the old isPrivileged check.)
+  if (can(publisher, 'content.edit.any')) return { sql: '1=1', binds: [] }
   return { sql: 'publisher_id = ?', binds: [publisher.id] }
+}
+
+/**
+ * Whether `publisher` may mutate (edit / publish / retract / delete /
+ * preview / reindex) the given row. Privileged callers may mutate
+ * anything; everyone else only their own rows. This is the single
+ * source of truth for the write rule — the mutation gate
+ * (`getDatasetForPublisher`) and the route layer's `can_edit` flag
+ * both derive from it.
+ */
+export function canMutateDataset(
+  publisher: PublisherRow,
+  row: Pick<DatasetRow, 'publisher_id'>,
+): boolean {
+  return canOwnOrAny(publisher, row.publisher_id, 'content.edit.own', 'content.edit.any')
 }
 
 /**
@@ -156,15 +191,16 @@ export interface ListOptions {
 
 export async function listDatasetsForPublisher(
   db: D1Database,
-  publisher: PublisherRow,
+  // Every authenticated publisher sees the whole node catalog, so the
+  // list is no longer owner-scoped. The caller is retained in the
+  // signature because the route layer still needs it to stamp the
+  // per-row `can_edit` flag (see `canMutateDataset`), and to keep the
+  // call sites stable.
+  _publisher: PublisherRow,
   options: ListOptions = {},
 ): Promise<{ datasets: DatasetRow[]; next_cursor: string | null }> {
   const where: string[] = []
   const binds: unknown[] = []
-
-  const scope = publisherScope(publisher)
-  where.push(scope.sql)
-  binds.push(...scope.binds)
 
   if (options.status === 'draft') {
     where.push('published_at IS NULL AND retracted_at IS NULL')
@@ -180,9 +216,12 @@ export async function listDatasetsForPublisher(
   }
 
   const limit = Math.min(Math.max(options.limit ?? 50, 1), 200)
+  // With no status/cursor filter the predicate list is empty, so omit
+  // the WHERE clause entirely rather than emit a dangling `WHERE`.
+  const whereClause = where.length ? `WHERE ${where.join(' AND ')}` : ''
   const sql = `
     SELECT * FROM datasets
-    WHERE ${where.join(' AND ')}
+    ${whereClause}
     ORDER BY id ASC
     LIMIT ?
   `
@@ -195,6 +234,24 @@ export async function listDatasetsForPublisher(
   const datasets = hasMore ? rows.slice(0, limit) : rows
   const next_cursor = hasMore ? datasets[datasets.length - 1].id : null
   return { datasets, next_cursor }
+}
+
+/**
+ * Unscoped single-row read by id. Backs the list + detail read
+ * endpoints, which are open to every authenticated publisher. Returns
+ * null only when the row genuinely does not exist. Mutation handlers
+ * must not use this — they gate on `getDatasetForPublisher` so the
+ * owner boundary is preserved.
+ */
+export async function getDatasetById(
+  db: D1Database,
+  id: string,
+): Promise<DatasetRow | null> {
+  const row = await db
+    .prepare('SELECT * FROM datasets WHERE id = ? LIMIT 1')
+    .bind(id)
+    .first<DatasetRow>()
+  return row ?? null
 }
 
 export async function getDatasetForPublisher(
@@ -921,6 +978,11 @@ export async function deleteDataset(
   const row = await getDatasetForPublisher(db, publisher, id)
   if (!row) {
     return { ok: false, status: 404, error: 'not_found', message: `Dataset ${id} not found.` }
+  }
+  // Ownership alone isn't enough — the caller must hold a delete/edit
+  // capability (a demoted read-only reviewer still owns its old rows).
+  if (!canMutateDataset(publisher, row)) {
+    return { ok: false, status: 403, error: 'forbidden_role', message: 'Deleting this dataset requires an authoring role.' }
   }
   if (row.published_at && !row.retracted_at) {
     return {

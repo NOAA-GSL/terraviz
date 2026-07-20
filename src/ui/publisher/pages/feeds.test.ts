@@ -6,6 +6,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { renderFeedsPage } from './feeds'
+import { fetchFeatures, resetFeaturesCache } from '../features'
 import { FEED_PRESETS } from '../feed-presets'
 
 interface RouteSpec { status?: number; body?: unknown }
@@ -54,6 +55,7 @@ const baseRoutes = (): Record<string, RouteSpec> => ({
       ],
     },
   },
+  '/api/v1/publish/media/video-sources': { body: { sources: [] } },
 })
 
 const flush = () => new Promise<void>(r => setTimeout(r, 0))
@@ -65,6 +67,26 @@ beforeEach(() => {
 })
 
 describe('renderFeedsPage', () => {
+  it('renders the disabled card (and skips every fetch) when events is off', async () => {
+    // Prime the module-cached toggle map with events off, then render
+    // — the page consults the cache before touching its own APIs.
+    resetFeaturesCache()
+    try {
+      await fetchFeatures({
+        fetchFn: mockFetch({
+          '/api/v1/publish/node-settings': { body: { features: { events: false } } },
+        }) as unknown as typeof fetch,
+      })
+      const pageFetch = mockFetch(baseRoutes())
+      await renderFeedsPage(mount, { fetchFn: pageFetch })
+      expect(mount.querySelector('.publisher-feature-disabled')).not.toBeNull()
+      expect(mount.querySelector('.publisher-feeds-row')).toBeNull()
+      expect(pageFetch).not.toHaveBeenCalled()
+    } finally {
+      resetFeaturesCache()
+    }
+  })
+
   it('shows a restricted card for a non-privileged publisher', async () => {
     const routes = baseRoutes()
     routes['/api/v1/publish/me'] = { body: { role: 'publisher', is_admin: false } }
@@ -236,15 +258,46 @@ describe('renderFeedsPage', () => {
     expect(fetchFn.mock.calls.some(c => String(c[0]).includes('/events/refresh'))).toBe(true)
   })
 
-  it('lists built-in + custom YouTube channels; only custom ones are removable', async () => {
+  it('lists built-in + custom YouTube channels; built-ins toggle, custom ones remove', async () => {
     await renderFeedsPage(mount, { fetchFn: mockFetch(baseRoutes()) })
     const rows = [...mount.querySelectorAll('.publisher-feeds-channel-row')]
     expect(rows.length).toBe(2)
     const builtinRow = rows.find(r => r.textContent?.includes('NASA'))!
     const customRow = rows.find(r => r.textContent?.includes('City Museum'))!
-    // Built-in has no Remove button; custom does.
-    expect(builtinRow.querySelector('button')).toBeNull()
+    // Built-in can't be removed — it has a Disable toggle; custom has Remove.
+    expect(builtinRow.querySelector('button')?.textContent).toBe('Disable')
     expect(customRow.querySelector('button')?.textContent).toBe('Remove')
+  })
+
+  it('shows Enable on a disabled built-in and re-enables it via POST { disabled: false }', async () => {
+    const routes = baseRoutes()
+    routes['/api/v1/publish/media/youtube-channels'] = {
+      body: {
+        channels: [
+          { channelId: NASA_CHANNEL, channelName: 'NASA', builtin: true, disabled: true },
+          { channelId: CUSTOM_CHANNEL, channelName: 'City Museum', builtin: false, disabled: false },
+        ],
+      },
+    }
+    routes[`POST /api/v1/publish/media/youtube-channels/${NASA_CHANNEL}`] = {
+      body: { channelId: NASA_CHANNEL, builtin: true, disabled: false },
+    }
+    const fetchFn = mockFetch(routes)
+    await renderFeedsPage(mount, { fetchFn })
+
+    const builtinRow = [...mount.querySelectorAll('.publisher-feeds-channel-row')].find(r =>
+      r.textContent?.includes('NASA'),
+    )!
+    expect(builtinRow.classList.contains('publisher-feeds-channel-row-off')).toBe(true)
+    const toggle = builtinRow.querySelector('button') as HTMLButtonElement
+    expect(toggle.textContent).toBe('Enable')
+
+    toggle.click()
+    await flush()
+    const call = fetchFn.mock.calls.find(c => String(c[0]).includes(`/youtube-channels/${NASA_CHANNEL}`))
+    expect(call).toBeTruthy()
+    expect((call![1] as RequestInit).method).toBe('POST')
+    expect(JSON.parse(String((call![1] as RequestInit).body))).toEqual({ disabled: false })
   })
 
   it('shows an unavailable note (no add form) when the channels endpoint is missing (older deploy)', async () => {
@@ -296,6 +349,68 @@ describe('renderFeedsPage', () => {
     expect(
       fetchFn.mock.calls.some(
         c => String(c[0]).includes(`/youtube-channels/${CUSTOM_CHANNEL}`) && c[1]?.method === 'DELETE',
+      ),
+    ).toBe(true)
+  })
+
+  it('renders registered video sources and adds a new one', async () => {
+    const routes = baseRoutes()
+    routes['/api/v1/publish/media/video-sources'] = {
+      body: {
+        sources: [
+          {
+            id: 'VS1',
+            label: 'NOAA Ocean Today',
+            url: 'https://oceantoday.noaa.gov/videositemap.xml',
+            attribution: 'NOAA Ocean Today',
+            enabled: true,
+            lastRunAt: '2026-07-17T10:00:00.000Z',
+            lastRunStatus: 'ok',
+            lastRunError: null,
+            lastRunCount: 283,
+          },
+        ],
+      },
+    }
+    routes['POST /api/v1/publish/media/video-sources'] = { status: 201, body: { source: {} } }
+    const fetchFn = mockFetch(routes)
+    await renderFeedsPage(mount, { fetchFn })
+
+    // The registered source is listed with its indexed count.
+    expect(mount.textContent).toContain('NOAA Ocean Today')
+    expect(mount.textContent).toContain('283')
+
+    // Add a new source via the form — scoped to the video-sources card
+    // (its inputs share classes with the news-tab custom-feed form).
+    const addBtn = [...mount.querySelectorAll('button')].find(b => b.textContent === 'Add video source')!
+    const cardEl = addBtn.closest('.publisher-card')!
+    const inputs = [...cardEl.querySelectorAll('.publisher-feeds-input')] as HTMLInputElement[]
+    const urlInput = inputs.find(i => i.type === 'url')!
+    const labelInput = inputs.find(i => i.type === 'text' && i.maxLength === 120)!
+    labelInput.value = 'USGS Video'
+    urlInput.value = 'https://usgs.example/videositemap.xml'
+    addBtn.click()
+    await flush()
+    const post = fetchFn.mock.calls.find(
+      c => String(c[0]).endsWith('/media/video-sources') && (c[1]?.method ?? 'GET') === 'POST',
+    )
+    expect(post).toBeTruthy()
+    expect(JSON.parse(String(post![1]!.body))).toMatchObject({ label: 'USGS Video', url: 'https://usgs.example/videositemap.xml' })
+  })
+
+  it('Index now POSTs the refresh endpoint', async () => {
+    const routes = baseRoutes()
+    routes['POST /api/v1/publish/media/video-sources/refresh'] = {
+      body: { fetched: 283, indexed: 283, embedded: 12, pruned: 0 },
+    }
+    const fetchFn = mockFetch(routes)
+    await renderFeedsPage(mount, { fetchFn })
+    const indexBtn = [...mount.querySelectorAll('button')].find(b => b.textContent === 'Index now')!
+    indexBtn.click()
+    await flush()
+    expect(
+      fetchFn.mock.calls.some(
+        c => String(c[0]).endsWith('/video-sources/refresh') && c[1]?.method === 'POST',
       ),
     ).toBe(true)
   })

@@ -16,6 +16,7 @@
  * errors inline.
  */
 
+import { fetchFeatures, renderFeatureDisabledCard } from '../features'
 import { t } from '../../../i18n'
 import { clearWarmupFlag, handleSessionError, publisherGet } from '../api'
 import {
@@ -71,6 +72,10 @@ export async function renderDatasetEditPage(
   id: string,
   options: DatasetEditPageOptions = {},
 ): Promise<void> {
+  if (!(await fetchFeatures()).datasets) {
+    renderFeatureDisabledCard(content, 'datasets')
+    return
+  }
   renderLoading(content)
   const result = await publisherGet<DatasetDetailResponse>(endpoint(id), {
     fetchFn: options.fetchFn,
@@ -91,6 +96,17 @@ export async function renderDatasetEditPage(
     return
   }
   clearWarmupFlag()
+  // The whole catalog is visible, but editing stays owner-scoped. A
+  // non-owner who deep-links to `/edit` (the Edit affordance is hidden
+  // for them elsewhere) is bounced to the read-only detail page rather
+  // than shown a form whose Save would 404. `can_edit` absent (older
+  // payload / fixture) is treated as editable.
+  if (result.data.dataset.can_edit === false) {
+    const detailHref = `/publish/datasets/${encodeURIComponent(id)}`
+    if (options.navigate) options.navigate(detailHref)
+    else window.location.href = detailHref
+    return
+  }
   renderDatasetForm(content, {
     ...options,
     mode: 'edit',

@@ -2,7 +2,7 @@
  * Wire-level tests for GET /api/v1/publish/events — the current-events
  * review queue.
  *
- * Coverage: privileged gate (403 for publisher), the assembled
+ * Coverage: read-open / create-owns access model, the assembled
  * event+links+title shape, the `?status` filter, 400 for a bad status,
  * and 503 when CATALOG_DB is unbound.
  */
@@ -15,6 +15,7 @@ import {
   upsertEventDatasetLink,
   setEventStatus,
   listCurrentEvents,
+  getCurrentEvent,
   listLinksForEvent,
   getEventDecorations,
 } from '../_lib/events-store'
@@ -71,10 +72,10 @@ const SAMPLE = {
 }
 
 describe('GET /api/v1/publish/events', () => {
-  it('403 for a publisher-role account', async () => {
+  it('is readable by a publisher-role account (whole-queue read access)', async () => {
     const { env } = setupEnv()
     const res = await eventsGet(ctx({ env, publisher: PUBLISHER }))
-    expect(res.status).toBe(403)
+    expect(res.status).toBe(200)
   })
 
   it('503 when CATALOG_DB is unbound', async () => {
@@ -177,10 +178,16 @@ const CREATE = {
 }
 
 describe('POST /api/v1/publish/events', () => {
-  it('403 for a publisher-role account', async () => {
-    const { env } = setupEnv()
+  it('lets a publisher-role account create an event and makes them the owner', async () => {
+    const { env, sqlite } = setupEnv()
     const res = await eventsPost(postCtx({ env, publisher: PUBLISHER, body: CREATE }))
-    expect(res.status).toBe(403)
+    expect(res.status).toBe(201)
+    const body = JSON.parse(await res.text()) as { event: { id: string } }
+    // The creating publisher is stamped as owner.
+    const row = sqlite
+      .prepare(`SELECT owner_id FROM current_events WHERE id = ?`)
+      .get(body.event.id) as { owner_id: string | null }
+    expect(row.owner_id).toBe(PUBLISHER.id)
   })
 
   it('400 when provenance is missing', async () => {
@@ -225,6 +232,35 @@ describe('POST /api/v1/publish/events', () => {
     const all = await listCurrentEvents(env.CATALOG_DB)
     expect(all).toHaveLength(1)
     expect(all[0].title).toBe('Hurricane Lena (updated)')
+  })
+
+  it('a non-publish.any author cannot overwrite an existing feed event via (feedId, externalId)', async () => {
+    // Security: the idempotent upsert must not let a lower authoring
+    // role rewrite an event it does not own. Admin seeds a feed event…
+    const { env } = setupEnv()
+    const seeded = JSON.parse(
+      await (await eventsPost(postCtx({ env, body: CREATE }))).text(),
+    ) as { event: { id: string } }
+
+    // …an author POSTs the SAME feed key with hijacked content.
+    const res = await eventsPost(
+      postCtx({
+        env,
+        publisher: PUBLISHER, // role 'publisher' → author (no publish.any)
+        body: { ...CREATE, title: 'HIJACKED', source: { name: 'Evil', url: 'https://evil.example/x' } },
+      }),
+    )
+    expect(res.status).toBe(201) // a fresh manual event, not an update
+    const body = JSON.parse(await res.text()) as { created: boolean; event: { id: string } }
+    expect(body.created).toBe(true)
+    expect(body.event.id).not.toBe(seeded.event.id)
+
+    // The original event is untouched, and the author's row carries no feed key.
+    const original = await getCurrentEvent(env.CATALOG_DB, seeded.event.id)
+    expect(original!.title).toBe(CREATE.title)
+    const hijack = await getCurrentEvent(env.CATALOG_DB, body.event.id)
+    expect(hijack!.feed_id).toBeNull()
+    expect(hijack!.external_id).toBeNull()
   })
 
   it('persists published_at from source.publishedAt', async () => {

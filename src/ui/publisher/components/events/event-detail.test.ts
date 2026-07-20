@@ -45,6 +45,22 @@ describe('renderEventDetail — story image (task: story media)', () => {
   })
 })
 
+describe('renderEventDetail — layout', () => {
+  it('places the Approve/Reject decision directly under the title, above media and pairings', () => {
+    const pane = renderEventDetail(
+      event({ imageUrl: 'https://img.ex/story.jpg', links: [link('DS1')] }),
+      { fetchFn: okFetch() } as never,
+    )
+    const order = [...pane.querySelectorAll('*')]
+    const idx = (sel: string): number => order.indexOf(pane.querySelector(sel)!)
+    // header → decision → story image → pairings, so a curator can triage
+    // without scrolling past the media/meta/pairings.
+    expect(idx('.publisher-events-detail-header')).toBeLessThan(idx('.publisher-events-decision'))
+    expect(idx('.publisher-events-decision')).toBeLessThan(idx('.publisher-events-story-image'))
+    expect(idx('.publisher-events-decision')).toBeLessThan(idx('.publisher-events-pairings'))
+  })
+})
+
 describe('renderEventDetail — suggested media (task: media suggestion engine)', () => {
   const located = () =>
     event({
@@ -190,6 +206,20 @@ describe('renderEventDetail — suggested media (task: media suggestion engine)'
     }
     expect(sent.edits.videoEmbedUrl).toBe('') // empty clears
     expect(evt.videoEmbedUrl).toBeUndefined()
+  })
+
+  it('shows the attached video to a non-editable caller without a Remove control', async () => {
+    const evt = event({
+      can_edit: false,
+      videoEmbedUrl: 'https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ',
+    })
+    const pane = renderEventDetail(evt, { onEventStatusChange: vi.fn(), fetchFn: vi.fn() } as never)
+
+    const frame = pane.querySelector('.publisher-events-video-frame') as HTMLIFrameElement
+    expect(frame).not.toBeNull()
+    expect(frame.src).toBe('https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ')
+    // Read-only: the frame renders, but no Remove control.
+    expect(pane.querySelector('.publisher-events-video button')).toBeNull()
   })
 
   it('appends nearby Commons photo cards asynchronously alongside the Worldview card', async () => {

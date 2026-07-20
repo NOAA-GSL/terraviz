@@ -17,6 +17,7 @@
 import { t } from '../../../../i18n'
 import { getRegionNames } from '../../../../data/regions'
 import { publisherSend, handleSessionError } from '../../api'
+import { fetchFeatures } from '../../features'
 import { renderMatchBadge, toDisplayScore } from './match-badge'
 import { loadPublishedDatasets, filterDatasetsByTitle } from './dataset-search'
 import type { PublisherDataset } from '../../types'
@@ -34,6 +35,7 @@ import {
   fetchNhcConeSuggestion,
   fetchShakemapSuggestion,
   fetchYoutubeSuggestions,
+  fetchVideoSitemapSuggestions,
   isNocookieEmbedUrl,
   looksLikeTropical,
   type MediaSuggestion,
@@ -117,6 +119,7 @@ function suggestionBadge(kind: MediaSuggestion['kind']): string {
     case 'shakemap': return t('publisher.events.suggest.shakemap')
     case 'nhc': return t('publisher.events.suggest.nhc')
     case 'youtube': return t('publisher.events.suggest.youtube')
+    case 'video-sitemap': return t('publisher.events.suggest.videoSitemap')
     case 'worldview': return t('publisher.events.suggest.worldview')
   }
 }
@@ -127,6 +130,7 @@ function suggestionAlt(kind: MediaSuggestion['kind']): string {
     case 'shakemap': return t('publisher.events.suggest.shakemapAlt')
     case 'nhc': return t('publisher.events.suggest.nhcAlt')
     case 'youtube': return t('publisher.events.suggest.youtubeAlt')
+    case 'video-sitemap': return t('publisher.events.suggest.videoSitemapAlt')
     case 'worldview': return t('publisher.events.suggest.worldviewAlt')
   }
 }
@@ -137,9 +141,13 @@ function suggestionCard(
   cb: EventDetailCallbacks,
   onCardGone: () => void,
 ): HTMLElement {
-  // The agency-YouTube source is a VIDEO: it stores `video_embed_url`,
-  // not the event image, and its preview is a play-badged thumbnail.
-  const isVideo = suggestion.kind === 'youtube' && typeof suggestion.embedUrl === 'string'
+  // Two VIDEO sources store a video (not the event image) and preview as
+  // a play-badged thumbnail: agency-YouTube → `video_embed_url` (an
+  // iframe embed), and the non-YouTube video-sitemap → `video_file_url`
+  // (a direct file played natively).
+  const isEmbedVideo = suggestion.kind === 'youtube' && typeof suggestion.embedUrl === 'string'
+  const isFileVideo = suggestion.kind === 'video-sitemap' && typeof suggestion.videoFileUrl === 'string'
+  const isVideo = isEmbedVideo || isFileVideo
   const card = el('div', `publisher-events-suggest-card${isVideo ? ' publisher-events-suggest-card-video' : ''}`)
   // One description serves the preview and, on an image pick, the
   // stored alt text (media accessibility) every surface renders with.
@@ -179,11 +187,13 @@ function suggestionCard(
     use.disabled = true
     status.textContent = ''
     status.classList.remove('publisher-events-status-error')
-    // Video → `edits.videoEmbedUrl` (the embed); image → `edits.imageUrl`
-    // (the URL itself) plus its alt text.
-    const edits = isVideo
+    // Embed video → `edits.videoEmbedUrl`; direct-file video →
+    // `edits.videoFileUrl`; image → `edits.imageUrl` + its alt text.
+    const edits = isEmbedVideo
       ? { videoEmbedUrl: suggestion.embedUrl }
-      : { imageUrl: suggestion.url, imageAlt: altText }
+      : isFileVideo
+        ? { videoFileUrl: suggestion.videoFileUrl }
+        : { imageUrl: suggestion.url, imageAlt: altText }
     void publisherSend<{ event?: Partial<ReviewEvent> }>(
       `${EVENTS_ENDPOINT}/${encodeURIComponent(event.id)}`,
       { edits },
@@ -194,10 +204,13 @@ function suggestionCard(
         handleWriteError(res, status, cb.navigate)
         return
       }
-      if (isVideo) {
+      if (isEmbedVideo) {
         // A video attaches without displacing the image; reflect it and
         // let the card show its "attached" state via re-render.
         event.videoEmbedUrl = res.data?.event?.videoEmbedUrl ?? suggestion.embedUrl
+        cb.onEventStatusChange(event.id, event.status)
+      } else if (isFileVideo) {
+        event.videoFileUrl = res.data?.event?.videoFileUrl ?? suggestion.videoFileUrl
         cb.onEventStatusChange(event.id, event.status)
       } else {
         // The event now has a vetted image — the pane yields to the
@@ -299,7 +312,10 @@ function renderMediaSuggestions(event: ReviewEvent, cb: EventDetailCallbacks): H
   // while videoless — an event can accept both.
   const located = Boolean(event.geometry?.point ?? event.geometry?.boundingBox)
   const wantImage = !event.imageUrl && (located || looksLikeTropical(event))
-  const wantVideo = !event.videoEmbedUrl && Boolean((event.title ?? '').trim())
+  // An event carries at most one video — offer the video sources only
+  // while it has neither an embed nor a direct file attached.
+  const hasVideo = Boolean(event.videoEmbedUrl || event.videoFileUrl)
+  const wantVideo = !hasVideo && Boolean((event.title ?? '').trim())
   if (!wantImage && !wantVideo) return null
 
   const wrap = el('div', 'publisher-events-suggest')
@@ -326,7 +342,10 @@ function renderMediaSuggestions(event: ReviewEvent, cb: EventDetailCallbacks): H
       if (!result) return
       const suggestions = Array.isArray(result) ? result : [result]
       for (const s of suggestions) {
-        const stillWanted = s.kind === 'youtube' ? !event.videoEmbedUrl : !event.imageUrl
+        const isVideoKind = s.kind === 'youtube' || s.kind === 'video-sitemap'
+        const stillWanted = isVideoKind
+          ? !event.videoEmbedUrl && !event.videoFileUrl
+          : !event.imageUrl
         if (stillWanted) wrap.append(suggestionCard(s, event, cb, syncWithCards))
       }
       syncWithCards()
@@ -339,26 +358,69 @@ function renderMediaSuggestions(event: ReviewEvent, cb: EventDetailCallbacks): H
   }
   if (wantVideo) {
     appendLater(fetchYoutubeSuggestions(event, fetchFn))
+    // Non-YouTube agency video from the node's registered sitemaps.
+    appendLater(
+      fetchVideoSitemapSuggestions(
+        { title: event.title, summary: event.summary, keywords: event.keywords },
+        fetchFn,
+      ),
+    )
   }
 
   return wrap
 }
 
+/** The same-origin media-proxy path a direct-file video plays through
+ *  (mirrors the server-side `videoProxyUrl`) — adds CORS for a
+ *  consistent element and the eventual VR path. */
+function videoProxyUrl(fileUrl: string): string {
+  return `/api/v1/media/video-proxy?url=${encodeURIComponent(fileUrl)}`
+}
+
 /**
- * The attached agency video (a curator-picked YouTube embed) — framed
- * as the generated tour will show it, with a Remove control. The embed
- * host is re-guarded by the caller before this renders.
+ * The attached event video — a curator-picked YouTube embed (iframe) or
+ * a direct-file agency video (native <video> through the media-proxy),
+ * framed as the generated tour will show it, with a Remove control. The
+ * embed host is re-guarded by the caller before this renders.
  */
-function renderAttachedVideo(event: ReviewEvent, cb: EventDetailCallbacks): HTMLElement {
+function renderAttachedVideo(
+  event: ReviewEvent,
+  cb: EventDetailCallbacks,
+  canEdit: boolean,
+): HTMLElement {
   const wrap = el('div', 'publisher-events-video')
-  const frame = document.createElement('iframe')
-  frame.className = 'publisher-events-video-frame'
-  frame.src = event.videoEmbedUrl! // caller guarded isNocookieEmbedUrl
-  frame.title = t('publisher.events.suggest.videoAttached')
-  frame.setAttribute('loading', 'lazy')
-  frame.setAttribute('allowfullscreen', '')
-  frame.setAttribute('referrerpolicy', 'strict-origin-when-cross-origin')
-  frame.setAttribute('allow', 'accelerometer; encrypted-media; gyroscope; picture-in-picture')
+  // Which video is attached decides the element + which field Remove
+  // clears. The embed wins only when it's a VALID nocookie URL — an
+  // invalid/legacy embed must not render an unguarded iframe when a
+  // direct file is present; fall back to the native <video> instead.
+  const hasValidEmbed = Boolean(event.videoEmbedUrl && isNocookieEmbedUrl(event.videoEmbedUrl))
+  const isFile = !hasValidEmbed && Boolean(event.videoFileUrl)
+  let media: HTMLElement
+  if (isFile) {
+    const video = document.createElement('video')
+    video.className = 'publisher-events-video-frame'
+    video.src = videoProxyUrl(event.videoFileUrl!)
+    video.controls = true
+    video.preload = 'metadata'
+    video.setAttribute('playsinline', '')
+    media = video
+  } else {
+    const frame = document.createElement('iframe')
+    frame.className = 'publisher-events-video-frame'
+    frame.src = event.videoEmbedUrl! // caller guarded isNocookieEmbedUrl
+    frame.title = t('publisher.events.suggest.videoAttached')
+    frame.setAttribute('loading', 'lazy')
+    frame.setAttribute('allowfullscreen', '')
+    frame.setAttribute('referrerpolicy', 'strict-origin-when-cross-origin')
+    frame.setAttribute('allow', 'accelerometer; encrypted-media; gyroscope; picture-in-picture')
+    media = frame
+  }
+
+  // Non-editable callers can watch the video but get no Remove control.
+  if (!canEdit) {
+    wrap.append(media)
+    return wrap
+  }
 
   const status = el('span', 'publisher-events-edit-status')
   const remove = document.createElement('button')
@@ -371,7 +433,8 @@ function renderAttachedVideo(event: ReviewEvent, cb: EventDetailCallbacks): HTML
     status.classList.remove('publisher-events-status-error')
     void publisherSend<{ event?: Partial<ReviewEvent> }>(
       `${EVENTS_ENDPOINT}/${encodeURIComponent(event.id)}`,
-      { edits: { videoEmbedUrl: '' } }, // empty string clears it
+      // Empty string clears whichever video field is attached.
+      { edits: isFile ? { videoFileUrl: '' } : { videoEmbedUrl: '' } },
       { fetchFn: cb.fetchFn },
     ).then(res => {
       remove.disabled = false
@@ -379,14 +442,15 @@ function renderAttachedVideo(event: ReviewEvent, cb: EventDetailCallbacks): HTML
         handleWriteError(res, status, cb.navigate)
         return
       }
-      event.videoEmbedUrl = undefined
+      if (isFile) event.videoFileUrl = undefined
+      else event.videoEmbedUrl = undefined
       cb.onEventStatusChange(event.id, event.status)
     })
   })
 
   const foot = el('div', 'publisher-events-video-foot')
   foot.append(remove, status)
-  wrap.append(frame, foot)
+  wrap.append(media, foot)
   return wrap
 }
 
@@ -514,8 +578,10 @@ function renderMetadataEdit(event: ReviewEvent, cb: EventDetailCallbacks): HTMLE
   return wrap
 }
 
-/** One dataset pairing row: name · Match Badge · ✓ / ✕ icon buttons. */
-function renderLinkRow(eventId: string, link: ReviewLink, cb: EventDetailCallbacks): HTMLElement {
+/** One dataset pairing row: name · Match Badge · ✓ / ✕ icon buttons.
+ *  When `canEdit` is false the row is display-only (no decision
+ *  buttons) — the read half of read-all / write-own. */
+function renderLinkRow(eventId: string, link: ReviewLink, cb: EventDetailCallbacks, canEdit = true): HTMLElement {
   const row = el('div', `publisher-events-pairing publisher-events-pairing-${link.status}`)
   const name = el('span', 'publisher-events-pairing-name')
   name.textContent = link.datasetTitle ?? link.datasetId
@@ -572,18 +638,23 @@ function renderLinkRow(eventId: string, link: ReviewLink, cb: EventDetailCallbac
   const approveBtn = iconBtn('approve')
   const rejectBtn = iconBtn('reject')
 
-  row.append(
-    name,
-    badgeEl,
-    el('span', 'publisher-events-pairing-actions', [approveBtn, rejectBtn]),
-    rowStatus,
-  )
+  const actions = canEdit
+    ? el('span', 'publisher-events-pairing-actions', [approveBtn, rejectBtn])
+    : el('span', 'publisher-events-pairing-actions')
+  row.append(name, badgeEl, actions, rowStatus)
   return row
 }
 
 /** Build the detail pane for `event`. */
 export function renderEventDetail(event: ReviewEvent, cb: EventDetailCallbacks): HTMLElement {
   const pane = el('div', 'publisher-events-detail')
+
+  // Read-all / write-own: every publisher sees the full detail, but the
+  // review + edit affordances only appear on events the caller may
+  // mutate (its owner / an admin / an unclaimed event). `can_edit`
+  // absent (older payload / fixture) is treated as editable; the server
+  // enforces every write regardless.
+  const canEdit = event.can_edit !== false
 
   // --- Header: title + status badge ---
   const badgeEl = badge(event.status)
@@ -594,85 +665,13 @@ export function renderEventDetail(event: ReviewEvent, cb: EventDetailCallbacks):
     ]),
   )
 
-  // --- Story image (feed enclosure / og:image) — rendered so the
-  // curator vets it alongside the text; approving the event approves
-  // the image that generated tours will show. http(s) re-guarded
-  // client-side before it reaches an <img src>.
-  if (event.imageUrl && /^https?:\/\//i.test(event.imageUrl)) {
-    const img = document.createElement('img')
-    img.className = 'publisher-events-story-image'
-    img.src = event.imageUrl
-    img.alt = event.imageAlt ?? t('publisher.events.storyImage.alt')
-    img.loading = 'lazy'
-    // A dead image link should vanish, not show a broken-image glyph.
-    img.addEventListener('error', () => img.remove())
-    pane.append(img, renderImageUpload(event, cb, 'replace'))
-  } else {
-    // The publisher's own photo is always an option, located or not.
-    pane.append(renderImageUpload(event, cb, 'upload'))
+  if (!canEdit) {
+    pane.append(el('p', 'publisher-events-readonly-notice', [t('publisher.events.readonly.notice')]))
   }
 
-  // --- Attached agency video (the picked YouTube embed) — framed for
-  // the curator to vet, with a Remove control. Independent of the image.
-  if (event.videoEmbedUrl && isNocookieEmbedUrl(event.videoEmbedUrl)) {
-    pane.append(renderAttachedVideo(event, cb))
-  }
-
-  // --- Suggested media (task: media suggestion engine) — image
-  // sources while imageless, the agency-YouTube source while videoless;
-  // each pick writes through the review endpoint's edits.
-  const suggest = renderMediaSuggestions(event, cb)
-  if (suggest) pane.append(suggest)
-
-  // --- Meta strip: source / first observed / detail ---
-  const sourceLink = document.createElement('a')
-  sourceLink.className = 'publisher-events-source-link'
-  sourceLink.href = event.source.url
-  sourceLink.target = '_blank'
-  sourceLink.rel = 'noopener noreferrer'
-  sourceLink.textContent = `${event.source.name} ↗`
-  const meta = el('div', 'publisher-events-meta')
-  meta.append(metaField(t('publisher.events.source'), sourceLink))
-  if (event.source.publishedAt ?? event.occurredStart) {
-    meta.append(metaField(t('publisher.events.occurred'), event.occurredStart ?? event.source.publishedAt ?? ''))
-  }
-  if (event.summary) meta.append(metaField(t('publisher.events.detailLabel'), event.summary))
-  // AI-inferred provenance (slice C): the ingest layer filled these
-  // fields from the headline/summary — flag them for a closer look.
-  if (event.inferredFields && event.inferredFields.length > 0) {
-    const parts = event.inferredFields.map(f =>
-      f === 'occurredStart'
-        ? t('publisher.events.inferred.date')
-        : f === 'geometry'
-          ? t('publisher.events.inferred.location')
-          : f,
-    )
-    const chip = el('span', 'publisher-events-inferred-badge', [parts.join(', ')])
-    chip.title = t('publisher.events.inferred.tooltip')
-    meta.append(metaField(t('publisher.events.inferred.label'), chip))
-  }
-  pane.append(meta)
-
-  // --- Curator metadata override (slice C): correct the occurred date
-  // and/or location when the feed's — or the AI's — value is wrong.
-  // Location is constrained to the same regions.ts vocabulary the
-  // enrichment uses (offered via a datalist); the backend re-runs the
-  // matcher so the pairing signals score the corrected values.
-  pane.append(renderMetadataEdit(event, cb))
-
-  // --- Locator: live map slot, coordinates as text fallback ---
-  const point = locatorPoint(event.geometry)
-  if (point) {
-    const slot = el('div', 'publisher-events-detail-map')
-    slot.setAttribute('data-events-locator', '')
-    const coords = el('span', 'publisher-events-detail-coords')
-    coords.textContent = `${Math.abs(point.lat).toFixed(1)}°${point.lat >= 0 ? 'N' : 'S'}, ${Math.abs(point.lon).toFixed(1)}°${point.lon >= 0 ? 'E' : 'W'}`
-    slot.append(coords)
-    pane.append(slot)
-    if (cb.mountLocator) cb.mountLocator(slot, point)
-  }
-
-  // --- Event-level decision (the heavy tier) ---
+  // --- Event-level decision (the heavy tier) — placed directly under the
+  // title so a curator can triage (Approve / Reject) and clean the queue
+  // without scrolling past the media, meta strip, and dataset pairings.
   const decisionStatus = el('span', 'publisher-events-decision-status')
   decisionStatus.setAttribute('role', 'status')
   const approveEvent = document.createElement('button')
@@ -710,13 +709,98 @@ export function renderEventDetail(event: ReviewEvent, cb: EventDetailCallbacks):
   approveEvent.addEventListener('click', () => submitEvent('approve'))
   rejectEvent.addEventListener('click', () => submitEvent('reject'))
 
-  pane.append(
-    el('div', 'publisher-events-decision', [
-      el('p', 'publisher-events-decision-prompt', [t('publisher.events.decision.prompt')]),
-      el('div', 'publisher-events-decision-actions', [approveEvent, rejectEvent]),
-      decisionStatus,
-    ]),
-  )
+  if (canEdit) {
+    pane.append(
+      el('div', 'publisher-events-decision', [
+        el('p', 'publisher-events-decision-prompt', [t('publisher.events.decision.prompt')]),
+        el('div', 'publisher-events-decision-actions', [approveEvent, rejectEvent]),
+        decisionStatus,
+      ]),
+    )
+  }
+
+  // --- Story image (feed enclosure / og:image) — rendered so the
+  // curator vets it alongside the text; approving the event approves
+  // the image that generated tours will show. http(s) re-guarded
+  // client-side before it reaches an <img src>.
+  if (event.imageUrl && /^https?:\/\//i.test(event.imageUrl)) {
+    const img = document.createElement('img')
+    img.className = 'publisher-events-story-image'
+    img.src = event.imageUrl
+    img.alt = event.imageAlt ?? t('publisher.events.storyImage.alt')
+    img.loading = 'lazy'
+    // A dead image link should vanish, not show a broken-image glyph.
+    img.addEventListener('error', () => img.remove())
+    pane.append(img)
+    if (canEdit) pane.append(renderImageUpload(event, cb, 'replace'))
+  } else if (canEdit) {
+    // The publisher's own photo is always an option, located or not.
+    pane.append(renderImageUpload(event, cb, 'upload'))
+  }
+
+  // --- Attached event video (the picked YouTube embed or a direct-file
+  // agency video) — framed for the curator to vet. Independent of the
+  // image. Read-all/write-own: everyone can watch the attached video;
+  // only editable callers get the Remove control.
+  const hasEmbedVideo = Boolean(event.videoEmbedUrl && isNocookieEmbedUrl(event.videoEmbedUrl))
+  const hasFileVideo = Boolean(event.videoFileUrl && /^https?:\/\//i.test(event.videoFileUrl))
+  if (hasEmbedVideo || hasFileVideo) {
+    pane.append(renderAttachedVideo(event, cb, canEdit))
+  }
+
+  // --- Suggested media (task: media suggestion engine) — image
+  // sources while imageless, the agency-YouTube source while videoless;
+  // each pick writes through the review endpoint's edits.
+  const suggest = canEdit ? renderMediaSuggestions(event, cb) : null
+  if (suggest) pane.append(suggest)
+
+  // --- Meta strip: source / first observed / detail ---
+  const sourceLink = document.createElement('a')
+  sourceLink.className = 'publisher-events-source-link'
+  sourceLink.href = event.source.url
+  sourceLink.target = '_blank'
+  sourceLink.rel = 'noopener noreferrer'
+  sourceLink.textContent = `${event.source.name} ↗`
+  const meta = el('div', 'publisher-events-meta')
+  meta.append(metaField(t('publisher.events.source'), sourceLink))
+  if (event.source.publishedAt ?? event.occurredStart) {
+    meta.append(metaField(t('publisher.events.occurred'), event.occurredStart ?? event.source.publishedAt ?? ''))
+  }
+  if (event.summary) meta.append(metaField(t('publisher.events.detailLabel'), event.summary))
+  // AI-inferred provenance (slice C): the ingest layer filled these
+  // fields from the headline/summary — flag them for a closer look.
+  if (event.inferredFields && event.inferredFields.length > 0) {
+    const parts = event.inferredFields.map(f =>
+      f === 'occurredStart'
+        ? t('publisher.events.inferred.date')
+        : f === 'geometry'
+          ? t('publisher.events.inferred.location')
+          : f,
+    )
+    const chip = el('span', 'publisher-events-inferred-badge', [parts.join(', ')])
+    chip.title = t('publisher.events.inferred.tooltip')
+    meta.append(metaField(t('publisher.events.inferred.label'), chip))
+  }
+  pane.append(meta)
+
+  // --- Curator metadata override (slice C): correct the occurred date
+  // and/or location when the feed's — or the AI's — value is wrong.
+  // Location is constrained to the same regions.ts vocabulary the
+  // enrichment uses (offered via a datalist); the backend re-runs the
+  // matcher so the pairing signals score the corrected values.
+  if (canEdit) pane.append(renderMetadataEdit(event, cb))
+
+  // --- Locator: live map slot, coordinates as text fallback ---
+  const point = locatorPoint(event.geometry)
+  if (point) {
+    const slot = el('div', 'publisher-events-detail-map')
+    slot.setAttribute('data-events-locator', '')
+    const coords = el('span', 'publisher-events-detail-coords')
+    coords.textContent = `${Math.abs(point.lat).toFixed(1)}°${point.lat >= 0 ? 'N' : 'S'}, ${Math.abs(point.lon).toFixed(1)}°${point.lon >= 0 ? 'E' : 'W'}`
+    slot.append(coords)
+    pane.append(slot)
+    if (cb.mountLocator) cb.mountLocator(slot, point)
+  }
 
   // --- Dataset pairings ---
   const pairings = el('div', 'publisher-events-pairings')
@@ -731,7 +815,7 @@ export function renderEventDetail(event: ReviewEvent, cb: EventDetailCallbacks):
 
   const bulkStatus = el('span', 'publisher-events-bulk-status')
   bulkStatus.setAttribute('role', 'status')
-  const targets = autoPairTargets(event)
+  const targets = canEdit ? autoPairTargets(event) : []
   if (targets.length > 0) {
     const bulkBtn = document.createElement('button')
     bulkBtn.type = 'button'
@@ -807,7 +891,13 @@ export function renderEventDetail(event: ReviewEvent, cb: EventDetailCallbacks):
       tourBtn.disabled = false
     })
   })
-  headActions.append(tourBtn)
+  if (canEdit) headActions.append(tourBtn)
+  // Generating a tour needs the tours feature (the endpoint checks it
+  // too) — hide the action when the toggle is off. The map is
+  // module-cached, so this resolves without a network round-trip.
+  void fetchFeatures().then(features => {
+    if (!features.tours) tourBtn.hidden = true
+  })
 
   // "+ Add dataset" — pair a dataset the matcher never suggested. A
   // toggle in the head reveals an inline catalog search; picking a
@@ -817,7 +907,7 @@ export function renderEventDetail(event: ReviewEvent, cb: EventDetailCallbacks):
   addBtn.className = 'publisher-button publisher-button-small publisher-events-add-btn'
   addBtn.textContent = t('publisher.events.addDataset')
   addBtn.setAttribute('aria-expanded', 'false')
-  headActions.append(addBtn)
+  if (canEdit) headActions.append(addBtn)
 
   pairings.append(head, bulkStatus, tourStatus)
 
@@ -828,7 +918,7 @@ export function renderEventDetail(event: ReviewEvent, cb: EventDetailCallbacks):
       rowsHost.append(el('p', 'publisher-events-nolinks', [t('publisher.events.noLinks')]))
       return
     }
-    for (const link of event.links) rowsHost.append(renderLinkRow(event.id, link, cb))
+    for (const link of event.links) rowsHost.append(renderLinkRow(event.id, link, cb, canEdit))
   }
   rebuildRows()
 
@@ -920,7 +1010,10 @@ export function renderEventDetail(event: ReviewEvent, cb: EventDetailCallbacks):
     })
   })
 
-  pairings.append(addPanel, rowsHost)
+  // The add-dataset panel is a write affordance — only mount it (and its
+  // toggle) for editable events; read-only sees just the pairing rows.
+  if (canEdit) pairings.append(addPanel, rowsHost)
+  else pairings.append(rowsHost)
   pane.append(pairings)
 
   return pane

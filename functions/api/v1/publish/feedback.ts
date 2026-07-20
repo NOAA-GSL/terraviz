@@ -3,15 +3,21 @@
  * `/publish/feedback` portal tab (Phase C of
  * `docs/ANALYTICS_STORAGE_AND_ADMIN_PLAN.md`).
  *
- * A thin privilege-gated facade over the same `_feedback-helpers`
+ * A thin read-only facade over the same `_feedback-helpers`
  * the legacy `/api/feedback-admin` endpoint uses — one data layer,
- * two auth surfaces (this one rides the publish middleware +
- * `isPrivileged()`; feedback-admin keeps Cloudflare Access /
- * bearer-token for scripts). Views:
+ * two auth surfaces (this one rides the publish middleware and is
+ * readable by any active publisher; feedback-admin keeps Cloudflare
+ * Access / bearer-token for scripts). Views:
  *
  *   ?view=ai&days=30&recent=100         → AI thumbs dashboard JSON
- *   ?view=general&days=30&recent=100    → bug/feature/other JSON
- *   ?view=screenshot&id=N               → one screenshot data URL
+ *   ?view=general&days=30&recent=100    → bug/feature/other/idea/content JSON
+ *   ?view=screenshot&id=N               → one inline screenshot data URL
+ *   ?view=screenshot-file&id=N          → one R2-backed screenshot,
+ *                                         streamed as image bytes (the
+ *                                         standalone widget's PNGs);
+ *                                         list rows carry
+ *                                         `screenshotIsFile` so the
+ *                                         portal picks the right view
  *
  * CSV/JSONL exports intentionally stay on
  * `/api/feedback-admin?action=…` — they're machine interfaces with
@@ -23,16 +29,14 @@
  */
 
 import type { CatalogEnv } from '../_lib/env'
-import type { PublisherData } from './_middleware'
 import {
   fetchAiDashboard,
   fetchGeneralDashboard,
   fetchScreenshot,
 } from '../../_feedback-helpers'
-import { isPrivileged } from '../_lib/publisher-store'
 
 const CONTENT_TYPE = 'application/json; charset=utf-8'
-const ALLOWED_VIEWS = ['ai', 'general', 'screenshot'] as const
+const ALLOWED_VIEWS = ['ai', 'general', 'screenshot', 'screenshot-file'] as const
 
 function jsonError(status: number, error: string, message: string): Response {
   return new Response(JSON.stringify({ error, message }), {
@@ -56,11 +60,9 @@ export const onRequestGet: PagesFunction<CatalogEnv> = async context => {
   if (!context.env.FEEDBACK_DB) {
     return jsonError(503, 'binding_missing', 'FEEDBACK_DB binding is not configured on this deployment.')
   }
-  const publisher = (context.data as unknown as PublisherData).publisher
-  if (!isPrivileged(publisher)) {
-    return jsonError(403, 'forbidden_role', 'Feedback review is restricted to admin and service callers.')
-  }
-
+  // Read-only view is open to any active publisher (the middleware
+  // has already rejected pending / suspended accounts). There are no
+  // mutation routes under this path — the page only reads.
   const params = new URL(context.request.url).searchParams
   const view = params.get('view') ?? ''
   if (!(ALLOWED_VIEWS as readonly string[]).includes(view)) {
@@ -68,7 +70,7 @@ export const onRequestGet: PagesFunction<CatalogEnv> = async context => {
   }
   const db = context.env.FEEDBACK_DB
 
-  if (view === 'screenshot') {
+  if (view === 'screenshot' || view === 'screenshot-file') {
     // Strict parse, no clamping — an identifier is either valid or
     // it isn't; rounding `id=0` up to row 1 would serve the wrong
     // record.
@@ -81,6 +83,31 @@ export const onRequestGet: PagesFunction<CatalogEnv> = async context => {
     if (!result) {
       return jsonError(404, 'not_found', `No screenshot for general_feedback id ${id}.`)
     }
+
+    if (view === 'screenshot-file') {
+      // R2-backed binary (standalone widget). Streamed rather than
+      // re-encoded to a data URL — these run up to ~9 MB.
+      if (!result.r2Key || !context.env.CATALOG_R2) {
+        return jsonError(404, 'not_found', `No stored screenshot file for general_feedback id ${id}.`)
+      }
+      const object = await context.env.CATALOG_R2.get(result.r2Key)
+      if (!object) {
+        return jsonError(404, 'not_found', `Screenshot object is missing from R2 for general_feedback id ${id}.`)
+      }
+      // nosniff + inline disposition: the bytes are attacker-supplied
+      // (magic-checked as PNG at ingest); make sure no browser ever
+      // reinterprets them as anything but the declared image type.
+      return new Response(object.body, {
+        status: 200,
+        headers: {
+          'Content-Type': object.httpMetadata?.contentType ?? 'image/png',
+          'Content-Disposition': `inline; filename="feedback-${id}.png"`,
+          'X-Content-Type-Options': 'nosniff',
+          'Cache-Control': 'private, no-store',
+        },
+      })
+    }
+
     return new Response(JSON.stringify(result), {
       status: 200,
       headers: { 'Content-Type': CONTENT_TYPE, 'Cache-Control': 'private, no-store' },

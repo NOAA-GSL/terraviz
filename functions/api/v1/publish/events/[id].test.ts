@@ -2,7 +2,7 @@
  * Wire-level tests for POST /api/v1/publish/events/:id — the curator
  * review-submit.
  *
- * Coverage: privileged gate (403), 404 unknown event, 400 empty body,
+ * Coverage: owner-scoped write gate, 404 unknown event, 400 empty body,
  * 400 unknown link, event approve, per-link approve/reject, and the
  * `event.reviewed` audit row.
  */
@@ -29,19 +29,23 @@ const ADMIN: PublisherRow = {
   status: 'active',
   created_at: '2026-01-01T00:00:00.000Z',
 }
-const PUBLISHER: PublisherRow = { ...ADMIN, id: 'PUB-PUBLISHER', email: 'c@e', role: 'publisher', is_admin: 0 }
+const PUBLISHER: PublisherRow = { ...ADMIN, id: 'PUB-PUBLISHER', email: 'c@e', role: 'author', is_admin: 0 }
+const EDITOR: PublisherRow = { ...ADMIN, id: 'PUB-EDITOR', email: 'ed@e', role: 'editor', is_admin: 0 }
+const CONTRIBUTOR: PublisherRow = { ...ADMIN, id: 'PUB-CONTRIB', email: 'co@e', role: 'contributor', is_admin: 0 }
 
 const DS_0 = 'DS000' + 'A'.repeat(21)
 const DS_1 = 'DS001' + 'A'.repeat(21)
 
 function setupEnv() {
   const sqlite = seedFixtures({ count: 2 })
-  sqlite
-    .prepare(
-      `INSERT INTO publishers (id, email, display_name, role, is_admin, status, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    )
-    .run(ADMIN.id, ADMIN.email, ADMIN.display_name, ADMIN.role, ADMIN.is_admin, ADMIN.status, ADMIN.created_at)
+  for (const p of [ADMIN, PUBLISHER, EDITOR, CONTRIBUTOR]) {
+    sqlite
+      .prepare(
+        `INSERT INTO publishers (id, email, display_name, role, is_admin, status, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(p.id, p.email, p.display_name, p.role, p.is_admin, p.status, p.created_at)
+  }
   return { sqlite, env: { CATALOG_DB: asD1(sqlite) } }
 }
 
@@ -81,11 +85,71 @@ async function seedEventWithLink(env: { CATALOG_DB: D1Database }) {
 }
 
 describe('POST /api/v1/publish/events/:id', () => {
-  it('403 for a publisher-role account', async () => {
+  it('lets an editor approve an unclaimed event and claims ownership for them (D1)', async () => {
     const { env } = setupEnv()
     const id = await seedEventWithLink(env)
+    const res = await reviewPost(ctx({ env, id, publisher: EDITOR, body: { event: 'approve' } }))
+    expect(res.status).toBe(200)
+    const row = await getCurrentEvent(env.CATALOG_DB, id)
+    expect(row!.status).toBe('approved')
+    expect(row!.owner_id).toBe(EDITOR.id) // approving claimed it
+    const body = JSON.parse(await res.text()) as { event: { can_edit: boolean } }
+    expect(body.event.can_edit).toBe(true)
+  })
+
+  it('403 when an author touches an UNCLAIMED feed event (Editor territory — D1)', async () => {
+    const { env } = setupEnv()
+    const id = await seedEventWithLink(env) // owner_id null
+    // An author can neither edit nor approve an unclaimed feed event —
+    // it fails the baseline edit gate (needs edit.any).
     const res = await reviewPost(ctx({ env, id, publisher: PUBLISHER, body: { event: 'approve' } }))
     expect(res.status).toBe(403)
+    expect((JSON.parse(await res.text()) as { error: string }).error).toBe('forbidden_owner')
+  })
+
+  it('lets an author approve their OWN event (publish.own)', async () => {
+    const { env } = setupEnv()
+    const id = (await insertCurrentEvent(env.CATALOG_DB, { ...SAMPLE, ownerId: PUBLISHER.id })).id
+    await upsertEventDatasetLink(env.CATALOG_DB, { eventId: id, datasetId: DS_0, matchScore: 0.9 })
+    const res = await reviewPost(ctx({ env, id, publisher: PUBLISHER, body: { event: 'approve' } }))
+    expect(res.status).toBe(200)
+    expect((await getCurrentEvent(env.CATALOG_DB, id))!.status).toBe('approved')
+  })
+
+  it('lets a contributor edit its OWN event metadata but not approve it', async () => {
+    const { env } = setupEnv()
+    const id = (await insertCurrentEvent(env.CATALOG_DB, { ...SAMPLE, ownerId: CONTRIBUTOR.id })).id
+    await upsertEventDatasetLink(env.CATALOG_DB, { eventId: id, datasetId: DS_0, matchScore: 0.9 })
+    // Edits-only submit (no decision) → allowed.
+    const edit = await reviewPost(
+      ctx({ env, id, publisher: CONTRIBUTOR, body: { edits: { occurredStart: '2026-06-26T00:00:00Z' } } }),
+    )
+    expect(edit.status).toBe(200)
+    // A decision → refused (no publish.own).
+    const approve = await reviewPost(ctx({ env, id, publisher: CONTRIBUTOR, body: { event: 'approve' } }))
+    expect(approve.status).toBe(403)
+    expect((JSON.parse(await approve.text()) as { error: string }).error).toBe('forbidden_role')
+  })
+
+  it('403 forbidden_owner when an author reviews an event owned by someone else', async () => {
+    const { env } = setupEnv()
+    // Seed an event already owned by the admin.
+    const id = (await insertCurrentEvent(env.CATALOG_DB, { ...SAMPLE, ownerId: 'PUB-ADMIN' })).id
+    await upsertEventDatasetLink(env.CATALOG_DB, { eventId: id, datasetId: DS_0, matchScore: 0.9 })
+    const res = await reviewPost(ctx({ env, id, publisher: PUBLISHER, body: { event: 'approve' } }))
+    expect(res.status).toBe(403)
+    expect((JSON.parse(await res.text()) as { error: string }).error).toBe('forbidden_owner')
+  })
+
+  it('does not transfer ownership when a different owner-or-admin re-reviews', async () => {
+    const { env } = setupEnv()
+    // Event already owned by the publisher; an admin re-review must not steal it.
+    const id = (await insertCurrentEvent(env.CATALOG_DB, { ...SAMPLE, ownerId: PUBLISHER.id })).id
+    await upsertEventDatasetLink(env.CATALOG_DB, { eventId: id, datasetId: DS_0, matchScore: 0.9 })
+    const res = await reviewPost(ctx({ env, id, body: { event: 'approve' } })) // ctx defaults to ADMIN
+    expect(res.status).toBe(200)
+    const row = await getCurrentEvent(env.CATALOG_DB, id)
+    expect(row!.owner_id).toBe(PUBLISHER.id) // unchanged
   })
 
   it('404 for an unknown event', async () => {
@@ -328,6 +392,27 @@ describe('POST /api/v1/publish/events/:id', () => {
       await reviewPost(ctx({ env, id, body: { edits: { videoEmbedUrl: '' } } }))
       row = await getCurrentEvent(env.CATALOG_DB, id)
       expect(row!.video_embed_url).toBeNull()
+    })
+
+    it('accepts a direct video file, rejects a non-http url, clears on empty', async () => {
+      const { env } = setupEnv()
+      const id = await seedInferredEvent(env)
+      const file = 'https://oceantoday.noaa.gov/coral/bleach_720p.mp4'
+      const ok = await reviewPost(ctx({ env, id, body: { edits: { videoFileUrl: file } } }))
+      expect(ok.status).toBe(200)
+      let row = await getCurrentEvent(env.CATALOG_DB, id)
+      expect(row!.video_file_url).toBe(file)
+      // Independent of the embed + image fields.
+      expect(row!.video_embed_url).toBeNull()
+      expect(row!.image_url).toBeNull()
+
+      const bad = await reviewPost(ctx({ env, id, body: { edits: { videoFileUrl: 'ftp://oceantoday.noaa.gov/x.mp4' } } }))
+      expect(bad.status).toBe(400)
+      expect((await bad.json() as { errors: Array<{ field: string }> }).errors[0].field).toBe('edits.videoFileUrl')
+
+      await reviewPost(ctx({ env, id, body: { edits: { videoFileUrl: '' } } }))
+      row = await getCurrentEvent(env.CATALOG_DB, id)
+      expect(row!.video_file_url).toBeNull()
     })
 
     it('400 for a non-http(s) or oversized imageUrl', async () => {

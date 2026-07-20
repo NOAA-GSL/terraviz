@@ -25,7 +25,8 @@
 
 import type { CatalogEnv } from '../../../_lib/env'
 import type { PublisherData } from '../../_middleware'
-import { retractTour } from '../../../_lib/tour-mutations'
+import { getTourForPublisher, retractTour } from '../../../_lib/tour-mutations'
+import { canOwnOrAny } from '../../../_lib/capabilities'
 
 const CONTENT_TYPE = 'application/json; charset=utf-8'
 
@@ -45,6 +46,13 @@ export const onRequestPost: PagesFunction<CatalogEnv, 'id'> = async context => {
   const publisher = (context.data as unknown as PublisherData).publisher
   const id = pickId(context.params.id)
   if (!id) return jsonError(400, 'invalid_request', 'Missing tour id.')
+  // Retract is a publish-tier action (changes public visibility) — same
+  // gate as publish.
+  const existing = await getTourForPublisher(context.env.CATALOG_DB!, publisher, id)
+  if (!existing) return jsonError(404, 'not_found', `Tour ${id} not found.`)
+  if (!canOwnOrAny(publisher, existing.publisher_id, 'content.publish.own', 'content.publish.any')) {
+    return jsonError(403, 'forbidden_role', 'Retracting a tour requires a publishing role.')
+  }
   const result = await retractTour(context.env, publisher, id)
   if (!result.ok) return jsonError(result.status, result.error, result.message)
   return new Response(JSON.stringify({ tour: result.tour }), {

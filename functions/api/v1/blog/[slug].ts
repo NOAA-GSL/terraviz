@@ -13,11 +13,16 @@
  * 404 for unknown slugs AND drafts (indistinguishable, deliberately).
  * KV-cached per slug (`blog:post:<slug>:v1`, 60 s TTL); the authoring
  * writes bust it. Degrades to 404 `no-store` on read failure.
+ *
+ * Feature toggles: blog off → 404 (page-like surface, same shape as
+ * an unknown slug). Blog on but events/tours off → the post still
+ * serves, minus the event citation / companion-tour reference.
  */
 
 import type { CatalogEnv } from '../_lib/env'
 import { blogPostCacheKey, getPublishedBySlug, resolvePlayableTourId, toPublicPost } from '../_lib/blog-store'
 import { getCurrentEvent } from '../_lib/events-store'
+import { getEffectiveFeatures } from '../_lib/node-settings-store'
 
 const CONTENT_TYPE = 'application/json; charset=utf-8'
 const CACHE_TTL_SECONDS = 60
@@ -60,6 +65,13 @@ export const onRequestGet: PagesFunction<CatalogEnv, 'slug'> = async context => 
   const raw = context.params.slug
   const slug = Array.isArray(raw) ? raw[0] : raw
   if (!slug || !SLUG_RE.test(slug)) return notFound()
+
+  // Feature gate — before the KV read so a still-warm cached post is
+  // never served while the blog feature is off. 404 (not soft-empty):
+  // this is a page-like surface and "disabled" must be
+  // indistinguishable from "no such post". Fail-open on storage blips.
+  const features = await getEffectiveFeatures(context.env)
+  if (!features.blog) return notFound()
 
   const cacheKey = blogPostCacheKey(slug)
   if (context.env.CATALOG_KV) {
@@ -105,8 +117,10 @@ export const onRequestGet: PagesFunction<CatalogEnv, 'slug'> = async context => 
       })
     }
 
-    // Cited event: only surfaced while approved.
-    if (pub.eventId) {
+    // Cited event: only surfaced while approved — and only while the
+    // events feature is on (the post itself still serves; the
+    // citation quietly drops, mirroring the gated public events reads).
+    if (pub.eventId && features.events) {
       const ev = await getCurrentEvent(context.env.CATALOG_DB, pub.eventId)
       if (ev && ev.status === 'approved') {
         event = {
@@ -124,9 +138,12 @@ export const onRequestGet: PagesFunction<CatalogEnv, 'slug'> = async context => 
     }
 
     // Companion tour: only surfaced while published, public, and not
-    // retracted — the same two-gate discipline as the event citation.
-    const playable = await resolvePlayableTourId(context.env.CATALOG_DB, pub.tourId)
-    if (playable) tour = { id: playable }
+    // retracted — the same two-gate discipline as the event citation —
+    // and only while the tours feature is on.
+    if (features.tours) {
+      const playable = await resolvePlayableTourId(context.env.CATALOG_DB, pub.tourId)
+      if (playable) tour = { id: playable }
+    }
   } catch (err) {
     console.warn(
       '[blog] post read failed (table missing / D1 error):',
