@@ -25,4 +25,4 @@ paths-ignore:
   - src-tauri/gen/**
   - "**/node_modules/**"
   - "**/dist/**"
-  - public/design-preview.html
+  - public/design-preview*.html
