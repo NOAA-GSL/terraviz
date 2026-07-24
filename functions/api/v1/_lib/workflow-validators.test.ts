@@ -151,6 +151,37 @@ describe('validatePipeline', () => {
     expect(runPipeline(oversized).some(e => e.code === 'invalid_value')).toBe(true)
   })
 
+  it('validates arg placeholders at save time', () => {
+    const good = JSON.stringify({
+      stages: [
+        {
+          stage: 'process',
+          command: 'decode-grib2',
+          args: {
+            file_or_url: 'https://x/gefs.{{cycle_date:PT6H:PT5H}}/{{cycle_hour:PT6H:PT5H}}/f000.grib2',
+            raw: true,
+          },
+        },
+        {
+          stage: 'visualize',
+          command: 'compose-video',
+          args: { frames: WORKFLOW_FRAMES_OUTPUT_DIR, output: WORKFLOW_OUTPUT_PATH },
+        },
+      ],
+    })
+    expect(runPipeline(good)).toEqual([])
+    const bad = JSON.stringify({
+      stages: [
+        {
+          stage: 'acquire',
+          command: 'http',
+          args: { url: 'https://x/{{cycle_date}}', output: WORKFLOW_OUTPUT_PATH },
+        },
+      ],
+    })
+    expect(runPipeline(bad).some(e => e.code === 'invalid_placeholder')).toBe(true)
+  })
+
   it('rejects stages and commands off the allowlist', () => {
     const shell = JSON.stringify({ stages: [{ stage: 'shell', command: 'bash' }] })
     expect(runPipeline(shell).some(e => e.code === 'not_allowlisted')).toBe(true)
