@@ -76,6 +76,7 @@ import {
   type R2UploadConfig,
 } from './lib/r2-upload'
 import { frameHexFromKey, frameStorePrefix, selectFrameOrphans } from './lib/frame-store'
+import { renderPipelineJson } from '../src/types/zyra-pipeline-args'
 import {
   isoDurationToSeconds,
   restoreFramesFromR2,
@@ -273,7 +274,27 @@ async function phaseFetch(client: TerravizClient, args: Args): Promise<number> {
   const workflow = result.body.workflow
   await mkdir(args.workdir, { recursive: true })
   await mkdir(join(args.workdir, 'output'), { recursive: true })
-  await writeFile(join(args.workdir, 'pipeline.json'), workflow.pipeline_json)
+  // Interpolate {{run_date}}/{{run_id}}/{{cycle_*}} placeholders in
+  // pipeline args before the container sees them. A malformed or
+  // unknown placeholder is a hard failure: rendering a literal
+  // {{...}} into a source URL would fetch garbage.
+  let renderedPipeline: string
+  try {
+    renderedPipeline = renderPipelineJson(workflow.pipeline_json, {
+      now: new Date(),
+      runId: args.runId,
+    })
+  } catch (e) {
+    const detail = e instanceof Error ? e.message : String(e)
+    log(`FAIL: pipeline placeholder rendering → ${detail}`)
+    await client.postWorkflowRunStatus(args.workflowId, args.runId, {
+      status: 'failed',
+      gha_run_id: args.ghaRunId,
+      error_summary: sanitizeErrorSummary(`pipeline placeholder rendering: ${detail}`),
+    })
+    return 2
+  }
+  await writeFile(join(args.workdir, 'pipeline.json'), renderedPipeline)
   await writeFile(join(args.workdir, 'workflow.json'), JSON.stringify(workflow))
   log(`fetched workflow ${workflow.id} → ${args.workdir}/pipeline.json`)
 

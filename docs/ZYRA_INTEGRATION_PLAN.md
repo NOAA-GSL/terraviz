@@ -729,3 +729,20 @@ cache, sequenced after it.
    chunk (versioned with the app) vs. rows in D1 (editable per
    node without a deploy). v1 leans hard-coded; revisit when a
    second node wants different templates.
+
+
+## Pipeline arg placeholders
+
+Model-output sources embed the forecast cycle in their paths
+(`gefs.20260724/00/...`), so a static pipeline can only fetch one
+frozen cycle. String arg values (including array elements) may
+reference `{{run_date}}`, `{{run_id}}`, and the parameterized
+`{{cycle_date:INTERVAL:LAG}}` / `{{cycle_hour:INTERVAL:LAG}}` pair
+(ISO-8601 durations; cycle = floor((now − LAG) / INTERVAL) · INTERVAL,
+epoch-anchored). The validator checks placeholder syntax at save and
+dispatch time (`invalid_placeholder`); the runner interpolates them
+just before writing `pipeline.json`. Unlike the metadata sidecar's
+drop-with-warning behavior, an unresolved pipeline placeholder is a
+hard run failure — a URL with a missing date fetches garbage.
+Contract lives in `src/types/zyra-pipeline-args.ts`, shared by
+validator and runner.

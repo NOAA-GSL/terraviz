@@ -34,6 +34,7 @@ import {
   ZYRA_STAGE_ALLOWLIST,
   type WorkflowRunStatus,
 } from '../../../../src/types/zyra-workflow-constants'
+import { validateArgPlaceholders } from '../../../../src/types/zyra-pipeline-args'
 import { isValidSchedule } from './workflow-schedule'
 
 export interface WorkflowValidationError {
@@ -153,6 +154,11 @@ export function validatePipeline(
               err(`pipeline_json.stages[${i}].args.${key}`, 'too_long', `Arg values must be ≤ ${MAX_PIPELINE_ARG_LENGTH} characters.`),
             )
             continue
+          }
+          if (kind === 'string' && ((item as string).includes('{{') || (item as string).includes('}}'))) {
+            for (const message of validateArgPlaceholders(item as string)) {
+              errors.push(err(`pipeline_json.stages[${i}].args.${key}`, 'invalid_placeholder', message))
+            }
           }
           if (item === WORKFLOW_OUTPUT_PATH || item === WORKFLOW_FRAMES_OUTPUT_DIR) {
             writesOutput = true
