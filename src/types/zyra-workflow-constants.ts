@@ -21,10 +21,8 @@
  * deprecated alias (also named `scan-frames`), so both spellings
  * are allowlisted until curated templates settle on `process`.
  *
- * `reproject` (NOAA-GSL/zyra#295/#306) is allowlisted ahead of the
- * runner: it is on zyra staging but not yet in a tagged release, so
- * the pinned image cannot execute it until the next digest bump.
- * Pipelines using it validate now and become runnable then.
+ * `reproject` (NOAA-GSL/zyra#295/#306) was added together with the
+ * runner bump to zyra v0.1.49, the first release carrying it.
  */
 export const ZYRA_STAGE_ALLOWLIST: Readonly<Record<string, readonly string[]>> = {
   acquire: ['http', 'ftp', 's3'],
