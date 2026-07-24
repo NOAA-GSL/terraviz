@@ -36,6 +36,7 @@ export const ZYRA_STAGE_ALLOWLIST: Readonly<Record<string, readonly string[]>> =
 export const MAX_PIPELINE_STAGES = 12
 export const MAX_PIPELINE_JSON_BYTES = 32 * 1024
 export const MAX_PIPELINE_ARG_LENGTH = 2000
+export const MAX_PIPELINE_ARG_LIST_ITEMS = 16
 
 /** Bounds on the metadata sidecar template. */
 export const MAX_METADATA_TEMPLATE_BYTES = 8 * 1024

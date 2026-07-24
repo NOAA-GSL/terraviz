@@ -104,6 +104,43 @@ describe('validatePipeline', () => {
     expect(runPipeline(reprojectPipeline)).toEqual([])
   })
 
+  it('accepts array args of scalars (multi-valued flags like dst-bounds)', () => {
+    const pipeline = JSON.stringify({
+      stages: [
+        {
+          stage: 'process',
+          command: 'reproject',
+          args: { i: '/work/tmp/in.tif', o: '/work/tmp/out.tif', dst_bounds: [-180, -90, 180, 90], width: 2048 },
+        },
+        {
+          stage: 'visualize',
+          command: 'compose-video',
+          args: { frames: WORKFLOW_FRAMES_OUTPUT_DIR, output: WORKFLOW_OUTPUT_PATH },
+        },
+      ],
+    })
+    expect(runPipeline(pipeline)).toEqual([])
+  })
+
+  it('rejects array args with non-scalar elements or bad lengths', () => {
+    const nested = JSON.stringify({
+      stages: [
+        {
+          stage: 'process',
+          command: 'reproject',
+          args: { dst_bounds: [[-180, -90]], o: WORKFLOW_OUTPUT_PATH },
+        },
+      ],
+    })
+    expect(runPipeline(nested).some(e => e.code === 'invalid_value')).toBe(true)
+    const empty = JSON.stringify({
+      stages: [
+        { stage: 'process', command: 'reproject', args: { dst_bounds: [], o: WORKFLOW_OUTPUT_PATH } },
+      ],
+    })
+    expect(runPipeline(empty).some(e => e.code === 'invalid_value')).toBe(true)
+  })
+
   it('rejects stages and commands off the allowlist', () => {
     const shell = JSON.stringify({ stages: [{ stage: 'shell', command: 'bash' }] })
     expect(runPipeline(shell).some(e => e.code === 'not_allowlisted')).toBe(true)

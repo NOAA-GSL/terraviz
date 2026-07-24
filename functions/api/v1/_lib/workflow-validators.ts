@@ -22,6 +22,7 @@ import {
   MAX_ERROR_SUMMARY_LENGTH,
   MAX_METADATA_TEMPLATE_BYTES,
   MAX_PIPELINE_ARG_LENGTH,
+  MAX_PIPELINE_ARG_LIST_ITEMS,
   MAX_PIPELINE_JSON_BYTES,
   MAX_PIPELINE_STAGES,
   METADATA_TEMPLATE_ALLOWED_FIELDS,
@@ -119,21 +120,42 @@ export function validatePipeline(
         return
       }
       for (const [key, value] of Object.entries(args)) {
-        const kind = typeof value
-        if (kind !== 'string' && kind !== 'number' && kind !== 'boolean') {
+        // Arrays of scalars are allowed: zyra's pipeline runner expands
+        // them as multi-valued flags (e.g. dst_bounds: [-180,-90,180,90]
+        // -> --dst-bounds -180 -90 180 90), which nargs-style options
+        // like reproject bounds and visualize extents require.
+        const items = Array.isArray(value) ? value : [value]
+        if (Array.isArray(value) && (value.length === 0 || value.length > MAX_PIPELINE_ARG_LIST_ITEMS)) {
           errors.push(
-            err(`pipeline_json.stages[${i}].args.${key}`, 'invalid_value', 'Arg values must be string, number, or boolean.'),
+            err(
+              `pipeline_json.stages[${i}].args.${key}`,
+              'invalid_value',
+              `Array args must have 1-${MAX_PIPELINE_ARG_LIST_ITEMS} elements.`,
+            ),
           )
           continue
         }
-        if (kind === 'string' && (value as string).length > MAX_PIPELINE_ARG_LENGTH) {
-          errors.push(
-            err(`pipeline_json.stages[${i}].args.${key}`, 'too_long', `Arg values must be ≤ ${MAX_PIPELINE_ARG_LENGTH} characters.`),
-          )
-          continue
-        }
-        if (value === WORKFLOW_OUTPUT_PATH || value === WORKFLOW_FRAMES_OUTPUT_DIR) {
-          writesOutput = true
+        for (const item of items) {
+          const kind = typeof item
+          if (kind !== 'string' && kind !== 'number' && kind !== 'boolean') {
+            errors.push(
+              err(
+                `pipeline_json.stages[${i}].args.${key}`,
+                'invalid_value',
+                'Arg values must be scalars (string, number, boolean) or arrays of scalars.',
+              ),
+            )
+            continue
+          }
+          if (kind === 'string' && (item as string).length > MAX_PIPELINE_ARG_LENGTH) {
+            errors.push(
+              err(`pipeline_json.stages[${i}].args.${key}`, 'too_long', `Arg values must be ≤ ${MAX_PIPELINE_ARG_LENGTH} characters.`),
+            )
+            continue
+          }
+          if (item === WORKFLOW_OUTPUT_PATH || item === WORKFLOW_FRAMES_OUTPUT_DIR) {
+            writesOutput = true
+          }
         }
       }
     }
