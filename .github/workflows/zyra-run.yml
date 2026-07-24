@@ -45,7 +45,10 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  ZYRA_IMAGE_DEFAULT: ghcr.io/noaa-gsl/zyra-scheduler@sha256:fe83cf443dd96d3a7043e52207463424fcde11937c4b177a6fb5130d2caf9937
+  # v0.1.49 — first release with process reproject, GeoTIFF input for
+  # heatmap/contour, palette files (--cmap-file), and legend export
+  # (--legend-file); bumped together with ZYRA_STAGE_ALLOWLIST.
+  ZYRA_IMAGE_DEFAULT: ghcr.io/noaa-gsl/zyra-scheduler@sha256:c34a016a4f4cd3d9e35869ca95878449619a588955c2093bd14fb84876386301
 
 jobs:
   run:

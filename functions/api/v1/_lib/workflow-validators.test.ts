@@ -77,6 +77,33 @@ describe('validatePipeline', () => {
     expect(runPipeline(noOutput).some(e => e.code === 'missing_output')).toBe(true)
   })
 
+  it('accepts a process reproject stage (regional-model pattern)', () => {
+    // Warps projected model output (e.g. HRRR Lambert Conformal) onto
+    // the equirectangular grid the globe expects, and wraps 0-360
+    // global grids to ±180. All args are scalars.
+    const reprojectPipeline = JSON.stringify({
+      stages: [
+        {
+          stage: 'process',
+          command: 'reproject',
+          args: {
+            i: '/work/images/in.tif',
+            o: '/work/images/frames/out.tif',
+            'dst-bounds': 'auto',
+            width: 2048,
+            'dst-nodata': 'nan',
+          },
+        },
+        {
+          stage: 'visualize',
+          command: 'compose-video',
+          args: { frames: WORKFLOW_FRAMES_OUTPUT_DIR, output: WORKFLOW_OUTPUT_PATH },
+        },
+      ],
+    })
+    expect(runPipeline(reprojectPipeline)).toEqual([])
+  })
+
   it('rejects stages and commands off the allowlist', () => {
     const shell = JSON.stringify({ stages: [{ stage: 'shell', command: 'bash' }] })
     expect(runPipeline(shell).some(e => e.code === 'not_allowlisted')).toBe(true)

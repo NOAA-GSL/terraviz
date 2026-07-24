@@ -101,7 +101,7 @@ gap needs a tool on our side (or an upstream contribution).
 | # | Stage (aliases) | Status upstream | Use for TerraViz | Gap / suggested tooling |
 |---|---|---|---|---|
 | 1 | **Import** (acquire, ingest) | Implemented — `zyra acquire http\|s3\|ftp\|vimeo` | Fetch source data: model output, satellite imagery, observation feeds | None blocking. THREDDS/OPeNDAP connectors would widen the NOAA catalog reach — note for upstream, not a prerequisite. |
-| 2 | **Process** (transform) | Implemented — `decode-grib2`, `extract-variable`, `convert-format` | Decode GRIB2/NetCDF, subset variables, reproject | None blocking. |
+| 2 | **Process** (transform) | Implemented — `decode-grib2`, `extract-variable`, `convert-format`, `reproject` | Decode GRIB2/NetCDF, subset variables, reproject (regional grids → equirectangular; 0–360 global grids → ±180) | None blocking (runner pinned to zyra v0.1.49, the first release carrying `reproject`). |
 | 3 | **Simulate** | Conceptual (no CLI) | — | Not needed; skip. |
 | 4 | **Decide** (optimize) | Conceptual | — | Not needed for v1. Future: automatic colormap / contour-level selection for unattended renders. |
 | 5 | **Visualize** (render) | Implemented — `heatmap\|contour\|timeseries\|vector\|animate\|compose-video\|interactive` | Render frames; `compose-video` produces the MP4 | **SOS preset.** Nothing enforces the sphere spec (4096×2048 equirectangular, 30 fps, H.264). v1: bake the constraints into our curated templates' ffmpeg args. Upstream candidate: a `--preset sos` for `compose-video`. **Thumbnail + legend.** No poster/legend output; v1 derives the thumbnail via an ffmpeg frame-grab in the runner, legend stays a template-supplied static asset. |
