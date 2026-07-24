@@ -180,6 +180,16 @@ describe('validatePipeline', () => {
       ],
     })
     expect(runPipeline(bad).some(e => e.code === 'invalid_placeholder')).toBe(true)
+    const strayCloser = JSON.stringify({
+      stages: [
+        {
+          stage: 'acquire',
+          command: 'http',
+          args: { url: 'https://x/stray}}closer', output: WORKFLOW_OUTPUT_PATH },
+        },
+      ],
+    })
+    expect(runPipeline(strayCloser).some(e => e.code === 'invalid_placeholder')).toBe(true)
   })
 
   it('rejects stages and commands off the allowlist', () => {

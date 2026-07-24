@@ -53,6 +53,16 @@ describe('parsePlaceholder / validateArgPlaceholders', () => {
     expect(typeof parsePlaceholder('cycle_hour:6h:5h')).toBe('string')
     expect(typeof parsePlaceholder('run_date:PT1H:PT1H')).toBe('string')
   })
+  it('rejects unterminated or mismatched braces', () => {
+    // matchAll() sees no complete placeholder here; the residual-brace
+    // check must catch it or the literal leaks into a URL.
+    expect(validateArgPlaceholders('https://x/gefs.{{cycle_date:PT6H:PT5H/f000.grib2')).toHaveLength(1)
+    expect(validateArgPlaceholders('stray }} closer')).toHaveLength(1)
+    expect(validateArgPlaceholders('{{run_date}} then {{broken')).toHaveLength(1)
+    // Single braces are ordinary characters.
+    expect(validateArgPlaceholders('a{b}c')).toEqual([])
+  })
+
   it('collects errors from a URL-shaped string', () => {
     const errors = validateArgPlaceholders(
       'https://x/gefs.{{cycle_date:PT6H:PT5H}}/{{cycle_hr}}/f000.grib2',
@@ -77,6 +87,11 @@ describe('renderArgPlaceholders', () => {
   })
   it('throws on malformed placeholders', () => {
     expect(() => renderArgPlaceholders('{{cycle_date}}', CTX)).toThrow(/requires interval/)
+  })
+  it('throws on unterminated braces instead of passing them through', () => {
+    expect(() => renderArgPlaceholders('https://x/{{cycle_date:PT6H:PT5H', CTX)).toThrow(
+      /Unterminated or mismatched/,
+    )
   })
 })
 

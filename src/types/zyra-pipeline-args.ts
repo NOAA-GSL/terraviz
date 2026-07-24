@@ -95,6 +95,18 @@ export function parsePlaceholder(body: string): PipelinePlaceholder | string {
   return { name }
 }
 
+const RESIDUAL_BRACES_MESSAGE =
+  'Unterminated or mismatched placeholder braces — every "{{" needs a matching "}}".'
+
+/** True when brace tokens remain after removing complete
+ *  placeholders — an unterminated `{{...` (or stray `}}`) that the
+ *  match-based scan cannot see and would otherwise pass through
+ *  verbatim into a URL. */
+function hasResidualBraces(value: string): boolean {
+  const stripped = value.replace(PLACEHOLDER_RE, '')
+  return stripped.includes('{{') || stripped.includes('}}')
+}
+
 /**
  * Validate every placeholder in one arg string. Returns error
  * messages (empty when the string is placeholder-free or all
@@ -106,6 +118,7 @@ export function validateArgPlaceholders(value: string): string[] {
     const parsed = parsePlaceholder(match[1])
     if (typeof parsed === 'string') errors.push(parsed)
   }
+  if (hasResidualBraces(value)) errors.push(RESIDUAL_BRACES_MESSAGE)
   return errors
 }
 
@@ -128,6 +141,7 @@ export function cycleStart(now: Date, intervalSeconds: number, lagSeconds: numbe
  * literal `{{...}}` into a URL must never proceed silently.
  */
 export function renderArgPlaceholders(value: string, ctx: PipelineArgContext): string {
+  if (hasResidualBraces(value)) throw new Error(RESIDUAL_BRACES_MESSAGE)
   return value.replace(PLACEHOLDER_RE, (_, body: string) => {
     const parsed = parsePlaceholder(body)
     if (typeof parsed === 'string') throw new Error(parsed)

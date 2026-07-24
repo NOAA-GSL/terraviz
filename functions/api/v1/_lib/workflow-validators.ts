@@ -155,7 +155,7 @@ export function validatePipeline(
             )
             continue
           }
-          if (kind === 'string' && (item as string).includes('{{')) {
+          if (kind === 'string' && ((item as string).includes('{{') || (item as string).includes('}}'))) {
             for (const message of validateArgPlaceholders(item as string)) {
               errors.push(err(`pipeline_json.stages[${i}].args.${key}`, 'invalid_placeholder', message))
             }
