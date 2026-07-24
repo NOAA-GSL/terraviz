@@ -171,6 +171,21 @@ jobs:
             "$IMAGE" \
             bash -c '
               set -euo pipefail
+              # The zyra image sets PROJ_LIB=/usr/share/proj for its
+              # arm64 apt layout (docker/zyra/Dockerfile), but sets it
+              # unconditionally. On amd64 that directory does not exist
+              # and the stale value overrides the PROJ data bundled in
+              # the rasterio wheel, so every CRS lookup dies with
+              # "Cannot find proj.db" (NOAA-GSL/zyra#318). GDAL_DATA is
+              # correctly left unset there, which is why GDAL data
+              # resolves fine; do the same for PROJ. Only a value that
+              # is genuinely broken gets cleared, so a fixed image and
+              # the arm64 layout are both unaffected, and this guard
+              # becomes a no-op once the image ships the fix.
+              if [ -n "${PROJ_LIB:-}" ] && [ ! -f "${PROJ_LIB}/proj.db" ]; then
+                echo "::notice::PROJ_LIB=$PROJ_LIB has no proj.db; clearing it so rasterio uses its bundled PROJ data"
+                unset PROJ_LIB
+              fi
               # pad-missing needs Pillow, which the scheduler image does
               # not bundle — install it on demand (as the zyra-scheduler
               # GitLab pipeline does) when the pipeline uses that stage.
