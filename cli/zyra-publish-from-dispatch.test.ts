@@ -12,6 +12,16 @@ import {
 const ULID = '01HX0000000000000000000000'
 
 describe('parseArgs', () => {
+
+  it('defaults report-failure to failed and honors --status=canceled', () => {
+    // A cancelled or timed-out GHA job must post `canceled`, not
+    // `failed`, so the run row still reaches a terminal state and the
+    // workflow is not wedged by the active-run guard.
+    const base = [`--phase=report-failure`, `--workflow-id=${ULID}`, `--run-id=${ULID}`]
+    expect(parseArgs(base)).toMatchObject({ terminalStatus: 'failed' })
+    expect(parseArgs([...base, '--status=canceled'])).toMatchObject({ terminalStatus: 'canceled' })
+    expect(parseArgs([...base, '--status=nonsense'])).toMatchObject({ terminalStatus: 'failed' })
+  })
   it('requires a valid phase and ULID ids', () => {
     expect(parseArgs([])).toHaveProperty('error')
     expect(parseArgs([`--phase=deploy`, `--workflow-id=${ULID}`, `--run-id=${ULID}`])).toHaveProperty('error')
