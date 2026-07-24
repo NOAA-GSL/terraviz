@@ -139,6 +139,16 @@ describe('validatePipeline', () => {
       ],
     })
     expect(runPipeline(empty).some(e => e.code === 'invalid_value')).toBe(true)
+    const oversized = JSON.stringify({
+      stages: [
+        {
+          stage: 'process',
+          command: 'reproject',
+          args: { dst_bounds: Array.from({ length: 17 }, (_, n) => n), o: WORKFLOW_OUTPUT_PATH },
+        },
+      ],
+    })
+    expect(runPipeline(oversized).some(e => e.code === 'invalid_value')).toBe(true)
   })
 
   it('rejects stages and commands off the allowlist', () => {

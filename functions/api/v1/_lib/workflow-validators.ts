@@ -8,7 +8,8 @@
  *
  *   - `validatePipeline`     — the security boundary. Every stage/
  *     command pair must be on `ZYRA_STAGE_ALLOWLIST`, args must be
- *     scalar and bounded, and at least one arg must equal
+ *     scalars or bounded arrays of scalars, and at least one arg
+ *     must equal
  *     `WORKFLOW_OUTPUT_PATH` so the publish leg has an MP4 to find.
  *     Enforced at save AND re-enforced at dispatch time — a row
  *     edited around the API (or saved under an older allowlist)
