@@ -20,10 +20,15 @@
  * into `process` — `transform metadata` still works as a
  * deprecated alias (also named `scan-frames`), so both spellings
  * are allowlisted until curated templates settle on `process`.
+ *
+ * `reproject` (NOAA-GSL/zyra#295/#306) is allowlisted ahead of the
+ * runner: it is on zyra staging but not yet in a tagged release, so
+ * the pinned image cannot execute it until the next digest bump.
+ * Pipelines using it validate now and become runnable then.
  */
 export const ZYRA_STAGE_ALLOWLIST: Readonly<Record<string, readonly string[]>> = {
   acquire: ['http', 'ftp', 's3'],
-  process: ['decode-grib2', 'extract-variable', 'convert-format', 'metadata', 'scan-frames', 'pad-missing'],
+  process: ['decode-grib2', 'extract-variable', 'convert-format', 'reproject', 'metadata', 'scan-frames', 'pad-missing'],
   transform: ['metadata', 'scan-frames'],
   visualize: ['heatmap', 'contour', 'animate', 'compose-video'],
   export: ['local'],
