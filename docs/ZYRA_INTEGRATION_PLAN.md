@@ -411,6 +411,21 @@ metadata vocabulary. When Zyra's Narrate stage ships, an
 LLM-drafted abstract can replace the static template string behind
 the same file format.
 
+`data_start` / `data_end` come from `frames-meta.json`, which
+`scan-frames` builds by parsing timestamps out of frame filenames.
+Model output defeats that: GEFS names files by cycle hour and
+forecast hour with no date, so there is nothing to parse, both
+variables come back null, and every field referencing them drops.
+Those workflows can use `{{valid_iso:INTERVAL:LAG[:OFFSET]}}`
+instead — the same cycle arithmetic as the pipeline args, with
+`OFFSET` naming the frame's forecast hour, so `f042` of a 6-hourly
+cycle is `{{valid_iso:PT6H:PT7H:PT42H}}`. It always resolves and
+needs no `scan-frames` stage. The trade is that it is a prediction
+rather than an observation: `data_*` stays the truthful choice
+wherever the frames really do carry their own timestamps, which is
+what `{{valid_compact:…}}` plus `process convert-format
+--output-names` sets up.
+
 ---
 
 ## Portal UI — `/publish/workflows`
@@ -746,3 +761,15 @@ drop-with-warning behavior, an unresolved pipeline placeholder is a
 hard run failure — a URL with a missing date fetches garbage.
 Contract lives in `src/types/zyra-pipeline-args.ts`, shared by
 validator and runner.
+
+`{{valid_iso:INTERVAL:LAG[:OFFSET]}}` and its filename-safe sibling
+`{{valid_compact:…}}` name the *valid time* of a frame rather than
+the cycle: the cycle advanced by `OFFSET`, the frame's forecast
+hour. `valid_compact` renders `YYYYMMDDTHHMMSS`, which is what
+Zyra's `--datetime-format %Y%m%dT%H%M%S` reads back — so pairing it
+with `process convert-format --output-names` renames frames from
+their cycle-relative source names to their valid times, and
+`scan-frames` can then recover a real date range. The same two
+names are available to metadata templates, where `valid_iso` is
+the way to get dates onto a dataset whose pipeline has no
+`scan-frames` stage at all.

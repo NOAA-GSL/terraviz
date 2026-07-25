@@ -3,17 +3,35 @@
  * `docs/ZYRA_INTEGRATION_PLAN.md` §Metadata sidecar).
  *
  * A workflow row carries a `metadata_template` — a JSON object
- * whose string values may reference `{{run_date}}`, `{{run_id}}`,
- * `{{data_start}}`, `{{data_end}}`. The runner resolves the
- * variables from the run context (+ the pipeline's
- * `frames-meta.json` when present) and interpolates; the result is
- * the dataset-PATCH body. A field referencing a variable that
- * could not be resolved is dropped with a warning rather than
- * failing the run — a missing frames-meta shouldn't kill an
- * otherwise-good publish.
+ * whose string values may reference the names in
+ * `METADATA_TEMPLATE_VARIABLES`. The runner resolves them and
+ * interpolates; the result is the dataset-PATCH body. A field
+ * referencing a variable that could not be resolved is dropped with
+ * a warning rather than failing the run — a missing frames-meta
+ * shouldn't kill an otherwise-good publish.
+ *
+ * Two kinds of variable, resolved from different places:
+ *
+ *   - `run_date`, `run_id`, `data_start`, `data_end`, `data_period`
+ *     come from `RunVars` — the run context plus the pipeline's
+ *     `frames-meta.json`. The `data_*` trio is null when no
+ *     frames-meta was produced, which is what makes fields drop.
+ *   - `{{valid_iso:INTERVAL:LAG[:OFFSET]}}` and its filename-safe
+ *     sibling `valid_compact` are computed from the run instant by
+ *     `renderPlaceholder`, shared with the pipeline-arg
+ *     interpolator. These never drop.
+ *
+ * Placeholder *syntax* is shared with pipeline args
+ * (`src/types/zyra-pipeline-args.ts`); only the vocabulary differs.
  */
 
-const PLACEHOLDER_RE = /\{\{\s*([a-z_]+)\s*\}\}/g
+import {
+  PLACEHOLDER_RE,
+  parsePlaceholder,
+  renderPlaceholder,
+  validateArgPlaceholders,
+} from '../../src/types/zyra-pipeline-args'
+import { METADATA_TEMPLATE_VARIABLES } from '../../src/types/zyra-workflow-constants'
 
 export interface RunVars {
   run_date: string
@@ -21,6 +39,9 @@ export interface RunVars {
   data_start: string | null
   data_end: string | null
   data_period: string | null
+  /** The run instant, kept so the cycle-derived `valid_*`
+   *  placeholders resolve against the same clock `run_date` did. */
+  now: Date
 }
 
 export function buildRunVars(options: {
@@ -37,6 +58,7 @@ export function buildRunVars(options: {
     data_end: range?.dataEnd ?? null,
     data_period:
       range?.periodSeconds != null ? secondsToIsoDuration(range.periodSeconds) : null,
+    now,
   }
 }
 
@@ -131,35 +153,77 @@ export function renderSidecar(
 ): SidecarResult {
   const fields: Record<string, unknown> = {}
   const warnings: string[] = []
-  const lookup = vars as unknown as Record<string, string | null>
+  // Spelled out rather than cast from RunVars: `now` is a Date, and a
+  // blanket cast would hand the lookup a value it cannot render.
+  const lookup: Record<string, string | null> = {
+    run_date: vars.run_date,
+    run_id: vars.run_id,
+    data_start: vars.data_start,
+    data_end: vars.data_end,
+    data_period: vars.data_period,
+  }
+  const ctx = { now: vars.now, runId: vars.run_id }
 
-  const renderString = (s: string): string | null => {
-    let unresolved = false
-    const rendered = s.replace(PLACEHOLDER_RE, (_, name: string) => {
-      const value = lookup[name]
-      if (value == null) {
-        unresolved = true
-        return ''
+  /** Either the rendered string, or why the field has to be dropped.
+   *  The two reasons are worth telling apart: a malformed template is
+   *  an authoring mistake to go fix, while an unresolved `data_*` is
+   *  the expected shape of a run that produced no frames-meta. */
+  type Rendered = { ok: true; text: string } | { ok: false; reason: string }
+
+  const renderString = (s: string): Rendered => {
+    // Malformed or unknown placeholders drop the field. Checked up
+    // front because a stray `{{` never matches as a placeholder at
+    // all, and would otherwise publish literal braces in an abstract.
+    const invalid = validateArgPlaceholders(s, METADATA_TEMPLATE_VARIABLES)
+    if (invalid.length > 0) return { ok: false, reason: invalid[0].message }
+
+    let missing: string | null = null
+    const rendered = s.replace(PLACEHOLDER_RE, (_, body: string) => {
+      const parsed = parsePlaceholder(body, METADATA_TEMPLATE_VARIABLES)
+      // Unreachable — validateArgPlaceholders already rejected it.
+      if (typeof parsed === 'string') return ''
+      if (parsed.name in lookup) {
+        const value = lookup[parsed.name]
+        if (value == null) {
+          // First one named wins; listing all of them buries the lede.
+          if (missing === null) missing = parsed.name
+          return ''
+        }
+        return value
       }
-      return value
+      return renderPlaceholder(parsed, ctx)
     })
-    return unresolved ? null : rendered
+    return missing === null
+      ? { ok: true, text: rendered }
+      : { ok: false, reason: `{{${missing}}} did not resolve (no frames-meta?)` }
   }
 
   for (const [key, value] of Object.entries(template)) {
     if (typeof value === 'string') {
       const rendered = renderString(value)
-      if (rendered === null) {
-        warnings.push(`dropped "${key}" — an unresolved placeholder (frames-meta missing?)`)
+      if (rendered.ok) {
+        fields[key] = rendered.text
       } else {
-        fields[key] = rendered
+        warnings.push(`dropped "${key}" — ${rendered.reason}`)
       }
     } else if (Array.isArray(value)) {
-      const rendered = value.map(v => (typeof v === 'string' ? renderString(v) : null))
-      if (rendered.some(v => v === null)) {
-        warnings.push(`dropped "${key}" — an unresolved placeholder in a list entry`)
+      const entries: string[] = []
+      let bad: string | undefined
+      for (const v of value) {
+        const r: Rendered =
+          typeof v === 'string'
+            ? renderString(v)
+            : { ok: false, reason: `a non-string entry (${typeof v})` }
+        if (!r.ok) {
+          bad = r.reason
+          break
+        }
+        entries.push(r.text)
+      }
+      if (bad === undefined) {
+        fields[key] = entries
       } else {
-        fields[key] = rendered
+        warnings.push(`dropped "${key}" — ${bad}`)
       }
     } else {
       fields[key] = value

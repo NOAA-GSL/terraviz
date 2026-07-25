@@ -233,6 +233,31 @@ describe('validateMetadataTemplate', () => {
       ),
     ).toBe(true)
   })
+
+  it('accepts parameterized valid-time placeholders', () => {
+    expect(
+      runTemplate(
+        JSON.stringify({
+          start_time: '{{valid_iso:PT6H:PT7H}}',
+          end_time: '{{valid_iso:PT6H:PT7H:PT42H}}',
+          abstract: 'Cycle {{valid_compact:PT6H:PT7H}}, run {{run_id}}',
+        }),
+      ),
+    ).toEqual([])
+  })
+
+  it('rejects a malformed valid_iso at save time', () => {
+    // Parameters are part of the placeholder now, so a missing lag or
+    // a bad duration has to fail here rather than at publish time.
+    expect(runTemplate(JSON.stringify({ start_time: '{{valid_iso:PT6H}}' }))).not.toEqual([])
+    expect(runTemplate(JSON.stringify({ start_time: '{{valid_iso:PT6H:7h}}' }))).not.toEqual([])
+    // Pipeline-only names stay out of scope for a metadata template.
+    expect(runTemplate(JSON.stringify({ title: '{{cycle_date:PT6H:PT7H}}' }))).not.toEqual([])
+  })
+
+  it('rejects unterminated braces that match no placeholder', () => {
+    expect(runTemplate(JSON.stringify({ abstract: 'through {{data_end' }))).not.toEqual([])
+  })
 })
 
 describe('validateWorkflowInput', () => {

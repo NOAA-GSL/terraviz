@@ -1655,6 +1655,7 @@
   "publisher.workflows.runs.trigger.manual": "Manual",
   "publisher.workflows.runs.trigger.schedule": "Scheduled",
   "publisher.workflows.template.ftpFrames": "FTP frames → SOS MP4 (NOAA weekly drought)",
+  "publisher.workflows.template.gefsCycle": "Model cycle → SOS MP4 (NOAA GEFS forecast)",
   "publisher.workflows.template.httpFrames": "HTTP frames → SOS MP4",
   "tools.actions.clear": "Clear markers & highlights",
   "tools.actions.credits": "Credits…",
