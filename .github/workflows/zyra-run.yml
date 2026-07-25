@@ -20,11 +20,12 @@
 #
 # The image is pinned by digest — the digest is the Zyra version
 # pin the /validate stage allowlist is coupled to (plan doc
-# §Runner); bump both together, deliberately. This digest was
-# observed and validated by the Z0 spike run
-# (actions/runs/27286624666: SOS-spec pass with zero warnings).
+# §Runner); bump both together, deliberately.
+#
 # Override per-node without a commit via the ZYRA_SCHEDULER_IMAGE
-# repo variable.
+# repo variable. The name is historical: it must hold a `zyra` image,
+# not a `zyra-scheduler` one — see the note on ZYRA_IMAGE_DEFAULT
+# below for why the scheduler image cannot run these pipelines.
 #
 # Required repo secrets (the transcode-hls.yml set):
 #   TERRAVIZ_SERVER, CF_ACCESS_CLIENT_ID, CF_ACCESS_CLIENT_SECRET
@@ -45,10 +46,16 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # v0.1.49 — first release with process reproject, GeoTIFF input for
-  # heatmap/contour, palette files (--cmap-file), and legend export
-  # (--legend-file); bumped together with ZYRA_STAGE_ALLOWLIST.
-  ZYRA_IMAGE_DEFAULT: ghcr.io/noaa-gsl/zyra-scheduler@sha256:c34a016a4f4cd3d9e35869ca95878449619a588955c2093bd14fb84876386301
+  # `zyra`, NOT `zyra-scheduler`. The scheduler image is built with
+  # ZYRA_EXTRAS=connectors only (NOAA-GSL/zyra `release-images.yml`),
+  # so it has neither `processing` nor `visualization` and dies at the
+  # first convert-format or heatmap stage. `zyra` carries
+  # connectors,processing,visualization,api on both arches.
+  #
+  # v0.1.51 — adds --output-names on the batch raster stages and
+  # backoff for throttled HTTP fetches; bumped together with
+  # ZYRA_STAGE_ALLOWLIST.
+  ZYRA_IMAGE_DEFAULT: ghcr.io/noaa-gsl/zyra@sha256:f4b34dadbb54b52342b1c09fcebab03704440e2b473a53e1354895616dd37580
 
 jobs:
   run:
@@ -186,9 +193,12 @@ jobs:
                 echo "::notice::PROJ_LIB=$PROJ_LIB has no proj.db; clearing it so rasterio uses its bundled PROJ data"
                 unset PROJ_LIB
               fi
-              # pad-missing needs Pillow, which the scheduler image does
-              # not bundle — install it on demand (as the zyra-scheduler
-              # GitLab pipeline does) when the pipeline uses that stage.
+              # pad-missing needs Pillow. On the `zyra` image this is
+              # already a no-op: the `visualization` extra pulls
+              # matplotlib, which depends on pillow>=9, so the import
+              # check below short-circuits. Kept for leaner images
+              # (zyra-scheduler ships connectors only), which is what
+              # the `import PIL` guard is testing rather than assuming.
               # Pinned for reproducibility; bump deliberately alongside
               # the runner image digest.
               if grep -q "pad-missing" /work/pipeline.json && ! python -c "import PIL" >/dev/null 2>&1; then
