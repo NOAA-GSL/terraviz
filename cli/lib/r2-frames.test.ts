@@ -26,6 +26,7 @@ import { join } from 'node:path'
 import {
   buildWorkflowFramesPrefix,
   isoDurationToSeconds,
+  purgeFramesFromR2,
   restoreFramesFromR2,
   saveFramesToR2,
   windowFrameBudget,
@@ -370,5 +371,37 @@ describe('saveFramesToR2', () => {
     expect(result).toEqual({ uploaded: 0, pruned: 0, kept: 0 })
     // Cache untouched — a missing workdir must not wipe the cache.
     expect(store.size).toBe(1)
+  })
+})
+
+describe('purgeFramesFromR2', () => {
+  it('deletes every cached frame under the dataset prefix', async () => {
+    const { store, fetchImpl } = makeFakeR2({
+      [`${PREFIX}20260725T120000.png`]: bytes('a'),
+      [`${PREFIX}w000.png`]: bytes('b'),
+      [`${PREFIX}w006.png`]: bytes('c'),
+    })
+    expect(await purgeFramesFromR2(CONFIG, DATASET, { fetchImpl })).toBe(3)
+    expect(store.size).toBe(0)
+  })
+
+  it('leaves non-frame objects and other datasets alone', async () => {
+    const other = 'ZZZZZZZZZZZZZZZZZZZZZZZZZZ'
+    const { store, fetchImpl } = makeFakeR2({
+      [`${PREFIX}a.png`]: bytes('a'),
+      // A sidecar under the same prefix: not a frame, so not ours.
+      [`${PREFIX}report.json`]: bytes('{}'),
+      [`${WORKFLOW_FRAMES_PREFIX}/${other}/a.png`]: bytes('b'),
+    })
+    expect(await purgeFramesFromR2(CONFIG, DATASET, { fetchImpl })).toBe(1)
+    expect([...store.keys()].sort()).toEqual([
+      `${WORKFLOW_FRAMES_PREFIX}/${other}/a.png`,
+      `${PREFIX}report.json`,
+    ].sort())
+  })
+
+  it('is a no-op on an empty cache', async () => {
+    const { fetchImpl } = makeFakeR2()
+    expect(await purgeFramesFromR2(CONFIG, DATASET, { fetchImpl })).toBe(0)
   })
 })

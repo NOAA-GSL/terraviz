@@ -3,6 +3,7 @@ import { mkdtemp, mkdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
+  deriveFrameParams,
   expectedOutputKind,
   findFramesMeta,
   parseArgs,
@@ -180,5 +181,82 @@ describe('findFramesMeta', () => {
 
     await writeFile(join(workdir, 'frames-meta.json'), '{}')
     expect(await findFramesMeta(workdir)).toBe(join(workdir, 'frames-meta.json'))
+  })
+})
+
+describe('deriveFrameParams', () => {
+  /** A pipeline that regenerates every frame from source URLs — no
+   *  acquire stage, so nothing incremental to cache. */
+  const fromScratch = JSON.stringify({
+    stages: [
+      {
+        stage: 'visualize',
+        command: 'heatmap',
+        args: { 'output-dir': '/work/images/frames', basemap: 'fv3-chem-basemap.jpg' },
+      },
+      {
+        stage: 'process',
+        command: 'scan-frames',
+        args: { 'frames-dir': '/work/images/frames', 'period-seconds': 10800 },
+      },
+      {
+        stage: 'visualize',
+        command: 'compose-video',
+        args: { frames: '/work/images/frames', glob: '*.png' },
+      },
+    ],
+  })
+
+  it('opts a pipeline into the cache only via `acquire --sync-dir`', () => {
+    // Regression: cacheDir used to default to <workdir>/images/frames,
+    // which restored another era's frames into a from-scratch
+    // pipeline's output dir. compose-video globs *.png, so those
+    // leftovers ended up in the published video.
+    expect(deriveFrameParams(fromScratch, '/tmp/zw').cacheDir).toBeNull()
+  })
+
+  it('still resolves a frames dir to publish from without a sync-dir', () => {
+    // framesDir is a different question from cacheDir: the
+    // image-sequence publish path reads the frames the run produced,
+    // and the runner's convention is where they land. Gating the
+    // cache must not take that path's directory away.
+    expect(deriveFrameParams(fromScratch, '/tmp/zw').framesDir).toBe(
+      join('/tmp/zw', 'images', 'frames'),
+    )
+  })
+
+  it('maps the sync-dir to its host path when the pipeline has one', () => {
+    const cached = JSON.stringify({
+      stages: [
+        {
+          stage: 'acquire',
+          args: { 'sync-dir': '/work/images/frames', 'since-period': 'PT6H' },
+        },
+        {
+          stage: 'process',
+          command: 'scan-frames',
+          args: { 'frames-dir': '/work/images/frames', 'period-seconds': 3600 },
+        },
+      ],
+    })
+    expect(deriveFrameParams(cached, '/tmp/zw')).toMatchObject({
+      framesDir: join('/tmp/zw', 'images', 'frames'),
+      cacheDir: join('/tmp/zw', 'images', 'frames'),
+      // 6 h at an hourly cadence, inclusive of both endpoints.
+      keepFrames: 7,
+    })
+  })
+
+  it('does not opt in on a sync-dir outside the mounted workdir', () => {
+    // The runner can only see paths under /work; a sync-dir elsewhere
+    // is not a directory we could restore into.
+    const elsewhere = JSON.stringify({
+      stages: [{ stage: 'acquire', args: { 'sync-dir': '/scratch/frames' } }],
+    })
+    expect(deriveFrameParams(elsewhere, '/tmp/zw').cacheDir).toBeNull()
+  })
+
+  it('does not opt in on an unparseable pipeline', () => {
+    expect(deriveFrameParams('not json', '/tmp/zw').cacheDir).toBeNull()
   })
 })
