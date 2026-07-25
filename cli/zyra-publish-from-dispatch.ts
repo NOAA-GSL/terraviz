@@ -177,6 +177,13 @@ export function parseArgs(argv: readonly string[]): Args | { error: string } {
       error: `--stale-after-seconds must be an integer 0..${MAX_STALE_AFTER_SECONDS}; got ${staleRaw}`,
     }
   }
+  // Derived before the literal so the default summary can agree with
+  // it. The workflow always passes --error-summary, but the CLI is
+  // hand-runnable, and "Workflow run failed" stored against a
+  // `canceled` row contradicts the row it is attached to.
+  const terminalStatus: Args['terminalStatus'] =
+    get('status') === 'canceled' ? 'canceled' : 'failed'
+
   return {
     phase,
     workflowId,
@@ -185,8 +192,12 @@ export function parseArgs(argv: readonly string[]): Args | { error: string } {
     ghaRunId: get('gha-run-id'),
     video: get('video') ?? join(workdir, 'output', 'dataset.mp4'),
     waitSeconds,
-    errorSummary: get('error-summary') ?? 'Workflow run failed (no detail provided).',
-    terminalStatus: get('status') === 'canceled' ? 'canceled' : 'failed',
+    errorSummary:
+      get('error-summary') ??
+      (terminalStatus === 'canceled'
+        ? 'Workflow run cancelled (no detail provided).'
+        : 'Workflow run failed (no detail provided).'),
+    terminalStatus,
     ffprobeBin: get('ffprobe-bin') ?? 'ffprobe',
     zyraLog: get('zyra-log'),
     staleAfterSeconds,
