@@ -90,7 +90,10 @@ import {
   classifyZyraFailure,
   decideAcquireSoftPass,
 } from './lib/zyra-acquire-softpass'
-import { WORKFLOW_OUTPUT_PATH } from '../src/types/zyra-workflow-constants'
+import {
+  WORKFLOW_FRAMES_OUTPUT_DIR,
+  WORKFLOW_OUTPUT_PATH,
+} from '../src/types/zyra-workflow-constants'
 
 const ULID_RE = /^[0-9A-HJKMNP-TV-Z]{26}$/
 
@@ -700,11 +703,25 @@ function mapWorkFile(pipelinePath: string | null, workdir: string): string | nul
   return null
 }
 
+/** Where a pipeline that declares no sync-dir of its own leaves its
+ *  frames. `/validate` requires every stored pipeline to write to
+ *  `WORKFLOW_OUTPUT_PATH` or `WORKFLOW_FRAMES_OUTPUT_DIR`
+ *  (`functions/api/v1/_lib/workflow-validators.ts`), so a
+ *  frames-output pipeline's frames are there by contract — deriving
+ *  the fallback from the constant keeps the runner and the validator
+ *  from drifting apart. */
+function framesOutputDir(workdir: string): string {
+  // The constant is a `/work/...` path by construction, so the
+  // mapping cannot fail; the fallback is a guard against a future
+  // edit to it silently yielding null here.
+  return mapWorkFile(WORKFLOW_FRAMES_OUTPUT_DIR, workdir) ?? join(workdir, 'images', 'frames')
+}
+
 export interface FrameParams {
   /** Host path to the directory the run's frames land in: the acquire
-   *  stage's `--sync-dir` when it declares one under `/work`, else the
-   *  runner's `<workdir>/images/frames` convention. Always a path —
-   *  the image-sequence publish path has to read from somewhere. */
+   *  stage's `--sync-dir` when it declares one under `/work`, else
+   *  `WORKFLOW_FRAMES_OUTPUT_DIR`. Always a path — the image-sequence
+   *  publish path has to read from somewhere. */
   framesDir: string
   /** The same directory *as a cache participant* — null unless the
    *  pipeline declares an `acquire --sync-dir` under `/work`. See
@@ -763,7 +780,7 @@ export function deriveFrameParams(pipelineJson: string, workdir: string): FrameP
   }
   const cacheDir = mapWorkFile(syncDir, workdir)
   return {
-    framesDir: cacheDir ?? join(workdir, 'images', 'frames'),
+    framesDir: cacheDir ?? framesOutputDir(workdir),
     cacheDir,
     keepFrames: windowFrameBudget(
       sincePeriod ? isoDurationToSeconds(sincePeriod) : null,
