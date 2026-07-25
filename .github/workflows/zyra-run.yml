@@ -343,16 +343,23 @@ jobs:
             --workdir=_work \
             --gha-run-id="${{ github.run_id }}"
 
+      # cancelled() as well as failure(): GitHub does NOT run failure()
+      # steps when a job is cancelled or hits timeout-minutes, so a
+      # cancelled run left its workflow_runs row stuck at `running`
+      # forever -- and both /due and insertRun skip a workflow that has
+      # an active run, wedging the schedule permanently.
       - name: Report failure
-        if: failure()
+        if: failure() || cancelled()
         env:
           TERRAVIZ_SERVER: ${{ secrets.TERRAVIZ_SERVER }}
           TERRAVIZ_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
           TERRAVIZ_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+          TERMINAL_STATUS: ${{ job.status == 'cancelled' && 'canceled' || 'failed' }}
         run: |
           npx tsx cli/zyra-publish-from-dispatch.ts \
             --phase=report-failure \
             --workflow-id="${{ github.event.client_payload.workflow_id }}" \
             --run-id="${{ github.event.client_payload.run_id }}" \
             --gha-run-id="${{ github.run_id }}" \
-            --error-summary="Run failed in GitHub Actions run ${{ github.run_id }} — see the Actions log."
+            --status="$TERMINAL_STATUS" \
+            --error-summary="Run $TERMINAL_STATUS in GitHub Actions run ${{ github.run_id }} — see the Actions log."

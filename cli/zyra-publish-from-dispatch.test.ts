@@ -12,6 +12,36 @@ import {
 const ULID = '01HX0000000000000000000000'
 
 describe('parseArgs', () => {
+
+  it('defaults report-failure to failed and honors --status=canceled', () => {
+    // A cancelled or timed-out GHA job must post `canceled`, not
+    // `failed`, so the run row still reaches a terminal state and the
+    // workflow is not wedged by the active-run guard.
+    const base = [`--phase=report-failure`, `--workflow-id=${ULID}`, `--run-id=${ULID}`]
+    expect(parseArgs(base)).toMatchObject({ terminalStatus: 'failed' })
+    expect(parseArgs([...base, '--status=canceled'])).toMatchObject({ terminalStatus: 'canceled' })
+    expect(parseArgs([...base, '--status=nonsense'])).toMatchObject({ terminalStatus: 'failed' })
+  })
+
+  it('defaults the summary to match the status it is stored against', () => {
+    // The workflow always passes --error-summary, so this is the
+    // hand-run path — but a row reading `canceled` with "Workflow run
+    // failed" contradicts itself wherever it surfaces.
+    const base = [`--phase=report-failure`, `--workflow-id=${ULID}`, `--run-id=${ULID}`]
+    expect(parseArgs(base)).toMatchObject({
+      errorSummary: expect.stringContaining('failed'),
+    })
+    expect(parseArgs([...base, '--status=canceled'])).toMatchObject({
+      errorSummary: expect.stringContaining('cancelled'),
+    })
+    expect(parseArgs([...base, '--status=canceled'])).toMatchObject({
+      errorSummary: expect.not.stringContaining('failed'),
+    })
+    // An explicit summary still wins over both defaults.
+    expect(
+      parseArgs([...base, '--status=canceled', '--error-summary=out of disk']),
+    ).toMatchObject({ errorSummary: 'out of disk' })
+  })
   it('requires a valid phase and ULID ids', () => {
     expect(parseArgs([])).toHaveProperty('error')
     expect(parseArgs([`--phase=deploy`, `--workflow-id=${ULID}`, `--run-id=${ULID}`])).toHaveProperty('error')

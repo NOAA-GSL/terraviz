@@ -121,6 +121,9 @@ export interface Args {
   video: string
   waitSeconds: number
   errorSummary: string
+  /** Terminal status for report-failure: `failed` (default) or
+   *  `canceled` when the GHA job was cancelled or timed out. */
+  terminalStatus: 'failed' | 'canceled'
   ffprobeBin: string
   /** Path to the captured `zyra run` combined output — the
    *  acquire-softpass classifier's input. */
@@ -174,6 +177,13 @@ export function parseArgs(argv: readonly string[]): Args | { error: string } {
       error: `--stale-after-seconds must be an integer 0..${MAX_STALE_AFTER_SECONDS}; got ${staleRaw}`,
     }
   }
+  // Derived before the literal so the default summary can agree with
+  // it. The workflow always passes --error-summary, but the CLI is
+  // hand-runnable, and "Workflow run failed" stored against a
+  // `canceled` row contradicts the row it is attached to.
+  const terminalStatus: Args['terminalStatus'] =
+    get('status') === 'canceled' ? 'canceled' : 'failed'
+
   return {
     phase,
     workflowId,
@@ -182,7 +192,12 @@ export function parseArgs(argv: readonly string[]): Args | { error: string } {
     ghaRunId: get('gha-run-id'),
     video: get('video') ?? join(workdir, 'output', 'dataset.mp4'),
     waitSeconds,
-    errorSummary: get('error-summary') ?? 'Workflow run failed (no detail provided).',
+    errorSummary:
+      get('error-summary') ??
+      (terminalStatus === 'canceled'
+        ? 'Workflow run cancelled (no detail provided).'
+        : 'Workflow run failed (no detail provided).'),
+    terminalStatus,
     ffprobeBin: get('ffprobe-bin') ?? 'ffprobe',
     zyraLog: get('zyra-log'),
     staleAfterSeconds,
@@ -843,7 +858,7 @@ async function phaseSaveFrames(args: Args): Promise<number> {
 
 async function phaseReportFailure(client: TerravizClient, args: Args): Promise<number> {
   const status = await client.postWorkflowRunStatus(args.workflowId, args.runId, {
-    status: 'failed',
+    status: args.terminalStatus,
     gha_run_id: args.ghaRunId,
     error_summary: sanitizeErrorSummary(args.errorSummary),
   })
@@ -851,13 +866,13 @@ async function phaseReportFailure(client: TerravizClient, args: Args): Promise<n
     // A 409 here means the run already reached a terminal status
     // (e.g. publish failed AFTER reporting) — that's fine.
     if (status.status === 409) {
-      log('failed callback skipped — run already terminal')
+      log(`${args.terminalStatus} callback skipped — run already terminal`)
       return 0
     }
     log(`FAIL: failed callback → ${status.status} ${status.error}`)
     return 2
   }
-  log(`run ${args.runId} marked failed`)
+  log(`run ${args.runId} marked ${args.terminalStatus}`)
   return 0
 }
 
