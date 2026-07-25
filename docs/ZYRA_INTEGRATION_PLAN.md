@@ -647,6 +647,17 @@ consumes:
   run — the same span the video shows). The cache is bounded by
   cadence × window, never by how long the workflow has run.
 
+**Both phases are opt-in via `acquire --sync-dir`.** That stage is
+the whole mechanism — it is what skips a fetch when the frame is
+already on disk — so a pipeline without one is not a cache
+participant. It regenerates every frame from source each run, which
+means a restored frame saves no work and merely leaves a file the
+run did not produce sitting in the output directory, where
+`compose-video --glob` folds it into the video. The runner therefore
+skips restore and save when the pipeline declares no `--sync-dir`
+under `/work`, and purges any frames a prior run left under that
+dataset's prefix.
+
 Persisting frames across runs is also what makes
 **padded→real freshening** possible — the capability the scheduler
 gets from `acquire --prefer-remote-if-meta-newer`. We do it

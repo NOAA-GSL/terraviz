@@ -348,6 +348,42 @@ export async function saveFramesToR2(
 }
 
 /**
+ * Delete every frame under a dataset's cache prefix. Used when the
+ * dataset's pipeline turns out not to be a cache participant at all
+ * (no `acquire --sync-dir`), so its cached frames are unreachable and
+ * would otherwise persist indefinitely. Per-object failures are
+ * logged and skipped — same best-effort posture as save's prune.
+ * Returns the number of objects deleted.
+ */
+export async function purgeFramesFromR2(
+  config: R2UploadConfig,
+  datasetId: string,
+  options: FrameSyncOptions = {},
+): Promise<number> {
+  validateR2Config(config)
+  const fetchImpl = options.fetchImpl ?? fetch
+  const log = options.log ?? (() => {})
+  const prefix = buildWorkflowFramesPrefix(datasetId)
+
+  const keys = (await listR2KeysPaginated(config, prefix, { fetchImpl })).filter(
+    key => frameNameFromKey(prefix, key) !== null,
+  )
+  if (keys.length === 0) return 0
+
+  let purged = 0
+  await runPool(keys, options.concurrency ?? DEFAULT_CONCURRENCY, async key => {
+    try {
+      await deleteR2Object(config, key, { fetchImpl })
+      purged++
+    } catch (err) {
+      log(`WARN: cache purge ${key} failed (continuing) — ${err instanceof Error ? err.message : String(err)}`)
+    }
+  })
+  log(`purge: ${purged}/${keys.length} cached frame(s) deleted`)
+  return purged
+}
+
+/**
  * Frame budget for the active window: how many cadence steps fit in
  * `sincePeriodSeconds`. Used to derive `keepFrames` from the
  * pipeline's `acquire --since-period` and `scan-frames
