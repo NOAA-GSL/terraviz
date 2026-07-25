@@ -48,7 +48,6 @@ function err(field: string, code: string, message: string): WorkflowValidationEr
 }
 
 const ULID_RE = /^[0-9A-HJKMNP-TV-Z]{26}$/
-const PLACEHOLDER_RE = /\{\{\s*([a-z_]+)\s*\}\}/g
 
 // --- Pipeline -----------------------------------------------------
 
@@ -230,17 +229,12 @@ export function validateMetadataTemplate(
       )
       continue
     }
+    // Same syntax as pipeline args (including the parameterized
+    // `valid_iso`), different vocabulary — so the shared validator is
+    // told which names are in scope here.
     for (const s of strings) {
-      for (const match of s.matchAll(PLACEHOLDER_RE)) {
-        if (!METADATA_TEMPLATE_VARIABLES.includes(match[1])) {
-          errors.push(
-            err(
-              `metadata_template.${key}`,
-              'unknown_placeholder',
-              `Unknown placeholder "${match[1]}". Available: ${METADATA_TEMPLATE_VARIABLES.join(', ')}.`,
-            ),
-          )
-        }
+      for (const message of validateArgPlaceholders(s, METADATA_TEMPLATE_VARIABLES)) {
+        errors.push(err(`metadata_template.${key}`, 'unknown_placeholder', message))
       }
     }
   }

@@ -53,6 +53,33 @@ describe('parsePlaceholder / validateArgPlaceholders', () => {
     expect(typeof parsePlaceholder('cycle_hour:6h:5h')).toBe('string')
     expect(typeof parsePlaceholder('run_date:PT1H:PT1H')).toBe('string')
   })
+  it('takes an optional offset on the valid-time pair only', () => {
+    expect(parsePlaceholder('valid_iso:PT6H:PT7H')).toEqual({
+      name: 'valid_iso',
+      intervalSeconds: 21_600,
+      lagSeconds: 25_200,
+    })
+    expect(parsePlaceholder('valid_iso:PT6H:PT7H:PT42H')).toEqual({
+      name: 'valid_iso',
+      intervalSeconds: 21_600,
+      lagSeconds: 25_200,
+      offsetSeconds: 151_200,
+    })
+    // cycle_date names the cycle itself — an offset there would be
+    // silently meaningless, so it is an error rather than ignored.
+    expect(typeof parsePlaceholder('cycle_date:PT6H:PT5H:PT42H')).toBe('string')
+    expect(typeof parsePlaceholder('valid_iso:PT6H:PT7H:42h')).toBe('string')
+    expect(typeof parsePlaceholder('valid_iso:PT6H')).toBe('string')
+    // Four params is past the arity of anything in the vocabulary.
+    expect(typeof parsePlaceholder('valid_iso:PT6H:PT7H:PT1H:PT2H')).toBe('string')
+  })
+  it('scopes the vocabulary to the caller', () => {
+    // Same syntax, different name sets: data_start is a metadata
+    // variable and means nothing in a pipeline arg, and vice versa.
+    expect(typeof parsePlaceholder('data_start')).toBe('string')
+    expect(parsePlaceholder('data_start', ['data_start'])).toEqual({ name: 'data_start' })
+    expect(typeof parsePlaceholder('cycle_date:PT6H:PT5H', ['data_start'])).toBe('string')
+  })
   it('rejects unterminated or mismatched braces', () => {
     // matchAll() sees no complete placeholder here; the residual-brace
     // check must catch it or the literal leaks into a URL.
@@ -84,6 +111,41 @@ describe('renderArgPlaceholders', () => {
     expect(renderArgPlaceholders('{{run_date}}/{{run_id}}', CTX)).toBe(
       '2026-07-24/01HX0000000000000000000000',
     )
+  })
+  it('renders valid times relative to the cycle', () => {
+    // 13:07Z, 6-hourly cycles, 7h lag -> the 06:00Z cycle. f000 is
+    // valid at the cycle; f042 is 42h past it, two days on.
+    expect(renderArgPlaceholders('{{valid_iso:PT6H:PT7H}}', CTX)).toBe('2026-07-24T06:00:00Z')
+    expect(renderArgPlaceholders('{{valid_iso:PT6H:PT7H:PT42H}}', CTX)).toBe(
+      '2026-07-26T00:00:00Z',
+    )
+    // No colons, no dashes: what Zyra's %Y%m%dT%H%M%S parses back.
+    expect(renderArgPlaceholders('{{valid_compact:PT6H:PT7H:PT6H}}', CTX)).toBe('20260724T120000')
+  })
+  it('names frames by valid time for --output-names', () => {
+    // The pairing this exists for: the source URL carries the
+    // cycle-relative name, the output carries the valid time.
+    const pipeline = JSON.stringify({
+      stages: [
+        {
+          stage: 'process',
+          command: 'convert-format',
+          args: {
+            inputs: [
+              'https://x/gefs.{{cycle_date:PT6H:PT7H}}/{{cycle_hour:PT6H:PT7H}}/chem/f000.grib2',
+              'https://x/gefs.{{cycle_date:PT6H:PT7H}}/{{cycle_hour:PT6H:PT7H}}/chem/f006.grib2',
+            ],
+            output_names: [
+              '{{valid_compact:PT6H:PT7H}}.tif',
+              '{{valid_compact:PT6H:PT7H:PT6H}}.tif',
+            ],
+          },
+        },
+      ],
+    })
+    const args = JSON.parse(renderPipelineJson(pipeline, CTX)).stages[0].args
+    expect(args.inputs[0]).toBe('https://x/gefs.20260724/06/chem/f000.grib2')
+    expect(args.output_names).toEqual(['20260724T060000.tif', '20260724T120000.tif'])
   })
   it('throws on malformed placeholders', () => {
     expect(() => renderArgPlaceholders('{{cycle_date}}', CTX)).toThrow(/requires interval/)
