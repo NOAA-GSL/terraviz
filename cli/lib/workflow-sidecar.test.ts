@@ -103,6 +103,24 @@ describe('renderSidecar', () => {
     expect(result.warnings).toHaveLength(2)
   })
 
+  it('says which of the two reasons dropped the field', () => {
+    // A malformed template is an authoring mistake to go fix; an
+    // unresolved data_* is the ordinary shape of a run with no
+    // frames-meta. Reporting both as "frames-meta missing?" sends
+    // anyone debugging the first one to the wrong place.
+    const noMeta = buildRunVars({ runId: RUN_ID, now: new Date('2026-06-10T12:00:00Z') })
+    const { warnings } = renderSidecar(
+      { title: '{{data_strat}}', start_time: '{{data_start}}' },
+      noMeta,
+    )
+    const authoring = warnings.find(w => w.includes('"title"'))!
+    const runtime = warnings.find(w => w.includes('"start_time"'))!
+    expect(authoring).toContain('Unknown placeholder')
+    expect(authoring).not.toContain('frames-meta')
+    expect(runtime).toContain('{{data_start}}')
+    expect(runtime).toContain('frames-meta')
+  })
+
   // ---- valid_* : dates without a frames-meta ------------------------
 
   describe('valid-time placeholders', () => {

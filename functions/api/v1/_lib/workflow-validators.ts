@@ -155,8 +155,8 @@ export function validatePipeline(
             continue
           }
           if (kind === 'string' && ((item as string).includes('{{') || (item as string).includes('}}'))) {
-            for (const message of validateArgPlaceholders(item as string)) {
-              errors.push(err(`pipeline_json.stages[${i}].args.${key}`, 'invalid_placeholder', message))
+            for (const e of validateArgPlaceholders(item as string)) {
+              errors.push(err(`pipeline_json.stages[${i}].args.${key}`, e.code, e.message))
             }
           }
           if (item === WORKFLOW_OUTPUT_PATH || item === WORKFLOW_FRAMES_OUTPUT_DIR) {
@@ -231,10 +231,12 @@ export function validateMetadataTemplate(
     }
     // Same syntax as pipeline args (including the parameterized
     // `valid_iso`), different vocabulary — so the shared validator is
-    // told which names are in scope here.
+    // told which names are in scope here. Codes come from it too, so
+    // an unknown name and a malformed one stay distinguishable, and
+    // the two surfaces report the same kind of problem the same way.
     for (const s of strings) {
-      for (const message of validateArgPlaceholders(s, METADATA_TEMPLATE_VARIABLES)) {
-        errors.push(err(`metadata_template.${key}`, 'unknown_placeholder', message))
+      for (const e of validateArgPlaceholders(s, METADATA_TEMPLATE_VARIABLES)) {
+        errors.push(err(`metadata_template.${key}`, e.code, e.message))
       }
     }
   }

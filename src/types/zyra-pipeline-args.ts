@@ -159,7 +159,31 @@ function hasResidualBraces(value: string): boolean {
 }
 
 /**
- * Validate every placeholder in one string. Returns error messages
+ * `unknown_placeholder` is reserved for a name that is not in the
+ * vocabulary — the typo case, and the one a client can usefully
+ * special-case with a "did you mean…". Everything else (arity, a bad
+ * duration, unmatched braces) is `invalid_placeholder`: the name was
+ * recognised, the rest of it was not.
+ */
+export type PlaceholderErrorCode = 'unknown_placeholder' | 'invalid_placeholder'
+
+export interface PlaceholderError {
+  code: PlaceholderErrorCode
+  message: string
+}
+
+function placeholderErrorCode(
+  body: string,
+  allowed: readonly string[],
+): PlaceholderErrorCode {
+  const name = BODY_RE.exec(body)?.[1]
+  return name !== undefined && !allowed.includes(name)
+    ? 'unknown_placeholder'
+    : 'invalid_placeholder'
+}
+
+/**
+ * Validate every placeholder in one string. Returns coded errors
  * (empty when the string is placeholder-free or all placeholders are
  * well-formed). `allowed` selects the vocabulary — the metadata
  * template validator passes its own.
@@ -167,13 +191,17 @@ function hasResidualBraces(value: string): boolean {
 export function validateArgPlaceholders(
   value: string,
   allowed: readonly string[] = PIPELINE_ARG_VARIABLES,
-): string[] {
-  const errors: string[] = []
+): PlaceholderError[] {
+  const errors: PlaceholderError[] = []
   for (const match of value.matchAll(PLACEHOLDER_RE)) {
     const parsed = parsePlaceholder(match[1], allowed)
-    if (typeof parsed === 'string') errors.push(parsed)
+    if (typeof parsed === 'string') {
+      errors.push({ code: placeholderErrorCode(match[1], allowed), message: parsed })
+    }
   }
-  if (hasResidualBraces(value)) errors.push(RESIDUAL_BRACES_MESSAGE)
+  if (hasResidualBraces(value)) {
+    errors.push({ code: 'invalid_placeholder', message: RESIDUAL_BRACES_MESSAGE })
+  }
   return errors
 }
 

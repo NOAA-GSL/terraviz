@@ -164,47 +164,66 @@ export function renderSidecar(
   }
   const ctx = { now: vars.now, runId: vars.run_id }
 
-  const renderString = (s: string): string | null => {
+  /** Either the rendered string, or why the field has to be dropped.
+   *  The two reasons are worth telling apart: a malformed template is
+   *  an authoring mistake to go fix, while an unresolved `data_*` is
+   *  the expected shape of a run that produced no frames-meta. */
+  type Rendered = { ok: true; text: string } | { ok: false; reason: string }
+
+  const renderString = (s: string): Rendered => {
     // Malformed or unknown placeholders drop the field. Checked up
     // front because a stray `{{` never matches as a placeholder at
     // all, and would otherwise publish literal braces in an abstract.
-    if (validateArgPlaceholders(s, METADATA_TEMPLATE_VARIABLES).length > 0) return null
-    let unresolved = false
+    const invalid = validateArgPlaceholders(s, METADATA_TEMPLATE_VARIABLES)
+    if (invalid.length > 0) return { ok: false, reason: invalid[0].message }
+
+    let missing: string | null = null
     const rendered = s.replace(PLACEHOLDER_RE, (_, body: string) => {
       const parsed = parsePlaceholder(body, METADATA_TEMPLATE_VARIABLES)
-      if (typeof parsed === 'string') {
-        // Unreachable — validateArgPlaceholders already rejected it.
-        unresolved = true
-        return ''
-      }
+      // Unreachable — validateArgPlaceholders already rejected it.
+      if (typeof parsed === 'string') return ''
       if (parsed.name in lookup) {
         const value = lookup[parsed.name]
-        // Null means frames-meta was missing: the data_* drop case.
         if (value == null) {
-          unresolved = true
+          // First one named wins; listing all of them buries the lede.
+          if (missing === null) missing = parsed.name
           return ''
         }
         return value
       }
       return renderPlaceholder(parsed, ctx)
     })
-    return unresolved ? null : rendered
+    return missing === null
+      ? { ok: true, text: rendered }
+      : { ok: false, reason: `{{${missing}}} did not resolve (no frames-meta?)` }
   }
 
   for (const [key, value] of Object.entries(template)) {
     if (typeof value === 'string') {
       const rendered = renderString(value)
-      if (rendered === null) {
-        warnings.push(`dropped "${key}" — an unresolved placeholder (frames-meta missing?)`)
+      if (rendered.ok) {
+        fields[key] = rendered.text
       } else {
-        fields[key] = rendered
+        warnings.push(`dropped "${key}" — ${rendered.reason}`)
       }
     } else if (Array.isArray(value)) {
-      const rendered = value.map(v => (typeof v === 'string' ? renderString(v) : null))
-      if (rendered.some(v => v === null)) {
-        warnings.push(`dropped "${key}" — an unresolved placeholder in a list entry`)
+      const entries: string[] = []
+      let bad: string | undefined
+      for (const v of value) {
+        const r: Rendered =
+          typeof v === 'string'
+            ? renderString(v)
+            : { ok: false, reason: `a non-string entry (${typeof v})` }
+        if (!r.ok) {
+          bad = r.reason
+          break
+        }
+        entries.push(r.text)
+      }
+      if (bad === undefined) {
+        fields[key] = entries
       } else {
-        fields[key] = rendered
+        warnings.push(`dropped "${key}" — ${bad}`)
       }
     } else {
       fields[key] = value

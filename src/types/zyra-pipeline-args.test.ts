@@ -95,7 +95,27 @@ describe('parsePlaceholder / validateArgPlaceholders', () => {
       'https://x/gefs.{{cycle_date:PT6H:PT5H}}/{{cycle_hr}}/f000.grib2',
     )
     expect(errors).toHaveLength(1)
-    expect(errors[0]).toContain('cycle_hr')
+    expect(errors[0].message).toContain('cycle_hr')
+  })
+
+  it('separates an unknown name from a malformed one', () => {
+    // A client can act on these differently — "did you mean…" for a
+    // typo'd name, "check the parameters" for the rest — so they must
+    // not arrive under one code.
+    const code = (v: string) => validateArgPlaceholders(v).map(e => e.code)
+    expect(code('{{cycle_hr:PT6H:PT5H}}')).toEqual(['unknown_placeholder'])
+    // Known name, wrong arity / bad duration / stray braces are all
+    // "the name was fine, the rest was not".
+    expect(code('{{cycle_date}}')).toEqual(['invalid_placeholder'])
+    expect(code('{{cycle_date:6h:5h}}')).toEqual(['invalid_placeholder'])
+    expect(code('{{valid_iso:PT6H:PT7H:42h}}')).toEqual(['invalid_placeholder'])
+    expect(code('stray }} closer')).toEqual(['invalid_placeholder'])
+    // The vocabulary decides "unknown", so the same body is classified
+    // differently depending on which surface is asking.
+    expect(validateArgPlaceholders('{{data_start}}').map(e => e.code)).toEqual([
+      'unknown_placeholder',
+    ])
+    expect(validateArgPlaceholders('{{data_start}}', ['data_start'])).toEqual([])
   })
 })
 
