@@ -354,11 +354,12 @@ jobs:
           TERRAVIZ_SERVER: ${{ secrets.TERRAVIZ_SERVER }}
           TERRAVIZ_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
           TERRAVIZ_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+          TERMINAL_STATUS: ${{ job.status == 'cancelled' && 'canceled' || 'failed' }}
         run: |
           npx tsx cli/zyra-publish-from-dispatch.ts \
             --phase=report-failure \
             --workflow-id="${{ github.event.client_payload.workflow_id }}" \
             --run-id="${{ github.event.client_payload.run_id }}" \
             --gha-run-id="${{ github.run_id }}" \
-            --status="${{ cancelled() && 'canceled' || 'failed' }}" \
-            --error-summary="Run ${{ cancelled() && 'cancelled' || 'failed' }} in GitHub Actions run ${{ github.run_id }} — see the Actions log."
+            --status="$TERMINAL_STATUS" \
+            --error-summary="Run $TERMINAL_STATUS in GitHub Actions run ${{ github.run_id }} — see the Actions log."
