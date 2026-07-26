@@ -93,7 +93,6 @@ jobs:
         id: deploy
         run: |
           set -o pipefail
-          BRANCH_NAME="${{ github.event_name == 'pull_request' && github.head_ref || github.ref_name }}"
           # Stream wrangler output live AND capture it so we can
           # extract the preview URL afterwards. Same pattern as
           # ci.yml's SPA deploy — see the comments there for
@@ -107,5 +106,8 @@ jobs:
           echo "url=$PREVIEW_URL" >> "$GITHUB_OUTPUT"
           rm -f "$DEPLOY_LOG"
         env:
+          # Through the environment, not interpolated — see the note
+          # on the same variable in ci.yml's Deploy step.
+          BRANCH_NAME: ${{ github.event_name == 'pull_request' && github.head_ref || github.ref_name }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

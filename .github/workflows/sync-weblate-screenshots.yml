@@ -80,7 +80,7 @@ jobs:
           SCREENSHOT_BASE_URL: http://127.0.0.1:4173
         run: |
           VITE_I18N_TRACE=true npm run dev -- --host 127.0.0.1 --port 4173 &
-          for i in $(seq 1 60); do
+          for _ in $(seq 1 60); do
             curl -sf http://127.0.0.1:4173 >/dev/null && break
             sleep 1
           done
