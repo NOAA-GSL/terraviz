@@ -25,6 +25,53 @@ permissions:
   contents: read
 
 jobs:
+  # An invalid workflow is not a failing step — GitHub stops loading
+  # the file, so nothing runs and nothing goes red. #316 shipped a
+  # `cancelled()` call inside a `run:` block that way and silently
+  # disabled zyra-run.yml, the workflow behind every scheduled
+  # pipeline. Nothing else in CI can catch that, because the broken
+  # file is the one that would have reported it.
+  actionlint:
+    name: Actionlint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Pinned by version and checksum rather than pulled from a
+      # marketplace action: this job exists to be the backstop, so its
+      # own supply chain shouldn't be a moving target.
+      - name: Install actionlint
+        env:
+          ACTIONLINT_VERSION: 1.7.12
+          ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+        run: |
+          set -euo pipefail
+          curl -fsSL -o actionlint.tar.gz \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          echo "${ACTIONLINT_SHA256}  actionlint.tar.gz" | sha256sum -c -
+          tar xzf actionlint.tar.gz actionlint
+      # Pass the files explicitly. Invoked bare, actionlint locates
+      # the project by walking up for a `.git` directory, and when it
+      # can't find one it prints "no project was found" and exits 0 —
+      # a green job that checked nothing. The empty-list guard makes
+      # "found no workflows" fail loudly for the same reason.
+      #
+      # shellcheck is preinstalled on ubuntu-latest and actionlint
+      # picks it up automatically, so this also lints every `run:`
+      # block. Reproduce a failure locally with the same pairing —
+      # actionlint on its own reports strictly less.
+      - name: Lint workflows
+        run: |
+          set -euo pipefail
+          mapfile -t WORKFLOWS < <(
+            find .github/workflows -type f \( -name '*.yml' -o -name '*.yaml' \) | sort
+          )
+          if [ "${#WORKFLOWS[@]}" -eq 0 ]; then
+            echo "::error::no workflow files found to lint"
+            exit 1
+          fi
+          echo "linting ${#WORKFLOWS[@]} workflow file(s)"
+          ./actionlint -color "${WORKFLOWS[@]}"
+
   type-check:
     name: Type Check
     runs-on: ubuntu-latest
@@ -162,7 +209,6 @@ jobs:
         id: deploy
         run: |
           set -o pipefail
-          BRANCH_NAME="${{ github.event_name == 'pull_request' && github.head_ref || github.ref_name }}"
           # Stream wrangler output live AND capture it for preview-URL extraction.
           # The previous `DEPLOY_OUTPUT=$(wrangler ...)` pattern silently swallowed
           # wrangler errors: under `bash -e` the command substitution aborts the
@@ -180,5 +226,11 @@ jobs:
           echo "url=$PREVIEW_URL" >> "$GITHUB_OUTPUT"
           rm -f "$DEPLOY_LOG"
         env:
+          # A branch name is attacker-controlled on a fork PR and can
+          # carry shell metacharacters, so it reaches the script
+          # through the environment instead of being interpolated into
+          # it — interpolation would run `$(...)` in a branch name as
+          # this step, which holds the Cloudflare token.
+          BRANCH_NAME: ${{ github.event_name == 'pull_request' && github.head_ref || github.ref_name }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

@@ -97,7 +97,7 @@ jobs:
       - run: npm ci
 
       - name: Export NDK_HOME
-        run: echo "NDK_HOME=$ANDROID_HOME/ndk/28.2.13676358" >> $GITHUB_ENV
+        run: echo "NDK_HOME=$ANDROID_HOME/ndk/28.2.13676358" >> "$GITHUB_ENV"
 
       # Bootstrap: src-tauri/gen/android/ is gitignored as generated
       # scaffolding (per Tauri convention — gen/ is regenerated from
