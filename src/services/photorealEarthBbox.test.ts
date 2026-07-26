@@ -30,7 +30,25 @@ import { resolve } from 'node:path'
 import * as THREE from 'three'
 
 const srcFile = (name: string) => resolve(process.cwd(), 'src/services', name)
-const SHADER_SRC = readFileSync(srcFile('photorealEarth.ts'), 'utf-8')
+
+/** Source with `//` comments stripped.
+ *
+ * The assertions below look for GLSL assignments, and this file's own
+ * fix adds a comment *describing* the old expression — so matching raw
+ * source would let a future comment quoting either form flip a result
+ * without any code changing. */
+const codeOf = (name: string) =>
+  readFileSync(srcFile(name), 'utf-8').replace(/\/\/[^\n]*/g, '')
+
+const SHADER_SRC = codeOf('photorealEarth.ts')
+
+/** Anchored to the assignment, tolerant of spacing. */
+const latAssign = (expr: string) =>
+  new RegExp(`float\\s+lat\\s*=\\s*${expr}\\s*;`)
+const LAT_THREE = latAssign(String.raw`\(\s*vMapUv\.y\s*-\s*0\.5\s*\)\s*\*\s*180\.0`)
+const LAT_INVERTED = latAssign(String.raw`\(\s*0\.5\s*-\s*vMapUv\.y\s*\)\s*\*\s*180\.0`)
+const BV_CORRECT = /float\s+bv\s*=\s*\(\s*lat\s*-\s*bs\s*\)\s*\/\s*max\(/
+const BV_INVERTED = /float\s+bv\s*=\s*\(\s*bn\s*-\s*lat\s*\)\s*\/\s*max\(/
 
 describe('THREE sphere UV convention', () => {
   it('puts uv.y == 1 at the north pole, unlike the 2D globe', () => {
@@ -38,16 +56,21 @@ describe('THREE sphere UV convention', () => {
     const pos = geo.attributes.position
     const uv = geo.attributes.uv
 
-    let northUvY: number | null = null
-    let southUvY: number | null = null
-    for (let i = 0; i < pos.count; i++) {
-      const y = pos.getY(i)
-      if (y > 0.999 && northUvY === null) northUvY = uv.getY(i)
-      if (y < -0.999 && southUvY === null) southUvY = uv.getY(i)
+    // Pick the extreme vertices rather than threshold-and-first-hit,
+    // so a change in tessellation or a hair of float drift cannot
+    // change which vertex is examined.
+    let north = 0
+    let south = 0
+    for (let i = 1; i < pos.count; i++) {
+      if (pos.getY(i) > pos.getY(north)) north = i
+      if (pos.getY(i) < pos.getY(south)) south = i
     }
 
-    expect(northUvY).toBe(1)
-    expect(southUvY).toBe(0)
+    // Loose comparison on purpose: what is under test is the
+    // convention (1 at the north, 0 at the south), not the exact
+    // float a given Three.js release happens to emit.
+    expect(uv.getY(north)).toBeCloseTo(1, 5)
+    expect(uv.getY(south)).toBeCloseTo(0, 5)
   })
 
   it('derives latitude with the sign that convention requires', () => {
@@ -67,15 +90,15 @@ describe('THREE sphere UV convention', () => {
 
 describe('photorealEarth bbox shader', () => {
   it('derives lat as (vMapUv.y - 0.5), not the 2D globe’s inverse', () => {
-    expect(SHADER_SRC).toContain('float lat = (vMapUv.y - 0.5) * 180.0;')
-    expect(SHADER_SRC).not.toContain('float lat = (0.5 - vMapUv.y) * 180.0;')
+    expect(SHADER_SRC).toMatch(LAT_THREE)
+    expect(SHADER_SRC).not.toMatch(LAT_INVERTED)
   })
 
   it('maps the box’s north edge to the image’s top row', () => {
     // THREE uploads with flipY, so v == 1 is the image's TOP row.
     // bv must therefore be 1 at lat == bn.
-    expect(SHADER_SRC).toContain('float bv = (lat - bs) / max(bn - bs, 1e-6);')
-    expect(SHADER_SRC).not.toContain('float bv = (bn - lat) / max(bn - bs, 1e-6);')
+    expect(SHADER_SRC).toMatch(BV_CORRECT)
+    expect(SHADER_SRC).not.toMatch(BV_INVERTED)
 
     const bv = (lat: number, bn: number, bs: number) => (lat - bs) / (bn - bs)
     expect(bv(53, 53, 21)).toBe(1) // north edge -> top row
@@ -86,7 +109,9 @@ describe('photorealEarth bbox shader', () => {
     // earthTileLayer builds a sphere with v == 0 at the north pole, so
     // its inverse form is correct there. Changing one must not be
     // taken as licence to "fix" the other.
-    const twoD = readFileSync(srcFile('earthTileLayer.ts'), 'utf-8')
-    expect(twoD).toContain('float lat = (0.5 - vUV.y) * 180.0;')
+    const twoD = codeOf('earthTileLayer.ts')
+    expect(twoD).toMatch(
+      /float\s+lat\s*=\s*\(\s*0\.5\s*-\s*vUV\.y\s*\)\s*\*\s*180\.0\s*;/,
+    )
   })
 })
