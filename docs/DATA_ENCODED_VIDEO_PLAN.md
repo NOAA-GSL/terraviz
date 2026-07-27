@@ -1,14 +1,21 @@
 # Data-encoded video: transparency + value readout
 
-**Status: partially built** (on branches, not yet merged). The browser
-range check, the encoder, the row + transport, all four render surfaces,
-the 2D readout, and zyra's luma writer are implemented. Not yet built:
-the publish plumbing that
-activates the mode (nothing passes `dataEncoded` to `encodeHls`, and
-nothing carries `render_encoding` / `color_scale` from a workflow run
-onto the row), the VR readout, and the zyra release + scheduler-image
-bump. Until the publish plumbing exists, the code is inert on every
-existing dataset by construction.
+**Status: built end-to-end** (on branches, not yet merged). The browser
+range check, zyra's luma writer, the encoder, the row + transport, all
+four render surfaces, the 2D readout, and the publish plumbing that
+activates the mode are implemented. A pipeline declaring
+`visualize heatmap --data-encoded --color-scale-file` now reaches the
+globe as data.
+
+Not yet done: the zyra release + `ZYRA_SCHEDULER_IMAGE` bump, so no
+deployed runner can produce these frames yet; the VR readout; and the
+manual first-slice confirmation under §Verification. Downloads remain
+the recorded follow-up.
+
+Backwards compatibility holds at every boundary a dataset crosses — the
+encoder argv, the row serializer, the overlay bundle, and the publish
+scraper — each pinned by a test asserting the legacy path is unchanged
+when the mode is absent.
 
 Resolves the transparency half of
 [#326](https://github.com/zyra-project/terraviz/issues/326) and supersedes the
