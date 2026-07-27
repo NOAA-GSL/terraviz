@@ -52,6 +52,45 @@ async function probe(src) {
     result.readout = vals
   }
 
+  // iOS Safari failed every readout row — including untagged ones — with
+  // endpoints preserved and a mid-range bow (gain ~1.003, offset ~+6,
+  // max|e| 11), while its WebGL path was exact. That is a colour
+  // transform in the video->2D-canvas step, not a range problem. These
+  // two variants isolate which part of that step causes it, so the fix
+  // is chosen by measurement rather than by guessing.
+
+  // Does pinning the colour space on both the context and the read fix it?
+  {
+    try {
+      const c = document.createElement('canvas'); c.width = 1; c.height = 1
+      const ctx = c.getContext('2d', { willReadFrequently: true, colorSpace: 'srgb' })
+      const vals = []
+      for (let i = 0; i < 256; i++) {
+        ctx.drawImage(v, i * BAND_W + BAND_W / 2, SAMPLE_Y, 1, 1, 0, 0, 1, 1)
+        vals.push(ctx.getImageData(0, 0, 1, 1, { colorSpace: 'srgb' }).data[0])
+      }
+      result.readoutSrgb = vals
+    } catch (e) { result.readoutSrgbError = String(e.message || e) }
+  }
+
+  // Is it the per-texel 1x1 draw, or any draw at all? One full-size blit,
+  // then read every sample out of a single ImageData.
+  {
+    try {
+      const c = document.createElement('canvas')
+      c.width = v.videoWidth; c.height = v.videoHeight
+      const ctx = c.getContext('2d', { willReadFrequently: true })
+      ctx.drawImage(v, 0, 0)
+      const img = ctx.getImageData(0, 0, c.width, c.height)
+      const vals = []
+      for (let i = 0; i < 256; i++) {
+        const x = i * BAND_W + BAND_W / 2
+        vals.push(img.data[(SAMPLE_Y * c.width + x) * 4])
+      }
+      result.readoutFull = vals
+    } catch (e) { result.readoutFullError = String(e.message || e) }
+  }
+
   // Render path: upload the video to a texture and read it back.
   {
     const gl = document.getElementById('cgl').getContext('webgl2', { preserveDrawingBuffer: true, antialias: false })
@@ -113,7 +152,7 @@ window.runCheck = async function (variants) {
     let r
     try { r = await probe(`./out/${name}.mp4`) }
     catch (e) { rows.push({ name, error: String(e.message || e) }); continue }
-    for (const path of ['readout', 'render']) {
+    for (const path of ['readout', 'readoutSrgb', 'readoutFull', 'render']) {
       if (!r[path]) { rows.push({ name, path, error: r[path + 'Error'] || 'unavailable' }); continue }
       rows.push({ name, path, glRenderer: r.glRenderer, ...analyse(r[path]) })
     }
