@@ -21,6 +21,7 @@ interface Recorded {
   uniforms: [number, number][]
   readPixelsCalls: number
   uploads: number
+  throwOnNextUpload: boolean
 }
 
 const K = {
@@ -39,6 +40,7 @@ const K = {
 function stubGl(luma = 200) {
   const rec: Recorded = {
     pixelStorei: [], texParameteri: [], uniforms: [], readPixelsCalls: 0, uploads: 0,
+    throwOnNextUpload: false,
   }
   const gl = {
     ...K,
@@ -56,7 +58,10 @@ function stubGl(luma = 200) {
     createTexture: () => ({}), bindTexture: () => {},
     pixelStorei: (k: number, v: unknown) => rec.pixelStorei.push([k, v]),
     texParameteri: (_t: number, k: number, v: number) => rec.texParameteri.push([k, v]),
-    texImage2D: () => { rec.uploads++ },
+    texImage2D: () => {
+      if (rec.throwOnNextUpload) throw new DOMException('tainted', 'SecurityError')
+      rec.uploads++
+    },
     uniform2f: (_l: unknown, u: number, v: number) => rec.uniforms.push([u, v]),
     viewport: () => {}, drawArrays: () => {},
     readPixels: (_x: number, _y: number, _w: number, _h: number, _f: number, _t: number, out: Uint8Array) => {
@@ -128,6 +133,52 @@ describe('createGlLumaSampler', () => {
     // frame per event.
     expect(rec.uploads).toBe(1)
     v.currentTime = 1.5
+    s.sample(v, { u: 0.5, v: 0.5 })
+    expect(rec.uploads).toBe(2)
+    vi.restoreAllMocks()
+  })
+
+  it('re-uploads when the source is swapped, even at an identical frame key', () => {
+    const rec = stubGl()
+    const s = createGlLumaSampler()!
+    // Two datasets of the same size, both at currentTime 0 — the normal
+    // state right after a load. A key-only cache reports the previous
+    // dataset's values against the new dataset's globe, silently.
+    const a = video()
+    const b = video()
+    s.sample(a, { u: 0.5, v: 0.5 })
+    s.sample(b, { u: 0.5, v: 0.5 })
+    expect(rec.uploads).toBe(2)
+    vi.restoreAllMocks()
+  })
+
+  it('never assumes a canvas is current, since it can be redrawn in place', () => {
+    const rec = stubGl()
+    const s = createGlLumaSampler()!
+    const c = { width: 64, height: 32 } as unknown as HTMLCanvasElement
+    s.sample(c, { u: 0.5, v: 0.5 })
+    s.sample(c, { u: 0.5, v: 0.5 })
+    // Same object, same size, but the pixels may have changed underneath.
+    expect(rec.uploads).toBe(2)
+    vi.restoreAllMocks()
+  })
+
+  it('forgets the cached source when an upload throws', () => {
+    const rec = stubGl()
+    const s = createGlLumaSampler()!
+    const v = video()
+    s.sample(v, { u: 0.5, v: 0.5 })
+    expect(rec.uploads).toBe(1)
+    // Advance the frame so an upload is genuinely attempted, then make
+    // it throw. A tainted upload must not leave the sampler believing
+    // the texture holds this frame.
+    v.currentTime = 1.5
+    rec.throwOnNextUpload = true
+    expect(s.sample(v, { u: 0.5, v: 0.5 })).toBeNull()
+    // Same source, same currentTime — but the cache was invalidated, so
+    // this must re-attempt rather than sample a texture holding the
+    // previous frame.
+    rec.throwOnNextUpload = false
     s.sample(v, { u: 0.5, v: 0.5 })
     expect(rec.uploads).toBe(2)
     vi.restoreAllMocks()

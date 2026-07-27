@@ -133,6 +133,7 @@ export function createGlLumaSampler(): GlLumaSampler | null {
 
   const px = new Uint8Array(4)
   let uploadedKey = ''
+  let lastSource: ProbeSource | null = null
   let disposed = false
 
   return {
@@ -146,15 +147,29 @@ export function createGlLumaSampler(): GlLumaSampler | null {
       if (!width) return null
 
       // Re-upload only when the frame actually changed. A paused video
-      // under a moving pointer would otherwise re-upload the same
-      // frame on every event.
-      const key = source instanceof HTMLVideoElement
-        ? `v:${source.currentTime}:${source.videoWidth}`
-        : `s:${width}`
+      // under a moving pointer would otherwise re-upload the same frame
+      // on every event.
+      //
+      // Identity is checked first and separately, because the callers
+      // keep one sampler for the life of the renderer and swap the
+      // source underneath it on every dataset change. Two videos of the
+      // same size both sitting at currentTime 0 — the normal state right
+      // after a load — produce the same key, so a key-only check would
+      // skip the upload and report the *previous* dataset's values
+      // against the new dataset's globe. Silent, and exactly the failure
+      // this module exists to prevent.
+      const changed =
+        source !== lastSource ||
+        // A canvas can be redrawn in place with no observable change to
+        // identity or size, so it is never assumed current. An <img> is
+        // fixed once decoded, so identity alone settles it.
+        !(source instanceof HTMLVideoElement || source instanceof HTMLImageElement) ||
+        (source instanceof HTMLVideoElement && `${source.currentTime}` !== uploadedKey)
       try {
-        if (key !== uploadedKey) {
+        if (changed) {
           gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source)
-          uploadedKey = key
+          lastSource = source
+          uploadedKey = source instanceof HTMLVideoElement ? `${source.currentTime}` : ''
         }
         gl.uniform2f(uUv, uv.u, uv.v)
         gl.drawArrays(gl.TRIANGLES, 0, 3)
@@ -164,12 +179,14 @@ export function createGlLumaSampler(): GlLumaSampler | null {
         // a configuration problem, not a per-pixel one, but it must not
         // take the pointer handler down with it.
         uploadedKey = ''
+        lastSource = null
         return null
       }
       return px[0]
     },
     dispose() {
       disposed = true
+      lastSource = null
       gl.deleteTexture(tex)
       gl.deleteBuffer(buf)
       gl.deleteProgram(prog)

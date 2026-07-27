@@ -1309,6 +1309,20 @@ export class MapRenderer implements GlobeRenderer {
    */
   dispose(): void {
     this.stopAutoRotate()
+    // Before map.remove(): the unsubscribe closure captures `map`, so
+    // dropping the reference first would strand the handlers.
+    this.clearLatLngCallbacks()
+    // The probe owns a WebGL2 context of its own. ViewportManager
+    // builds and tears down renderers on every layout change, so
+    // leaking one context per renderer walks into the browser's
+    // per-page context limit after a handful of switches — at which
+    // point context creation starts failing for the globe itself.
+    // `null` rather than `undefined` so a post-dispose call cannot
+    // treat it as "not built yet" and allocate another.
+    this.probeSampler?.dispose()
+    this.probeSampler = null
+    this.probeSource = null
+    this.probeOptions = null
     if (this.map) {
       this.map.remove()
       this.map = null
