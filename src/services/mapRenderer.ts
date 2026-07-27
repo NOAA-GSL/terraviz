@@ -19,6 +19,7 @@ import type {
   VideoTextureHandle,
 } from '../types'
 import { setDatasetCreditsSource } from '../ui/creditsPanel'
+import { createGlLumaSampler, type GlLumaSampler } from './glLumaSampler'
 import {
   probeDatasetValue,
   type ProbeReading,
@@ -347,7 +348,8 @@ export class MapRenderer implements GlobeRenderer {
   private probeOptions: DatasetOverlayOptions | null = null
   /** 1x1 scratch canvas the probe draws into. Created once; a fresh
    *  canvas per pointer event would allocate on every mouse move. */
-  private probeScratch: HTMLCanvasElement | null = null
+  /** `undefined` = not yet built; `null` = no WebGL2, readout off. */
+  private probeSampler: GlLumaSampler | null | undefined = undefined
   private container: HTMLElement | null = null
   private canvasId: string = 'globe-canvas'
   /** Projection requested at init time. Stays `'globe'` for the
@@ -980,12 +982,15 @@ export class MapRenderer implements GlobeRenderer {
    */
   probeValueAt(lat: number, lon: number): ProbeReading | null {
     if (!this.probeSource || !this.probeOptions?.colorScale) return null
-    if (!this.probeScratch) {
-      this.probeScratch = document.createElement('canvas')
-      this.probeScratch.width = 1
-      this.probeScratch.height = 1
-    }
-    return probeDatasetValue(lat, lon, this.probeSource, this.probeScratch, this.probeOptions)
+    // Built on first use and kept: the context, program and texture
+    // outlive individual probes, and a pointer stream would otherwise
+    // rebuild all three per event. `null` means no WebGL2, in which
+    // case there is no globe either, so no readout is the right answer.
+    if (this.probeSampler === undefined) this.probeSampler = createGlLumaSampler()
+    if (!this.probeSampler) return null
+    const sampler = this.probeSampler
+    return probeDatasetValue(
+      lat, lon, this.probeSource, (s, uv) => sampler.sample(s, uv), this.probeOptions)
   }
 
   /** Detach the lat/lng handlers registered by `setLatLngCallbacks`. */

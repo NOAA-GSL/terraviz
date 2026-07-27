@@ -143,7 +143,8 @@ npm run screenshots:smoke   # gating interaction tests (search, Orbit, nav)
 | `src/services/catalogTimeline.ts` | Catalog **Timeline** view — pure transform to one row per dataset on a shared time axis |
 | `src/services/catalogEvents.ts` | Catalog **events overlay** — pure transform from public approved events + the visible dataset set to event overlays for the Map/Timeline views (`docs/CURRENT_EVENTS_PLAN.md` §6.3) |
 | `src/services/eventsService.ts` | Client for the public approved-events reads — the catalog list (`GET /api/v1/events`) and the per-dataset "In the news" list (`fetchEventsForDataset` → `GET /api/v1/datasets/:id/events`); shared fetch + sanitize (http(s) source-url guard) + 60s cache |
-| `src/services/datasetProbe.ts` | Hover value readout for data-encoded datasets — pure lat/lon → texel UV (mirrors the shader maths, image-space V) plus the 1×1 `drawImage` luma sample and its mapping back to a physical value (`docs/DATA_ENCODED_VIDEO_PLAN.md` §Part 4) |
+| `src/services/datasetProbe.ts` | Hover value readout for data-encoded datasets — pure lat/lon → texel UV (mirrors the shader maths, image-space V), the `LumaSampler` seam, and the mapping from luma back to a physical value (`docs/DATA_ENCODED_VIDEO_PLAN.md` §Part 4) |
+| `src/services/glLumaSampler.ts` | The shipped `LumaSampler` — reads one texel through its own WebGL2 context (`texImage2D` → 1×1 draw → `readPixels`), the configuration `scripts/luma-range-check` measured correct on every browser. Replaces a 1×1 `drawImage` into a 2D canvas, which iOS Safari colour-transforms; no 2D fallback, deliberately |
 | `src/services/datasetOverlayOptions.ts` | Pure helpers for the dataset-overlay rendering path (Phase 3e) |
 | `src/services/markdownRenderer.ts` | Markdown → safe HTML renderer (Orbit messages, doc content) |
 | `src/services/docentDegradedState.ts` | Session-scoped degraded-mode state for the docent |

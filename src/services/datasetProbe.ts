@@ -116,35 +116,33 @@ function sourceSize(source: ProbeSource): { width: number; height: number } {
 }
 
 /**
- * Read the luma (0-255) at a normalised UV.
+ * Reads the luma (0-255) at a normalised UV, or null when there is
+ * nothing to read.
  *
- * Copies **one texel**, not a frame. A full-frame `readPixels` or
- * `getImageData` at 4096×2048 is 32 MB per pointer event, which on a
- * `pointermove` stream is not a slow path but a broken one. Drawing a
- * 1×1 sub-rectangle keeps the copy at four bytes and lets the browser
- * do the crop on the GPU.
+ * This is a seam, not an implementation. The shipped one is
+ * `createGlLumaSampler` in `glLumaSampler.ts`, which reads through
+ * WebGL because a 1×1 `drawImage` into a 2D canvas — the obvious
+ * approach, and what this originally did — returns transformed values
+ * on iOS Safari. See that module for the measurements.
  *
- * Returns `null` if the source has no decoded frame yet, or if the
- * canvas is tainted — reading a cross-origin video without CORS
- * throws a SecurityError, which is a configuration problem rather
- * than a per-pixel one, but must not take the pointer handler down.
+ * Whatever implements it must copy **one texel, not a frame**: a
+ * full-frame read at 4096×2048 is 32 MB per pointer event, which on a
+ * `mousemove` stream is not a slow path but a broken one.
  */
-export function sampleLumaAt(
+export type LumaSampler = (source: ProbeSource, uv: TexelUv) => number | null
+
+/** Clamp a normalised UV onto the source's texel grid centres.
+ *  Exported for tests; the GL sampler filters NEAREST so it does not
+ *  need this, but the maths is worth pinning independently. */
+export function uvToTexel(
   source: ProbeSource,
   uv: TexelUv,
-  scratch: HTMLCanvasElement,
-): number | null {
+): { sx: number; sy: number } | null {
   const { width, height } = sourceSize(source)
   if (!width || !height) return null
-  const sx = Math.min(width - 1, Math.max(0, Math.floor(uv.u * width)))
-  const sy = Math.min(height - 1, Math.max(0, Math.floor(uv.v * height)))
-  const ctx = scratch.getContext('2d', { willReadFrequently: true })
-  if (!ctx) return null
-  try {
-    ctx.drawImage(source, sx, sy, 1, 1, 0, 0, 1, 1)
-    return ctx.getImageData(0, 0, 1, 1).data[0]
-  } catch {
-    return null
+  return {
+    sx: Math.min(width - 1, Math.max(0, Math.floor(uv.u * width))),
+    sy: Math.min(height - 1, Math.max(0, Math.floor(uv.v * height))),
   }
 }
 
@@ -167,14 +165,14 @@ export function probeDatasetValue(
   lat: number,
   lon: number,
   source: ProbeSource,
-  scratch: HTMLCanvasElement,
+  sample: LumaSampler,
   options: DatasetOverlayOptions | undefined,
 ): ProbeReading | null {
   const scale: ColorScale | undefined = options?.colorScale
   if (!scale) return null
   const uv = latLonToTexelUv(lat, lon, options)
   if (!uv) return null
-  const luma = sampleLumaAt(source, uv, scratch)
+  const luma = sample(source, uv)
   if (luma === null) return null
   return {
     value: lumaToValue(luma, scale),

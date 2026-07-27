@@ -12,7 +12,9 @@ import {
   latLonToTexelUv,
   sphereUvToLatLon,
   probeDatasetValue,
-  sampleLumaAt,
+  uvToTexel,
+  type LumaSampler,
+  type TexelUv,
   type ProbeSource,
 } from './datasetProbe'
 import type { ColorScale, DatasetOverlayOptions } from '../types'
@@ -113,18 +115,13 @@ describe('latLonToTexelUv — regional bbox', () => {
   })
 })
 
-/** A canvas whose 2D context reports a fixed pixel, and records the
- *  drawImage arguments so the "one texel, not one frame" rule can be
- *  asserted directly. */
-function fakeScratch(luma: number, calls: number[][] = []) {
-  return {
-    canvas: {
-      getContext: () => ({
-        drawImage: (...args: unknown[]) => calls.push(args.slice(1) as number[]),
-        getImageData: () => ({ data: [luma, luma, luma, 255] }),
-      }),
-    } as unknown as HTMLCanvasElement,
-    calls,
+/** A sampler that reports a fixed luma, recording the UVs it was asked
+ *  for so the lat/lon → texel mapping can be asserted through the whole
+ *  path rather than only against the pure helper. */
+function fakeSampler(luma: number, seen: TexelUv[] = []): LumaSampler {
+  return (_source, uv) => {
+    seen.push(uv)
+    return luma
   }
 }
 
@@ -134,75 +131,50 @@ const fakeVideo = (w = 4096, h = 2048): ProbeSource =>
     videoHeight: h,
   })
 
-describe('sampleLumaAt', () => {
-  it('copies a single texel rather than a frame', () => {
-    const { canvas, calls } = fakeScratch(128)
-    sampleLumaAt(fakeVideo(), { u: 0.5, v: 0.5 }, canvas)
-    // sx, sy, sw, sh, dx, dy, dw, dh — the source rect must be 1x1.
-    expect(calls[0].slice(2, 4)).toEqual([1, 1])
-    expect(calls[0].slice(4)).toEqual([0, 0, 1, 1])
-  })
-
+describe('uvToTexel', () => {
   it('indexes the texel from the UV', () => {
-    const { canvas, calls } = fakeScratch(0)
-    sampleLumaAt(fakeVideo(4096, 2048), { u: 0.25, v: 0.75 }, canvas)
-    expect(calls[0].slice(0, 2)).toEqual([1024, 1536])
+    expect(uvToTexel(fakeVideo(4096, 2048), { u: 0.25, v: 0.75 })).toEqual({ sx: 1024, sy: 1536 })
   })
 
-  it('clamps at the far edge rather than sampling out of bounds', () => {
-    const { canvas, calls } = fakeScratch(0)
-    sampleLumaAt(fakeVideo(100, 50), { u: 1, v: 1 }, canvas)
-    expect(calls[0].slice(0, 2)).toEqual([99, 49])
+  it('clamps at the far edge rather than indexing out of bounds', () => {
+    expect(uvToTexel(fakeVideo(100, 50), { u: 1, v: 1 })).toEqual({ sx: 99, sy: 49 })
   })
 
   it('returns null before a frame has decoded', () => {
-    const { canvas } = fakeScratch(0)
-    expect(sampleLumaAt(fakeVideo(0, 0), { u: 0.5, v: 0.5 }, canvas)).toBeNull()
-  })
-
-  it('returns null instead of throwing on a tainted canvas', () => {
-    const tainted = {
-      getContext: () => ({
-        drawImage: () => {},
-        getImageData: () => {
-          throw new DOMException('tainted', 'SecurityError')
-        },
-      }),
-    } as unknown as HTMLCanvasElement
-    expect(sampleLumaAt(fakeVideo(), { u: 0.5, v: 0.5 }, tainted)).toBeNull()
+    expect(uvToTexel(fakeVideo(0, 0), { u: 0.5, v: 0.5 })).toBeNull()
   })
 })
 
 describe('probeDatasetValue', () => {
   it('reports the physical value with units', () => {
-    const { canvas } = fakeScratch(255)
-    const r = probeDatasetValue(0, 0, fakeVideo(), canvas, { colorScale: SCALE })
+    const sample = fakeSampler(255)
+    const r = probeDatasetValue(0, 0, fakeVideo(), sample, { colorScale: SCALE })
     expect(r?.value).toBeCloseTo(100, 6)
     expect(r?.units).toBe('mg m-2')
     expect(r?.noData).toBe(false)
   })
 
   it('flags the no-data band instead of reporting a number near vmin', () => {
-    const { canvas } = fakeScratch(3) // 3/255 < 12/256
-    expect(probeDatasetValue(0, 0, fakeVideo(), canvas, { colorScale: SCALE })?.noData).toBe(true)
+    const sample = fakeSampler(3) // 3/255 < 12/256
+    expect(probeDatasetValue(0, 0, fakeVideo(), sample, { colorScale: SCALE })?.noData).toBe(true)
   })
 
   it('returns null for a dataset that is not data-encoded', () => {
     // The backwards-compatibility guarantee for the readout: a
     // picture dataset reports nothing rather than a made-up number.
-    const { canvas } = fakeScratch(200)
-    expect(probeDatasetValue(0, 0, fakeVideo(), canvas, undefined)).toBeNull()
-    expect(probeDatasetValue(0, 0, fakeVideo(), canvas, { lonOrigin: 0 })).toBeNull()
+    const sample = fakeSampler(200)
+    expect(probeDatasetValue(0, 0, fakeVideo(), sample, undefined)).toBeNull()
+    expect(probeDatasetValue(0, 0, fakeVideo(), sample, { lonOrigin: 0 })).toBeNull()
   })
 
   it('returns null outside a regional dataset', () => {
-    const { canvas } = fakeScratch(200)
+    const sample = fakeSampler(200)
     const opts: DatasetOverlayOptions = {
       colorScale: SCALE,
       boundingBox: { n: 53, s: 21, w: -134, e: -60 },
     }
-    expect(probeDatasetValue(0, 0, fakeVideo(), canvas, opts)).toBeNull()
-    expect(probeDatasetValue(37, -100, fakeVideo(), canvas, opts)).not.toBeNull()
+    expect(probeDatasetValue(0, 0, fakeVideo(), sample, opts)).toBeNull()
+    expect(probeDatasetValue(37, -100, fakeVideo(), sample, opts)).not.toBeNull()
   })
 })
 
