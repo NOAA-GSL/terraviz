@@ -60,7 +60,51 @@ import {
 let vrProbeScratch: HTMLCanvasElement | null = null
 
 /**
- * Value under the controller's aim, for the HUD.
+ * How often the VR probe actually samples, in ms.
+ *
+ * The readout is a number a person reads off a HUD; 10 Hz is already
+ * faster than anyone can follow it changing. What it replaces is not
+ * free: a raycast plus a `drawImage` and a **synchronous**
+ * `getImageData`, on a loop that has 11-14 ms to render two eyes. The
+ * 1x1 copy keeps the transfer small but not the readback stall, and
+ * that stall would otherwise land 72-90 times a second.
+ */
+const VR_PROBE_INTERVAL_MS = 100
+
+/** -1, not 0: the XR clock legitimately reads 0 on the first frame. */
+let vrProbeLastAt = -1
+let vrProbeLastValue: string | null = null
+
+/** Forget the cached reading so a new session starts clean. */
+function resetVrProbe(): void {
+  vrProbeLastAt = -1
+  vrProbeLastValue = null
+}
+
+/**
+ * Value under the controller's aim, for the HUD — sampled at most
+ * every `VR_PROBE_INTERVAL_MS`, returning the previous reading in
+ * between.
+ *
+ * Held to a fixed cadence rather than driven by the HUD's own
+ * change-detection, because the HUD debounces the *redraw* and this
+ * is the cost of producing the value it debounces on.
+ */
+function readVrProbe(
+  interaction: VrInteractionHandle,
+  ctx: VrSessionContext,
+  now: number,
+): string | null {
+  if (vrProbeLastAt >= 0 && now - vrProbeLastAt < VR_PROBE_INTERVAL_MS) {
+    return vrProbeLastValue
+  }
+  vrProbeLastAt = now
+  vrProbeLastValue = sampleVrProbe(interaction, ctx)
+  return vrProbeLastValue
+}
+
+/**
+ * One probe sample.
  *
  * Returns null — and the HUD drops the line entirely — for a picture
  * dataset, a controller not aimed at a globe, a point outside a
@@ -68,11 +112,10 @@ let vrProbeScratch: HTMLCanvasElement | null = null
  * dataset published before this feature keeps exactly the HUD it has
  * today.
  *
- * Runs on the XR frame loop, which is why the probe copies a single
- * texel rather than a frame: at 4096x2048 a full read would be 32 MB
- * per frame at 72-90 Hz.
+ * Copies a single texel rather than a frame: at 4096x2048 a full read
+ * would be 32 MB.
  */
-function readVrProbe(
+function sampleVrProbe(
   interaction: VrInteractionHandle,
   ctx: VrSessionContext,
 ): string | null {
@@ -1283,7 +1326,7 @@ export async function enterImmersive(mode: VrMode, ctx: VrSessionContext): Promi
       panelCount,
       primaryIndex: ctx.getPrimaryIndex(),
       browseOpen: active.browse.isVisible(),
-      probeReadout: readVrProbe(active.interaction, ctx),
+      probeReadout: readVrProbe(active.interaction, ctx, now),
     })
 
     // Tour strip mirrors the engine state. Always poll; the strip's
@@ -1445,6 +1488,10 @@ export async function enterImmersive(mode: VrMode, ctx: VrSessionContext): Promi
     const a = active
     active = null
     a.renderer.setAnimationLoop(null)
+    // The probe cache is module-scoped (like its scratch canvas), so
+    // clear it or the next session opens showing the last session's
+    // number until the first sample lands.
+    resetVrProbe()
     // Resolve any in-flight flyTo so awaiting callers don't hang
     // after the session ends (tour engine's execFlyTo, chat's
     // onFlyTo handler).

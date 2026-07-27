@@ -935,8 +935,14 @@ export class MapRenderer implements GlobeRenderer {
    *   - Previous handlers are removed first. This used to stack a
    *     new pair on every call, so a second invocation drove the
    *     display twice per pointer event.
-   *   - `pointermove` rather than `mousemove`, so a touch drag
-   *     reports too. `pointerout` likewise.
+   *   - `touchmove` alongside `mousemove`, so a touch drag reports
+   *     too. These are the events MapLibre actually fires; it has no
+   *     `pointermove`/`pointerout`, and `Evented.on` accepts an
+   *     unknown name without complaint, so registering those bound a
+   *     handler that could never run. There is no touch equivalent of
+   *     `mouseout` in play deliberately: a finger has no hover state,
+   *     and clearing on lift would erase the reading at the moment it
+   *     became readable.
    *   - Off-globe returns nothing. MapLibre's `e.lngLat` unprojects
    *     even where the sphere isn't, so the corners of the viewport
    *     used to report a coordinate for empty space.
@@ -949,7 +955,7 @@ export class MapRenderer implements GlobeRenderer {
     if (!map) return
     this.clearLatLngCallbacks()
 
-    const move = (e: maplibregl.MapMouseEvent) => {
+    const move = (e: maplibregl.MapMouseEvent | maplibregl.MapTouchEvent) => {
       if (!this.isPointerOnGlobe(e)) {
         onClear()
         return
@@ -957,11 +963,13 @@ export class MapRenderer implements GlobeRenderer {
       onUpdate(e.lngLat.lat, e.lngLat.lng)
     }
     const out = () => onClear()
-    map.on('pointermove', move)
-    map.on('pointerout', out)
+    map.on('mousemove', move)
+    map.on('touchmove', move)
+    map.on('mouseout', out)
     this.latLngUnsubscribe = () => {
-      map.off('pointermove', move)
-      map.off('pointerout', out)
+      map.off('mousemove', move)
+      map.off('touchmove', move)
+      map.off('mouseout', out)
     }
   }
 
@@ -995,7 +1003,7 @@ export class MapRenderer implements GlobeRenderer {
    * original screen point is: for a point off the sphere the round
    * trip does not come back where it started.
    */
-  private isPointerOnGlobe(e: maplibregl.MapMouseEvent): boolean {
+  private isPointerOnGlobe(e: maplibregl.MapMouseEvent | maplibregl.MapTouchEvent): boolean {
     const map = this.map
     if (!map) return false
     try {
