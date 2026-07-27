@@ -89,6 +89,16 @@ const VARIANTS: ReadonlyArray<{ name: string; vf?: string; extra: string[]; note
             '-x264-params', 'colorprim=bt709:colormatrix=bt709:range=pc'],
     note: 'everything D has except --color_trc — isolates the transfer tag',
   },
+  // What `buildFfmpegArgs` emits for a data-encoded rendition after the
+  // E/F results ruled the range tag out: a nearest-neighbour scale and
+  // nothing else. A is the same settings without the scale filter, so
+  // this exists to confirm the filter itself does not reintroduce a
+  // range conversion.
+  {
+    name: 'G_neighbor_only', vf: 'scale=4096:256:flags=neighbor',
+    extra: [],
+    note: 'exactly what the encoder now emits — neighbor scale, no colour flags',
+  },
 ]
 
 // --- PNG writing (grayscale, colour type 0) ------------------------------

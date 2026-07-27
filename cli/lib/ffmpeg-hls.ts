@@ -241,24 +241,14 @@ export function buildFfmpegArgs(
   inputArgs: readonly string[] = [],
   dataEncoded: boolean = false,
 ): string[] {
-  // Nearest-neighbour, and an explicit full→full range conversion,
-  // for the data path only.
+  // Nearest-neighbour for the data path, and deliberately nothing
+  // else — no range conversion and no colour tags. See the note at
+  // the per-rendition block below for why.
   //
   // The default scaler is bicubic, which interpolates across the
   // nodata/data boundary and invents values that were never
   // measured — fine for a picture, wrong for a measurement.
-  //
-  // `in_range`/`out_range` are load-bearing and are NOT implied by
-  // the `-color_range` flag added below. `-color_range pc` alone
-  // retags the stream and flips ffmpeg's assumption about the
-  // input without changing what swscale writes, so the samples
-  // arrive compressed into 16-235 while the tag claims full range
-  // — measured as a 0.859 gain and a +16 offset on every value,
-  // which is precisely the corruption the tag was meant to
-  // prevent. Setting the conversion explicitly here and the tag
-  // below keeps content and tag agreeing. Verified end-to-end by
-  // `npm run check:luma-range`.
-  const scaleFlags = dataEncoded ? ':flags=neighbor:in_range=full:out_range=full' : ''
+  const scaleFlags = dataEncoded ? ':flags=neighbor' : ''
   const splits = renditions.length
   const filterParts: string[] = [`[0:v]split=${splits}` + renditions.map((_, i) => `[s${i}]`).join('')]
   for (let i = 0; i < renditions.length; i++) {
@@ -300,27 +290,47 @@ export function buildFfmpegArgs(
     // HLS-on-iOS baseline; bumping to higher profiles to keep
     // 4:4:4 would break legacy Safari clients.
     args.push(`-pix_fmt:v:${i}`, 'yuv420p')
-    if (dataEncoded) {
-      // Signal full range and a fully-specified colourspace. No
-      // `-color_range` / `-colorspace` / `-color_trc` /
-      // `-color_primaries` flag exists anywhere else in this repo,
-      // so today's streams carry an unspecified VUI and every
-      // decoder applies its own default. Legacy colourised
-      // datasets tolerate that — a decoder guessing wrong shifts
-      // the picture slightly. A data-encoded stream does not: the
-      // limited-range guess shifts every value by 16/255 (0.063),
-      // larger than the smoke palette's entire transparent_range
-      // of 12/256 (0.047), so "no data" stops reading as
-      // transparent everywhere at once.
-      //
-      // Full rather than limited range because limited spends 219
-      // of 256 code levels, quantising the data ~1.17x more
-      // coarsely for no benefit here.
-      args.push(`-color_range:v:${i}`, 'pc')
-      args.push(`-colorspace:v:${i}`, 'bt709')
-      args.push(`-color_primaries:v:${i}`, 'bt709')
-      args.push(`-color_trc:v:${i}`, 'bt709')
-    }
+    // NO colour-range or colourspace flags on the data path either.
+    //
+    // This reverses the design's own recommendation, on measurement.
+    // The plan reasoned that an unspecified VUI lets every decoder
+    // guess, and that a limited-range guess shifts every value by
+    // 16/255 — so it prescribed tagging the stream `pc` with a
+    // matching full→full conversion. Chrome agreed: that setting
+    // round-tripped 256/256 exactly.
+    //
+    // Firefox does not. Its video→WebGL-texture path expands a
+    // `pc`-tagged stream as if it were limited, applying
+    // (v - 16) * 255/219 to samples that are already full-range.
+    // Modelling that clamped expansion predicts exact 8/256, MAE
+    // 9.086, max|e| 20, gain 1.1295, offset -14.52; Firefox on
+    // Windows measured 8/256, 9.082, 20, 1.1294, -14.51. Every
+    // variant carrying `-color_range pc` failed identically —
+    // including one with no colourspace/primaries/transfer tags at
+    // all — which isolates the range flag as the trigger rather
+    // than the colourspace tagging.
+    //
+    // The alternatives both lose. Tagging `tv` with a real
+    // conversion to limited range is self-consistent but spends
+    // only 219 code levels, and measured max|e| 3 on both sampling
+    // paths — it cannot round-trip 256 distinct values through 219.
+    // Leaving the conversion while dropping the tag would store
+    // full-range samples under a VUI that Firefox reads as limited,
+    // which is the same expansion again.
+    //
+    // Untagged is what every other stream in this repo already
+    // emits, and it is the only variant that passed on both
+    // browsers: max|e| 1, within the one-8-bit-step budget. It
+    // works because the encoder writes limited-range samples by
+    // swscale's default and both decoders expand them back, so the
+    // contraction and the expansion cancel. That is a narrower
+    // guarantee than the plan wanted — it rests on decoders
+    // agreeing rather than on a signalled contract — but a tag that
+    // demonstrably breaks a major browser is not a safety
+    // improvement over one that does not. Safari and iOS Safari are
+    // still unverified; `npm run check:luma-range -- --serve`
+    // is the check, and variant `G_neighbor_only` mirrors exactly
+    // what this function now emits.
     args.push(`-preset:v:${i}`, 'slow')
     args.push(`-crf:v:${i}`, String(r.crf))
     args.push(`-maxrate:v:${i}`, `${r.maxBitrateKbps}k`)

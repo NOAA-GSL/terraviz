@@ -159,25 +159,44 @@ describe('buildFfmpegArgs', () => {
   describe('data-encoded mode', () => {
     const DATA: HlsRendition[] = [{ height: 2048, crf: 18, maxBitrateKbps: 25_000 }]
 
-    it('scales with nearest-neighbour and an explicit full→full range', () => {
+    it('scales with nearest-neighbour and nothing else', () => {
       const args = buildFfmpegArgs('/in.png', '/out', DATA, 6, 192, false, [], true)
       const filter = args[args.indexOf('-filter_complex') + 1]
       // Bicubic (the default) interpolates across the nodata/data
       // boundary and invents values that were never measured.
-      expect(filter).toContain('flags=neighbor')
-      // in_range/out_range are what actually move the samples;
-      // `-color_range` below only sets the tag.
-      expect(filter).toContain('in_range=full')
-      expect(filter).toContain('out_range=full')
-      expect(filter).toContain('scale=4096:2048:flags=neighbor:in_range=full:out_range=full')
+      expect(filter).toContain('scale=4096:2048:flags=neighbor')
+      // No range conversion. Converting to full range and then not
+      // tagging it (or tagging it, see below) both land on Firefox's
+      // limited-range expansion.
+      expect(filter).not.toContain('in_range')
+      expect(filter).not.toContain('out_range')
     })
 
-    it('tags the stream full-range with a fully-specified colourspace', () => {
+    // The design prescribed `-color_range pc` plus a matching
+    // conversion, and Chrome round-tripped that 256/256. Firefox's
+    // video→WebGL path expands any pc-tagged stream as if it were
+    // limited — (v - 16) * 255/219 applied to already-full samples —
+    // and measured max|e| 20 against a one-step budget. Every variant
+    // carrying the range flag failed identically, including one with
+    // no colourspace tags at all, so the range flag is the trigger.
+    // Untagged was the only variant to pass on both browsers.
+    //
+    // Asserting absence rather than presence: the failure mode this
+    // guards against is someone re-adding the flags because the
+    // reasoning for them reads convincingly.
+    it('emits no colour-range or colourspace flags on the data path', () => {
       const args = buildFfmpegArgs('/in.png', '/out', DATA, 6, 192, false, [], true)
-      expect(args[args.indexOf('-color_range:v:0') + 1]).toBe('pc')
-      expect(args[args.indexOf('-colorspace:v:0') + 1]).toBe('bt709')
-      expect(args[args.indexOf('-color_primaries:v:0') + 1]).toBe('bt709')
-      expect(args[args.indexOf('-color_trc:v:0') + 1]).toBe('bt709')
+      for (const flag of ['-color_range', '-colorspace', '-color_primaries', '-color_trc']) {
+        expect(args.some(a => a.startsWith(flag))).toBe(false)
+      }
+    })
+
+    it('differs from the legacy argv only by the scaler and the ladder', () => {
+      // The whole data-encoded delta at the encoder is now one filter
+      // flag. Pinning that keeps the blast radius honest.
+      const data = buildFfmpegArgs('/in.png', '/out', DATA, 6, 192, false, [], true)
+      const legacy = buildFfmpegArgs('/in.png', '/out', DATA, 6, 192, false, [], false)
+      expect(data.join(' ').replace(':flags=neighbor', '')).toBe(legacy.join(' '))
     })
 
     it('DATA_ENCODED_RENDITIONS publishes the source rung only', () => {
