@@ -193,6 +193,13 @@ describe('renderDatasetNewPage', () => {
           // on/off so it can be toggled back off on edit); false is a
           // no-op the serializer treats the same as null.
           is_flipped_in_y: false,
+          // Likewise always sent, as null when blank. Omitting it
+          // would make the field one-way: the PATCH treats an absent
+          // key as "leave untouched", so a publisher who set a rate
+          // could never clear it back to the catalog default. That is
+          // the existing behaviour of lon_origin, which omits when
+          // empty; not copied here deliberately.
+          playback_fps: null,
         }),
       }),
     )
@@ -905,6 +912,32 @@ describe('renderDatasetNewPage', () => {
     expect(body.is_flipped_in_y).toBe(true)
     expect(body.celestial_body).toBe('Mars')
     expect(body.radius_mi).toBe(2106)
+  })
+
+  it('sends playback_fps as a number, and as null when cleared', async () => {
+    // Null rather than omitted is the whole point: the PATCH reads an
+    // absent key as "leave untouched", so omitting on blank would let a
+    // publisher set a rate and never get back to the catalog default.
+    const fetchFn = vi.fn().mockResolvedValue(jsonResponse({ dataset: { id: 'X' } }))
+    renderDatasetNewPage(mount, {
+      fetchFn: fetchFn as unknown as typeof fetch,
+      routerNavigate: vi.fn(),
+    })
+    setInput(mount, '#dataset-title', 'My Dataset')
+    setInput(mount, '#dataset-playback-fps', '0.5')
+    submitForm(mount)
+    await new Promise(r => setTimeout(r, 0))
+    const set = JSON.parse(fetchFn.mock.calls[0][1].body as string) as Record<string, unknown>
+    // Sub-1 rates are the interesting ones for a long forecast, so the
+    // value must survive as a float rather than being rounded.
+    expect(set.playback_fps).toBe(0.5)
+
+    setInput(mount, '#dataset-playback-fps', '')
+    submitForm(mount)
+    await new Promise(r => setTimeout(r, 0))
+    const cleared = JSON.parse(fetchFn.mock.calls[1][1].body as string) as Record<string, unknown>
+    expect(cleared.playback_fps).toBeNull()
+    expect('playback_fps' in cleared, 'cleared must send null, not omit').toBe(true)
   })
 
   it('omits bounding_box when not all four corners are filled', async () => {

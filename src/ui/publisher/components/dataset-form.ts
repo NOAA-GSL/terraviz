@@ -170,6 +170,10 @@ interface FormState {
   bboxW: string
   bboxE: string
   lonOrigin: string
+  /** Source frames per second for an image-sequence encode. String
+   *  because it is an <input> value; '' means "leave it to the
+   *  catalog default". */
+  playbackFps: string
   isFlippedInY: boolean
   celestialBody: string
   radiusMi: string
@@ -999,6 +1003,22 @@ function geographyCard(state: FormState): HTMLElement {
       helpKey: 'publisher.datasetForm.help.flippedInY',
       onChange: v => {
         state.isFlippedInY = v
+      },
+    }),
+  )
+
+  card.appendChild(
+    inputField({
+      id: 'dataset-playback-fps',
+      labelKey: 'publisher.datasetForm.field.playbackFps',
+      required: false,
+      value: state.playbackFps,
+      placeholder: '30',
+      type: 'number',
+      helpKey: 'publisher.datasetForm.help.playbackFps',
+      error: findError(state.errors, 'playback_fps'),
+      onChange: v => {
+        state.playbackFps = v
       },
     }),
   )
@@ -2194,6 +2214,13 @@ function renderForm(
     // it can be toggled back off on edit, unlike the omit-when-empty
     // text fields.
     body.is_flipped_in_y = state.isFlippedInY
+    // Always sent too, as null when cleared. Omitting it would make
+    // the field one-way: the PATCH reads an absent key as "leave
+    // untouched", so a publisher could set a rate and never revert to
+    // the default. lon_origin above omits when empty and has exactly
+    // that limitation; not copied here.
+    body.playback_fps =
+      state.playbackFps.trim() === '' ? null : num(state.playbackFps)
     setIfPresent('celestial_body', state.celestialBody)
     const radius = num(state.radiusMi)
     if (radius != null) body.radius_mi = radius
@@ -2413,6 +2440,7 @@ function initialState(
       bboxW: '',
       bboxE: '',
       lonOrigin: '',
+      playbackFps: '',
       isFlippedInY: false,
       celestialBody: '',
       radiusMi: '',
@@ -2468,6 +2496,7 @@ function initialState(
     bboxW: row.bbox_w != null ? String(row.bbox_w) : '',
     bboxE: row.bbox_e != null ? String(row.bbox_e) : '',
     lonOrigin: row.lon_origin != null ? String(row.lon_origin) : '',
+    playbackFps: row.playback_fps != null ? String(row.playback_fps) : '',
     isFlippedInY: row.is_flipped_in_y === 1,
     celestialBody: row.celestial_body ?? '',
     radiusMi: row.radius_mi != null ? String(row.radius_mi) : '',
