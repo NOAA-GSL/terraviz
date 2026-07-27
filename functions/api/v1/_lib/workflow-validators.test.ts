@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
+  MAX_PIPELINE_ARG_LIST_ITEMS,
+  MAX_PIPELINE_JSON_BYTES,
   WORKFLOW_FRAMES_OUTPUT_DIR,
   WORKFLOW_OUTPUT_PATH,
 } from '../../../../src/types/zyra-workflow-constants'
@@ -144,7 +146,13 @@ describe('validatePipeline', () => {
         {
           stage: 'process',
           command: 'reproject',
-          args: { dst_bounds: Array.from({ length: 17 }, (_, n) => n), o: WORKFLOW_OUTPUT_PATH },
+          // Derived from the bound rather than hardcoded, so raising
+          // the bound cannot leave this asserting that a now-legal
+          // length is rejected.
+          args: {
+            dst_bounds: Array.from({ length: MAX_PIPELINE_ARG_LIST_ITEMS + 1 }, (_, n) => n),
+            o: WORKFLOW_OUTPUT_PATH,
+          },
         },
       ],
     })
@@ -215,6 +223,72 @@ describe('validatePipeline', () => {
     expect(runPipeline(nested).some(e => e.code === 'invalid_value')).toBe(true)
     expect(runPipeline('{not json').some(e => e.code === 'invalid_json')).toBe(true)
     expect(runPipeline(JSON.stringify({ stages: [] })).some(e => e.code === 'invalid_shape')).toBe(true)
+  })
+
+  // --- bounds ------------------------------------------------------
+  //
+  // These were raised for per-frame forecast pipelines, where one list
+  // entry per frame is unavoidable. The cases below are shaped like the
+  // real thing (a long templated URL repeated per frame) so a future
+  // reduction fails here rather than in production.
+
+  const framePipeline = (n: number) => {
+    const url = (i: number) =>
+      'https://noaa-rrfs-pds.s3.amazonaws.com/rrfs_public/rrfs.{{cycle_date:PT6H:PT9H}}/' +
+      '{{cycle_hour:PT6H:PT9H}}/rrfs.t{{cycle_hour:PT6H:PT9H}}z.2dfld.3km.f' +
+      String(i).padStart(3, '0') + '.conus.grib2'
+    return JSON.stringify({
+      stages: [
+        {
+          stage: 'process',
+          command: 'convert-format',
+          args: {
+            format: 'geotiff',
+            output_dir: '/work/tif',
+            inputs: Array.from({ length: n }, (_, i) => url(i)),
+            output_names: Array.from({ length: n }, (_, i) => `f${i}.tif`),
+          },
+        },
+        {
+          stage: 'process',
+          command: 'scan-frames',
+          args: { frames_dir: WORKFLOW_FRAMES_OUTPUT_DIR, output: '/work/frames-meta.json' },
+        },
+      ],
+    })
+  }
+
+  it('accepts an hourly forecast out to RRFS f084 (85 frames)', () => {
+    // The case that motivated the raise. At the old bound of 16 this
+    // failed four times over -- once per array arg.
+    expect(runPipeline(framePipeline(85))).toEqual([])
+  })
+
+  it('still refuses a runaway list', () => {
+    const errs = runPipeline(framePipeline(MAX_PIPELINE_ARG_LIST_ITEMS + 1))
+    expect(errs.length).toBeGreaterThan(0)
+    expect(errs.some(e => /Array args must have/.test(e.message ?? ''))).toBe(true)
+  })
+
+  it('keeps the byte bound clear of a full-length forecast pipeline', () => {
+    // Raising the item count alone would have left an 85-frame pipeline
+    // at 83% of the old 32 KiB -- one longer URL from failing. This
+    // asserts real headroom, not merely that it fits.
+    const bytes = framePipeline(85).length
+    expect(bytes).toBeLessThan(MAX_PIPELINE_JSON_BYTES / 2)
+  })
+
+  it('rejects an empty array arg regardless of the bound', () => {
+    const empty = JSON.stringify({
+      stages: [
+        {
+          stage: 'process',
+          command: 'scan-frames',
+          args: { frames_dir: WORKFLOW_FRAMES_OUTPUT_DIR, output: '/work/m.json', inputs: [] },
+        },
+      ],
+    })
+    expect(runPipeline(empty).length).toBeGreaterThan(0)
   })
 })
 
