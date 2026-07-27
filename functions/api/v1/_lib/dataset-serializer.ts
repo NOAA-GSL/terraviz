@@ -20,6 +20,8 @@
 import {
   parseColorScale,
   RENDER_ENCODING_DATA_LUMA,
+  type ColorScale,
+  type RenderEncoding,
 } from '../../../../src/types/color-scale'
 import type { DatasetRow, DecorationRows, NodeIdentityRow } from './catalog-store'
 
@@ -122,11 +124,11 @@ export interface WireDataset {
    * `'data-luma'` means luma carries the normalised value and
    * `colorScale` colours it at display time. Emitted only as a
    * validated pair with `colorScale`. */
-  renderEncoding?: string
+  renderEncoding?: RenderEncoding
   /** Palette + scale for a `data-luma` dataset: ordered `stops`
    * (`{ t, rgba }`), `vmin` / `vmax`, optional `units` and
    * `transparentRange`. Omitted unless `renderEncoding` is set. */
-  colorScale?: unknown
+  colorScale?: ColorScale
   /**
    * For `tour/json` rows: the resolved URL the SPA's tour engine
    * fetches the tour document from, bypassing the manifest endpoint
@@ -288,7 +290,7 @@ function parseJsonField(v: string | null | undefined): unknown {
  */
 function serializeRenderEncoding(
   row: DatasetRow,
-): { renderEncoding?: string; colorScale?: unknown } {
+): { renderEncoding?: RenderEncoding; colorScale?: ColorScale } {
   if (row.render_encoding !== RENDER_ENCODING_DATA_LUMA) return {}
   const scale = parseColorScale(row.color_scale)
   if (!scale) return {}

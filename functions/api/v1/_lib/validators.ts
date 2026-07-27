@@ -453,7 +453,13 @@ function validateRenderEncoding(
   const hasScale = colorScale != null && colorScale !== ''
   if (hasScale) {
     if (typeof colorScale !== 'string') {
-      errors.push(err('color_scale', 'invalid_type', 'color_scale must be a JSON-stringified string.'))
+      errors.push(
+        err(
+          'color_scale',
+          'invalid_type',
+          'color_scale must be a JSON-stringified object (palette stops + scale), sent as a string.',
+        ),
+      )
       return
     }
     if (colorScale.length > COLOR_SCALE_MAX_CHARS) {
