@@ -270,6 +270,27 @@ describe('validatePipeline', () => {
     expect(errs.some(e => /Array args must have/.test(e.message ?? ''))).toBe(true)
   })
 
+  it('measures the bound in UTF-8 bytes, not UTF-16 code units', () => {
+    // A CJK codepoint is one code unit and three UTF-8 bytes, so a
+    // `.length` check undercounts by up to 3x and lets a pipeline
+    // exceed the documented bound. Sized to pass a code-unit check
+    // and fail a byte check, so it can only go green under the
+    // correct one.
+    const pad = '\u6f22'.repeat(Math.floor(MAX_PIPELINE_JSON_BYTES * 0.6))
+    const heavy = JSON.stringify({
+      stages: [
+        {
+          stage: 'process',
+          command: 'scan-frames',
+          args: { frames_dir: WORKFLOW_FRAMES_OUTPUT_DIR, output: '/work/m.json', note: pad },
+        },
+      ],
+    })
+    expect(heavy.length).toBeLessThan(MAX_PIPELINE_JSON_BYTES)
+    expect(new TextEncoder().encode(heavy).length).toBeGreaterThan(MAX_PIPELINE_JSON_BYTES)
+    expect(runPipeline(heavy).some(e => e.code === 'too_large')).toBe(true)
+  })
+
   it('keeps the byte bound clear of a full-length forecast pipeline', () => {
     // Raising the item count alone would have left an 85-frame pipeline
     // at 83% of the old 32 KiB -- one longer URL from failing. This
