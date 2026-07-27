@@ -38,7 +38,15 @@ const SECONDARY = codeOf('vrScene.ts')
 describe('VR globe — the contrast/saturation bypass', () => {
   it('guards the colour-correction block behind the picture branch', () => {
     // The maths must sit inside the `else`, not run unconditionally.
-    expect(VR).toMatch(/if\s*\(\s*uOverlayDataEncoded\s*==\s*1\s*\)/)
+    //
+    // The condition also requires `sampledDataset` — outside a regional
+    // bbox the fragment holds the BASE MAP, whose red channel is not a
+    // measurement and must not be fed to the value palette. Asserted in
+    // full here so this test keeps pinning the real branch rather than a
+    // prefix of it; the gate itself is covered in photorealEarthBbox.
+    expect(VR).toMatch(
+      /if\s*\(\s*uOverlayDataEncoded\s*==\s*1\s*&&\s*sampledDataset\s*\)/,
+    )
     const branch = VR.slice(VR.indexOf('uOverlayDataEncoded == 1'))
     const contrastAt = branch.indexOf('uContrast')
     const elseAt = branch.indexOf('} else {')

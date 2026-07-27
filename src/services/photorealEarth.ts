@@ -599,6 +599,12 @@ export function createPhotorealEarth(
       '#include <map_fragment>',
       `#ifdef USE_MAP
          vec4 sampledDiffuseColor;
+         // Whether this fragment's colour came from the DATASET
+         // texture. False when it fell back to the base map outside
+         // a regional bbox, which matters below: the data-encoded
+         // branch treats .r as a measurement to look up in the
+         // palette, and the base map's red channel is not one.
+         bool sampledDataset = true;
          if (uOverlayHasBbox == 1) {
            // THREE's SphereGeometry puts uv.y == 1 at the NORTH pole
            // (verified: SphereGeometry(1,8,6) gives uv.y 1 at y=+1, 0
@@ -637,6 +643,7 @@ export function createPhotorealEarth(
              sampledDiffuseColor = texture2D(map, vec2(bu, bv));
            } else if (uOverlayHasBase == 1) {
              sampledDiffuseColor = texture2D(uOverlayBaseMap, vMapUv);
+             sampledDataset = false;
            } else {
              discard;
            }
@@ -675,7 +682,7 @@ export function createPhotorealEarth(
          // curve is a few %-points more accurate but adds branches
          // to a hot path; the 2.2 approximation is good enough for
          // a perceptual-contrast knob.
-         if (uOverlayDataEncoded == 1) {
+         if (uOverlayDataEncoded == 1 && sampledDataset) {
            // Luma is a measurement, not a look. The contrast /
            // saturation knobs below exist to make the *Earth* read
            // well and would silently rewrite every value here — a
