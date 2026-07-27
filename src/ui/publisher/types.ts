@@ -84,6 +84,10 @@ export interface PublisherDatasetDetail extends PublisherDataset {
   bbox_e?: number | null
   lon_origin?: number | null
   is_flipped_in_y?: number | null
+  /** `'data-luma'` when the frames encode values rather than colour. */
+  render_encoding?: string | null
+  /** JSON sidecar (palette + scale) paired with `render_encoding`. */
+  color_scale?: string | null
   celestial_body?: string | null
   radius_mi?: number | null
   website_link: string | null

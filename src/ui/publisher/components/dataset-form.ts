@@ -37,6 +37,7 @@ import {
 import { renderMarkdown } from '../../../services/markdownRenderer'
 import type { PublisherDatasetDetail } from '../types'
 import type { DatasetOverlayOptions } from '../../../types'
+import { parseColorScale, RENDER_ENCODING_DATA_LUMA } from '../../../types/color-scale'
 import { ROUTE_CHANGE_START_EVENT } from '../router'
 
 export type DatasetFormMode = 'create' | 'edit'
@@ -1601,6 +1602,13 @@ function overlayFromRow(row: PublisherDatasetDetail): DatasetOverlayOptions | nu
   if (row.is_flipped_in_y === 1) overlay.isFlippedInY = true
   if (row.celestial_body && row.celestial_body.trim()) {
     overlay.celestialBody = row.celestial_body
+  }
+  // Without this the publisher thumbnail for a data-encoded dataset
+  // would be a picture of the raw grayscale frame — the one place a
+  // reviewer looks to confirm the dataset published correctly.
+  if (row.render_encoding === RENDER_ENCODING_DATA_LUMA) {
+    const scale = parseColorScale(row.color_scale)
+    if (scale) overlay.colorScale = scale
   }
   return Object.keys(overlay).length > 0 ? overlay : null
 }
