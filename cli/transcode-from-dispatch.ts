@@ -674,7 +674,7 @@ async function fetchRenderSettings(
       },
     })
     if (!res.ok) {
-      console.error(`[transcode] render_encoding fetch returned ${res.status} — encoding as a picture`)
+      console.error(`[transcode] render settings fetch returned ${res.status} — encoding as a picture at the default rate`)
       return { dataEncoded: false, playbackFps: null }
     }
     const parsed = (await res.json()) as {
@@ -690,7 +690,7 @@ async function fetchRenderSettings(
     }
   } catch (err) {
     console.error(
-      `[transcode] render_encoding fetch failed — encoding as a picture: ` +
+      `[transcode] render settings fetch failed — encoding as a picture at the default rate: ` +
         `${err instanceof Error ? err.message : String(err)}`,
     )
     return { dataEncoded: false, playbackFps: null }

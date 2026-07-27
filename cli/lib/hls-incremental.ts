@@ -121,7 +121,7 @@ export const DATA_ENCODED_RENDITION_DESCRIPTORS: readonly RenditionDescriptor[] 
 /** A grid-aligned group of ≤ `FRAMES_PER_CHUNK` consecutive frames
  *  that encodes to exactly one segment per rendition. */
 export interface ChunkInput {
-  /** Absolute grid cell index: `floor((offset + windowIndex) / 180)`. */
+  /** Absolute grid cell index: `floor((offset + windowIndex) / perChunk)`. */
   gridIndex: number
   /** The frames in this chunk, in playback order. */
   frames: FrameEntry[]
@@ -215,7 +215,7 @@ export function gridOffset(
 /**
  * Partition the frame list into grid-aligned chunks. `offset` is the
  * absolute grid step of `frames[0]`; frame `i` lands in grid cell
- * `floor((offset + i) / 180)`. `paddedNames` (a set of filenames the
+ * `floor((offset + i) / perChunk)`. `paddedNames` (a set of filenames the
  * pad-missing report flagged) marks chunks that contain synthetic
  * frames.
  */

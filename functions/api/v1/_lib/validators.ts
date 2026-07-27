@@ -525,6 +525,39 @@ function validateLonOrigin(value: unknown, errors: ValidationError[]): void {
 }
 
 /**
+ * Validate `playback_fps` (source frames per second).
+ *
+ * Rejected rather than silently coerced. The transcode already falls
+ * back to the catalog default for a non-positive value, but a publisher
+ * who typed 0 would get a dataset that plays at 30 fps with the form
+ * still showing 0 — an accepted write that did not take effect. A
+ * structured 400 says so at the point of the mistake.
+ *
+ * Sub-1 is valid and is the interesting range: 0.5 holds each frame two
+ * seconds. The upper bound is the output rate, above which extra source
+ * frames would be dropped by the `-r 30` on each rendition rather than
+ * shown faster. Kept as a local constant rather than importing
+ * OUTPUT_FRAME_RATE: `functions/` must not depend on `cli/`. */
+const MAX_PLAYBACK_FPS = 30
+
+function validatePlaybackFps(value: unknown, errors: ValidationError[]): void {
+  if (value == null) return
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    errors.push(err('playback_fps', 'invalid_type', 'playback_fps must be a finite number.'))
+    return
+  }
+  if (value <= 0 || value > MAX_PLAYBACK_FPS) {
+    errors.push(
+      err(
+        'playback_fps',
+        'invalid_value',
+        `playback_fps must be in (0, ${MAX_PLAYBACK_FPS}] (got ${value}).`,
+      ),
+    )
+  }
+}
+
+/**
  * Validate `radius_mi` (positive finite number; bounded loosely
  * at 1e9 so an absurd publisher-side bug surfaces before D1
  * accepts it). Phase 3d. */
@@ -638,6 +671,7 @@ export function validateDraftCreate(body: DatasetDraftBody): ValidationError[] {
   validateOptionalString('celestial_body', body.celestial_body, 64, errors)
   validateRadiusMi(body.radius_mi, errors)
   validateLonOrigin(body.lon_origin, errors)
+  validatePlaybackFps(body.playback_fps, errors)
   validateRenderEncoding(body.render_encoding, body.color_scale, errors)
   // null is allowed (clears the column on UPDATE; treated as
   // the column's default "no flip" on INSERT). Anything else
@@ -685,6 +719,7 @@ export function validateDraftUpdate(body: DatasetDraftBody): ValidationError[] {
   validateOptionalString('celestial_body', body.celestial_body, 64, errors)
   validateRadiusMi(body.radius_mi, errors)
   validateLonOrigin(body.lon_origin, errors)
+  validatePlaybackFps(body.playback_fps, errors)
   validateRenderEncoding(body.render_encoding, body.color_scale, errors)
   // null is allowed (clears the column on UPDATE; treated as
   // the column's default "no flip" on INSERT). Anything else
