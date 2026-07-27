@@ -87,6 +87,26 @@ import { overlayOptionsFromDataset } from './services/datasetOverlayOptions'
 import { resolveFrameQuery } from './utils/frames'
 import { initTourAuthoring } from './ui/tourAuthoring'
 import { bootstrapI18n } from './i18n/bootstrap'
+import { t } from './i18n'
+import { formatNumber } from './i18n/format'
+import type { ProbeReading } from './services/datasetProbe'
+
+/**
+ * Render a hover reading for the lat/lng strip.
+ *
+ * Significant digits rather than fixed decimals, because the same
+ * code formats a smoke column in mg m-2 and a temperature in K, and
+ * a fixed precision is wrong for at least one of them. A sample in
+ * the palette's no-data band says so instead of printing a number
+ * that happens to sit at the bottom of the range.
+ */
+function formatProbeReading(reading: ProbeReading): string {
+  if (reading.noData) return t('probe.noData')
+  const value = formatNumber(reading.value, { maximumSignificantDigits: 3 })
+  return reading.units
+    ? t('probe.value', { value, units: reading.units })
+    : t('probe.valueNoUnits', { value })
+}
 import { initUiScale } from './services/uiScaleService'
 import { initShaderSettings } from './services/shaderSettingsService'
 import { maybeInitShaderTuner } from './ui/shaderTunerUI'
@@ -440,7 +460,14 @@ class InteractiveSphere {
           (lat: number, lng: number) => {
             const ns = lat >= 0 ? 'N' : 'S'
             const ew = lng >= 0 ? 'E' : 'W'
-            latlngEl.textContent = `${Math.abs(lat).toFixed(1)}° ${ns}, ${Math.abs(lng).toFixed(1)}° ${ew}`
+            const coords = `${Math.abs(lat).toFixed(1)}° ${ns}, ${Math.abs(lng).toFixed(1)}° ${ew}`
+            // A data-encoded dataset can also say what the value
+            // *is* here. Everything else reports coordinates only,
+            // exactly as before.
+            const reading = primary.probeValueAt(lat, lng)
+            latlngEl.textContent = reading
+              ? `${coords} · ${formatProbeReading(reading)}`
+              : coords
             latlngEl.classList.remove('hidden')
           },
           () => {
