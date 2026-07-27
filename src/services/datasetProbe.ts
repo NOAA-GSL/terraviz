@@ -13,6 +13,8 @@
 
 import type { DatasetOverlayOptions } from '../types'
 import { isTransparentLuma, lumaToValue, type ColorScale } from '../types/color-scale'
+import { t } from '../i18n'
+import { formatNumber } from '../i18n/format'
 
 /** Normalised texture coordinates, origin at the image's top-left. */
 export interface TexelUv {
@@ -73,6 +75,31 @@ export function latLonToTexelUv(
   const u = ((raw % 1) + 1) % 1
   const vTop = (90 - lat) / 180
   return { u, v: flipY ? 1 - vTop : vTop }
+}
+
+/**
+ * Sphere-geometry UV → lat/lon, for the VR globe.
+ *
+ * THREE populates `uv` on every raycast hit for free, and it is the
+ * *mesh-local* texture coordinate — so it already accounts for however
+ * far the user has spun the globe, and no inverse-quaternion step is
+ * needed to recover the Earth-fixed point. That is why this is the
+ * cheaper route into the readout than re-deriving from a world-space
+ * ray.
+ *
+ * **The V convention here is THREE's, not the 2D globe's.**
+ * `SphereGeometry` puts `uv.y == 1` at the north pole, the opposite of
+ * `earthTileLayer`'s own sphere, which is why the two shaders carry
+ * mirrored latitude expressions (`photorealEarth.ts:584-588`). Copying
+ * the 2D form here mirrors the data across the equator — a failure
+ * that has shipped twice in this codebase and looks entirely plausible
+ * on screen. Latitude is therefore derived as `(v - 0.5) * 180` and
+ * handed straight to `latLonToTexelUv`, which owns the conversion back
+ * into image space, so the sign lives in exactly one place per
+ * direction.
+ */
+export function sphereUvToLatLon(uv: { x: number; y: number }): { lat: number; lon: number } {
+  return { lat: (uv.y - 0.5) * 180, lon: (uv.x - 0.5) * 360 }
 }
 
 /** A source the probe can read one texel out of. */
@@ -154,6 +181,24 @@ export function probeDatasetValue(
     units: scale.units,
     noData: isTransparentLuma(luma, scale),
   }
+}
+
+/**
+ * Render a reading for display, shared by the 2D lat/lon strip and the
+ * in-VR HUD so the two never disagree about the same pixel.
+ *
+ * Significant digits rather than fixed decimals, because the same code
+ * formats a smoke column in mg m-2 and a temperature in K, and a fixed
+ * precision is wrong for at least one of them. A sample in the
+ * palette's no-data band says so rather than printing a number that
+ * happens to sit at the bottom of the range.
+ */
+export function formatProbeReading(reading: ProbeReading): string {
+  if (reading.noData) return t('probe.noData')
+  const value = formatNumber(reading.value, { maximumSignificantDigits: 3 })
+  return reading.units
+    ? t('probe.value', { value, units: reading.units })
+    : t('probe.valueNoUnits', { value })
 }
 
 /** `wireToDataset` defaults every catalog row's bbox to worldwide, so

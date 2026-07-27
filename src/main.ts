@@ -87,26 +87,7 @@ import { overlayOptionsFromDataset } from './services/datasetOverlayOptions'
 import { resolveFrameQuery } from './utils/frames'
 import { initTourAuthoring } from './ui/tourAuthoring'
 import { bootstrapI18n } from './i18n/bootstrap'
-import { t } from './i18n'
-import { formatNumber } from './i18n/format'
-import type { ProbeReading } from './services/datasetProbe'
-
-/**
- * Render a hover reading for the lat/lng strip.
- *
- * Significant digits rather than fixed decimals, because the same
- * code formats a smoke column in mg m-2 and a temperature in K, and
- * a fixed precision is wrong for at least one of them. A sample in
- * the palette's no-data band says so instead of printing a number
- * that happens to sit at the bottom of the range.
- */
-function formatProbeReading(reading: ProbeReading): string {
-  if (reading.noData) return t('probe.noData')
-  const value = formatNumber(reading.value, { maximumSignificantDigits: 3 })
-  return reading.units
-    ? t('probe.value', { value, units: reading.units })
-    : t('probe.valueNoUnits', { value })
-}
+import { formatProbeReading } from './services/datasetProbe'
 import { initUiScale } from './services/uiScaleService'
 import { initShaderSettings } from './services/shaderSettingsService'
 import { maybeInitShaderTuner } from './ui/shaderTunerUI'

@@ -202,6 +202,16 @@ export interface VrInteractionContext {
 export interface VrInteractionHandle {
   /** Drive per-frame polling (thumbstick zoom, drag tracking). */
   update(deltaSeconds: number): void
+  /**
+   * Mesh-local UV under whichever controller is currently aimed at a
+   * globe, or null when neither is. Drives the data-encoded value
+   * readout — the in-VR equivalent of the 2D globe's pointer position.
+   *
+   * Raycasts on demand rather than caching per frame, because the only
+   * caller is the readout and it is already throttled by the HUD's own
+   * update cadence.
+   */
+  globeHoverUv(): { x: number; y: number } | null
   dispose(): void
 }
 
@@ -534,7 +544,7 @@ export function createVrInteraction(
     | { kind: 'tour-overlay'; action: VrTourInteractiveAction }
     | { kind: 'overlay-drag'; overlayId: string; mesh: THREE.Mesh }
     | { kind: 'place-button' }
-    | { kind: 'globe'; mesh: THREE.Mesh }
+    | { kind: 'globe'; mesh: THREE.Mesh; uv: THREE.Vector2 | null }
     | null {
     setRaycasterFromController(controller)
 
@@ -633,7 +643,15 @@ export function createVrInteraction(
     const allGlobes = ctx.getAllGlobes()
     const globeHits = raycaster.intersectObjects(allGlobes, false)
     if (globeHits.length > 0) {
-      return { kind: 'globe', mesh: globeHits[0].object as THREE.Mesh }
+      // Keep the UV. THREE populates it for free, and it is the
+      // mesh-local texture coordinate — already accounting for the
+      // globe's rotation — so the dataset readout can go straight
+      // from here to a lat/lon without re-deriving anything.
+      return {
+        kind: 'globe',
+        mesh: globeHits[0].object as THREE.Mesh,
+        uv: globeHits[0].uv ?? null,
+      }
     }
 
     return null
@@ -1421,6 +1439,14 @@ export function createVrInteraction(
   let zoomGestureStartScale = 0
 
   return {
+    globeHoverUv() {
+      for (const controller of controllers) {
+        if (!controller) continue
+        const hit = pickHit(controller)
+        if (hit?.kind === 'globe' && hit.uv) return { x: hit.uv.x, y: hit.uv.y }
+      }
+      return null
+    },
     update(deltaSeconds) {
       switch (rotationMode.kind) {
         case 'idle':

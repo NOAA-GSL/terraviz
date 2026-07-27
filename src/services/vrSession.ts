@@ -25,6 +25,12 @@ import { createVrTimeLabel, type VrTimeLabelHandle } from './vrTimeLabel'
 import { setVrTourOverlaySink } from '../ui/tourUI'
 import { createVrInteraction, type VrInteractionHandle } from './vrInteraction'
 import { createVrLoading, type VrLoadingHandle } from './vrLoading'
+import {
+  formatProbeReading,
+  probeDatasetValue,
+  sphereUvToLatLon,
+  type ProbeSource,
+} from './datasetProbe'
 import { createVrZoomOverlay, type VrZoomOverlayHandle } from '../ui/vrZoomOverlay'
 import { MAX_GLOBE_SCALE, MIN_GLOBE_SCALE } from './vrScene'
 import { createVrPlacement, liftedPlacementPosition, type VrPlacementHandle } from './vrPlacement'
@@ -49,6 +55,51 @@ import {
  * HUD / scene. Keeps the VR modules decoupled from the specifics of
  * MapLibre / HLSService / viewportManager.
  */
+/** 1x1 scratch canvas for the in-VR readout. Module-scoped and reused
+ *  so a per-frame probe allocates nothing. */
+let vrProbeScratch: HTMLCanvasElement | null = null
+
+/**
+ * Value under the controller's aim, for the HUD.
+ *
+ * Returns null — and the HUD drops the line entirely — for a picture
+ * dataset, a controller not aimed at a globe, a point outside a
+ * regional dataset's box, or a frame that hasn't decoded. So every
+ * dataset published before this feature keeps exactly the HUD it has
+ * today.
+ *
+ * Runs on the XR frame loop, which is why the probe copies a single
+ * texel rather than a frame: at 4096x2048 a full read would be 32 MB
+ * per frame at 72-90 Hz.
+ */
+function readVrProbe(
+  interaction: VrInteractionHandle,
+  ctx: VrSessionContext,
+): string | null {
+  const spec = ctx.getDatasetTexture()
+  if (!spec?.options?.colorScale) return null
+  const uv = interaction.globeHoverUv()
+  if (!uv) return null
+  if (!vrProbeScratch) {
+    vrProbeScratch = document.createElement('canvas')
+    vrProbeScratch.width = 1
+    vrProbeScratch.height = 1
+  }
+  const source = spec.element
+  // ImageBitmap is a valid THREE texture source but not a
+  // `drawImage` source the probe accepts; skip rather than cast.
+  if (typeof ImageBitmap !== 'undefined' && source instanceof ImageBitmap) return null
+  const { lat, lon } = sphereUvToLatLon(uv)
+  const reading = probeDatasetValue(
+    lat,
+    lon,
+    source as ProbeSource,
+    vrProbeScratch,
+    spec.options,
+  )
+  return reading ? formatProbeReading(reading) : null
+}
+
 export interface VrSessionContext {
   /**
    * The currently-loaded dataset's surface texture for the PRIMARY
@@ -1232,6 +1283,7 @@ export async function enterImmersive(mode: VrMode, ctx: VrSessionContext): Promi
       panelCount,
       primaryIndex: ctx.getPrimaryIndex(),
       browseOpen: active.browse.isVisible(),
+      probeReadout: readVrProbe(active.interaction, ctx),
     })
 
     // Tour strip mirrors the engine state. Always poll; the strip's

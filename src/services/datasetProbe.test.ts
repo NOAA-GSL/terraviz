@@ -10,6 +10,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   latLonToTexelUv,
+  sphereUvToLatLon,
   probeDatasetValue,
   sampleLumaAt,
   type ProbeSource,
@@ -202,5 +203,60 @@ describe('probeDatasetValue', () => {
     }
     expect(probeDatasetValue(0, 0, fakeVideo(), canvas, opts)).toBeNull()
     expect(probeDatasetValue(37, -100, fakeVideo(), canvas, opts)).not.toBeNull()
+  })
+})
+
+describe('sphereUvToLatLon — the VR globe', () => {
+  it('reads uv.y == 1 as the north pole, opposite the 2D convention', () => {
+    // THREE's SphereGeometry puts uv.y == 1 at +Y. Copying the 2D
+    // globe's form here mirrors the data across the equator — the
+    // failure that has shipped twice in this codebase.
+    expect(sphereUvToLatLon({ x: 0.5, y: 1 }).lat).toBeCloseTo(90, 6)
+    expect(sphereUvToLatLon({ x: 0.5, y: 0 }).lat).toBeCloseTo(-90, 6)
+    expect(sphereUvToLatLon({ x: 0.5, y: 0.5 }).lat).toBeCloseTo(0, 6)
+  })
+
+  it('is the inverse of the 2D mapping, not a copy of it', () => {
+    // Round-tripping through latLonToTexelUv must land back where it
+    // started. If both used the same sign the pair would be
+    // self-consistently wrong, so assert the hemisphere explicitly
+    // too: a northern sphere uv maps to the image's TOP half.
+    const { lat, lon } = sphereUvToLatLon({ x: 0.75, y: 0.75 })
+    expect(lat).toBeCloseTo(45, 6)
+    const texel = latLonToTexelUv(lat, lon)
+    expect(texel?.v).toBeCloseTo(0.25, 6) // north → top of the image
+    expect(texel?.u).toBeCloseTo(0.75, 6)
+  })
+
+  it('maps longitude with 0.5 at the prime meridian', () => {
+    expect(sphereUvToLatLon({ x: 0.5, y: 0.5 }).lon).toBeCloseTo(0, 6)
+    expect(sphereUvToLatLon({ x: 0, y: 0.5 }).lon).toBeCloseTo(-180, 6)
+    expect(sphereUvToLatLon({ x: 1, y: 0.5 }).lon).toBeCloseTo(180, 6)
+  })
+
+  it('round-trips back through the texel map, with V inverted', () => {
+    // V inverts because the two conventions are opposites — that is
+    // the whole point of having a separate function per renderer.
+    for (const uv of [
+      { x: 0, y: 0 },
+      { x: 0.25, y: 0.6 },
+      { x: 0.9, y: 0.1 },
+      { x: 0.5, y: 0.5 },
+    ]) {
+      const { lat, lon } = sphereUvToLatLon(uv)
+      const texel = latLonToTexelUv(lat, lon)!
+      expect(texel.u).toBeCloseTo(uv.x, 5)
+      expect(texel.v).toBeCloseTo(1 - uv.y, 5)
+    }
+  })
+
+  it('wraps the dateline seam rather than round-tripping it', () => {
+    // uv.x == 1 is lon 180, which the texel map wraps to u == 0 —
+    // the same column as uv.x == 0. Both are the seam, so the round
+    // trip above deliberately excludes it rather than asserting an
+    // identity that does not hold on a repeating texture.
+    const east = sphereUvToLatLon({ x: 1, y: 0.5 })
+    expect(east.lon).toBeCloseTo(180, 6)
+    expect(latLonToTexelUv(east.lat, east.lon)?.u).toBeCloseTo(0, 6)
   })
 })
