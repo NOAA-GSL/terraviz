@@ -235,6 +235,31 @@ function lanAddress(): string {
   return 'localhost'
 }
 
+/**
+ * Write the check as a static bundle for the Pages deploy to serve.
+ *
+ * `--serve` binds the LAN, which is the wrong shape for iOS Safari when
+ * the phone and the dev box are not on a reachable network — a common
+ * case, and the one browser most likely to differ, since HLS goes
+ * through the native player there rather than MSE. Emitting into
+ * `public/` puts the same page on every preview deploy, so verifying a
+ * new browser is a URL rather than a network setup.
+ *
+ * The page fetches `./variants.json` and `./out/<name>.mp4`, both
+ * relative, so this layout works unchanged behind a static host.
+ */
+function emitStatic(dest: string): void {
+  mkdirSync(join(dest, 'out'), { recursive: true })
+  writeFileSync(join(dest, 'page.html'), readFileSync(join(HERE, 'page.html')))
+  writeFileSync(
+    join(dest, 'variants.json'),
+    JSON.stringify(VARIANTS.map(v => ({ name: v.name, note: v.note })), null, 2) + '\n')
+  for (const v of VARIANTS) {
+    writeFileSync(join(dest, 'out', `${v.name}.mp4`),
+      readFileSync(join(OUT, `${v.name}.mp4`)))
+  }
+}
+
 // --- main ----------------------------------------------------------------
 
 interface Row {
@@ -254,11 +279,24 @@ interface Row {
 
 async function main(): Promise<void> {
   const serveOnly = process.argv.includes('--serve')
+  const emitStaticTo = process.argv.includes('--emit-static')
+    ? join(HERE, '..', '..', 'public', 'luma-check')
+    : null
 
   process.stdout.write('Generating ramp frames…\n')
   writeFrames()
   process.stdout.write('Encoding variants…\n')
   encodeAll()
+
+  if (emitStaticTo) {
+    emitStatic(emitStaticTo)
+    process.stdout.write(
+      `\nWrote ${VARIANTS.length} variants to public/luma-check/.\n` +
+      `Commit them and the Pages deploy serves the check at\n\n` +
+      `    <deploy-url>/luma-check/page.html\n\n` +
+      `Re-run this whenever VARIANTS changes.\n`)
+    return
+  }
 
   const { port, close } = await serve(serveOnly ? 8791 : 0)
   const names = VARIANTS.map(v => v.name)
