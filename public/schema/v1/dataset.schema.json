@@ -223,6 +223,10 @@
     "isFlippedInY": {
       "type": "boolean"
     },
+    "renderEncoding": {
+      "type": "string"
+    },
+    "colorScale": {},
     "tourJsonUrl": {
       "type": "string"
     },

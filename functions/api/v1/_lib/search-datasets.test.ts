@@ -538,6 +538,8 @@ describe('rowOverlapsTimeRange (3pg/D)', () => {
       radius_mi: null,
       lon_origin: null,
       is_flipped_in_y: null,
+      render_encoding: null,
+      color_scale: null,
       transcoding: null,
       active_transcode_upload_id: null,
       frame_count: null,

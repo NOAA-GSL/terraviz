@@ -425,8 +425,9 @@ export async function createDataset(
          probing_info,
          bbox_n, bbox_s, bbox_w, bbox_e,
          celestial_body, radius_mi, lon_origin, is_flipped_in_y,
+         render_encoding, color_scale,
          schema_version, created_at, updated_at, published_at, publisher_id
-       ) VALUES (?,?,(SELECT node_id FROM node_identity LIMIT 1),?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+       ) VALUES (?,?,(SELECT node_id FROM node_identity LIMIT 1),?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     )
     .bind(
       id,
@@ -485,6 +486,11 @@ export async function createDataset(
       // NULL (the column's default state); booleans round-trip
       // through 0/1.
       body.is_flipped_in_y == null ? null : body.is_flipped_in_y ? 1 : 0,
+      // render_encoding / color_scale: NULL means "a picture",
+      // which is every row created before this pair existed and
+      // every row a publisher creates without opting in.
+      normalizeOptionalString(body.render_encoding ?? undefined),
+      normalizeOptionalString(body.color_scale ?? undefined),
       1,
       now,
       now,
@@ -638,6 +644,15 @@ export async function updateDataset(
   if (body.lon_origin !== undefined) set('lon_origin', body.lon_origin)
   if (body.is_flipped_in_y !== undefined) {
     set('is_flipped_in_y', body.is_flipped_in_y === null ? null : body.is_flipped_in_y ? 1 : 0)
+  }
+  // Explicit null clears (reverting a dataset to a picture);
+  // omission leaves the pair untouched. The validator refuses a
+  // half-set pair, so the two can't drift apart here.
+  if (body.render_encoding !== undefined) {
+    set('render_encoding', normalizeOptionalString(body.render_encoding ?? undefined))
+  }
+  if (body.color_scale !== undefined) {
+    set('color_scale', normalizeOptionalString(body.color_scale ?? undefined))
   }
   if (body.website_link !== undefined) set('website_link', body.website_link)
   if (body.start_time !== undefined) set('start_time', body.start_time)
