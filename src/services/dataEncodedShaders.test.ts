@@ -47,7 +47,13 @@ describe('VR globe — the contrast/saturation bypass', () => {
     expect(VR).toMatch(
       /if\s*\(\s*uOverlayDataEncoded\s*==\s*1\s*&&\s*sampledDataset\s*\)/,
     )
-    const branch = VR.slice(VR.indexOf('uOverlayDataEncoded == 1'))
+    // Anchored by regex, not by an exact-spacing literal: the
+    // assertion above tolerates reformatting and this must too, or a
+    // whitespace-only edit fails the test for a reason that has
+    // nothing to do with what it guards.
+    const branchAt = VR.search(/if\s*\(\s*uOverlayDataEncoded\s*==\s*1/)
+    expect(branchAt).toBeGreaterThan(-1)
+    const branch = VR.slice(branchAt)
     const contrastAt = branch.indexOf('uContrast')
     const elseAt = branch.indexOf('} else {')
     expect(elseAt).toBeGreaterThan(-1)
