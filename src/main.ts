@@ -87,6 +87,7 @@ import { overlayOptionsFromDataset } from './services/datasetOverlayOptions'
 import { resolveFrameQuery } from './utils/frames'
 import { initTourAuthoring } from './ui/tourAuthoring'
 import { bootstrapI18n } from './i18n/bootstrap'
+import { formatProbeReading } from './services/datasetProbe'
 import { initUiScale } from './services/uiScaleService'
 import { initShaderSettings } from './services/shaderSettingsService'
 import { maybeInitShaderTuner } from './ui/shaderTunerUI'
@@ -440,7 +441,14 @@ class InteractiveSphere {
           (lat: number, lng: number) => {
             const ns = lat >= 0 ? 'N' : 'S'
             const ew = lng >= 0 ? 'E' : 'W'
-            latlngEl.textContent = `${Math.abs(lat).toFixed(1)}° ${ns}, ${Math.abs(lng).toFixed(1)}° ${ew}`
+            const coords = `${Math.abs(lat).toFixed(1)}° ${ns}, ${Math.abs(lng).toFixed(1)}° ${ew}`
+            // A data-encoded dataset can also say what the value
+            // *is* here. Everything else reports coordinates only,
+            // exactly as before.
+            const reading = primary.probeValueAt(lat, lng)
+            latlngEl.textContent = reading
+              ? `${coords} · ${formatProbeReading(reading)}`
+              : coords
             latlngEl.classList.remove('hidden')
           },
           () => {

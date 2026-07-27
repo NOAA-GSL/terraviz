@@ -21,6 +21,12 @@
  * `{ errors: [{ field, code, message }] }` per the doc.
  */
 
+import {
+  COLOR_SCALE_MAX_CHARS,
+  parseColorScale,
+  RENDER_ENCODING_DATA_LUMA,
+} from '../../../../src/types/color-scale'
+
 const RESERVED_SLUGS = new Set([
   'api',
   'publish',
@@ -86,6 +92,12 @@ export interface DatasetDraftBody {
   /** Image Y-axis flip flag for inverted-Y imagery. `null`
    * clears the column on UPDATE; omission leaves it untouched. */
   is_flipped_in_y?: boolean | null
+  /** How the frames encode their pixels — `'data-luma'`, or `null`
+   * to clear the column on UPDATE. Omission leaves it untouched,
+   * and an absent value means the dataset is a picture. */
+  render_encoding?: string | null
+  /** JSON sidecar (palette + scale) for data-encoded datasets. */
+  color_scale?: string | null
   website_link?: string
   start_time?: string
   end_time?: string
@@ -401,6 +413,97 @@ function validateBoundingBox(value: unknown, errors: ValidationError[]): void {
 }
 
 /**
+ * Validate `render_encoding` and its `color_scale` sidecar.
+ *
+ * Stricter than the neighbouring `probing_info` check, which only
+ * asks for parseable JSON under a length cap. `probing_info` is
+ * documentation of an SOS payload that nothing renders; `color_scale`
+ * decides what colour every pixel of a published dataset is and what
+ * number the globe reports under the cursor, so a malformed one has
+ * to be refused at write time rather than discovered by a viewer.
+ *
+ * The pairing is enforced in both directions: `data-luma` without a
+ * sidecar renders as raw grayscale, and a sidecar without `data-luma`
+ * is silently ignored — both are almost certainly a publishing
+ * mistake, so both are errors.
+ */
+function validateRenderEncoding(
+  encoding: unknown,
+  colorScale: unknown,
+  errors: ValidationError[],
+): void {
+  const hasEncoding = encoding != null && encoding !== ''
+  if (hasEncoding) {
+    if (typeof encoding !== 'string') {
+      errors.push(err('render_encoding', 'invalid_type', 'render_encoding must be a string.'))
+      return
+    }
+    if (encoding !== RENDER_ENCODING_DATA_LUMA) {
+      errors.push(
+        err(
+          'render_encoding',
+          'invalid_value',
+          `render_encoding must be '${RENDER_ENCODING_DATA_LUMA}' (got '${encoding}').`,
+        ),
+      )
+      return
+    }
+  }
+
+  const hasScale = colorScale != null && colorScale !== ''
+  if (hasScale) {
+    if (typeof colorScale !== 'string') {
+      errors.push(
+        err(
+          'color_scale',
+          'invalid_type',
+          'color_scale must be a JSON-stringified object (palette stops + scale), sent as a string.',
+        ),
+      )
+      return
+    }
+    if (colorScale.length > COLOR_SCALE_MAX_CHARS) {
+      errors.push(
+        err('color_scale', 'too_long', `color_scale must be at most ${COLOR_SCALE_MAX_CHARS} characters.`),
+      )
+      return
+    }
+    if (parseColorScale(colorScale) === null) {
+      errors.push(
+        err(
+          'color_scale',
+          'invalid_value',
+          'color_scale must be a JSON object with >= 2 ordered palette stops ' +
+            '({ t, rgba }) and finite, distinct vmin / vmax.',
+        ),
+      )
+      return
+    }
+  }
+
+  if (hasEncoding && !hasScale) {
+    errors.push(
+      err(
+        'color_scale',
+        'invalid_value',
+        `color_scale is required when render_encoding is '${RENDER_ENCODING_DATA_LUMA}' — ` +
+          'without it the frames render as raw grayscale.',
+      ),
+    )
+  }
+  if (hasScale && !hasEncoding) {
+    errors.push(
+      err(
+        'render_encoding',
+        'invalid_value',
+        `render_encoding must be '${RENDER_ENCODING_DATA_LUMA}' when color_scale is set; ` +
+          'otherwise the sidecar is ignored.',
+      ),
+    )
+  }
+}
+
+/**
  * Validate `lon_origin` (degrees, [-180, 180]). Phase 3d. */
 function validateLonOrigin(value: unknown, errors: ValidationError[]): void {
   if (value == null) return
@@ -529,6 +632,7 @@ export function validateDraftCreate(body: DatasetDraftBody): ValidationError[] {
   validateOptionalString('celestial_body', body.celestial_body, 64, errors)
   validateRadiusMi(body.radius_mi, errors)
   validateLonOrigin(body.lon_origin, errors)
+  validateRenderEncoding(body.render_encoding, body.color_scale, errors)
   // null is allowed (clears the column on UPDATE; treated as
   // the column's default "no flip" on INSERT). Anything else
   // non-boolean is a type error.
@@ -575,6 +679,7 @@ export function validateDraftUpdate(body: DatasetDraftBody): ValidationError[] {
   validateOptionalString('celestial_body', body.celestial_body, 64, errors)
   validateRadiusMi(body.radius_mi, errors)
   validateLonOrigin(body.lon_origin, errors)
+  validateRenderEncoding(body.render_encoding, body.color_scale, errors)
   // null is allowed (clears the column on UPDATE; treated as
   // the column's default "no flip" on INSERT). Anything else
   // non-boolean is a type error.

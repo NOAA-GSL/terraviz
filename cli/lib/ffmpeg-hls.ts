@@ -90,6 +90,23 @@ export const DEFAULT_RENDITIONS: readonly HlsRendition[] = [
   { height: 720,  crf: 22, maxBitrateKbps: 4_000 },  //   720p  (1440x720)
 ] as const
 
+/**
+ * Rendition ladder for data-encoded datasets — a single rung at the
+ * source resolution.
+ *
+ * The ABR ladder exists to trade picture quality for bandwidth, and
+ * that trade is incoherent when luma *is* the measurement: the 1080p
+ * and 720p rungs would resample a data raster to a quarter scale and
+ * hand the client averaged values that were never measured. A viewer
+ * on a slow connection should wait for the real numbers rather than
+ * silently receive invented ones.
+ *
+ * See `docs/DATA_ENCODED_VIDEO_PLAN.md` §Part 2.
+ */
+export const DATA_ENCODED_RENDITIONS: readonly HlsRendition[] = [
+  { height: 2048, crf: 18, maxBitrateKbps: 25_000 }, // 4K spherical (4096x2048)
+] as const
+
 export const DEFAULT_SEGMENT_SECONDS = 6
 export const DEFAULT_AUDIO_BITRATE_KBPS = 192
 export const MASTER_PLAYLIST_NAME = 'master.m3u8'
@@ -153,6 +170,13 @@ export interface EncodeHlsOptions {
    *  directly and the `-r 30` on each output rendition then
    *  normalises the encode. */
   inputArgs?: readonly string[]
+  /** Encode as data rather than as a picture: luma carries the
+   *  normalised value and a palette sidecar colours it at display
+   *  time. Switches the scaler to nearest-neighbour and pins the
+   *  colour range to full at both the conversion and the VUI tag.
+   *  Defaults to false, which leaves every existing dataset on
+   *  exactly the argv it encodes with today. */
+  dataEncoded?: boolean
 }
 
 export interface EncodedHls {
@@ -202,6 +226,10 @@ export class FfmpegError extends Error {
  * `[v0]`..`[vN-1]` for `-map` to pick up. Audio is shared across
  * all renditions — one AAC encode, referenced from each variant
  * playlist via `-var_stream_map`.
+ *
+ * `dataEncoded` changes two things, both of which silently corrupt
+ * the values if left at their defaults. See the comments at the
+ * scaler and the colour-range block below.
  */
 export function buildFfmpegArgs(
   inputPath: string,
@@ -211,13 +239,22 @@ export function buildFfmpegArgs(
   audioBitrateKbps: number,
   hasAudio: boolean = true,
   inputArgs: readonly string[] = [],
+  dataEncoded: boolean = false,
 ): string[] {
+  // Nearest-neighbour for the data path, and deliberately nothing
+  // else — no range conversion and no colour tags. See the note at
+  // the per-rendition block below for why.
+  //
+  // The default scaler is bicubic, which interpolates across the
+  // nodata/data boundary and invents values that were never
+  // measured — fine for a picture, wrong for a measurement.
+  const scaleFlags = dataEncoded ? ':flags=neighbor' : ''
   const splits = renditions.length
   const filterParts: string[] = [`[0:v]split=${splits}` + renditions.map((_, i) => `[s${i}]`).join('')]
   for (let i = 0; i < renditions.length; i++) {
     const r = renditions[i]
     const width = r.height * 2
-    filterParts.push(`[s${i}]scale=${width}:${r.height}[v${i}]`)
+    filterParts.push(`[s${i}]scale=${width}:${r.height}${scaleFlags}[v${i}]`)
   }
   const filterComplex = filterParts.join(';')
 
@@ -253,6 +290,47 @@ export function buildFfmpegArgs(
     // HLS-on-iOS baseline; bumping to higher profiles to keep
     // 4:4:4 would break legacy Safari clients.
     args.push(`-pix_fmt:v:${i}`, 'yuv420p')
+    // NO colour-range or colourspace flags on the data path either.
+    //
+    // This reverses the design's own recommendation, on measurement.
+    // The plan reasoned that an unspecified VUI lets every decoder
+    // guess, and that a limited-range guess shifts every value by
+    // 16/255 — so it prescribed tagging the stream `pc` with a
+    // matching full→full conversion. Chrome agreed: that setting
+    // round-tripped 256/256 exactly.
+    //
+    // Firefox does not. Its video→WebGL-texture path expands a
+    // `pc`-tagged stream as if it were limited, applying
+    // (v - 16) * 255/219 to samples that are already full-range.
+    // Modelling that clamped expansion predicts exact 8/256, MAE
+    // 9.086, max|e| 20, gain 1.1295, offset -14.52; Firefox on
+    // Windows measured 8/256, 9.082, 20, 1.1294, -14.51. Every
+    // variant carrying `-color_range pc` failed identically —
+    // including one with no colourspace/primaries/transfer tags at
+    // all — which isolates the range flag as the trigger rather
+    // than the colourspace tagging.
+    //
+    // The alternatives both lose. Tagging `tv` with a real
+    // conversion to limited range is self-consistent but spends
+    // only 219 code levels, and measured max|e| 3 on both sampling
+    // paths — it cannot round-trip 256 distinct values through 219.
+    // Leaving the conversion while dropping the tag would store
+    // full-range samples under a VUI that Firefox reads as limited,
+    // which is the same expansion again.
+    //
+    // Untagged is what every other stream in this repo already
+    // emits, and it is the only variant that passed on both
+    // browsers: max|e| 1, within the one-8-bit-step budget. It
+    // works because the encoder writes limited-range samples by
+    // swscale's default and both decoders expand them back, so the
+    // contraction and the expansion cancel. That is a narrower
+    // guarantee than the plan wanted — it rests on decoders
+    // agreeing rather than on a signalled contract — but a tag that
+    // demonstrably breaks a major browser is not a safety
+    // improvement over one that does not. Safari and iOS Safari are
+    // still unverified; `npm run check:luma-range -- --serve`
+    // is the check, and variant `G_neighbor_only` mirrors exactly
+    // what this function now emits.
     args.push(`-preset:v:${i}`, 'slow')
     args.push(`-crf:v:${i}`, String(r.crf))
     args.push(`-maxrate:v:${i}`, `${r.maxBitrateKbps}k`)
@@ -388,7 +466,11 @@ export async function encodeHls(options: EncodeHlsOptions): Promise<EncodedHls> 
   }
   mkdirSync(options.outputDir, { recursive: true })
 
-  const renditions = options.renditions ?? DEFAULT_RENDITIONS
+  // A data-encoded encode publishes the source-resolution rung
+  // only; an explicit `renditions` override still wins so a caller
+  // can pin a different single rung.
+  const renditions =
+    options.renditions ?? (options.dataEncoded ? DATA_ENCODED_RENDITIONS : DEFAULT_RENDITIONS)
   if (renditions.length === 0) {
     throw new Error('encodeHls: renditions must be non-empty')
   }
@@ -423,6 +505,7 @@ export async function encodeHls(options: EncodeHlsOptions): Promise<EncodedHls> 
     audioBitrateKbps,
     hasAudio,
     options.inputArgs ?? [],
+    options.dataEncoded ?? false,
   )
 
   const start = Date.now()

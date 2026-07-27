@@ -19,11 +19,22 @@ import type {
   VideoTextureHandle,
 } from '../types'
 import { setDatasetCreditsSource } from '../ui/creditsPanel'
+import { getSharedLumaSampler } from './glLumaSampler'
+import {
+  probeDatasetValue,
+  type ProbeReading,
+  type ProbeSource,
+} from './datasetProbe'
 import { getSunPosition } from '../utils/time'
 import { logger } from '../utils/logger'
 import { isMobile } from '../utils/deviceCapability'
 import { preloadLowZoomTiles } from './tilePreloader'
 import { emitCameraSettled, emit, reportError } from '../analytics'
+
+/** Screen-space slack, in CSS pixels, for the "is the pointer on the
+ *  sphere?" round-trip test. Generous enough to survive projection
+ *  rounding at the limb, tight enough to exclude the empty corners. */
+const ON_GLOBE_TOLERANCE_PX = 2
 
 // --- Tauri desktop: route tiles through Rust cache via IPC ---
 const IS_TAURI = !!(window as any).__TAURI__
@@ -328,6 +339,15 @@ const SCREENSHOT_MAX_SIZE = 512
 /** MapLibre-based globe renderer. */
 export class MapRenderer implements GlobeRenderer {
   private map: MaplibreMap | null = null
+  /** Detaches the lat/lng pointer handlers, so a second
+   *  `setLatLngCallbacks` replaces rather than stacks them. */
+  private latLngUnsubscribe: (() => void) | null = null
+  /** The currently displayed dataset frame source, kept so the hover
+   *  probe can read one texel out of it. */
+  private probeSource: ProbeSource | null = null
+  private probeOptions: DatasetOverlayOptions | null = null
+  /** 1x1 scratch canvas the probe draws into. Created once; a fresh
+   *  canvas per pointer event would allocate on every mouse move. */
   private container: HTMLElement | null = null
   private canvasId: string = 'globe-canvas'
   /** Projection requested at init time. Stays `'globe'` for the
@@ -904,17 +924,97 @@ export class MapRenderer implements GlobeRenderer {
 
   // --- Lat/lng tracking ---
 
-  /** Register callbacks for cursor lat/lng display. */
+  /**
+   * Register callbacks for the cursor lat/lng display (and, for a
+   * data-encoded dataset, the value readout that hangs off it).
+   *
+   * Three fixes over the original, all of which the data-encoded
+   * readout made visible by giving the callback something more
+   * consequential to say than a coordinate:
+   *
+   *   - Previous handlers are removed first. This used to stack a
+   *     new pair on every call, so a second invocation drove the
+   *     display twice per pointer event.
+   *   - `touchmove` alongside `mousemove`, so a touch drag reports
+   *     too. These are the events MapLibre actually fires; it has no
+   *     `pointermove`/`pointerout`, and `Evented.on` accepts an
+   *     unknown name without complaint, so registering those bound a
+   *     handler that could never run. There is no touch equivalent of
+   *     `mouseout` in play deliberately: a finger has no hover state,
+   *     and clearing on lift would erase the reading at the moment it
+   *     became readable.
+   *   - Off-globe returns nothing. MapLibre's `e.lngLat` unprojects
+   *     even where the sphere isn't, so the corners of the viewport
+   *     used to report a coordinate for empty space.
+   */
   setLatLngCallbacks(
     onUpdate: (lat: number, lng: number) => void,
     onClear: () => void
   ): void {
-    this.map?.on('mousemove', (e) => {
+    const map = this.map
+    if (!map) return
+    this.clearLatLngCallbacks()
+
+    const move = (e: maplibregl.MapMouseEvent | maplibregl.MapTouchEvent) => {
+      if (!this.isPointerOnGlobe(e)) {
+        onClear()
+        return
+      }
       onUpdate(e.lngLat.lat, e.lngLat.lng)
-    })
-    this.map?.on('mouseout', () => {
-      onClear()
-    })
+    }
+    const out = () => onClear()
+    map.on('mousemove', move)
+    map.on('touchmove', move)
+    map.on('mouseout', out)
+    this.latLngUnsubscribe = () => {
+      map.off('mousemove', move)
+      map.off('touchmove', move)
+      map.off('mouseout', out)
+    }
+  }
+
+  /**
+   * Read the dataset value under a geographic point, or `null` when
+   * there is nothing meaningful to report — a picture dataset, a
+   * point outside a regional dataset's box, or no decoded frame yet.
+   */
+  probeValueAt(lat: number, lon: number): ProbeReading | null {
+    if (!this.probeSource || !this.probeOptions?.colorScale) return null
+    // Shared across every renderer on the page: one WebGL2 context
+    // total rather than one per panel. `null` means no WebGL2, in
+    // which case there is no globe either, so no readout is right.
+    const sampler = getSharedLumaSampler()
+    if (!sampler) return null
+    return probeDatasetValue(
+      lat, lon, this.probeSource, (s, uv) => sampler.sample(s, uv), this.probeOptions)
+  }
+
+  /** Detach the lat/lng handlers registered by `setLatLngCallbacks`. */
+  clearLatLngCallbacks(): void {
+    this.latLngUnsubscribe?.()
+    this.latLngUnsubscribe = null
+  }
+
+  /**
+   * Whether the pointer is actually over the globe.
+   *
+   * On a globe projection MapLibre still unprojects points in the
+   * empty space around the sphere, so `e.lngLat` alone is not a test.
+   * Re-projecting the returned coordinate and comparing against the
+   * original screen point is: for a point off the sphere the round
+   * trip does not come back where it started.
+   */
+  private isPointerOnGlobe(e: maplibregl.MapMouseEvent | maplibregl.MapTouchEvent): boolean {
+    const map = this.map
+    if (!map) return false
+    try {
+      const back = map.project(e.lngLat)
+      const dx = back.x - e.point.x
+      const dy = back.y - e.point.y
+      return dx * dx + dy * dy < ON_GLOBE_TOLERANCE_PX * ON_GLOBE_TOLERANCE_PX
+    } catch {
+      return false
+    }
   }
 
   // --- Custom layers (for Phase 1+) ---
@@ -974,6 +1074,8 @@ export class MapRenderer implements GlobeRenderer {
       return
     }
     this.earthLayer.setDatasetTexture(texture, options)
+    this.probeSource = texture
+    this.probeOptions = options ?? null
     this.applyBaseLayerVisibility(options)
     logger.info('[MapRenderer] Dataset overlay set via custom layer sphere')
   }
@@ -986,6 +1088,8 @@ export class MapRenderer implements GlobeRenderer {
   setVideoTexture(video: HTMLVideoElement, options?: DatasetOverlayOptions): VideoTextureHandle {
     if (this.earthLayer) {
       this.earthLayer.setDatasetVideo(video, options)
+      this.probeSource = video
+      this.probeOptions = options ?? null
       this.applyBaseLayerVisibility(options)
       logger.info('[MapRenderer] Video dataset set via custom layer sphere')
     } else {
@@ -1047,6 +1151,8 @@ export class MapRenderer implements GlobeRenderer {
   /** Update sun direction and re-show the earth tile layer + atmosphere. */
   enableSunLighting(lat: number, lng: number): void {
     this.earthLayer?.clearDatasetTexture()
+    this.probeSource = null
+    this.probeOptions = null
     this.earthLayer?.setVisible(true)
     this.earthLayer?.setSunPosition(lat, lng)
     // Restore tile bases (may have been hidden for dataset overlay)
@@ -1199,6 +1305,15 @@ export class MapRenderer implements GlobeRenderer {
    */
   dispose(): void {
     this.stopAutoRotate()
+    // Before map.remove(): the unsubscribe closure captures `map`, so
+    // dropping the reference first would strand the handlers.
+    this.clearLatLngCallbacks()
+    // The probe sampler is page-shared and deliberately NOT disposed
+    // here — other panels may still be using it, and tearing down its
+    // context would take their readouts with it. Dropping the source
+    // is enough: probeValueAt returns early without it.
+    this.probeSource = null
+    this.probeOptions = null
     if (this.map) {
       this.map.remove()
       this.map = null

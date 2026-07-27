@@ -14,6 +14,7 @@
  */
 
 import type { Dataset, DatasetOverlayOptions } from '../types'
+import { RENDER_ENCODING_DATA_LUMA, type ColorScale } from '../types/color-scale'
 
 /**
  * Is a `celestialBody` string the SOS convention for "Earth"?
@@ -53,6 +54,12 @@ export function isEarthBody(name: string | null | undefined): boolean {
  * emission, `celestialBody` is propagated verbatim regardless
  * of value so the renderer sees what the catalog actually
  * said.
+ *
+ * `colorScale` joins the same bundle. It is the single field that
+ * carries data-encoded mode to all four render surfaces, and it is
+ * only ever set alongside `renderEncoding: 'data-luma'` — a dataset
+ * without that pairing is a picture and takes exactly the path it
+ * takes today, which is the backwards-compatibility guarantee.
  */
 export function overlayOptionsFromDataset(
   dataset: Dataset,
@@ -62,7 +69,8 @@ export function overlayOptionsFromDataset(
     typeof dataset.lonOrigin === 'number' && Number.isFinite(dataset.lonOrigin)
   const hasFlip = dataset.isFlippedInY === true
   const hasNonEarthBody = !isEarthBody(dataset.celestialBody)
-  if (!hasBbox && !hasLonOrigin && !hasFlip && !hasNonEarthBody) {
+  const colorScale = dataEncodedScale(dataset)
+  if (!hasBbox && !hasLonOrigin && !hasFlip && !hasNonEarthBody && !colorScale) {
     return undefined
   }
   return {
@@ -70,5 +78,14 @@ export function overlayOptionsFromDataset(
     lonOrigin: dataset.lonOrigin,
     isFlippedInY: dataset.isFlippedInY,
     celestialBody: dataset.celestialBody,
+    colorScale,
   }
+}
+
+/** The palette, but only for a dataset that actually declares itself
+ *  data-encoded. A `colorScale` without `renderEncoding` is inert by
+ *  contract, so it must not reach a shader. */
+function dataEncodedScale(dataset: Dataset): ColorScale | undefined {
+  if (dataset.renderEncoding !== RENDER_ENCODING_DATA_LUMA) return undefined
+  return dataset.colorScale
 }

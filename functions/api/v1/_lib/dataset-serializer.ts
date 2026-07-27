@@ -17,6 +17,12 @@
  * follow the manifest link.
  */
 
+import {
+  parseColorScale,
+  RENDER_ENCODING_DATA_LUMA,
+  type ColorScale,
+  type RenderEncoding,
+} from '../../../../src/types/color-scale'
 import type { DatasetRow, DecorationRows, NodeIdentityRow } from './catalog-store'
 
 /**
@@ -113,6 +119,16 @@ export interface WireDataset {
   lonOrigin?: number
   /** Image Y-axis flip flag. Omitted when false. */
   isFlippedInY?: boolean
+  /** How the frames encode their pixels. Omitted means a picture,
+   * which is every dataset published before this field existed.
+   * `'data-luma'` means luma carries the normalised value and
+   * `colorScale` colours it at display time. Emitted only as a
+   * validated pair with `colorScale`. */
+  renderEncoding?: RenderEncoding
+  /** Palette + scale for a `data-luma` dataset: ordered `stops`
+   * (`{ t, rgba }`), `vmin` / `vmax`, optional `units` and
+   * `transparentRange`. Omitted unless `renderEncoding` is set. */
+  colorScale?: ColorScale
   /**
    * For `tour/json` rows: the resolved URL the SPA's tour engine
    * fetches the tour document from, bypassing the manifest endpoint
@@ -261,6 +277,27 @@ function parseJsonField(v: string | null | undefined): unknown {
 }
 
 /**
+ * Serialize the data-encoded video pair, or nothing.
+ *
+ * All-or-nothing on purpose. `renderEncoding` tells the renderer to
+ * read luma as a measurement instead of a colour, and `colorScale`
+ * is the only thing that says what that measurement means. Emitting
+ * the first without the second would render every dataset pixel
+ * through a palette the client had to invent; emitting the second
+ * without the first is inert. So a row that carries only one — or a
+ * sidecar that no longer parses — is served as the picture it was
+ * before the columns existed.
+ */
+function serializeRenderEncoding(
+  row: DatasetRow,
+): { renderEncoding?: RenderEncoding; colorScale?: ColorScale } {
+  if (row.render_encoding !== RENDER_ENCODING_DATA_LUMA) return {}
+  const scale = parseColorScale(row.color_scale)
+  if (!scale) return {}
+  return { renderEncoding: RENDER_ENCODING_DATA_LUMA, colorScale: scale }
+}
+
+/**
  * Assemble the wire-side `boundingBox` field from the four
  * `bbox_*` columns, or return undefined if any corner is missing.
  * A partial bbox can't drive the SPA's Phase 3e regional
@@ -385,6 +422,13 @@ export function serializeDataset(
     radiusMi: row.radius_mi != null ? row.radius_mi : undefined,
     lonOrigin: row.lon_origin != null ? row.lon_origin : undefined,
     isFlippedInY: row.is_flipped_in_y === 1 ? true : undefined,
+    // Data-encoded video. Both surface only as a validated pair —
+    // a row carrying one without the other is served as a plain
+    // picture, so a half-written row degrades to raw grayscale
+    // rather than to confidently-wrong colours. The write-side
+    // validator refuses that pairing, but a row could still predate
+    // it or arrive by direct SQL.
+    ...serializeRenderEncoding(row),
   }
 
   // Tour rows carry a fetchable JSON URL alongside the manifest

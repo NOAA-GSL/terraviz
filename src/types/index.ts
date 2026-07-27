@@ -2,6 +2,10 @@
  * Type definitions for Terraviz project
  */
 
+import type { ColorScale, RenderEncoding } from './color-scale'
+
+export type { ColorScale, RenderEncoding }
+
 /**
  * Supported dataset formats.
  *
@@ -128,6 +132,19 @@ export interface Dataset {
   /** Image Y-axis flip flag for datasets whose imagery uses
    * inverted Y conventions. Omitted == false. */
   isFlippedInY?: boolean
+
+  /** How the frames encode their pixels. Omitted == a picture
+   * (colourised upstream, rendered as-is) — the state of every
+   * dataset published before this field existed, and the whole of
+   * the backwards-compatibility contract. `'data-luma'` means luma
+   * carries the normalised value; `colorScale` says what it means.
+   * See `docs/DATA_ENCODED_VIDEO_PLAN.md`. */
+  renderEncoding?: RenderEncoding
+
+  /** Palette + scale for a `data-luma` dataset. Present only
+   * alongside `renderEncoding`; both are dropped together if
+   * either is missing or the sidecar fails to parse. */
+  colorScale?: ColorScale
 
   // Enriched metadata (from sos_dataset_metadata.json cross-reference)
   enriched?: EnrichedMetadata
@@ -336,6 +353,13 @@ export interface DatasetOverlayOptions {
   lonOrigin?: number
   isFlippedInY?: boolean
   celestialBody?: string
+  /** Present only for a data-encoded dataset, where the texture's
+   *  luma is the normalised value rather than a colour. The renderer
+   *  builds a 256×1 LUT from this and colours in the shader; absent
+   *  means the texture is already a picture and is drawn as-is.
+   *  This is the field that carries data-encoded mode to all four
+   *  render surfaces. */
+  colorScale?: ColorScale
 }
 
 /**

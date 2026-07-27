@@ -223,6 +223,55 @@
     "isFlippedInY": {
       "type": "boolean"
     },
+    "renderEncoding": {
+      "type": "string",
+      "const": "data-luma"
+    },
+    "colorScale": {
+      "type": "object",
+      "properties": {
+        "stops": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "t": {
+                "type": "number"
+              },
+              "rgba": {
+                "type": "array",
+                "items": {
+                  "type": "number"
+                },
+                "minItems": 4,
+                "maxItems": 4
+              }
+            },
+            "required": [
+              "t",
+              "rgba"
+            ]
+          }
+        },
+        "vmin": {
+          "type": "number"
+        },
+        "vmax": {
+          "type": "number"
+        },
+        "units": {
+          "type": "string"
+        },
+        "transparentRange": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "stops",
+        "vmin",
+        "vmax"
+      ]
+    },
     "tourJsonUrl": {
       "type": "string"
     },

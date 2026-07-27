@@ -3,10 +3,12 @@ import { mkdtemp, mkdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
+  deriveColorScalePath,
   deriveFrameParams,
   expectedOutputKind,
   findFramesMeta,
   parseArgs,
+  readColorScaleFields,
   readPaddedFrameNames,
 } from './zyra-publish-from-dispatch'
 
@@ -258,5 +260,163 @@ describe('deriveFrameParams', () => {
 
   it('does not opt in on an unparseable pipeline', () => {
     expect(deriveFrameParams('not json', '/tmp/zw').cacheDir).toBeNull()
+  })
+})
+
+describe('deriveColorScalePath', () => {
+  const pipeline = (heatmapArgs: Record<string, unknown>): string =>
+    JSON.stringify({
+      stages: [
+        { stage: 'acquire', command: 'http', args: { url: 'https://example.org/x.grib2' } },
+        { stage: 'visualize', command: 'heatmap', args: heatmapArgs },
+      ],
+    })
+
+  it('returns the sidecar path when the pipeline opts in', () => {
+    const json = pipeline({
+      'data-encoded': true,
+      'color-scale-file': '/work/scale.json',
+      vmin: 0,
+      vmax: 50,
+    })
+    expect(deriveColorScalePath(json, '/tmp/zw')).toBe('/tmp/zw/scale.json')
+  })
+
+  it.each([[true], ['true'], ['']])('treats %j as the flag being present', flag => {
+    // Flag-style args survive round-trips as a boolean or as an empty
+    // string depending on how the pipeline was authored.
+    const json = pipeline({ 'data-encoded': flag, 'color-scale-file': '/work/s.json' })
+    expect(deriveColorScalePath(json, '/tmp/zw')).not.toBeNull()
+  })
+
+  // The backwards-compatibility guarantee at the publish boundary:
+  // every pipeline published so far omits both args and must stay a
+  // picture.
+  it('returns null for an ordinary colourised pipeline', () => {
+    expect(deriveColorScalePath(pipeline({ basemap: 'fv3-chem-basemap.jpg' }), '/tmp/zw')).toBeNull()
+  })
+
+  it('returns null when the flag is set without a sidecar', () => {
+    // Half-configured would publish frames whose luma is a measurement
+    // with nothing saying what it measures — raw grayscale on the
+    // globe. Better to publish it as the picture it will look like.
+    expect(deriveColorScalePath(pipeline({ 'data-encoded': true }), '/tmp/zw')).toBeNull()
+  })
+
+  // zyra's pipeline_runner builds the flag with
+  // `"--" + k.replace("_", "-")`, so both spellings are legitimate in a
+  // stored pipeline and nothing normalises the JSON on the way in. The
+  // published RRFS workflow is snake_case throughout — cmap_file,
+  // period_seconds, output_names — so a kebab-only scraper misses a
+  // real, in-production pipeline and publishes a picture with no
+  // warning, because the warning only fires once the flag is seen.
+  it('reads the snake_case spelling the real workflows are written in', () => {
+    const json = JSON.stringify({
+      stages: [
+        {
+          stage: 'visualize',
+          command: 'heatmap',
+          args: {
+            data_encoded: true,
+            color_scale_file: '/work/color-scale.json',
+            cmap_file: 'https://example.test/smoke.json',
+            vmin: 0,
+            vmax: 0.0005,
+          },
+        },
+      ],
+    })
+    expect(deriveColorScalePath(json, '/tmp/zw')).toBe('/tmp/zw/color-scale.json')
+  })
+
+  it('still warns on snake_case data_encoded with no sidecar', () => {
+    const json = JSON.stringify({
+      stages: [{ stage: 'visualize', command: 'heatmap', args: { data_encoded: true } }],
+    })
+    // Recognised, so it can warn — the kebab-only version returned null
+    // silently, which reads identically to "not a data-encoded pipeline".
+    expect(deriveColorScalePath(json, '/tmp/zw')).toBeNull()
+  })
+
+  it('prefers the kebab spelling when a pipeline somehow carries both', () => {
+    const json = JSON.stringify({
+      stages: [
+        {
+          stage: 'visualize',
+          command: 'heatmap',
+          args: {
+            'data-encoded': true,
+            'color-scale-file': '/work/kebab.json',
+            color_scale_file: '/work/snake.json',
+          },
+        },
+      ],
+    })
+    expect(deriveColorScalePath(json, '/tmp/zw')).toBe('/tmp/zw/kebab.json')
+  })
+
+  it('ignores the args on a non-heatmap stage', () => {
+    const json = JSON.stringify({
+      stages: [
+        { stage: 'visualize', command: 'contour', args: { 'data-encoded': true, 'color-scale-file': '/work/s.json' } },
+      ],
+    })
+    expect(deriveColorScalePath(json, '/tmp/zw')).toBeNull()
+  })
+
+  it('survives an unparseable pipeline', () => {
+    expect(deriveColorScalePath('not json', '/tmp/zw')).toBeNull()
+  })
+})
+
+describe('readColorScaleFields', () => {
+  const VALID = JSON.stringify({
+    stops: [
+      { t: 0, rgba: [0, 0, 0, 0] },
+      { t: 1, rgba: [255, 0, 0, 255] },
+    ],
+    vmin: 0,
+    vmax: 50,
+    units: 'mg m-2',
+  })
+
+  async function withSidecar(body: string): Promise<Record<string, string>> {
+    const dir = await mkdtemp(join(tmpdir(), 'tv-scale-'))
+    const path = join(dir, 'scale.json')
+    await writeFile(path, body, 'utf-8')
+    return readColorScaleFields(path)
+  }
+
+  it('returns the row fields for a valid sidecar', async () => {
+    const fields = await withSidecar(VALID)
+    expect(fields.render_encoding).toBe('data-luma')
+    expect(JSON.parse(fields.color_scale)).toMatchObject({ vmin: 0, vmax: 50, units: 'mg m-2' })
+  })
+
+  it('returns nothing when there is no sidecar to read', async () => {
+    expect(await readColorScaleFields(null)).toEqual({})
+    expect(await readColorScaleFields('/nonexistent/scale.json')).toEqual({})
+  })
+
+  it.each([
+    ['unparseable JSON', '{nope'],
+    ['a single stop', JSON.stringify({ stops: [{ t: 0, rgba: [0, 0, 0, 0] }], vmin: 0, vmax: 1 })],
+    ['a zero-width range', JSON.stringify({ stops: [{ t: 0, rgba: [0, 0, 0, 0] }, { t: 1, rgba: [1, 1, 1, 1] }], vmin: 7, vmax: 7 })],
+  ])('publishes as a picture rather than failing the run on %s', async (_label, body) => {
+    // A bad palette must not sink a run that produced good frames.
+    expect(await withSidecar(body)).toEqual({})
+  })
+
+  it('rejects a sidecar past the column cap', async () => {
+    const huge = JSON.stringify({
+      stops: [
+        { t: 0, rgba: [0, 0, 0, 0] },
+        { t: 1, rgba: [255, 255, 255, 255] },
+      ],
+      vmin: 0,
+      vmax: 1,
+      units: 'x'.repeat(20_000),
+    })
+    expect(await withSidecar(huge)).toEqual({})
   })
 })

@@ -35,6 +35,12 @@ import {
   type VrDatasetTexture,
 } from './photorealEarth'
 import { createVrBorders, type VrBordersHandle } from './vrBorders'
+import type { DatasetOverlayOptions } from '../types'
+import {
+  buildColorScaleLut,
+  COLOR_SCALE_LUT_SIZE,
+  type ColorScale,
+} from '../types/color-scale'
 
 export type { VrDatasetTexture } from './photorealEarth'
 
@@ -199,6 +205,8 @@ export function createVrScene(
     activeKey: HTMLVideoElement | HTMLImageElement | HTMLCanvasElement | ImageBitmap | null
     activeTexture: THREE.Texture | null
     cancelPendingVideoListeners: (() => void) | null
+    /** Flip + palette for the data-encoded shader patch. */
+    setColorScale: (scale: ColorScale | undefined) => void
   }
 
   /**
@@ -281,8 +289,24 @@ export function createVrScene(
     return { x, y: globePosition.y, z: globePosition.z }
   }
 
-  /** Build a simple secondary globe — basic Phong, no shader patches. */
+  /**
+   * Build a simple secondary globe — basic Phong, with one shader
+   * patch.
+   *
+   * Secondaries deliberately skip the primary's bbox / lonOrigin /
+   * flipY handling, so a regional dataset still renders stretched
+   * here (a pre-existing gap). Data-encoded mode is not optional in
+   * the same way: without the patch a secondary would display the
+   * raw grayscale luma, which is not a degraded picture of the
+   * dataset but a completely different image. The patch is the
+   * minimum that avoids that — decode luma through the palette,
+   * nothing else.
+   */
   function createSecondaryGlobe(): SecondaryGlobe {
+    const dataEncodedUniform = { value: 0 }
+    const colorLutUniform: { value: THREE.Texture } = {
+      value: earth.baseEarthTexture,
+    }
     const mat = new THREE_.MeshPhongMaterial({
       // Share the primary's current diffuse tier; the
       // `onBaseDiffuseChange` subscription below keeps this
@@ -291,6 +315,50 @@ export function createVrScene(
       specular: new THREE_.Color(0x444444),
       shininess: 30,
     })
+    mat.onBeforeCompile = shader => {
+      shader.uniforms.uSecDataEncoded = dataEncodedUniform
+      shader.uniforms.uSecColorLut = colorLutUniform
+      shader.fragmentShader = shader.fragmentShader.replace(
+        '#include <common>',
+        `#include <common>
+         uniform int uSecDataEncoded;
+         uniform sampler2D uSecColorLut;`,
+      )
+      shader.fragmentShader = shader.fragmentShader.replace(
+        '#include <map_fragment>',
+        `#ifdef USE_MAP
+           vec4 sampledDiffuseColor = texture2D(map, vMapUv);
+           if (uSecDataEncoded == 1) {
+             vec4 pal = texture2D(uSecColorLut, vec2(sampledDiffuseColor.r, 0.5));
+             // No base map is bound on a secondary, so composite
+             // the transparent regions against black rather than
+             // leaving them as an unpalettised grey.
+             sampledDiffuseColor = vec4(pal.rgb * pal.a, 1.0);
+           }
+           diffuseColor *= sampledDiffuseColor;
+         #endif`,
+      )
+    }
+    let ownedLut: THREE.DataTexture | null = null
+    const setColorScale = (scale: ColorScale | undefined): void => {
+      ownedLut?.dispose()
+      ownedLut = null
+      if (!scale) {
+        dataEncodedUniform.value = 0
+        colorLutUniform.value = earth.baseEarthTexture
+        return
+      }
+      const lut = new THREE_.DataTexture(
+        buildColorScaleLut(scale), COLOR_SCALE_LUT_SIZE, 1, THREE_.RGBAFormat,
+      )
+      lut.colorSpace = THREE_.SRGBColorSpace
+      lut.minFilter = THREE_.LinearFilter
+      lut.magFilter = THREE_.LinearFilter
+      lut.needsUpdate = true
+      ownedLut = lut
+      colorLutUniform.value = lut
+      dataEncodedUniform.value = 1
+    }
     const mesh = new THREE_.Mesh(
       new THREE_.SphereGeometry(GLOBE_RADIUS, 64, 64),
       mat,
@@ -328,12 +396,35 @@ export function createVrScene(
       activeKey: null,
       activeTexture: null,
       cancelPendingVideoListeners: null,
+      setColorScale,
     }
+  }
+
+  /**
+   * Colour space, filtering, and palette for a secondary's dataset
+   * texture. Mirrors the primary: a data-encoded texture is read as
+   * a raw code value (NoColorSpace) and sampled nearest, because
+   * gamma-decoding or interpolating it would change the values
+   * before the palette ever saw them.
+   */
+  function configureSecondaryTexture(
+    tex: THREE.Texture,
+    sg: SecondaryGlobe,
+    options?: DatasetOverlayOptions,
+  ): void {
+    const scale = options?.colorScale
+    tex.colorSpace = scale ? THREE_.NoColorSpace : THREE_.SRGBColorSpace
+    const filter = scale ? THREE_.NearestFilter : THREE_.LinearFilter
+    tex.minFilter = filter
+    tex.magFilter = filter
+    sg.setColorScale(scale)
+    sg.material.needsUpdate = true
   }
 
   /** Dispose a secondary globe's GPU resources and remove from scene. */
   function disposeSecondary(sg: SecondaryGlobe): void {
     if (sg.cancelPendingVideoListeners) sg.cancelPendingVideoListeners()
+    sg.setColorScale(undefined)
     if (sg.activeTexture) sg.activeTexture.dispose()
     sg.material.dispose()
     ;(sg.mesh.geometry as THREE.BufferGeometry).dispose()
@@ -470,9 +561,7 @@ export function createVrScene(
         sg.activeKey = spec.element
         try { spec.element.currentTime = spec.element.currentTime } catch { /* no-op */ }
         const tex = new THREE_.VideoTexture(spec.element)
-        tex.colorSpace = THREE_.SRGBColorSpace
-        tex.minFilter = THREE_.LinearFilter
-        tex.magFilter = THREE_.LinearFilter
+        configureSecondaryTexture(tex, sg, spec.options)
         sg.activeTexture = tex
         if (spec.element.readyState >= 2) {
           sg.material.map = tex
@@ -496,9 +585,7 @@ export function createVrScene(
         }
       } else if (spec.kind === 'image') {
         const tex = new THREE_.Texture(spec.element)
-        tex.colorSpace = THREE_.SRGBColorSpace
-        tex.minFilter = THREE_.LinearFilter
-        tex.magFilter = THREE_.LinearFilter
+        configureSecondaryTexture(tex, sg, spec.options)
         tex.needsUpdate = true
         sg.activeTexture = tex
         sg.material.map = tex

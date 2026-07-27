@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Luma range check</title>
+<style>
+  body { background:#111; color:#eee; font:13px/1.5 ui-monospace,Menlo,monospace; margin:0; padding:1rem; }
+  h1 { font-size:1rem; margin:0 0 .5rem; }
+  p { color:#9aa; max-width:60ch; }
+  button { font:inherit; padding:.5rem 1rem; margin:.25rem 0; cursor:pointer; }
+  table { border-collapse:collapse; margin-top:1rem; font-size:12px; }
+  th,td { border:1px solid #333; padding:.25rem .5rem; text-align:right; }
+  th:first-child, td:first-child { text-align:left; }
+  .pass { color:#5f5; } .fail { color:#f66; }
+  video,canvas { display:none; }
+</style>
+</head>
+<body>
+<h1>H.264 luma round-trip check</h1>
+<p>Encodes a known 0..255 luma ramp, plays it, and samples it back four ways.
+A data-encoded dataset is only viable where the sampled value equals the source value.</p>
+<p><strong><code>render</code> is the row that matters.</strong> The globe draws through a
+WebGL texture, and since the probe moved to <code>glLumaSampler</code> the hover
+readout does too, so this column models both.</p>
+<p>The three <code>readout*</code> columns sample through a 2D canvas
+(<code>drawImage</code> + <code>getImageData</code>, plain / <code>colorSpace:&nbsp;'srgb'</code> /
+one full-size blit). That is what the probe <em>used</em> to do. They are kept as
+diagnostics: Safari on macOS and iOS transforms every one of them identically
+&mdash; endpoints preserved, up to 11 codes of error in between &mdash; which is why
+the probe no longer reads that way. Expect them to fail on Safari; that is the
+finding, not a regression.</p>
+<button id="run">Run check</button>
+<div id="out"></div>
+
+<video id="v" muted playsinline preload="auto" crossorigin="anonymous"></video>
+<canvas id="cgl" width="4096" height="256"></canvas>
+
+<script>
+const BAND_W = 16, W = 4096, H = 256, SAMPLE_Y = 128
+
+async function probe(src) {
+  const v = document.getElementById('v')
+  v.src = src
+  await new Promise((res, rej) => {
+    v.onloadeddata = res
+    v.onerror = () => rej(new Error('load failed (code ' + (v.error && v.error.code) + ') — no H.264 decoder?'))
+  })
+  await new Promise(res => { v.onseeked = res; v.currentTime = 0.2 })
+  const result = { videoWidth: v.videoWidth, videoHeight: v.videoHeight }
+
+  // Readout path: the exact 1x1 drawImage the design prescribes for hover.
+  {
+    const c = document.createElement('canvas'); c.width = 1; c.height = 1
+    const ctx = c.getContext('2d', { willReadFrequently: true })
+    const vals = []
+    for (let i = 0; i < 256; i++) {
+      ctx.drawImage(v, i * BAND_W + BAND_W / 2, SAMPLE_Y, 1, 1, 0, 0, 1, 1)
+      vals.push(ctx.getImageData(0, 0, 1, 1).data[0])
+    }
+    result.readout = vals
+  }
+
+  // iOS Safari failed every readout row — including untagged ones — with
+  // endpoints preserved and a mid-range bow (gain ~1.003, offset ~+6,
+  // max|e| 11), while its WebGL path was exact. That is a colour
+  // transform in the video->2D-canvas step, not a range problem. These
+  // two variants isolate which part of that step causes it, so the fix
+  // is chosen by measurement rather than by guessing.
+
+  // Does pinning the colour space on both the context and the read fix it?
+  {
+    try {
+      const c = document.createElement('canvas'); c.width = 1; c.height = 1
+      const ctx = c.getContext('2d', { willReadFrequently: true, colorSpace: 'srgb' })
+      const vals = []
+      for (let i = 0; i < 256; i++) {
+        ctx.drawImage(v, i * BAND_W + BAND_W / 2, SAMPLE_Y, 1, 1, 0, 0, 1, 1)
+        vals.push(ctx.getImageData(0, 0, 1, 1, { colorSpace: 'srgb' }).data[0])
+      }
+      result.readoutSrgb = vals
+    } catch (e) { result.readoutSrgbError = String(e.message || e) }
+  }
+
+  // Is it the per-texel 1x1 draw, or any draw at all? One full-size blit,
+  // then read every sample out of a single ImageData.
+  {
+    try {
+      const c = document.createElement('canvas')
+      c.width = v.videoWidth; c.height = v.videoHeight
+      const ctx = c.getContext('2d', { willReadFrequently: true })
+      ctx.drawImage(v, 0, 0)
+      const img = ctx.getImageData(0, 0, c.width, c.height)
+      const vals = []
+      for (let i = 0; i < 256; i++) {
+        const x = i * BAND_W + BAND_W / 2
+        vals.push(img.data[(SAMPLE_Y * c.width + x) * 4])
+      }
+      result.readoutFull = vals
+    } catch (e) { result.readoutFullError = String(e.message || e) }
+  }
+
+  // Render path: upload the video to a texture and read it back.
+  {
+    const gl = document.getElementById('cgl').getContext('webgl2', { preserveDrawingBuffer: true, antialias: false })
+    if (!gl) { result.renderError = 'no webgl2'; return result }
+    gl.bindTexture(gl.TEXTURE_2D, gl.createTexture())
+    gl.pixelStorei(gl.UNPACK_COLORSPACE_CONVERSION_WEBGL, gl.NONE)
+    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false)
+    for (const [k, val] of [['TEXTURE_MIN_FILTER','NEAREST'],['TEXTURE_MAG_FILTER','NEAREST'],
+                            ['TEXTURE_WRAP_S','CLAMP_TO_EDGE'],['TEXTURE_WRAP_T','CLAMP_TO_EDGE']])
+      gl.texParameteri(gl.TEXTURE_2D, gl[k], gl[val])
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, v)
+
+    const mk = (t, s) => { const sh = gl.createShader(t); gl.shaderSource(sh, s); gl.compileShader(sh)
+      if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(sh)); return sh }
+    const prog = gl.createProgram()
+    gl.attachShader(prog, mk(gl.VERTEX_SHADER, `#version 300 es
+      in vec2 p; out vec2 uv; void main(){ uv = p*0.5+0.5; gl_Position = vec4(p,0.,1.); }`))
+    gl.attachShader(prog, mk(gl.FRAGMENT_SHADER, `#version 300 es
+      precision highp float; in vec2 uv; uniform sampler2D t; out vec4 o;
+      void main(){ o = vec4(texture(t, vec2(uv.x, 1.-uv.y)).rgb, 1.); }`))
+    gl.linkProgram(prog); gl.useProgram(prog)
+    gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer())
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 3,-1, -1,3]), gl.STATIC_DRAW)
+    const loc = gl.getAttribLocation(prog, 'p')
+    gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0)
+    gl.viewport(0, 0, W, H); gl.drawArrays(gl.TRIANGLES, 0, 3)
+
+    const px = new Uint8Array(4), vals = []
+    for (let i = 0; i < 256; i++) {
+      gl.readPixels(i * BAND_W + BAND_W / 2, H - 1 - SAMPLE_Y, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px)
+      vals.push(px[0])
+    }
+    result.render = vals
+    const ext = gl.getExtension('WEBGL_debug_renderer_info')
+    result.glRenderer = ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER)
+  }
+  return result
+}
+
+function analyse(vals) {
+  let exact = 0, sumAbs = 0, maxAbs = 0
+  for (let i = 0; i < 256; i++) {
+    const e = vals[i] - i
+    if (e === 0) exact++
+    sumAbs += Math.abs(e); maxAbs = Math.max(maxAbs, Math.abs(e))
+  }
+  let sx=0, sy=0, sxy=0, sxx=0
+  for (let i = 0; i < 256; i++) { sx+=i; sy+=vals[i]; sxy+=i*vals[i]; sxx+=i*i }
+  const a = (256*sxy - sx*sy) / (256*sxx - sx*sx), b = (sy - a*sx)/256
+  // Pass = an identity transform within one 8-bit step. A range mismatch shows
+  // up as gain != 1 or offset != 0, which is what actually breaks transparency.
+  const pass = maxAbs <= 1 && Math.abs(a - 1) < 0.01 && Math.abs(b) < 1
+  return { exact, mae: sumAbs/256, maxAbs, gain: a, offset: b, v0: vals[0], v255: vals[255], pass }
+}
+
+window.runCheck = async function (variants) {
+  const rows = []
+  for (const name of variants) {
+    let r
+    try { r = await probe(`./out/${name}.mp4`) }
+    catch (e) { rows.push({ name, error: String(e.message || e) }); continue }
+    for (const path of ['readout', 'readoutSrgb', 'readoutFull', 'render']) {
+      if (!r[path]) { rows.push({ name, path, error: r[path + 'Error'] || 'unavailable' }); continue }
+      rows.push({ name, path, glRenderer: r.glRenderer, ...analyse(r[path]) })
+    }
+  }
+  const out = document.getElementById('out')
+  out.innerHTML = '<table><tr><th>variant</th><th>path</th><th>exact</th><th>MAE</th>'
+    + '<th>max|e|</th><th>gain</th><th>offset</th><th>0→</th><th>255→</th><th></th></tr>'
+    + rows.map(r => r.error
+        ? `<tr><td>${r.name}</td><td>${r.path||''}</td><td colspan="8" class="fail">${r.error}</td></tr>`
+        : `<tr><td>${r.name}</td><td>${r.path}</td><td>${r.exact}/256</td><td>${r.mae.toFixed(3)}</td>`
+          + `<td>${r.maxAbs}</td><td>${r.gain.toFixed(4)}</td><td>${r.offset.toFixed(2)}</td>`
+          + `<td>${r.v0}</td><td>${r.v255}</td>`
+          + `<td class="${r.pass?'pass':'fail'}">${r.pass?'PASS':'FAIL'}</td></tr>`).join('')
+    + '</table>'
+  return rows
+}
+// Ask the server which variants exist. Deliberately NO hardcoded
+// fallback: a list baked in here is a list that goes stale the moment a
+// variant is added, and the failure mode is silent — the table renders,
+// every row passes, and the variant you came to test was never run.
+// Better to say nothing ran than to imply the wrong thing did.
+document.getElementById('run').onclick = async () => {
+  const out = document.getElementById('out')
+  out.textContent = 'Loading variant list…'
+  let variants
+  try {
+    const r = await fetch('./variants.json', { cache: 'no-store' })
+    if (!r.ok) throw new Error('HTTP ' + r.status)
+    variants = (await r.json()).map(v => v.name)
+    if (!variants.length) throw new Error('server reported no variants')
+  } catch (e) {
+    out.innerHTML = '<p class="fail">Could not load ./variants.json ('
+      + String(e.message || e) + '). Not running a guessed subset — '
+      + 'restart the harness with --serve so the list is served.</p>'
+    return
+  }
+  out.textContent = 'Testing ' + variants.length + ' variants: ' + variants.join(', ') + '…'
+  return window.runCheck(variants)
+}
+</script>
+</body>
+</html>
