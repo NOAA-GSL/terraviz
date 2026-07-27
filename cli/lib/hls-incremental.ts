@@ -33,6 +33,7 @@
 import { createHash } from 'node:crypto'
 
 import {
+  DATA_ENCODED_RENDITIONS,
   DEFAULT_RENDITIONS,
   DEFAULT_SEGMENT_SECONDS,
   MASTER_PLAYLIST_NAME,
@@ -70,6 +71,13 @@ export interface RenditionDescriptor {
    *  change at the same dimensions forces a re-encode instead of
    *  recycling bytes produced under the old setting. */
   crf: number
+  /** Whether these bytes were produced by the data-encoded argv
+   *  (nearest-neighbour scaler, full-range VUI). Part of the
+   *  segment identity because a data-encoded rung and the default
+   *  4K rung share dimensions AND CRF, so without this they hash
+   *  identically while carrying incompatible pixels. Absent is
+   *  treated as false so existing manifests keep their hashes. */
+  dataEncoded?: boolean
 }
 
 /** The default ladder projected to `RenditionDescriptor`s, indexed
@@ -80,6 +88,18 @@ export const DEFAULT_RENDITION_DESCRIPTORS: readonly RenditionDescriptor[] =
     width: r.height * 2,
     height: r.height,
     crf: r.crf,
+  }))
+
+/** The data-encoded ladder projected the same way. One rung, because
+ *  resampling a data raster to a lower rung would hand the client
+ *  averaged values that were never measured. */
+export const DATA_ENCODED_RENDITION_DESCRIPTORS: readonly RenditionDescriptor[] =
+  DATA_ENCODED_RENDITIONS.map((r: HlsRendition, i: number) => ({
+    id: `stream_${i}`,
+    width: r.height * 2,
+    height: r.height,
+    crf: r.crf,
+    dataEncoded: true,
   }))
 
 /** A grid-aligned group of ≤ `FRAMES_PER_CHUNK` consecutive frames
@@ -208,15 +228,27 @@ export function computeChunkGrid(
  * (re-encode). Codec settings shared across the whole ladder (preset,
  * profile, GOP) aren't per-rendition fields here; a change to those in
  * `ffmpeg-hls.ts` must bump `v` to force a global re-encode.
+ *
+ * `v: 2` — data-encoded video added a nearest-neighbour scaler and an
+ * explicit full-range VUI to `buildFfmpegArgs`. Those are ladder-wide
+ * argv changes of exactly the kind this docstring warns about, so the
+ * bump is mandatory: without it, segments cached under the bicubic /
+ * unspecified-range settings would be recycled into a bundle whose
+ * other segments carry the new ones, mixing resampled and exact values
+ * in one stream. `dataEncoded` additionally rides in the rendition
+ * descriptor, because the data rung and the default 4K rung agree on
+ * both dimensions and CRF.
  */
 export function segmentDescriptorHash(
   chunk: Pick<ChunkInput, 'gridIndex' | 'frames' | 'padded'>,
   rendition: RenditionDescriptor,
 ): string {
   const descriptor = JSON.stringify({
-    v: 1,
+    v: 2,
     grid: chunk.gridIndex,
-    rendition: `${rendition.width}x${rendition.height}@crf${rendition.crf}`,
+    rendition:
+      `${rendition.width}x${rendition.height}@crf${rendition.crf}` +
+      (rendition.dataEncoded ? ':data' : ''),
     padded: chunk.padded,
     digests: chunk.frames.map(f => f.digest),
   })

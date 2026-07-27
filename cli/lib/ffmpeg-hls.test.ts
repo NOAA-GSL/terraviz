@@ -25,6 +25,7 @@ import { join } from 'node:path'
 import {
   buildFfmpegArgs,
   createBoundedStderr,
+  DATA_ENCODED_RENDITIONS,
   DEFAULT_RENDITIONS,
   encodeHls,
   FfmpegError,
@@ -151,6 +152,56 @@ describe('buildFfmpegArgs', () => {
     const args = buildFfmpegArgs('/in.mp4', '/out', RENDITIONS, 6, 192)
     expect(args).toContain('-c:a')
     expect(args[args.indexOf('-var_stream_map') + 1]).toBe('v:0,a:0 v:1,a:1 v:2,a:2')
+  })
+
+  // --- data-encoded video (docs/DATA_ENCODED_VIDEO_PLAN.md §Part 2) ---
+
+  describe('data-encoded mode', () => {
+    const DATA: HlsRendition[] = [{ height: 2048, crf: 18, maxBitrateKbps: 25_000 }]
+
+    it('scales with nearest-neighbour and an explicit full→full range', () => {
+      const args = buildFfmpegArgs('/in.png', '/out', DATA, 6, 192, false, [], true)
+      const filter = args[args.indexOf('-filter_complex') + 1]
+      // Bicubic (the default) interpolates across the nodata/data
+      // boundary and invents values that were never measured.
+      expect(filter).toContain('flags=neighbor')
+      // in_range/out_range are what actually move the samples;
+      // `-color_range` below only sets the tag.
+      expect(filter).toContain('in_range=full')
+      expect(filter).toContain('out_range=full')
+      expect(filter).toContain('scale=4096:2048:flags=neighbor:in_range=full:out_range=full')
+    })
+
+    it('tags the stream full-range with a fully-specified colourspace', () => {
+      const args = buildFfmpegArgs('/in.png', '/out', DATA, 6, 192, false, [], true)
+      expect(args[args.indexOf('-color_range:v:0') + 1]).toBe('pc')
+      expect(args[args.indexOf('-colorspace:v:0') + 1]).toBe('bt709')
+      expect(args[args.indexOf('-color_primaries:v:0') + 1]).toBe('bt709')
+      expect(args[args.indexOf('-color_trc:v:0') + 1]).toBe('bt709')
+    })
+
+    it('DATA_ENCODED_RENDITIONS publishes the source rung only', () => {
+      // Lower rungs would resample a data raster and hand the
+      // client averaged values that were never measured.
+      expect(DATA_ENCODED_RENDITIONS).toHaveLength(1)
+      expect(DATA_ENCODED_RENDITIONS[0].height).toBe(2048)
+    })
+
+    // This is the backwards-compatibility guarantee. Every existing
+    // colourised MP4 must keep encoding under byte-identical argv,
+    // and the mode is opt-in per dataset, so an absent flag has to
+    // leave the command line untouched.
+    it('leaves the legacy argv byte-identical when the flag is absent', () => {
+      const legacy = buildFfmpegArgs('/in.mp4', '/out', RENDITIONS, 6, 192)
+      const explicitlyOff = buildFfmpegArgs('/in.mp4', '/out', RENDITIONS, 6, 192, true, [], false)
+      expect(explicitlyOff).toEqual(legacy)
+      // None of the colour flags appear at all…
+      for (const flag of ['-color_range', '-colorspace', '-color_primaries', '-color_trc']) {
+        expect(legacy.some(a => a.startsWith(flag))).toBe(false)
+      }
+      // …and the scaler keeps ffmpeg's default (no `flags=`).
+      expect(legacy[legacy.indexOf('-filter_complex') + 1]).not.toContain('flags=')
+    })
   })
 })
 

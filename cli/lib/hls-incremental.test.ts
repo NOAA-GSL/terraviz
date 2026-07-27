@@ -132,6 +132,22 @@ describe('segmentDescriptorHash', () => {
       segmentDescriptorHash(chunk, r),
     )
   })
+
+  // The data-encoded rung and the default 4K rung agree on both
+  // dimensions and CRF, so without `dataEncoded` in the descriptor
+  // they hash identically — and segments encoded with the bicubic
+  // scaler get recycled into a bundle that claims exact values.
+  it('separates data-encoded segments from same-size, same-CRF picture ones', () => {
+    const picture: RenditionDescriptor = { id: 'stream_0', width: 4096, height: 2048, crf: 18 }
+    const data: RenditionDescriptor = { ...picture, dataEncoded: true }
+    expect(segmentDescriptorHash(chunk, data)).not.toBe(segmentDescriptorHash(chunk, picture))
+  })
+
+  it('treats an absent dataEncoded flag as false', () => {
+    const implicit: RenditionDescriptor = { id: 'stream_0', width: 4096, height: 2048, crf: 18 }
+    const explicit: RenditionDescriptor = { ...implicit, dataEncoded: false }
+    expect(segmentDescriptorHash(chunk, explicit)).toBe(segmentDescriptorHash(chunk, implicit))
+  })
 })
 
 /** Encode a plan into a finished manifest, faking 6.0s durations for
