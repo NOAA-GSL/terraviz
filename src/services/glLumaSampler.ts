@@ -195,3 +195,40 @@ export function createGlLumaSampler(): GlLumaSampler | null {
     },
   }
 }
+
+// --- shared instance -------------------------------------------------
+
+/**
+ * One sampler for the whole page.
+ *
+ * Each instance owns a WebGL2 context, and `ViewportManager` runs up to
+ * four `MapRenderer`s at once. One sampler apiece meant a 4-globe
+ * layout held eight contexts — four MapLibre plus four probes — before
+ * VR adds its own. Browsers cap contexts per page (Chrome around 16)
+ * and do not politely refuse past the limit: they drop the oldest live
+ * context, which would blank a globe rather than the probe that caused
+ * it.
+ *
+ * Sharing is safe because the sampler holds no per-caller state beyond
+ * its texture cache, and that cache is keyed on source identity — so
+ * two panels alternating simply re-upload, which is the correct result
+ * and irrelevant at pointer speed.
+ *
+ * Deliberately never disposed in normal operation: it is one context
+ * for the lifetime of the page, which is the point. `dispose` exists
+ * for tests and teardown.
+ */
+let shared: GlLumaSampler | null | undefined
+
+export function getSharedLumaSampler(): GlLumaSampler | null {
+  if (shared === undefined) shared = createGlLumaSampler()
+  return shared
+}
+
+/** Drop the shared sampler. For tests and teardown, not for renderers —
+ *  a renderer disposing it would pull the context out from under every
+ *  other panel still using it. */
+export function disposeSharedLumaSampler(): void {
+  shared?.dispose()
+  shared = undefined
+}

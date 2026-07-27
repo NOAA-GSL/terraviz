@@ -13,7 +13,11 @@
  * this is written for: someone tidying away lines that look redundant.
  */
 import { describe, expect, it, vi } from 'vitest'
-import { createGlLumaSampler } from './glLumaSampler'
+import {
+  createGlLumaSampler,
+  disposeSharedLumaSampler,
+  getSharedLumaSampler,
+} from './glLumaSampler'
 
 interface Recorded {
   pixelStorei: [number, unknown][]
@@ -207,6 +211,43 @@ describe('createGlLumaSampler', () => {
     // A 2D fallback is the path this module replaces; reintroducing one
     // would put wrong numbers back on iOS.
     expect(createGlLumaSampler()).toBeNull()
+    vi.restoreAllMocks()
+  })
+})
+
+describe('getSharedLumaSampler', () => {
+  it('hands every caller the same instance', () => {
+    stubGl()
+    disposeSharedLumaSampler()
+    const a = getSharedLumaSampler()
+    const b = getSharedLumaSampler()
+    // One WebGL2 context for the page. Four MapRenderers in a 4-globe
+    // layout previously meant four probe contexts on top of MapLibre's
+    // four, and browsers drop the oldest live context past their limit
+    // rather than refusing the new one — so the cost of getting this
+    // wrong is a blanked globe, not a dead probe.
+    expect(a).toBe(b)
+    disposeSharedLumaSampler()
+    vi.restoreAllMocks()
+  })
+
+  it('builds a fresh one after the shared instance is disposed', () => {
+    stubGl()
+    disposeSharedLumaSampler()
+    const first = getSharedLumaSampler()
+    disposeSharedLumaSampler()
+    const second = getSharedLumaSampler()
+    expect(second).not.toBe(first)
+    disposeSharedLumaSampler()
+    vi.restoreAllMocks()
+  })
+
+  it('still samples correctly through the shared instance', () => {
+    stubGl(88)
+    disposeSharedLumaSampler()
+    const s = getSharedLumaSampler()!
+    expect(s.sample(video(), { u: 0.5, v: 0.5 })).toBe(88)
+    disposeSharedLumaSampler()
     vi.restoreAllMocks()
   })
 })

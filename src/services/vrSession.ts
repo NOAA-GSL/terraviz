@@ -31,7 +31,7 @@ import {
   sphereUvToLatLon,
   type ProbeSource,
 } from './datasetProbe'
-import { createGlLumaSampler, type GlLumaSampler } from './glLumaSampler'
+import { getSharedLumaSampler } from './glLumaSampler'
 import { createVrZoomOverlay, type VrZoomOverlayHandle } from '../ui/vrZoomOverlay'
 import { MAX_GLOBE_SCALE, MIN_GLOBE_SCALE } from './vrScene'
 import { createVrPlacement, liftedPlacementPosition, type VrPlacementHandle } from './vrPlacement'
@@ -58,8 +58,6 @@ import {
  */
 /** 1x1 scratch canvas for the in-VR readout. Module-scoped and reused
  *  so a per-frame probe allocates nothing. */
-/** `undefined` = not yet built; `null` = no WebGL2, readout off. */
-let vrProbeSampler: GlLumaSampler | null | undefined = undefined
 
 /**
  * How often the VR probe actually samples, in ms.
@@ -81,8 +79,6 @@ let vrProbeLastValue: string | null = null
 function resetVrProbe(): void {
   vrProbeLastAt = -1
   vrProbeLastValue = null
-  vrProbeSampler?.dispose()
-  vrProbeSampler = undefined
 }
 
 /**
@@ -127,9 +123,8 @@ function sampleVrProbe(
   if (!spec?.options?.colorScale) return null
   const uv = interaction.globeHoverUv()
   if (!uv) return null
-  if (vrProbeSampler === undefined) vrProbeSampler = createGlLumaSampler()
-  if (!vrProbeSampler) return null
-  const sampler = vrProbeSampler
+  const sampler = getSharedLumaSampler()
+  if (!sampler) return null
   const source = spec.element
   // ImageBitmap is a valid THREE texture source but not one the
   // sampler's texImage2D overload accepts; skip rather than cast.

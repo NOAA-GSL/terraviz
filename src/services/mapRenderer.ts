@@ -19,7 +19,7 @@ import type {
   VideoTextureHandle,
 } from '../types'
 import { setDatasetCreditsSource } from '../ui/creditsPanel'
-import { createGlLumaSampler, type GlLumaSampler } from './glLumaSampler'
+import { getSharedLumaSampler } from './glLumaSampler'
 import {
   probeDatasetValue,
   type ProbeReading,
@@ -348,8 +348,6 @@ export class MapRenderer implements GlobeRenderer {
   private probeOptions: DatasetOverlayOptions | null = null
   /** 1x1 scratch canvas the probe draws into. Created once; a fresh
    *  canvas per pointer event would allocate on every mouse move. */
-  /** `undefined` = not yet built; `null` = no WebGL2, readout off. */
-  private probeSampler: GlLumaSampler | null | undefined = undefined
   private container: HTMLElement | null = null
   private canvasId: string = 'globe-canvas'
   /** Projection requested at init time. Stays `'globe'` for the
@@ -982,13 +980,11 @@ export class MapRenderer implements GlobeRenderer {
    */
   probeValueAt(lat: number, lon: number): ProbeReading | null {
     if (!this.probeSource || !this.probeOptions?.colorScale) return null
-    // Built on first use and kept: the context, program and texture
-    // outlive individual probes, and a pointer stream would otherwise
-    // rebuild all three per event. `null` means no WebGL2, in which
-    // case there is no globe either, so no readout is the right answer.
-    if (this.probeSampler === undefined) this.probeSampler = createGlLumaSampler()
-    if (!this.probeSampler) return null
-    const sampler = this.probeSampler
+    // Shared across every renderer on the page: one WebGL2 context
+    // total rather than one per panel. `null` means no WebGL2, in
+    // which case there is no globe either, so no readout is right.
+    const sampler = getSharedLumaSampler()
+    if (!sampler) return null
     return probeDatasetValue(
       lat, lon, this.probeSource, (s, uv) => sampler.sample(s, uv), this.probeOptions)
   }
@@ -1312,15 +1308,10 @@ export class MapRenderer implements GlobeRenderer {
     // Before map.remove(): the unsubscribe closure captures `map`, so
     // dropping the reference first would strand the handlers.
     this.clearLatLngCallbacks()
-    // The probe owns a WebGL2 context of its own. ViewportManager
-    // builds and tears down renderers on every layout change, so
-    // leaking one context per renderer walks into the browser's
-    // per-page context limit after a handful of switches — at which
-    // point context creation starts failing for the globe itself.
-    // `null` rather than `undefined` so a post-dispose call cannot
-    // treat it as "not built yet" and allocate another.
-    this.probeSampler?.dispose()
-    this.probeSampler = null
+    // The probe sampler is page-shared and deliberately NOT disposed
+    // here — other panels may still be using it, and tearing down its
+    // context would take their readouts with it. Dropping the source
+    // is enough: probeValueAt returns early without it.
     this.probeSource = null
     this.probeOptions = null
     if (this.map) {
