@@ -98,6 +98,12 @@ export interface DatasetDraftBody {
   render_encoding?: string | null
   /** JSON sidecar (palette + scale) for data-encoded datasets. */
   color_scale?: string | null
+  /** Source frames per second for an image-sequence encode — each
+   *  frame is held 1/playback_fps seconds. Null clears the column on
+   *  UPDATE; absent leaves it untouched. Independent of the
+   *  data-encoded pair above: a picture published as a frame
+   *  sequence wants a readable speed too. */
+  playback_fps?: number | null
   website_link?: string
   start_time?: string
   end_time?: string
