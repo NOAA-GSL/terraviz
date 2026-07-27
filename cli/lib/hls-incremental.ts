@@ -48,8 +48,24 @@ export const MASTER_PLAYLIST_FILE = MASTER_PLAYLIST_NAME
 
 /** Frames per chunk = one segment's worth at the pinned encode
  *  settings (6 s × 30 fps). The whole scheme rests on this matching
- *  `ffmpeg-hls.ts`'s `-hls_time` × `OUTPUT_FRAME_RATE`. */
+ *  `ffmpeg-hls.ts`'s `-hls_time` × the *input* frame rate. */
 export const FRAMES_PER_CHUNK = DEFAULT_SEGMENT_SECONDS * OUTPUT_FRAME_RATE
+
+/** Frames per chunk at a given *input* frame rate.
+ *
+ * A chunk must encode to exactly one segment, which means its duration
+ * must stay under `-hls_time`. Duration is `frames / inputFps`, so the
+ * frame count has to scale with the rate: 180 at 30 fps, 6 at 1 fps.
+ * Holding it at 180 while slowing the input would make each chunk 180 s
+ * and ffmpeg would split it into 30 segments, breaking the
+ * one-chunk-one-segment invariant the content-addressed manifest is
+ * built on.
+ *
+ * Floored at 1 so a pathological rate cannot produce an empty chunk. */
+export function framesPerChunk(inputFps: number = OUTPUT_FRAME_RATE): number {
+  const n = Math.floor(DEFAULT_SEGMENT_SECONDS * inputFps)
+  return Number.isFinite(n) && n >= 1 ? n : 1
+}
 
 /** A frame as recorded in `source_filenames.json`
  *  (`frames-manifest.ts` `parseFrameManifest`). */
@@ -153,6 +169,12 @@ export interface SegmentManifest {
    *  forward so reuse-only runs still emit `CODECS` in the master.
    *  Absent only for manifests written before this was tracked. */
   codecs?: Record<string, string>
+  /** Input frame rate this bundle's segments were encoded at.
+   *  Absent means the historical 30. Load-bearing for reuse: the rate
+   *  sets the chunk size, so segments encoded at a different rate
+   *  cover different frames and must never be recycled across a
+   *  change. The runner treats a mismatch as a cold start. */
+  playbackFps?: number
   /** Rendition ids present in `chunks[*].segments`, in ladder order. */
   renditions: RenditionDescriptor[]
   /** Live chunks in playback order. */
@@ -201,11 +223,12 @@ export function computeChunkGrid(
   frames: readonly FrameEntry[],
   offset: number,
   paddedNames: ReadonlySet<string> = new Set(),
+  perChunk: number = FRAMES_PER_CHUNK,
 ): ChunkInput[] {
   const chunks: ChunkInput[] = []
   let current: ChunkInput | null = null
   for (let i = 0; i < frames.length; i++) {
-    const gridIndex = Math.floor((offset + i) / FRAMES_PER_CHUNK)
+    const gridIndex = Math.floor((offset + i) / perChunk)
     if (!current || current.gridIndex !== gridIndex) {
       current = { gridIndex, frames: [], padded: false, partial: false }
       chunks.push(current)
@@ -214,7 +237,7 @@ export function computeChunkGrid(
     if (paddedNames.has(frames[i].filename)) current.padded = true
   }
   for (const chunk of chunks) {
-    chunk.partial = chunk.frames.length < FRAMES_PER_CHUNK
+    chunk.partial = chunk.frames.length < perChunk
   }
   return chunks
 }

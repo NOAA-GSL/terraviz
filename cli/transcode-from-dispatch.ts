@@ -659,7 +659,10 @@ interface DatasetGrid {
  * timestamp/duration. Incremental is best-effort: any gap in the grid
  * inputs degrades gracefully.
  */
-async function fetchDataEncoded(server: ServerEnv, datasetId: string): Promise<boolean> {
+async function fetchRenderSettings(
+  server: ServerEnv,
+  datasetId: string,
+): Promise<{ dataEncoded: boolean; playbackFps: number | null }> {
   const url = `${server.server}/api/v1/publish/datasets/${datasetId}`
   try {
     const res = await fetch(url, {
@@ -672,16 +675,25 @@ async function fetchDataEncoded(server: ServerEnv, datasetId: string): Promise<b
     })
     if (!res.ok) {
       console.error(`[transcode] render_encoding fetch returned ${res.status} — encoding as a picture`)
-      return false
+      return { dataEncoded: false, playbackFps: null }
     }
-    const parsed = (await res.json()) as { dataset?: { render_encoding?: unknown } }
-    return parsed?.dataset?.render_encoding === RENDER_ENCODING_DATA_LUMA
+    const parsed = (await res.json()) as {
+      dataset?: { render_encoding?: unknown; playback_fps?: unknown }
+    }
+    const fps = parsed?.dataset?.playback_fps
+    return {
+      dataEncoded: parsed?.dataset?.render_encoding === RENDER_ENCODING_DATA_LUMA,
+      // Refuse anything that isn't a usable rate rather than letting a
+      // 0 or a negative through to ffmpeg, where it would either fail
+      // obscurely or produce a bundle nobody can seek.
+      playbackFps: typeof fps === 'number' && Number.isFinite(fps) && fps > 0 ? fps : null,
+    }
   } catch (err) {
     console.error(
       `[transcode] render_encoding fetch failed — encoding as a picture: ` +
         `${err instanceof Error ? err.message : String(err)}`,
     )
-    return false
+    return { dataEncoded: false, playbackFps: null }
   }
 }
 
@@ -754,6 +766,7 @@ async function encodeChunkSegments(
   framesDir: string,
   chunkFrames: readonly FrameEntry[],
   dataEncoded: boolean,
+  inputFps: number = OUTPUT_FRAME_RATE,
 ): Promise<{ segments: Record<string, Uint8Array>; extinf: number; codecs?: Record<string, string> }> {
   const ext = args.frameExtension
   const tmpIn = mkdtempSync(join(tmpdir(), 'tvchunk-in-'))
@@ -768,7 +781,10 @@ async function encodeChunkSegments(
       inputPath: join(tmpIn, `%05d.${ext}`),
       outputDir: tmpOut,
       ffmpegBin: args.ffmpegBin ?? undefined,
-      inputArgs: ['-framerate', String(OUTPUT_FRAME_RATE)],
+      // Input rate only: how long each source frame is held. The
+      // `-r 30` the encoder puts on every *output* rendition is
+      // untouched, so tourEngine's requestedFps/30 still holds.
+      inputArgs: ['-framerate', String(inputFps)],
       hasAudio: false,
       dataEncoded,
     })
@@ -879,6 +895,7 @@ async function runFramesIncremental(
   framesDir: string,
   frames: readonly FrameEntry[],
   dataEncoded: boolean,
+  inputFps: number = OUTPUT_FRAME_RATE,
 ): Promise<boolean> {
   const grid = await fetchDatasetGrid(serverEnv, args.datasetId)
   if (!grid) return false
@@ -914,7 +931,8 @@ async function runFramesIncremental(
         'application/json',
       )
     },
-    encodeChunk: chunkFrames => encodeChunkSegments(args, framesDir, chunkFrames, dataEncoded),
+    encodeChunk: chunkFrames =>
+      encodeChunkSegments(args, framesDir, chunkFrames, dataEncoded, inputFps),
     segmentExists: hex => r2ObjectExists(r2Config, `${datasetPrefix}/${segmentKey(hex)}`),
     putSegment: async (hex, body) => {
       await uploadR2Object(r2Config, `${datasetPrefix}/${segmentKey(hex)}`, body, 'video/mp2t')
@@ -957,6 +975,7 @@ async function runFramesIncremental(
     offset,
     epoch,
     period: grid.period,
+    playbackFps: inputFps,
     bandwidthByRendition,
   })
   console.error(
@@ -1012,7 +1031,13 @@ async function main(): Promise<number> {
   // relies on. Fails closed to a picture encode: an unreadable row
   // yields a colourised bundle, which is wrong but watchable, rather
   // than a data bundle with resampled values in it.
-  const dataEncoded = await fetchDataEncoded(serverEnv, args.datasetId)
+  const { dataEncoded, playbackFps } = await fetchRenderSettings(serverEnv, args.datasetId)
+  if (playbackFps != null) {
+    console.error(
+      `[transcode] playback_fps=${playbackFps} — each source frame held ` +
+        `${(1 / playbackFps).toFixed(3)}s (output stays ${OUTPUT_FRAME_RATE} fps)`,
+    )
+  }
   if (dataEncoded) console.error('[transcode] render_encoding=data-luma — value-exact encode')
 
   let publishedIncrementally = false
@@ -1078,6 +1103,7 @@ async function main(): Promise<number> {
           framesDir,
           frameManifest,
           dataEncoded,
+          playbackFps ?? OUTPUT_FRAME_RATE,
         )
       } catch (err) {
         console.error(
@@ -1093,7 +1119,9 @@ async function main(): Promise<number> {
       // each output rendition then keeps the encode at the
       // catalog-wide 30 fps invariant.
       ffmpegInputPath = join(framesDir, `%05d.${args.frameExtension}`)
-      ffmpegInputArgs = ['-framerate', String(OUTPUT_FRAME_RATE)]
+      // Same rate the incremental path uses, or the two disagree and
+      // a fallback silently re-times the dataset.
+      ffmpegInputArgs = ['-framerate', String(playbackFps ?? OUTPUT_FRAME_RATE)]
     }
 
     // Full-encode path. Skipped when the frames branch already

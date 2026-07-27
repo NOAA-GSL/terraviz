@@ -14,6 +14,7 @@ import {
   type FrameEntry,
   type SegmentManifest,
 } from './hls-incremental'
+import { framesPerChunk } from './hls-incremental'
 import { runIncremental, type IncrementalDeps, type IncrementalParams } from './hls-incremental-runner'
 
 const RENDITIONS = DEFAULT_RENDITION_DESCRIPTORS
@@ -271,5 +272,72 @@ describe('runIncremental', () => {
     const fakes = makeFakes(prev)
     await runIncremental(fakes.deps, params(frames(360), 0, '2027-06-15T12:00:00.000Z'))
     expect(fakes.savedManifest?.epoch).toBeNull()
+  })
+})
+
+describe('playback rate changes invalidate segment reuse', () => {
+  // The chunk grid's cell size is `hls_time × inputFps`, so changing
+  // the rate changes which frames a gridIndex covers. A stored segment
+  // is then no longer the segment that cell needs. Recycling across the
+  // change would splice 30 fps segments into a 1 fps bundle: no error,
+  // a playable master, and a timeline that is simply wrong. That is the
+  // failure this guards, and it is why the manifest records the rate.
+
+  it('re-encodes when the rate changes but the chunk size does not', async () => {
+    // The case the guard actually exists for, and the only one where
+    // it is load-bearing. framesPerChunk floors, so 30 and 30.1 fps
+    // both give 180-frame chunks: identical grid, identical digests,
+    // so planSegments would reuse every segment. Those segments were
+    // encoded at 30 fps and the bundle now claims 30.1 -- the reused
+    // extinf values are simply wrong for the new rate.
+    //
+    // A 30 -> 1 fps change does NOT test this: the chunk size changes
+    // too (180 -> 6), so the grid re-chunks and everything re-encodes
+    // whether or not the guard exists. An earlier version of this test
+    // asserted exactly that and passed with the guard deleted.
+    expect(framesPerChunk(30), 'precondition: same chunk size').toBe(framesPerChunk(30.1))
+
+    const fr = frames(12)
+    const cold = await coldRun(fr)
+    expect(cold.playbackFps).toBe(30)
+
+    const same = makeFakes(cold)
+    await runIncremental(same.deps, params(fr, 0))
+    expect(same.encodeCalls, 'identical input at the same rate reuses').toEqual([])
+
+    const nudged = makeFakes(cold)
+    await runIncremental(nudged.deps, { ...params(fr, 0), playbackFps: 30.1 })
+    expect(nudged.encodeCalls, 'rate change must re-encode even at the same chunk size')
+      .not.toEqual([])
+    expect(nudged.savedManifest?.playbackFps).toBe(30.1)
+  })
+
+  it('regrids at the new rate rather than keeping 180-frame cells', async () => {
+    // 12 frames at 1 fps is 6+6, not one chunk. If the grid did not
+    // follow the rate, each chunk would be 12 s against a 6 s hls_time
+    // and ffmpeg would emit two segments for one chunk.
+    const fakes = makeFakes(null)
+    await runIncremental(fakes.deps, { ...params(frames(12), 0), playbackFps: 1 })
+    expect(fakes.encodeCalls).toEqual([6, 6])
+  })
+
+  it('treats a manifest with no recorded rate as the historical 30', async () => {
+    // Every bundle published before this field existed. Reading absence
+    // as a mismatch would force a full re-encode of the whole catalog
+    // on the first run after deploy.
+    const fr = frames(12)
+    const cold = await coldRun(fr)
+    const legacy: SegmentManifest = { ...cold }
+    delete legacy.playbackFps
+
+    const fakes = makeFakes(legacy)
+    await runIncremental(fakes.deps, params(fr, 0))
+    expect(fakes.encodeCalls, 'legacy manifest must still reuse').toEqual([])
+  })
+
+  it('stamps the rate even when it is the default', async () => {
+    // Self-describing beats "absent means 30 forever".
+    const cold = await coldRun(frames(6))
+    expect(cold.playbackFps).toBe(30)
   })
 })
