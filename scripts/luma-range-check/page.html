@@ -18,9 +18,18 @@
 </head>
 <body>
 <h1>H.264 luma round-trip check</h1>
-<p>Encodes a known 0..255 luma ramp, plays it, and samples it back through both
-the render path (WebGL texture) and the readout path (1&times;1 <code>drawImage</code>).
+<p>Encodes a known 0..255 luma ramp, plays it, and samples it back four ways.
 A data-encoded dataset is only viable where the sampled value equals the source value.</p>
+<p><strong><code>render</code> is the row that matters.</strong> The globe draws through a
+WebGL texture, and since the probe moved to <code>glLumaSampler</code> the hover
+readout does too, so this column models both.</p>
+<p>The three <code>readout*</code> columns sample through a 2D canvas
+(<code>drawImage</code> + <code>getImageData</code>, plain / <code>colorSpace:&nbsp;'srgb'</code> /
+one full-size blit). That is what the probe <em>used</em> to do. They are kept as
+diagnostics: Safari on macOS and iOS transforms every one of them identically
+&mdash; endpoints preserved, up to 11 codes of error in between &mdash; which is why
+the probe no longer reads that way. Expect them to fail on Safari; that is the
+finding, not a regression.</p>
 <button id="run">Run check</button>
 <div id="out"></div>
 
