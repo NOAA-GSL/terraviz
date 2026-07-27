@@ -388,3 +388,53 @@ Steps 2 and 3 can run in parallel once step 1 clears; 4 depends on both.
   no-data. This scheme assumes they coincide; those need a reserved sentinel or
   a separate mask.
 - `dataset_renditions` and the dormant colour columns.
+
+### Why the chroma planes aren't spare precision
+
+The obvious question about a scheme that encodes into luma is whether the
+other two planes could carry low-order bits for 16- or 24-bit values.
+**They can't usefully, and the reason is worth recording because the
+question will recur:** this scheme is not bit-depth limited.
+
+From the [Evidence](#evidence) above, the error budget decomposes as
+
+| term | RMSE on normalised `t` |
+|---|---|
+| 8-bit quantisation floor | 0.001133 |
+| compression residual | 0.003927 |
+| **total** (quadrature) | **0.004087** |
+
+Removing the quantisation term *entirely* — infinite bit depth — lands at
+0.003927. That is a **4% reduction in total error** for 8 extra bits.
+Roughly 96% of the budget is the encoder's own noise, and quality doesn't
+buy an escape: even CRF 6 stays 2.3× above the quantisation floor.
+
+Chroma is also the worst available place to put those bits:
+
+- **Quarter resolution.** `-pix_fmt yuv420p` is forced, so U and V are
+  4:2:0 — one chroma pair per 2×2 luma block. That is not extra precision
+  per texel; it is a coarser second field.
+- **4:4:4 isn't reachable.** `-profile:v main` rejects it, and the
+  encoder comment already records that higher profiles "would break
+  legacy Safari clients" — the exact constraint
+  [#326](https://github.com/zyra-project/terraviz/issues/326) established.
+- **Chroma is coded more lossily than luma**, so those bits would sit
+  under a worse noise floor than the ones already in use.
+- **The client receives RGB, not YUV.** Recovering U/V means inverting the
+  bt709 matrix from 8-bit-rounded RGB, folding luma's error into the
+  chroma readback. The 3→3 mapping is not lossless even at 4:4:4.
+- Flat chroma is why files *shrink* (34,153 B vs 50,543 B at identical
+  CRF). Signal there gives that back.
+
+If a dataset genuinely needs more than ~8 effective bits, in order of
+preference: **narrow `vmin`/`vmax`** (free, and usually the real answer —
+8 bits over a tight range beats 16 over a range the data never occupies);
+**two adjacent luma texels** as high/low byte (full resolution, no profile
+change, but pointless without the next item); or a **lossless path**
+(FFV1, or serving the PNG frame sequence directly), which is the only
+option that moves the 0.003927 term at all, at the cost of HLS streaming.
+
+A separate idea the chroma planes *could* legitimately serve — not more
+precision, but a **second variable at quarter resolution** (wind U/V
+alongside a scalar, say) where coarse spatial resolution is acceptable for
+the secondary field. That warrants its own design if a dataset wants it.
