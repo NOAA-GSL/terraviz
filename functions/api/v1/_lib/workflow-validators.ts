@@ -8,7 +8,8 @@
  *
  *   - `validatePipeline`     — the security boundary. Every stage/
  *     command pair must be on `ZYRA_STAGE_ALLOWLIST`, args must be
- *     scalar and bounded, and at least one arg must equal
+ *     scalars or bounded arrays of scalars, and at least one arg
+ *     must equal
  *     `WORKFLOW_OUTPUT_PATH` so the publish leg has an MP4 to find.
  *     Enforced at save AND re-enforced at dispatch time — a row
  *     edited around the API (or saved under an older allowlist)
@@ -22,6 +23,7 @@ import {
   MAX_ERROR_SUMMARY_LENGTH,
   MAX_METADATA_TEMPLATE_BYTES,
   MAX_PIPELINE_ARG_LENGTH,
+  MAX_PIPELINE_ARG_LIST_ITEMS,
   MAX_PIPELINE_JSON_BYTES,
   MAX_PIPELINE_STAGES,
   METADATA_TEMPLATE_ALLOWED_FIELDS,
@@ -32,6 +34,7 @@ import {
   ZYRA_STAGE_ALLOWLIST,
   type WorkflowRunStatus,
 } from '../../../../src/types/zyra-workflow-constants'
+import { validateArgPlaceholders } from '../../../../src/types/zyra-pipeline-args'
 import { isValidSchedule } from './workflow-schedule'
 
 export interface WorkflowValidationError {
@@ -45,7 +48,6 @@ function err(field: string, code: string, message: string): WorkflowValidationEr
 }
 
 const ULID_RE = /^[0-9A-HJKMNP-TV-Z]{26}$/
-const PLACEHOLDER_RE = /\{\{\s*([a-z_]+)\s*\}\}/g
 
 // --- Pipeline -----------------------------------------------------
 
@@ -119,21 +121,47 @@ export function validatePipeline(
         return
       }
       for (const [key, value] of Object.entries(args)) {
-        const kind = typeof value
-        if (kind !== 'string' && kind !== 'number' && kind !== 'boolean') {
+        // Arrays of scalars are allowed: zyra's pipeline runner expands
+        // them as multi-valued flags (e.g. dst_bounds: [-180,-90,180,90]
+        // -> --dst-bounds -180 -90 180 90), which nargs-style options
+        // like reproject bounds and visualize extents require.
+        const items = Array.isArray(value) ? value : [value]
+        if (Array.isArray(value) && (value.length === 0 || value.length > MAX_PIPELINE_ARG_LIST_ITEMS)) {
           errors.push(
-            err(`pipeline_json.stages[${i}].args.${key}`, 'invalid_value', 'Arg values must be string, number, or boolean.'),
+            err(
+              `pipeline_json.stages[${i}].args.${key}`,
+              'invalid_value',
+              `Array args must have 1-${MAX_PIPELINE_ARG_LIST_ITEMS} elements.`,
+            ),
           )
           continue
         }
-        if (kind === 'string' && (value as string).length > MAX_PIPELINE_ARG_LENGTH) {
-          errors.push(
-            err(`pipeline_json.stages[${i}].args.${key}`, 'too_long', `Arg values must be ≤ ${MAX_PIPELINE_ARG_LENGTH} characters.`),
-          )
-          continue
-        }
-        if (value === WORKFLOW_OUTPUT_PATH || value === WORKFLOW_FRAMES_OUTPUT_DIR) {
-          writesOutput = true
+        for (const item of items) {
+          const kind = typeof item
+          if (kind !== 'string' && kind !== 'number' && kind !== 'boolean') {
+            errors.push(
+              err(
+                `pipeline_json.stages[${i}].args.${key}`,
+                'invalid_value',
+                'Arg values must be scalars (string, number, boolean) or arrays of scalars.',
+              ),
+            )
+            continue
+          }
+          if (kind === 'string' && (item as string).length > MAX_PIPELINE_ARG_LENGTH) {
+            errors.push(
+              err(`pipeline_json.stages[${i}].args.${key}`, 'too_long', `Arg values must be ≤ ${MAX_PIPELINE_ARG_LENGTH} characters.`),
+            )
+            continue
+          }
+          if (kind === 'string' && ((item as string).includes('{{') || (item as string).includes('}}'))) {
+            for (const e of validateArgPlaceholders(item as string)) {
+              errors.push(err(`pipeline_json.stages[${i}].args.${key}`, e.code, e.message))
+            }
+          }
+          if (item === WORKFLOW_OUTPUT_PATH || item === WORKFLOW_FRAMES_OUTPUT_DIR) {
+            writesOutput = true
+          }
         }
       }
     }
@@ -201,17 +229,14 @@ export function validateMetadataTemplate(
       )
       continue
     }
+    // Same syntax as pipeline args (including the parameterized
+    // `valid_iso`), different vocabulary — so the shared validator is
+    // told which names are in scope here. Codes come from it too, so
+    // an unknown name and a malformed one stay distinguishable, and
+    // the two surfaces report the same kind of problem the same way.
     for (const s of strings) {
-      for (const match of s.matchAll(PLACEHOLDER_RE)) {
-        if (!METADATA_TEMPLATE_VARIABLES.includes(match[1])) {
-          errors.push(
-            err(
-              `metadata_template.${key}`,
-              'unknown_placeholder',
-              `Unknown placeholder "${match[1]}". Available: ${METADATA_TEMPLATE_VARIABLES.join(', ')}.`,
-            ),
-          )
-        }
+      for (const e of validateArgPlaceholders(s, METADATA_TEMPLATE_VARIABLES)) {
+        errors.push(err(`metadata_template.${key}`, e.code, e.message))
       }
     }
   }

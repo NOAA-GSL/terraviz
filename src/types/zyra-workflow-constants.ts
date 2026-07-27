@@ -20,10 +20,13 @@
  * into `process` — `transform metadata` still works as a
  * deprecated alias (also named `scan-frames`), so both spellings
  * are allowlisted until curated templates settle on `process`.
+ *
+ * `reproject` (NOAA-GSL/zyra#295/#306) was added together with the
+ * runner bump to zyra v0.1.49, the first release carrying it.
  */
 export const ZYRA_STAGE_ALLOWLIST: Readonly<Record<string, readonly string[]>> = {
   acquire: ['http', 'ftp', 's3'],
-  process: ['decode-grib2', 'extract-variable', 'convert-format', 'metadata', 'scan-frames', 'pad-missing'],
+  process: ['decode-grib2', 'extract-variable', 'convert-format', 'reproject', 'metadata', 'scan-frames', 'pad-missing'],
   transform: ['metadata', 'scan-frames'],
   visualize: ['heatmap', 'contour', 'animate', 'compose-video'],
   export: ['local'],
@@ -33,6 +36,7 @@ export const ZYRA_STAGE_ALLOWLIST: Readonly<Record<string, readonly string[]>> =
 export const MAX_PIPELINE_STAGES = 12
 export const MAX_PIPELINE_JSON_BYTES = 32 * 1024
 export const MAX_PIPELINE_ARG_LENGTH = 2000
+export const MAX_PIPELINE_ARG_LIST_ITEMS = 16
 
 /** Bounds on the metadata sidecar template. */
 export const MAX_METADATA_TEMPLATE_BYTES = 8 * 1024
@@ -59,17 +63,35 @@ export const METADATA_TEMPLATE_ALLOWED_FIELDS: readonly string[] = [
   'website_link',
 ]
 
-/** Placeholder names the runner can interpolate into template
- *  string values as `{{name}}`. The `data_*` trio derives from the
- *  pipeline's `frames-meta.json` when present (`start_datetime` /
- *  `end_datetime` / `period_seconds` per upstream's
- *  `_compute_frames_metadata()`). */
+/**
+ * Placeholder names the runner can interpolate into template string
+ * values. Two families, resolved differently:
+ *
+ *   - `{{name}}` — `run_date`, `run_id`, and the `data_*` trio. The
+ *     latter derives from the pipeline's `frames-meta.json` when
+ *     present (`start_datetime` / `end_datetime` / `period_seconds`
+ *     per upstream's `_compute_frames_metadata()`), and so reports
+ *     what the frames on disk actually are.
+ *   - `{{valid_iso:INTERVAL:LAG[:OFFSET]}}` — the valid time of a
+ *     forecast hour of the current cycle, from the same clock
+ *     arithmetic the pipeline args use. It always resolves and needs
+ *     no `scan-frames` stage, so it is how a dataset gets dates when
+ *     its frames carry cycle-relative names. It is a prediction
+ *     rather than an observation, though: `data_*` stays the
+ *     truthful choice when the frames are named by valid time and
+ *     `frames-meta.json` exists.
+ *
+ * Syntax and parsing live in `zyra-pipeline-args.ts`; this list only
+ * decides which names are in scope for a metadata template.
+ */
 export const METADATA_TEMPLATE_VARIABLES: readonly string[] = [
   'run_date',
   'run_id',
   'data_start',
   'data_end',
   'data_period',
+  'valid_iso',
+  'valid_compact',
 ]
 
 /**

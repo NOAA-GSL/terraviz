@@ -101,7 +101,7 @@ gap needs a tool on our side (or an upstream contribution).
 | # | Stage (aliases) | Status upstream | Use for TerraViz | Gap / suggested tooling |
 |---|---|---|---|---|
 | 1 | **Import** (acquire, ingest) | Implemented — `zyra acquire http\|s3\|ftp\|vimeo` | Fetch source data: model output, satellite imagery, observation feeds | None blocking. THREDDS/OPeNDAP connectors would widen the NOAA catalog reach — note for upstream, not a prerequisite. |
-| 2 | **Process** (transform) | Implemented — `decode-grib2`, `extract-variable`, `convert-format` | Decode GRIB2/NetCDF, subset variables, reproject | None blocking. |
+| 2 | **Process** (transform) | Implemented — `decode-grib2`, `extract-variable`, `convert-format`, `reproject` | Decode GRIB2/NetCDF, subset variables, reproject (regional grids → equirectangular; 0–360 global grids → ±180) | None blocking (runner pinned to zyra v0.1.49, the first release carrying `reproject`). |
 | 3 | **Simulate** | Conceptual (no CLI) | — | Not needed; skip. |
 | 4 | **Decide** (optimize) | Conceptual | — | Not needed for v1. Future: automatic colormap / contour-level selection for unattended renders. |
 | 5 | **Visualize** (render) | Implemented — `heatmap\|contour\|timeseries\|vector\|animate\|compose-video\|interactive` | Render frames; `compose-video` produces the MP4 | **SOS preset.** Nothing enforces the sphere spec (4096×2048 equirectangular, 30 fps, H.264). v1: bake the constraints into our curated templates' ffmpeg args. Upstream candidate: a `--preset sos` for `compose-video`. **Thumbnail + legend.** No poster/legend output; v1 derives the thumbnail via an ffmpeg frame-grab in the runner, legend stays a template-supplied static asset. |
@@ -411,6 +411,21 @@ metadata vocabulary. When Zyra's Narrate stage ships, an
 LLM-drafted abstract can replace the static template string behind
 the same file format.
 
+`data_start` / `data_end` come from `frames-meta.json`, which
+`scan-frames` builds by parsing timestamps out of frame filenames.
+Model output defeats that: GEFS names files by cycle hour and
+forecast hour with no date, so there is nothing to parse, both
+variables come back null, and every field referencing them drops.
+Those workflows can use `{{valid_iso:INTERVAL:LAG[:OFFSET]}}`
+instead — the same cycle arithmetic as the pipeline args, with
+`OFFSET` naming the frame's forecast hour, so `f042` of a 6-hourly
+cycle is `{{valid_iso:PT6H:PT7H:PT42H}}`. It always resolves and
+needs no `scan-frames` stage. The trade is that it is a prediction
+rather than an observation: `data_*` stays the truthful choice
+wherever the frames really do carry their own timestamps, which is
+what `{{valid_compact:…}}` plus `process convert-format
+--output-names` sets up.
+
 ---
 
 ## Portal UI — `/publish/workflows`
@@ -450,10 +465,16 @@ Pipeline YAML is user-supplied execution config that runs inside
 the node's GitHub Actions with repo secrets in scope. Containment,
 in order of importance:
 
-1. **Who can author.** Workflow CRUD is restricted to `staff` and
-   `service` roles in v1. Community publishers don't see the
-   section. Relaxing this is a §Open questions item, not a v1
-   feature.
+1. **Who can author.** Workflow CRUD gates on the
+   `workflows.manage` capability — `editor`, `admin`, and
+   `service` in the five-role matrix. (This doc originally said
+   "staff", a pre-five-role term that never existed as a role;
+   issue #305 resolved the mismatch in favor of editor as the
+   trusted human role.) The enforcement point is the API's
+   capability gate: the sidebar's Workflows item is
+   feature-gated, not role-gated, so other roles may *see* the
+   section but every route 403s them. Granting more roles is a
+   §Open questions item, not a v1 feature.
 2. **What can run.** `/validate` — enforced again at dispatch
    time, not just at save — checks every stage/command pair
    against a server-side allowlist (the implemented Zyra stages
@@ -480,6 +501,11 @@ in order of importance:
 | **Z2 — portal UI** | `/publish/workflows` list / new / edit / history pages; enable toggle; Run now; status badges. | A staff publisher manages workflows without leaving the dashboard. |
 | **Z3 — guided authoring** | Curated pipeline templates; stage-form builder over the allowlist; richer validation surfacing; log links; a "Create draft dataset" button beside the target field that POSTs a minimal draft (workflow name + video/mp4) and fills the id in place — the new-workflow flow never leaves the page (gap confirmed in production: the form's hint sends the publisher off to do something the form can do itself). | A publisher who has never read Zyra docs ships a working hourly pipeline. |
 | **Z4 — real-time UX + upstream** | SPA consumes `period` for freshness (the §7.4 marker driven by data, targeted catalog-cache bypass for due datasets); upstream proposals to NOAA-GSL/zyra (`--preset sos`, `export terraviz`, Narrate/Verify input); alignment with federation Tier 0 once Phase 4 ships. | The catalog visibly knows which datasets are live, and the Zyra-side ergonomics stop being our fork's problem. |
+
+Authoring beyond Z3 — a source probe with pattern induction,
+curated dataset-source presets, one-click upstream gap issues,
+and an evidence-gated Orbit authoring mode — is scoped separately
+in [`WORKFLOW_AUTHORING_PLAN.md`](WORKFLOW_AUTHORING_PLAN.md).
 
 ### Implementation conventions (Z1/Z2 checklist)
 
@@ -621,6 +647,17 @@ consumes:
   run — the same span the video shows). The cache is bounded by
   cadence × window, never by how long the workflow has run.
 
+**Both phases are opt-in via `acquire --sync-dir`.** That stage is
+the whole mechanism — it is what skips a fetch when the frame is
+already on disk — so a pipeline without one is not a cache
+participant. It regenerates every frame from source each run, which
+means a restored frame saves no work and merely leaves a file the
+run did not produce sitting in the output directory, where
+`compose-video --glob` folds it into the video. The runner therefore
+skips restore and save when the pipeline declares no `--sync-dir`
+under `/work`, and purges any frames a prior run left under that
+dataset's prefix.
+
 Persisting frames across runs is also what makes
 **padded→real freshening** possible — the capability the scheduler
 gets from `acquire --prefer-remote-if-meta-newer`. We do it
@@ -701,7 +738,11 @@ cache, sequenced after it.
 3. **Failure escalation.** A workflow that fails every hour fills
    `workflow_runs` and nobody notices. Minimum viable: auto-disable
    after N consecutive failures + a status banner in the portal.
-   Email/webhook fan-out belongs to the deferred 3pj work.
+   Email/webhook fan-out belongs to the deferred 3pj work. An
+   agent-assisted *diagnosis* hook for these failures (headless,
+   behind the run-status contract) is conditionally approved in
+   [`AGENT_SDK_EVALUATION.md`](AGENT_SDK_EVALUATION.md), gated on
+   this table's observed non-transient failure rate.
 4. **Community publishers.** The v1 staff-only restriction is a
    trust decision, not a technical one. Revisit alongside the
    Phase 6 review-queue (`submitted_at` / `approved_at`) — a
@@ -714,3 +755,32 @@ cache, sequenced after it.
    chunk (versioned with the app) vs. rows in D1 (editable per
    node without a deploy). v1 leans hard-coded; revisit when a
    second node wants different templates.
+
+
+## Pipeline arg placeholders
+
+Model-output sources embed the forecast cycle in their paths
+(`gefs.20260724/00/...`), so a static pipeline can only fetch one
+frozen cycle. String arg values (including array elements) may
+reference `{{run_date}}`, `{{run_id}}`, and the parameterized
+`{{cycle_date:INTERVAL:LAG}}` / `{{cycle_hour:INTERVAL:LAG}}` pair
+(ISO-8601 durations; cycle = floor((now − LAG) / INTERVAL) · INTERVAL,
+epoch-anchored). The validator checks placeholder syntax at save and
+dispatch time (`invalid_placeholder`); the runner interpolates them
+just before writing `pipeline.json`. Unlike the metadata sidecar's
+drop-with-warning behavior, an unresolved pipeline placeholder is a
+hard run failure — a URL with a missing date fetches garbage.
+Contract lives in `src/types/zyra-pipeline-args.ts`, shared by
+validator and runner.
+
+`{{valid_iso:INTERVAL:LAG[:OFFSET]}}` and its filename-safe sibling
+`{{valid_compact:…}}` name the *valid time* of a frame rather than
+the cycle: the cycle advanced by `OFFSET`, the frame's forecast
+hour. `valid_compact` renders `YYYYMMDDTHHMMSS`, which is what
+Zyra's `--datetime-format %Y%m%dT%H%M%S` reads back — so pairing it
+with `process convert-format --output-names` renames frames from
+their cycle-relative source names to their valid times, and
+`scan-frames` can then recover a real date range. The same two
+names are available to metadata templates, where `valid_iso` is
+the way to get dates onto a dataset whose pipeline has no
+`scan-frames` stage at all.

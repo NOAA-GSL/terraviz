@@ -581,7 +581,15 @@ export function createPhotorealEarth(
       `#ifdef USE_MAP
          vec4 sampledDiffuseColor;
          if (uOverlayHasBbox == 1) {
-           float lat = (0.5 - vMapUv.y) * 180.0;
+           // THREE's SphereGeometry puts uv.y == 1 at the NORTH pole
+           // (verified: SphereGeometry(1,8,6) gives uv.y 1 at y=+1, 0
+           // at y=-1). That is the opposite of the 2D globe's own
+           // sphere in earthTileLayer.ts, which builds v = y/hSegs with
+           // lat = pi/2 - v*pi, i.e. v == 0 at the north pole. This
+           // expression was copied from there and inverted latitude
+           // here, so a regional dataset rendered into the mirrored
+           // hemisphere - a US bbox landing over the South Pacific.
+           float lat = (vMapUv.y - 0.5) * 180.0;
            float lon = (vMapUv.x - 0.5) * 360.0;
            float bn = uOverlayBbox.x;
            float bs = uOverlayBbox.y;
@@ -603,7 +611,9 @@ export function createPhotorealEarth(
              bu = eastSide ? (lon - bw) / span : (lon + 360.0 - bw) / span;
            }
            if (insideLat && insideLon) {
-             float bv = (bn - lat) / max(bn - bs, 1e-6);
+             // v == 1 is the image's TOP row (THREE uploads with
+             // flipY), so the box's north edge maps to bv 1, not 0.
+             float bv = (lat - bs) / max(bn - bs, 1e-6);
              if (uOverlayFlipY == 1) bv = 1.0 - bv;
              sampledDiffuseColor = texture2D(map, vec2(bu, bv));
            } else if (uOverlayHasBase == 1) {

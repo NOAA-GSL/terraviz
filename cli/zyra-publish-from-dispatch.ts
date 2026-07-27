@@ -76,8 +76,10 @@ import {
   type R2UploadConfig,
 } from './lib/r2-upload'
 import { frameHexFromKey, frameStorePrefix, selectFrameOrphans } from './lib/frame-store'
+import { renderPipelineJson } from '../src/types/zyra-pipeline-args'
 import {
   isoDurationToSeconds,
+  purgeFramesFromR2,
   restoreFramesFromR2,
   saveFramesToR2,
   windowFrameBudget,
@@ -88,7 +90,10 @@ import {
   classifyZyraFailure,
   decideAcquireSoftPass,
 } from './lib/zyra-acquire-softpass'
-import { WORKFLOW_OUTPUT_PATH } from '../src/types/zyra-workflow-constants'
+import {
+  WORKFLOW_FRAMES_OUTPUT_DIR,
+  WORKFLOW_OUTPUT_PATH,
+} from '../src/types/zyra-workflow-constants'
 
 const ULID_RE = /^[0-9A-HJKMNP-TV-Z]{26}$/
 
@@ -120,6 +125,9 @@ export interface Args {
   video: string
   waitSeconds: number
   errorSummary: string
+  /** Terminal status for report-failure: `failed` (default) or
+   *  `canceled` when the GHA job was cancelled or timed out. */
+  terminalStatus: 'failed' | 'canceled'
   ffprobeBin: string
   /** Path to the captured `zyra run` combined output — the
    *  acquire-softpass classifier's input. */
@@ -173,6 +181,13 @@ export function parseArgs(argv: readonly string[]): Args | { error: string } {
       error: `--stale-after-seconds must be an integer 0..${MAX_STALE_AFTER_SECONDS}; got ${staleRaw}`,
     }
   }
+  // Derived before the literal so the default summary can agree with
+  // it. The workflow always passes --error-summary, but the CLI is
+  // hand-runnable, and "Workflow run failed" stored against a
+  // `canceled` row contradicts the row it is attached to.
+  const terminalStatus: Args['terminalStatus'] =
+    get('status') === 'canceled' ? 'canceled' : 'failed'
+
   return {
     phase,
     workflowId,
@@ -181,7 +196,12 @@ export function parseArgs(argv: readonly string[]): Args | { error: string } {
     ghaRunId: get('gha-run-id'),
     video: get('video') ?? join(workdir, 'output', 'dataset.mp4'),
     waitSeconds,
-    errorSummary: get('error-summary') ?? 'Workflow run failed (no detail provided).',
+    errorSummary:
+      get('error-summary') ??
+      (terminalStatus === 'canceled'
+        ? 'Workflow run cancelled (no detail provided).'
+        : 'Workflow run failed (no detail provided).'),
+    terminalStatus,
     ffprobeBin: get('ffprobe-bin') ?? 'ffprobe',
     zyraLog: get('zyra-log'),
     staleAfterSeconds,
@@ -273,7 +293,27 @@ async function phaseFetch(client: TerravizClient, args: Args): Promise<number> {
   const workflow = result.body.workflow
   await mkdir(args.workdir, { recursive: true })
   await mkdir(join(args.workdir, 'output'), { recursive: true })
-  await writeFile(join(args.workdir, 'pipeline.json'), workflow.pipeline_json)
+  // Interpolate {{run_date}}/{{run_id}}/{{cycle_*}} placeholders in
+  // pipeline args before the container sees them. A malformed or
+  // unknown placeholder is a hard failure: rendering a literal
+  // {{...}} into a source URL would fetch garbage.
+  let renderedPipeline: string
+  try {
+    renderedPipeline = renderPipelineJson(workflow.pipeline_json, {
+      now: new Date(),
+      runId: args.runId,
+    })
+  } catch (e) {
+    const detail = e instanceof Error ? e.message : String(e)
+    log(`FAIL: pipeline placeholder rendering → ${detail}`)
+    await client.postWorkflowRunStatus(args.workflowId, args.runId, {
+      status: 'failed',
+      gha_run_id: args.ghaRunId,
+      error_summary: sanitizeErrorSummary(`pipeline placeholder rendering: ${detail}`),
+    })
+    return 2
+  }
+  await writeFile(join(args.workdir, 'pipeline.json'), renderedPipeline)
   await writeFile(join(args.workdir, 'workflow.json'), JSON.stringify(workflow))
   log(`fetched workflow ${workflow.id} → ${args.workdir}/pipeline.json`)
 
@@ -653,18 +693,9 @@ function frameCacheConfig(): R2UploadConfig | null {
 }
 
 /** Translate a pipeline `/work/...` path (the container's view of
- *  the mounted workdir) to the host path the CLI sees. */
-function mapWorkPath(pipelinePath: string | null, workdir: string): string {
-  if (!pipelinePath) return join(workdir, 'images', 'frames')
-  if (pipelinePath === '/work') return workdir
-  if (pipelinePath.startsWith('/work/')) return join(workdir, pipelinePath.slice('/work/'.length))
-  return join(workdir, 'images', 'frames')
-}
-
-/** Like `mapWorkPath` but for an arbitrary `/work/...` file path —
- *  returns null (rather than a frames-dir fallback) when the path
- *  isn't under the mounted workdir, so a caller can tell "absent"
- *  from "defaulted". */
+ *  the mounted workdir) to the host path the CLI sees. Returns null
+ *  when the path is absent or points outside the mounted workdir, so
+ *  a caller can tell "absent" from "present" instead of guessing. */
 function mapWorkFile(pipelinePath: string | null, workdir: string): string | null {
   if (!pipelinePath) return null
   if (pipelinePath === '/work') return workdir
@@ -672,8 +703,30 @@ function mapWorkFile(pipelinePath: string | null, workdir: string): string | nul
   return null
 }
 
-interface FrameParams {
+/** Where a pipeline that declares no sync-dir of its own leaves its
+ *  frames. `/validate` requires every stored pipeline to write to
+ *  `WORKFLOW_OUTPUT_PATH` or `WORKFLOW_FRAMES_OUTPUT_DIR`
+ *  (`functions/api/v1/_lib/workflow-validators.ts`), so a
+ *  frames-output pipeline's frames are there by contract — deriving
+ *  the fallback from the constant keeps the runner and the validator
+ *  from drifting apart. */
+function framesOutputDir(workdir: string): string {
+  // The constant is a `/work/...` path by construction, so the
+  // mapping cannot fail; the fallback is a guard against a future
+  // edit to it silently yielding null here.
+  return mapWorkFile(WORKFLOW_FRAMES_OUTPUT_DIR, workdir) ?? join(workdir, 'images', 'frames')
+}
+
+export interface FrameParams {
+  /** Host path to the directory the run's frames land in: the acquire
+   *  stage's `--sync-dir` when it declares one under `/work`, else
+   *  `WORKFLOW_FRAMES_OUTPUT_DIR`. Always a path — the image-sequence
+   *  publish path has to read from somewhere. */
   framesDir: string
+  /** The same directory *as a cache participant* — null unless the
+   *  pipeline declares an `acquire --sync-dir` under `/work`. See
+   *  `deriveFrameParams` for why the two differ. */
+  cacheDir: string | null
   /** Window budget for the prune, or null to keep everything. */
   keepFrames: number | null
   /** Host path to the pad-missing JSON report, or null when the
@@ -684,8 +737,21 @@ interface FrameParams {
 /** Derive the frames directory + window budget + pad-report path
  *  from the stored pipeline definition: the acquire stage's
  *  `sync-dir` + `since-period`, a scan-frames/metadata stage's
- *  `period-seconds`, and the pad-missing stage's `json-report`. */
-function deriveFrameParams(pipelineJson: string, workdir: string): FrameParams {
+ *  `period-seconds`, and the pad-missing stage's `json-report`.
+ *
+ *  `framesDir` and `cacheDir` are the same path when the pipeline
+ *  declares a sync-dir, and diverge when it doesn't: reading frames
+ *  the run produced is always possible (the runner has a conventional
+ *  location), but *caching* them is only meaningful for a pipeline
+ *  built around `acquire --sync-dir`. That stage is the entire reason
+ *  the cache exists — it is what skips a re-fetch when the frame is
+ *  already on disk. A pipeline without one regenerates every frame
+ *  from source each run, so restoring a cached frame into its output
+ *  directory cannot save any work; it can only leave behind a file
+ *  the run did not produce, which `compose-video --glob` then folds
+ *  into the video. Defaulting `cacheDir` to `<workdir>/images/frames`
+ *  made every such pipeline an unwilling cache participant. */
+export function deriveFrameParams(pipelineJson: string, workdir: string): FrameParams {
   let stages: Array<Record<string, unknown>> = []
   try {
     const parsed = JSON.parse(pipelineJson) as { stages?: unknown }
@@ -712,8 +778,10 @@ function deriveFrameParams(pipelineJson: string, workdir: string): FrameParams {
       padReport = args['json-report']
     }
   }
+  const cacheDir = mapWorkFile(syncDir, workdir)
   return {
-    framesDir: mapWorkPath(syncDir, workdir),
+    framesDir: cacheDir ?? framesOutputDir(workdir),
+    cacheDir,
     keepFrames: windowFrameBudget(
       sincePeriod ? isoDurationToSeconds(sincePeriod) : null,
       periodSeconds,
@@ -778,10 +846,14 @@ async function phaseRestoreFrames(args: Args): Promise<number> {
   }
   const wf = await readWorkflowForFrames(args.workdir)
   if (!wf) return 0
-  const { framesDir } = deriveFrameParams(wf.pipelineJson, args.workdir)
+  const { cacheDir } = deriveFrameParams(wf.pipelineJson, args.workdir)
+  if (!cacheDir) {
+    log('frame cache: pipeline has no `acquire --sync-dir` — skipping restore')
+    return 0
+  }
   try {
-    const result = await restoreFramesFromR2(cfg, wf.datasetId, framesDir, { log })
-    log(`frame cache: restored ${result.restored}, ${result.skipped} already present → ${framesDir}`)
+    const result = await restoreFramesFromR2(cfg, wf.datasetId, cacheDir, { log })
+    log(`frame cache: restored ${result.restored}, ${result.skipped} already present → ${cacheDir}`)
   } catch (err) {
     log(`WARN: frame restore failed (continuing uncached) — ${err instanceof Error ? err.message : String(err)}`)
   }
@@ -799,12 +871,26 @@ async function phaseSaveFrames(args: Args): Promise<number> {
   }
   const wf = await readWorkflowForFrames(args.workdir)
   if (!wf) return 0
-  const { framesDir, keepFrames, padReportPath } = deriveFrameParams(wf.pipelineJson, args.workdir)
+  const { cacheDir, keepFrames, padReportPath } = deriveFrameParams(wf.pipelineJson, args.workdir)
+  if (!cacheDir) {
+    // Restore skipped for the same reason, so there is nothing new to
+    // push. Drop whatever a prior (pre-gating) run left under this
+    // dataset's prefix: it is unreachable now and would otherwise sit
+    // in R2 forever, waiting to contaminate the pipeline again if it
+    // ever gains a sync-dir.
+    log('frame cache: pipeline has no `acquire --sync-dir` — skipping save')
+    try {
+      await purgeFramesFromR2(cfg, wf.datasetId, { log })
+    } catch (err) {
+      log(`WARN: frame purge failed (continuing) — ${err instanceof Error ? err.message : String(err)}`)
+    }
+    return 0
+  }
   // Synthetic frames (pad-missing's created_files) stay out of the
   // cache so the next run's acquire can replace them with real ones.
   const excludeNames = padReportPath ? await readPaddedFrameNames(padReportPath) : []
   try {
-    const result = await saveFramesToR2(cfg, wf.datasetId, framesDir, {
+    const result = await saveFramesToR2(cfg, wf.datasetId, cacheDir, {
       log,
       keepFrames: keepFrames ?? undefined,
       excludeNames,
@@ -822,7 +908,7 @@ async function phaseSaveFrames(args: Args): Promise<number> {
 
 async function phaseReportFailure(client: TerravizClient, args: Args): Promise<number> {
   const status = await client.postWorkflowRunStatus(args.workflowId, args.runId, {
-    status: 'failed',
+    status: args.terminalStatus,
     gha_run_id: args.ghaRunId,
     error_summary: sanitizeErrorSummary(args.errorSummary),
   })
@@ -830,13 +916,13 @@ async function phaseReportFailure(client: TerravizClient, args: Args): Promise<n
     // A 409 here means the run already reached a terminal status
     // (e.g. publish failed AFTER reporting) — that's fine.
     if (status.status === 409) {
-      log('failed callback skipped — run already terminal')
+      log(`${args.terminalStatus} callback skipped — run already terminal`)
       return 0
     }
     log(`FAIL: failed callback → ${status.status} ${status.error}`)
     return 2
   }
-  log(`run ${args.runId} marked failed`)
+  log(`run ${args.runId} marked ${args.terminalStatus}`)
   return 0
 }
 

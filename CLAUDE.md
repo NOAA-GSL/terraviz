@@ -31,6 +31,23 @@ next" rule from `~/.claude/CLAUDE.md` applies here especially:
   named phases, explicit non-goals, tables for comparisons,
   honest tradeoffs. New plan content should match.
 
+### LLM integration convention
+
+Any change that touches an LLM call — Orbit, voice, enrichment,
+workflow tooling, anything new — must follow
+[CONTRIBUTING.md](CONTRIBUTING.md) §LLM Integrations: speak
+through an existing contract, availability-gate with a working
+fallback (quota exhaustion included), no vendor LLM SDK in
+`dependencies`, and external content in model input is data,
+never instructions. Verdicts on specific agentic proposals
+(embedded Agent SDK: rejected; run-failure diagnosis:
+conditionally approved; others parked behind named triggers) are
+in [`docs/AGENT_SDK_EVALUATION.md`](docs/AGENT_SDK_EVALUATION.md)
+— check it before proposing or building an agentic feature, and
+add new value ideas to
+[`docs/LLM_INTEGRATION_OPPORTUNITIES.md`](docs/LLM_INTEGRATION_OPPORTUNITIES.md)
+rather than building them ad hoc.
+
 ### Federation planning artifact
 
 Federation work — Phase 4 routes (handshake / feed / signing),
@@ -183,6 +200,7 @@ npm run screenshots:smoke   # gating interaction tests (search, Orbit, nav)
 | `src/config/endpoints.ts` | Externally-hosted endpoint configuration (catalog / proxy / NOAA / NASA base URLs) |
 | `src/types/image-sequence-constants.ts` | Constants shared by the publisher API (`functions/`), the GHA runner (`cli/`), and the portal (`src/`) for the image-sequence upload pipeline |
 | `src/types/zyra-workflow-constants.ts` | Constants shared by the publisher API (`functions/`), the GHA runner (`cli/`), and the portal (`src/`) for the Zyra workflow pipeline — stage/command allowlist, template fields, run statuses (`docs/ZYRA_INTEGRATION_PLAN.md`) |
+| `src/types/zyra-pipeline-args.ts` | Pipeline-arg placeholder contract shared by the validator (`functions/`) and the runner (`cli/`) — `{{run_date}}` / `{{run_id}}` / `{{cycle_date:INTERVAL:LAG}}` / `{{cycle_hour:INTERVAL:LAG}}` parsing, validation, and cycle-floored rendering; unresolved pipeline placeholders hard-fail the run (`docs/ZYRA_INTEGRATION_PLAN.md` §Pipeline arg placeholders) |
 | `src/types/node-features.ts` | Per-node feature-toggle constants shared by the publisher API (`functions/`) and the portal + public SPA — `FEATURE_KEYS` / `FeatureMap`, all-on defaults, fail-open normalization (missing/unknown keys resolve to enabled) |
 | `src/types/publisher-roles.ts` | Publisher role → capability matrix shared by the publisher API (`functions/`) and the portal — `CAPABILITIES` / `ROLES` / `ROLE_CAPABILITIES`, `roleCan` / `capabilitiesForRole`, legacy-string `normalizeRole` (fail-closed to `reviewer`). The single source of truth for authorization (`docs/PUBLISHER_ROLES_PLAN.md`) |
 | `src/data/regions.ts` | Common region bounding boxes for name-based region resolution |

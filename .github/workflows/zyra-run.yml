@@ -20,11 +20,12 @@
 #
 # The image is pinned by digest — the digest is the Zyra version
 # pin the /validate stage allowlist is coupled to (plan doc
-# §Runner); bump both together, deliberately. This digest was
-# observed and validated by the Z0 spike run
-# (actions/runs/27286624666: SOS-spec pass with zero warnings).
+# §Runner); bump both together, deliberately.
+#
 # Override per-node without a commit via the ZYRA_SCHEDULER_IMAGE
-# repo variable.
+# repo variable. The name is historical: it must hold a `zyra` image,
+# not a `zyra-scheduler` one — see the note on ZYRA_IMAGE_DEFAULT
+# below for why the scheduler image cannot run these pipelines.
 #
 # Required repo secrets (the transcode-hls.yml set):
 #   TERRAVIZ_SERVER, CF_ACCESS_CLIENT_ID, CF_ACCESS_CLIENT_SECRET
@@ -45,7 +46,21 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  ZYRA_IMAGE_DEFAULT: ghcr.io/noaa-gsl/zyra-scheduler@sha256:fe83cf443dd96d3a7043e52207463424fcde11937c4b177a6fb5130d2caf9937
+  # `zyra`, NOT `zyra-scheduler`. The scheduler image is built with
+  # ZYRA_EXTRAS=connectors only (NOAA-GSL/zyra `release-images.yml`),
+  # so it has neither `processing` nor `visualization` and dies at the
+  # first convert-format or heatmap stage. `zyra` carries
+  # connectors,processing,visualization,api on both arches.
+  #
+  # v0.1.52 — corrects north-south mirroring of GeoTIFF input in
+  # heatmap/contour (NOAA-GSL/zyra#338). Every frame this runner has
+  # rendered through `convert-format geotiff` -> `reproject` ->
+  # `heatmap` had its data flipped against the basemap, so a dataset
+  # published on an earlier image needs re-running to be correct.
+  # Also places a regional basemap at its own extent rather than the
+  # viewport (NOAA-GSL/zyra#341), and validates `--extent` latitudes
+  # (NOAA-GSL/zyra#344).
+  ZYRA_IMAGE_DEFAULT: ghcr.io/noaa-gsl/zyra@sha256:0f335b9d9b2f0eba6d7ef9407906b13eddb1ead43b984bc07c21b4507063b09b
 
 jobs:
   run:
@@ -168,9 +183,27 @@ jobs:
             "$IMAGE" \
             bash -c '
               set -euo pipefail
-              # pad-missing needs Pillow, which the scheduler image does
-              # not bundle — install it on demand (as the zyra-scheduler
-              # GitLab pipeline does) when the pipeline uses that stage.
+              # The zyra image sets PROJ_LIB=/usr/share/proj for its
+              # arm64 apt layout (docker/zyra/Dockerfile), but sets it
+              # unconditionally. On amd64 that directory does not exist
+              # and the stale value overrides the PROJ data bundled in
+              # the rasterio wheel, so every CRS lookup dies with
+              # "Cannot find proj.db" (NOAA-GSL/zyra#318). GDAL_DATA is
+              # correctly left unset there, which is why GDAL data
+              # resolves fine; do the same for PROJ. Only a value that
+              # is genuinely broken gets cleared, so a fixed image and
+              # the arm64 layout are both unaffected, and this guard
+              # becomes a no-op once the image ships the fix.
+              if [ -n "${PROJ_LIB:-}" ] && [ ! -f "${PROJ_LIB}/proj.db" ]; then
+                echo "::notice::PROJ_LIB=$PROJ_LIB has no proj.db; clearing it so rasterio uses its bundled PROJ data"
+                unset PROJ_LIB
+              fi
+              # pad-missing needs Pillow. On the `zyra` image this is
+              # already a no-op: the `visualization` extra pulls
+              # matplotlib, which depends on pillow>=9, so the import
+              # check below short-circuits. Kept for leaner images
+              # (zyra-scheduler ships connectors only), which is what
+              # the `import PIL` guard is testing rather than assuming.
               # Pinned for reproducibility; bump deliberately alongside
               # the runner image digest.
               if grep -q "pad-missing" /work/pipeline.json && ! python -c "import PIL" >/dev/null 2>&1; then
@@ -295,9 +328,12 @@ jobs:
           export DEBIAN_FRONTEND=noninteractive
           sudo systemctl stop apt-daily.timer apt-daily-upgrade.timer 2>/dev/null || true
           sudo systemctl stop apt-daily.service apt-daily-upgrade.service unattended-upgrades.service 2>/dev/null || true
-          APT_OPTS="-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=180"
-          sudo apt-get $APT_OPTS update
-          sudo apt-get $APT_OPTS install -y --no-install-recommends ffmpeg
+          # An array, not a string: these are several separate argv
+          # entries, and quoting a scalar would hand apt-get one
+          # argument containing spaces.
+          APT_OPTS=(-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=180)
+          sudo apt-get "${APT_OPTS[@]}" update
+          sudo apt-get "${APT_OPTS[@]}" install -y --no-install-recommends ffmpeg
           ffmpeg -version | head -n1
 
       - name: Publish to TerraViz (succeeded callback)
@@ -325,16 +361,23 @@ jobs:
             --workdir=_work \
             --gha-run-id="${{ github.run_id }}"
 
+      # cancelled() as well as failure(): GitHub does NOT run failure()
+      # steps when a job is cancelled or hits timeout-minutes, so a
+      # cancelled run left its workflow_runs row stuck at `running`
+      # forever -- and both /due and insertRun skip a workflow that has
+      # an active run, wedging the schedule permanently.
       - name: Report failure
-        if: failure()
+        if: failure() || cancelled()
         env:
           TERRAVIZ_SERVER: ${{ secrets.TERRAVIZ_SERVER }}
           TERRAVIZ_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
           TERRAVIZ_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+          TERMINAL_STATUS: ${{ job.status == 'cancelled' && 'canceled' || 'failed' }}
         run: |
           npx tsx cli/zyra-publish-from-dispatch.ts \
             --phase=report-failure \
             --workflow-id="${{ github.event.client_payload.workflow_id }}" \
             --run-id="${{ github.event.client_payload.run_id }}" \
             --gha-run-id="${{ github.run_id }}" \
-            --error-summary="Run failed in GitHub Actions run ${{ github.run_id }} — see the Actions log."
+            --status="$TERMINAL_STATUS" \
+            --error-summary="Run $TERMINAL_STATUS in GitHub Actions run ${{ github.run_id }} — see the Actions log."

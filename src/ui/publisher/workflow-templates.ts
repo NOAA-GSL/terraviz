@@ -154,6 +154,59 @@ export const WORKFLOW_TEMPLATES: readonly WorkflowTemplate[] = [
   "period": "{{data_period}}"
 }`,
   },
+  {
+    // The two templates above read frames whose filenames already
+    // carry a date, so `scan-frames` can recover the range and the
+    // `data_*` variables resolve. Model output is the other case:
+    // GEFS names files by cycle hour and forecast hour with no date
+    // at all, so the range has to come from the cycle arithmetic
+    // instead — `{{valid_iso:INTERVAL:LAG[:OFFSET]}}`, where OFFSET
+    // is the forecast hour of the frame.
+    id: 'gefs-cycle-sos',
+    labelKey: 'publisher.workflows.template.gefsCycle',
+    pipelineYaml: `stages:
+  - stage: process
+    command: convert-format
+    args:
+      format: geotiff
+      inputs:
+        - https://noaa-gefs-pds.s3.amazonaws.com/gefs.{{cycle_date:PT6H:PT7H}}/{{cycle_hour:PT6H:PT7H}}/chem/pgrb2ap25/gefs.chem.t{{cycle_hour:PT6H:PT7H}}z.a2d_0p25.f000.grib2
+        - https://noaa-gefs-pds.s3.amazonaws.com/gefs.{{cycle_date:PT6H:PT7H}}/{{cycle_hour:PT6H:PT7H}}/chem/pgrb2ap25/gefs.chem.t{{cycle_hour:PT6H:PT7H}}z.a2d_0p25.f006.grib2
+      output-dir: /work/tif
+      output-names:
+        - '{{valid_compact:PT6H:PT7H}}.tif'
+        - '{{valid_compact:PT6H:PT7H:PT6H}}.tif'
+  - stage: process
+    command: reproject
+    args:
+      inputs:
+        - /work/tif/{{valid_compact:PT6H:PT7H}}.tif
+        - /work/tif/{{valid_compact:PT6H:PT7H:PT6H}}.tif
+      output-dir: /work/wrapped
+  - stage: visualize
+    command: heatmap
+    args:
+      inputs:
+        - /work/wrapped/{{valid_compact:PT6H:PT7H}}.tif
+        - /work/wrapped/{{valid_compact:PT6H:PT7H:PT6H}}.tif
+      output-dir: /work/images/frames
+  - stage: visualize
+    command: compose-video
+    args:
+      frames: /work/images/frames
+      output: /work/output/dataset.mp4
+`,
+    metadataTemplate: `{
+  "title": "GEFS aerosol optical depth",
+  "abstract": "Most recent GEFS chemistry cycle, valid {{valid_iso:PT6H:PT7H}} to {{valid_iso:PT6H:PT7H:PT6H}}.",
+  "keywords": ["real-time", "forecast"],
+  "start_time": "{{valid_iso:PT6H:PT7H}}",
+  "end_time": "{{valid_iso:PT6H:PT7H:PT6H}}",
+  "period": "PT6H",
+  "organization": "NOAA",
+  "attribution_text": "NOAA"
+}`,
+  },
 ]
 
 /**
