@@ -115,3 +115,50 @@ describe('photorealEarth bbox shader', () => {
     )
   })
 })
+
+describe('data-encoded palette is confined to the dataset texture', () => {
+  // The base map and the dataset share one material here, unlike the 2D
+  // globe where the dataset is a separate program that discards outside
+  // the box. So `sampledDiffuseColor` holds the BASE MAP outside a
+  // regional bbox, and feeding its red channel to the value palette
+  // paints the Earth with the colour ramp: white terrain (Greenland,
+  // ice, bright desert) reads as r ~= 1.0 and lands on the top of the
+  // scale — the hottest colour, over land that carries no data at all.
+  //
+  // Shipped in the data-encoded video work and caught on the first
+  // regional dataset viewed through the publisher's globe-thumbnail
+  // generator.
+
+  it('gates the palette lookup on having sampled the dataset', () => {
+    // The flag must exist and start true, so the full-globe path (which
+    // never touches it) still colours.
+    expect(SHADER_SRC).toMatch(/bool\s+sampledDataset\s*=\s*true\s*;/)
+    // ...and be cleared exactly where the base map is substituted.
+    expect(SHADER_SRC).toMatch(
+      /sampledDiffuseColor\s*=\s*texture2D\(\s*uOverlayBaseMap\s*,\s*vMapUv\s*\)\s*;\s*sampledDataset\s*=\s*false\s*;/,
+    )
+    // The palette branch must require it. Without the conjunct the
+    // base map's red channel is treated as a measurement.
+    expect(SHADER_SRC).toMatch(
+      /if\s*\(\s*uOverlayDataEncoded\s*==\s*1\s*&&\s*sampledDataset\s*\)/,
+    )
+    expect(SHADER_SRC).not.toMatch(/if\s*\(\s*uOverlayDataEncoded\s*==\s*1\s*\)/)
+  })
+
+  it('still reads the palette from the dataset sample, not the base map', () => {
+    // The lookup itself is unchanged: .r of the dataset texel indexes
+    // the 256x1 LUT. This pins the thing the gate protects.
+    expect(SHADER_SRC).toMatch(
+      /texture2D\(\s*uOverlayColorLut\s*,\s*vec2\(\s*sampledDiffuseColor\.r\s*,\s*0\.5\s*\)\s*\)/,
+    )
+  })
+
+  it('leaves the 2D globe alone — it never had this bug', () => {
+    // earthTileLayer runs the dataset as its own program and discards
+    // outside the box, so the base map can never reach the LUT there.
+    // No gate is needed and none should be added.
+    const twoD = codeOf('earthTileLayer.ts')
+    expect(twoD).toMatch(/if\s*\(\s*uDataEncoded\s*\)/)
+    expect(twoD).not.toMatch(/sampledDataset/)
+  })
+})
