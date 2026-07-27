@@ -130,8 +130,29 @@ window.runCheck = async function (variants) {
     + '</table>'
   return rows
 }
-document.getElementById('run').onclick = () =>
-  window.runCheck(window.__VARIANTS__ || ['A_today', 'B_tag_only', 'D_full_proper'])
+// Ask the server which variants exist. Deliberately NO hardcoded
+// fallback: a list baked in here is a list that goes stale the moment a
+// variant is added, and the failure mode is silent — the table renders,
+// every row passes, and the variant you came to test was never run.
+// Better to say nothing ran than to imply the wrong thing did.
+document.getElementById('run').onclick = async () => {
+  const out = document.getElementById('out')
+  out.textContent = 'Loading variant list…'
+  let variants
+  try {
+    const r = await fetch('./variants.json', { cache: 'no-store' })
+    if (!r.ok) throw new Error('HTTP ' + r.status)
+    variants = (await r.json()).map(v => v.name)
+    if (!variants.length) throw new Error('server reported no variants')
+  } catch (e) {
+    out.innerHTML = '<p class="fail">Could not load ./variants.json ('
+      + String(e.message || e) + '). Not running a guessed subset — '
+      + 'restart the harness with --serve so the list is served.</p>'
+    return
+  }
+  out.textContent = 'Testing ' + variants.length + ' variants: ' + variants.join(', ') + '…'
+  return window.runCheck(variants)
+}
 </script>
 </body>
 </html>

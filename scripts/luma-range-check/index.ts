@@ -182,6 +182,23 @@ const MIME: Record<string, string> = { '.html': 'text/html', '.mp4': 'video/mp4'
 function serve(port: number): Promise<{ port: number; close: () => void }> {
   const server = createServer((req, res) => {
     const rel = decodeURIComponent((req.url ?? '/').split('?')[0])
+    // The variant list has to come from VARIANTS, not from the page. It
+    // used to be hardcoded in page.html's click handler, so every
+    // browser reached through --serve silently tested a stale subset
+    // while the Playwright path (which passes the list explicitly)
+    // tested all of them — the two paths disagreed about what "the
+    // check" even was, and adding a variant here did nothing on a real
+    // device.
+    if (rel === '/variants.json') {
+      const body = Buffer.from(JSON.stringify(
+        VARIANTS.map(v => ({ name: v.name, note: v.note }))))
+      res.writeHead(200, {
+        'Content-Type': 'application/json',
+        'Content-Length': body.length,
+        'Cache-Control': 'no-store',
+      })
+      return res.end(body)
+    }
     const p = join(HERE, rel === '/' ? 'page.html' : rel)
     if (!p.startsWith(HERE) || !existsSync(p)) {
       res.writeHead(404)
