@@ -70,6 +70,25 @@ const VARIANTS: ReadonlyArray<{ name: string; vf?: string; extra: string[]; note
             '-color_trc', 'bt709', '-x264-params', 'colorprim=bt709:transfer=bt709:colormatrix=bt709:range=pc'],
     note: 'conversion AND tag both full range — the recommended setting',
   },
+  // E and F bisect a Firefox/Windows failure that D does not survive: the
+  // WebGL render path came back with endpoints exact but midtones off by
+  // up to 20 codes, while the 2D `drawImage` readout was 256/256 exact on
+  // the same file. Endpoints pinned with a bow in between is a transfer
+  // mismatch, not a range one — and B and D failed with *identical*
+  // numbers despite differing only in the range conversion, which rules
+  // the range flags out as the trigger. That leaves the bt709
+  // transfer/primaries/matrix tags, which A (passing) does not carry.
+  {
+    name: 'E_range_only', vf: 'scale=in_range=full:out_range=full',
+    extra: ['-color_range', 'pc', '-x264-params', 'range=pc'],
+    note: 'full-range conversion + range tag, NO transfer/primaries/matrix tags',
+  },
+  {
+    name: 'F_no_trc', vf: 'scale=in_range=full:out_range=full',
+    extra: ['-color_range', 'pc', '-colorspace', 'bt709', '-color_primaries', 'bt709',
+            '-x264-params', 'colorprim=bt709:colormatrix=bt709:range=pc'],
+    note: 'everything D has except --color_trc — isolates the transfer tag',
+  },
 ]
 
 // --- PNG writing (grayscale, colour type 0) ------------------------------
