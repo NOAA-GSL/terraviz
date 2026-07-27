@@ -303,6 +303,58 @@ describe('deriveColorScalePath', () => {
     expect(deriveColorScalePath(pipeline({ 'data-encoded': true }), '/tmp/zw')).toBeNull()
   })
 
+  // zyra's pipeline_runner builds the flag with
+  // `"--" + k.replace("_", "-")`, so both spellings are legitimate in a
+  // stored pipeline and nothing normalises the JSON on the way in. The
+  // published RRFS workflow is snake_case throughout — cmap_file,
+  // period_seconds, output_names — so a kebab-only scraper misses a
+  // real, in-production pipeline and publishes a picture with no
+  // warning, because the warning only fires once the flag is seen.
+  it('reads the snake_case spelling the real workflows are written in', () => {
+    const json = JSON.stringify({
+      stages: [
+        {
+          stage: 'visualize',
+          command: 'heatmap',
+          args: {
+            data_encoded: true,
+            color_scale_file: '/work/color-scale.json',
+            cmap_file: 'https://example.test/smoke.json',
+            vmin: 0,
+            vmax: 0.0005,
+          },
+        },
+      ],
+    })
+    expect(deriveColorScalePath(json, '/tmp/zw')).toBe('/tmp/zw/color-scale.json')
+  })
+
+  it('still warns on snake_case data_encoded with no sidecar', () => {
+    const json = JSON.stringify({
+      stages: [{ stage: 'visualize', command: 'heatmap', args: { data_encoded: true } }],
+    })
+    // Recognised, so it can warn — the kebab-only version returned null
+    // silently, which reads identically to "not a data-encoded pipeline".
+    expect(deriveColorScalePath(json, '/tmp/zw')).toBeNull()
+  })
+
+  it('prefers the kebab spelling when a pipeline somehow carries both', () => {
+    const json = JSON.stringify({
+      stages: [
+        {
+          stage: 'visualize',
+          command: 'heatmap',
+          args: {
+            'data-encoded': true,
+            'color-scale-file': '/work/kebab.json',
+            color_scale_file: '/work/snake.json',
+          },
+        },
+      ],
+    })
+    expect(deriveColorScalePath(json, '/tmp/zw')).toBe('/tmp/zw/kebab.json')
+  })
+
   it('ignores the args on a non-heatmap stage', () => {
     const json = JSON.stringify({
       stages: [

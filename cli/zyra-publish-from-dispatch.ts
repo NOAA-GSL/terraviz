@@ -781,16 +781,16 @@ export function deriveFrameParams(pipelineJson: string, workdir: string): FrameP
   for (const stage of stages) {
     const args = (stage.args ?? {}) as Record<string, unknown>
     if (stage.stage === 'acquire') {
-      if (typeof args['sync-dir'] === 'string') syncDir = args['sync-dir']
-      if (typeof args['since-period'] === 'string') sincePeriod = args['since-period']
+      syncDir = pipelineArgString(args, 'sync-dir') ?? syncDir
+      sincePeriod = pipelineArgString(args, 'since-period') ?? sincePeriod
     }
     if (stage.command === 'scan-frames' || stage.command === 'metadata') {
-      const ps = args['period-seconds']
+      const ps = pipelineArg(args, 'period-seconds')
       if (typeof ps === 'number') periodSeconds = ps
       else if (typeof ps === 'string' && /^\d+$/.test(ps)) periodSeconds = Number(ps)
     }
-    if (stage.command === 'pad-missing' && typeof args['json-report'] === 'string') {
-      padReport = args['json-report']
+    if (stage.command === 'pad-missing') {
+      padReport = pipelineArgString(args, 'json-report') ?? padReport
     }
   }
   const cacheDir = mapWorkFile(syncDir, workdir)
@@ -824,6 +824,30 @@ export function deriveFrameParams(pipelineJson: string, workdir: string): FrameP
  * combination is treated as "not data-encoded" and warned about rather
  * than half-applied.
  */
+/**
+ * Read a pipeline arg by its canonical kebab name, accepting the
+ * snake_case spelling too.
+ *
+ * zyra's `pipeline_runner` builds the CLI flag with
+ * `"--" + k.replace("_", "-")`, so `cmap_file` and `cmap-file` both
+ * become `--cmap-file` and both are legitimate in a stored pipeline.
+ * Nothing normalises the JSON on the way in, so whichever the author
+ * typed is what lands in the row — and a scraper that knows only one
+ * spelling silently sees nothing. The published RRFS workflow is
+ * written in snake_case throughout, so that is not a hypothetical.
+ */
+function pipelineArg(args: Record<string, unknown>, name: string): unknown {
+  const direct = args[name]
+  if (direct !== undefined) return direct
+  return args[name.replace(/-/g, '_')]
+}
+
+/** `pipelineArg` narrowed to a string, or null. */
+function pipelineArgString(args: Record<string, unknown>, name: string): string | null {
+  const v = pipelineArg(args, name)
+  return typeof v === 'string' ? v : null
+}
+
 export function deriveColorScalePath(pipelineJson: string, workdir: string): string | null {
   let stages: Array<Record<string, unknown>> = []
   try {
@@ -839,9 +863,9 @@ export function deriveColorScalePath(pipelineJson: string, workdir: string): str
     const args = (stage.args ?? {}) as Record<string, unknown>
     // Flag-style args can arrive as `true` or as an empty string
     // depending on how the pipeline was authored; both mean "present".
-    const flag = args['data-encoded']
+    const flag = pipelineArg(args, 'data-encoded')
     if (flag === true || flag === '' || flag === 'true') dataEncoded = true
-    if (typeof args['color-scale-file'] === 'string') scalePath = args['color-scale-file']
+    scalePath = pipelineArgString(args, 'color-scale-file') ?? scalePath
   }
   if (!dataEncoded) return null
   if (!scalePath) {
