@@ -58,19 +58,36 @@ and answer from them.
 | Orbit's view of a dataset | title, description, categories, keywords, org, time range, plus a free-text `Legend:` string transcribed from the legend *PNG* by a background vision call (`describeLegendAsync`) | The exact `colorScale`, `boundingBox` and `frames` are on the client and never reach the prompt. The prompt actively forbids numeric claims |
 | Charting | `renderBarSeries` / `buildCsv` / `downloadCsv` / `csvExportButton` in [`src/ui/publisher/analytics-charts.ts`](../src/ui/publisher/analytics-charts.ts); `d3-scale`/`d3-axis`/`d3-brush` already in `dependencies` (used only by `catalogTimelineUI.ts`) | Nothing charts dataset *values* |
 
-### The precondition nobody should skip past
+### What is actually live
 
-Per the parent plan's own header, the zyra release and the
-`ZYRA_SCHEDULER_IMAGE` bump have not happened, **so no deployed runner can
-produce data-encoded frames yet**. There are zero such datasets in production.
+Three data-encoded rows are published in the production catalog, measured
+against `GET /api/v1/catalog` on 2026-07-28 (177 rows total):
 
-That is not a reason to avoid planning this — the design questions are the same
-either way, and it is cheaper to answer them before a dataset ships in the mode
-than after. It *is* a reason to sequence carefully: Phase A1 below pays off with
-no data-encoded datasets at all, and Phase A2 ships a generated fixture so
-everything downstream can be built and tested without waiting on the release.
-Anything that looks like a statistics product should wait for a real dataset to
-be wrong about.
+| slug | units | range | frames | period |
+|---|---|---|---|---|
+| `north-america-smoke` | `kg m-2` | 0 → 5×10⁻⁴ | 85 | PT1H |
+| `wildfire-smoke-forecast-transparent-united-states-rrfs` | `kg m-2` | 0 → 5×10⁻⁴ | 85 | PT1H |
+| `rrfs-smoke-near-surface-north-america` | `kg m-3` | 0 → 2×10⁻⁷ | 85 | PT1H |
+
+All three are RRFS smoke on the 3 km North America domain, all carry a
+256-stop palette with `transparentRange` 0.046875 (= 12/256), and all are
+**regional**: bbox `n:85 s:5 w:-175 e:-20`. That last detail is not
+incidental — `cos(lat)` varies from 0.996 to 0.087 across those bounds, a
+factor of eleven, so the area-weighting requirement below is load-bearing on
+the very first dataset anyone will point this at rather than a theoretical
+concern about polar grids.
+
+Two consequences for sequencing. There is a real dataset to be wrong about
+from day one, so no phase here is blocked on a release. And every one of the
+three carries a **`frames` envelope** — `{ count: 85, urlTemplate,
+framesDigest }` against `GET /api/v1/datasets/{id}/frames/{index}` — with an
+exact `startTime` + `PT1H` period, which changes the time-axis architecture
+materially (see below).
+
+> The parent plan's header still says the zyra release and
+> `ZYRA_SCHEDULER_IMAGE` bump are outstanding and that no deployed runner can
+> produce these frames. That text is stale as of the rows above and should be
+> refreshed; it is cited here only to note that it should not be relied on.
 
 ---
 
@@ -118,6 +135,29 @@ Each of these is a pure function over a luma array, the `ColorScale`, and the
 The axis nothing currently touches. The probe only ever sees the currently
 decoded frame. Every product below has a cheap per-frame reduction, so none
 needs to hold more than one frame at a time.
+
+**Two transports, and the choice matters more than it first appears.** Every
+live data-encoded row carries both a playing HLS video *and* a `frames`
+envelope addressing 85 individual full-resolution frames by index, with exact
+timestamps from `startTime` + `PT1H`.
+
+| | Sample the decoded video | Fetch frames by index |
+|---|---|---|
+| Bytes | Free — already downloaded and decoding | A full 4096×2048 frame per timestep |
+| Timestamps | Interpolated through `seekToDate`'s linear map across `video.duration` | Exact, from the envelope's own period |
+| Latency | One decode per seek; smooth if simply played through | Parallelisable across frames, cacheable by `framesDigest` |
+| Fidelity | The frame the user is looking at | The frame as published |
+
+The default is **sample the decoded video**, because for a time series at a
+pinned point the bytes are already in hand and fetching 85 full frames to read
+85 texels is absurd. Play through once and sample per decoded frame; pin-and-plot
+and the GPU composites both fall out of that with no extra network at all.
+
+The frames endpoint earns its place where the whole grid is needed per timestep
+anyway (a Hovmöller's zonal means), where exact published values matter more
+than smoothness, or where a specific timestamp must be resolved without
+scrubbing the transport — `resolveFrameQuery` already turns an ISO timestamp
+into an index and a URL. Treat it as the precision path, not the default.
 
 | Idea | Per-frame work |
 |---|---|
@@ -281,7 +321,14 @@ pinned by round-trip tests.
 
 ## Phases
 
-Independently shippable and DCO-signed, one logical change each.
+Independently shippable and DCO-signed, one logical change each. Nothing here
+is blocked on a release; all three live rows exercise every phase.
+
+**A1 first** — not because the later phases lack data, but because a value the
+user cannot read is a value they cannot check. The live rows report in
+`kg m-2` at 5×10⁻⁴ full scale, which is a number no visitor has intuition for
+and no colourbar currently explains. Legibility is the cheapest phase and the
+one every later phase is quoted against.
 
 ### A1 — Legibility
 
@@ -311,8 +358,13 @@ No UI.
 | `src/services/glLumaSampler.ts` | Add `snapshot()` + R8 FBO + cache; `sample()` untouched |
 | `src/services/datasetProbe.ts` | Add `texelToLatLon()` beside its inverse |
 | `src/services/datasetStats.ts` (new) | Pure reducers: histogram, weighted stats, extremum, transect sampling, zonal means, marching squares |
-| `scripts/make-data-encoded-fixture.ts` (new) | Generate a small data-encoded asset with analytically known values |
+| `scripts/make-data-encoded-fixture.ts` (new) | Generate a small data-encoded asset with analytically known values, for tests that must not depend on the network |
 | `CLAUDE.md` | Module-map rows |
+
+The fixture is for determinism in unit tests, not for want of real data —
+`north-america-smoke` is the ground truth to validate against, and its
+85-frame envelope makes a specific published frame addressable by index for a
+reproducible assertion.
 
 **Risks.** R8 read format support; the fallback must be real, not theoretical.
 The cache key must not repeat the stale-texture bug fixed in `fcd92df` — two
@@ -389,18 +441,26 @@ with a second axis.
 | **total** | **0.004087** |
 
 That is ~0.4% of full scale, and ~96% of it is H.264 noise rather than bit
-depth. Two consequences the UI must respect. First, compression noise is
-spatially correlated — block-structured — so a regional mean does **not**
-improve as 1/√N; averaging a million texels does not buy three more digits.
-Second, the extremum is the single most noise-sensitive statistic available, and
-`find_extremum` is the feature most likely to be quoted. Keep the existing
+depth. On the live `north-america-smoke` row that is concrete: `vmax` is
+5×10⁻⁴ kg m⁻², so one luma step is 1.96×10⁻⁶ kg m⁻² — 1.96 mg m⁻², which is
+exactly the figure the parent plan measured the encoder's own RMSE at. **The
+noise floor and the quantisation step are the same size.**
+
+Two consequences the UI must respect. First, compression noise is spatially
+correlated — block-structured — so a regional mean does **not** improve as
+1/√N; averaging a million texels does not buy three more digits. Second, the
+extremum is the single most noise-sensitive statistic available, and
+`find_extremum` is the feature most likely to be quoted back. Keep the existing
 three-significant-digit convention from `formatProbeReading`, and state the
 uncertainty next to any headline number rather than in a footnote.
 
-**Area weighting.** Equirectangular rows are not equal-area; at 84° latitude a
-texel covers about a tenth of the area of one at the equator. Every spatial
-aggregate weights by `cos(lat)` or it is simply wrong, and wrong in the
-direction that makes polar signals look global.
+**Area weighting.** Equirectangular rows are not equal-area. This is not a
+polar-grid edge case here: the live RRFS rows span 5°N to 85°N, where `cos(lat)`
+runs from 0.996 to 0.087 — a texel at the top of the domain covers about a
+*ninth* of the area of one at the bottom. An unweighted mean over that box
+would inflate the Canadian Arctic's contribution by an order of magnitude
+relative to Mexico's. Every spatial aggregate weights by `cos(lat)` or it is
+simply wrong, in the direction that makes high-latitude signals look continental.
 
 **Nodata versus real zero.** `isTransparentLuma` is a `t < transparentRange`
 threshold at the bottom of the range. For a field where zero is meaningful and
@@ -410,8 +470,14 @@ The parent plan already records diverging fields as an open follow-up. **This
 blocks anomaly, difference and tendency modes.** The cheap fix is to reserve
 luma 0 as an explicit nodata sentinel and encode data in 1..255 — one level out
 of 256, 0.4% of range, negligible against a noise floor already at 1 LSB — at
-the cost of a zyra change and a sidecar field. It is much cheaper to do before a
-dataset ships in this mode than after.
+the cost of a zyra change and a sidecar field.
+
+The three live rows are not themselves affected: smoke is a one-sided field
+where zero genuinely *is* both the floor and the absence, which is why
+`transparentRange` 0.046875 works for them. The ambiguity arrives with the first
+diverging field published, and the migration cost is bounded to re-encoding
+whatever has shipped by then. It is cheapest to do now, while that is three
+rows.
 
 **Only the primary panel probes.** The readout in `main.ts` reads from `primary`
 alone, and `probeValueAt` is a `MapRenderer` method rather than part of the
@@ -464,8 +530,9 @@ way in — the snapshot reads native resolution or it reads nothing.
    Tools popover alongside Privacy and Credits. Should it skew harder toward the
    science audience (dense charts, exact numbers, CSV) or the museum floor
    (legibility and wonder, no statistics panels)?
-2. **The nodata sentinel.** Resolve it now, before any dataset ships in this
-   mode, or defer with anomaly modes?
+2. **The nodata sentinel.** Resolve it now, while the migration is three
+   one-sided rows that don't need it yet, or defer until the first diverging
+   field forces it?
 3. **Scope of this document.** A1 alone is small enough to live as a follow-up
    in `DATA_ENCODED_VIDEO_PLAN.md` rather than opening a second plan. Splitting
    it out is defensible either way.
