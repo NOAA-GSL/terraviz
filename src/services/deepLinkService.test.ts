@@ -2,19 +2,23 @@ import { describe, it, expect, afterEach, vi } from 'vitest'
 import { parseDatasetFromUrl, parseDatasetPathname } from './deepLinkService'
 
 describe('parseDatasetPathname', () => {
-  it('parses the /dataset/<id> path form share links and blog posts emit', () => {
+  it('parses the /dataset/<slug> path form the app now emits', () => {
+    expect(parseDatasetPathname('/dataset/north-america-smoke')).toBe('north-america-smoke')
+    expect(parseDatasetPathname('/dataset/sea-ice-extent/')).toBe('sea-ice-extent')
+  })
+
+  it('still parses the id forms older links carry', () => {
     expect(parseDatasetPathname('/dataset/INTERNAL_SOS_123')).toBe('INTERNAL_SOS_123')
     expect(parseDatasetPathname('/dataset/01JXCULID0000000000000000/')).toBe('01JXCULID0000000000000000')
   })
 
-  it('rejects other paths, nested segments, and ids outside the shared alphabet', () => {
+  it('rejects other paths, nested segments, and refs outside the shared alphabet', () => {
     expect(parseDatasetPathname('/')).toBeNull()
     expect(parseDatasetPathname('/blog/some-post')).toBeNull()
     expect(parseDatasetPathname('/dataset/')).toBeNull()
     expect(parseDatasetPathname('/dataset/id/extra')).toBeNull()
     expect(parseDatasetPathname('/dataset/bad%20chars')).toBeNull()
-    // Aligned with parseDatasetFromUrl's ID_PATTERN — no hyphens.
-    expect(parseDatasetPathname('/dataset/has-hyphen')).toBeNull()
+    expect(parseDatasetPathname('/dataset/has.dot')).toBeNull()
   })
 })
 
