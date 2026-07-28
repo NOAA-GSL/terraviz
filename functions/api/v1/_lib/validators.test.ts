@@ -482,3 +482,41 @@ describe('validateRenderEncoding (data-encoded video)', () => {
     expect(validateDraftUpdate({ render_encoding: null, color_scale: null })).toEqual([])
   })
 })
+
+describe('playback_fps', () => {
+  // Rejected rather than coerced. The transcode already falls back to
+  // the default for a non-positive value, so a 0 would have produced an
+  // accepted write that silently did not take effect — the form still
+  // showing 0 while the video played at 30.
+  const fps = (v: unknown) =>
+    validateDraftUpdate({ playback_fps: v } as never).filter(e => e.field === 'playback_fps')
+
+  it('accepts the sub-1 range, which is the useful one', () => {
+    // 0.5 holds each frame two seconds — the point of the REAL column.
+    for (const v of [0.25, 0.5, 1, 2, 30]) expect(fps(v)).toEqual([])
+  })
+
+  it('accepts null and absence as "use the catalog default"', () => {
+    expect(fps(null)).toEqual([])
+    expect(validateDraftUpdate({}).filter(e => e.field === 'playback_fps')).toEqual([])
+  })
+
+  it('rejects zero and negatives instead of silently defaulting', () => {
+    for (const v of [0, -1, -0.5]) {
+      expect(fps(v).map(e => e.code), `${v}`).toContain('invalid_value')
+    }
+  })
+
+  it('rejects a rate above the output frame rate', () => {
+    // Above 30 the `-r 30` on each rendition drops the extra source
+    // frames rather than playing them faster, so the value would not
+    // mean what it says.
+    expect(fps(60).map(e => e.code)).toContain('invalid_value')
+  })
+
+  it('rejects non-finite and non-numeric values', () => {
+    for (const v of [NaN, Infinity, '2', {}]) {
+      expect(fps(v).map(e => e.code), String(v)).toContain('invalid_type')
+    }
+  })
+})

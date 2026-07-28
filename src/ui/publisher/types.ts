@@ -84,6 +84,9 @@ export interface PublisherDatasetDetail extends PublisherDataset {
   bbox_e?: number | null
   lon_origin?: number | null
   is_flipped_in_y?: number | null
+  /** Source frames per second for an image-sequence encode. Null /
+   *  absent means the catalog default (30). */
+  playback_fps?: number | null
   /** `'data-luma'` when the frames encode values rather than colour. */
   render_encoding?: string | null
   /** JSON sidecar (palette + scale) paired with `render_encoding`. */

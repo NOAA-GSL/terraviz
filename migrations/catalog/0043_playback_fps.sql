@@ -1,0 +1,41 @@
+-- Per-dataset playback speed for image-sequence datasets.
+--
+-- The HLS encode is normalised to 30 fps output catalog-wide, because
+-- the tour engine's `frameRate` task computes playback rate as
+-- `requestedFps / 30` and a non-30 encode silently breaks that maths.
+-- That is the *output* rate and it stays fixed. What varies, and what
+-- this column controls, is the *input* rate: how long each source
+-- frame is held before the next one.
+--
+-- A frames-published dataset currently declares `-framerate 30` on
+-- the input side, so every PNG occupies exactly one output frame and
+-- a 16-frame forecast plays in 0.53 seconds — too fast to read. The
+-- MP4 path never had this problem because `compose-video --fps` had
+-- already spread the frames over a real duration before ffmpeg saw
+-- them; a pipeline that publishes frames directly, which is what a
+-- data-encoded dataset must do to avoid a second lossy generation,
+-- has nowhere to say it.
+--
+--   playback_fps  REAL — source frames per second, i.e. each frame is
+--                        held 1/playback_fps seconds. NULL means the
+--                        current behaviour (hold for 1/30 s), so
+--                        every existing dataset re-encodes to exactly
+--                        the bytes it has today.
+--
+-- Stored on the dataset rather than scraped from the pipeline because
+-- every pipeline arg is passed through to the zyra container as a CLI
+-- flag: an arg zyra does not accept fails the run, so terraviz cannot
+-- introduce a pipeline key of its own. It is also a presentation
+-- choice rather than a property of the data, and belongs next to the
+-- other presentation fields (`is_flipped_in_y`, `lon_origin`) that
+-- the publisher sets by hand.
+--
+-- REAL rather than INTEGER: rates below 1 fps are the interesting
+-- ones for a long forecast (0.5 fps holds each frame two seconds),
+-- and an integer column would round them to zero.
+--
+-- Nullable with no default and no backfill, additive only. No index —
+-- never a query predicate, read only as part of a row already
+-- selected by id.
+
+ALTER TABLE datasets ADD COLUMN playback_fps REAL;
