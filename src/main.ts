@@ -628,8 +628,20 @@ class InteractiveSphere {
             primary.loadDefaultEarthMaterials((f: number) => { earthFraction = f; updateProgress() }),
             primary.loadCloudOverlay(cloudUrl, (f: number) => { cloudFraction = f; updateProgress() })
           ])
-          const sun = getSunPosition(new Date())
-          primary.enableSunLighting(sun.lat, sun.lng)
+          // Only if the globe is still bare. `enableSunLighting` clears
+          // the dataset texture and the probe source by design — that
+          // is how unloading returns to the plain Earth — so firing it
+          // here after a dataset has already been loaded wipes that
+          // dataset off the globe and silently kills its value readout.
+          //
+          // The window is real whenever these two textures are slow or
+          // unreachable: they are large external assets, and the
+          // catalog can be ready long before them. The dataset is the
+          // thing the visitor asked for; the day/night look is not.
+          if (!this.panelStates.some(p => p?.dataset)) {
+            const sun = getSunPosition(new Date())
+            primary.enableSunLighting(sun.lat, sun.lng)
+          }
         } catch (err) {
           logger.warn('[App] Earth material loading failed — continuing without day/night overlay:', err)
         }
