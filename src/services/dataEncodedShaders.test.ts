@@ -155,3 +155,57 @@ describe('secondary VR globes', () => {
     expect(SECONDARY).toMatch(/texture2D\(\s*uSecColorLut\s*,\s*vec2\(\s*sampledDiffuseColor\.r/)
   })
 })
+
+// --- the snapshot read path ------------------------------------------
+
+const PROBE = codeOf('glLumaSampler.ts')
+
+describe('snapshot — orientation and framebuffer hygiene', () => {
+  // A full-frame read cannot run under happy-dom, so the two mistakes
+  // that would silently mirror every statistic across the equator are
+  // pinned at the source instead. Both look completely normal on screen:
+  // the globe is drawn by a different code path entirely.
+  it('maps clip position straight onto UV, with no flip', () => {
+    // `vUv = p * 0.5 + 0.5` puts texture v == 0 at clip y == -1, the
+    // framebuffer's BOTTOM. readPixels returns rows bottom-up, so row 0
+    // of the buffer is the image's top row — the image-space
+    // convention `latLonToTexelUv` returns.
+    expect(PROBE).toMatch(/vUv\s*=\s*p\s*\*\s*0\.5\s*\+\s*0\.5\s*;/)
+    // The inverted forms. Either would flip the returned grid.
+    expect(PROBE).not.toMatch(/vUv\s*=\s*vec2\([^)]*1\.0\s*-\s*/)
+    expect(PROBE).not.toMatch(/vUv\.y\s*=\s*1\.0\s*-/)
+  })
+
+  it('never turns on UNPACK_FLIP_Y for the upload', () => {
+    // The upload is shared with the pointer probe, whose UV convention
+    // is the same one. Flipping here would break both at once.
+    expect(PROBE).toMatch(/UNPACK_FLIP_Y_WEBGL\s*,\s*false\s*\)/)
+    expect(PROBE).not.toMatch(/UNPACK_FLIP_Y_WEBGL\s*,\s*true\s*\)/)
+  })
+
+  it('reads the red channel of a single-channel target when it can', () => {
+    expect(PROBE).toMatch(/readPixels\([^)]*gl\.RED,\s*gl\.UNSIGNED_BYTE/)
+    // …and keeps a real RGBA fallback rather than assuming R8 reads back.
+    expect(PROBE).toMatch(/IMPLEMENTATION_COLOR_READ_FORMAT/)
+    expect(PROBE).toMatch(/readPixels\([^)]*gl\.RGBA,\s*gl\.UNSIGNED_BYTE/)
+  })
+
+  it('restores the default framebuffer and the 1x1 viewport afterwards', () => {
+    // Leaving the snapshot target bound would send every subsequent
+    // pointer read into it and return stale bytes — a readout that
+    // reports the frame the user analysed rather than the one playing.
+    const finallyBlock = /finally\s*\{[\s\S]*?bindFramebuffer\(gl\.FRAMEBUFFER,\s*null\)[\s\S]*?viewport\(0,\s*0,\s*1,\s*1\)[\s\S]*?\}/
+    expect(PROBE).toMatch(finallyBlock)
+  })
+
+  it('binds the source texture explicitly before a pointer read', () => {
+    // `snapshot` binds a render target to the same unit. A `sample`
+    // that inherited whatever was bound would read the wrong texture
+    // with no visible symptom.
+    // lastIndexOf, not indexOf: the first occurrence of each name is
+    // the interface declaration, whose body is a doc comment.
+    const sampleBody = PROBE.slice(
+      PROBE.lastIndexOf('sample(source'), PROBE.lastIndexOf('snapshot(source'))
+    expect(sampleBody).toMatch(/bindTexture\(gl\.TEXTURE_2D,\s*tex\)/)
+  })
+})

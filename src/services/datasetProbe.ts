@@ -78,6 +78,85 @@ export function latLonToTexelUv(
 }
 
 /**
+ * Texture UV → lat/lon: the exact inverse of {@link latLonToTexelUv}.
+ *
+ * Needed by anything that starts from a texel rather than from a
+ * pointer — area weighting (which needs the latitude of each image
+ * row), extremum location, and contour extraction all read the grid
+ * and have to say *where* a value is.
+ *
+ * **V is image-space here too**, matching the forward direction: `v == 0`
+ * is the image's TOP row and therefore the NORTH edge. The forward
+ * function's docstring records that an inverted V has shipped twice in
+ * this codebase; an inverted *inverse* is the same bug wearing a
+ * different hat, and it would place every computed statistic in the
+ * wrong hemisphere while leaving the globe looking correct. The
+ * round-trip is pinned by tests in both directions.
+ *
+ * Longitude comes back normalised to [-180, 180). The antimeridian maps
+ * to -180 rather than +180, which is the same point; callers comparing
+ * against a bbox edge should not test for equality there.
+ *
+ * Unlike the forward direction this never returns null: every UV in the
+ * unit square is inside the dataset by construction. UVs outside it are
+ * extrapolated rather than rejected, because the only callers are grid
+ * walks that cannot produce one.
+ */
+export function texelUvToLatLon(
+  uv: TexelUv,
+  options?: DatasetOverlayOptions,
+): { lat: number; lon: number } {
+  const bbox = options?.boundingBox
+  const flipY = options?.isFlippedInY === true
+  // Undo the flip first so the rest of the maths works in the same
+  // top-down space the forward function computes in.
+  const vTop = flipY ? 1 - uv.v : uv.v
+
+  if (bbox && !isGlobalBbox(bbox)) {
+    const { n, s, w, e } = bbox
+    const lat = n - vTop * (n - s)
+    // Antimeridian-crossing box: the forward direction measures U
+    // across `360 - w + e`, so the inverse walks the same span east
+    // from `w` and wraps.
+    const span = w <= e ? e - w : 360 - w + e
+    return { lat, lon: normaliseLon(w + uv.u * span) }
+  }
+
+  const lonOrigin = typeof options?.lonOrigin === 'number' && Number.isFinite(options.lonOrigin)
+    ? options.lonOrigin
+    : 0
+  return {
+    lat: 90 - vTop * 180,
+    lon: normaliseLon(lonOrigin + (uv.u - 0.5) * 360),
+  }
+}
+
+/** Wrap into [-180, 180). JS `%` keeps the dividend's sign, so this
+ *  adds a full turn before the second remainder — the same guard
+ *  `latLonToTexelUv` applies to its `fract()`. */
+function normaliseLon(lon: number): number {
+  return ((((lon + 180) % 360) + 360) % 360) - 180
+}
+
+/**
+ * Degrees of longitude the texture spans: the bbox width, or 360 for a
+ * full-globe dataset.
+ *
+ * Exported because area weighting needs the width of one texel in
+ * longitude, and deriving it by differencing two `texelUvToLatLon`
+ * samples fails at exactly the case that matters — u = 0 and u = 1 are
+ * the *same* meridian after wrapping, so a one-column frame differences
+ * to zero and every cell area collapses. The span belongs to the same
+ * bbox arithmetic the mapping already owns, so it lives here rather
+ * than being re-derived by each caller.
+ */
+export function lonSpanDegrees(options?: DatasetOverlayOptions): number {
+  const bbox = options?.boundingBox
+  if (!bbox || isGlobalBbox(bbox)) return 360
+  return bbox.w <= bbox.e ? bbox.e - bbox.w : 360 - bbox.w + bbox.e
+}
+
+/**
  * Sphere-geometry UV → lat/lon, for the VR globe.
  *
  * THREE populates `uv` on every raycast hit for free, and it is the

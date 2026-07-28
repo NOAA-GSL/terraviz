@@ -10,7 +10,9 @@
 import { describe, expect, it } from 'vitest'
 import {
   latLonToTexelUv,
+  lonSpanDegrees,
   sphereUvToLatLon,
+  texelUvToLatLon,
   probeDatasetValue,
   uvToTexel,
   type LumaSampler,
@@ -230,5 +232,106 @@ describe('sphereUvToLatLon — the VR globe', () => {
     const east = sphereUvToLatLon({ x: 1, y: 0.5 })
     expect(east.lon).toBeCloseTo(180, 6)
     expect(latLonToTexelUv(east.lat, east.lon)?.u).toBeCloseTo(0, 6)
+  })
+})
+
+describe('texelUvToLatLon — the inverse', () => {
+  // An inverted inverse is the same bug as an inverted forward map
+  // wearing a different hat: it places every computed statistic in the
+  // wrong hemisphere while leaving the globe looking correct. So the
+  // poles are pinned explicitly, in both directions, before anything
+  // round-trips.
+  it('puts the image top at the north pole on a full globe', () => {
+    expect(texelUvToLatLon({ u: 0.5, v: 0 }).lat).toBeCloseTo(90, 6)
+    expect(texelUvToLatLon({ u: 0.5, v: 1 }).lat).toBeCloseTo(-90, 6)
+    expect(texelUvToLatLon({ u: 0.5, v: 0.5 }).lat).toBeCloseTo(0, 6)
+  })
+
+  it('puts the image top at the box north edge on a regional dataset', () => {
+    const opts: DatasetOverlayOptions = { boundingBox: { n: 85, s: 5, w: -175, e: -20 } }
+    expect(texelUvToLatLon({ u: 0, v: 0 }, opts).lat).toBeCloseTo(85, 6)
+    expect(texelUvToLatLon({ u: 0, v: 1 }, opts).lat).toBeCloseTo(5, 6)
+    expect(texelUvToLatLon({ u: 0, v: 0 }, opts).lon).toBeCloseTo(-175, 6)
+    expect(texelUvToLatLon({ u: 1, v: 0 }, opts).lon).toBeCloseTo(-20, 6)
+  })
+
+  it('honours the Y flip, mirroring latitude about the box centre', () => {
+    const opts: DatasetOverlayOptions = {
+      boundingBox: { n: 85, s: 5, w: -175, e: -20 },
+      isFlippedInY: true,
+    }
+    expect(texelUvToLatLon({ u: 0, v: 0 }, opts).lat).toBeCloseTo(5, 6)
+    expect(texelUvToLatLon({ u: 0, v: 1 }, opts).lat).toBeCloseTo(85, 6)
+  })
+
+  it('round-trips against latLonToTexelUv on a full globe', () => {
+    for (const [lat, lon] of [
+      [0, 0], [45, 90], [-45, -90], [80, 179], [-80, -179], [10, -1], [-10, 1],
+    ] as const) {
+      const uv = latLonToTexelUv(lat, lon)!
+      const back = texelUvToLatLon(uv)
+      expect(back.lat).toBeCloseTo(lat, 9)
+      expect(back.lon).toBeCloseTo(lon, 9)
+    }
+  })
+
+  it('round-trips on a regional dataset, flipped and not', () => {
+    const box = { n: 85, s: 5, w: -175, e: -20 }
+    for (const isFlippedInY of [false, true]) {
+      const opts: DatasetOverlayOptions = { boundingBox: box, isFlippedInY }
+      for (const [lat, lon] of [[85, -175], [5, -20], [45, -100], [70, -30]] as const) {
+        const uv = latLonToTexelUv(lat, lon, opts)!
+        const back = texelUvToLatLon(uv, opts)
+        expect(back.lat).toBeCloseTo(lat, 9)
+        expect(back.lon).toBeCloseTo(lon, 9)
+      }
+    }
+  })
+
+  it('round-trips across an antimeridian-crossing box', () => {
+    // w > e: the box runs east from 150 through 180 to -150.
+    const opts: DatasetOverlayOptions = { boundingBox: { n: 60, s: -60, w: 150, e: -150 } }
+    for (const [lat, lon] of [[0, 150], [0, 179], [0, -179], [0, -150], [30, 170]] as const) {
+      const uv = latLonToTexelUv(lat, lon, opts)!
+      const back = texelUvToLatLon(uv, opts)
+      expect(back.lat).toBeCloseTo(lat, 9)
+      expect(back.lon).toBeCloseTo(lon, 9)
+    }
+  })
+
+  it('round-trips a shifted lonOrigin', () => {
+    const opts: DatasetOverlayOptions = { lonOrigin: 180 }
+    for (const [lat, lon] of [[0, 180], [0, 0], [0, -90], [0, 90], [45, 120]] as const) {
+      const uv = latLonToTexelUv(lat, lon, opts)!
+      const back = texelUvToLatLon(uv, opts)
+      expect(back.lat).toBeCloseTo(lat, 9)
+      // lon 180 and -180 are the same meridian; the inverse normalises
+      // to the -180 end of the range.
+      const delta = Math.abs(((back.lon - lon + 540) % 360) - 180)
+      expect(delta).toBeCloseTo(0, 9)
+    }
+  })
+
+  it('normalises longitude into [-180, 180)', () => {
+    // A dateline-centred dataset's right edge is lon 360 before wrapping.
+    const opts: DatasetOverlayOptions = { lonOrigin: 180 }
+    const lon = texelUvToLatLon({ u: 1, v: 0.5 }, opts).lon
+    expect(lon).toBeGreaterThanOrEqual(-180)
+    expect(lon).toBeLessThan(180)
+  })
+})
+
+describe('lonSpanDegrees', () => {
+  it('is a full turn for a global dataset, with or without a defaulted box', () => {
+    expect(lonSpanDegrees()).toBe(360)
+    expect(lonSpanDegrees({ boundingBox: { n: 90, s: -90, w: -180, e: 180 } })).toBe(360)
+  })
+
+  it('is the box width for a regional dataset', () => {
+    expect(lonSpanDegrees({ boundingBox: { n: 85, s: 5, w: -175, e: -20 } })).toBe(155)
+  })
+
+  it('measures the long way round an antimeridian-crossing box', () => {
+    expect(lonSpanDegrees({ boundingBox: { n: 60, s: -60, w: 150, e: -150 } })).toBe(60)
   })
 })
