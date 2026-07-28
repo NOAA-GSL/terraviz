@@ -388,6 +388,12 @@ Steps 2 and 3 can run in parallel once step 1 clears; 4 depends on both.
   no-data. This scheme assumes they coincide; those need a reserved sentinel or
   a separate mask.
 - `dataset_renditions` and the dormant colour columns.
+- **Analysis beyond one pixel.** §Part 4 stops at the value under the cursor,
+  but the frames carry a whole gridded field. Statistics, transects, contours,
+  time series at a pinned point, and Orbit answering numeric questions from
+  tool results are surveyed in
+  [`DATA_ANALYSIS_PLAN.md`](DATA_ANALYSIS_PLAN.md), which also proposes the
+  nodata sentinel the diverging-field item above needs.
 
 ### Why the chroma planes aren't spare precision
 
