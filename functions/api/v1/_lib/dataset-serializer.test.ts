@@ -65,6 +65,9 @@ function fakeRow(overrides: Partial<DatasetRow> = {}): DatasetRow {
     radius_mi: null,
     lon_origin: null,
     is_flipped_in_y: null,
+    render_encoding: null,
+    playback_fps: null,
+    color_scale: null,
     transcoding: null,
     active_transcode_upload_id: null,
     frame_count: null,
@@ -575,5 +578,55 @@ describe('serializeDataset — frames envelope (3pg/A)', () => {
       stubFramesResolver,
     )
     expect(wire.frames).toBeUndefined()
+  })
+})
+
+describe('data-encoded video (renderEncoding / colorScale)', () => {
+  const SCALE = JSON.stringify({
+    stops: [
+      { t: 0, rgba: [0, 0, 0, 0] },
+      { t: 1, rgba: [255, 0, 0, 255] },
+    ],
+    vmin: 0,
+    vmax: 50,
+    units: 'mg m-2',
+    transparentRange: 12 / 256,
+  })
+
+  it('serializes the pair when both halves are valid', () => {
+    const wire = serializeDataset(
+      fakeRow({ render_encoding: 'data-luma', color_scale: SCALE }),
+      emptyDecoration,
+      fakeIdentity,
+    )
+    expect(wire.renderEncoding).toBe('data-luma')
+    const scale = wire.colorScale as { vmin: number; vmax: number; units: string; stops: unknown[] }
+    expect(scale.vmin).toBe(0)
+    expect(scale.vmax).toBe(50)
+    expect(scale.units).toBe('mg m-2')
+    expect(scale.stops).toHaveLength(2)
+  })
+
+  it('omits both when the row is a legacy picture', () => {
+    // This is the backwards-compatibility guarantee at the wire:
+    // a row that predates the columns serializes exactly as before.
+    const wire = serializeDataset(fakeRow(), emptyDecoration, fakeIdentity)
+    expect(wire.renderEncoding).toBeUndefined()
+    expect(wire.colorScale).toBeUndefined()
+  })
+
+  it.each([
+    ['an encoding with no sidecar', { render_encoding: 'data-luma', color_scale: null }],
+    ['a sidecar with no encoding', { render_encoding: null, color_scale: SCALE }],
+    ['an unknown encoding', { render_encoding: 'data-rgb', color_scale: SCALE }],
+    ['a malformed sidecar', { render_encoding: 'data-luma', color_scale: '{nope' }],
+    ['a sidecar with one stop', { render_encoding: 'data-luma', color_scale: '{"stops":[],"vmin":0,"vmax":1}' }],
+  ])('serves %s as a plain picture', (_label, over) => {
+    // All-or-nothing. A half-written row degrades to raw grayscale
+    // rather than to confidently-wrong colours, and the client is
+    // never handed an encoding it cannot interpret.
+    const wire = serializeDataset(fakeRow(over), emptyDecoration, fakeIdentity)
+    expect(wire.renderEncoding).toBeUndefined()
+    expect(wire.colorScale).toBeUndefined()
   })
 })

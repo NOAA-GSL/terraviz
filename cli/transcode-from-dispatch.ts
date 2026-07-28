@@ -91,7 +91,13 @@ import {
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { AwsClient } from 'aws4fetch'
-import { DEFAULT_RENDITIONS, encodeHls, OUTPUT_FRAME_RATE } from './lib/ffmpeg-hls'
+import {
+  DATA_ENCODED_RENDITIONS,
+  DEFAULT_RENDITIONS,
+  encodeHls,
+  OUTPUT_FRAME_RATE,
+} from './lib/ffmpeg-hls'
+import { RENDER_ENCODING_DATA_LUMA } from '../src/types/color-scale'
 import { MAX_IMAGE_SEQUENCE_FRAMES } from '../src/types/image-sequence-constants'
 import {
   deleteR2Object,
@@ -105,6 +111,7 @@ import {
 } from './lib/r2-upload'
 import { isoDurationToSeconds } from './lib/r2-frames'
 import {
+  DATA_ENCODED_RENDITION_DESCRIPTORS,
   DEFAULT_RENDITION_DESCRIPTORS,
   gridOffset,
   segmentKey,
@@ -652,6 +659,44 @@ interface DatasetGrid {
  * timestamp/duration. Incremental is best-effort: any gap in the grid
  * inputs degrades gracefully.
  */
+async function fetchRenderSettings(
+  server: ServerEnv,
+  datasetId: string,
+): Promise<{ dataEncoded: boolean; playbackFps: number | null }> {
+  const url = `${server.server}/api/v1/publish/datasets/${datasetId}`
+  try {
+    const res = await fetch(url, {
+      method: 'GET',
+      headers: {
+        Accept: 'application/json',
+        'CF-Access-Client-Id': server.accessClientId,
+        'CF-Access-Client-Secret': server.accessClientSecret,
+      },
+    })
+    if (!res.ok) {
+      console.error(`[transcode] render settings fetch returned ${res.status} — encoding as a picture at the default rate`)
+      return { dataEncoded: false, playbackFps: null }
+    }
+    const parsed = (await res.json()) as {
+      dataset?: { render_encoding?: unknown; playback_fps?: unknown }
+    }
+    const fps = parsed?.dataset?.playback_fps
+    return {
+      dataEncoded: parsed?.dataset?.render_encoding === RENDER_ENCODING_DATA_LUMA,
+      // Refuse anything that isn't a usable rate rather than letting a
+      // 0 or a negative through to ffmpeg, where it would either fail
+      // obscurely or produce a bundle nobody can seek.
+      playbackFps: typeof fps === 'number' && Number.isFinite(fps) && fps > 0 ? fps : null,
+    }
+  } catch (err) {
+    console.error(
+      `[transcode] render settings fetch failed — encoding as a picture at the default rate: ` +
+        `${err instanceof Error ? err.message : String(err)}`,
+    )
+    return { dataEncoded: false, playbackFps: null }
+  }
+}
+
 async function fetchDatasetGrid(
   server: ServerEnv,
   datasetId: string,
@@ -720,6 +765,8 @@ async function encodeChunkSegments(
   args: { frameExtension: string; ffmpegBin: string | null },
   framesDir: string,
   chunkFrames: readonly FrameEntry[],
+  dataEncoded: boolean,
+  inputFps: number = OUTPUT_FRAME_RATE,
 ): Promise<{ segments: Record<string, Uint8Array>; extinf: number; codecs?: Record<string, string> }> {
   const ext = args.frameExtension
   const tmpIn = mkdtempSync(join(tmpdir(), 'tvchunk-in-'))
@@ -734,11 +781,16 @@ async function encodeChunkSegments(
       inputPath: join(tmpIn, `%05d.${ext}`),
       outputDir: tmpOut,
       ffmpegBin: args.ffmpegBin ?? undefined,
-      inputArgs: ['-framerate', String(OUTPUT_FRAME_RATE)],
+      // Input rate only: how long each source frame is held. The
+      // `-r 30` the encoder puts on every *output* rendition is
+      // untouched, so tourEngine's requestedFps/30 still holds.
+      inputArgs: ['-framerate', String(inputFps)],
       hasAudio: false,
+      dataEncoded,
     })
     const segments: Record<string, Uint8Array> = {}
-    for (let i = 0; i < DEFAULT_RENDITIONS.length; i++) {
+    const rungs = dataEncoded ? DATA_ENCODED_RENDITIONS : DEFAULT_RENDITIONS
+    for (let i = 0; i < rungs.length; i++) {
       const streamDir = join(tmpOut, `stream_${i}`)
       // A ≤180-frame chunk must encode to exactly one segment for the
       // content-addressed model to hold. If ffmpeg split it (an
@@ -842,6 +894,8 @@ async function runFramesIncremental(
   serverEnv: ServerEnv,
   framesDir: string,
   frames: readonly FrameEntry[],
+  dataEncoded: boolean,
+  inputFps: number = OUTPUT_FRAME_RATE,
 ): Promise<boolean> {
   const grid = await fetchDatasetGrid(serverEnv, args.datasetId)
   if (!grid) return false
@@ -877,7 +931,8 @@ async function runFramesIncremental(
         'application/json',
       )
     },
-    encodeChunk: chunkFrames => encodeChunkSegments(args, framesDir, chunkFrames),
+    encodeChunk: chunkFrames =>
+      encodeChunkSegments(args, framesDir, chunkFrames, dataEncoded, inputFps),
     segmentExists: hex => r2ObjectExists(r2Config, `${datasetPrefix}/${segmentKey(hex)}`),
     putSegment: async (hex, body) => {
       await uploadR2Object(r2Config, `${datasetPrefix}/${segmentKey(hex)}`, body, 'video/mp2t')
@@ -902,16 +957,25 @@ async function runFramesIncremental(
     log: line => console.error(`[transcode] ${line}`),
   }
 
+  // A data-encoded dataset publishes the source rung only, and its
+  // descriptors carry `dataEncoded` so a segment cached under the
+  // picture argv can never be recycled into this bundle — the two
+  // ladders otherwise agree on dimensions AND CRF at the 4K rung.
+  const descriptors = dataEncoded
+    ? DATA_ENCODED_RENDITION_DESCRIPTORS
+    : DEFAULT_RENDITION_DESCRIPTORS
+  const ladder = dataEncoded ? DATA_ENCODED_RENDITIONS : DEFAULT_RENDITIONS
   const bandwidthByRendition = new Map(
-    DEFAULT_RENDITION_DESCRIPTORS.map((d, i) => [d.id, DEFAULT_RENDITIONS[i].maxBitrateKbps * 1000]),
+    descriptors.map((d, i) => [d.id, ladder[i].maxBitrateKbps * 1000]),
   )
 
   const result = await runIncremental(deps, {
     frames,
-    renditions: DEFAULT_RENDITION_DESCRIPTORS,
+    renditions: descriptors,
     offset,
     epoch,
     period: grid.period,
+    playbackFps: inputFps,
     bandwidthByRendition,
   })
   console.error(
@@ -960,6 +1024,22 @@ async function main(): Promise<number> {
   // encoder; the full-encode + bundle-upload block below is then
   // skipped. Stays false for MP4 sources and for any incremental
   // fallback, so those take the legacy path.
+  // Read the encoding mode off the row before either encode path
+  // runs. The publish job PATCHes `render_encoding` *before* firing
+  // this transcode (see `applyMetadataSidecar`), so the row is
+  // current here — the same ordering `fetchDatasetGrid` already
+  // relies on. Fails closed to a picture encode: an unreadable row
+  // yields a colourised bundle, which is wrong but watchable, rather
+  // than a data bundle with resampled values in it.
+  const { dataEncoded, playbackFps } = await fetchRenderSettings(serverEnv, args.datasetId)
+  if (playbackFps != null) {
+    console.error(
+      `[transcode] playback_fps=${playbackFps} — each source frame held ` +
+        `${(1 / playbackFps).toFixed(3)}s (output stays ${OUTPUT_FRAME_RATE} fps)`,
+    )
+  }
+  if (dataEncoded) console.error('[transcode] render_encoding=data-luma — value-exact encode')
+
   let publishedIncrementally = false
   try {
     if (args.sourceKind === 'video') {
@@ -1022,6 +1102,8 @@ async function main(): Promise<number> {
           serverEnv,
           framesDir,
           frameManifest,
+          dataEncoded,
+          playbackFps ?? OUTPUT_FRAME_RATE,
         )
       } catch (err) {
         console.error(
@@ -1037,7 +1119,9 @@ async function main(): Promise<number> {
       // each output rendition then keeps the encode at the
       // catalog-wide 30 fps invariant.
       ffmpegInputPath = join(framesDir, `%05d.${args.frameExtension}`)
-      ffmpegInputArgs = ['-framerate', String(OUTPUT_FRAME_RATE)]
+      // Same rate the incremental path uses, or the two disagree and
+      // a fallback silently re-times the dataset.
+      ffmpegInputArgs = ['-framerate', String(playbackFps ?? OUTPUT_FRAME_RATE)]
     }
 
     // Full-encode path. Skipped when the frames branch already
@@ -1057,6 +1141,7 @@ async function main(): Promise<number> {
         // tell `buildFfmpegArgs` to omit the audio mapping. MP4
         // sources keep the auto-detect default.
         hasAudio: args.sourceKind === 'frames' ? false : undefined,
+        dataEncoded,
       })
       console.error(
         `[transcode] encode done in ${Date.now() - encodeStart} ms; ${encoded.files.length} files`,

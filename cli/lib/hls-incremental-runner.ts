@@ -14,9 +14,11 @@
  * `cli/transcode-from-dispatch.ts`.
  */
 
+import { OUTPUT_FRAME_RATE } from './ffmpeg-hls'
 import {
   assemblePlaylists,
   computeChunkGrid,
+  framesPerChunk,
   finalizeManifest,
   MASTER_PLAYLIST_FILE,
   planSegments,
@@ -70,6 +72,10 @@ export interface IncrementalParams {
    *  be carried over unchanged from the prior manifest when present. */
   epoch: string | null
   period: string | null
+  /** Input frame rate for this encode. Omitted means the historical
+   *  30. Recorded in the manifest, and a change from the stored value
+   *  forces a cold re-encode — see the guard in `runIncremental`. */
+  playbackFps?: number
   /** Per-rendition `BANDWIDTH` (bits/sec) for the master playlist. */
   bandwidthByRendition: ReadonlyMap<string, number>
   /** Filenames the pad-missing report flagged as synthetic, so chunks
@@ -100,8 +106,32 @@ export async function runIncremental(
   params: IncrementalParams,
 ): Promise<IncrementalResult> {
   const log = deps.log ?? (() => {})
-  const prev = await deps.loadManifest()
-  const newChunks = computeChunkGrid(params.frames, params.offset, params.paddedNames)
+  const stored = await deps.loadManifest()
+
+  // Segment reuse is keyed on the chunk grid, and the grid's cell size
+  // is `hls_time × inputFps`. Change the rate and the same gridIndex
+  // covers a different set of frames, so a stored segment is no longer
+  // the segment that cell needs. Recycling across a rate change would
+  // splice, say, 30 fps segments into a 1 fps bundle: no error, a
+  // playable master, and a timeline that is simply wrong.
+  //
+  // Compared with `?? OUTPUT_FRAME_RATE` on both sides so a manifest
+  // written before this field existed reads as 30 rather than as a
+  // mismatch, and does not force a spurious re-encode of every
+  // existing dataset on first run after deploy.
+  const prevFps = stored?.playbackFps ?? OUTPUT_FRAME_RATE
+  const thisFps = params.playbackFps ?? OUTPUT_FRAME_RATE
+  const rateChanged = stored != null && prevFps !== thisFps
+  if (rateChanged) {
+    log(
+      `incremental: playbackFps ${prevFps} → ${thisFps} — chunk grid changed, ` +
+        `re-encoding every chunk`,
+    )
+  }
+  const prev = rateChanged ? null : stored
+
+  const perChunk = framesPerChunk(thisFps)
+  const newChunks = computeChunkGrid(params.frames, params.offset, params.paddedNames, perChunk)
   const plan = planSegments(newChunks, params.renditions, prev)
 
   // The grid epoch is frozen on first write and must never change, or
@@ -181,6 +211,11 @@ export async function runIncremental(
     period: params.period,
     codecs: resolvedCodecs,
   })
+  // Stamp the rate these segments were encoded at, so the next run can
+  // tell whether the chunk grid still matches. Written unconditionally
+  // (including the default) so a manifest is self-describing rather
+  // than relying on absence meaning 30 forever.
+  manifest.playbackFps = thisFps
   const codecsByRendition = new Map(Object.entries(manifest.codecs ?? {}))
   const { master, variants } = assemblePlaylists(
     manifest,

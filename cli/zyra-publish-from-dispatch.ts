@@ -78,6 +78,11 @@ import {
 import { frameHexFromKey, frameStorePrefix, selectFrameOrphans } from './lib/frame-store'
 import { renderPipelineJson } from '../src/types/zyra-pipeline-args'
 import {
+  COLOR_SCALE_MAX_CHARS,
+  parseColorScale,
+  RENDER_ENCODING_DATA_LUMA,
+} from '../src/types/color-scale'
+import {
   isoDurationToSeconds,
   purgeFramesFromR2,
   restoreFramesFromR2,
@@ -353,13 +358,23 @@ async function applyMetadataSidecar(
   const template = JSON.parse(workflow.metadata_template) as Record<string, unknown>
   const sidecar = renderSidecar(template, buildRunVars({ runId: args.runId, framesMeta }))
   for (const w of sidecar.warnings) log(`WARN: ${w}`)
-  if (Object.keys(sidecar.fields).length > 0) {
-    const patched = await client.updateDataset(workflow.target_dataset_id, sidecar.fields)
+  // The data-encoded pair rides along on the same PATCH, and it has to
+  // land HERE rather than after the upload: `publishFrames` fires the
+  // transcode via `/complete`, and the transcode job reads
+  // `render_encoding` off the row to decide how to encode. Patching it
+  // afterwards would race — the encode would already have run with the
+  // picture argv.
+  const fields: Record<string, unknown> = {
+    ...sidecar.fields,
+    ...(await readColorScaleFields(deriveColorScalePath(workflow.pipeline_json, args.workdir))),
+  }
+  if (Object.keys(fields).length > 0) {
+    const patched = await client.updateDataset(workflow.target_dataset_id, fields)
     if (!patched.ok) {
       log(`FAIL: dataset PATCH → ${patched.status} ${patched.error}`)
       return 2
     }
-    log(`dataset ${workflow.target_dataset_id} metadata updated (${Object.keys(sidecar.fields).join(', ')})`)
+    log(`dataset ${workflow.target_dataset_id} metadata updated (${Object.keys(fields).join(', ')})`)
   }
   return null
 }
@@ -766,16 +781,16 @@ export function deriveFrameParams(pipelineJson: string, workdir: string): FrameP
   for (const stage of stages) {
     const args = (stage.args ?? {}) as Record<string, unknown>
     if (stage.stage === 'acquire') {
-      if (typeof args['sync-dir'] === 'string') syncDir = args['sync-dir']
-      if (typeof args['since-period'] === 'string') sincePeriod = args['since-period']
+      syncDir = pipelineArgString(args, 'sync-dir') ?? syncDir
+      sincePeriod = pipelineArgString(args, 'since-period') ?? sincePeriod
     }
     if (stage.command === 'scan-frames' || stage.command === 'metadata') {
-      const ps = args['period-seconds']
+      const ps = pipelineArg(args, 'period-seconds')
       if (typeof ps === 'number') periodSeconds = ps
       else if (typeof ps === 'string' && /^\d+$/.test(ps)) periodSeconds = Number(ps)
     }
-    if (stage.command === 'pad-missing' && typeof args['json-report'] === 'string') {
-      padReport = args['json-report']
+    if (stage.command === 'pad-missing') {
+      padReport = pipelineArgString(args, 'json-report') ?? padReport
     }
   }
   const cacheDir = mapWorkFile(syncDir, workdir)
@@ -788,6 +803,111 @@ export function deriveFrameParams(pipelineJson: string, workdir: string): FrameP
     ),
     padReportPath: mapWorkFile(padReport, workdir),
   }
+}
+
+/**
+ * Locate the data-encoded colour-scale sidecar the pipeline declares,
+ * or `null` for an ordinary colourised pipeline.
+ *
+ * The third scraper over the stored pipeline, alongside
+ * `expectedOutputKind` and `deriveFrameParams`. The signal is the
+ * `visualize heatmap` stage's own `--data-encoded` / `--color-scale-file`
+ * args, so the pipeline that produced the frames is the single source
+ * of truth for how they are encoded — nothing has to be declared twice
+ * or kept in sync. Pipeline arg *keys* aren't allowlisted
+ * (`workflow-validators.ts` checks only stage/command pairs and value
+ * shape), so this needed no validator change.
+ *
+ * Both args are required together. `--data-encoded` without a sidecar
+ * would publish frames whose luma is a measurement with nothing saying
+ * what it measures — they would render as raw grayscale — so that
+ * combination is treated as "not data-encoded" and warned about rather
+ * than half-applied.
+ */
+/**
+ * Read a pipeline arg by its canonical kebab name, accepting the
+ * snake_case spelling too.
+ *
+ * zyra's `pipeline_runner` builds the CLI flag with
+ * `"--" + k.replace("_", "-")`, so `cmap_file` and `cmap-file` both
+ * become `--cmap-file` and both are legitimate in a stored pipeline.
+ * Nothing normalises the JSON on the way in, so whichever the author
+ * typed is what lands in the row — and a scraper that knows only one
+ * spelling silently sees nothing. The published RRFS workflow is
+ * written in snake_case throughout, so that is not a hypothetical.
+ */
+function pipelineArg(args: Record<string, unknown>, name: string): unknown {
+  const direct = args[name]
+  if (direct !== undefined) return direct
+  return args[name.replace(/-/g, '_')]
+}
+
+/** `pipelineArg` narrowed to a string, or null. */
+function pipelineArgString(args: Record<string, unknown>, name: string): string | null {
+  const v = pipelineArg(args, name)
+  return typeof v === 'string' ? v : null
+}
+
+export function deriveColorScalePath(pipelineJson: string, workdir: string): string | null {
+  let stages: Array<Record<string, unknown>> = []
+  try {
+    const parsed = JSON.parse(pipelineJson) as { stages?: unknown }
+    if (Array.isArray(parsed.stages)) stages = parsed.stages as Array<Record<string, unknown>>
+  } catch {
+    return null
+  }
+  let dataEncoded = false
+  let scalePath: string | null = null
+  for (const stage of stages) {
+    if (stage.command !== 'heatmap') continue
+    const args = (stage.args ?? {}) as Record<string, unknown>
+    // Flag-style args can arrive as `true` or as an empty string
+    // depending on how the pipeline was authored; both mean "present".
+    const flag = pipelineArg(args, 'data-encoded')
+    if (flag === true || flag === '' || flag === 'true') dataEncoded = true
+    scalePath = pipelineArgString(args, 'color-scale-file') ?? scalePath
+  }
+  if (!dataEncoded) return null
+  if (!scalePath) {
+    log('WARN: pipeline declares --data-encoded with no --color-scale-file — publishing as a picture')
+    return null
+  }
+  return mapWorkFile(scalePath, workdir)
+}
+
+/**
+ * Read and validate the sidecar, returning the row fields to PATCH.
+ *
+ * Validated here rather than trusted, because the publisher API will
+ * refuse a malformed pair anyway and a run that fails at the PATCH is
+ * far harder to diagnose than one that says so at the source. Returns
+ * `{}` on any problem — the dataset publishes as the picture it
+ * visibly is, rather than the run failing outright over a palette.
+ */
+export async function readColorScaleFields(
+  scalePath: string | null,
+): Promise<Record<string, string>> {
+  if (!scalePath) return {}
+  let raw: string
+  try {
+    raw = await readFile(scalePath, 'utf-8')
+  } catch {
+    log(`WARN: color-scale sidecar ${scalePath} is unreadable — publishing as a picture`)
+    return {}
+  }
+  if (raw.length > COLOR_SCALE_MAX_CHARS) {
+    log(
+      `WARN: color-scale sidecar is ${raw.length} chars (max ${COLOR_SCALE_MAX_CHARS}) — ` +
+        'publishing as a picture',
+    )
+    return {}
+  }
+  if (parseColorScale(raw) === null) {
+    log(`WARN: color-scale sidecar ${scalePath} failed validation — publishing as a picture`)
+    return {}
+  }
+  log(`color-scale sidecar: ${scalePath} (${raw.length} chars)`)
+  return { render_encoding: RENDER_ENCODING_DATA_LUMA, color_scale: raw }
 }
 
 /**

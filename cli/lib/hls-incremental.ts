@@ -33,6 +33,7 @@
 import { createHash } from 'node:crypto'
 
 import {
+  DATA_ENCODED_RENDITIONS,
   DEFAULT_RENDITIONS,
   DEFAULT_SEGMENT_SECONDS,
   MASTER_PLAYLIST_NAME,
@@ -47,8 +48,24 @@ export const MASTER_PLAYLIST_FILE = MASTER_PLAYLIST_NAME
 
 /** Frames per chunk = one segment's worth at the pinned encode
  *  settings (6 s × 30 fps). The whole scheme rests on this matching
- *  `ffmpeg-hls.ts`'s `-hls_time` × `OUTPUT_FRAME_RATE`. */
+ *  `ffmpeg-hls.ts`'s `-hls_time` × the *input* frame rate. */
 export const FRAMES_PER_CHUNK = DEFAULT_SEGMENT_SECONDS * OUTPUT_FRAME_RATE
+
+/** Frames per chunk at a given *input* frame rate.
+ *
+ * A chunk must encode to exactly one segment, which means its duration
+ * must stay under `-hls_time`. Duration is `frames / inputFps`, so the
+ * frame count has to scale with the rate: 180 at 30 fps, 6 at 1 fps.
+ * Holding it at 180 while slowing the input would make each chunk 180 s
+ * and ffmpeg would split it into 30 segments, breaking the
+ * one-chunk-one-segment invariant the content-addressed manifest is
+ * built on.
+ *
+ * Floored at 1 so a pathological rate cannot produce an empty chunk. */
+export function framesPerChunk(inputFps: number = OUTPUT_FRAME_RATE): number {
+  const n = Math.floor(DEFAULT_SEGMENT_SECONDS * inputFps)
+  return Number.isFinite(n) && n >= 1 ? n : 1
+}
 
 /** A frame as recorded in `source_filenames.json`
  *  (`frames-manifest.ts` `parseFrameManifest`). */
@@ -70,6 +87,13 @@ export interface RenditionDescriptor {
    *  change at the same dimensions forces a re-encode instead of
    *  recycling bytes produced under the old setting. */
   crf: number
+  /** Whether these bytes were produced by the data-encoded argv
+   *  (nearest-neighbour scaler, full-range VUI). Part of the
+   *  segment identity because a data-encoded rung and the default
+   *  4K rung share dimensions AND CRF, so without this they hash
+   *  identically while carrying incompatible pixels. Absent is
+   *  treated as false so existing manifests keep their hashes. */
+  dataEncoded?: boolean
 }
 
 /** The default ladder projected to `RenditionDescriptor`s, indexed
@@ -82,10 +106,22 @@ export const DEFAULT_RENDITION_DESCRIPTORS: readonly RenditionDescriptor[] =
     crf: r.crf,
   }))
 
+/** The data-encoded ladder projected the same way. One rung, because
+ *  resampling a data raster to a lower rung would hand the client
+ *  averaged values that were never measured. */
+export const DATA_ENCODED_RENDITION_DESCRIPTORS: readonly RenditionDescriptor[] =
+  DATA_ENCODED_RENDITIONS.map((r: HlsRendition, i: number) => ({
+    id: `stream_${i}`,
+    width: r.height * 2,
+    height: r.height,
+    crf: r.crf,
+    dataEncoded: true,
+  }))
+
 /** A grid-aligned group of ≤ `FRAMES_PER_CHUNK` consecutive frames
  *  that encodes to exactly one segment per rendition. */
 export interface ChunkInput {
-  /** Absolute grid cell index: `floor((offset + windowIndex) / 180)`. */
+  /** Absolute grid cell index: `floor((offset + windowIndex) / perChunk)`. */
   gridIndex: number
   /** The frames in this chunk, in playback order. */
   frames: FrameEntry[]
@@ -133,6 +169,12 @@ export interface SegmentManifest {
    *  forward so reuse-only runs still emit `CODECS` in the master.
    *  Absent only for manifests written before this was tracked. */
   codecs?: Record<string, string>
+  /** Input frame rate this bundle's segments were encoded at.
+   *  Absent means the historical 30. Load-bearing for reuse: the rate
+   *  sets the chunk size, so segments encoded at a different rate
+   *  cover different frames and must never be recycled across a
+   *  change. The runner treats a mismatch as a cold start. */
+  playbackFps?: number
   /** Rendition ids present in `chunks[*].segments`, in ladder order. */
   renditions: RenditionDescriptor[]
   /** Live chunks in playback order. */
@@ -173,7 +215,7 @@ export function gridOffset(
 /**
  * Partition the frame list into grid-aligned chunks. `offset` is the
  * absolute grid step of `frames[0]`; frame `i` lands in grid cell
- * `floor((offset + i) / 180)`. `paddedNames` (a set of filenames the
+ * `floor((offset + i) / perChunk)`. `paddedNames` (a set of filenames the
  * pad-missing report flagged) marks chunks that contain synthetic
  * frames.
  */
@@ -181,11 +223,12 @@ export function computeChunkGrid(
   frames: readonly FrameEntry[],
   offset: number,
   paddedNames: ReadonlySet<string> = new Set(),
+  perChunk: number = FRAMES_PER_CHUNK,
 ): ChunkInput[] {
   const chunks: ChunkInput[] = []
   let current: ChunkInput | null = null
   for (let i = 0; i < frames.length; i++) {
-    const gridIndex = Math.floor((offset + i) / FRAMES_PER_CHUNK)
+    const gridIndex = Math.floor((offset + i) / perChunk)
     if (!current || current.gridIndex !== gridIndex) {
       current = { gridIndex, frames: [], padded: false, partial: false }
       chunks.push(current)
@@ -194,7 +237,7 @@ export function computeChunkGrid(
     if (paddedNames.has(frames[i].filename)) current.padded = true
   }
   for (const chunk of chunks) {
-    chunk.partial = chunk.frames.length < FRAMES_PER_CHUNK
+    chunk.partial = chunk.frames.length < perChunk
   }
   return chunks
 }
@@ -208,15 +251,27 @@ export function computeChunkGrid(
  * (re-encode). Codec settings shared across the whole ladder (preset,
  * profile, GOP) aren't per-rendition fields here; a change to those in
  * `ffmpeg-hls.ts` must bump `v` to force a global re-encode.
+ *
+ * `v: 2` — data-encoded video added a nearest-neighbour scaler and an
+ * explicit full-range VUI to `buildFfmpegArgs`. Those are ladder-wide
+ * argv changes of exactly the kind this docstring warns about, so the
+ * bump is mandatory: without it, segments cached under the bicubic /
+ * unspecified-range settings would be recycled into a bundle whose
+ * other segments carry the new ones, mixing resampled and exact values
+ * in one stream. `dataEncoded` additionally rides in the rendition
+ * descriptor, because the data rung and the default 4K rung agree on
+ * both dimensions and CRF.
  */
 export function segmentDescriptorHash(
   chunk: Pick<ChunkInput, 'gridIndex' | 'frames' | 'padded'>,
   rendition: RenditionDescriptor,
 ): string {
   const descriptor = JSON.stringify({
-    v: 1,
+    v: 2,
     grid: chunk.gridIndex,
-    rendition: `${rendition.width}x${rendition.height}@crf${rendition.crf}`,
+    rendition:
+      `${rendition.width}x${rendition.height}@crf${rendition.crf}` +
+      (rendition.dataEncoded ? ':data' : ''),
     padded: chunk.padded,
     digests: chunk.frames.map(f => f.digest),
   })

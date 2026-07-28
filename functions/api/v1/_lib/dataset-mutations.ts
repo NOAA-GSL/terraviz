@@ -177,6 +177,15 @@ export function canMutateDataset(
  * for both the SOS importer (which already strips empties) and
  * the future publisher-portal client.
  */
+/** Accept only a finite positive rate; anything else stores NULL.
+ *  The validator rejects these before they reach here, so this is the
+ *  second line rather than the first — but the value ends up as an
+ *  ffmpeg argument and as the chunk-grid divisor, where a 0 is a
+ *  division by zero rather than a cosmetic wrong. */
+function sanePlaybackFps(value: number | null | undefined): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null
+}
+
 function normalizeOptionalString(value: string | null | undefined): string | null {
   if (value == null) return null
   const trimmed = value.trim()
@@ -425,8 +434,9 @@ export async function createDataset(
          probing_info,
          bbox_n, bbox_s, bbox_w, bbox_e,
          celestial_body, radius_mi, lon_origin, is_flipped_in_y,
+         render_encoding, color_scale, playback_fps,
          schema_version, created_at, updated_at, published_at, publisher_id
-       ) VALUES (?,?,(SELECT node_id FROM node_identity LIMIT 1),?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+       ) VALUES (?,?,(SELECT node_id FROM node_identity LIMIT 1),?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     )
     .bind(
       id,
@@ -485,6 +495,17 @@ export async function createDataset(
       // NULL (the column's default state); booleans round-trip
       // through 0/1.
       body.is_flipped_in_y == null ? null : body.is_flipped_in_y ? 1 : 0,
+      // render_encoding / color_scale: NULL means "a picture",
+      // which is every row created before this pair existed and
+      // every row a publisher creates without opting in.
+      normalizeOptionalString(body.render_encoding ?? undefined),
+      normalizeOptionalString(body.color_scale ?? undefined),
+      // Presentation only, consulted by the image-sequence transcode.
+      // NULL is "hold each frame 1/30 s" — what every existing
+      // dataset already does. Clamped as well as validated: this value
+      // becomes an ffmpeg argument and the chunk-grid divisor, and a 0
+      // reaching either is worse than a rejected write.
+      sanePlaybackFps(body.playback_fps),
       1,
       now,
       now,
@@ -639,6 +660,18 @@ export async function updateDataset(
   if (body.is_flipped_in_y !== undefined) {
     set('is_flipped_in_y', body.is_flipped_in_y === null ? null : body.is_flipped_in_y ? 1 : 0)
   }
+  // Explicit null clears (reverting a dataset to a picture);
+  // omission leaves the pair untouched. The validator refuses a
+  // half-set pair, so the two can't drift apart here.
+  if (body.render_encoding !== undefined) {
+    set('render_encoding', normalizeOptionalString(body.render_encoding ?? undefined))
+  }
+  if (body.color_scale !== undefined) {
+    set('color_scale', normalizeOptionalString(body.color_scale ?? undefined))
+  }
+  // Independent of the pair above: a *picture* dataset published as a
+  // frame sequence wants a readable speed too.
+  if (body.playback_fps !== undefined) set('playback_fps', sanePlaybackFps(body.playback_fps))
   if (body.website_link !== undefined) set('website_link', body.website_link)
   if (body.start_time !== undefined) set('start_time', body.start_time)
   if (body.end_time !== undefined) set('end_time', body.end_time)

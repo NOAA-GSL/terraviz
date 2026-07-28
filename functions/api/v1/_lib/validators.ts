@@ -21,6 +21,12 @@
  * `{ errors: [{ field, code, message }] }` per the doc.
  */
 
+import {
+  COLOR_SCALE_MAX_CHARS,
+  parseColorScale,
+  RENDER_ENCODING_DATA_LUMA,
+} from '../../../../src/types/color-scale'
+
 const RESERVED_SLUGS = new Set([
   'api',
   'publish',
@@ -86,6 +92,18 @@ export interface DatasetDraftBody {
   /** Image Y-axis flip flag for inverted-Y imagery. `null`
    * clears the column on UPDATE; omission leaves it untouched. */
   is_flipped_in_y?: boolean | null
+  /** How the frames encode their pixels — `'data-luma'`, or `null`
+   * to clear the column on UPDATE. Omission leaves it untouched,
+   * and an absent value means the dataset is a picture. */
+  render_encoding?: string | null
+  /** JSON sidecar (palette + scale) for data-encoded datasets. */
+  color_scale?: string | null
+  /** Source frames per second for an image-sequence encode — each
+   *  frame is held 1/playback_fps seconds. Null clears the column on
+   *  UPDATE; absent leaves it untouched. Independent of the
+   *  data-encoded pair above: a picture published as a frame
+   *  sequence wants a readable speed too. */
+  playback_fps?: number | null
   website_link?: string
   start_time?: string
   end_time?: string
@@ -401,6 +419,97 @@ function validateBoundingBox(value: unknown, errors: ValidationError[]): void {
 }
 
 /**
+ * Validate `render_encoding` and its `color_scale` sidecar.
+ *
+ * Stricter than the neighbouring `probing_info` check, which only
+ * asks for parseable JSON under a length cap. `probing_info` is
+ * documentation of an SOS payload that nothing renders; `color_scale`
+ * decides what colour every pixel of a published dataset is and what
+ * number the globe reports under the cursor, so a malformed one has
+ * to be refused at write time rather than discovered by a viewer.
+ *
+ * The pairing is enforced in both directions: `data-luma` without a
+ * sidecar renders as raw grayscale, and a sidecar without `data-luma`
+ * is silently ignored — both are almost certainly a publishing
+ * mistake, so both are errors.
+ */
+function validateRenderEncoding(
+  encoding: unknown,
+  colorScale: unknown,
+  errors: ValidationError[],
+): void {
+  const hasEncoding = encoding != null && encoding !== ''
+  if (hasEncoding) {
+    if (typeof encoding !== 'string') {
+      errors.push(err('render_encoding', 'invalid_type', 'render_encoding must be a string.'))
+      return
+    }
+    if (encoding !== RENDER_ENCODING_DATA_LUMA) {
+      errors.push(
+        err(
+          'render_encoding',
+          'invalid_value',
+          `render_encoding must be '${RENDER_ENCODING_DATA_LUMA}' (got '${encoding}').`,
+        ),
+      )
+      return
+    }
+  }
+
+  const hasScale = colorScale != null && colorScale !== ''
+  if (hasScale) {
+    if (typeof colorScale !== 'string') {
+      errors.push(
+        err(
+          'color_scale',
+          'invalid_type',
+          'color_scale must be a JSON-stringified object (palette stops + scale), sent as a string.',
+        ),
+      )
+      return
+    }
+    if (colorScale.length > COLOR_SCALE_MAX_CHARS) {
+      errors.push(
+        err('color_scale', 'too_long', `color_scale must be at most ${COLOR_SCALE_MAX_CHARS} characters.`),
+      )
+      return
+    }
+    if (parseColorScale(colorScale) === null) {
+      errors.push(
+        err(
+          'color_scale',
+          'invalid_value',
+          'color_scale must be a JSON object with >= 2 ordered palette stops ' +
+            '({ t, rgba }) and finite, distinct vmin / vmax.',
+        ),
+      )
+      return
+    }
+  }
+
+  if (hasEncoding && !hasScale) {
+    errors.push(
+      err(
+        'color_scale',
+        'invalid_value',
+        `color_scale is required when render_encoding is '${RENDER_ENCODING_DATA_LUMA}' — ` +
+          'without it the frames render as raw grayscale.',
+      ),
+    )
+  }
+  if (hasScale && !hasEncoding) {
+    errors.push(
+      err(
+        'render_encoding',
+        'invalid_value',
+        `render_encoding must be '${RENDER_ENCODING_DATA_LUMA}' when color_scale is set; ` +
+          'otherwise the sidecar is ignored.',
+      ),
+    )
+  }
+}
+
+/**
  * Validate `lon_origin` (degrees, [-180, 180]). Phase 3d. */
 function validateLonOrigin(value: unknown, errors: ValidationError[]): void {
   if (value == null) return
@@ -411,6 +520,39 @@ function validateLonOrigin(value: unknown, errors: ValidationError[]): void {
   if (value < -180 || value > 180) {
     errors.push(
       err('lon_origin', 'invalid_value', `lon_origin must be in [-180, 180] (got ${value}).`),
+    )
+  }
+}
+
+/**
+ * Validate `playback_fps` (source frames per second).
+ *
+ * Rejected rather than silently coerced. The transcode already falls
+ * back to the catalog default for a non-positive value, but a publisher
+ * who typed 0 would get a dataset that plays at 30 fps with the form
+ * still showing 0 — an accepted write that did not take effect. A
+ * structured 400 says so at the point of the mistake.
+ *
+ * Sub-1 is valid and is the interesting range: 0.5 holds each frame two
+ * seconds. The upper bound is the output rate, above which extra source
+ * frames would be dropped by the `-r 30` on each rendition rather than
+ * shown faster. Kept as a local constant rather than importing
+ * OUTPUT_FRAME_RATE: `functions/` must not depend on `cli/`. */
+const MAX_PLAYBACK_FPS = 30
+
+function validatePlaybackFps(value: unknown, errors: ValidationError[]): void {
+  if (value == null) return
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    errors.push(err('playback_fps', 'invalid_type', 'playback_fps must be a finite number.'))
+    return
+  }
+  if (value <= 0 || value > MAX_PLAYBACK_FPS) {
+    errors.push(
+      err(
+        'playback_fps',
+        'invalid_value',
+        `playback_fps must be in (0, ${MAX_PLAYBACK_FPS}] (got ${value}).`,
+      ),
     )
   }
 }
@@ -529,6 +671,8 @@ export function validateDraftCreate(body: DatasetDraftBody): ValidationError[] {
   validateOptionalString('celestial_body', body.celestial_body, 64, errors)
   validateRadiusMi(body.radius_mi, errors)
   validateLonOrigin(body.lon_origin, errors)
+  validatePlaybackFps(body.playback_fps, errors)
+  validateRenderEncoding(body.render_encoding, body.color_scale, errors)
   // null is allowed (clears the column on UPDATE; treated as
   // the column's default "no flip" on INSERT). Anything else
   // non-boolean is a type error.
@@ -575,6 +719,8 @@ export function validateDraftUpdate(body: DatasetDraftBody): ValidationError[] {
   validateOptionalString('celestial_body', body.celestial_body, 64, errors)
   validateRadiusMi(body.radius_mi, errors)
   validateLonOrigin(body.lon_origin, errors)
+  validatePlaybackFps(body.playback_fps, errors)
+  validateRenderEncoding(body.render_encoding, body.color_scale, errors)
   // null is allowed (clears the column on UPDATE; treated as
   // the column's default "no flip" on INSERT). Anything else
   // non-boolean is a type error.

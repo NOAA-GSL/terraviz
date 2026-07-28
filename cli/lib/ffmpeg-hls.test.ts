@@ -25,6 +25,7 @@ import { join } from 'node:path'
 import {
   buildFfmpegArgs,
   createBoundedStderr,
+  DATA_ENCODED_RENDITIONS,
   DEFAULT_RENDITIONS,
   encodeHls,
   FfmpegError,
@@ -151,6 +152,75 @@ describe('buildFfmpegArgs', () => {
     const args = buildFfmpegArgs('/in.mp4', '/out', RENDITIONS, 6, 192)
     expect(args).toContain('-c:a')
     expect(args[args.indexOf('-var_stream_map') + 1]).toBe('v:0,a:0 v:1,a:1 v:2,a:2')
+  })
+
+  // --- data-encoded video (docs/DATA_ENCODED_VIDEO_PLAN.md §Part 2) ---
+
+  describe('data-encoded mode', () => {
+    const DATA: HlsRendition[] = [{ height: 2048, crf: 18, maxBitrateKbps: 25_000 }]
+
+    it('scales with nearest-neighbour and nothing else', () => {
+      const args = buildFfmpegArgs('/in.png', '/out', DATA, 6, 192, false, [], true)
+      const filter = args[args.indexOf('-filter_complex') + 1]
+      // Bicubic (the default) interpolates across the nodata/data
+      // boundary and invents values that were never measured.
+      expect(filter).toContain('scale=4096:2048:flags=neighbor')
+      // No range conversion. Converting to full range and then not
+      // tagging it (or tagging it, see below) both land on Firefox's
+      // limited-range expansion.
+      expect(filter).not.toContain('in_range')
+      expect(filter).not.toContain('out_range')
+    })
+
+    // The design prescribed `-color_range pc` plus a matching
+    // conversion, and Chrome round-tripped that 256/256. Firefox's
+    // video→WebGL path expands any pc-tagged stream as if it were
+    // limited — (v - 16) * 255/219 applied to already-full samples —
+    // and measured max|e| 20 against a one-step budget. Every variant
+    // carrying the range flag failed identically, including one with
+    // no colourspace tags at all, so the range flag is the trigger.
+    // Untagged was the only variant to pass on both browsers.
+    //
+    // Asserting absence rather than presence: the failure mode this
+    // guards against is someone re-adding the flags because the
+    // reasoning for them reads convincingly.
+    it('emits no colour-range or colourspace flags on the data path', () => {
+      const args = buildFfmpegArgs('/in.png', '/out', DATA, 6, 192, false, [], true)
+      for (const flag of ['-color_range', '-colorspace', '-color_primaries', '-color_trc']) {
+        expect(args.some(a => a.startsWith(flag))).toBe(false)
+      }
+    })
+
+    it('differs from the legacy argv only by the scaler and the ladder', () => {
+      // The whole data-encoded delta at the encoder is now one filter
+      // flag. Pinning that keeps the blast radius honest.
+      const data = buildFfmpegArgs('/in.png', '/out', DATA, 6, 192, false, [], true)
+      const legacy = buildFfmpegArgs('/in.png', '/out', DATA, 6, 192, false, [], false)
+      expect(data.join(' ').replace(':flags=neighbor', '')).toBe(legacy.join(' '))
+    })
+
+    it('DATA_ENCODED_RENDITIONS publishes the source rung only', () => {
+      // Lower rungs would resample a data raster and hand the
+      // client averaged values that were never measured.
+      expect(DATA_ENCODED_RENDITIONS).toHaveLength(1)
+      expect(DATA_ENCODED_RENDITIONS[0].height).toBe(2048)
+    })
+
+    // This is the backwards-compatibility guarantee. Every existing
+    // colourised MP4 must keep encoding under byte-identical argv,
+    // and the mode is opt-in per dataset, so an absent flag has to
+    // leave the command line untouched.
+    it('leaves the legacy argv byte-identical when the flag is absent', () => {
+      const legacy = buildFfmpegArgs('/in.mp4', '/out', RENDITIONS, 6, 192)
+      const explicitlyOff = buildFfmpegArgs('/in.mp4', '/out', RENDITIONS, 6, 192, true, [], false)
+      expect(explicitlyOff).toEqual(legacy)
+      // None of the colour flags appear at all…
+      for (const flag of ['-color_range', '-colorspace', '-color_primaries', '-color_trc']) {
+        expect(legacy.some(a => a.startsWith(flag))).toBe(false)
+      }
+      // …and the scaler keeps ffmpeg's default (no `flags=`).
+      expect(legacy[legacy.indexOf('-filter_complex') + 1]).not.toContain('flags=')
+    })
   })
 })
 

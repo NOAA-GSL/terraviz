@@ -1,0 +1,30 @@
+[
+  {
+    "name": "A_today",
+    "note": "today's settings — no colour flags at all"
+  },
+  {
+    "name": "B_tag_only",
+    "note": "retag only — the naive fix, expected to FAIL"
+  },
+  {
+    "name": "C_limited",
+    "note": "consistent limited range — survives, but only 219 code levels"
+  },
+  {
+    "name": "D_full_proper",
+    "note": "conversion AND tag both full range — the recommended setting"
+  },
+  {
+    "name": "E_range_only",
+    "note": "full-range conversion + range tag, NO transfer/primaries/matrix tags"
+  },
+  {
+    "name": "F_no_trc",
+    "note": "everything D has except --color_trc — isolates the transfer tag"
+  },
+  {
+    "name": "G_neighbor_only",
+    "note": "exactly what the encoder now emits — neighbor scale, no colour flags"
+  }
+]

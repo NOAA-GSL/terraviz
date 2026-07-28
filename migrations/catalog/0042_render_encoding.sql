@@ -1,0 +1,52 @@
+-- Data-encoded video (docs/DATA_ENCODED_VIDEO_PLAN.md).
+--
+-- Every dataset published so far is a *picture*: the values were
+-- colourised through a colormap and composited over a basemap before
+-- ffmpeg ever saw them, so by render time the numbers are gone and
+-- "no data" carries whatever was underneath. A data-encoded dataset
+-- ships the *data* instead — frames are grayscale where luma is the
+-- normalised value (black = vmin / no data, white = vmax) — and a
+-- palette plus scale ride along on the row for the shader to apply at
+-- display time. That makes transparency exact, makes a dataset
+-- repalettable without re-encoding, and keeps the values on the
+-- client so the globe can report them under the cursor.
+--
+--   render_encoding  TEXT — NULL or 'data-luma'. NULL means the
+--                           bytes are a picture and every render
+--                           surface takes exactly the path it takes
+--                           today. This is the whole of the
+--                           backwards-compatibility contract: the
+--                           mode is opt-in per dataset and absent
+--                           means legacy.
+--
+--   color_scale      TEXT — JSON sidecar authored by zyra from the
+--                           pipeline's own --cmap-file / --vmin /
+--                           --vmax:
+--                             { "stops": [{ "t": 0..1,
+--                                           "rgba": [r,g,b,a] }, …],
+--                               "vmin": number, "vmax": number,
+--                               "units": string|null,
+--                               "transparentRange": number|null }
+--                           Only meaningful when render_encoding is
+--                           'data-luma'.
+--
+-- Two columns rather than one because 0009's existing colour columns
+-- do not cover the palette. `color_table_ref` is a URL to a ramp
+-- *image*, which would mean a second network fetch and a decode
+-- before the first frame could be coloured, and `probing_info` is a
+-- documented SOS-specific shape (minPos / maxPos in colour-table
+-- pixel coordinates) that this must not overload — its units /
+-- minVal / maxVal are the SOS snapshot's, not the encode's, and the
+-- two disagree for any dataset that carries both. Storing the
+-- sidecar inline keeps it atomic with the row that points at the
+-- video, so a dataset can never be served with a palette belonging
+-- to a previous encode.
+--
+-- Both nullable with no default and no backfill: every existing row
+-- reads NULL, which is exactly "legacy picture". Single-node D1,
+-- additive only. No index — neither column is ever a query
+-- predicate; both are read only as part of a row already selected by
+-- id or slug.
+
+ALTER TABLE datasets ADD COLUMN render_encoding TEXT;
+ALTER TABLE datasets ADD COLUMN color_scale TEXT;

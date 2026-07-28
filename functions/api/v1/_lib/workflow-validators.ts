@@ -59,7 +59,14 @@ export function validatePipeline(
     errors.push(err('pipeline_json', 'required', 'pipeline_json is required (a JSON string).'))
     return
   }
-  if (pipelineJson.length > MAX_PIPELINE_JSON_BYTES) {
+  // UTF-8 bytes, not `.length`. `String.length` counts UTF-16 code
+  // units, so it undercounts anything outside ASCII — a CJK title is
+  // 1 unit and 3 bytes — and this bound exists to size what D1
+  // actually stores, which is UTF-8. Measuring code units let a
+  // pipeline pass the check and exceed the documented bound by up to
+  // 3x. Real pipelines are URLs and paths, so this is a latent
+  // correctness fix rather than an observed failure.
+  if (new TextEncoder().encode(pipelineJson).length > MAX_PIPELINE_JSON_BYTES) {
     errors.push(
       err('pipeline_json', 'too_large', `Pipeline JSON must be ≤ ${MAX_PIPELINE_JSON_BYTES} bytes.`),
     )

@@ -37,6 +37,7 @@ import {
 import { renderMarkdown } from '../../../services/markdownRenderer'
 import type { PublisherDatasetDetail } from '../types'
 import type { DatasetOverlayOptions } from '../../../types'
+import { parseColorScale, RENDER_ENCODING_DATA_LUMA } from '../../../types/color-scale'
 import { ROUTE_CHANGE_START_EVENT } from '../router'
 
 export type DatasetFormMode = 'create' | 'edit'
@@ -169,6 +170,10 @@ interface FormState {
   bboxW: string
   bboxE: string
   lonOrigin: string
+  /** Source frames per second for an image-sequence encode. String
+   *  because it is an <input> value; '' means "leave it to the
+   *  catalog default". */
+  playbackFps: string
   isFlippedInY: boolean
   celestialBody: string
   radiusMi: string
@@ -1004,6 +1009,22 @@ function geographyCard(state: FormState): HTMLElement {
 
   card.appendChild(
     inputField({
+      id: 'dataset-playback-fps',
+      labelKey: 'publisher.datasetForm.field.playbackFps',
+      required: false,
+      value: state.playbackFps,
+      placeholder: '30',
+      type: 'number',
+      helpKey: 'publisher.datasetForm.help.playbackFps',
+      error: findError(state.errors, 'playback_fps'),
+      onChange: v => {
+        state.playbackFps = v
+      },
+    }),
+  )
+
+  card.appendChild(
+    inputField({
       id: 'dataset-celestial-body',
       labelKey: 'publisher.datasetForm.field.celestialBody',
       required: false,
@@ -1602,6 +1623,13 @@ function overlayFromRow(row: PublisherDatasetDetail): DatasetOverlayOptions | nu
   if (row.celestial_body && row.celestial_body.trim()) {
     overlay.celestialBody = row.celestial_body
   }
+  // Without this the publisher thumbnail for a data-encoded dataset
+  // would be a picture of the raw grayscale frame — the one place a
+  // reviewer looks to confirm the dataset published correctly.
+  if (row.render_encoding === RENDER_ENCODING_DATA_LUMA) {
+    const scale = parseColorScale(row.color_scale)
+    if (scale) overlay.colorScale = scale
+  }
   return Object.keys(overlay).length > 0 ? overlay : null
 }
 
@@ -2186,6 +2214,13 @@ function renderForm(
     // it can be toggled back off on edit, unlike the omit-when-empty
     // text fields.
     body.is_flipped_in_y = state.isFlippedInY
+    // Always sent too, as null when cleared. Omitting it would make
+    // the field one-way: the PATCH reads an absent key as "leave
+    // untouched", so a publisher could set a rate and never revert to
+    // the default. lon_origin above omits when empty and has exactly
+    // that limitation; not copied here.
+    body.playback_fps =
+      state.playbackFps.trim() === '' ? null : num(state.playbackFps)
     setIfPresent('celestial_body', state.celestialBody)
     const radius = num(state.radiusMi)
     if (radius != null) body.radius_mi = radius
@@ -2405,6 +2440,7 @@ function initialState(
       bboxW: '',
       bboxE: '',
       lonOrigin: '',
+      playbackFps: '',
       isFlippedInY: false,
       celestialBody: '',
       radiusMi: '',
@@ -2460,6 +2496,7 @@ function initialState(
     bboxW: row.bbox_w != null ? String(row.bbox_w) : '',
     bboxE: row.bbox_e != null ? String(row.bbox_e) : '',
     lonOrigin: row.lon_origin != null ? String(row.lon_origin) : '',
+    playbackFps: row.playback_fps != null ? String(row.playback_fps) : '',
     isFlippedInY: row.is_flipped_in_y === 1,
     celestialBody: row.celestial_body ?? '',
     radiusMi: row.radius_mi != null ? String(row.radius_mi) : '',

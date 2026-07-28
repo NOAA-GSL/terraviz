@@ -34,9 +34,30 @@ export const ZYRA_STAGE_ALLOWLIST: Readonly<Record<string, readonly string[]>> =
 
 /** Bounds on a stored pipeline. */
 export const MAX_PIPELINE_STAGES = 12
-export const MAX_PIPELINE_JSON_BYTES = 32 * 1024
+/** Size of the whole stored pipeline.
+ *
+ * Raised from 32 KiB alongside the list bound below. A per-frame
+ * pipeline repeats a long templated URL once per list, so the byte
+ * count grows with frame count and hits this before anything else
+ * does: an 85-frame RRFS forecast serialises to ~27 KiB, i.e. 83% of
+ * the old bound. Raising only the item count would have shipped a
+ * pipeline one edit — a longer palette URL — away from failing. */
+export const MAX_PIPELINE_JSON_BYTES = 64 * 1024
 export const MAX_PIPELINE_ARG_LENGTH = 2000
-export const MAX_PIPELINE_ARG_LIST_ITEMS = 16
+/** Items in a single array-valued pipeline arg (`inputs`,
+ *  `output_names`, …).
+ *
+ * Was 16, which is exactly the frame count of the first workflow
+ * written against it — the bound and its only consumer were the same
+ * size, so nothing had pushed on it. It is a real limit though: a
+ * forecast that wants an hourly frame per lead hour needs one list
+ * entry per frame, and RRFS publishes to f084.
+ *
+ * 128 is chosen to clear that (85) with room, while still refusing a
+ * runaway generated pipeline. These lists become CLI argv for the zyra
+ * container, so the bound is about keeping a stored pipeline sane
+ * rather than about any single downstream limit. */
+export const MAX_PIPELINE_ARG_LIST_ITEMS = 128
 
 /** Bounds on the metadata sidecar template. */
 export const MAX_METADATA_TEMPLATE_BYTES = 8 * 1024

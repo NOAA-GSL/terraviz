@@ -3,7 +3,21 @@
  */
 
 import axios from 'axios'
-import type { Dataset, DatasetFormat, DatasetMetadata, EnrichedMetadata, TimeInfo, Tour } from '../types'
+import type {
+  Dataset,
+  DatasetFormat,
+  DatasetMetadata,
+  EnrichedMetadata,
+  ProbingInfo,
+  TimeInfo,
+  Tour,
+} from '../types'
+import {
+  parseColorScale,
+  RENDER_ENCODING_DATA_LUMA,
+  type ColorScale,
+  type RenderEncoding,
+} from '../types/color-scale'
 import { isLiveCadence, parseISO8601Duration, safePeriodMs } from '../utils/time'
 import { logger } from '../utils/logger'
 import { reportError } from '../analytics'
@@ -242,6 +256,14 @@ interface WireDataset {
   thumbnailLink?: string
   legendLink?: string
   closedCaptionLink?: string
+  /** Colour-ramp image used by interactive probing — distinct from
+   *  `legendLink` on the rows that carry both. The server has always
+   *  serialized this; the SPA simply never declared it. */
+  colorTableLink?: string
+  /** Pixel-coords → data-value mapping for the colour table. Declared
+   *  in the JSON schema and emitted by the serializer; likewise never
+   *  declared here until now. */
+  probingInfo?: ProbingInfo
   websiteLink?: string
   startTime?: string
   endTime?: string
@@ -273,6 +295,17 @@ interface WireDataset {
    *  (prime-meridian-centered); ±180 is dateline-centered (Pacific-
    *  focused datasets). */
   lonOrigin?: number
+  /** How the frames encode their pixels. Omitted means a picture —
+   *  colourised upstream and rendered as-is, which is every dataset
+   *  published before this field existed. `'data-luma'` means luma
+   *  carries the normalised value and `colorScale` colours it at
+   *  display time. The serializer emits this only as a validated
+   *  pair with `colorScale`. */
+  renderEncoding?: RenderEncoding
+  /** Palette + scale for a `data-luma` dataset. Already parsed and
+   *  validated server-side; re-parsed here anyway, because the
+   *  catalog can also be served from a static snapshot. */
+  colorScale?: ColorScale
   /** Image Y-axis flip flag for datasets with inverted Y conventions.
    *  Omitted == false. */
   isFlippedInY?: boolean
@@ -337,6 +370,13 @@ function wireToDataset(d: WireDataset): Dataset {
     thumbnailLink: d.thumbnailLink,
     legendLink: d.legendLink,
     closedCaptionLink: d.closedCaptionLink,
+    // The server has always emitted these two and the SPA has
+    // always discarded them here — the loss started one level up,
+    // at `WireDataset`, which never declared them. `colorTableLink`
+    // in particular means `downloadService`'s colour-table bundling
+    // has been reading `undefined` on every catalog-sourced dataset.
+    colorTableLink: d.colorTableLink,
+    probingInfo: d.probingInfo,
     websiteLink: d.websiteLink,
     startTime: d.startTime,
     endTime: d.endTime,
@@ -357,9 +397,27 @@ function wireToDataset(d: WireDataset): Dataset {
     celestialBody: d.celestialBody,
     lonOrigin: d.lonOrigin,
     isFlippedInY: d.isFlippedInY,
+    // Data-encoded video. Re-validated rather than trusted: the
+    // catalog can be served from a static snapshot that never went
+    // through the write-side validator, and a malformed sidecar
+    // here would colour real measurements through an invented
+    // palette. `parseColorScale` returning null drops the pair, and
+    // the dataset renders as the picture it appears to be.
+    ...dataEncodingFromWire(d),
     tourJsonUrl: d.tourJsonUrl,
     frames: d.frames,
   }
+}
+
+/** Accept the `renderEncoding` / `colorScale` pair only when both
+ *  halves are present and the sidecar parses. */
+function dataEncodingFromWire(
+  d: WireDataset,
+): { renderEncoding?: RenderEncoding; colorScale?: ColorScale } {
+  if (d.renderEncoding !== RENDER_ENCODING_DATA_LUMA) return {}
+  const colorScale = parseColorScale(d.colorScale)
+  if (!colorScale) return {}
+  return { renderEncoding: RENDER_ENCODING_DATA_LUMA, colorScale }
 }
 
 /**

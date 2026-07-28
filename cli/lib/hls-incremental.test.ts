@@ -12,6 +12,7 @@ import { describe, expect, it } from 'vitest'
 import {
   DEFAULT_RENDITION_DESCRIPTORS,
   FRAMES_PER_CHUNK,
+  framesPerChunk,
   assemblePlaylists,
   buildMasterPlaylist,
   buildVariantPlaylist,
@@ -27,6 +28,7 @@ import {
   type RenditionDescriptor,
   type SegmentManifest,
 } from './hls-incremental'
+import { DEFAULT_SEGMENT_SECONDS, OUTPUT_FRAME_RATE } from './ffmpeg-hls'
 
 /** Build N frame entries with deterministic digests. `from` shifts
  *  the digest content so two ranges differ; `padIndices` marks
@@ -67,6 +69,44 @@ describe('gridOffset', () => {
     expect(gridOffset(period + 1_000, 0, period)).toBeNull()
     // Exact alignment still rounds cleanly.
     expect(gridOffset(4 * period, 0, period)).toBe(4)
+  })
+})
+
+describe('framesPerChunk — the one-chunk-one-segment invariant', () => {
+  // A chunk must encode to exactly ONE segment, so its duration has to
+  // stay under `-hls_time`. Duration is frames / inputFps, so the frame
+  // count scales with the rate. Holding it at 180 while slowing the
+  // input would make each chunk 180 s and ffmpeg would emit 30
+  // segments, which the content-addressed manifest cannot represent.
+
+  it('matches the historical constant at the default rate', () => {
+    expect(framesPerChunk()).toBe(FRAMES_PER_CHUNK)
+    expect(framesPerChunk(OUTPUT_FRAME_RATE)).toBe(FRAMES_PER_CHUNK)
+  })
+
+  it('keeps every chunk under the segment length at any rate', () => {
+    for (const fps of [30, 24, 12, 10, 5, 2, 1, 0.5, 0.25]) {
+      const perChunk = framesPerChunk(fps)
+      const seconds = perChunk / fps
+      expect(seconds, `${fps} fps → ${perChunk} frames = ${seconds}s`)
+        .toBeLessThanOrEqual(DEFAULT_SEGMENT_SECONDS)
+    }
+  })
+
+  it('never yields an empty chunk, which would stall the grid', () => {
+    // Math.floor(6 * 0.01) is 0; a zero chunk size makes gridIndex
+    // divide by zero and every frame land in the same undefined cell.
+    for (const fps of [0.01, 0.001, Number.EPSILON]) {
+      expect(framesPerChunk(fps)).toBeGreaterThanOrEqual(1)
+    }
+  })
+
+  it('sizes the grid from the rate, not from the constant', () => {
+    // 1 fps → 6 frames per chunk, so 7 frames is a full chunk plus a
+    // one-frame tail rather than a single 7-frame chunk.
+    const chunks = computeChunkGrid(frames(7), 0, new Set(), framesPerChunk(1))
+    expect(chunks.map(c => c.frames.length)).toEqual([6, 1])
+    expect(chunks.map(c => c.partial)).toEqual([false, true])
   })
 })
 
@@ -131,6 +171,22 @@ describe('segmentDescriptorHash', () => {
     expect(segmentDescriptorHash({ ...chunk, gridIndex: 4 }, r)).not.toBe(
       segmentDescriptorHash(chunk, r),
     )
+  })
+
+  // The data-encoded rung and the default 4K rung agree on both
+  // dimensions and CRF, so without `dataEncoded` in the descriptor
+  // they hash identically — and segments encoded with the bicubic
+  // scaler get recycled into a bundle that claims exact values.
+  it('separates data-encoded segments from same-size, same-CRF picture ones', () => {
+    const picture: RenditionDescriptor = { id: 'stream_0', width: 4096, height: 2048, crf: 18 }
+    const data: RenditionDescriptor = { ...picture, dataEncoded: true }
+    expect(segmentDescriptorHash(chunk, data)).not.toBe(segmentDescriptorHash(chunk, picture))
+  })
+
+  it('treats an absent dataEncoded flag as false', () => {
+    const implicit: RenditionDescriptor = { id: 'stream_0', width: 4096, height: 2048, crf: 18 }
+    const explicit: RenditionDescriptor = { ...implicit, dataEncoded: false }
+    expect(segmentDescriptorHash(chunk, explicit)).toBe(segmentDescriptorHash(chunk, implicit))
   })
 })
 

@@ -103,6 +103,23 @@ export interface DatasetRow {
    * Zero rows use this in the current SOS snapshot; persisted for
    * future publishers whose imagery uses inverted Y conventions. */
   is_flipped_in_y: number | null
+  /** How the frames encode their pixels. NULL means a picture —
+   * colourised upstream, rendered as-is, which is every dataset
+   * published before this column existed. 'data-luma' means luma
+   * carries the normalised value and `color_scale` colours it at
+   * display time. */
+  render_encoding: string | null
+  /** JSON sidecar for `render_encoding = 'data-luma'`: palette
+   * stops, vmin/vmax, units, transparent range. Meaningless (and
+   * ignored) when render_encoding is NULL. */
+  color_scale: string | null
+  /** Source frames per second for an image-sequence encode: each
+   * frame is held 1/playback_fps seconds. NULL keeps the historical
+   * behaviour of one output frame per source frame at 30 fps, which
+   * plays a short forecast in well under a second. The *output* rate
+   * stays 30 regardless — the tour engine's `frameRate` maths
+   * depends on it. */
+  playback_fps: number | null
   /** Boolean (0/1) flag set by the video-upload /complete handler
    * when a `source.mp4` lands in R2 and a GHA transcode dispatch
    * fires (Phase 3pd). The workflow clears the flag and writes

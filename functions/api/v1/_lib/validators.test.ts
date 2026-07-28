@@ -408,3 +408,115 @@ describe('validateTourDraft', () => {
     expect(validateTourDraft({ title: 'My tour' })).toEqual([])
   })
 })
+
+describe('validateRenderEncoding (data-encoded video)', () => {
+  const STOPS = [
+    { t: 0, rgba: [0, 0, 0, 0] },
+    { t: 1, rgba: [255, 255, 255, 255] },
+  ]
+  const scale = (over: Record<string, unknown> = {}): string =>
+    JSON.stringify({ stops: STOPS, vmin: 0, vmax: 100, units: 'mg m-2', ...over })
+  const base = { title: 'Smoke', format: 'video/mp4' }
+
+  it('accepts a well-formed encoding + sidecar pair', () => {
+    expect(
+      validateDraftCreate({ ...base, render_encoding: 'data-luma', color_scale: scale() }),
+    ).toEqual([])
+  })
+
+  it('leaves a legacy body — neither field set — untouched', () => {
+    // The backwards-compatibility contract: an absent pair is not
+    // an error, it is every dataset published so far.
+    expect(validateDraftCreate(base)).toEqual([])
+    expect(validateDraftUpdate({})).toEqual([])
+  })
+
+  it('rejects an unknown encoding', () => {
+    expect(
+      validateDraftCreate({ ...base, render_encoding: 'data-rgb', color_scale: scale() }).some(
+        e => e.field === 'render_encoding' && e.code === 'invalid_value',
+      ),
+    ).toBe(true)
+  })
+
+  it('rejects each half of the pair without the other', () => {
+    // 'data-luma' with no sidecar renders as raw grayscale…
+    expect(
+      validateDraftCreate({ ...base, render_encoding: 'data-luma' }).some(
+        e => e.field === 'color_scale' && e.code === 'invalid_value',
+      ),
+    ).toBe(true)
+    // …and a sidecar with no encoding is silently ignored.
+    expect(
+      validateDraftCreate({ ...base, color_scale: scale() }).some(
+        e => e.field === 'render_encoding' && e.code === 'invalid_value',
+      ),
+    ).toBe(true)
+  })
+
+  it.each([
+    ['unparseable JSON', '{nope'],
+    ['a single stop', JSON.stringify({ stops: [STOPS[0]], vmin: 0, vmax: 1 })],
+    ['a zero-width range', JSON.stringify({ stops: STOPS, vmin: 7, vmax: 7 })],
+    ['a non-finite bound', JSON.stringify({ stops: STOPS, vmin: 0, vmax: null })],
+  ])('rejects a sidecar with %s', (_label, color_scale) => {
+    // Stricter than the neighbouring probing_info check, which only
+    // asks for parseable JSON — this one decides pixel colours.
+    expect(
+      validateDraftCreate({ ...base, render_encoding: 'data-luma', color_scale }).some(
+        e => e.field === 'color_scale',
+      ),
+    ).toBe(true)
+  })
+
+  it('rejects an over-long sidecar', () => {
+    const huge = JSON.stringify({ stops: STOPS, vmin: 0, vmax: 1, units: 'x'.repeat(20_000) })
+    expect(
+      validateDraftCreate({ ...base, render_encoding: 'data-luma', color_scale: huge }).some(
+        e => e.field === 'color_scale' && e.code === 'too_long',
+      ),
+    ).toBe(true)
+  })
+
+  it('allows an update to clear the pair back to a picture', () => {
+    expect(validateDraftUpdate({ render_encoding: null, color_scale: null })).toEqual([])
+  })
+})
+
+describe('playback_fps', () => {
+  // Rejected rather than coerced. The transcode already falls back to
+  // the default for a non-positive value, so a 0 would have produced an
+  // accepted write that silently did not take effect — the form still
+  // showing 0 while the video played at 30.
+  const fps = (v: unknown) =>
+    validateDraftUpdate({ playback_fps: v } as never).filter(e => e.field === 'playback_fps')
+
+  it('accepts the sub-1 range, which is the useful one', () => {
+    // 0.5 holds each frame two seconds — the point of the REAL column.
+    for (const v of [0.25, 0.5, 1, 2, 30]) expect(fps(v)).toEqual([])
+  })
+
+  it('accepts null and absence as "use the catalog default"', () => {
+    expect(fps(null)).toEqual([])
+    expect(validateDraftUpdate({}).filter(e => e.field === 'playback_fps')).toEqual([])
+  })
+
+  it('rejects zero and negatives instead of silently defaulting', () => {
+    for (const v of [0, -1, -0.5]) {
+      expect(fps(v).map(e => e.code), `${v}`).toContain('invalid_value')
+    }
+  })
+
+  it('rejects a rate above the output frame rate', () => {
+    // Above 30 the `-r 30` on each rendition drops the extra source
+    // frames rather than playing them faster, so the value would not
+    // mean what it says.
+    expect(fps(60).map(e => e.code)).toContain('invalid_value')
+  })
+
+  it('rejects non-finite and non-numeric values', () => {
+    for (const v of [NaN, Infinity, '2', {}]) {
+      expect(fps(v).map(e => e.code), String(v)).toContain('invalid_type')
+    }
+  })
+})

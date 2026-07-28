@@ -89,6 +89,14 @@ export interface VrHudState {
    * open a second one.
    */
   browseOpen: boolean
+  /**
+   * Value under the controller's aim on a data-encoded dataset, already
+   * formatted with units — the in-VR counterpart of the 2D globe's
+   * lat/lon strip. Null for a picture dataset, for a point outside a
+   * regional dataset's box, or when nothing is aimed at a globe, in
+   * which case the title keeps the full width it has today.
+   */
+  probeReadout?: string | null
 }
 
 export interface VrHudHandle {
@@ -234,7 +242,21 @@ function drawCanvas(
   while (ctx.measureText(title).width > titleMaxWidth && title.length > 4) {
     title = title.slice(0, -2) + '…'
   }
-  ctx.fillText(title, titleCenterX, h / 2)
+  // The readout shares the title's column: title lifts, value sits
+  // under it in the accent colour. Only a data-encoded dataset ever
+  // supplies one, so every existing dataset keeps the centred
+  // full-height title it has today.
+  const readout = state.probeReadout
+  ctx.fillText(title, titleCenterX, readout ? h / 2 - 26 : h / 2)
+  if (readout) {
+    ctx.fillStyle = '#4da6ff' // --color-accent
+    ctx.font = '500 40px ui-monospace, SFMono-Regular, Menlo, monospace'
+    let value = readout
+    while (ctx.measureText(value).width > titleMaxWidth && value.length > 4) {
+      value = value.slice(0, -2) + '…'
+    }
+    ctx.fillText(value, titleCenterX, h / 2 + 30)
+  }
 
   // --- Browse button (three horizontal bars, "list" glyph) ---
   // Highlights in accent when the panel is currently open so the

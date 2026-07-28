@@ -31,6 +31,7 @@ import { logger } from '../utils/logger'
 import { getCloudTextureUrl, isMobile } from '../utils/deviceCapability'
 import { reportError } from '../analytics'
 import type { DatasetOverlayOptions } from '../types'
+import { buildColorScaleLut, COLOR_SCALE_LUT_SIZE } from '../types/color-scale'
 import {
   ATMOSPHERE_GLSL_CONSTANTS,
   ATMOSPHERE_GLSL_DENSITY,
@@ -874,6 +875,17 @@ const datasetVertSrc = `#version 300 es
 //     datasets authored with inverted-Y conventions. Zero SOS
 //     rows use this today but the field is wired for future
 //     publishers.
+//
+//   - `uDataEncoded`: when true the texture is not a picture. Its
+//     red channel carries the normalised value (0 = vmin / no data,
+//     1 = vmax) and `uColorLut` — a 256×1 RGBA ramp built from the
+//     dataset's sidecar — turns it back into colour and alpha. The
+//     luma is read as a raw code value: the texture is uploaded as
+//     plain `gl.RGBA` with no sRGB internal format, so no transfer
+//     function has been applied and none must be. Everything before
+//     this point is shared with the picture path, so a legacy
+//     dataset compiles the same shader and takes the same branch it
+//     always has.
 const datasetFragSrc = `#version 300 es
   precision highp float;
   uniform sampler2D uDatasetTex;
@@ -881,6 +893,8 @@ const datasetFragSrc = `#version 300 es
   uniform vec4 uBbox;        // (n, s, w, e) degrees
   uniform float uLonOrigin;  // degrees
   uniform bool uFlipY;
+  uniform bool uDataEncoded;
+  uniform sampler2D uColorLut; // 256x1 RGBA palette
   in vec2 vUV;
   out vec4 fragColor;
 
@@ -936,7 +950,17 @@ const datasetFragSrc = `#version 300 es
       sampleUV = vec2(u, v);
     }
 
-    fragColor = texture(uDatasetTex, sampleUV);
+    if (uDataEncoded) {
+      // Luma is the measurement. Look the value up in the palette
+      // rather than showing it, and let the palette's own alpha
+      // decide what the base map shows through — which is exact
+      // here, because "no data" was encoded as a value rather than
+      // baked into a colour.
+      float t = texture(uDatasetTex, sampleUV).r;
+      fragColor = texture(uColorLut, vec2(t, 0.5));
+    } else {
+      fragColor = texture(uDatasetTex, sampleUV);
+    }
   }
 `
 
@@ -1067,6 +1091,63 @@ export function computeSunLightPosition(sunLat: number, sunLng: number): [number
   return [1.5, azimuthal, polar]
 }
 
+/**
+ * Filtering for a data-encoded dataset texture: nearest, no mipmaps.
+ *
+ * The same argument that puts `flags=neighbor` in the encoder. A
+ * bilinear tap averages the codes of adjacent texels, and across a
+ * nodata/data edge that average is a value nobody measured — it lands
+ * mid-palette and paints a fringe of invented colour around every
+ * coastline of the data. Mipmaps are worse: each level averages four
+ * codes, so a zoomed-out globe would read from a texture whose
+ * "values" are entirely synthetic.
+ *
+ * The cost is visible texel edges when magnified past 1:1. That is the
+ * right trade for a measurement, and it is the honest picture of the
+ * data's real resolution.
+ */
+function applyDataEncodedFiltering(gl: WebGL2RenderingContext): void {
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST)
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST)
+}
+
+/**
+ * Create, update, or tear down the 256×1 palette texture to match the
+ * dataset being loaded. Returns the texture, or `null` when the
+ * dataset is an ordinary picture — the caller treats that `null` as
+ * the mode flag, so a legacy dataset can never end up in the
+ * data-encoded branch.
+ *
+ * Leaves `TEXTURE_2D` bound to whatever the caller had bound, since
+ * both call sites are mid-way through configuring the dataset texture.
+ */
+function syncColorLut(
+  gl: WebGL2RenderingContext,
+  existing: WebGLTexture | null,
+  options?: DatasetOverlayOptions,
+): WebGLTexture | null {
+  const scale = options?.colorScale
+  if (!scale) {
+    if (existing) gl.deleteTexture(existing)
+    return null
+  }
+  const bound = gl.getParameter(gl.TEXTURE_BINDING_2D) as WebGLTexture | null
+  const lut = existing ?? gl.createTexture()
+  gl.bindTexture(gl.TEXTURE_2D, lut)
+  gl.texImage2D(
+    gl.TEXTURE_2D, 0, gl.RGBA, COLOR_SCALE_LUT_SIZE, 1, 0,
+    gl.RGBA, gl.UNSIGNED_BYTE, buildColorScaleLut(scale),
+  )
+  // LINEAR across the ramp is correct and wanted: the palette is a
+  // continuous colour ramp, unlike the data it is applied to.
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+  gl.bindTexture(gl.TEXTURE_2D, bound)
+  return lut
+}
+
 // --- Layer implementation ---
 
 interface DatasetProgram {
@@ -1079,6 +1160,9 @@ interface DatasetProgram {
   bboxLoc: WebGLUniformLocation | null
   lonOriginLoc: WebGLUniformLocation | null
   flipYLoc: WebGLUniformLocation | null
+  /** Data-encoded video uniforms. */
+  dataEncodedLoc: WebGLUniformLocation | null
+  colorLutLoc: WebGLUniformLocation | null
 }
 
 interface DayNightProgram {
@@ -1248,6 +1332,9 @@ export function createEarthTileLayer(): EarthTileLayerControl {
   // isFlippedInY is set. Until 3e/B lands, the options are
   // captured but the rendering ignores them — pure plumbing.
   let datasetOptions: DatasetOverlayOptions | null = null
+  /** 256x1 RGBA palette for a data-encoded dataset, or null when the
+   *  texture is an ordinary picture. Doubles as the mode flag. */
+  let datasetColorLut: WebGLTexture | null = null
   let forceVideoUpdate = false
   let transmittanceLutTex: WebGLTexture | null = null
   let skyboxProg: WebGLProgram | null = null
@@ -1389,6 +1476,8 @@ export function createEarthTileLayer(): EarthTileLayerControl {
           bboxLoc: gl2.getUniformLocation(datasetProg, 'uBbox'),
           lonOriginLoc: gl2.getUniformLocation(datasetProg, 'uLonOrigin'),
           flipYLoc: gl2.getUniformLocation(datasetProg, 'uFlipY'),
+          dataEncodedLoc: gl2.getUniformLocation(datasetProg, 'uDataEncoded'),
+          colorLutLoc: gl2.getUniformLocation(datasetProg, 'uColorLut'),
         }
       }
 
@@ -1745,7 +1834,19 @@ export function createEarthTileLayer(): EarthTileLayerControl {
           if (!datasetVideo.paused) mapRef?.triggerRepaint()
         }
 
-        gl2.disable(gl2.BLEND)
+        // A data-encoded dataset is the one case with a real alpha
+        // source: the palette's own alpha, looked up per fragment
+        // from the encoded value. Everything else stays opaque, so
+        // the picture path keeps the exact GL state it had before.
+        const dataEncoded = Boolean(datasetColorLut)
+        if (dataEncoded) {
+          gl2.enable(gl2.BLEND)
+          // Straight (non-premultiplied) alpha — the LUT is built in
+          // straight 8-bit space by `buildColorScaleLut`.
+          gl2.blendFuncSeparate(gl2.SRC_ALPHA, gl2.ONE_MINUS_SRC_ALPHA, gl2.ONE, gl2.ONE_MINUS_SRC_ALPHA)
+        } else {
+          gl2.disable(gl2.BLEND)
+        }
         gl2.useProgram(dataset.program)
         gl2.uniformMatrix4fv(dataset.matrixLoc, false, matrix)
         gl2.uniform1f(dataset.radiusScaleLoc, terrainRadiusScale)
@@ -1766,13 +1867,21 @@ export function createEarthTileLayer(): EarthTileLayerControl {
         gl2.activeTexture(gl2.TEXTURE0)
         gl2.bindTexture(gl2.TEXTURE_2D, datasetTex)
         gl2.uniform1i(dataset.texLoc, 0)
-        // BLEND is disabled above, so the bbox interior is opaque —
-        // the base tile layers (which 3e/C keeps visible for bbox
-        // datasets) are revealed solely by the fragment shader's
-        // `discard` on the outside-the-box path, never by alpha
-        // compositing inside it. Adding real alpha-blended overlays
-        // would require re-enabling BLEND here and giving the
-        // shader an alpha source.
+        gl2.uniform1i(dataset.dataEncodedLoc, dataEncoded ? 1 : 0)
+        if (dataEncoded && datasetColorLut) {
+          gl2.activeTexture(gl2.TEXTURE1)
+          gl2.bindTexture(gl2.TEXTURE_2D, datasetColorLut)
+          gl2.uniform1i(dataset.colorLutLoc, 1)
+          gl2.activeTexture(gl2.TEXTURE0)
+        }
+        // For a picture dataset BLEND is disabled above, so the bbox
+        // interior is opaque — the base tile layers (which 3e/C keeps
+        // visible for bbox datasets) are revealed solely by the
+        // fragment shader's `discard` on the outside-the-box path,
+        // never by alpha compositing inside it. A data-encoded
+        // dataset is the exception: it enables BLEND and composites
+        // inside the box too, because its alpha is a measurement
+        // rather than a styling choice.
         gl2.drawElements(gl2.TRIANGLES, indexCount, gl2.UNSIGNED_SHORT, 0)
 
         // Restore GL state and return — no earth effects when dataset is active
@@ -2232,9 +2341,14 @@ export function createEarthTileLayer(): EarthTileLayerControl {
       glRef.bindTexture(glRef.TEXTURE_2D, datasetTex)
       const source = fitImageToMaxTextureSize(glRef, image)
       glRef.texImage2D(glRef.TEXTURE_2D, 0, glRef.RGBA, glRef.RGBA, glRef.UNSIGNED_BYTE, source)
-      glRef.generateMipmap(glRef.TEXTURE_2D)
-      glRef.texParameteri(glRef.TEXTURE_2D, glRef.TEXTURE_MIN_FILTER, glRef.LINEAR_MIPMAP_LINEAR)
-      glRef.texParameteri(glRef.TEXTURE_2D, glRef.TEXTURE_MAG_FILTER, glRef.LINEAR)
+      datasetColorLut = syncColorLut(glRef, datasetColorLut, options)
+      if (datasetColorLut) {
+        applyDataEncodedFiltering(glRef)
+      } else {
+        glRef.generateMipmap(glRef.TEXTURE_2D)
+        glRef.texParameteri(glRef.TEXTURE_2D, glRef.TEXTURE_MIN_FILTER, glRef.LINEAR_MIPMAP_LINEAR)
+        glRef.texParameteri(glRef.TEXTURE_2D, glRef.TEXTURE_MAG_FILTER, glRef.LINEAR)
+      }
       glRef.texParameteri(glRef.TEXTURE_2D, glRef.TEXTURE_WRAP_S, glRef.REPEAT)
       glRef.texParameteri(glRef.TEXTURE_2D, glRef.TEXTURE_WRAP_T, glRef.CLAMP_TO_EDGE)
       datasetActive = true
@@ -2255,9 +2369,14 @@ export function createEarthTileLayer(): EarthTileLayerControl {
       // Initialize with a single frame — render loop will update per-frame
       glRef.bindTexture(glRef.TEXTURE_2D, datasetTex)
       glRef.texImage2D(glRef.TEXTURE_2D, 0, glRef.RGBA, glRef.RGBA, glRef.UNSIGNED_BYTE, video)
-      // No mipmaps for video — LINEAR only (regenerating mipmaps per frame is expensive)
-      glRef.texParameteri(glRef.TEXTURE_2D, glRef.TEXTURE_MIN_FILTER, glRef.LINEAR)
-      glRef.texParameteri(glRef.TEXTURE_2D, glRef.TEXTURE_MAG_FILTER, glRef.LINEAR)
+      datasetColorLut = syncColorLut(glRef, datasetColorLut, options)
+      if (datasetColorLut) {
+        applyDataEncodedFiltering(glRef)
+      } else {
+        // No mipmaps for video — LINEAR only (regenerating mipmaps per frame is expensive)
+        glRef.texParameteri(glRef.TEXTURE_2D, glRef.TEXTURE_MIN_FILTER, glRef.LINEAR)
+        glRef.texParameteri(glRef.TEXTURE_2D, glRef.TEXTURE_MAG_FILTER, glRef.LINEAR)
+      }
       glRef.texParameteri(glRef.TEXTURE_2D, glRef.TEXTURE_WRAP_S, glRef.REPEAT)
       glRef.texParameteri(glRef.TEXTURE_2D, glRef.TEXTURE_WRAP_T, glRef.CLAMP_TO_EDGE)
       datasetActive = true
@@ -2274,6 +2393,10 @@ export function createEarthTileLayer(): EarthTileLayerControl {
       datasetActive = false
       datasetVideo = null
       datasetOptions = null
+      // Drop the palette with the dataset, so the next one can't
+      // inherit it and render its values through a stranger's ramp.
+      if (datasetColorLut && glRef) glRef.deleteTexture(datasetColorLut)
+      datasetColorLut = null
       mapRef?.triggerRepaint()
     },
   }

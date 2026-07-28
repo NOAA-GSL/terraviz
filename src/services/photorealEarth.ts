@@ -42,6 +42,11 @@ import { getSunPosition } from '../utils/time'
 import { getCloudTextureUrl, isMobile } from '../utils/deviceCapability'
 import { logger } from '../utils/logger'
 import type { DatasetOverlayOptions } from '../types'
+import {
+  buildColorScaleLut,
+  COLOR_SCALE_LUT_SIZE,
+  type ColorScale,
+} from '../types/color-scale'
 import { isEarthBody } from './datasetOverlayOptions'
 import {
   ATMOSPHERE_GLSL_CONSTANTS,
@@ -441,6 +446,9 @@ export function createPhotorealEarth(
   const overlayLonOriginUniform = { value: 0 }
   const overlayFlipYUniform = { value: 0 }
   const overlayHasBaseUniform = { value: 0 }
+  /** 1 when the dataset texture's luma is a measurement rather than a
+   *  colour, and `uOverlayColorLut` should decode it. */
+  const overlayDataEncodedUniform = { value: 0 }
   // `uOverlayBaseMap` always points at a valid texture so the sampler
   // binding is never null. `baseEarthTexture` is the always-loaded
   // monochrome specular fallback (the same one `material.map` starts
@@ -485,6 +493,13 @@ export function createPhotorealEarth(
   // `uOverlayHasBase = 1`, so what's bound here for the common case
   // is functionally irrelevant — just needs to be valid.
   const overlayBaseMapUniform: { value: THREE.Texture } = { value: baseEarthTexture }
+  /** 256x1 palette for a data-encoded dataset. Seeded with the base
+   *  earth texture so the sampler always has a bound texture even
+   *  before any data-encoded dataset loads; `uOverlayDataEncoded`
+   *  gates whether it is ever read. */
+  const overlayColorLutUniform: { value: THREE.Texture } = { value: baseEarthTexture }
+  /** The palette texture we own and must dispose when it is replaced. */
+  let overlayColorLut: THREE.DataTexture | null = null
 
   // MeshPhongMaterial — matches the pre-MapLibre earthMaterials.ts
   // shader style. Phong is simpler than StandardMaterial (no PBR)
@@ -532,6 +547,8 @@ export function createPhotorealEarth(
     shader.uniforms.uOverlayFlipY = overlayFlipYUniform
     shader.uniforms.uOverlayHasBase = overlayHasBaseUniform
     shader.uniforms.uOverlayBaseMap = overlayBaseMapUniform
+    shader.uniforms.uOverlayDataEncoded = overlayDataEncodedUniform
+    shader.uniforms.uOverlayColorLut = overlayColorLutUniform
 
     shader.vertexShader = shader.vertexShader.replace(
       '#include <common>',
@@ -557,7 +574,9 @@ export function createPhotorealEarth(
        uniform float uOverlayLonOrigin; // degrees
        uniform int uOverlayFlipY;
        uniform int uOverlayHasBase;
-       uniform sampler2D uOverlayBaseMap;`,
+       uniform sampler2D uOverlayBaseMap;
+       uniform int uOverlayDataEncoded;
+       uniform sampler2D uOverlayColorLut;`,
     )
     // Replace the standard <map_fragment> chunk (which is just
     // `sampledDiffuseColor = texture2D(map, vMapUv); diffuseColor *= …`)
@@ -580,6 +599,12 @@ export function createPhotorealEarth(
       '#include <map_fragment>',
       `#ifdef USE_MAP
          vec4 sampledDiffuseColor;
+         // Whether this fragment's colour came from the DATASET
+         // texture. False when it fell back to the base map outside
+         // a regional bbox, which matters below: the data-encoded
+         // branch treats .r as a measurement to look up in the
+         // palette, and the base map's red channel is not one.
+         bool sampledDataset = true;
          if (uOverlayHasBbox == 1) {
            // THREE's SphereGeometry puts uv.y == 1 at the NORTH pole
            // (verified: SphereGeometry(1,8,6) gives uv.y 1 at y=+1, 0
@@ -618,6 +643,7 @@ export function createPhotorealEarth(
              sampledDiffuseColor = texture2D(map, vec2(bu, bv));
            } else if (uOverlayHasBase == 1) {
              sampledDiffuseColor = texture2D(uOverlayBaseMap, vMapUv);
+             sampledDataset = false;
            } else {
              discard;
            }
@@ -656,12 +682,34 @@ export function createPhotorealEarth(
          // curve is a few %-points more accurate but adds branches
          // to a hot path; the 2.2 approximation is good enough for
          // a perceptual-contrast knob.
-         vec3 perceptual = pow(sampledDiffuseColor.rgb, vec3(1.0 / 2.2));
-         perceptual = (perceptual - 0.5) * uContrast + 0.5;
-         float vrLuma = dot(perceptual, vec3(0.299, 0.587, 0.114));
-         perceptual = mix(vec3(vrLuma), perceptual, uSaturation);
-         perceptual = clamp(perceptual, 0.0, 1.0);
-         sampledDiffuseColor.rgb = pow(perceptual, vec3(2.2));
+         if (uOverlayDataEncoded == 1 && sampledDataset) {
+           // Luma is a measurement, not a look. The contrast /
+           // saturation knobs below exist to make the *Earth* read
+           // well and would silently rewrite every value here — a
+           // contrast of 1.2 reports a different number under the
+           // cursor than the pipeline measured — so this path skips
+           // them entirely. The dataset texture is uploaded with
+           // NoColorSpace precisely so .r is the raw code value at
+           // this point; everything else on this material is sRGB
+           // and hardware-decoded to linear.
+           vec4 pal = texture2D(uOverlayColorLut, vec2(sampledDiffuseColor.r, 0.5));
+           // Composite against the base map in-shader. The material
+           // sits in the opaque pass and always has; mixing here
+           // gives exact transparency without a material or
+           // render-order change, and reuses the sampler the
+           // outside-bbox branch above already binds.
+           vec3 overlayBase = (uOverlayHasBase == 1)
+             ? texture2D(uOverlayBaseMap, vMapUv).rgb
+             : vec3(0.0);
+           sampledDiffuseColor = vec4(mix(overlayBase, pal.rgb, pal.a), 1.0);
+         } else {
+           vec3 perceptual = pow(sampledDiffuseColor.rgb, vec3(1.0 / 2.2));
+           perceptual = (perceptual - 0.5) * uContrast + 0.5;
+           float vrLuma = dot(perceptual, vec3(0.299, 0.587, 0.114));
+           perceptual = mix(vec3(vrLuma), perceptual, uSaturation);
+           perceptual = clamp(perceptual, 0.0, 1.0);
+           sampledDiffuseColor.rgb = pow(perceptual, vec3(2.2));
+         }
          diffuseColor *= sampledDiffuseColor;
        #endif`,
     )
@@ -1169,6 +1217,28 @@ export function createPhotorealEarth(
    * progressive diffuse tier upgrade. `undefined` resets to the
    * pre-3h passthrough.
    */
+  /**
+   * Colour space and filtering for a dataset texture.
+   *
+   * A data-encoded texture must be read as a raw code value, so it is
+   * uploaded with `NoColorSpace` — the same opt-out the normal maps
+   * use. Left at `SRGBColorSpace`, WebGL would upload it as
+   * SRGB8_ALPHA8 and the hardware would gamma-decode every sample,
+   * shifting every value before it ever reached the palette (0.5
+   * would arrive as ~0.21).
+   *
+   * Filtering drops to nearest for the same reason the encoder uses
+   * `flags=neighbor`: a bilinear tap across a nodata/data edge
+   * averages two codes into a value nobody measured.
+   */
+  function configureDatasetTexture(tex: THREE.Texture, options?: DatasetOverlayOptions): void {
+    const dataEncoded = Boolean(options?.colorScale)
+    tex.colorSpace = dataEncoded ? THREE_.NoColorSpace : THREE_.SRGBColorSpace
+    const filter = dataEncoded ? THREE_.NearestFilter : THREE_.LinearFilter
+    tex.minFilter = filter
+    tex.magFilter = filter
+  }
+
   function applyOverlayOptions(options: DatasetOverlayOptions | undefined): void {
     if (!options) {
       overlayHasBboxUniform.value = 0
@@ -1176,8 +1246,10 @@ export function createPhotorealEarth(
       overlayLonOriginUniform.value = 0
       overlayFlipYUniform.value = 0
       overlayHasBaseUniform.value = 0
+      setOverlayColorScale(undefined)
       return
     }
+    setOverlayColorScale(options.colorScale)
     const bbox = options.boundingBox
     if (bbox) {
       overlayHasBboxUniform.value = 1
@@ -1190,13 +1262,57 @@ export function createPhotorealEarth(
       }
     } else {
       overlayHasBboxUniform.value = 0
-      overlayHasBaseUniform.value = 0
+      // A data-encoded dataset needs the base map on the full-globe
+      // path too: its transparent regions are "nothing measured
+      // here", and the point of encoding the data rather than a
+      // picture is that the real base map shows through them. A
+      // picture dataset keeps the existing behaviour, where the
+      // full-globe path is opaque and never reads the base map.
+      overlayHasBaseUniform.value =
+        options.colorScale && isEarthBody(options.celestialBody) ? 1 : 0
+      if (overlayHasBaseUniform.value === 1) {
+        overlayBaseMapUniform.value = baseDiffuseTexture ?? baseEarthTexture
+      }
     }
     overlayLonOriginUniform.value =
       typeof options.lonOrigin === 'number' && Number.isFinite(options.lonOrigin)
         ? options.lonOrigin
         : 0
     overlayFlipYUniform.value = options.isFlippedInY ? 1 : 0
+  }
+
+  /**
+   * Build (or tear down) the palette texture for a data-encoded
+   * dataset, and flip the shader branch that reads it.
+   *
+   * The LUT is tagged `SRGBColorSpace` so the hardware decodes it to
+   * linear on sample, matching every other colour texture on this
+   * material — the dataset texture itself is the one that must *not*
+   * be decoded, and it is uploaded with `NoColorSpace` for exactly
+   * that reason.
+   */
+  function setOverlayColorScale(scale: ColorScale | undefined): void {
+    if (overlayColorLut) {
+      overlayColorLut.dispose()
+      overlayColorLut = null
+    }
+    if (!scale) {
+      overlayDataEncodedUniform.value = 0
+      overlayColorLutUniform.value = baseEarthTexture
+      return
+    }
+    const lut = new THREE_.DataTexture(
+      buildColorScaleLut(scale), COLOR_SCALE_LUT_SIZE, 1, THREE_.RGBAFormat,
+    )
+    lut.colorSpace = THREE_.SRGBColorSpace
+    lut.minFilter = THREE_.LinearFilter
+    lut.magFilter = THREE_.LinearFilter
+    lut.wrapS = THREE_.ClampToEdgeWrapping
+    lut.wrapT = THREE_.ClampToEdgeWrapping
+    lut.needsUpdate = true
+    overlayColorLut = lut
+    overlayColorLutUniform.value = lut
+    overlayDataEncodedUniform.value = 1
   }
 
   /**
@@ -1455,9 +1571,7 @@ export function createPhotorealEarth(
         try { video.currentTime = video.currentTime } catch { /* no-op */ }
 
         const tex = new THREE_.VideoTexture(video)
-        tex.colorSpace = THREE_.SRGBColorSpace
-        tex.minFilter = THREE_.LinearFilter
-        tex.magFilter = THREE_.LinearFilter
+        configureDatasetTexture(tex, spec.options)
         activeDatasetTexture = tex
 
         if (video.readyState >= 2) {
@@ -1527,9 +1641,7 @@ export function createPhotorealEarth(
         // resolution-fallback dance), so we wrap the live
         // HTMLImageElement directly — no re-fetch, no async.
         const tex = new THREE_.Texture(spec.element)
-        tex.colorSpace = THREE_.SRGBColorSpace
-        tex.minFilter = THREE_.LinearFilter
-        tex.magFilter = THREE_.LinearFilter
+        configureDatasetTexture(tex, spec.options)
         tex.needsUpdate = true
         activeDatasetTexture = tex
         // Hide Earth decoration — same rationale as the video branch.
