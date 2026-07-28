@@ -35,6 +35,9 @@ import { initToolsMenu, syncToolsMenuState, syncToolsMenuLayout, pulseBrowseButt
 import { openCreditsPanel } from './ui/creditsPanel'
 import { initChatUI, openChat, openChatSettings, notifyDatasetChanged, showChatTrigger, hideChatTrigger, closeChat, flushPendingGlobeActions } from './ui/chatUI'
 import { loadViewPreferences, saveViewPreferences, type ViewPreferences } from './utils/viewPreferences'
+import { renderColorbar, openDisplayControls, closeDisplayControls } from './ui/colorbarUI'
+import { DEFAULT_DISPLAY, type ColorScaleDisplay } from './services/colorScaleDisplay'
+import { RENDER_ENCODING_DATA_LUMA } from './types/color-scale'
 import { initHelpUI, setActiveDataset as setHelpActiveDataset } from './ui/helpUI'
 import { showDisclosureBannerIfNeeded } from './ui/disclosureBanner'
 import {
@@ -301,6 +304,17 @@ class InteractiveSphere {
 
   /** Persisted view preferences: info panel + legend visibility. */
   private viewPrefs: ViewPreferences = loadViewPreferences()
+
+  /**
+   * The data-encoded viewing transform, shared by every panel.
+   *
+   * Session-scoped rather than persisted: a palette or threshold is
+   * chosen against the field in front of you, and silently re-applying
+   * last week's threshold to a different dataset would hide data with
+   * no visible cause. It does survive dataset and layout changes within
+   * a session, which is the span over which a viewer is comparing.
+   */
+  private colorScaleDisplay: ColorScaleDisplay = DEFAULT_DISPLAY
 
   /**
    * Which slot's dataset the info panel currently displays.
@@ -1576,6 +1590,7 @@ class InteractiveSphere {
     const infoOn = this.viewPrefs.infoPanelVisible
     const isMultiView = this.viewports.getPanelCount() > 1
     const primaryIdx = this.viewports.getPrimaryIndex()
+    let anyColorbar = false
 
     for (let slot = 0; slot < this.panelStates.length; slot++) {
       const panel = this.panelStates[slot]
@@ -1588,10 +1603,31 @@ class InteractiveSphere {
       // - Off for the primary in single-view mode when the info
       //   panel is visible (the info panel holds the legend there)
       // - On otherwise
-      let showFloating = legendOn && !!legendLink
-      if (showFloating && !isMultiView && slot === primaryIdx && infoOn) {
+      // A data-encoded row carries its exact palette, range and units,
+      // so the rendered colorbar supersedes the uploaded legend image —
+      // which for these datasets describes at best the same thing and
+      // at worst a previous encode.
+      const scale = dataset?.renderEncoding === RENDER_ENCODING_DATA_LUMA
+        ? dataset.colorScale ?? null
+        : null
+
+      let showFloating = legendOn && (!!legendLink || !!scale)
+      if (showFloating && !isMultiView && slot === primaryIdx && infoOn && !scale) {
         showFloating = false
       }
+
+      if (showFloating && scale && dataset) {
+        this.viewports.setPanelLegend(slot, null)
+        this.viewports.setPanelColorbar(slot, renderColorbar({
+          scale,
+          display: this.colorScaleDisplay,
+          title: dataset.title,
+          onOpen: () => this.openColorbarControls(scale),
+        }))
+        anyColorbar = true
+        continue
+      }
+      this.viewports.setPanelColorbar(slot, null)
 
       if (showFloating && legendLink && dataset) {
         this.viewports.setPanelLegend(slot, legendLink, {
@@ -1602,6 +1638,34 @@ class InteractiveSphere {
         this.viewports.setPanelLegend(slot, null)
       }
     }
+
+    // Nothing on screen carries a palette any more — the dataset was
+    // unloaded or swapped for a picture — so an open controls popover
+    // is now adjusting the colours of nothing.
+    if (!anyColorbar) closeDisplayControls()
+  }
+
+  /**
+   * Open the palette / range / threshold controls for a data-encoded
+   * dataset, and fan every change out to all panels.
+   *
+   * The transform goes to every globe rather than the one that was
+   * tapped: in a 2- or 4-globe layout the panels exist to be compared,
+   * and comparing two fields through two different palettes is worse
+   * than not comparing them.
+   */
+  private openColorbarControls(scale: NonNullable<Dataset['colorScale']>): void {
+    openDisplayControls({
+      scale,
+      display: this.colorScaleDisplay,
+      onChange: (next) => {
+        this.colorScaleDisplay = next
+        this.viewports.setColorScaleDisplay(next)
+        // Rebuild the floating bars so they track the globe. Cheap:
+        // this is DOM, and the LUT upload has already happened.
+        this.refreshPanelLegends()
+      },
+    })
   }
 
   /** Open the full-size legend modal for a dataset. Mirrors the

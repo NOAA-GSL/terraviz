@@ -174,6 +174,26 @@ async function openGlobe(page: Page): Promise<void> {
   await page.locator('#tools-menu-toggle').waitFor({ state: 'visible' })
 }
 
+/**
+ * Load the data-encoded fixture dataset onto the globe from the browse
+ * overlay, and wait for its colorbar to mount.
+ *
+ * Goes through the real browse card rather than a deep link so the
+ * scene exercises the path a viewer actually takes — and so a
+ * regression in `refreshPanelLegends` (which decides colorbar vs.
+ * legend image) is what fails, rather than being bypassed.
+ */
+async function openDataEncodedDataset(page: Page): Promise<void> {
+  await page.locator('#browse-search').fill('smoke')
+  const card = page.locator('.browse-card').first()
+  await card.waitFor({ state: 'visible' })
+  // The card's own Load button, not the card: clicking the card body
+  // opens its detail rather than loading the dataset, which leaves the
+  // browse overlay up and no globe behind it.
+  await card.locator('.browse-card-load').click()
+  await page.locator('.panel-colorbar').first().waitFor({ state: 'visible' })
+}
+
 export const scenes: Scene[] = [
   {
     name: 'catalog-landing',
@@ -341,6 +361,27 @@ export const scenes: Scene[] = [
       // Assert the app-shell chrome stays suppressed, so a regression that
       // re-introduces it fails the capture loudly rather than silently.
       await page.locator('#map-controls').waitFor({ state: 'hidden' })
+    },
+  },
+
+  {
+    name: 'colorbar-controls',
+    description:
+      'Colour & range controls for a data-encoded dataset — palette swatches, contrast stretch, and the value threshold, opened from the floating colorbar',
+    fixtures: catalogReportFixtures(),
+    // Loads a dataset onto the WebGL globe, so it carries the same GPU
+    // pressure as the other globe scenes; and the controls are captured
+    // as a crop, which the Weblate capturer ignores anyway.
+    skipWeblate: true,
+    crop: '.colorbar-controls',
+    async setup(page) {
+      await openCatalog(page)
+      await openDataEncodedDataset(page)
+      // The colorbar replaces the uploaded legend image for a
+      // data-encoded row; asserting on it here means a regression that
+      // silently falls back to the image legend fails the capture.
+      await page.locator('.panel-colorbar').first().click()
+      await page.locator('.colorbar-controls').waitFor({ state: 'visible' })
     },
   },
 

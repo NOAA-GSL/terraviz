@@ -69,9 +69,21 @@ export function assertSafeOutDir(dir: string): void {
   }
 }
 
-/** Launch a headless Chromium for a capture run. */
+/**
+ * Launch a headless Chromium for a capture run.
+ *
+ * `PLAYWRIGHT_CHROMIUM_PATH` overrides the browser binary. Playwright
+ * resolves its default against the exact build its own version pins, so
+ * a sandbox that ships a *different* Chromium build — as some
+ * pre-provisioned dev containers do — fails to launch at all and the
+ * only advertised fix is `npx playwright install`, which such an
+ * environment usually cannot run. Pointing at the local binary is the
+ * escape hatch. Unset in CI, where the pinned build is present, so the
+ * gate keeps testing what it always tested.
+ */
 export function launchBrowser(opts: { args?: string[] } = {}): Promise<Browser> {
-  return chromium.launch({ args: opts.args })
+  const executablePath = process.env.PLAYWRIGHT_CHROMIUM_PATH || undefined
+  return chromium.launch({ args: opts.args, executablePath })
 }
 
 /**

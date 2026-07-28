@@ -20,6 +20,7 @@ import type {
 } from '../types'
 import { setDatasetCreditsSource } from '../ui/creditsPanel'
 import { getSharedLumaSampler } from './glLumaSampler'
+import { DEFAULT_DISPLAY, type ColorScaleDisplay } from './colorScaleDisplay'
 import {
   probeDatasetValue,
   type ProbeReading,
@@ -344,6 +345,10 @@ export class MapRenderer implements GlobeRenderer {
   private latLngUnsubscribe: (() => void) | null = null
   /** The currently displayed dataset frame source, kept so the hover
    *  probe can read one texel out of it. */
+  /** Viewing state for data-encoded datasets, re-applied whenever the
+   *  earth layer is (re)created so a display chosen before the first
+   *  dataset loaded is not lost. */
+  private colorScaleDisplay: ColorScaleDisplay = DEFAULT_DISPLAY
   private probeSource: ProbeSource | null = null
   private probeOptions: DatasetOverlayOptions | null = null
   /** 1x1 scratch canvas the probe draws into. Created once; a fresh
@@ -587,6 +592,12 @@ export class MapRenderer implements GlobeRenderer {
 
       // Add skybox as a separate 3d layer (renders after all 2d layers)
       this.map!.addLayer(this.earthLayer.skyboxLayer as unknown as maplibregl.LayerSpecification)
+
+      // Re-apply the viewing transform before the buffered dataset, so
+      // the LUT is already correct on the layer's first build rather
+      // than being rebuilt a frame later — otherwise a globe restored
+      // with a non-default palette flashes the publisher's ramp first.
+      this.earthLayer.setColorScaleDisplay(this.colorScaleDisplay)
 
       // Apply any dataset texture/video that was buffered before the layer was ready
       if (this.pendingTexture) {
@@ -974,9 +985,35 @@ export class MapRenderer implements GlobeRenderer {
   }
 
   /**
+   * Apply a palette / stretch / threshold transform to a data-encoded
+   * dataset on this globe.
+   *
+   * A viewing decision, not a data one: the LUT the shader samples is
+   * rebuilt and nothing else moves. `probeValueAt` keeps reporting the
+   * same physical value under the same pixel, which is the invariant
+   * `colorScaleDisplay` exists to protect — see its docstring.
+   *
+   * Buffered when the earth layer has not been created yet, the same
+   * way `updateTexture` buffers, so a display chosen before the first
+   * dataset finishes loading is not silently dropped.
+   */
+  setColorScaleDisplay(display: ColorScaleDisplay): void {
+    this.colorScaleDisplay = display
+    this.earthLayer?.setColorScaleDisplay(display)
+  }
+
+  /** The transform currently applied to this globe. */
+  getColorScaleDisplay(): ColorScaleDisplay {
+    return this.colorScaleDisplay
+  }
+
+  /**
    * Read the dataset value under a geographic point, or `null` when
    * there is nothing meaningful to report — a picture dataset, a
    * point outside a regional dataset's box, or no decoded frame yet.
+   *
+   * Deliberately independent of `setColorScaleDisplay`: recolouring the
+   * globe must never move this number.
    */
   probeValueAt(lat: number, lon: number): ProbeReading | null {
     if (!this.probeSource || !this.probeOptions?.colorScale) return null
