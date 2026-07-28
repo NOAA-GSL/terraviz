@@ -600,16 +600,29 @@ export class MapRenderer implements GlobeRenderer {
       // with a non-default palette flashes the publisher's ramp first.
       this.earthLayer.setColorScaleDisplay(this.colorScaleDisplay)
 
-      // Apply any dataset texture/video that was buffered before the layer was ready
+      // Apply any dataset texture/video that was buffered before the
+      // layer was ready.
+      //
+      // The probe source is assigned here as well as on the direct
+      // path. It used to be set only on the direct path, so a dataset
+      // that finished loading *before* the map fired `load` — a fast
+      // local asset, a warm cache, a fixtured scene — reached the globe
+      // with no probe source at all. The value readout then reported
+      // nothing for that dataset and looked exactly like a dataset with
+      // nothing to report, for the rest of its life on screen.
       if (this.pendingTexture) {
         const opts = this.pendingDatasetOptions ?? undefined
         this.earthLayer.setDatasetTexture(this.pendingTexture, opts)
+        this.probeSource = this.pendingTexture
+        this.probeOptions = opts ?? null
         this.pendingTexture = null
         this.pendingDatasetOptions = null
         this.applyBaseLayerVisibility(opts)
       } else if (this.pendingVideo) {
         const opts = this.pendingDatasetOptions ?? undefined
         this.earthLayer.setDatasetVideo(this.pendingVideo, opts)
+        this.probeSource = this.pendingVideo
+        this.probeOptions = opts ?? null
         this.pendingVideo = null
         this.pendingDatasetOptions = null
         this.applyBaseLayerVisibility(opts)
