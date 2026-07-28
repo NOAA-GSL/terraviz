@@ -80,9 +80,13 @@ export function renderColorbar(options: ColorbarOptions): HTMLElement {
   const stops = displayGradientStops(scale, display, 32)
     .map((s) => `${css(s.rgba)} ${(s.position * 100).toFixed(1)}%`)
     .join(', ')
-  // A checkerboard behind the gradient so a transparent band reads as
-  // "hidden" rather than as "the same colour as the panel".
-  gradient.style.backgroundImage = `linear-gradient(to right, ${stops})`
+  // Only the ramp is supplied here; the stylesheet composes it over the
+  // checkerboard and owns the layer sizes. Assigning `backgroundImage`
+  // directly would overwrite that composition and drop the checker, so
+  // a thresholded band would read as "the same colour as the panel"
+  // rather than as "hidden" — which is the one moment the checker
+  // exists for, and the reason this indirection is worth having.
+  gradient.style.setProperty('--colorbar-ramp', `linear-gradient(to right, ${stops})`)
 
   const axis = document.createElement('div')
   axis.className = 'panel-colorbar-axis'
@@ -128,9 +132,6 @@ export interface DisplayControlsOptions {
   scale: ColorScale
   display: ColorScaleDisplay
   onChange: (next: ColorScaleDisplay) => void
-  /** Anchor for positioning; the popover centres on the viewport when
-   *  omitted, which is what the narrow-screen path wants anyway. */
-  anchor?: HTMLElement
 }
 
 let openPopover: HTMLElement | null = null

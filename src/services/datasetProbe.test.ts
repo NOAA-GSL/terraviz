@@ -331,7 +331,11 @@ describe('lonSpanDegrees', () => {
     expect(lonSpanDegrees({ boundingBox: { n: 85, s: 5, w: -175, e: -20 } })).toBe(155)
   })
 
-  it('measures the long way round an antimeridian-crossing box', () => {
+  it('measures eastward through the antimeridian, not the long way round', () => {
+    // w=150, e=-150 is a 60-degree box spanning the dateline, not a
+    // 300-degree one spanning everything else. Reading it the other way
+    // is exactly the bug the wrap arithmetic exists to prevent, so the
+    // name says which of the two answers is correct.
     expect(lonSpanDegrees({ boundingBox: { n: 60, s: -60, w: 150, e: -150 } })).toBe(60)
   })
 })
