@@ -1,11 +1,12 @@
 # Analysis on data-encoded datasets
 
-> **Status: draft for review.** Nothing here is built. No code, no
-> migrations, no bindings. This document surveys what the shipped
-> data-encoded video work makes possible, proposes an architecture
-> grounded in modules that already exist, and sequences it into
-> independently shippable phases. It exists to be argued with before
-> anything is written.
+> **Status: reviewed; phases not yet built.** No code, no migrations, no
+> bindings have landed. This document surveys what the shipped data-encoded
+> video work makes possible, proposes an architecture grounded in modules
+> that already exist, and sequences it into independently shippable phases.
+> The three questions it opened with — audience, the nodata contract, and
+> its own scope — were settled on 2026-07-28 and are recorded under
+> [Settled](#settled); the remaining open items are listed beside them.
 
 Companion to [`DATA_ENCODED_VIDEO_PLAN.md`](DATA_ENCODED_VIDEO_PLAN.md) — the
 substrate this depends on entirely, and whose §Follow-ups this partly answers.
@@ -164,7 +165,7 @@ into an index and a URL. Treat it as the precision path, not the default.
 | **Pin and plot** | Drop N pins, play or scrub, sample N texels per frame. Reuses today's 1×1 sampler completely untouched. Multiple pins become multiple series on one chart. The most legible time feature and the cheapest. |
 | **Hovmöller diagram** | Time on one axis, latitude on the other, value as colour — one zonal-mean column per frame. The classic geoscience diagram, and it falls out of a data-encoded video almost for free. |
 | **Temporal composites** | Max / mean / min over the played window. Accumulate on the GPU with a MAX blend into an R8 target: **zero readback**. "Peak smoke over the last 48 hours" as a single frame. |
-| **Anomaly and difference** | Frame minus temporal mean, or frame minus a reference frame, on a diverging palette. **Blocked** — see the nodata problem under Honest tradeoffs. |
+| **Anomaly and difference** | Frame minus temporal mean, or frame minus a reference frame, on a diverging palette. **Blocked on A0** — the nodata band has to be expressible before a field whose zero is mid-scale can be summarised. |
 | **Tendency** | d(value)/dt between adjacent frames. Same blocker. |
 
 ### Group D — Orbit answering from the data
@@ -310,9 +311,30 @@ pinned by round-trip tests.
   reading of the original palette, so the colorbar must always render the
   *active* transform, not the sidecar's.
 
-- **Anomaly, difference and tendency wait for an explicit nodata sentinel.**
-  See Honest tradeoffs.
-  *Tradeoff:* the most scientifically interesting mode is the last one to ship.
+- **Progressive disclosure, both audiences.** Colorbar, threshold isolation and
+  Orbit's answers live in the main chrome; transects, histograms and region
+  statistics live behind an explicit Analyze entry in the Tools popover,
+  alongside Privacy and Credits.
+  *Tradeoff:* one more panel to coordinate against the existing chat/info-panel
+  mutual exclusion, and a design surface that has to read well at both ends —
+  more work than committing to a single audience.
+
+- **The nodata band becomes representable now; nothing migrates.** An optional
+  `dataMinLuma` on the sidecar (phase A0) marks the lowest luma code carrying
+  data. Absent means 0, which is exactly today's arithmetic, so the three live
+  rows are untouched and nothing re-encodes. zyra sets it when the first
+  diverging field is authored.
+  *Tradeoff:* a second way to express "absent" now exists alongside
+  `transparentRange`, and the relationship between them has to be documented at
+  the contract rather than discovered at a call site.
+
+- **A band, not a sentinel.** An exact reserved code cannot survive the encoder:
+  the compression residual is ~1 luma code, so a pixel written as 0 can arrive
+  as 2 or 3, and worse across a blocking edge. `dataMinLuma` therefore reserves
+  a *range* below it, the same shape `transparentRange` already has.
+  *Tradeoff:* the reserved band costs real value resolution — 12 codes out of
+  256 in the shipped smoke palettes — where a single sentinel would cost one.
+  Unavoidable given a lossy transport.
 
 - **Orbit gets tools, not narration.** Numbers reach the model only as tool
   results, never as an invitation to estimate.
@@ -324,11 +346,36 @@ pinned by round-trip tests.
 Independently shippable and DCO-signed, one logical change each. Nothing here
 is blocked on a release; all three live rows exercise every phase.
 
-**A1 first** — not because the later phases lack data, but because a value the
-user cannot read is a value they cannot check. The live rows report in
-`kg m-2` at 5×10⁻⁴ full scale, which is a number no visitor has intuition for
-and no colourbar currently explains. Legibility is the cheapest phase and the
-one every later phase is quoted against.
+**Build order is A2 → A1 → A3 →** the rest. A2 has no UI, so nothing in it
+needs redesigning if the audience question is ever revisited, and every phase
+from A3 on depends on it. A1 stays first among the *visible* phases for the
+reason it always did: the live rows report in `kg m-2` at 5×10⁻⁴ full scale,
+which is a number no visitor has intuition for and no colourbar currently
+explains. Legibility is what every later phase gets quoted against.
+
+### A0 — The nodata band in the sidecar contract
+
+Optional `dataMinLuma?: number` on `ColorScale` — the lowest luma code carrying
+data. Absent means 0. Small enough to land whenever; independent of everything
+else.
+
+`lumaToValue` becomes `vmin + ((luma − lo) / (255 − lo)) × (vmax − vmin)` with
+`lo = dataMinLuma ?? 0`, which is *identical* arithmetic when the field is
+absent — the backwards-compatibility guarantee falls out of the algebra rather
+than out of a branch. `isTransparentLuma` tests `luma < dataMinLuma` when set
+and keeps the `transparentRange` test otherwise. `buildColorScaleLut` zeroes
+alpha across the reserved band.
+
+| File | Change |
+|---|---|
+| `src/types/color-scale.ts` | The field, the two function changes, validation (integer, 0..254, below the data range) |
+| `functions/api/v1/_lib/validators.ts` | Accept and round-trip it; reject out-of-range |
+| `public/schema/v1/*.json` | Regenerate via `gen:protocol-schemas` |
+
+**Risks.** The interaction with `transparentRange` is the whole risk: with both
+set they must not disagree about where data starts. Validate the relationship at
+parse time and fail closed, the way `parseColorScale` already does everywhere
+else.
 
 ### A1 — Legibility
 
@@ -467,17 +514,16 @@ threshold at the bottom of the range. For a field where zero is meaningful and
 mid-scale — a temperature anomaly — that is not a rough edge, it is incorrect:
 statistics would either drop real mid-range data or count absent data as `vmin`.
 The parent plan already records diverging fields as an open follow-up. **This
-blocks anomaly, difference and tendency modes.** The cheap fix is to reserve
-luma 0 as an explicit nodata sentinel and encode data in 1..255 — one level out
-of 256, 0.4% of range, negligible against a noise floor already at 1 LSB — at
-the cost of a zyra change and a sidecar field.
+blocks anomaly, difference and tendency modes**, and phase A0 is the answer:
+an optional `dataMinLuma` reserving a band below the data range, because an
+exact sentinel cannot survive an encoder whose residual is ~1 luma code.
 
 The three live rows are not themselves affected: smoke is a one-sided field
 where zero genuinely *is* both the floor and the absence, which is why
 `transparentRange` 0.046875 works for them. The ambiguity arrives with the first
-diverging field published, and the migration cost is bounded to re-encoding
-whatever has shipped by then. It is cheapest to do now, while that is three
-rows.
+diverging field published. A0 makes it expressible without re-encoding anything,
+which is the whole reason to land the contract before a dataset needs it rather
+than after.
 
 **Only the primary panel probes.** The readout in `main.ts` reads from `primary`
 alone, and `probeValueAt` is a `MapRenderer` method rather than part of the
@@ -523,16 +569,30 @@ way in — the snapshot reads native resolution or it reads nothing.
   the cheapest end-to-end sanity check available, and the one that catches a
   flipped V.
 
-## Open questions
+## Settled
 
-1. **Audience.** This assumes progressive disclosure — colorbar, threshold and
-   Orbit up front; charts and statistics behind an explicit Analyze entry in the
-   Tools popover alongside Privacy and Credits. Should it skew harder toward the
-   science audience (dense charts, exact numbers, CSV) or the museum floor
-   (legibility and wonder, no statistics panels)?
-2. **The nodata sentinel.** Resolve it now, while the migration is three
-   one-sided rows that don't need it yet, or defer until the first diverging
-   field forces it?
-3. **Scope of this document.** A1 alone is small enough to live as a follow-up
-   in `DATA_ENCODED_VIDEO_PLAN.md` rather than opening a second plan. Splitting
-   it out is defensible either way.
+The three questions this document opened with, answered 2026-07-28.
+
+1. **Audience — both, progressively disclosed.** Colorbar, threshold isolation
+   and Orbit in the main chrome; charts and statistics behind an explicit
+   Analyze entry in the Tools popover. Neither audience gets designed away, and
+   the museum visitor never has to dismiss a statistics panel to see the globe.
+2. **Nodata — representable now, migrated never.** `dataMinLuma` lands as an
+   optional field (A0); absent reproduces today's arithmetic exactly, so no
+   published row changes. The expensive part of this decision was always the
+   contract, not the encoding, and the contract is now settled before anything
+   depends on it.
+3. **Scope — this document keeps the legibility work.** A1 is where the value
+   mapping and the display transform get separated, and every later phase
+   depends on that invariant holding. Planning it in the parent doc would put
+   the invariant somewhere the analysis work doesn't cite.
+
+## Still open
+
+- **Whether Compare mode is worth pulling forward.** Cross-dataset differencing
+  is parked behind `WEB_CATALOG_FEATURES_PLAN.md` §9.4, but data-encoded video
+  is what would make that feature numerically meaningful rather than merely
+  visual. It may deserve reprioritising on those grounds alone.
+- **What the first diverging field actually is.** A0 makes it expressible; it
+  does not say who publishes one or when. Until something concrete is planned,
+  the anomaly and difference modes stay designed but unbuilt.
