@@ -385,6 +385,29 @@ export const scenes: Scene[] = [
     },
   },
 
+  {
+    name: 'analyze-panel',
+    description:
+      'Analyze panel for a data-encoded dataset — region picker, palette-coloured histogram, area-weighted statistics, coverage and the quantisation caveat',
+    fixtures: catalogReportFixtures(),
+    // Loads a dataset onto the WebGL globe; the panel is captured as a
+    // crop, which the Weblate capturer ignores anyway.
+    skipWeblate: true,
+    crop: '.analyze-panel',
+    async setup(page) {
+      await openCatalog(page)
+      await openDataEncodedDataset(page)
+      await page.locator('#tools-menu-toggle').click()
+      await page.locator('#tools-menu-popover:not(.hidden)').waitFor()
+      await page.locator('#tools-menu-analyze').click()
+      await page.locator('.analyze-panel').waitFor({ state: 'visible' })
+      // The statistics, not just the shell: a panel that mounted but
+      // computed nothing would otherwise capture as a plausible-looking
+      // empty state.
+      await page.locator('.analyze-stat').first().waitFor({ state: 'visible' })
+    },
+  },
+
   // ── Publisher portal ──────────────────────────────────────────
   // Populated via route-stub fixtures (Phase V7); see openPublish().
   {

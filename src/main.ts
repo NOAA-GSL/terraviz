@@ -36,6 +36,7 @@ import { openCreditsPanel } from './ui/creditsPanel'
 import { initChatUI, openChat, openChatSettings, notifyDatasetChanged, showChatTrigger, hideChatTrigger, closeChat, flushPendingGlobeActions } from './ui/chatUI'
 import { loadViewPreferences, saveViewPreferences, type ViewPreferences } from './utils/viewPreferences'
 import { renderColorbar, openDisplayControls, closeDisplayControls } from './ui/colorbarUI'
+import { initAnalyzeUI, closeAnalyzeUI } from './ui/analyzeUI'
 import { DEFAULT_DISPLAY, type ColorScaleDisplay } from './services/colorScaleDisplay'
 import { RENDER_ENCODING_DATA_LUMA } from './types/color-scale'
 import { initHelpUI, setActiveDataset as setHelpActiveDataset } from './ui/helpUI'
@@ -408,6 +409,16 @@ class InteractiveSphere {
       // safe on desktop too; the opener affordances are the gate.
       initDownloadDialogUI({ announce: (msg) => this.announce(msg) })
       initHelpUI()
+      // Statistics over the frame on screen (§A3). Reads through the
+      // primary panel, which is the one the info panel, playback and
+      // the value readout all already follow — analysing a globe the
+      // user is not driving would be a different feature.
+      initAnalyzeUI({
+        frame: () => this.viewports.getPrimary()?.analysisFrame() ?? null,
+        visibleBounds: () => this.viewports.getPrimary()?.visibleBounds() ?? null,
+        display: () => this.colorScaleDisplay,
+        datasetTitle: () => this.appState.currentDataset?.title ?? null,
+      })
       // Playlists — mount the manager panel host and wire the
       // playback state machine to the regular loadDataset flow.
       // hasTourOnLoad probes dataset metadata so the playback
@@ -1641,8 +1652,12 @@ class InteractiveSphere {
 
     // Nothing on screen carries a palette any more — the dataset was
     // unloaded or swapped for a picture — so an open controls popover
-    // is now adjusting the colours of nothing.
-    if (!anyColorbar) closeDisplayControls()
+    // is adjusting the colours of nothing, and an open Analyze panel is
+    // showing statistics for a frame that is no longer displayed.
+    if (!anyColorbar) {
+      closeDisplayControls()
+      closeAnalyzeUI()
+    }
   }
 
   /**

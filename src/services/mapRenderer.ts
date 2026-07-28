@@ -19,8 +19,9 @@ import type {
   VideoTextureHandle,
 } from '../types'
 import { setDatasetCreditsSource } from '../ui/creditsPanel'
-import { getSharedLumaSampler } from './glLumaSampler'
+import { getSharedLumaSampler, type LumaSnapshot } from './glLumaSampler'
 import { DEFAULT_DISPLAY, type ColorScaleDisplay } from './colorScaleDisplay'
+import type { ColorScale } from '../types/color-scale'
 import {
   probeDatasetValue,
   type ProbeReading,
@@ -1005,6 +1006,40 @@ export class MapRenderer implements GlobeRenderer {
   /** The transform currently applied to this globe. */
   getColorScaleDisplay(): ColorScaleDisplay {
     return this.colorScaleDisplay
+  }
+
+  /**
+   * Everything the statistics reducers need for the currently displayed
+   * frame, or `null` when there is nothing to compute over.
+   *
+   * All-or-nothing on purpose: a snapshot without its scale is a grid of
+   * meaningless bytes, and a scale without the bbox would put every
+   * texel at the wrong latitude. Handing back one object means a caller
+   * cannot pair a frame with the previous dataset's metadata.
+   *
+   * **Not for pointer handlers.** This reads the whole frame — see
+   * `GlLumaSampler.snapshot`. Call it from an explicit user action.
+   */
+  analysisFrame(): {
+    snapshot: LumaSnapshot
+    scale: ColorScale
+    options: DatasetOverlayOptions
+  } | null {
+    const options = this.probeOptions
+    if (!this.probeSource || !options?.colorScale) return null
+    const sampler = getSharedLumaSampler()
+    if (!sampler) return null
+    const snapshot = sampler.snapshot(this.probeSource)
+    if (!snapshot) return null
+    return { snapshot, scale: options.colorScale, options }
+  }
+
+  /** The geographic box currently in view, for "analyse what I can
+   *  see". Null when the map is not up yet. */
+  visibleBounds(): { n: number; s: number; w: number; e: number } | null {
+    if (!this.map) return null
+    const b = this.map.getBounds()
+    return { n: b.getNorth(), s: b.getSouth(), w: b.getWest(), e: b.getEast() }
   }
 
   /**
