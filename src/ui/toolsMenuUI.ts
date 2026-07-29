@@ -156,8 +156,10 @@ export interface ToolsMenuCallbacks {
   onOpenCredits?: (trigger: HTMLElement) => void
   /** Announce something for screen readers. */
   announce?: (message: string) => void
-  /** Get the currently loaded dataset (used by the Share action). */
-  getCurrentDataset: () => { id: string; title: string } | null
+  /** Get the currently loaded dataset (used by the Share action).
+   *  `slug` is what makes the copied link read as
+   *  `/dataset/north-america-smoke` rather than a bare ULID. */
+  getCurrentDataset: () => { id: string; title: string; slug?: string } | null
 }
 
 /** Open/close state for the popover. Tracked here because DOM tests
@@ -590,7 +592,7 @@ export function initToolsMenu(
     const shared = await shareDataset({
       title: dataset.title,
       text: t('tools.share.text', { title: dataset.title }),
-      url: buildDatasetShareUrl(dataset.id),
+      url: buildDatasetShareUrl(dataset),
     })
     if (shared) announce?.(t('tools.announce.shared'))
   })
