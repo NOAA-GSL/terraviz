@@ -279,12 +279,76 @@ describe('findExtremum', () => {
     expect(findExtremum(snap(4, 4, () => 0), SCALE, 'max', RRFS)).toBeNull()
   })
 
-  it('breaks ties stably, in row-major order', () => {
+  it('reports the middle of a plateau, not its corner', () => {
+    // This used to return [0,0] — the first texel a row-major scan
+    // met — and call it "where it is worst". That is the plateau's
+    // north-west corner, an artefact of loop order presented as a
+    // place, and live it put the pin on the edge of a smoke bank
+    // rather than in it. These fields clip at the top of their scale,
+    // so a tie is the normal case, not an edge case.
+    const s = snap(4, 4, () => 200)
+    const a = findExtremum(s, SCALE, 'max', RRFS)!
+    expect(a.plateau).toBe(true)
+    expect(a.tieCount).toBe(16)
+    expect(a.patchCount).toBe(1)
+    // Interior, not the corner.
+    expect(a.x).toBeGreaterThan(0)
+    expect(a.y).toBeGreaterThan(0)
+    expect(a.x).toBeLessThan(3)
+    expect(a.y).toBeLessThan(3)
+  })
+
+  it('is deterministic', () => {
     const s = snap(4, 4, () => 200)
     const a = findExtremum(s, SCALE, 'max', RRFS)!
     const b = findExtremum(s, SCALE, 'max', RRFS)!
-    expect([a.x, a.y]).toEqual([0, 0])
     expect([b.x, b.y]).toEqual([a.x, a.y])
+  })
+
+  it('says a lone maximum is not a plateau', () => {
+    const s = snap(8, 8, (x, y) => (x === 5 && y === 2 ? 250 : 100))
+    const r = findExtremum(s, SCALE, 'max', RRFS)!
+    expect(r.plateau).toBe(false)
+    expect(r.tieCount).toBe(1)
+    expect(r.patchCount).toBe(1)
+    expect([r.x, r.y]).toEqual([5, 2])
+  })
+
+  it('picks the largest patch when the ceiling is hit in several places', () => {
+    // Two fires at the same ceiling: one texel in the north-west, a
+    // 3x3 block in the south-east. Row-major order would have reported
+    // the lone north-west texel purely because it is scanned first.
+    const s = snap(12, 12, (x, y) => {
+      if (x === 1 && y === 1) return 250
+      if (x >= 7 && x <= 9 && y >= 7 && y <= 9) return 250
+      return 80
+    })
+    const r = findExtremum(s, SCALE, 'max', RRFS)!
+    expect(r.patchCount).toBe(2)
+    expect(r.tieCount).toBe(10)
+    // The middle of the 3x3 block.
+    expect([r.x, r.y]).toEqual([8, 8])
+  })
+
+  it('reports a point that actually holds the value, even for a crescent', () => {
+    // A ring's centroid falls in its hole, which is not a place where
+    // the maximum occurs. The report snaps to a real member.
+    const s = snap(9, 9, (x, y) => {
+      const ring = (x >= 3 && x <= 5 && y >= 3 && y <= 5) && !(x === 4 && y === 4)
+      return ring ? 250 : 90
+    })
+    const r = findExtremum(s, SCALE, 'max', RRFS)!
+    expect(s.data[r.y * 9 + r.x]).toBe(250)
+    expect([r.x, r.y]).not.toEqual([4, 4])
+  })
+
+  it('measures how much of the world sits at the ceiling', () => {
+    const s = snap(4, 4, () => 200)
+    const r = findExtremum(s, SCALE, 'max', RRFS)!
+    const areas = rowAreasKm2(4, 4, RRFS)
+    let expected = 0
+    for (let y = 0; y < 4; y++) expected += areas[y] * 4
+    expect(r.tieAreaKm2).toBeCloseTo(expected, 6)
   })
 })
 

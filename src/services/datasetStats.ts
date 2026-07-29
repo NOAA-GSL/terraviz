@@ -140,6 +140,23 @@ export interface ExtremumResult {
   /** Texel index, for callers that want to re-read or draw it. */
   x: number
   y: number
+  /** How many texels in the window share this exact value.
+   *
+   *  Rarely one. These fields clip at the top of their scale, so "the
+   *  maximum" is usually a plateau rather than a point, and the
+   *  question "where is it worst" then has many equally correct
+   *  answers. A caller that reports one of them as *the* place has to
+   *  know that. */
+  tieCount: number
+  /** Spherical area of those texels, km². */
+  tieAreaKm2: number
+  /** True when the reported point is the middle of the largest patch
+   *  sharing the extreme value, rather than a lone extremum. */
+  plateau: boolean
+  /** How many separate patches share it. Two fires burning equally
+   *  hard in different provinces is a different answer from one broad
+   *  smear, and the count is the cheapest way to tell them apart. */
+  patchCount: number
 }
 
 // --- geometry --------------------------------------------------------
@@ -438,25 +455,97 @@ export function findExtremum(
 
   const firstDataCode = firstDataLuma(scale)
   let best = -1
-  let bx = 0
-  let by = 0
   for (let y = y0; y < y1; y++) {
     const row = y * width
     for (let x = x0; x < x1; x++) {
       const luma = data[row + x]
       if (luma < firstDataCode) continue
-      if (best < 0 || (kind === 'max' ? luma > best : luma < best)) {
-        best = luma
-        bx = x
-        by = y
-      }
+      if (best < 0 || (kind === 'max' ? luma > best : luma < best)) best = luma
     }
   }
   if (best < 0) return null
 
+  // Which texels actually hold that value.
+  //
+  // The old code kept the first one the row-major scan met and called
+  // it the answer, which is only defensible when the extremum is
+  // unique. It is usually not: these fields clip at the top of their
+  // scale, so `best` is typically shared by a whole plateau and the
+  // "first" member is simply its northernmost, then westernmost corner
+  // — an artefact of loop order, reported as a place, flown to, and
+  // pinned. Live, that put the marker on the edge of a smoke bank
+  // rather than in it, and the answer read as though that specific
+  // spot were meaningfully the worst.
+  const members: number[] = []
+  const mask = new Uint8Array(width * height)
+  for (let y = y0; y < y1; y++) {
+    const row = y * width
+    for (let x = x0; x < x1; x++) {
+      if (data[row + x] === best) { mask[row + x] = 1; members.push(row + x) }
+    }
+  }
+
+  // Largest 4-connected patch, by flood fill over the members only.
+  // Iterative rather than recursive: a saturated frame can hold a
+  // plateau tens of thousands of texels wide.
+  let bestPatch: number[] = []
+  let patchCount = 0
+  const seen = new Uint8Array(width * height)
+  for (const start of members) {
+    if (seen[start]) continue
+    patchCount++
+    const patch: number[] = []
+    const stack = [start]
+    seen[start] = 1
+    while (stack.length) {
+      const i = stack.pop()!
+      patch.push(i)
+      const x = i % width
+      const y = (i - x) / width
+      if (x > x0 && mask[i - 1] && !seen[i - 1]) { seen[i - 1] = 1; stack.push(i - 1) }
+      if (x < x1 - 1 && mask[i + 1] && !seen[i + 1]) { seen[i + 1] = 1; stack.push(i + 1) }
+      if (y > y0 && mask[i - width] && !seen[i - width]) { seen[i - width] = 1; stack.push(i - width) }
+      if (y < y1 - 1 && mask[i + width] && !seen[i + width]) { seen[i + width] = 1; stack.push(i + width) }
+    }
+    if (patch.length > bestPatch.length) bestPatch = patch
+  }
+
+  // The centroid of the largest patch, snapped to whichever of its
+  // texels is nearest. Snapped rather than used raw because a
+  // crescent-shaped patch has a centroid outside itself, and a
+  // reported location must be somewhere the value actually occurs.
+  let sx = 0
+  let sy = 0
+  for (const i of bestPatch) { const x = i % width; sx += x; sy += (i - x) / width }
+  const cx = sx / bestPatch.length
+  const cy = sy / bestPatch.length
+  let bx = bestPatch[0] % width
+  let by = (bestPatch[0] - bx) / width
+  let nearest = Infinity
+  for (const i of bestPatch) {
+    const x = i % width
+    const y = (i - x) / width
+    const d = (x - cx) ** 2 + (y - cy) ** 2
+    if (d < nearest) { nearest = d; bx = x; by = y }
+  }
+
+  const areas = rowAreasKm2(width, height, options)
+  let tieAreaKm2 = 0
+  for (const i of members) tieAreaKm2 += areas[(i - (i % width)) / width]
+
   const { lat, lon } = texelUvToLatLon(
     { u: (bx + 0.5) / width, v: (by + 0.5) / height }, options)
-  return { lat, lon, value: lumaToValue(best, scale), x: bx, y: by }
+  return {
+    lat,
+    lon,
+    value: lumaToValue(best, scale),
+    x: bx,
+    y: by,
+    tieCount: members.length,
+    tieAreaKm2,
+    plateau: members.length > 1,
+    patchCount,
+  }
 }
 
 // --- lines and profiles ----------------------------------------------

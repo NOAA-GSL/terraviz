@@ -408,6 +408,11 @@ export interface FindExtremumResult {
    *  which is a floor rather than a measurement, and quoting it as an
    *  exact figure overstates what the encoding can carry. */
   saturated?: string
+  /** Present when the extreme value is shared by more than one texel,
+   *  which for a clipping field is the normal case. Without it the
+   *  answer reads as though one specific spot were the worst, when the
+   *  reported point is only a representative of a wider area. */
+  plateau?: string
   lat?: number
   lon?: number
   value?: number
@@ -456,6 +461,16 @@ export function executeFindExtremum(
     units: scale.units,
     valueText: valueText(round3(found.value), scale, kind === 'max' && found.value >= scale.vmax),
     precision: precisionNote(scale),
+    ...(found.plateau
+      ? {
+          plateau:
+            `This value is shared by ${found.tieCount} grid cells covering about ` +
+            `${round3(found.tieAreaKm2)} km²` +
+            (found.patchCount > 1 ? ` in ${found.patchCount} separate patches` : '') +
+            '. The coordinates are the middle of the largest patch, not a uniquely ' +
+            'worst point — say that it is worst across an area rather than at a spot.',
+        }
+      : {}),
     ...(kind === 'max' && found.value >= scale.vmax
       ? {
           saturated:
