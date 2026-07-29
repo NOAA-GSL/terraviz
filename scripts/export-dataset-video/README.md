@@ -8,10 +8,10 @@ sidecars needed to use it outside the app (Science On a Sphere included).
 A dataset published with `renderEncoding: "data-luma"` ships frames whose luma
 *is* the normalised value — black is `vmin`, white is `vmax`. The colour lives in
 the row's `colorScale` sidecar and is applied by the globe shaders at draw time
-(`docs/DATA_ENCODED_VIDEO_PLAN.md`). That is what makes the hover readout and
-repalettability possible, but it means **downloading the published asset gets you
-a greyscale field**. Anyone who wants a normal watchable video has to apply the
-palette themselves. This does that.
+(`docs/DATA_ENCODED_VIDEO_PLAN.md`). That is what makes the hover readout possible
+and the dataset repalettable, but it means **downloading the published asset gets
+you a greyscale field**. Anyone who wants a normal watchable video has to apply
+the palette themselves. This does that.
 
 It is the "one canonical copy" caveat in the plan doc showing up in practice —
 that doc records the download story as follow-up work, and this script is the
@@ -36,6 +36,14 @@ python3 scripts/export-dataset-video/export_dataset_video.py \
 
 `--dataset` takes a catalog slug or a ULID id. Run it with a bad name and the
 error lists the data-encoded datasets the node currently publishes.
+
+The `npm run export:dataset-video` alias calls `python3`. On Windows, where that
+command usually isn't on `PATH`, invoke the launcher directly instead — everything
+else is identical:
+
+```bat
+py -3 scripts/export-dataset-video/export_dataset_video.py --dataset north-america-smoke
+```
 
 ## Output
 

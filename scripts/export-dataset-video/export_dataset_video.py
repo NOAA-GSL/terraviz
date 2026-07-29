@@ -38,6 +38,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import math
 import os
 import re
 import time
@@ -67,6 +68,18 @@ def log(msg: str) -> None:
 # Colour scale — port of src/types/color-scale.ts
 # --------------------------------------------------------------------------
 
+def js_round(x: float) -> int:
+    """Match JavaScript Math.round: ties round toward +Infinity.
+
+    Python's built-in round() is banker's rounding (ties-to-even), so at an
+    exact x.5 interpolated channel it would diverge from the TypeScript this
+    ports. Every value fed here is non-negative (rgba 0-255 interpolated by a
+    fraction in [0,1]), for which Math.round(x) == floor(x + 0.5). Keeping the
+    LUT bit-identical to the shader's is the whole point of the port.
+    """
+    return math.floor(x + 0.5)
+
+
 def build_color_scale_lut(scale: dict) -> np.ndarray:
     """Expand a ColorScale into the 256-entry RGBA LUT the shaders sample.
 
@@ -88,7 +101,7 @@ def build_color_scale_lut(scale: dict) -> np.ndarray:
         span = b['t'] - a['t']
         f = min(1.0, max(0.0, (t - a['t']) / span)) if span > 0 else 0.0
         for c in range(4):
-            lut[i, c] = round(a['rgba'][c] + (b['rgba'][c] - a['rgba'][c]) * f)
+            lut[i, c] = js_round(a['rgba'][c] + (b['rgba'][c] - a['rgba'][c]) * f)
         # Below transparentRange nothing was measured; force alpha to 0 rather
         # than trusting the palette's own low end.
         if t < cutoff:
@@ -104,14 +117,20 @@ def luma_to_value(luma: float, scale: dict) -> float:
 # Catalog + asset fetch
 # --------------------------------------------------------------------------
 
-def http_get(url: str, timeout: int = 120, attempts: int = 4) -> requests.Response:
+def http_get(url: str, timeout: int = 120, attempts: int = 4,
+             stream: bool = False) -> requests.Response:
     """GET with retry. The CDN resets large transfers often enough that a
-    single-shot fetch makes re-running this a coin flip."""
+    single-shot fetch makes re-running this a coin flip.
+
+    `stream=True` returns before the body is read, so the caller must consume
+    (and close) the response — `download_to` does. JSON/text callers leave it
+    False and get the whole body buffered, which is what `.json()`/`.text` want.
+    """
     delay = 2.0
     last = None
     for i in range(attempts):
         try:
-            r = requests.get(url, timeout=timeout)
+            r = requests.get(url, timeout=timeout, stream=stream)
             r.raise_for_status()
             return r
         except (requests.ConnectionError, requests.Timeout,
@@ -129,16 +148,24 @@ def http_get(url: str, timeout: int = 120, attempts: int = 4) -> requests.Respon
 
 
 def download_to(url: str, dest: str, timeout: int = 300) -> None:
-    """Fetch to a temp file and rename on success.
+    """Stream a URL to a temp file and rename on success.
 
-    Writing straight to `dest` leaves a truncated or zero-byte file behind when
-    a transfer dies, and the next run then treats that corpse as a valid cache
-    entry. Renaming only after a complete read makes the cache all-or-nothing.
+    Streamed in chunks rather than buffering the whole body: the .ts segments
+    and 8K basemap textures are multi-megabyte, and there is no reason to hold
+    a full copy in memory. Writing straight to `dest` would also leave a
+    truncated or zero-byte file behind when a transfer dies, and the next run
+    would treat that corpse as a valid cache entry — renaming only after a
+    complete read makes the cache all-or-nothing.
     """
     tmp = dest + '.part'
-    r = http_get(url, timeout=timeout)
-    with open(tmp, 'wb') as fh:
-        fh.write(r.content)
+    r = http_get(url, timeout=timeout, stream=True)
+    try:
+        with open(tmp, 'wb') as fh:
+            for chunk in r.iter_content(chunk_size=1 << 16):
+                if chunk:
+                    fh.write(chunk)
+    finally:
+        r.close()
     os.replace(tmp, dest)
 
 
@@ -152,10 +179,15 @@ def resolve_dataset(node: str, ref: str) -> dict:
     for d in cat.get('datasets', []):
         if d.get('id') == ref or d.get('slug') == ref:
             return d
-    slugs = [d.get('slug') for d in cat.get('datasets', []) if d.get('renderEncoding')]
+    # Only advertise datasets this script can actually export: data-luma with a
+    # colorScale. A row with some other renderEncoding, or none, would just fail
+    # the checks in main(), so listing it here would be misleading.
+    slugs = [d.get('slug') for d in cat.get('datasets', [])
+             if d.get('renderEncoding') == RENDER_ENCODING_DATA_LUMA and d.get('colorScale')]
+    listing = '\n  '.join(s for s in slugs if s) or '(none on this node)'
     raise SystemExit(
-        'dataset %r not found on %s.\nData-encoded datasets available:\n  %s'
-        % (ref, node, '\n  '.join(s for s in slugs if s)))
+        'dataset %r not found on %s.\nExportable data-encoded datasets:\n  %s'
+        % (ref, node, listing))
 
 
 PERIOD_RE = re.compile(
