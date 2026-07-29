@@ -71,6 +71,24 @@ export interface AnalyzeSource {
    *  pick on. Optional so a caller can wire the statistics without the
    *  transect, and so the tests can drive the panel with no map. */
   transect?(): TransectPicker | null
+  /** Drawing the analysed box on the globe. Same optionality, same
+   *  reason. */
+  regionOutline?(): RegionOutline | null
+}
+
+/**
+ * The globe's side of the region picker: show where the numbers came
+ * from.
+ *
+ * "Alabama, 180,000 km² with data" is unfalsifiable on a globe that
+ * gives no indication of which box was measured — the panel names a
+ * region and the map says nothing back. This is the same seam shape as
+ * `TransectPicker`, for the same reason: the panel should not know that
+ * MapLibre exists.
+ */
+export interface RegionOutline {
+  show(bounds: LatLonBounds): void
+  clear(): void
 }
 
 /**
@@ -135,6 +153,7 @@ let lastFrame: {
  */
 export function initAnalyzeUI(src: AnalyzeSource): void {
   source?.transect?.()?.clear()
+  source?.regionOutline?.()?.clear()
   source = src
   scope = { kind: 'dataset' }
   transectEnds = null
@@ -148,10 +167,12 @@ export function isAnalyzeUIOpen(): boolean {
 
 /** Close the panel and return focus to whatever opened it. */
 export function closeAnalyzeUI(): void {
-  // The line is drawn on the globe, not in the panel, so closing has to
-  // take it with it — a transect left behind would be an annotation
-  // with nothing left on screen explaining or removing it.
+  // The line and the region box are drawn on the globe, not in the
+  // panel, so closing has to take them with it — either left behind
+  // would be an annotation with nothing on screen left to explain or
+  // remove it.
   clearTransect()
+  source?.regionOutline?.()?.clear()
   root?.remove()
   root = null
   openedFor = null
@@ -342,7 +363,9 @@ function refresh(body: HTMLElement): void {
   if (!frame) {
     // No data-encoded dataset loaded, or no WebGL2. Absent rather than
     // broken, which is the availability posture the rest of the
-    // data-encoded work takes.
+    // data-encoded work takes. The box goes with the numbers it was
+    // explaining.
+    src.regionOutline?.()?.clear()
     body.appendChild(message(t('analyze.empty.noDataset')))
     return
   }
@@ -368,6 +391,7 @@ function renderRegionBlock(
 ): void {
   const { snapshot, scale, options } = frame
   const scoped = boundsForScope(scope, src)
+  syncRegionOutline(src, scoped)
   if (scoped.kind === 'unknown') {
     body.appendChild(message(t('analyze.empty.unknownRegion')))
     return
@@ -545,6 +569,38 @@ function coverageNote(text: string): HTMLElement {
   p.className = 'analyze-coverage'
   p.textContent = text
   return p
+}
+
+/**
+ * Longitude span past which a box is not worth outlining.
+ *
+ * "What I can see" on a zoomed-out globe resolves to most of the world,
+ * and a ring at the antimeridian and the poles is noise rather than an
+ * answer to "where did these numbers come from". Named regions are
+ * never this wide.
+ */
+const OUTLINE_MAX_LON_SPAN = 300
+
+/**
+ * Keep the drawn box in step with the picked region.
+ *
+ * The *requested* region is outlined, not the part of it the dataset
+ * covers — including when the region misses the dataset entirely, which
+ * is the one case where seeing the box is the whole explanation of the
+ * message beside it. Coverage already reports how much of the box
+ * carried data, so the two together say more than either alone.
+ */
+function syncRegionOutline(src: AnalyzeSource, scoped: ScopeBounds): void {
+  const outline = src.regionOutline?.()
+  if (!outline) return
+  if (scoped.kind !== 'box') {
+    outline.clear()
+    return
+  }
+  const { w, e } = scoped.bounds
+  const span = w <= e ? e - w : 360 - w + e
+  if (span >= OUTLINE_MAX_LON_SPAN) outline.clear()
+  else outline.show(scoped.bounds)
 }
 
 function message(text: string): HTMLElement {

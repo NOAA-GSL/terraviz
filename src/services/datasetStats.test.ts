@@ -24,6 +24,7 @@ import {
   findExtremum,
   fullWindow,
   rowAreasKm2,
+  boundsRing,
   greatCircleKm,
   greatCirclePath,
   MAX_TRANSECT_SAMPLES,
@@ -425,6 +426,56 @@ describe('greatCirclePath', () => {
   it('bulges poleward between two points at the same latitude', () => {
     const path = greatCirclePath({ lat: 70, lon: -170 }, { lat: 70, lon: -30 }, 3)
     expect(path[1].lat).toBeGreaterThan(70.5)
+  })
+})
+
+describe('boundsRing', () => {
+  const BOX = { n: 35, s: 30, w: -88, e: -84 }
+
+  it('closes, and never leaves the box', () => {
+    const ring = boundsRing(BOX, 8)
+    expect(ring[0]).toEqual(ring[ring.length - 1])
+    for (const p of ring) {
+      expect(p.lat).toBeGreaterThanOrEqual(30)
+      expect(p.lat).toBeLessThanOrEqual(35)
+      expect(p.lon).toBeGreaterThanOrEqual(-88)
+      expect(p.lon).toBeLessThanOrEqual(-84)
+    }
+  })
+
+  it('visits all four corners', () => {
+    const ring = boundsRing(BOX, 8)
+    const has = (lat: number, lon: number) =>
+      ring.some((p) => Math.abs(p.lat - lat) < 1e-9 && Math.abs(p.lon - lon) < 1e-9)
+    expect(has(30, -88)).toBe(true)
+    expect(has(30, -84)).toBe(true)
+    expect(has(35, -84)).toBe(true)
+    expect(has(35, -88)).toBe(true)
+  })
+
+  it('follows parallels, not great circles', () => {
+    // The whole point of not reusing greatCirclePath: the top edge of a
+    // box is constant latitude. A great circle between the same corners
+    // would bow poleward, which is a different box.
+    const wide = boundsRing({ n: 70, s: 60, w: -170, e: -30 }, 16)
+    const onTop = wide.filter((p) => Math.abs(p.lat - 70) < 1e-9)
+    expect(onTop.length).toBeGreaterThan(10)
+    for (const p of onTop) expect(p.lat).toBeCloseTo(70, 9)
+  })
+
+  it('walks an antimeridian box eastward, unwrapped', () => {
+    // 150E → -150E is 60 degrees east across the seam. Emitting -180
+    // mid-edge would make MapLibre draw the 300-degree complement.
+    const ring = boundsRing({ n: 10, s: -10, w: 150, e: -150 }, 8)
+    const lons = ring.map((p) => p.lon)
+    expect(Math.min(...lons)).toBeCloseTo(150, 9)
+    expect(Math.max(...lons)).toBeCloseTo(210, 9)
+    expect(lons.some((l) => l < 0)).toBe(false)
+  })
+
+  it('emits enough vertices to read as a curve, and at least a rectangle', () => {
+    expect(boundsRing(BOX, 32)).toHaveLength(4 * 32 + 1)
+    expect(boundsRing(BOX, 0)).toHaveLength(4 * 2 + 1)
   })
 })
 

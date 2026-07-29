@@ -434,6 +434,14 @@ class InteractiveSphere {
             clear: () => primary.clearTransect(),
           }
         },
+        regionOutline: () => {
+          const primary = this.viewports.getPrimary()
+          if (!primary) return null
+          return {
+            show: (bounds) => primary.showRegionOutline(bounds),
+            clear: () => primary.clearRegionOutline(),
+          }
+        },
       })
       // Playlists — mount the manager panel host and wire the
       // playback state machine to the regular loadDataset flow.

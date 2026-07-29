@@ -570,6 +570,46 @@ export function sampleTransect(
 }
 
 /**
+ * The outline of a lat/lon box, densified for drawing on a globe.
+ *
+ * A bbox's edges are parallels and meridians, **not** great circles:
+ * the top edge of "Alabama" follows constant latitude, where the
+ * shortest path between its corners would bow poleward. So this
+ * interpolates in lat/lon space — which is exactly the curve the box
+ * means — and emits enough vertices that the renderer's own
+ * straight-in-projected-space segments stay under a pixel. That is the
+ * opposite choice from `greatCirclePath`, deliberately, because the two
+ * are answering different questions.
+ *
+ * Longitudes are emitted **unwrapped**, so an antimeridian-crossing box
+ * runs past 180 rather than jumping to -180 mid-edge. That is the
+ * convention `catalogMapUI` already relies on — MapLibre reads wrapped
+ * polygon coordinates natively, and a ring that jumps at the seam would
+ * be drawn as its own complement. The eastward span is the same one
+ * `lonSpanDegrees` measures, so the ring encloses the box the
+ * statistics used.
+ */
+export function boundsRing(
+  bounds: LatLonBounds,
+  perEdge = 32,
+): { lat: number; lon: number }[] {
+  const n = Math.max(2, Math.floor(perEdge))
+  const { n: north, s: south, w, e } = bounds
+  const span = w <= e ? e - w : 360 - w + e
+  const lonAt = (f: number): number => w + f * span
+  const ring: { lat: number; lon: number }[] = []
+  // South edge west→east, east edge south→north, north edge east→west,
+  // west edge north→south. Each edge omits its final vertex, which the
+  // next edge contributes, and the ring closes on the first.
+  for (let i = 0; i < n; i++) ring.push({ lat: south, lon: lonAt(i / n) })
+  for (let i = 0; i < n; i++) ring.push({ lat: south + ((north - south) * i) / n, lon: lonAt(1) })
+  for (let i = 0; i < n; i++) ring.push({ lat: north, lon: lonAt(1 - i / n) })
+  for (let i = 0; i < n; i++) ring.push({ lat: north - ((north - south) * i) / n, lon: lonAt(0) })
+  ring.push({ ...ring[0] })
+  return ring
+}
+
+/**
  * `points` evenly-spaced positions along the great circle from `from` to
  * `to`, endpoints included.
  *

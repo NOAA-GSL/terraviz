@@ -538,3 +538,92 @@ describe('buildTransectCsvText', () => {
     expect(csv).toMatch(/0\.\d{5,}/)
   })
 })
+
+/** The globe's side of the region picker, recorded rather than drawn. */
+function makeOutline() {
+  const shown: { n: number; s: number; w: number; e: number }[] = []
+  let clears = 0
+  return {
+    outline: {
+      show(bounds: { n: number; s: number; w: number; e: number }) { shown.push(bounds) },
+      clear() { clears++ },
+    },
+    shown: () => shown,
+    last: () => shown[shown.length - 1],
+    clears: () => clears,
+  }
+}
+
+describe('region outline', () => {
+  it('outlines a named region so the numbers have a place', () => {
+    const o = makeOutline()
+    initAnalyzeUI(makeSource({ regionOutline: () => o.outline }))
+    openAnalyzeUI()
+    const alabama = resolveRegion('alabama')
+    expect(alabama).not.toBeNull()
+
+    select().value = 'named:Alabama'
+    select().dispatchEvent(new Event('change', { bubbles: true }))
+    const [w, s, e, n] = alabama!.bounds
+    expect(o.last()).toEqual({ n, s, w, e })
+  })
+
+  it('outlines the requested region even when it misses the dataset', () => {
+    // The box is the whole explanation of the message beside it — "that
+    // region is over there, and the data is not".
+    const o = makeOutline()
+    initAnalyzeUI(makeSource({
+      regionOutline: () => o.outline,
+      visibleBounds: () => ({ n: -30, s: -60, w: -100, e: -50 }),
+    }))
+    openAnalyzeUI()
+    select().value = 'view'
+    select().dispatchEvent(new Event('change', { bubbles: true }))
+    expect(currentResult()).toBeNull()
+    expect(o.last()).toEqual({ n: -30, s: -60, w: -100, e: -50 })
+  })
+
+  it('clears for the whole dataset, which needs no box', () => {
+    const o = makeOutline()
+    initAnalyzeUI(makeSource({ regionOutline: () => o.outline }))
+    openAnalyzeUI()
+    select().value = 'named:Alabama'
+    select().dispatchEvent(new Event('change', { bubbles: true }))
+    const before = o.clears()
+
+    select().value = 'dataset'
+    select().dispatchEvent(new Event('change', { bubbles: true }))
+    expect(o.clears()).toBeGreaterThan(before)
+  })
+
+  it('skips a box so wide it would just trace the antimeridian', () => {
+    const o = makeOutline()
+    initAnalyzeUI(makeSource({
+      regionOutline: () => o.outline,
+      visibleBounds: () => ({ n: 85, s: -85, w: -180, e: 180 }),
+    }))
+    openAnalyzeUI()
+    select().value = 'view'
+    select().dispatchEvent(new Event('change', { bubbles: true }))
+    expect(o.shown()).toHaveLength(0)
+  })
+
+  it('takes the box off the globe when the panel closes', () => {
+    const o = makeOutline()
+    initAnalyzeUI(makeSource({ regionOutline: () => o.outline }))
+    openAnalyzeUI()
+    select().value = 'named:Alabama'
+    select().dispatchEvent(new Event('change', { bubbles: true }))
+    const before = o.clears()
+    closeAnalyzeUI()
+    expect(o.clears()).toBeGreaterThan(before)
+  })
+
+  it('clears when there is no longer a frame to analyse', () => {
+    const o = makeOutline()
+    initAnalyzeUI(makeSource({ regionOutline: () => o.outline, frame: () => null }))
+    openAnalyzeUI()
+    expect(o.clears()).toBeGreaterThan(0)
+    expect(o.shown()).toHaveLength(0)
+  })
+})

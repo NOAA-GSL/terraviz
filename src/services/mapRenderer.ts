@@ -21,7 +21,7 @@ import type {
 import { setDatasetCreditsSource } from '../ui/creditsPanel'
 import { getSharedLumaSampler, type LumaSnapshot } from './glLumaSampler'
 import { DEFAULT_DISPLAY, type ColorScaleDisplay } from './colorScaleDisplay'
-import { greatCirclePath, type TransectEndpoints } from './datasetStats'
+import { boundsRing, greatCirclePath, type TransectEndpoints } from './datasetStats'
 import type { ColorScale } from '../types/color-scale'
 import {
   probeDatasetValue,
@@ -1048,6 +1048,38 @@ export class MapRenderer implements GlobeRenderer {
     return { snapshot, scale: options.colorScale, options }
   }
 
+  // --- Analysed-region outline (Analyze §A3) ---
+
+  private regionOutlineId: string | null = null
+
+  /**
+   * Outline the box the Analyze panel is measuring.
+   *
+   * Outline only, with no fill. A wash over the region would tint the
+   * very values being measured, and the whole discipline of the
+   * data-encoded path is that nothing decorative changes what a colour
+   * means. The box says *where*; the globe still says *what*.
+   */
+  showRegionOutline(bounds: { n: number; s: number; w: number; e: number }): void {
+    this.clearRegionOutline()
+    if (!this.map) return
+    const ring = boundsRing(bounds).map((p): [number, number] => [p.lon, p.lat])
+    this.regionOutlineId = this.highlightRegion(
+      {
+        type: 'Feature',
+        properties: {},
+        geometry: { type: 'Polygon', coordinates: [ring] },
+      } as GeoJSON.Feature,
+      { color: '#4da6ff', opacity: 0 },
+    )
+  }
+
+  clearRegionOutline(): void {
+    if (!this.regionOutlineId) return
+    this.removeHighlight(this.regionOutlineId)
+    this.regionOutlineId = null
+  }
+
   // --- Transect picking (Analyze §A4) ---
 
   /** Vertices in the drawn line. Enough that the curve reads as smooth
@@ -1516,6 +1548,7 @@ export class MapRenderer implements GlobeRenderer {
     // dropping the reference first would strand the handlers.
     this.clearLatLngCallbacks()
     this.clearTransect()
+    this.clearRegionOutline()
     // The probe sampler is page-shared and deliberately NOT disposed
     // here — other panels may still be using it, and tearing down its
     // context would take their readouts with it. Dropping the source
