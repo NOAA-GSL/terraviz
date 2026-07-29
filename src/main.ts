@@ -37,6 +37,7 @@ import { initChatUI, openChat, openChatSettings, notifyDatasetChanged, showChatT
 import { loadViewPreferences, saveViewPreferences, type ViewPreferences } from './utils/viewPreferences'
 import { renderColorbar, openDisplayControls, closeDisplayControls } from './ui/colorbarUI'
 import { initAnalyzeUI, closeAnalyzeUI } from './ui/analyzeUI'
+import { buildHistogram } from './services/datasetStats'
 import { DEFAULT_DISPLAY, type ColorScaleDisplay } from './services/colorScaleDisplay'
 import { RENDER_ENCODING_DATA_LUMA } from './types/color-scale'
 import { initHelpUI, setActiveDataset as setHelpActiveDataset } from './ui/helpUI'
@@ -1685,6 +1686,16 @@ class InteractiveSphere {
     openDisplayControls({
       scale,
       display: this.colorScaleDisplay,
+      // Read the frame once, when the controls open, so the sliders
+      // are placed on the data's own distribution rather than on the
+      // palette's nominal range — see `DisplayControlsOptions`.
+      // Null whenever the frame isn't readable, which falls back to
+      // the linear placement rather than failing.
+      distribution: () => {
+        const frame = this.viewports.getPrimary()?.analysisFrame()
+        if (!frame) return null
+        return buildHistogram(frame.snapshot, frame.scale, frame.options).weights
+      },
       onChange: (next) => {
         this.colorScaleDisplay = next
         this.viewports.setColorScaleDisplay(next)

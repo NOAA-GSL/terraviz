@@ -22,13 +22,16 @@ import {
   DEFAULT_DISPLAY,
   PALETTE_IDS,
   colorbarTicks,
+  dataQuantileOfLuma,
   displayGradientStops,
+  fractionKept,
   isDefaultDisplay,
-  positionOfValue,
+  lumaAtDataQuantile,
   valueAtPosition,
   type ColorScaleDisplay,
   type PaletteId,
 } from '../services/colorScaleDisplay'
+import { lumaToValue } from '../types/color-scale'
 import type { ColorScale } from '../types/color-scale'
 import { t } from '../i18n'
 import { formatNumber } from '../i18n/format'
@@ -132,6 +135,18 @@ export interface DisplayControlsOptions {
   scale: ColorScale
   display: ColorScaleDisplay
   onChange: (next: ColorScaleDisplay) => void
+  /**
+   * The 256-bin area-weighted distribution of the frame on screen, if
+   * one can be read.
+   *
+   * Without it the sliders divide the palette's nominal range evenly,
+   * which on a real field is close to useless: measured on a published
+   * RRFS smoke frame, half the data sits below 8% of the travel and the
+   * top three quarters of the slider changes the picture by under 3%.
+   * With it, half travel means half the data. Read once when the
+   * controls open — dragging still costs only a LUT rebuild.
+   */
+  distribution?: () => Float64Array | null
 }
 
 let openPopover: HTMLElement | null = null
@@ -236,13 +251,21 @@ export function openDisplayControls(options: DisplayControlsOptions): HTMLElemen
   root.appendChild(paletteGroup)
 
   // --- range (contrast stretch) ---
+  const stretchWeights = options.distribution?.() ?? null
+  const stretchAt = (p: number): number => lumaAtDataQuantile(stretchWeights, p) / 255
   const { group: rangeGroup, readout: rangeReadout } = sliderPair({
     labelText: t('colorbar.range.label'),
     minLabel: t('colorbar.range.min'),
     maxLabel: t('colorbar.range.max'),
-    initial: [display.stretch.lo, display.stretch.hi],
+    initial: [
+      dataQuantileOfLuma(stretchWeights, display.stretch.lo * 255),
+      dataQuantileOfLuma(stretchWeights, display.stretch.hi * 255),
+    ],
     onInput: ([lo, hi]) => {
-      apply({ ...display, stretch: { lo, hi } })
+      // The stretch is skewed the same way the threshold is: spreading
+      // the ramp evenly over a nominal range puts every visible colour
+      // change into the first few percent of the travel.
+      apply({ ...display, stretch: { lo: stretchAt(lo), hi: stretchAt(hi) } })
       rangeReadout.textContent = describeRange(scale, display)
     },
   })
@@ -250,12 +273,17 @@ export function openDisplayControls(options: DisplayControlsOptions): HTMLElemen
   root.appendChild(rangeGroup)
 
   // --- threshold ---
-  const initialMin = display.threshold.min === null
-    ? 0
-    : positionOfValue(scale, DEFAULT_DISPLAY, display.threshold.min)
-  const initialMax = display.threshold.max === null
-    ? 1
-    : positionOfValue(scale, DEFAULT_DISPLAY, display.threshold.max)
+  //
+  // Positions are data quantiles, not fractions of the palette's range.
+  // See `DisplayControlsOptions.distribution`.
+  const weights = options.distribution?.() ?? null
+  const valueAtSlider = (p: number): number =>
+    lumaToValue(lumaAtDataQuantile(weights, p), scale)
+  const sliderAtValue = (v: number): number =>
+    dataQuantileOfLuma(weights, ((v - scale.vmin) / (scale.vmax - scale.vmin)) * 255)
+
+  const initialMin = display.threshold.min === null ? 0 : sliderAtValue(display.threshold.min)
+  const initialMax = display.threshold.max === null ? 1 : sliderAtValue(display.threshold.max)
   const { group: thresholdGroup, readout: thresholdReadout } = sliderPair({
     labelText: t('colorbar.threshold.label'),
     minLabel: t('colorbar.threshold.min'),
@@ -265,13 +293,13 @@ export function openDisplayControls(options: DisplayControlsOptions): HTMLElemen
       // A handle parked at its end means "no bound on that side"
       // rather than "a bound that happens to sit at the extreme", so
       // that resetting a slider genuinely clears the constraint.
-      const min = lo <= 0 ? null : valueAtPosition(scale, DEFAULT_DISPLAY, lo)
-      const max = hi >= 1 ? null : valueAtPosition(scale, DEFAULT_DISPLAY, hi)
+      const min = lo <= 0 ? null : valueAtSlider(lo)
+      const max = hi >= 1 ? null : valueAtSlider(hi)
       apply({ ...display, threshold: { min, max } })
-      thresholdReadout.textContent = describeThreshold(scale, display)
+      thresholdReadout.textContent = describeThreshold(scale, display, weights)
     },
   })
-  thresholdReadout.textContent = describeThreshold(scale, display)
+  thresholdReadout.textContent = describeThreshold(scale, display, weights)
   root.appendChild(thresholdGroup)
 
   // --- reset ---
@@ -352,17 +380,31 @@ function describeRange(scale: ColorScale, display: ColorScaleDisplay): string {
   })
 }
 
-function describeThreshold(scale: ColorScale, display: ColorScaleDisplay): string {
+function describeThreshold(
+  scale: ColorScale,
+  display: ColorScaleDisplay,
+  weights: Float64Array | null,
+): string {
   const { min, max } = display.threshold
   if (min === null && max === null) return t('colorbar.threshold.none')
-  if (min !== null && max === null) {
-    return t('colorbar.threshold.above', { value: formatValue(min, scale.units) })
-  }
-  if (min === null && max !== null) {
-    return t('colorbar.threshold.below', { value: formatValue(max, scale.units) })
-  }
-  return t('colorbar.threshold.between', {
-    min: formatValue(min as number, scale.units),
-    max: formatValue(max as number, scale.units),
+
+  const band = min !== null && max === null
+    ? t('colorbar.threshold.above', { value: formatValue(min, scale.units) })
+    : min === null && max !== null
+      ? t('colorbar.threshold.below', { value: formatValue(max, scale.units) })
+      : t('colorbar.threshold.between', {
+        min: formatValue(min as number, scale.units),
+        max: formatValue(max as number, scale.units),
+      })
+
+  // How much of the field survives, when that is knowable. "Only
+  // 0.00028 and below" sounds decisive and on this data keeps 99.8% of
+  // the frame; a control that appears to do nothing is
+  // indistinguishable from one that is broken.
+  const kept = fractionKept(weights, scale, display.threshold)
+  if (kept === null) return band
+  return t('colorbar.threshold.keeps', {
+    band,
+    percent: formatNumber(kept * 100, { maximumSignificantDigits: 2 }),
   })
 }

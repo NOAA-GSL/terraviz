@@ -223,6 +223,87 @@ export function positionOfValue(
 }
 
 /**
+ * The luma at a position along a control, placed by the data's own
+ * distribution rather than by the palette's nominal range.
+ *
+ * These fields are extremely skewed. Measured on a published RRFS smoke
+ * frame: 88% of the frame is absent data, and of what remains, **half
+ * lies below 8% of a linear slider's travel** while the top 75% of that
+ * travel changes the picture by under 3%. A linear threshold control is
+ * therefore almost entirely dead — which reads as "the setting does
+ * nothing" rather than as "there is nothing up there to hide".
+ *
+ * `weights` is the 256-bin area-weighted tally from
+ * `datasetStats.buildHistogram`. Given one, position `p` returns the
+ * luma below which `p` of the data lies — so half travel really does
+ * mean half the data, for any field, with no tuned exponent. Given
+ * `null` (no frame readable, no WebGL2) this falls back to the linear
+ * mapping, which is wrong in the same way as before but never worse.
+ */
+export function lumaAtDataQuantile(
+  weights: Float64Array | null | undefined,
+  position: number,
+): number {
+  const p = clamp01(position)
+  if (!weights) return p * LAST
+  let total = 0
+  for (let i = 0; i < weights.length; i++) total += weights[i]
+  if (total <= 0) return p * LAST
+  const target = total * p
+  let seen = 0
+  for (let luma = 0; luma < weights.length; luma++) {
+    if (weights[luma] <= 0) continue
+    seen += weights[luma]
+    if (seen >= target) return luma
+  }
+  return LAST
+}
+
+/**
+ * The inverse: where a luma sits along the control.
+ *
+ * Used to place a handle for a threshold that already exists, so
+ * re-opening the controls does not move the setting the user chose.
+ */
+export function dataQuantileOfLuma(
+  weights: Float64Array | null | undefined,
+  luma: number,
+): number {
+  if (!weights) return clamp01(luma / LAST)
+  let total = 0
+  for (let i = 0; i < weights.length; i++) total += weights[i]
+  if (total <= 0) return clamp01(luma / LAST)
+  let seen = 0
+  for (let i = 0; i <= Math.min(LAST, Math.round(luma)); i++) seen += weights[i]
+  return clamp01(seen / total)
+}
+
+/**
+ * The fraction of the data a threshold band keeps, in [0, 1].
+ *
+ * Surfaced next to the threshold readout because "only 0.00028 and
+ * below" is not, on its own, a statement anyone can act on: on this
+ * data it keeps 99.8% of the field, and a control that appears to do
+ * nothing is indistinguishable from one that is broken.
+ */
+export function fractionKept(
+  weights: Float64Array | null | undefined,
+  scale: ColorScale,
+  threshold: { min: number | null; max: number | null },
+): number | null {
+  if (!weights) return null
+  let total = 0
+  let kept = 0
+  for (let luma = 0; luma < weights.length; luma++) {
+    const w = weights[luma]
+    if (w <= 0) continue
+    total += w
+    if (!outsideThreshold(lumaToValue(luma, scale), threshold)) kept += w
+  }
+  return total > 0 ? kept / total : null
+}
+
+/**
  * Tick marks at round numbers rather than at even fractions.
  *
  * The live smoke scale runs 0 to 5×10⁻⁴ kg m⁻²; five even divisions of

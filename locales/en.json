@@ -341,6 +341,7 @@
   "colorbar.threshold.above": "Only {value} and above",
   "colorbar.threshold.below": "Only {value} and below",
   "colorbar.threshold.between": "Only {min} to {max}",
+  "colorbar.threshold.keeps": "{band} — keeps {percent}% of the data",
   "colorbar.threshold.label": "Hide values",
   "colorbar.threshold.max": "Hide above",
   "colorbar.threshold.min": "Hide below",

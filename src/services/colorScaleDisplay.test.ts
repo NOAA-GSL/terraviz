@@ -15,7 +15,10 @@ import {
   PALETTE_IDS,
   buildDisplayLut,
   colorbarTicks,
+  dataQuantileOfLuma,
   displayGradientStops,
+  fractionKept,
+  lumaAtDataQuantile,
   isDefaultDisplay,
   positionOfValue,
   valueAtPosition,
@@ -302,5 +305,92 @@ describe('displayGradientStops', () => {
     const lut = buildDisplayLut(SCALE, d)
     expect(stops[0].rgba.slice(0, 3)).toEqual([...rgbAt(lut, 128)])
     expect(stops[3].rgba.slice(0, 3)).toEqual([...rgbAt(lut, 255)])
+  })
+})
+
+describe('data-quantile control placement', () => {
+  // The distribution that motivated this: measured on a published RRFS
+  // smoke frame, 88% of the frame is absent and of the rest half sits
+  // below 8% of a linear slider's travel. Approximated here by piling
+  // the weight into the bottom of the range.
+  const skewed = (): Float64Array => {
+    const w = new Float64Array(256)
+    for (let l = 12; l < 30; l++) w[l] = 1000 // the bulk, near the floor
+    for (let l = 30; l < 140; l++) w[l] = 10
+    for (let l = 140; l < 256; l++) w[l] = 0.1 // the long, near-empty tail
+    return w
+  }
+
+  it('puts half the data at half the travel', () => {
+    // The whole point. Linear placement puts the median at ~8%.
+    const w = skewed()
+    const mid = lumaAtDataQuantile(w, 0.5)
+    let below = 0
+    let total = 0
+    for (let l = 0; l < 256; l++) {
+      total += w[l]
+      if (l <= mid) below += w[l]
+    }
+    expect(below / total).toBeGreaterThan(0.45)
+    expect(below / total).toBeLessThan(0.55)
+    // …and that median is far below where a linear slider would put it.
+    expect(mid).toBeLessThan(0.25 * 255)
+  })
+
+  it('spans the ends exactly', () => {
+    const w = skewed()
+    expect(lumaAtDataQuantile(w, 0)).toBeGreaterThanOrEqual(12)
+    expect(lumaAtDataQuantile(w, 1)).toBe(255)
+  })
+
+  it('round-trips against dataQuantileOfLuma', () => {
+    const w = skewed()
+    for (const p of [0.1, 0.25, 0.5, 0.75, 0.9]) {
+      const luma = lumaAtDataQuantile(w, p)
+      expect(dataQuantileOfLuma(w, luma)).toBeCloseTo(p, 1)
+    }
+  })
+
+  it('falls back to linear when no distribution is available', () => {
+    // No WebGL2, or no frame decoded yet. Wrong in the old way, never
+    // worse, and never throwing.
+    expect(lumaAtDataQuantile(null, 0.5)).toBeCloseTo(127.5, 6)
+    expect(lumaAtDataQuantile(undefined, 1)).toBe(255)
+    expect(dataQuantileOfLuma(null, 255)).toBeCloseTo(1, 6)
+  })
+
+  it('falls back to linear for an all-empty distribution', () => {
+    const empty = new Float64Array(256)
+    expect(lumaAtDataQuantile(empty, 0.5)).toBeCloseTo(127.5, 6)
+    expect(dataQuantileOfLuma(empty, 128)).toBeCloseTo(128 / 255, 6)
+  })
+
+  it('clamps positions outside the track', () => {
+    const w = skewed()
+    expect(lumaAtDataQuantile(w, -1)).toBe(lumaAtDataQuantile(w, 0))
+    expect(lumaAtDataQuantile(w, 2)).toBe(lumaAtDataQuantile(w, 1))
+  })
+})
+
+describe('fractionKept', () => {
+  const w = (): Float64Array => {
+    const a = new Float64Array(256)
+    a[50] = 3
+    a[200] = 1
+    return a
+  }
+
+  it('reports how much of the field a threshold keeps', () => {
+    // The number the old readout did not have: "only X and below" kept
+    // 99.8% of the real frame and looked like it had done nothing.
+    expect(fractionKept(w(), SCALE, { min: null, max: null })).toBeCloseTo(1, 6)
+    expect(fractionKept(w(), SCALE, { min: null, max: lumaToValue(100, SCALE) }))
+      .toBeCloseTo(0.75, 6)
+    expect(fractionKept(w(), SCALE, { min: lumaToValue(100, SCALE), max: null }))
+      .toBeCloseTo(0.25, 6)
+  })
+
+  it('is null when the distribution is unknown, rather than guessing', () => {
+    expect(fractionKept(null, SCALE, { min: 1, max: null })).toBeNull()
   })
 })
