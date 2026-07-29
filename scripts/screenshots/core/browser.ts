@@ -150,6 +150,24 @@ export async function withScenePage<T>(
     viewport: opts.viewport,
     baseURL: opts.baseURL,
   })
+  // Opt the capture browser out of telemetry before any page script
+  // runs. A capture is not a user, so the events are junk data; more
+  // practically, the emitter's batch beacon POSTs `/api/ingest`, which
+  // no capture environment serves — it 403s against the dev server in
+  // CI and aborts as the context tears down, and every scene that
+  // lingers long enough to flush a batch was reported as a scene "with
+  // problems". Seeded here rather than route-stubbed because the beacon
+  // fires during pagehide, when the route handlers are already going
+  // away. Mirrors the `off` tier in `src/analytics/config.ts`; an
+  // unparseable or unknown value there falls back to `essential`, so
+  // the shape has to match.
+  await context.addInitScript(() => {
+    try {
+      localStorage.setItem('sos-telemetry-config', JSON.stringify({ tier: 'off' }))
+    } catch {
+      // Storage unavailable — nothing to opt out of.
+    }
+  })
   const headers = opts.extraHTTPHeaders
   if (headers && Object.keys(headers).length > 0) {
     // Scope the headers to the baseURL origin. Passing them to
