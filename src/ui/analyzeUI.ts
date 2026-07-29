@@ -225,9 +225,18 @@ function onEscape(ev: KeyboardEvent): void {
  * palette moves, and a panel showing last week's numbers under this
  * week's globe is worse than no panel.
  */
-export function openAnalyzeUI(triggeredBy?: HTMLElement | null): HTMLElement {
+export function openAnalyzeUI(
+  triggeredBy?: HTMLElement | null,
+  /** §A6 — open already scoped to a region, for the chip on an Orbit
+   *  message that just described one. Overrides the sticky choice from
+   *  the last open, because arriving here from "the smoke is worst over
+   *  Colorado" and landing on the previous region would be the one
+   *  wrong answer available. */
+  presetScope?: AnalyzeScope,
+): HTMLElement {
   closeAnalyzeUI()
   lastTrigger = triggeredBy ?? null
+  if (presetScope) scope = presetScope
 
   root = document.createElement('div')
   root.className = 'analyze-panel'

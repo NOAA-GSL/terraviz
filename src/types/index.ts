@@ -424,6 +424,32 @@ export type ChatAction =
   | { type: 'toggle-labels'; visible: boolean }
   | { type: 'highlight-region'; geojson: GeoJSON.GeoJSON; label?: string }
   /**
+   * Open the Analyze panel on the region Orbit just measured
+   * (`docs/DATA_ANALYSIS_PLAN.md` §A6).
+   *
+   * Chat cannot draw a chart — `renderMarkdownLite` supports bold,
+   * links and bullets, and the sanitizer's allowlist excludes tables
+   * and images deliberately. So Orbit answers in prose and this chip
+   * hands the same region to the surface that *can* draw it, rather
+   * than leaving the user to rebuild by hand the selection Orbit just
+   * described.
+   *
+   * Display-only, like `event-citation`: it is never deferred for
+   * execution, because opening a panel is the user's click to make.
+   *
+   * `scope` is limited to what the panel's picker can actually
+   * represent. A bbox-scoped answer gets no chip rather than a chip
+   * that opens a picker showing a region it cannot select.
+   */
+  | {
+      type: 'show-analysis'
+      scope: 'dataset' | 'view' | 'named'
+      /** Present when `scope === 'named'` — the display name, already
+       *  resolved against the region table, so the chip and the panel
+       *  agree on what it is called. */
+      regionName?: string
+    }
+  /**
    * Load a single frame from a Phase 3pg image-sequence dataset.
    * `frameQuery` is the verbatim payload from the LLM's
    * `<<LOAD_FRAME:DATASET_ID:query>>` marker — one of:

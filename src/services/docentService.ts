@@ -14,6 +14,7 @@ import {
   executeProbeValue,
   executeSummarizeRegion,
   isAnalysisAvailable,
+  type ResolvedScope,
 } from './docentAnalysisTools'
 import { fetchApprovedEvents, type PublicEvent } from './eventsService'
 import { parseIntent, generateResponse, searchDatasets, evaluateAutoLoad } from './docentEngine'
@@ -1778,6 +1779,8 @@ export async function* processMessage(
     for (let attempt = 1; attempt <= MAX_LLM_ATTEMPTS; attempt++) {
       let llmProducedText = false
       let accumulatedText = ''
+      // §A6 — one Analyze chip per distinct region per attempt.
+      const analysisChipsThisAttempt = new Set<string>()
       // Phase 3: each attempt maintains its own conversation state that may
       // grow across multiple streamChat rounds as the LLM calls search_catalog
       // and we feed the results back.
@@ -2088,11 +2091,39 @@ export async function* processMessage(
                 : call.name === 'summarize_region' ? executeSummarizeRegion(call.arguments)
                 : executeFindExtremum(call.arguments)
               logger.info(`[Docent] ${call.name} → ${result.ok ? 'ok' : `refused: ${result.error}`}`)
+              // `scope` is for us, not the model — strip it before the
+              // result goes into the prompt so it cannot be mistaken
+              // for something to quote.
+              const { scope: resultScope, ...forModel } = result as typeof result & { scope?: ResolvedScope }
               conversationMessages.push({
                 role: 'tool',
                 tool_call_id: call.id,
-                content: JSON.stringify(result),
+                content: JSON.stringify(forModel),
               })
+              // §A6 — offer to open Analyze on the region just measured.
+              // Chat cannot draw a chart, so the chip hands the same
+              // selection to the surface that can, rather than leaving
+              // the user to rebuild it by hand.
+              //
+              // Only for scopes the panel's picker can represent: a
+              // bbox answer gets no chip rather than one that opens a
+              // picker showing a region it cannot select. Deduped per
+              // turn, because a model comparing three regions would
+              // otherwise stack three chips on one message.
+              if (result.ok && resultScope && resultScope.kind !== 'bbox') {
+                const key = `${resultScope.kind}:${resultScope.name ?? ''}`
+                if (!analysisChipsThisAttempt.has(key)) {
+                  analysisChipsThisAttempt.add(key)
+                  yield {
+                    type: 'action',
+                    action: {
+                      type: 'show-analysis',
+                      scope: resultScope.kind,
+                      ...(resultScope.name ? { regionName: resultScope.name } : {}),
+                    },
+                  }
+                }
+              }
             } else if (call.name === 'search_events') {
               // In-memory filter over the approved events already fetched
               // for this turn — no network, works on any deploy.

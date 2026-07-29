@@ -36,7 +36,7 @@ import { openCreditsPanel } from './ui/creditsPanel'
 import { initChatUI, openChat, openChatSettings, notifyDatasetChanged, showChatTrigger, hideChatTrigger, closeChat, flushPendingGlobeActions } from './ui/chatUI'
 import { loadViewPreferences, saveViewPreferences, type ViewPreferences } from './utils/viewPreferences'
 import { renderColorbar, openDisplayControls, closeDisplayControls } from './ui/colorbarUI'
-import { initAnalyzeUI, closeAnalyzeUI, notifyAnalyzeDatasetChanged } from './ui/analyzeUI'
+import { initAnalyzeUI, openAnalyzeUI, closeAnalyzeUI, notifyAnalyzeDatasetChanged } from './ui/analyzeUI'
 import { registerAnalysisSource } from './services/docentAnalysisTools'
 import { buildHistogram } from './services/datasetStats'
 import { DEFAULT_DISPLAY, type ColorScaleDisplay } from './services/colorScaleDisplay'
@@ -2338,6 +2338,16 @@ class InteractiveSphere {
         for (const r of this.viewports.getAll()) { r.toggleLabels?.(visible); r.toggleBoundaries?.(visible) }
       },
       onHighlightRegion: (geojson, _label) => { this.renderer?.highlightRegion(geojson) },
+      onShowAnalysis: (scope, regionName) => {
+        openAnalyzeUI(
+          null,
+          scope === 'named' && regionName
+            ? { kind: 'named', name: regionName }
+            : scope === 'view'
+              ? { kind: 'view' }
+              : { kind: 'dataset' },
+        )
+      },
       getMapViewContext: () => this.renderer?.getViewContext() ?? null,
       getDatasets: () => this.appState.datasets,
       getCurrentDataset: () => this.appState.currentDataset,

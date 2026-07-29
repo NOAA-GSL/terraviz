@@ -2684,3 +2684,122 @@ describe('processMessage — backend tool round-trip', () => {
     expect(toolMsg.content).toContain('Climate Reanalysis 2024')
   })
 })
+
+describe('processMessage — §A6 value tools', () => {
+  const SCALE = {
+    stops: [{ t: 0, rgba: [0, 0, 0, 0] }, { t: 1, rgba: [255, 255, 255, 255] }],
+    vmin: 0, vmax: 255, units: 'mg m-2', transparentRange: 12 / 256,
+  } as any
+  const OPTIONS = { boundingBox: { n: 85, s: 5, w: -175, e: -20 }, colorScale: SCALE } as any
+
+  function frameSource(over: Record<string, unknown> = {}) {
+    const data = new Uint8Array(64).fill(200)
+    return {
+      frame: () => ({ snapshot: { data, width: 8, height: 8 }, scale: SCALE, options: OPTIONS }),
+      datasetTitle: () => 'Wildfire Smoke Overhead',
+      visibleBounds: () => ({ n: 85, s: 5, w: -175, e: -20 }),
+      ...over,
+    } as any
+  }
+
+  /** Drive one tool call through the round trip and collect everything. */
+  async function runToolCall(name: string, args: Record<string, unknown>) {
+    const { streamChat } = await import('./llmProvider')
+    const mocked = vi.mocked(streamChat)
+    let round2: any[] | null = null as any[] | null
+    let round1Tools: any = null
+    // streamChat(messages, tools, config) — tools is the second arg.
+    mocked.mockImplementation(async function* (msgs, tools: any) {
+      if (round1Tools === null) {
+        round1Tools = tools ?? []
+        yield { type: 'tool_call' as const, call: { id: 'c1', name, arguments: args } }
+        yield { type: 'done' as const }
+      } else {
+        round2 = [...msgs]
+        yield { type: 'delta' as const, text: 'The mean is 200.' }
+        yield { type: 'done' as const }
+      }
+    })
+    const chunks: DocentStreamChunk[] = []
+    for await (const c of processMessage('how bad is it?', [], datasets, null, baseConfig)) chunks.push(c)
+    return { chunks, round2, round1Tools }
+  }
+
+  afterEach(async () => {
+    const { registerAnalysisSource } = await import('./docentAnalysisTools')
+    registerAnalysisSource(null)
+  })
+
+  it('does not offer the tools when nothing analysable is loaded', async () => {
+    // The availability gate, from the outside: with no source the tool
+    // array must be exactly what it was before this phase, so a picture
+    // dataset leaves Orbit's behaviour untouched.
+    const { registerAnalysisSource } = await import('./docentAnalysisTools')
+    registerAnalysisSource(null)
+    const { round1Tools } = await runToolCall('search_datasets', { query: 'x' })
+    const names = (round1Tools as any[]).map(t => t.function.name)
+    expect(names).not.toContain('probe_value')
+    expect(names).not.toContain('summarize_region')
+    expect(names).not.toContain('find_extremum')
+  })
+
+  it('offers them once a data-encoded frame is readable', async () => {
+    const { registerAnalysisSource } = await import('./docentAnalysisTools')
+    registerAnalysisSource(frameSource())
+    const { round1Tools } = await runToolCall('search_datasets', { query: 'x' })
+    const names = (round1Tools as any[]).map(t => t.function.name)
+    expect(names).toEqual(expect.arrayContaining(['probe_value', 'summarize_region', 'find_extremum']))
+  })
+
+  it('feeds real statistics back to the model', async () => {
+    const { registerAnalysisSource } = await import('./docentAnalysisTools')
+    registerAnalysisSource(frameSource())
+    const { round2 } = await runToolCall('summarize_region', { region_name: 'alaska' })
+    const toolMsg = round2!.find((m: any) => m.role === 'tool')
+    expect(toolMsg.tool_call_id).toBe('c1')
+    const payload = JSON.parse(toolMsg.content)
+    expect(payload.ok).toBe(true)
+    expect(payload.mean).toBeCloseTo(200, 6)
+    expect(payload.units).toBe('mg m-2')
+    expect(payload.precision).toMatch(/quantised/i)
+  })
+
+  it('keeps the internal scope out of the model’s copy', async () => {
+    // `scope` exists so the chip can be offered. Leaving it in the tool
+    // result would put a field in the prompt that reads like something
+    // to quote.
+    const { registerAnalysisSource } = await import('./docentAnalysisTools')
+    registerAnalysisSource(frameSource())
+    const { round2 } = await runToolCall('summarize_region', { region_name: 'alaska' })
+    const payload = JSON.parse(round2!.find((m: any) => m.role === 'tool').content)
+    expect(payload.scope).toBeUndefined()
+    expect(payload.region).toBe('Alaska')
+  })
+
+  it('offers an Analyze chip for the region it measured', async () => {
+    const { registerAnalysisSource } = await import('./docentAnalysisTools')
+    registerAnalysisSource(frameSource())
+    const { chunks } = await runToolCall('summarize_region', { region_name: 'alaska' })
+    const chip = chunks.find(c => c.type === 'action' && (c as any).action.type === 'show-analysis') as any
+    expect(chip).toBeDefined()
+    expect(chip.action.scope).toBe('named')
+    expect(chip.action.regionName).toBe('Alaska')
+  })
+
+  it('offers no chip for a bbox the panel could not select', async () => {
+    const { registerAnalysisSource } = await import('./docentAnalysisTools')
+    registerAnalysisSource(frameSource())
+    const { chunks } = await runToolCall('summarize_region', {
+      bbox: { north: 60, south: 40, west: -120, east: -90 },
+    })
+    expect(chunks.some(c => c.type === 'action' && (c as any).action.type === 'show-analysis')).toBe(false)
+  })
+
+  it('offers no chip when the tool refused', async () => {
+    const { registerAnalysisSource } = await import('./docentAnalysisTools')
+    registerAnalysisSource(frameSource())
+    const { chunks, round2 } = await runToolCall('summarize_region', { region_name: 'Mordor' })
+    expect(JSON.parse(round2!.find((m: any) => m.role === 'tool').content).ok).toBe(false)
+    expect(chunks.some(c => c.type === 'action' && (c as any).action.type === 'show-analysis')).toBe(false)
+  })
+})

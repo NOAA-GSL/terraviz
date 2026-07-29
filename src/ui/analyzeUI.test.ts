@@ -627,3 +627,44 @@ describe('region outline', () => {
     expect(o.shown()).toHaveLength(0)
   })
 })
+
+describe('§A6 — opening pre-scoped from an Orbit chip', () => {
+  it('opens on the region it was handed, overriding the sticky choice', () => {
+    // The scope is deliberately sticky across opens within a session,
+    // which is right for someone comparing regions by hand — and the
+    // one wrong answer available when arriving from "the smoke is
+    // worst over Alabama".
+    initAnalyzeUI(makeSource())
+    openAnalyzeUI()
+    select().value = 'named:Alaska'
+    select().dispatchEvent(new Event('change', { bubbles: true }))
+    closeAnalyzeUI()
+
+    openAnalyzeUI(null, { kind: 'named', name: 'Alabama' })
+    expect(select().value).toBe('named:Alabama')
+  })
+
+  it('computes against that region, not merely displays it', () => {
+    initAnalyzeUI(makeSource({
+      frame: () => ({
+        snapshot: snap(16, 16, (_x, y) => (y < 4 ? 240 : 40)),
+        scale: SCALE,
+        options: OPTIONS,
+      }),
+    }))
+    openAnalyzeUI(null, { kind: 'named', name: 'Mexico' })
+    // Mexico sits well south of the hot northern band.
+    expect(currentResult()!.mean).toBeCloseTo(40, 6)
+  })
+
+  it('still honours the sticky choice when opened with no preset', () => {
+    initAnalyzeUI(makeSource())
+    openAnalyzeUI()
+    select().value = 'named:Alaska'
+    select().dispatchEvent(new Event('change', { bubbles: true }))
+    closeAnalyzeUI()
+
+    openAnalyzeUI()
+    expect(select().value).toBe('named:Alaska')
+  })
+})

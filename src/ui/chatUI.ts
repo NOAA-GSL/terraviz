@@ -51,6 +51,9 @@ export interface ChatCallbacks {
   onAddMarker: (lat: number, lng: number, label?: string) => void
   onToggleLabels: (visible: boolean) => void
   onHighlightRegion: (geojson: GeoJSON.GeoJSON, label?: string) => void
+  /** §A6 — open the Analyze panel on the region Orbit just measured.
+   *  Optional: a host without the panel simply renders no chip. */
+  onShowAnalysis?: (scope: 'dataset' | 'view' | 'named', regionName?: string) => void
   getMapViewContext: () => MapViewContext | null
   getDatasets: () => Dataset[]
   getCurrentDataset: () => Dataset | null
@@ -1416,7 +1419,14 @@ async function handleSend(): Promise<void> {
           // the sibling load-dataset / fly-to / set-time actions the
           // <<EVENT:ID>> marker expanded into), so it renders but is never
           // deferred for execution.
-          if (action.type !== 'load-dataset' && action.type !== 'event-citation') {
+          if (
+            action.type !== 'load-dataset'
+            && action.type !== 'event-citation'
+            // Display-only too: opening a panel is the user's click to
+            // make, not something to replay when a dataset finishes
+            // loading.
+            && action.type !== 'show-analysis'
+          ) {
             pendingGlobeActions.push(action)
           }
           updateStreamingMessage(docentMsg)
@@ -1793,6 +1803,17 @@ function renderActions(actions: ChatAction[]): string {
       // the label.
       return `<button class="chat-action-btn chat-action-frame" data-dataset-id="${escapeAttr(a.datasetId)}" data-frame-query="${escapeAttr(a.frameQuery)}" aria-label="${escapeAttr(t('chat.action.loadFrame.aria', { name: a.displayName }))}"><span class="chat-action-title">${escapeHtml(a.displayName)}</span> <span class="chat-action-load">${escapeHtml(t('chat.action.loadFrame'))}</span></button>`
     }
+    if (a.type === 'show-analysis') {
+      // Rendered only where the host wired the panel — a chip that
+      // opens nothing is worse than no chip.
+      if (!callbacks?.onShowAnalysis) return ''
+      const label = a.scope === 'named' && a.regionName
+        ? t('chat.action.analyzeRegion', { region: a.regionName })
+        : a.scope === 'view'
+          ? t('chat.action.analyzeView')
+          : t('chat.action.analyzeDataset')
+      return `<button class="chat-action-btn chat-action-analyze" data-analyze-scope="${escapeAttr(a.scope)}"${a.regionName ? ` data-analyze-region="${escapeAttr(a.regionName)}"` : ''} aria-label="${escapeAttr(t('chat.action.analyze.aria', { region: a.regionName ?? label }))}"><span class="chat-action-title">${escapeHtml(label)}</span></button>`
+    }
     if (a.type === 'event-citation') {
       // Cited current-event card. Display-only: the sibling load-dataset /
       // fly-to / set-time actions (expanded from the same <<EVENT:ID>>
@@ -1818,6 +1839,19 @@ function wireActionButtons(container: Element): void {
   container.querySelectorAll<HTMLElement>('.chat-action-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       const id = btn.dataset.datasetId
+      // §A6 — the Analyze chip carries no dataset id, so it has to be
+      // handled before the `load-dataset` path rather than falling
+      // through it. Exclusive for the same reason the frame branch is:
+      // an unbound host callback should be a quiet no-op, not a
+      // surprise dataset load.
+      const analyzeScope = btn.dataset.analyzeScope
+      if (analyzeScope) {
+        callbacks?.onShowAnalysis?.(
+          analyzeScope as 'dataset' | 'view' | 'named',
+          btn.dataset.analyzeRegion,
+        )
+        return
+      }
       // Phase 3pg/C — frame-load buttons carry a `data-frame-query`
       // attribute and route through `onLoadFrame` instead. The
       // analytics + dataset-load bookkeeping below stays on the

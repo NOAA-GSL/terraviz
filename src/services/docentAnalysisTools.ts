@@ -179,9 +179,19 @@ export function executeProbeValue(args: Record<string, unknown>): ProbeValueResu
  * somewhere specific, and answering about everywhere under that
  * region's name would be a wrong answer rather than a missing one.
  */
+export interface ResolvedScope {
+  /** Which surface the Analyze panel would need to select to show the
+   *  same thing. `bbox` has no equivalent in the panel's picker, which
+   *  is why the chip is not offered for it. */
+  kind: 'dataset' | 'view' | 'named' | 'bbox'
+  /** Display name, when `kind === 'named'` — resolved through the
+   *  region table, so the chip and the panel agree on the spelling. */
+  name?: string
+}
+
 function resolveScope(
   args: Record<string, unknown>,
-): { bounds: LatLonBounds | null; label: string } | { error: string } {
+): { bounds: LatLonBounds | null; label: string; scope: ResolvedScope } | { error: string } {
   const name = typeof args.region_name === 'string' ? args.region_name.trim() : ''
   if (name) {
     const entry = resolveRegion(name)
@@ -189,7 +199,7 @@ function resolveScope(
       return { error: `Unknown region "${name}". Use a bbox, or omit the region for the whole dataset.` }
     }
     const [w, s, e, n] = entry.bounds
-    return { bounds: { n, s, w, e }, label: entry.name }
+    return { bounds: { n, s, w, e }, label: entry.name, scope: { kind: 'named', name: entry.name } }
   }
   const bbox = args.bbox as Record<string, unknown> | undefined
   if (bbox && typeof bbox === 'object') {
@@ -198,15 +208,15 @@ function resolveScope(
     const w = Number(bbox.west ?? bbox.w)
     const e = Number(bbox.east ?? bbox.e)
     if ([n, s, w, e].every(Number.isFinite)) {
-      return { bounds: { n, s, w, e }, label: 'the requested area' }
+      return { bounds: { n, s, w, e }, label: 'the requested area', scope: { kind: 'bbox' } }
     }
     return { error: 'bbox needs finite north, south, west and east.' }
   }
   if (args.region === 'view') {
     const visible = source?.visibleBounds() ?? null
-    if (visible) return { bounds: visible, label: 'the current view' }
+    if (visible) return { bounds: visible, label: 'the current view', scope: { kind: 'view' } }
   }
-  return { bounds: null, label: 'the whole dataset' }
+  return { bounds: null, label: 'the whole dataset', scope: { kind: 'dataset' } }
 }
 
 export interface SummarizeRegionResult {
@@ -214,6 +224,9 @@ export interface SummarizeRegionResult {
   error?: string
   dataset?: string
   region?: string
+  /** Not sent to the model — consumed by `docentService` to decide
+   *  whether the Analyze chip can be offered for this answer. */
+  scope?: ResolvedScope
   units?: string
   mean?: number
   median?: number
@@ -257,6 +270,7 @@ export function executeSummarizeRegion(args: Record<string, unknown>): Summarize
     ok: true,
     dataset: source?.datasetTitle() ?? undefined,
     region: scope.label,
+    scope: scope.scope,
     units: stats.units,
     mean: round3(stats.mean),
     median: round3(stats.median),
@@ -282,6 +296,9 @@ export interface FindExtremumResult {
   error?: string
   dataset?: string
   region?: string
+  /** Not sent to the model — consumed by `docentService` to decide
+   *  whether the Analyze chip can be offered for this answer. */
+  scope?: ResolvedScope
   kind?: 'max' | 'min'
   lat?: number
   lon?: number
@@ -319,6 +336,7 @@ export function executeFindExtremum(args: Record<string, unknown>): FindExtremum
     ok: true,
     dataset: source?.datasetTitle() ?? undefined,
     region: scope.label,
+    scope: scope.scope,
     kind,
     lat: round3(found.lat),
     lon: round3(found.lon),

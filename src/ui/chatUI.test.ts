@@ -77,6 +77,7 @@ function makeCallbacks(): MockCallbacks {
     announce: vi.fn(),
     onOpenBrowse: vi.fn(),
     onVoiceAudioFocus: vi.fn(),
+    onShowAnalysis: vi.fn(),
   } as MockCallbacks
 }
 
@@ -1085,5 +1086,69 @@ describe('feedback mechanism', () => {
     })
 
     fetchSpy.mockRestore()
+  })
+})
+
+describe('§A6 — the Analyze chip', () => {
+  /** Stream one show-analysis action and return the rendered chip. */
+  async function renderChip(
+    action: Record<string, unknown>,
+    cb = makeCallbacks(),
+  ): Promise<HTMLButtonElement | null> {
+    const { processMessage } = await import('../services/docentService')
+    vi.mocked(processMessage).mockImplementation(async function* () {
+      yield { type: 'delta' as const, text: 'The mean is 200 mg m-2.' }
+      yield { type: 'action' as const, action: action as never }
+      yield { type: 'done' as const, fallback: false }
+    })
+    initChatUI(cb)
+    openChat()
+    ;(document.getElementById('chat-input') as HTMLTextAreaElement).value = 'how bad is it?'
+    ;(document.getElementById('chat-send') as HTMLButtonElement).click()
+    await vi.waitFor(() => expect(getMessages()).toHaveLength(2))
+    await flush()
+    return document.querySelector<HTMLButtonElement>('.chat-action-analyze')
+  }
+
+  it('names the region it will open', async () => {
+    const chip = await renderChip({ type: 'show-analysis', scope: 'named', regionName: 'Colorado' })
+    expect(chip).not.toBeNull()
+    expect(chip!.textContent).toContain('Colorado')
+  })
+
+  it('opens Analyze on that region when clicked', async () => {
+    const cb = makeCallbacks()
+    const chip = await renderChip(
+      { type: 'show-analysis', scope: 'named', regionName: 'Colorado' },
+      cb,
+    )
+    chip!.click()
+    expect(cb.onShowAnalysis).toHaveBeenCalledWith('named', 'Colorado')
+  })
+
+  it('never falls through to loading a dataset', async () => {
+    // The chip carries no dataset id, so without its own exclusive
+    // branch it would reach the load-dataset path with `undefined` —
+    // the same footgun the frame-load branch guards against.
+    const cb = makeCallbacks()
+    const chip = await renderChip({ type: 'show-analysis', scope: 'dataset' }, cb)
+    chip!.click()
+    expect(cb.onLoadDataset).not.toHaveBeenCalled()
+  })
+
+  it('is not rendered by a host that cannot open the panel', async () => {
+    // A chip that opens nothing is worse than no chip.
+    const cb = makeCallbacks()
+    delete (cb as Record<string, unknown>).onShowAnalysis
+    const chip = await renderChip({ type: 'show-analysis', scope: 'named', regionName: 'Colorado' }, cb)
+    expect(chip).toBeNull()
+  })
+
+  it('labels the whole-dataset and view scopes differently', async () => {
+    const whole = await renderChip({ type: 'show-analysis', scope: 'dataset' })
+    expect(whole!.textContent).not.toContain('undefined')
+    clearChat()
+    const view = await renderChip({ type: 'show-analysis', scope: 'view' })
+    expect(view!.textContent).not.toBe(whole!.textContent)
   })
 })
