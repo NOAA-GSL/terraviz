@@ -867,6 +867,18 @@ describe('§A6 — the value carve-out', () => {
     expect(prompt).toMatch(/what is it at[^|]*\|[^|]*probe_value/i)
   })
 
+  it('tells the model the globe already moved, so it does not fly twice', () => {
+    // The app emits fly_to/add_marker for find_extremum now. If the
+    // model also calls them, the globe moves twice — and the second
+    // move is the one that can carry a mangled sign.
+    const prompt = buildSystemPrompt([], null, 'general', false, null, null, null, undefined, true)
+    expect(prompt).toMatch(/find_extremum` moves the globe for you/i)
+    expect(prompt).toMatch(/do not call `fly_to` or `add_marker` yourself/i)
+    // The signed-degrees rule survives for any other fly_to call.
+    expect(prompt).toMatch(/signed decimal degrees/i)
+    expect(prompt).toMatch(/northern China/i)
+  })
+
   it('forbids answering a values question by recommending another dataset', () => {
     // The specific wrong turn observed live: the related-dataset reflex
     // firing on a question that was never about discovery.

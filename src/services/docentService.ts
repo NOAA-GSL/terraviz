@@ -14,6 +14,7 @@ import {
   executeProbeValue,
   executeSummarizeRegion,
   isAnalysisAvailable,
+  type FindExtremumResult,
   type ResolvedScope,
 } from './docentAnalysisTools'
 import { fetchApprovedEvents, type PublicEvent } from './eventsService'
@@ -1781,6 +1782,11 @@ export async function* processMessage(
       let accumulatedText = ''
       // §A6 — one Analyze chip per distinct region per attempt.
       const analysisChipsThisAttempt = new Set<string>()
+      // §A6 — and one camera move. The first successful find_extremum
+      // is the answer to the question; a later one is usually the
+      // model comparing regions, and flying on each would drag the
+      // globe around mid-explanation.
+      let analysisFlewThisAttempt = false
       // Phase 3: each attempt maintains its own conversation state that may
       // grow across multiple streamChat rounds as the LLM calls search_catalog
       // and we feed the results back.
@@ -2112,6 +2118,36 @@ export async function* processMessage(
               // picker showing a region it cannot select. Deduped per
               // turn, because a model comparing three regions would
               // otherwise stack three chips on one message.
+              // §A6 — move the globe ourselves rather than asking the
+              // model to call `fly_to` with the coordinates it just
+              // read back.
+              //
+              // It had to transcribe a signed float immediately after
+              // writing it as "119.5 degrees W", and dropped the minus:
+              // the answer said Washington state, the globe went to
+              // northern China. Prompting against that is a warning;
+              // this removes the step. The rendered "Flying to ..."
+              // line is derived from the action's own lat/lon, so it
+              // now agrees with the sentence above it by construction.
+              if (call.name === 'find_extremum' && result.ok && !analysisFlewThisAttempt) {
+                const found = result as FindExtremumResult
+                if (Number.isFinite(found.lat) && Number.isFinite(found.lon)) {
+                  analysisFlewThisAttempt = true
+                  yield { type: 'action', action: { type: 'fly-to', lat: found.lat!, lon: found.lon! } }
+                  // The pin names what was measured, so the place stays
+                  // labelled after the camera settles.
+                  const label = `${found.value ?? ''} ${found.units ?? ''}`.trim()
+                  yield {
+                    type: 'action',
+                    action: {
+                      type: 'add-marker',
+                      lat: found.lat!,
+                      lng: found.lon!,
+                      ...(label ? { label } : {}),
+                    },
+                  }
+                }
+              }
               if (result.ok && resultScope && resultScope.kind !== 'bbox') {
                 const key = `${resultScope.kind}:${resultScope.name ?? ''}`
                 if (!analysisChipsThisAttempt.has(key)) {

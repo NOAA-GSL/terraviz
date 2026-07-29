@@ -2803,3 +2803,110 @@ describe('processMessage — §A6 value tools', () => {
     expect(chunks.some(c => c.type === 'action' && (c as any).action.type === 'show-analysis')).toBe(false)
   })
 })
+
+describe('processMessage — §A6 find_extremum moves the globe itself', () => {
+  const SCALE2 = {
+    stops: [{ t: 0, rgba: [0, 0, 0, 0] }, { t: 1, rgba: [255, 255, 255, 255] }],
+    vmin: 0, vmax: 255, units: 'mg m-2', transparentRange: 12 / 256,
+  } as any
+  const OPTIONS2 = { boundingBox: { n: 85, s: 5, w: -175, e: -20 }, colorScale: SCALE2 } as any
+
+  function peakSource() {
+    // One hot texel in the western half, so the extremum lands at a
+    // negative longitude — the sign is the whole point of this.
+    const w = 32, h = 32
+    const data = new Uint8Array(w * h)
+    data.fill(80)
+    data[8 * w + 4] = 250
+    return {
+      frame: () => ({ snapshot: { data, width: w, height: h }, scale: SCALE2, options: OPTIONS2 }),
+      datasetTitle: () => 'Wildfire Smoke Overhead',
+      visibleBounds: () => ({ n: 85, s: 5, w: -175, e: -20 }),
+    } as any
+  }
+
+  async function run(calls: { id: string; name: string; arguments: Record<string, unknown> }[]) {
+    const { streamChat } = await import('./llmProvider')
+    const mocked = vi.mocked(streamChat)
+    let first = true
+    mocked.mockImplementation(async function* () {
+      if (first) {
+        first = false
+        for (const c of calls) yield { type: 'tool_call' as const, call: c }
+        yield { type: 'done' as const }
+      } else {
+        yield { type: 'delta' as const, text: 'The peak is over the west.' }
+        yield { type: 'done' as const }
+      }
+    })
+    const chunks: DocentStreamChunk[] = []
+    for await (const c of processMessage('where is it worst?', [], datasets, null, baseConfig)) chunks.push(c)
+    return chunks
+  }
+
+  const actions = (chunks: DocentStreamChunk[], type: string) =>
+    chunks.filter(c => c.type === 'action' && (c as any).action.type === type).map(c => (c as any).action)
+
+  afterEach(async () => {
+    const { registerAnalysisSource } = await import('./docentAnalysisTools')
+    registerAnalysisSource(null)
+  })
+
+  it('flies to the extremum without the model transcribing anything', async () => {
+    const { registerAnalysisSource } = await import('./docentAnalysisTools')
+    registerAnalysisSource(peakSource())
+    const chunks = await run([{ id: 'c1', name: 'find_extremum', arguments: { kind: 'max' } }])
+    const fly = actions(chunks, 'fly-to')
+    expect(fly).toHaveLength(1)
+    // Western hemisphere: the sign survives because nothing rewrote it.
+    expect(fly[0].lon).toBeLessThan(0)
+    expect(fly[0].lat).toBeGreaterThan(5)
+    expect(fly[0].lat).toBeLessThan(85)
+  })
+
+  it('drops a pin labelled with the value', async () => {
+    const { registerAnalysisSource } = await import('./docentAnalysisTools')
+    registerAnalysisSource(peakSource())
+    const chunks = await run([{ id: 'c1', name: 'find_extremum', arguments: { kind: 'max' } }])
+    const marker = actions(chunks, 'add-marker')
+    expect(marker).toHaveLength(1)
+    expect(marker[0].label).toContain('mg m-2')
+    // add-marker names the longitude `lng`; a mismatch here would pin
+    // the marker somewhere the camera did not go.
+    expect(marker[0].lng).toBeCloseTo(actions(chunks, 'fly-to')[0].lon, 9)
+    expect(marker[0].lat).toBeCloseTo(actions(chunks, 'fly-to')[0].lat, 9)
+  })
+
+  it('moves once per turn, not once per call', async () => {
+    // A model comparing two regions calls the tool twice; dragging the
+    // globe on each would haul the view around mid-explanation.
+    const { registerAnalysisSource } = await import('./docentAnalysisTools')
+    registerAnalysisSource(peakSource())
+    const chunks = await run([
+      { id: 'c1', name: 'find_extremum', arguments: { kind: 'max' } },
+      { id: 'c2', name: 'find_extremum', arguments: { kind: 'min' } },
+    ])
+    expect(actions(chunks, 'fly-to')).toHaveLength(1)
+    expect(actions(chunks, 'add-marker')).toHaveLength(1)
+  })
+
+  it('does not move the globe when the tool refused', async () => {
+    const { registerAnalysisSource } = await import('./docentAnalysisTools')
+    registerAnalysisSource(peakSource())
+    const chunks = await run([
+      { id: 'c1', name: 'find_extremum', arguments: { region_name: 'Mordor' } },
+    ])
+    expect(actions(chunks, 'fly-to')).toHaveLength(0)
+    expect(actions(chunks, 'add-marker')).toHaveLength(0)
+  })
+
+  it('does not move the globe for the other two tools', async () => {
+    const { registerAnalysisSource } = await import('./docentAnalysisTools')
+    registerAnalysisSource(peakSource())
+    const chunks = await run([
+      { id: 'c1', name: 'summarize_region', arguments: {} },
+      { id: 'c2', name: 'probe_value', arguments: { lat: 45, lon: -100 } },
+    ])
+    expect(actions(chunks, 'fly-to')).toHaveLength(0)
+  })
+})
