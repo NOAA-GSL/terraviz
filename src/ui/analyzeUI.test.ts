@@ -20,6 +20,7 @@ import {
 } from './analyzeUI'
 import { buildCsvText, downloadCsv } from './analyzeExport'
 import { buildHistogram, summarize } from '../services/datasetStats'
+import { resolveRegion } from '../data/regions'
 import { DEFAULT_DISPLAY } from '../services/colorScaleDisplay'
 import type { LumaSnapshot } from '../services/glLumaSampler'
 import type { ColorScale, DatasetOverlayOptions } from '../types'
@@ -251,5 +252,42 @@ describe('export button', () => {
     ;(document.querySelector('.analyze-export') as HTMLButtonElement).click()
     expect(spy).toHaveBeenCalled()
     URL.createObjectURL = original
+  })
+})
+
+describe('region names that cannot be resolved', () => {
+  // `getRegionNames` returns display names; `resolveRegion` looks up
+  // lowercased aliases. At least one entry's display name is not among
+  // its own aliases, so offering the raw list produced a region that
+  // fell through to whole-dataset statistics wearing that region's
+  // label — real numbers, wrong answer, no error.
+  it('never offers a region it cannot locate', () => {
+    initAnalyzeUI(makeSource())
+    openAnalyzeUI()
+    const named = [...select().options]
+      .map((o) => o.value)
+      .filter((v) => v.startsWith('named:'))
+      .map((v) => v.slice(6))
+    expect(named.length).toBeGreaterThan(0)
+    for (const name of named) {
+      expect(resolveRegion(name), `"${name}" is offered but does not resolve`).not.toBeNull()
+    }
+  })
+
+  it('says so rather than silently measuring everything', () => {
+    initAnalyzeUI(makeSource())
+    openAnalyzeUI()
+    // Force the state directly: the picker no longer offers one, but
+    // the regions table can change underneath it.
+    const s = select()
+    const opt = document.createElement('option')
+    opt.value = 'named:Not A Real Place'
+    s.appendChild(opt)
+    s.value = 'named:Not A Real Place'
+    s.dispatchEvent(new Event('change', { bubbles: true }))
+
+    expect(currentResult()).toBeNull()
+    expect(document.querySelector('.analyze-stats')).toBeNull()
+    expect(document.querySelector('.analyze-message')).not.toBeNull()
   })
 })

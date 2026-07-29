@@ -166,7 +166,16 @@ function buildScopePicker(): HTMLElement {
   // Named regions come from the same table the LLM's `<<REGION:…>>`
   // marker resolves against, so "Europe" means the same box wherever a
   // user meets it.
-  for (const name of getRegionNames()) add(`named:${name}`, name)
+  //
+  // Filtered by whether the display name resolves back to a box:
+  // `getRegionNames` returns display names while `resolveRegion` looks
+  // up lowercased *aliases*, and at least one entry's display name is
+  // not among its own aliases. Offering it produced a region that
+  // silently fell through to the whole dataset — the worst outcome
+  // available, since the numbers were real and the label was wrong.
+  for (const name of getRegionNames()) {
+    if (resolveRegion(name)) add(`named:${name}`, name)
+  }
 
   select.value = scopeToValue(scope)
   select.addEventListener('change', () => {
@@ -189,17 +198,34 @@ function valueToScope(value: string): AnalyzeScope {
   return { kind: 'dataset' }
 }
 
-/** Resolve the picked scope to a geographic box, or null for "the
- *  whole dataset" (which needs no window at all). */
-function boundsForScope(s: AnalyzeScope, src: AnalyzeSource): LatLonBounds | null {
-  if (s.kind === 'view') return src.visibleBounds()
+/**
+ * Resolve the picked scope to a geographic box.
+ *
+ * Three outcomes, deliberately distinct. `null` used to mean both
+ * "analyse everything" and "I could not work out what you picked",
+ * which turned an unresolvable region into whole-dataset statistics
+ * wearing that region's name. A wrong answer delivered confidently is
+ * worse than an error, so the unknown case is now its own state.
+ */
+type ScopeBounds =
+  | { kind: 'all' }
+  | { kind: 'box'; bounds: LatLonBounds }
+  | { kind: 'unknown' }
+
+function boundsForScope(s: AnalyzeScope, src: AnalyzeSource): ScopeBounds {
+  if (s.kind === 'view') {
+    const bounds = src.visibleBounds()
+    // No map yet is "everything", not an error: the whole dataset is a
+    // truthful answer to "what can I see" before the camera exists.
+    return bounds ? { kind: 'box', bounds } : { kind: 'all' }
+  }
   if (s.kind === 'named') {
     const region = resolveRegion(s.name)
-    if (!region) return null
+    if (!region) return { kind: 'unknown' }
     const [w, south, e, n] = region.bounds
-    return { n, s: south, w, e }
+    return { kind: 'box', bounds: { n, s: south, w, e } }
   }
-  return null
+  return { kind: 'all' }
 }
 
 function refresh(body: HTMLElement): void {
@@ -221,9 +247,15 @@ function refresh(body: HTMLElement): void {
   }
 
   const { snapshot, scale, options } = frame
-  const bounds = boundsForScope(scope, src)
-  const window = bounds ? windowForBounds(snapshot, bounds, options) : undefined
-  if (bounds && !window) {
+  const scoped = boundsForScope(scope, src)
+  if (scoped.kind === 'unknown') {
+    body.appendChild(message(t('analyze.empty.unknownRegion')))
+    return
+  }
+  const window = scoped.kind === 'box'
+    ? windowForBounds(snapshot, scoped.bounds, options)
+    : undefined
+  if (scoped.kind === 'box' && !window) {
     body.appendChild(message(t('analyze.empty.outsideDataset')))
     return
   }

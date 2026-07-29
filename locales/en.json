@@ -5,6 +5,7 @@
   "analyze.empty.noValues": "No data in this region.",
   "analyze.empty.outsideDataset": "This region falls outside the dataset's coverage.",
   "analyze.empty.unavailable": "Analysis isn't available right now.",
+  "analyze.empty.unknownRegion": "That region couldn't be located, so there's nothing to measure.",
   "analyze.export": "Export CSV",
   "analyze.histogram.aria": "Distribution of values, coloured by the map's own palette",
   "analyze.precision": "Values are resolved to about {step}; treat smaller differences as noise.",
