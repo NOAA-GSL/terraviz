@@ -126,7 +126,7 @@ Each of these is a pure function over a luma array, the `ColorScale`, and the
 | Idea | Notes |
 |---|---|
 | **Region statistics** | A drawn box, the current view, or a named region through the existing `resolveRegion()` in [`src/data/regions.ts`](../src/data/regions.ts). Count, coverage fraction, min/max, mean, median, p10/p90, and area in km². |
-| **Histogram** | Falls out exactly. There are precisely 256 distinct source values, so the natural histogram is a 256-bucket count of the luma array — no bin-width choice, no binning bias, and percentiles read off it are exact to within one luma step. Paint each bar with its own palette colour and the chart explains the globe. |
+| **Histogram** | Falls out exactly. There are precisely 256 distinct source values, so the natural histogram is a 256-bucket count of the luma array — no bin-width choice, no binning bias, and percentiles read off it are exact to within one luma step. Paint each bar with its own palette colour and the chart explains the globe. (The *chart* aggregates several codes per bar; the transport cannot populate all 256. See §The transport lattice.) |
 | **Transect** | Click two points → great-circle interpolate N samples → `latLonToTexelUv` each → plot value against distance, re-rendering as the endpoints drag. The standard cross-section tool in every desktop met/ocean package, absent from every web globe we know of, and roughly forty lines on top of code that already exists. |
 | **Contours** | Marching squares over the luma array at a chosen physical threshold → GeoJSON LineStrings → a MapLibre line source. Also yields **area above threshold** by counting texels weighted by their own cell area — "how many km² are above AQI 150" is a question a newsroom actually asks. |
 | **Zonal mean profile** | Average each image row → one number per latitude → a sparkline down the globe's edge. A standard climate diagnostic, and nearly free once a snapshot exists. |
@@ -299,11 +299,16 @@ pinned by round-trip tests.
   exception of temporal composites, which stay on the GPU precisely because they
   *are* per-frame.
 
-- **The 256-bin histogram is the canonical distribution.** Bin edges are the 256
-  luma codes, so the histogram is exact rather than a choice.
-  *Tradeoff:* the UI cannot offer "more bins," and explaining why is a support
-  burden. Worth it — a 40-bin histogram over 256 source levels would show comb
-  artifacts and invite the user to read structure that is quantisation.
+- **The 256-bin histogram is the canonical distribution; the chart is not drawn
+  at that resolution.** Bin edges are the 256 luma codes, so the model is exact
+  rather than a choice, and the statistics and the CSV export both come from it.
+  The chart aggregates four codes per bar, because the transport cannot populate
+  256 codes — see §The transport lattice below, which corrects this bullet's
+  original reasoning.
+  *Tradeoff:* the exported distribution and the drawn one are now at different
+  resolutions, so a reader comparing the CSV against the chart will find rows
+  the chart has merged. Accepted: the alternative is a chart that renders a
+  transport artifact as though it were a property of the field.
 
 - **Display transforms never alter reported values.** Stretch and re-palette
   change the LUT only.
@@ -500,6 +505,46 @@ extremum is the single most noise-sensitive statistic available, and
 `find_extremum` is the feature most likely to be quoted back. Keep the existing
 three-significant-digit convention from `formatProbeReading`, and state the
 uncertainty next to any headline number rather than in a footnote.
+
+**The transport lattice.** Found by building the histogram — it is the first
+surface in the repo that looks at *which* codes arrive rather than at what they
+decode to. The data path ships untagged
+([`cli/lib/ffmpeg-hls.ts`](../cli/lib/ffmpeg-hls.ts)), a decision the parent
+plan reversed onto after measurement because `-color_range pc` breaks Firefox
+and `tv` spends only 219 levels. Untagged works because "the encoder writes
+limited-range samples by swscale's default and both decoders expand them back,
+so the contraction and the expansion cancel." They cancel in **value** — max|e|
+1 luma step, inside the budget above. They do not cancel in **occupancy**: 256
+source codes squeeze through 219 and stretch back, so roughly one code in seven
+is unreachable on arrival.
+
+Measured on the published `north-america-smoke` frame 40, area-weighted over the
+whole globe:
+
+| | codes occupied above the nodata band | codes empty |
+|---|---|---|
+| source PNG | 243 | 1 |
+| after the range round trip | 209 | 35 |
+
+The 34 emptied codes sit about every 7. Drawn one bar per code that reads as a
+comb, which is what prompted this section. Two things follow:
+
+- `npm run check:luma-range` **cannot see this.** It fits a gain and checks the
+  endpoints, and a contract-then-expand round trip preserves both exactly. The
+  check verifies the property it was written to verify; occupancy is the residue
+  it is structurally blind to.
+- The round trip moves any given sample by at most one code, so aggregating a
+  few codes per bar recovers the true shape. At four codes per bar the mean
+  bar-to-bar ripple falls from 0.66 to 0.10, against 0.066 for the same field
+  read losslessly — what is left is the field's own raggedness. That is why the
+  chart draws 64 bars over a 256-bin model.
+
+The honest framing for the UI: a bar is ~1.6% of full scale where the error
+budget is ~0.4%, so the chart is coarser than the noise floor and finer than
+anything worth concluding from, and the per-value precision is stated
+separately. Fixing this at the encoder — `scale=in_range=full:out_range=full`
+plus `-color_range pc`, which measured 256/256 exact in Chrome — remains
+blocked on Firefox, and would not retroactively fix published rows.
 
 **Area weighting.** Equirectangular rows are not equal-area. This is not a
 polar-grid edge case here: the live RRFS rows span 5°N to 85°N, where `cos(lat)`

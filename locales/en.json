@@ -8,6 +8,7 @@
   "analyze.empty.unknownRegion": "That region couldn't be located, so there's nothing to measure.",
   "analyze.export": "Export CSV",
   "analyze.histogram.aria": "Distribution of values, coloured by the map's own palette",
+  "analyze.histogram.caption": "Each bar covers about {width}.",
   "analyze.precision": "Values are resolved to about {step}; treat smaller differences as noise.",
   "analyze.scope.dataset": "Whole dataset",
   "analyze.scope.label": "Region",

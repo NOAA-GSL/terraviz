@@ -29,7 +29,12 @@ import type { ColorScaleDisplay } from '../services/colorScaleDisplay'
 import type { ColorScale } from '../types/color-scale'
 import type { DatasetOverlayOptions } from '../types'
 import { getRegionNames, resolveRegion } from '../data/regions'
-import { formatStatValue, renderHistogram, renderStatTile } from './analyzeCharts'
+import {
+  formatStatValue,
+  histogramBucketValueWidth,
+  renderHistogram,
+  renderStatTile,
+} from './analyzeCharts'
 import { buildCsvText, downloadCsv } from './analyzeExport'
 import { t } from '../i18n'
 import { formatNumber } from '../i18n/format'
@@ -298,6 +303,7 @@ function refresh(body: HTMLElement): void {
   lastResult = { stats, hist, scale }
 
   body.appendChild(renderHistogram(hist, scale, src.display()))
+  body.appendChild(renderHistogramCaption(scale))
   body.appendChild(renderStats(stats))
   body.appendChild(renderCoverage(stats))
   body.appendChild(renderPrecisionNote(scale))
@@ -339,6 +345,23 @@ function renderCoverage(stats: RegionStats): HTMLElement {
   p.textContent = t('analyze.coverage', {
     percent: formatNumber(stats.coverage * 100, { maximumSignificantDigits: 2 }),
     count: formatNumber(stats.count),
+  })
+  return p
+}
+
+/**
+ * How wide a bar is, in the dataset's own units.
+ *
+ * The chart aggregates several luma codes per bar (see
+ * `analyzeCharts.renderHistogram` for why the transport makes that the
+ * honest resolution), so the reader is told what a bar actually covers
+ * rather than left to infer it from an unlabelled axis.
+ */
+function renderHistogramCaption(scale: ColorScale): HTMLElement {
+  const p = document.createElement('p')
+  p.className = 'analyze-caption'
+  p.textContent = t('analyze.histogram.caption', {
+    width: formatStatValue(histogramBucketValueWidth(scale), scale.units),
   })
   return p
 }

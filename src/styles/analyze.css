@@ -90,9 +90,9 @@
   gap: var(--space-3, 0.75rem);
 }
 
-/* Bars are one viewBox unit wide with no gaps, so the chart must not be
-   smoothed — an interpolated 256-bar distribution reads as a blurred
-   ramp rather than as a shape. */
+/* Bars abut with no gaps, so the chart must not be smoothed — an
+   interpolated distribution reads as a blurred ramp rather than as a
+   shape. */
 .analyze-histogram {
   inline-size: 100%;
   block-size: 4.5rem;
@@ -132,6 +132,7 @@
   overflow-wrap: anywhere;
 }
 
+.analyze-caption,
 .analyze-coverage,
 .analyze-precision,
 .analyze-message {
@@ -147,6 +148,14 @@
   padding-inline-start: 0.5rem;
   border-inline-start: 2px solid var(--color-accent, #4da3ff);
   opacity: 0.9;
+}
+
+/* Belongs to the chart above it, so it is pulled up out of the body's
+   gap and set quieter than the prose it sits among. */
+.analyze-caption {
+  margin-block-start: calc(var(--space-3, 0.75rem) * -0.6);
+  text-align: end;
+  opacity: 0.6;
 }
 
 .analyze-export {
