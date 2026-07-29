@@ -52,6 +52,10 @@ export interface AnalyzeSource {
   display(): ColorScaleDisplay
   /** Title of the dataset being analysed, for the CSV header. */
   datasetTitle(): string | null
+  /** Identity of that dataset, so the panel can tell when the globe
+   *  underneath it has been replaced. Title is not enough — two rows
+   *  can share one. */
+  datasetId(): string | null
 }
 
 /** Which region the statistics cover. */
@@ -65,6 +69,8 @@ let scope: AnalyzeScope = { kind: 'dataset' }
 let lastResult: { stats: RegionStats; hist: LumaHistogram; scale: ColorScale } | null = null
 let lastTrigger: HTMLElement | null = null
 let root: HTMLElement | null = null
+/** The dataset the numbers on screen were computed from. */
+let openedFor: string | null = null
 
 /**
  * Wire the panel to the app. Call once at boot.
@@ -88,9 +94,31 @@ export function isAnalyzeUIOpen(): boolean {
 export function closeAnalyzeUI(): void {
   root?.remove()
   root = null
+  openedFor = null
   document.removeEventListener('keydown', onEscape, true)
   lastTrigger?.focus()
   lastTrigger = null
+}
+
+/**
+ * Close the panel when the globe under it changes to a different
+ * dataset.
+ *
+ * The numbers are computed once, on open, against one frame of one
+ * dataset. Swapping the dataset while the panel stays open leaves a
+ * statistics table describing something that is no longer on screen —
+ * every figure real, every figure about the wrong thing, and nothing
+ * saying so. That is precisely the failure this module's own docstring
+ * names, and it survived because the existing teardown only fired when
+ * *no* panel had a data-encoded dataset left; swapping one for another
+ * kept it open.
+ *
+ * Closed rather than recomputed on purpose. Recomputing would spend a
+ * full-frame readback the viewer did not ask for, and the region they
+ * picked belonged to the dataset that just left.
+ */
+export function notifyAnalyzeDatasetChanged(datasetId: string | null): void {
+  if (root && openedFor !== datasetId) closeAnalyzeUI()
 }
 
 function onEscape(ev: KeyboardEvent): void {
@@ -138,6 +166,7 @@ export function openAnalyzeUI(triggeredBy?: HTMLElement | null): HTMLElement {
 
   document.body.appendChild(root)
   document.addEventListener('keydown', onEscape, true)
+  openedFor = source?.datasetId() ?? null
   refresh(body)
   return root
 }

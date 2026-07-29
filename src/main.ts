@@ -36,7 +36,7 @@ import { openCreditsPanel } from './ui/creditsPanel'
 import { initChatUI, openChat, openChatSettings, notifyDatasetChanged, showChatTrigger, hideChatTrigger, closeChat, flushPendingGlobeActions } from './ui/chatUI'
 import { loadViewPreferences, saveViewPreferences, type ViewPreferences } from './utils/viewPreferences'
 import { renderColorbar, openDisplayControls, closeDisplayControls } from './ui/colorbarUI'
-import { initAnalyzeUI, closeAnalyzeUI } from './ui/analyzeUI'
+import { initAnalyzeUI, closeAnalyzeUI, notifyAnalyzeDatasetChanged } from './ui/analyzeUI'
 import { buildHistogram } from './services/datasetStats'
 import { DEFAULT_DISPLAY, type ColorScaleDisplay } from './services/colorScaleDisplay'
 import { RENDER_ENCODING_DATA_LUMA } from './types/color-scale'
@@ -419,6 +419,7 @@ class InteractiveSphere {
         visibleBounds: () => this.viewports.getPrimary()?.visibleBounds() ?? null,
         display: () => this.colorScaleDisplay,
         datasetTitle: () => this.appState.currentDataset?.title ?? null,
+        datasetId: () => this.appState.currentDataset?.id ?? null,
       })
       // Playlists — mount the manager panel host and wire the
       // playback state machine to the regular loadDataset flow.
@@ -1670,6 +1671,10 @@ class InteractiveSphere {
     if (!anyColorbar) {
       closeDisplayControls()
       closeAnalyzeUI()
+    } else {
+      // Still something to colour, but possibly a different dataset —
+      // the Analyze panel's numbers belong to the one it opened on.
+      notifyAnalyzeDatasetChanged(this.appState.currentDataset?.id ?? null)
     }
   }
 

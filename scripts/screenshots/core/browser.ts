@@ -82,7 +82,11 @@ export function assertSafeOutDir(dir: string): void {
  * gate keeps testing what it always tested.
  */
 export function launchBrowser(opts: { args?: string[] } = {}): Promise<Browser> {
-  const executablePath = process.env.PLAYWRIGHT_CHROMIUM_PATH || undefined
+  // Trimmed, and empty falls back to Playwright's own resolution: an
+  // env var templated to `""` or `" "` would otherwise be handed to
+  // Playwright verbatim and fail to launch, which is a worse failure
+  // than not setting it at all.
+  const executablePath = process.env.PLAYWRIGHT_CHROMIUM_PATH?.trim() || undefined
   return chromium.launch({ args: opts.args, executablePath })
 }
 

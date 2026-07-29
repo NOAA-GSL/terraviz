@@ -116,8 +116,14 @@ function stubGl(luma = 200, readable: 'red' | 'rgba' = 'red') {
     if (args.length > 6) { rec.attachments.push(args[2] as number); return }
     return (rawTexImage2D as () => void)()
   }) as typeof gl.texImage2D
+  // The real factory is captured *before* the spy replaces it. Calling
+  // `document.createElement` from inside the mock would re-enter the
+  // spy and recurse until the stack gives out — latent here only
+  // because these tests happen to ask for canvases, and a trap for the
+  // next test that asks for anything else.
+  const realCreateElement = document.createElement.bind(document)
   vi.spyOn(document, 'createElement').mockImplementation(((tag: string) => {
-    if (tag !== 'canvas') return document.createElement(tag)
+    if (tag !== 'canvas') return realCreateElement(tag)
     return { width: 0, height: 0, getContext: () => gl } as unknown as HTMLCanvasElement
   }) as typeof document.createElement)
   return rec
@@ -246,8 +252,9 @@ describe('createGlLumaSampler', () => {
   })
 
   it('returns null when WebGL2 is unavailable, rather than falling back to 2D', () => {
+    const realCreateElement = document.createElement.bind(document)
     vi.spyOn(document, 'createElement').mockImplementation(((tag: string) => {
-      if (tag !== 'canvas') return document.createElement(tag)
+      if (tag !== 'canvas') return realCreateElement(tag)
       return { width: 0, height: 0, getContext: () => null } as unknown as HTMLCanvasElement
     }) as typeof document.createElement)
     // A 2D fallback is the path this module replaces; reintroducing one

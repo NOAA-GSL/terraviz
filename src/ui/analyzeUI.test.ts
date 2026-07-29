@@ -15,6 +15,7 @@ import {
   currentResult,
   initAnalyzeUI,
   isAnalyzeUIOpen,
+  notifyAnalyzeDatasetChanged,
   openAnalyzeUI,
   type AnalyzeSource,
 } from './analyzeUI'
@@ -54,6 +55,7 @@ function makeSource(over: Partial<AnalyzeSource> = {}): AnalyzeSource {
     visibleBounds: () => ({ n: 85, s: 5, w: -175, e: -20 }),
     display: () => DEFAULT_DISPLAY,
     datasetTitle: () => 'Wildfire Smoke Overhead',
+    datasetId: () => 'INTERNAL_SMOKE_COLUMN',
     ...over,
   }
 }
@@ -289,5 +291,43 @@ describe('region names that cannot be resolved', () => {
     expect(currentResult()).toBeNull()
     expect(document.querySelector('.analyze-stats')).toBeNull()
     expect(document.querySelector('.analyze-message')).not.toBeNull()
+  })
+})
+
+describe('the globe changing underneath the panel', () => {
+  // The panel computes once, on open. Left open across a dataset swap
+  // it showed a statistics table describing something no longer on
+  // screen — every figure real, every figure about the wrong thing.
+  // The old teardown only fired when *no* dataset carried a palette, so
+  // swapping one data-encoded row for another kept it open.
+  it('closes when a different dataset is loaded', () => {
+    initAnalyzeUI(makeSource({ datasetId: () => 'SMOKE_COLUMN' }))
+    openAnalyzeUI()
+    expect(isAnalyzeUIOpen()).toBe(true)
+
+    notifyAnalyzeDatasetChanged('SMOKE_NEAR_SURFACE')
+    expect(isAnalyzeUIOpen()).toBe(false)
+  })
+
+  it('stays open when the same dataset is re-announced', () => {
+    // Re-announcing happens on layout changes and legend refreshes;
+    // closing on those would make the panel unusable.
+    initAnalyzeUI(makeSource({ datasetId: () => 'SMOKE_COLUMN' }))
+    openAnalyzeUI()
+    notifyAnalyzeDatasetChanged('SMOKE_COLUMN')
+    expect(isAnalyzeUIOpen()).toBe(true)
+  })
+
+  it('closes when the dataset is unloaded entirely', () => {
+    initAnalyzeUI(makeSource({ datasetId: () => 'SMOKE_COLUMN' }))
+    openAnalyzeUI()
+    notifyAnalyzeDatasetChanged(null)
+    expect(isAnalyzeUIOpen()).toBe(false)
+  })
+
+  it('is inert when the panel is closed', () => {
+    initAnalyzeUI(makeSource())
+    expect(() => notifyAnalyzeDatasetChanged('ANYTHING')).not.toThrow()
+    expect(isAnalyzeUIOpen()).toBe(false)
   })
 })
