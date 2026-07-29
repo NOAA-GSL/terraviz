@@ -21,6 +21,7 @@ import type {
 import { setDatasetCreditsSource } from '../ui/creditsPanel'
 import { getSharedLumaSampler, type LumaSnapshot } from './glLumaSampler'
 import { DEFAULT_DISPLAY, type ColorScaleDisplay } from './colorScaleDisplay'
+import { greatCirclePath, type TransectEndpoints } from './datasetStats'
 import type { ColorScale } from '../types/color-scale'
 import {
   probeDatasetValue,
@@ -1047,6 +1048,127 @@ export class MapRenderer implements GlobeRenderer {
     return { snapshot, scale: options.colorScale, options }
   }
 
+  // --- Transect picking (Analyze §A4) ---
+
+  /** Vertices in the drawn line. Enough that the curve reads as smooth
+   *  at any zoom without putting a meaningful number of points into a
+   *  source that is redrawn on every drag frame. */
+  private static readonly TRANSECT_LINE_VERTICES = 64
+
+  private transectPoints: { lat: number; lon: number }[] = []
+  private transectMarkers: maplibregl.Marker[] = []
+  private transectLineId: string | null = null
+  private transectUnsubscribe: (() => void) | null = null
+  private transectOnChange: ((ends: TransectEndpoints | null) => void) | null = null
+
+  /**
+   * Arm two-point picking on the globe.
+   *
+   * `onChange` fires with the pair once the second point lands, again on
+   * every drag of either endpoint, and with `null` when the transect is
+   * cleared. Re-arming replaces any transect already on screen — one
+   * line at a time, because two would need a legend to tell apart and
+   * the panel only charts one.
+   *
+   * Dragging recomputes from a snapshot the caller already holds, so a
+   * live drag costs a pure re-sample and no readback. That is why this
+   * fires on `drag` rather than `dragend`.
+   */
+  beginTransect(onChange: (ends: TransectEndpoints | null) => void): void {
+    if (!this.map) return
+    this.clearTransect()
+    this.transectOnChange = onChange
+    const map = this.map
+    const onClick = (e: maplibregl.MapMouseEvent): void => {
+      this.transectPoints.push({ lat: e.lngLat.lat, lon: e.lngLat.lng })
+      if (this.transectPoints.length === 1) {
+        this.addTransectMarker(0)
+        return
+      }
+      this.disarmTransectPicking()
+      this.addTransectMarker(1)
+      this.redrawTransectLine()
+      this.emitTransect()
+    }
+    map.on('click', onClick)
+    this.transectUnsubscribe = () => map.off('click', onClick)
+  }
+
+  /** How many points of the pair have been placed. Drives the panel's
+   *  "click two points" instruction. */
+  transectProgress(): number {
+    return this.transectPoints.length
+  }
+
+  /** Remove the line, its endpoints, and any pending pick. */
+  clearTransect(): void {
+    this.disarmTransectPicking()
+    for (const m of this.transectMarkers) m.remove()
+    this.transectMarkers = []
+    this.transectPoints = []
+    if (this.transectLineId) {
+      this.removeHighlight(this.transectLineId)
+      this.transectLineId = null
+    }
+    const notify = this.transectOnChange
+    this.transectOnChange = null
+    notify?.(null)
+  }
+
+  private disarmTransectPicking(): void {
+    this.transectUnsubscribe?.()
+    this.transectUnsubscribe = null
+  }
+
+  private addTransectMarker(index: number): void {
+    if (!this.map) return
+    const p = this.transectPoints[index]
+    const marker = new maplibregl.Marker({ color: '#ffd166', draggable: true })
+      .setLngLat([p.lon, p.lat])
+      .addTo(this.map)
+    marker.on('drag', () => {
+      const at = marker.getLngLat()
+      this.transectPoints[index] = { lat: at.lat, lon: at.lng }
+      this.redrawTransectLine()
+      this.emitTransect()
+    })
+    this.transectMarkers[index] = marker
+  }
+
+  private emitTransect(): void {
+    if (this.transectPoints.length < 2) return
+    this.transectOnChange?.({ from: this.transectPoints[0], to: this.transectPoints[1] })
+  }
+
+  /**
+   * Draw the line the samples are taken along.
+   *
+   * Densified rather than drawn as a two-point LineString: MapLibre
+   * renders a segment as a straight line in projected space, which on a
+   * globe is not the great circle the samples follow. A viewer
+   * comparing the chart against the line has to be looking at the same
+   * path, so the geometry is subdivided along the same spherical
+   * interpolation `sampleTransect` uses.
+   */
+  private redrawTransectLine(): void {
+    if (!this.map || this.transectPoints.length < 2) return
+    if (this.transectLineId) {
+      this.removeHighlight(this.transectLineId)
+      this.transectLineId = null
+    }
+    const [from, to] = this.transectPoints
+    const coords = greatCirclePath(from, to, MapRenderer.TRANSECT_LINE_VERTICES)
+      .map((p): [number, number] => [p.lon, p.lat])
+    this.transectLineId = this.highlightRegion(
+      {
+        type: 'Feature',
+        properties: {},
+        geometry: { type: 'LineString', coordinates: coords },
+      } as GeoJSON.Feature,
+      { color: '#ffd166' },
+    )
+  }
+
   /** The geographic box currently in view, for "analyse what I can
    *  see". Null when the map is not up yet. */
   visibleBounds(): { n: number; s: number; w: number; e: number } | null {
@@ -1390,9 +1512,10 @@ export class MapRenderer implements GlobeRenderer {
    */
   dispose(): void {
     this.stopAutoRotate()
-    // Before map.remove(): the unsubscribe closure captures `map`, so
+    // Before map.remove(): the unsubscribe closures capture `map`, so
     // dropping the reference first would strand the handlers.
     this.clearLatLngCallbacks()
+    this.clearTransect()
     // The probe sampler is page-shared and deliberately NOT disposed
     // here — other panels may still be using it, and tearing down its
     // context would take their readouts with it. Dropping the source

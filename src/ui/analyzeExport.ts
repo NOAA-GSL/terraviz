@@ -17,7 +17,12 @@
  * that module is publisher-portal-scoped.
  */
 
-import { LUMA_LEVELS, type LumaHistogram, type RegionStats } from '../services/datasetStats'
+import {
+  LUMA_LEVELS,
+  type LumaHistogram,
+  type RegionStats,
+  type TransectSample,
+} from '../services/datasetStats'
 import { lumaToValue, type ColorScale } from '../types/color-scale'
 
 type Cell = string | number | null | undefined
@@ -86,6 +91,44 @@ export function buildCsvText(
   }
 
   return `${rows(head)}\r\n${rows(bins)}\r\n`
+}
+
+/**
+ * Serialise a transect: one row per sample, in order along the line.
+ *
+ * Absent samples are kept with an empty value rather than dropped. A
+ * reader reconstructing the profile needs to know the line crossed a
+ * hole there — removing the row would close the gap silently, which is
+ * the same failure the chart takes care to avoid.
+ *
+ * `sample_spacing_km` is in the header because it is the resolution
+ * claim: the samples are placed one per grid cell crossed, so a reader
+ * can see that a bump narrower than that spacing is not resolved.
+ */
+export function buildTransectCsvText(
+  samples: readonly TransectSample[],
+  scale: ColorScale,
+  ctx: CsvContext,
+): string {
+  const step = Math.abs(scale.vmax - scale.vmin) / 255
+  const total = samples.length > 0 ? samples[samples.length - 1].distanceKm : 0
+  const withData = samples.reduce((n, s) => n + (s.value == null ? 0 : 1), 0)
+  const head: Cell[][] = [
+    ['dataset', ctx.datasetTitle ?? ''],
+    ['region', ctx.scopeLabel],
+    ['units', scale.units ?? ''],
+    ['value_min', scale.vmin],
+    ['value_max', scale.vmax],
+    ['quantisation_step', step],
+    ['length_km', total],
+    ['samples', samples.length],
+    ['samples_with_data', withData],
+    ['sample_spacing_km', samples.length > 1 ? total / (samples.length - 1) : 0],
+    [],
+    ['distance_km', 'lat', 'lon', 'value'],
+  ]
+  const body = samples.map((s): Cell[] => [s.distanceKm, s.lat, s.lon, s.value])
+  return `${rows(head)}\r\n${rows(body)}\r\n`
 }
 
 /** Trigger a browser download. No-op-safe outside a DOM. */

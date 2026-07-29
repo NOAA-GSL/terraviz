@@ -420,6 +420,20 @@ class InteractiveSphere {
         display: () => this.colorScaleDisplay,
         datasetTitle: () => this.appState.currentDataset?.title ?? null,
         datasetId: () => this.appState.currentDataset?.id ?? null,
+        // Primary panel only, matching the probe readout: `probeValueAt`
+        // is a MapRenderer method rather than part of the GlobeRenderer
+        // interface, so a transect on a secondary panel would have
+        // nothing to sample. Named as a constraint in
+        // `docs/DATA_ANALYSIS_PLAN.md` rather than worked around here.
+        transect: () => {
+          const primary = this.viewports.getPrimary()
+          if (!primary) return null
+          return {
+            begin: (onChange) => primary.beginTransect(onChange),
+            progress: () => primary.transectProgress(),
+            clear: () => primary.clearTransect(),
+          }
+        },
       })
       // Playlists — mount the manager panel host and wire the
       // playback state machine to the regular loadDataset flow.
@@ -2641,6 +2655,14 @@ class InteractiveSphere {
     logger.debug('[App] Primary panel changed:', _oldIndex, '→', newIndex)
     const newPrimaryPanel = this.panelStates[newIndex]
     const newDataset = newPrimaryPanel?.dataset ?? null
+
+    // Analyze reads the primary and nothing else, and its transect is
+    // drawn on that panel's map. Promoting a different one would leave
+    // the line on the globe the panel is no longer describing, so it
+    // closes here rather than being rewired — the same reasoning as the
+    // dataset-swap teardown, which `notifyAnalyzeDatasetChanged` below
+    // would miss whenever both panels hold the same row.
+    closeAnalyzeUI()
 
     // Rewire video sync to the new primary's video (if any)
     this.detachPrimaryVideoSync()

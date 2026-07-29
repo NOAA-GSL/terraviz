@@ -24,8 +24,13 @@ import {
   findExtremum,
   fullWindow,
   rowAreasKm2,
+  greatCircleKm,
+  greatCirclePath,
+  MAX_TRANSECT_SAMPLES,
   sampleTransect,
   summarize,
+  summarizeTransect,
+  transectSampleCount,
   weightedQuantile,
   windowForBounds,
   zonalMeans,
@@ -361,6 +366,109 @@ describe('sampleTransect', () => {
     const s = snap(8, 8, () => 200)
     expect(sampleTransect(s, SCALE, { lat: 40, lon: -100 }, { lat: 30, lon: -90 }, 0, RRFS))
       .toHaveLength(2)
+  })
+})
+
+describe('transectSampleCount', () => {
+  it('asks for about one sample per grid cell crossed', () => {
+    // 160 columns across the RRFS box's 155° of longitude, 80 rows over
+    // its 80° of latitude. A one-degree line at the equator-ward edge
+    // therefore crosses roughly one cell.
+    const s = snap(160, 80, () => 200)
+    const n = transectSampleCount(s, { lat: 5, lon: -100 }, { lat: 5, lon: -80 }, RRFS)
+    // 20° of longitude at 5°N ≈ 20 cells of ~0.97° each.
+    expect(n).toBeGreaterThan(15)
+    expect(n).toBeLessThan(30)
+  })
+
+  it('asks for more on a line across a finer grid', () => {
+    const coarse = transectSampleCount(
+      snap(80, 40, () => 200), { lat: 30, lon: -120 }, { lat: 30, lon: -60 }, RRFS)
+    const fine = transectSampleCount(
+      snap(320, 160, () => 200), { lat: 30, lon: -120 }, { lat: 30, lon: -60 }, RRFS)
+    expect(fine).toBeGreaterThan(coarse * 3)
+  })
+
+  it('never asks for fewer than two or more than the cap', () => {
+    const s = snap(4000, 2000, () => 200)
+    expect(transectSampleCount(s, { lat: 40, lon: -100 }, { lat: 40, lon: -100 }, RRFS)).toBe(2)
+    // A line the width of the domain on a 4000-wide grid would want
+    // thousands of samples; the cap is what stops it.
+    expect(transectSampleCount(s, { lat: 40, lon: -175 }, { lat: 40, lon: -20 }, RRFS))
+      .toBe(MAX_TRANSECT_SAMPLES)
+  })
+
+  it('accounts for cells narrowing toward the pole', () => {
+    const s = snap(160, 80, () => 200)
+    // The same 20° of longitude spans far fewer km at 80°N than at 5°N,
+    // but crosses the same number of grid columns — so the count must
+    // not fall with cos(lat) the way the distance does.
+    const low = transectSampleCount(s, { lat: 5, lon: -100 }, { lat: 5, lon: -80 }, RRFS)
+    const high = transectSampleCount(s, { lat: 80, lon: -100 }, { lat: 80, lon: -80 }, RRFS)
+    expect(high).toBeGreaterThan(low * 0.7)
+  })
+})
+
+describe('greatCirclePath', () => {
+  it('is the path sampleTransect walks', () => {
+    const from = { lat: 60, lon: -150 }
+    const to = { lat: 20, lon: -50 }
+    const path = greatCirclePath(from, to, 7)
+    const line = sampleTransect(snap(8, 8, () => 200), SCALE, from, to, 7, RRFS)
+    expect(path).toHaveLength(7)
+    for (let i = 0; i < path.length; i++) {
+      expect(path[i].lat).toBeCloseTo(line[i].lat, 9)
+      expect(path[i].lon).toBeCloseTo(line[i].lon, 9)
+    }
+  })
+
+  it('bulges poleward between two points at the same latitude', () => {
+    const path = greatCirclePath({ lat: 70, lon: -170 }, { lat: 70, lon: -30 }, 3)
+    expect(path[1].lat).toBeGreaterThan(70.5)
+  })
+})
+
+describe('greatCircleKm', () => {
+  it('measures a quarter of the way round for pole to equator', () => {
+    const km = greatCircleKm({ lat: 90, lon: 0 }, { lat: 0, lon: 0 })
+    expect(km / (2 * Math.PI * 6371.0088)).toBeCloseTo(0.25, 6)
+  })
+
+  it('reports exactly zero for coincident points', () => {
+    expect(greatCircleKm({ lat: 12.5, lon: -73.25 }, { lat: 12.5, lon: -73.25 })).toBe(0)
+  })
+})
+
+describe('summarizeTransect', () => {
+  it('means the samples unweighted, because a line has no area', () => {
+    const s = snap(8, 8, (_x, y) => 100 + y * 10)
+    const line = sampleTransect(s, SCALE, { lat: 80, lon: -100 }, { lat: 10, lon: -100 }, 9, RRFS)
+    const summary = summarizeTransect(line)!
+    const values = line.map((p) => p.value).filter((v): v is number => v !== null)
+    expect(summary.withData).toBe(values.length)
+    expect(summary.mean).toBeCloseTo(values.reduce((a, b) => a + b, 0) / values.length, 9)
+    expect(summary.min).toBe(Math.min(...values))
+    expect(summary.max).toBe(Math.max(...values))
+    expect(summary.lengthKm).toBeCloseTo(line[line.length - 1].distanceKm, 9)
+    expect(summary.samples).toBe(9)
+  })
+
+  it('ignores the gaps rather than counting them as zero', () => {
+    // Half the frame absent: a mean that counted the holes would fall
+    // below every value actually present.
+    const s = snap(8, 8, (_x, y) => (y < 4 ? 0 : 200))
+    const line = sampleTransect(s, SCALE, { lat: 80, lon: -100 }, { lat: 10, lon: -100 }, 9, RRFS)
+    const summary = summarizeTransect(line)!
+    expect(summary.withData).toBeLessThan(summary.samples)
+    expect(summary.mean).toBe(200)
+    expect(summary.min).toBe(200)
+  })
+
+  it('is null when the line crosses nothing, and when there are no samples', () => {
+    const empty = snap(8, 8, () => 0)
+    const line = sampleTransect(empty, SCALE, { lat: 60, lon: -150 }, { lat: 20, lon: -50 }, 5, RRFS)
+    expect(summarizeTransect(line)).toBeNull()
+    expect(summarizeTransect([])).toBeNull()
   })
 })
 

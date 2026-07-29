@@ -115,6 +115,12 @@ export interface TransectSample {
   value: number | null
 }
 
+/** The pair of points a transect runs between. */
+export interface TransectEndpoints {
+  from: { lat: number; lon: number }
+  to: { lat: number; lon: number }
+}
+
 export interface ZonalSample {
   /** Latitude at the centre of the image row. */
   lat: number
@@ -468,6 +474,82 @@ export function findExtremum(
  * with a null value rather than being dropped, so the caller can break
  * the line at a gap instead of silently closing it.
  */
+/**
+ * How many samples a transect between two points deserves.
+ *
+ * One per grid cell crossed, because that is all the information the
+ * frame holds. Asking for more does not refine the profile — it
+ * interpolates the same texels into a smoother-looking curve and draws
+ * structure the grid never measured, which is the same mistake the
+ * histogram made by drawing one bar per luma code (see
+ * `analyzeCharts.renderHistogram`). Asking for fewer throws away
+ * measurements that are there.
+ *
+ * Cell size is taken at the transect's mean latitude: on an
+ * equirectangular grid a cell's east-west extent shrinks with
+ * `cos(lat)`, so a transect across northern Canada crosses far more
+ * cells than its length in km would suggest at the equator.
+ *
+ * Clamped to `[2, 512]`. Two because a line needs endpoints; 512
+ * because beyond that the samples are narrower than a chart pixel and
+ * the cost stops buying anything.
+ */
+export const MAX_TRANSECT_SAMPLES = 512
+
+export function transectSampleCount(
+  snapshot: LumaSnapshot,
+  from: { lat: number; lon: number },
+  to: { lat: number; lon: number },
+  options?: DatasetOverlayOptions,
+): number {
+  const { width, height } = snapshot
+  if (width < 1 || height < 1) return 2
+
+  const bbox = options?.boundingBox
+  const latSpan = bbox ? Math.abs(bbox.n - bbox.s) : 180
+  const kmPerDegree = (Math.PI / 180) * EARTH_RADIUS_KM
+  const cellNsKm = (latSpan / height) * kmPerDegree
+  const meanLat = (from.lat + to.lat) / 2
+  const cellEwKm =
+    (lonSpanDegrees(options) / width) * kmPerDegree * Math.cos((meanLat * Math.PI) / 180)
+
+  // The smaller of the two, so the sampling resolves the finer axis
+  // rather than averaging the two and under-sampling one of them. Near
+  // the pole `cellEwKm` collapses toward zero, which would ask for an
+  // unbounded count — the clamp is what stops that, and it is a real
+  // case on these 85°N datasets, not a theoretical one.
+  const cellKm = Math.min(cellNsKm, cellEwKm)
+  if (!(cellKm > 0)) return MAX_TRANSECT_SAMPLES
+
+  const km = greatCircleKm(from, to)
+  return Math.max(2, Math.min(MAX_TRANSECT_SAMPLES, Math.round(km / cellKm) + 1))
+}
+
+/**
+ * Angle subtended at the Earth's centre by two points, radians.
+ *
+ * Two identical points round to a dot product a hair under 1, whose
+ * acos is ~2e-8 rad — 13 cm of phantom separation. Collapsed so a
+ * zero-length transect reports zero rather than nearly zero.
+ */
+function centralAngle(
+  from: { lat: number; lon: number },
+  to: { lat: number; lon: number },
+): number {
+  const a = toUnitVector(from.lat, from.lon)
+  const b = toUnitVector(to.lat, to.lon)
+  const dot = Math.min(1, Math.max(-1, a.x * b.x + a.y * b.y + a.z * b.z))
+  return 1 - dot < 1e-12 ? 0 : Math.acos(dot)
+}
+
+/** Great-circle distance between two points, km. */
+export function greatCircleKm(
+  from: { lat: number; lon: number },
+  to: { lat: number; lon: number },
+): number {
+  return centralAngle(from, to) * EARTH_RADIUS_KM
+}
+
 export function sampleTransect(
   snapshot: LumaSnapshot,
   scale: ColorScale,
@@ -477,18 +559,38 @@ export function sampleTransect(
   options?: DatasetOverlayOptions,
 ): TransectSample[] {
   const n = Math.max(2, Math.floor(samples))
+  const totalKm = greatCircleKm(from, to)
+  const firstDataCode = firstDataLuma(scale)
+  return greatCirclePath(from, to, n).map((p, i) => ({
+    lat: p.lat,
+    lon: p.lon,
+    distanceKm: totalKm * (i / (n - 1)),
+    value: readValueAt(snapshot, scale, p.lat, p.lon, firstDataCode, options),
+  }))
+}
+
+/**
+ * `points` evenly-spaced positions along the great circle from `from` to
+ * `to`, endpoints included.
+ *
+ * Shared with the map so the line drawn on the globe follows exactly the
+ * path the samples were taken along. Drawing a two-vertex LineString
+ * instead would render a straight line in projected space, which is not
+ * the same curve — and a viewer comparing chart against globe has to be
+ * looking at one path, not two.
+ */
+export function greatCirclePath(
+  from: { lat: number; lon: number },
+  to: { lat: number; lon: number },
+  points: number,
+): { lat: number; lon: number }[] {
+  const n = Math.max(2, Math.floor(points))
   const a = toUnitVector(from.lat, from.lon)
   const b = toUnitVector(to.lat, to.lon)
-  const dot = Math.min(1, Math.max(-1, a.x * b.x + a.y * b.y + a.z * b.z))
-  // Two identical points round to a dot product a hair under 1, whose
-  // acos is ~2e-8 rad — 13 cm of phantom separation. Collapse it so a
-  // zero-length transect reports zero rather than nearly zero.
-  const omega = 1 - dot < 1e-12 ? 0 : Math.acos(dot)
-  const totalKm = omega * EARTH_RADIUS_KM
+  const omega = centralAngle(from, to)
   const sinOmega = Math.sin(omega)
-  const firstDataCode = firstDataLuma(scale)
 
-  const out: TransectSample[] = []
+  const out: { lat: number; lon: number }[] = []
   for (let i = 0; i < n; i++) {
     const t = i / (n - 1)
     // Antipodal or coincident endpoints make the slerp denominator
@@ -498,15 +600,59 @@ export function sampleTransect(
     const p = sinOmega < 1e-9
       ? { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t, z: a.z + (b.z - a.z) * t }
       : blend(a, b, Math.sin((1 - t) * omega) / sinOmega, Math.sin(t * omega) / sinOmega)
-    const { lat, lon } = fromUnitVector(p)
-    out.push({
-      lat,
-      lon,
-      distanceKm: totalKm * t,
-      value: readValueAt(snapshot, scale, lat, lon, firstDataCode, options),
-    })
+    out.push(fromUnitVector(p))
   }
   return out
+}
+
+export interface TransectSummary {
+  lengthKm: number
+  /** Samples taken, including the ones that found no data. */
+  samples: number
+  withData: number
+  min: number
+  max: number
+  /** Unweighted, and correctly so — see the note below. */
+  mean: number
+}
+
+/**
+ * Summarise a sampled transect.
+ *
+ * **The mean here is unweighted, unlike every other mean in this
+ * module.** That is not an oversight: the samples are evenly spaced in
+ * true distance along a great circle, so each already represents an
+ * equal length of line. Area weighting answers "how much of the world
+ * is at this value", which is the right question for a region and the
+ * wrong one for a line — a transect has no area.
+ *
+ * Null where the line found no data at all, so the caller shows the
+ * empty state rather than a row of dashes.
+ */
+export function summarizeTransect(
+  samples: readonly TransectSample[],
+): TransectSummary | null {
+  if (samples.length === 0) return null
+  let min = Infinity
+  let max = -Infinity
+  let sum = 0
+  let withData = 0
+  for (const s of samples) {
+    if (s.value == null) continue
+    if (s.value < min) min = s.value
+    if (s.value > max) max = s.value
+    sum += s.value
+    withData++
+  }
+  if (withData === 0) return null
+  return {
+    lengthKm: samples[samples.length - 1].distanceKm,
+    samples: samples.length,
+    withData,
+    min,
+    max,
+    mean: sum / withData,
+  }
 }
 
 /**

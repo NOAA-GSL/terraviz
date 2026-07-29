@@ -438,10 +438,51 @@ Region selection, statistics card, histogram, CSV export.
 analytically known field. Panel mutual exclusion with chat and info panel is
 established but fiddly.
 
-### A4 — Transect · A5 — Contours
+### A4 — Transect
 
-Both build only on A2's reducers plus A3's panel. A5 adds a MapLibre GeoJSON
-line source and the area-above-threshold readout.
+Two clicks on the globe, then a profile of the field along the great circle
+between them, re-sampled live as either endpoint drags. `sampleTransect` and the
+slerp shipped with A2; A4 is the pick, the chart, and the line on the globe.
+
+| File | Change |
+|---|---|
+| `src/services/datasetStats.ts` | `greatCirclePath` (extracted from `sampleTransect`, now shared with the map), `greatCircleKm`, `transectSampleCount`, `summarizeTransect` |
+| `src/services/mapRenderer.ts` | `beginTransect` / `transectProgress` / `clearTransect` — click-to-place, draggable endpoints, the densified line |
+| `src/ui/analyzeUI.ts` | The transect section and the `TransectPicker` seam |
+| `src/ui/analyzeCharts.ts`, `src/ui/analyzeExport.ts` | `renderTransectChart`, `buildTransectCsvText` |
+
+Four decisions worth recording, each of which had a plausible wrong answer:
+
+- **Samples are placed one per grid cell crossed**, not at a fixed count. A
+  fixed count over-resolves a short line — interpolating the same texels into a
+  smoother curve and drawing structure the grid never measured, which is exactly
+  the mistake §The transport lattice describes in the histogram. Cell size is
+  taken at the transect's mean latitude, because an equirectangular cell's
+  east-west extent shrinks with `cos(lat)` and these datasets reach 85°N.
+  Clamped to 512.
+- **Not an area chart.** The vertical axis is scaled to the transect's own range,
+  because a full `[vmin, vmax]` axis flattens every profile on fields this
+  skewed. Filling under a curve whose baseline is not zero draws an area that
+  encodes nothing, so the profile is a stroke and a caption says the axis is
+  relative.
+- **The line on the globe is densified.** MapLibre renders a two-vertex
+  LineString as a straight line in projected space, which is not the great
+  circle the samples follow. It is subdivided through the same `greatCirclePath`
+  the sampler uses, so the chart and the line are one path rather than two.
+- **The mean along a line is unweighted**, unlike every other mean in
+  `datasetStats`. The samples are evenly spaced in true distance, so each
+  already represents an equal length; area weighting answers a question a line
+  does not have.
+
+**Risks.** A drag fires at pointer rate, and `frame()` on a playing video is a
+full readback — so the panel holds one frame per refresh and a drag re-samples
+that, which also makes the profile and the histogram describe the same instant.
+Primary panel only, per the constraint below.
+
+### A5 — Contours
+
+Builds on A2's reducers plus A3's panel: marching squares, a MapLibre GeoJSON
+line source, and the area-above-threshold readout.
 
 ### A6 — Orbit tools
 

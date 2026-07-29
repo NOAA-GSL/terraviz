@@ -158,6 +158,55 @@
   opacity: 0.6;
 }
 
+/* The transect block. Separated by a rule rather than by spacing
+   alone: it answers a different question from the statistics above it,
+   and on a phone the two run together without one. */
+.analyze-transect-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3, 0.75rem);
+  padding-block-start: var(--space-3, 0.75rem);
+  border-block-start: 1px solid var(--color-border, rgba(255, 255, 255, 0.18));
+}
+
+.analyze-transect-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2, 0.5rem);
+}
+
+.analyze-transect-head h3 {
+  margin: 0;
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+/* Taller than the histogram: this one carries a shape worth reading,
+   where the histogram carries a silhouette. */
+.analyze-transect {
+  inline-size: 100%;
+  block-size: 5.5rem;
+  display: block;
+  border-radius: var(--radius-sm, 0.25rem);
+  background: rgba(0, 0, 0, 0.35);
+}
+
+.analyze-action {
+  padding: 0.25rem 0.5rem;
+  border: 1px solid var(--color-border, rgba(255, 255, 255, 0.18));
+  border-radius: var(--radius-sm, 0.25rem);
+  background: rgba(255, 255, 255, 0.06);
+  color: inherit;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.analyze-action:hover,
+.analyze-action:focus-visible {
+  background: rgba(255, 255, 255, 0.14);
+}
+
 .analyze-export {
   padding: 0.4375rem;
   border: 1px solid var(--color-border, rgba(255, 255, 255, 0.18));

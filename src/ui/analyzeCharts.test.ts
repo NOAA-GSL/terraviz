@@ -15,8 +15,14 @@ import {
   HISTOGRAM_BUCKET,
   histogramBucketValueWidth,
   renderHistogram,
+  renderTransectChart,
+  transectValueSpan,
 } from './analyzeCharts'
-import { LUMA_LEVELS, type LumaHistogram } from '../services/datasetStats'
+import {
+  LUMA_LEVELS,
+  type LumaHistogram,
+  type TransectSample,
+} from '../services/datasetStats'
 import { DEFAULT_DISPLAY } from '../services/colorScaleDisplay'
 import type { ColorScale } from '../types'
 
@@ -149,6 +155,82 @@ describe('renderHistogram', () => {
   it('empties the chart rather than dividing by zero when nothing carries data', () => {
     const svg = renderHistogram(histogram(new Array(LUMA_LEVELS).fill(0)), SCALE, DEFAULT_DISPLAY)
     expect(svg.querySelectorAll('rect')).toHaveLength(0)
+  })
+})
+
+describe('renderTransectChart', () => {
+  const line = (values: (number | null)[]): TransectSample[] =>
+    values.map((value, i) => ({
+      lat: 40,
+      lon: -120 + i,
+      distanceKm: i * 100,
+      value,
+    }))
+
+  it('breaks the profile at a gap instead of drawing through it', () => {
+    const svg = renderTransectChart(line([1, 2, null, 4, 5]), SCALE, DEFAULT_DISPLAY)
+    // Four adjacent pairs, but the two touching the gap must not be
+    // stroked — a profile drawn straight across a hole is a measurement
+    // claim nobody made.
+    expect(svg.querySelectorAll('line')).toHaveLength(2)
+    // Same for the colour strip: one cell per sample that has data.
+    expect(svg.querySelectorAll('rect')).toHaveLength(4)
+  })
+
+  it('scales the profile to its own range, not to the palette range', () => {
+    // Values occupy a thousandth of the scale. Drawn against [vmin,
+    // vmax] every point would land within a hair of the baseline.
+    const svg = renderTransectChart(
+      line([0.001, 0.002, 0.003, 0.004]), SCALE, DEFAULT_DISPLAY)
+    const ys = [...svg.querySelectorAll('line')].flatMap((l) => [
+      Number(l.getAttribute('y1')),
+      Number(l.getAttribute('y2')),
+    ])
+    expect(Math.max(...ys) - Math.min(...ys)).toBeGreaterThan(40)
+  })
+
+  it('draws nothing rather than dividing by zero on an empty or absent line', () => {
+    expect(renderTransectChart([], SCALE, DEFAULT_DISPLAY).querySelectorAll('*')).toHaveLength(0)
+    expect(
+      renderTransectChart(line([null, null, null]), SCALE, DEFAULT_DISPLAY)
+        .querySelectorAll('line'),
+    ).toHaveLength(0)
+  })
+
+  it('keeps a flat line on screen instead of collapsing it', () => {
+    const svg = renderTransectChart(line([2, 2, 2, 2]), SCALE, DEFAULT_DISPLAY)
+    const ys = [...svg.querySelectorAll('line')].map((l) => Number(l.getAttribute('y1')))
+    expect(ys).toHaveLength(3)
+    for (const y of ys) {
+      expect(y).toBeGreaterThan(0)
+      expect(y).toBeLessThan(62)
+    }
+  })
+})
+
+describe('transectValueSpan', () => {
+  it('is null when nothing on the line has data', () => {
+    expect(transectValueSpan([])).toBeNull()
+    expect(
+      transectValueSpan([{ lat: 0, lon: 0, distanceKm: 0, value: null }]),
+    ).toBeNull()
+  })
+
+  it('pads a flat line so the range is usable as a divisor', () => {
+    const span = transectValueSpan([
+      { lat: 0, lon: 0, distanceKm: 0, value: 5 },
+      { lat: 0, lon: 1, distanceKm: 1, value: 5 },
+    ])!
+    expect(span.hi).toBeGreaterThan(span.lo)
+    expect((span.lo + span.hi) / 2).toBeCloseTo(5, 9)
+  })
+
+  it('pads a flat line at zero, where a proportional pad would not', () => {
+    const span = transectValueSpan([
+      { lat: 0, lon: 0, distanceKm: 0, value: 0 },
+      { lat: 0, lon: 1, distanceKm: 1, value: 0 },
+    ])!
+    expect(span.hi).toBeGreaterThan(span.lo)
   })
 })
 

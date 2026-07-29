@@ -18,14 +18,19 @@
 
 import {
   buildHistogram,
+  sampleTransect,
   summarize,
+  summarizeTransect,
+  transectSampleCount,
   windowForBounds,
   type LatLonBounds,
   type LumaHistogram,
   type RegionStats,
+  type TransectEndpoints,
+  type TransectSample,
 } from '../services/datasetStats'
 import type { LumaSnapshot } from '../services/glLumaSampler'
-import type { ColorScaleDisplay } from '../services/colorScaleDisplay'
+import { DEFAULT_DISPLAY, type ColorScaleDisplay } from '../services/colorScaleDisplay'
 import type { ColorScale } from '../types/color-scale'
 import type { DatasetOverlayOptions } from '../types'
 import { getRegionNames, resolveRegion } from '../data/regions'
@@ -34,8 +39,9 @@ import {
   histogramBucketValueWidth,
   renderHistogram,
   renderStatTile,
+  renderTransectChart,
 } from './analyzeCharts'
-import { buildCsvText, downloadCsv } from './analyzeExport'
+import { buildCsvText, buildTransectCsvText, downloadCsv } from './analyzeExport'
 import { t } from '../i18n'
 import { formatNumber } from '../i18n/format'
 
@@ -61,6 +67,28 @@ export interface AnalyzeSource {
    *  underneath it has been replaced. Title is not enough — two rows
    *  can share one. */
   datasetId(): string | null
+  /** Two-point picking on the globe, or null where there is no map to
+   *  pick on. Optional so a caller can wire the statistics without the
+   *  transect, and so the tests can drive the panel with no map. */
+  transect?(): TransectPicker | null
+}
+
+/**
+ * The globe's side of the transect: pick two points, keep them
+ * draggable, draw the line between them.
+ *
+ * A seam rather than a direct call into the renderer, for the same
+ * reason `AnalyzeSource` is one — the panel should not know that
+ * MapLibre exists, and a test should be able to drive a transect
+ * without a map.
+ */
+export interface TransectPicker {
+  /** Arm picking. `onChange` fires when the pair completes, on every
+   *  drag of an endpoint, and with null when cleared. */
+  begin(onChange: (ends: TransectEndpoints | null) => void): void
+  /** How many of the two points have been placed. */
+  progress(): number
+  clear(): void
 }
 
 /** Which region the statistics cover. */
@@ -76,6 +104,26 @@ let lastTrigger: HTMLElement | null = null
 let root: HTMLElement | null = null
 /** The dataset the numbers on screen were computed from. */
 let openedFor: string | null = null
+/** The transect section's own container, so a drag can redraw it
+ *  without recomputing the region statistics above it. */
+let transectHost: HTMLElement | null = null
+let transectEnds: TransectEndpoints | null = null
+let transectArmed = false
+let lastTransect: { samples: TransectSample[]; scale: ColorScale } | null = null
+/**
+ * The frame everything on screen was computed from.
+ *
+ * Held so a drag re-samples the transect against the same frame the
+ * histogram describes, rather than calling `frame()` per drag event: on
+ * a playing video that would be a full readback at pointer rate, which
+ * is the failure `glLumaSampler`'s docstring is emphatic about. It also
+ * makes the panel internally consistent — one frame, one set of numbers.
+ */
+let lastFrame: {
+  snapshot: LumaSnapshot
+  scale: ColorScale
+  options: DatasetOverlayOptions
+} | null = null
 
 /**
  * Wire the panel to the app. Call once at boot.
@@ -86,8 +134,11 @@ let openedFor: string | null = null
  * re-pick on every open — but a new source is a new context.
  */
 export function initAnalyzeUI(src: AnalyzeSource): void {
+  source?.transect?.()?.clear()
   source = src
   scope = { kind: 'dataset' }
+  transectEnds = null
+  transectArmed = false
 }
 
 /** Whether the panel is currently open. Used by tests and the scene. */
@@ -97,12 +148,25 @@ export function isAnalyzeUIOpen(): boolean {
 
 /** Close the panel and return focus to whatever opened it. */
 export function closeAnalyzeUI(): void {
+  // The line is drawn on the globe, not in the panel, so closing has to
+  // take it with it — a transect left behind would be an annotation
+  // with nothing left on screen explaining or removing it.
+  clearTransect()
   root?.remove()
   root = null
   openedFor = null
+  transectHost = null
+  lastFrame = null
   document.removeEventListener('keydown', onEscape, true)
   lastTrigger?.focus()
   lastTrigger = null
+}
+
+function clearTransect(): void {
+  source?.transect?.()?.clear()
+  transectEnds = null
+  transectArmed = false
+  lastTransect = null
 }
 
 /**
@@ -265,6 +329,8 @@ function boundsForScope(s: AnalyzeScope, src: AnalyzeSource): ScopeBounds {
 function refresh(body: HTMLElement): void {
   body.replaceChildren()
   lastResult = null
+  lastFrame = null
+  transectHost = null
 
   const src = source
   if (!src) {
@@ -272,6 +338,7 @@ function refresh(body: HTMLElement): void {
     return
   }
   const frame = src.frame()
+  lastFrame = frame
   if (!frame) {
     // No data-encoded dataset loaded, or no WebGL2. Absent rather than
     // broken, which is the availability posture the rest of the
@@ -280,6 +347,25 @@ function refresh(body: HTMLElement): void {
     return
   }
 
+  renderRegionBlock(body, src, frame)
+
+  // Appended whatever the region block decided, and deliberately so: a
+  // named region can be empty while the dataset is full, and the line a
+  // viewer wants to draw is very often the one that leaves that box.
+  // Only the globe's absence removes this — availability, not state.
+  if (src.transect?.()) {
+    transectHost = document.createElement('section')
+    transectHost.className = 'analyze-transect-section'
+    body.appendChild(transectHost)
+    renderTransectSection()
+  }
+}
+
+function renderRegionBlock(
+  body: HTMLElement,
+  src: AnalyzeSource,
+  frame: { snapshot: LumaSnapshot; scale: ColorScale; options: DatasetOverlayOptions },
+): void {
   const { snapshot, scale, options } = frame
   const scoped = boundsForScope(scope, src)
   if (scoped.kind === 'unknown') {
@@ -308,6 +394,157 @@ function refresh(body: HTMLElement): void {
   body.appendChild(renderCoverage(stats))
   body.appendChild(renderPrecisionNote(scale))
   body.appendChild(renderExport(src))
+}
+
+/**
+ * The transect block: a control, and a profile once there is one.
+ *
+ * Redrawn on its own rather than through `refresh`, because a drag
+ * changes only this and `refresh` would recompute the histogram and
+ * every region statistic above it on each pointer frame.
+ */
+function renderTransectSection(): void {
+  const host = transectHost
+  const picker = source?.transect?.()
+  if (!host || !picker) return
+  host.replaceChildren()
+
+  const head = document.createElement('div')
+  head.className = 'analyze-transect-head'
+  const label = document.createElement('h3')
+  label.textContent = t('analyze.transect.title')
+  head.appendChild(label)
+  host.appendChild(head)
+
+  if (transectArmed) {
+    head.appendChild(
+      actionButton(t('analyze.transect.cancel'), () => {
+        clearTransect()
+        renderTransectSection()
+      }),
+    )
+    host.appendChild(
+      message(
+        picker.progress() >= 1
+          ? t('analyze.transect.pickSecond')
+          : t('analyze.transect.pickFirst'),
+      ),
+    )
+    return
+  }
+
+  if (!transectEnds) {
+    head.appendChild(
+      actionButton(t('analyze.transect.draw'), () => {
+        transectArmed = true
+        transectEnds = null
+        picker.begin((ends) => {
+          transectEnds = ends
+          transectArmed = false
+          renderTransectSection()
+        })
+        renderTransectSection()
+      }),
+    )
+    host.appendChild(message(t('analyze.transect.hint')))
+    return
+  }
+
+  head.appendChild(
+    actionButton(t('analyze.transect.clear'), () => {
+      clearTransect()
+      renderTransectSection()
+    }),
+  )
+
+  const frame = lastFrame
+  if (!frame) {
+    host.appendChild(message(t('analyze.empty.noDataset')))
+    return
+  }
+  const { snapshot, scale, options } = frame
+  const samples = sampleTransect(
+    snapshot,
+    scale,
+    transectEnds.from,
+    transectEnds.to,
+    transectSampleCount(snapshot, transectEnds.from, transectEnds.to, options),
+    options,
+  )
+  const summary = summarizeTransect(samples)
+  if (!summary) {
+    host.appendChild(message(t('analyze.transect.noData')))
+    return
+  }
+  lastTransect = { samples, scale }
+
+  host.appendChild(renderTransectChart(samples, scale, source?.display() ?? DEFAULT_DISPLAY))
+  host.appendChild(caption(t('analyze.transect.caption')))
+
+  const grid = document.createElement('div')
+  grid.className = 'analyze-stats'
+  const u = scale.units
+  grid.appendChild(
+    renderStatTile(
+      t('analyze.transect.stat.length'),
+      formatStatValue(summary.lengthKm, t('analyze.units.km')),
+    ),
+  )
+  grid.appendChild(renderStatTile(t('analyze.stat.min'), formatStatValue(summary.min, u)))
+  grid.appendChild(renderStatTile(t('analyze.stat.max'), formatStatValue(summary.max, u)))
+  grid.appendChild(renderStatTile(t('analyze.stat.mean'), formatStatValue(summary.mean, u)))
+  host.appendChild(grid)
+
+  host.appendChild(
+    coverageNote(
+      t('analyze.transect.coverage', {
+        withData: formatNumber(summary.withData),
+        samples: formatNumber(summary.samples),
+        spacing: formatStatValue(
+          summary.samples > 1 ? summary.lengthKm / (summary.samples - 1) : 0,
+          t('analyze.units.km'),
+        ),
+      }),
+    ),
+  )
+
+  const exportBtn = actionButton(t('analyze.transect.export'), () => {
+    if (!lastTransect) return
+    downloadCsv(
+      'terraviz-transect.csv',
+      buildTransectCsvText(lastTransect.samples, lastTransect.scale, {
+        datasetTitle: source?.datasetTitle() ?? null,
+        scopeLabel: t('analyze.transect.title'),
+      }),
+    )
+  })
+  // The same full-width control the region export uses, not the small
+  // inline action in the header row.
+  exportBtn.className = 'analyze-export'
+  host.appendChild(exportBtn)
+}
+
+function actionButton(text: string, onClick: () => void): HTMLButtonElement {
+  const btn = document.createElement('button')
+  btn.type = 'button'
+  btn.className = 'analyze-action'
+  btn.textContent = text
+  btn.addEventListener('click', onClick)
+  return btn
+}
+
+function caption(text: string): HTMLElement {
+  const p = document.createElement('p')
+  p.className = 'analyze-caption'
+  p.textContent = text
+  return p
+}
+
+function coverageNote(text: string): HTMLElement {
+  const p = document.createElement('p')
+  p.className = 'analyze-coverage'
+  p.textContent = text
+  return p
 }
 
 function message(text: string): HTMLElement {

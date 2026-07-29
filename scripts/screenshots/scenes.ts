@@ -408,6 +408,34 @@ export const scenes: Scene[] = [
     },
   },
 
+  {
+    name: 'analyze-transect',
+    description:
+      'Analyze panel with a transect drawn — the value profile along a great circle, its own colour strip, and the length / range tiles',
+    fixtures: catalogReportFixtures(),
+    skipWeblate: true,
+    crop: '.analyze-panel',
+    async setup(page) {
+      await openCatalog(page)
+      await openDataEncodedDataset(page)
+      await page.locator('#tools-menu-toggle').click()
+      await page.locator('#tools-menu-popover:not(.hidden)').waitFor()
+      await page.locator('#tools-menu-analyze').click()
+      await page.locator('.analyze-stat').first().waitFor({ state: 'visible' })
+
+      await page.locator('.analyze-transect-section button').first().click()
+      // Two clicks on the globe place the endpoints. Offsets rather
+      // than lat/lon because the picker reads map coordinates from the
+      // pointer, which is the path being exercised.
+      const globe = page.locator('#map-container canvas').first()
+      const box = await globe.boundingBox()
+      if (!box) throw new Error('analyze-transect: no globe canvas to click')
+      await page.mouse.click(box.x + box.width * 0.38, box.y + box.height * 0.36)
+      await page.mouse.click(box.x + box.width * 0.62, box.y + box.height * 0.58)
+      await page.locator('.analyze-transect').waitFor({ state: 'visible' })
+    },
+  },
+
   // ── Publisher portal ──────────────────────────────────────────
   // Populated via route-stub fixtures (Phase V7); see openPublish().
   {

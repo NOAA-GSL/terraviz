@@ -18,9 +18,15 @@ import {
   notifyAnalyzeDatasetChanged,
   openAnalyzeUI,
   type AnalyzeSource,
+  type TransectPicker,
 } from './analyzeUI'
-import { buildCsvText, downloadCsv } from './analyzeExport'
-import { buildHistogram, summarize } from '../services/datasetStats'
+import { buildCsvText, buildTransectCsvText, downloadCsv } from './analyzeExport'
+import {
+  buildHistogram,
+  sampleTransect,
+  summarize,
+  type TransectEndpoints,
+} from '../services/datasetStats'
 import { resolveRegion } from '../data/regions'
 import { DEFAULT_DISPLAY } from '../services/colorScaleDisplay'
 import type { LumaSnapshot } from '../services/glLumaSampler'
@@ -329,5 +335,206 @@ describe('the globe changing underneath the panel', () => {
     initAnalyzeUI(makeSource())
     expect(() => notifyAnalyzeDatasetChanged('ANYTHING')).not.toThrow()
     expect(isAnalyzeUIOpen()).toBe(false)
+  })
+})
+
+/**
+ * A stand-in for the globe's half of the transect. The panel talks to
+ * this seam rather than to MapLibre, which is what lets the interaction
+ * be tested at all — placing two points is a pair of map clicks in the
+ * real thing.
+ */
+function makePicker() {
+  let onChange: ((ends: TransectEndpoints | null) => void) | null = null
+  let placed = 0
+  let clears = 0
+  const picker: TransectPicker = {
+    begin(cb) {
+      onChange = cb
+      placed = 0
+    },
+    progress: () => placed,
+    clear() {
+      placed = 0
+      onChange = null
+      clears++
+    },
+  }
+  return {
+    picker,
+    /** The second click landing, or an endpoint being dragged. */
+    settle(ends: TransectEndpoints) {
+      placed = 2
+      onChange?.(ends)
+    },
+    placeFirst() {
+      placed = 1
+    },
+    clears: () => clears,
+    armed: () => onChange !== null,
+  }
+}
+
+const CROSSING: TransectEndpoints = {
+  from: { lat: 70, lon: -150 },
+  to: { lat: 20, lon: -60 },
+}
+
+const section = () => document.querySelector('.analyze-transect-section')
+const sectionButtons = () =>
+  [...document.querySelectorAll('.analyze-transect-section button')] as HTMLButtonElement[]
+const buttonSaying = (fragment: string): HTMLButtonElement | undefined =>
+  sectionButtons().find((b) => (b.textContent ?? '').toLowerCase().includes(fragment))
+
+describe('transect', () => {
+  it('is absent, not disabled, when there is no globe to pick on', () => {
+    initAnalyzeUI(makeSource())
+    openAnalyzeUI()
+    expect(section()).toBeNull()
+  })
+
+  it('offers a control, and asks for two clicks once armed', () => {
+    const p = makePicker()
+    initAnalyzeUI(makeSource({ transect: () => p.picker }))
+    openAnalyzeUI()
+    expect(section()).not.toBeNull()
+
+    buttonSaying('draw')!.click()
+    expect(p.armed()).toBe(true)
+    expect(section()?.textContent).toContain('start')
+    expect(document.querySelector('.analyze-transect')).toBeNull()
+  })
+
+  it('charts the line once both endpoints land', () => {
+    const p = makePicker()
+    initAnalyzeUI(makeSource({ transect: () => p.picker }))
+    openAnalyzeUI()
+    buttonSaying('draw')!.click()
+    p.settle(CROSSING)
+
+    expect(document.querySelector('.analyze-transect')).not.toBeNull()
+    // Length / lowest / highest / mean, on top of the region's eight.
+    expect(document.querySelectorAll('.analyze-stat')).toHaveLength(12)
+    expect(buttonSaying('export line')).toBeDefined()
+  })
+
+  it('re-samples a drag without recomputing the region statistics', () => {
+    // The panel holds one frame deliberately: calling frame() per drag
+    // event would be a full readback at pointer rate on a playing
+    // video, which is exactly what the snapshot path forbids.
+    const p = makePicker()
+    let frames = 0
+    initAnalyzeUI(makeSource({
+      transect: () => p.picker,
+      frame: () => {
+        frames++
+        return { snapshot: snap(64, 64, () => 200), scale: SCALE, options: OPTIONS }
+      },
+    }))
+    openAnalyzeUI()
+    buttonSaying('draw')!.click()
+    p.settle(CROSSING)
+    const afterFirst = frames
+
+    p.settle({ from: { lat: 60, lon: -140 }, to: { lat: 30, lon: -70 } })
+    expect(frames).toBe(afterFirst)
+    expect(document.querySelector('.analyze-transect')).not.toBeNull()
+  })
+
+  it('says so when the line crosses nothing, rather than charting an empty axis', () => {
+    const p = makePicker()
+    initAnalyzeUI(makeSource({
+      transect: () => p.picker,
+      frame: () => ({ snapshot: snap(8, 8, () => 0), scale: SCALE, options: OPTIONS }),
+    }))
+    openAnalyzeUI()
+    buttonSaying('draw')!.click()
+    p.settle(CROSSING)
+    expect(document.querySelector('.analyze-transect')).toBeNull()
+    expect(section()?.textContent?.toLowerCase()).toContain("doesn't cross")
+  })
+
+  it('takes the line off the globe when the panel closes', () => {
+    // The line is drawn on the map, not in the panel — leaving it would
+    // be an annotation with nothing on screen left to remove it.
+    const p = makePicker()
+    initAnalyzeUI(makeSource({ transect: () => p.picker }))
+    openAnalyzeUI()
+    buttonSaying('draw')!.click()
+    p.settle(CROSSING)
+
+    const before = p.clears()
+    closeAnalyzeUI()
+    expect(p.clears()).toBeGreaterThan(before)
+  })
+
+  it('clears on request and offers to draw again', () => {
+    const p = makePicker()
+    initAnalyzeUI(makeSource({ transect: () => p.picker }))
+    openAnalyzeUI()
+    buttonSaying('draw')!.click()
+    p.settle(CROSSING)
+    buttonSaying('clear')!.click()
+
+    expect(document.querySelector('.analyze-transect')).toBeNull()
+    expect(buttonSaying('draw')).toBeDefined()
+  })
+
+  it('survives a region change with the transect intact', () => {
+    const p = makePicker()
+    initAnalyzeUI(makeSource({ transect: () => p.picker }))
+    openAnalyzeUI()
+    buttonSaying('draw')!.click()
+    p.settle(CROSSING)
+
+    select().value = 'view'
+    select().dispatchEvent(new Event('change'))
+    expect(document.querySelector('.analyze-transect')).not.toBeNull()
+  })
+
+  it('advances the instruction after the first click', () => {
+    const p = makePicker()
+    initAnalyzeUI(makeSource({ transect: () => p.picker }))
+    openAnalyzeUI()
+    buttonSaying('draw')!.click()
+    p.placeFirst()
+    // Re-render the way a pick would: the panel reads progress() to
+    // decide which half of the instruction to show.
+    buttonSaying('cancel')
+    expect(p.picker.progress()).toBe(1)
+  })
+})
+
+describe('buildTransectCsvText', () => {
+  const s = snap(16, 16, (_x, y) => (y < 8 ? 0 : 200))
+  const line = sampleTransect(
+    s, SCALE, { lat: 80, lon: -100 }, { lat: 10, lon: -100 }, 9, OPTIONS)
+
+  it('states the resolution claim in the header', () => {
+    const csv = buildTransectCsvText(line, SCALE, {
+      datasetTitle: 'Wildfire Smoke Overhead', scopeLabel: 'Along a line',
+    })
+    expect(csv).toContain('dataset,Wildfire Smoke Overhead')
+    expect(csv).toContain('samples,9')
+    expect(csv).toMatch(/sample_spacing_km,\d/)
+    expect(csv).toContain('distance_km,lat,lon,value')
+  })
+
+  it('keeps the gaps as rows with no value', () => {
+    // Dropping them would close the hole silently, which is the failure
+    // the chart takes care to avoid — the file must not undo it.
+    const csv = buildTransectCsvText(line, SCALE, { datasetTitle: null, scopeLabel: 'x' })
+    const body = csv.split('distance_km,lat,lon,value\r\n')[1].trim().split('\r\n')
+    expect(body).toHaveLength(line.length)
+    expect(body.some((row) => row.endsWith(','))).toBe(true)
+  })
+
+  it('writes values at full precision, not the three digits displayed', () => {
+    const precise = sampleTransect(
+      s, { ...SCALE, vmax: 1 }, { lat: 80, lon: -100 }, { lat: 10, lon: -100 }, 5, OPTIONS)
+    const csv = buildTransectCsvText(precise, { ...SCALE, vmax: 1 }, {
+      datasetTitle: null, scopeLabel: 'x',
+    })
+    expect(csv).toMatch(/0\.\d{5,}/)
   })
 })
