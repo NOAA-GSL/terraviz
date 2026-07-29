@@ -218,6 +218,19 @@ export function uvToTexel(
   uv: TexelUv,
 ): { sx: number; sy: number } | null {
   const { width, height } = sourceSize(source)
+  return uvToTexelInSize(width, height, uv)
+}
+
+/** `uvToTexel` against a bare size rather than a DOM source, for
+ *  callers holding a decoded frame instead of the element it came from
+ *  (`docentAnalysisTools`, which reads a `LumaSnapshot`). Same clamp,
+ *  one implementation — a second copy of this arithmetic is exactly the
+ *  kind of thing that drifts a half-texel and is never noticed. */
+export function uvToTexelInSize(
+  width: number,
+  height: number,
+  uv: TexelUv,
+): { sx: number; sy: number } | null {
   if (!width || !height) return null
   return {
     sx: Math.min(width - 1, Math.max(0, Math.floor(uv.u * width))),

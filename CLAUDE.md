@@ -120,6 +120,7 @@ npm run screenshots:smoke   # gating interaction tests (search, Orbit, nav)
 | `src/services/docentService.ts` | Orbit orchestrator — hybrid LLM + local engine |
 | `src/services/docentContext.ts` | LLM system prompt builder, history compression, tool definition |
 | `src/services/docentEngine.ts` | Local keyword-based fallback engine |
+| `src/services/docentAnalysisTools.ts` | The executors behind Orbit's answers about values (`docs/DATA_ANALYSIS_PLAN.md` §A6) — `probe_value` / `summarize_region` / `find_extremum` over the displayed frame, via a registered `DocentAnalysisSource`. Synchronous and local: no network, no endpoint. `isAnalysisAvailable()` is the gate the tool array is built from — it asks the source for a frame, which is false for a picture dataset, a browser without WebGL2, or a dataset mid-load, so absent either the tools are never offered and Orbit is unchanged. Every result carries a quantisation note, and low coverage carries a prose caveat |
 | `src/services/llmProvider.ts` | OpenAI-compatible SSE streaming client + `/models` fetch |
 | `src/services/downloadService.ts` | Offline dataset download manager (desktop only, Tauri commands) |
 | `src/services/tilePreloader.ts` | Eagerly fetches low-zoom GIBS tiles into cache on startup |

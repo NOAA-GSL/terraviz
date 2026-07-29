@@ -37,6 +37,7 @@ import { initChatUI, openChat, openChatSettings, notifyDatasetChanged, showChatT
 import { loadViewPreferences, saveViewPreferences, type ViewPreferences } from './utils/viewPreferences'
 import { renderColorbar, openDisplayControls, closeDisplayControls } from './ui/colorbarUI'
 import { initAnalyzeUI, closeAnalyzeUI, notifyAnalyzeDatasetChanged } from './ui/analyzeUI'
+import { registerAnalysisSource } from './services/docentAnalysisTools'
 import { buildHistogram } from './services/datasetStats'
 import { DEFAULT_DISPLAY, type ColorScaleDisplay } from './services/colorScaleDisplay'
 import { RENDER_ENCODING_DATA_LUMA } from './types/color-scale'
@@ -442,6 +443,16 @@ class InteractiveSphere {
             clear: () => primary.clearRegionOutline(),
           }
         },
+      })
+      // The same frame, reachable from Orbit's tool executors (§A6).
+      // Registered rather than passed down: `processMessage` already
+      // takes eight positional arguments, and the panel's own seam is
+      // established as a registration too. Reads the primary panel for
+      // the same reason the panel does.
+      registerAnalysisSource({
+        frame: () => this.viewports.getPrimary()?.analysisFrame() ?? null,
+        visibleBounds: () => this.viewports.getPrimary()?.visibleBounds() ?? null,
+        datasetTitle: () => this.appState.currentDataset?.title ?? null,
       })
       // Playlists — mount the manager panel host and wire the
       // playback state machine to the regular loadDataset flow.
