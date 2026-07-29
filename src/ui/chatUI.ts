@@ -1426,6 +1426,10 @@ async function handleSend(): Promise<void> {
             // make, not something to replay when a dataset finishes
             // loading.
             && action.type !== 'show-analysis'
+            // And a measurement is a statement, not an act. Deferring
+            // it would mean replaying a reading of one frame against
+            // whatever frame happened to be on screen later.
+            && action.type !== 'measurement'
           ) {
             pendingGlobeActions.push(action)
           }
@@ -1813,6 +1817,28 @@ function renderActions(actions: ChatAction[]): string {
           ? t('chat.action.analyzeView')
           : t('chat.action.analyzeDataset')
       return `<button class="chat-action-btn chat-action-analyze" data-analyze-scope="${escapeAttr(a.scope)}"${a.regionName ? ` data-analyze-region="${escapeAttr(a.regionName)}"` : ''} aria-label="${escapeAttr(t('chat.action.analyze.aria', { region: a.regionName ?? label }))}"><span class="chat-action-title">${escapeHtml(label)}</span></button>`
+    }
+    if (a.type === 'measurement') {
+      // The reading as the tool returned it, not as the sentence above
+      // retold it. Display-only and deliberately plain: this is the
+      // one element in a chat bubble that is not the model's voice, so
+      // it should not look like a control the user can press.
+      //
+      // Coordinates are formatted here from the signed floats rather
+      // than parsed out of prose — the compass letters are for reading
+      // and never round-trip back into anything.
+      const place = Number.isFinite(a.lat) && Number.isFinite(a.lon)
+        ? t('chat.measurement.at', {
+            lat: `${Math.abs(a.lat!).toFixed(2)}°${a.lat! >= 0 ? 'N' : 'S'}`,
+            lon: `${Math.abs(a.lon!).toFixed(2)}°${a.lon! >= 0 ? 'E' : 'W'}`,
+          })
+        : ''
+      const meta = [place, a.frameTime, a.dataset].filter(Boolean).join(' · ')
+      return `<div class="chat-measurement">
+        <span class="chat-measurement-eyebrow">${escapeHtml(t('chat.measurement.eyebrow'))}</span>
+        <p class="chat-measurement-value">${escapeHtml(a.valueText)}</p>
+        ${meta ? `<p class="chat-measurement-meta">${escapeHtml(meta)}</p>` : ''}
+      </div>`
     }
     if (a.type === 'event-citation') {
       // Cited current-event card. Display-only: the sibling load-dataset /

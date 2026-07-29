@@ -461,6 +461,42 @@ export type ChatAction =
       regionName?: string
     }
   /**
+   * The reading a value tool actually returned, rendered by the app
+   * rather than recounted by the model.
+   *
+   * Everything else in this union is something the user can do. This
+   * one is something the app *states*, and it exists because the
+   * sentence beside it cannot be trusted to state it correctly. Across
+   * ten live failures the model mis-reported a measured value in every
+   * way available: the wrong units, a unit belonging to a dataset it
+   * recommended in the same breath, a number from a neighbouring row's
+   * metadata, a region it had narrowed to silently, coordinates with
+   * the sign dropped, and — most recently — no location at all. Each
+   * was addressed at the prompt or at the payload, and the next one
+   * arrived in a new shape.
+   *
+   * So the number stops depending on the prose. `valueText` and the
+   * place come straight from the executor's own result, and if the
+   * sentence disagrees with the card, the user can see that it does.
+   * Display-only; nothing here is clickable and nothing is deferred.
+   */
+  | {
+      type: 'measurement'
+      /** The value already written out, units attached — the same
+       *  string the model was asked to quote. */
+      valueText: string
+      /** Absent for a whole-region summary, which measures an area
+       *  rather than a point. */
+      lat?: number
+      lon?: number
+      /** The frame this was read from. These datasets are animations;
+       *  a value with no time is a claim about an unnamed instant. */
+      frameTime?: string
+      /** The dataset the frame came from, not whatever app state
+       *  believes is loaded (see `2ca7417`). */
+      dataset?: string
+    }
+  /**
    * Load a single frame from a Phase 3pg image-sequence dataset.
    * `frameQuery` is the verbatim payload from the LLM's
    * `<<LOAD_FRAME:DATASET_ID:query>>` marker — one of:

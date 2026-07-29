@@ -2834,6 +2834,59 @@ describe('processMessage — §A6 value tools', () => {
     expect(JSON.parse(round2!.find((m: any) => m.role === 'tool').content).ok).toBe(false)
     expect(chunks.some(c => c.type === 'action' && (c as any).action.type === 'show-analysis')).toBe(false)
   })
+
+  // Ten live failures in, the model had mis-reported a measured value
+  // in every way the shape allows: wrong units, a unit belonging to a
+  // dataset it recommended in the same reply, a number lifted from a
+  // neighbouring row's metadata, a silently narrowed region, a dropped
+  // minus sign, and finally no location at all. The prompt asks for
+  // `valueText` verbatim and the payload no longer carries the parts to
+  // rebuild it from; both were necessary, neither was sufficient.
+  //
+  // So the reading is rendered from the executor's result. The prose can
+  // still be wrong — but now it is wrong *next to* the right answer.
+  it('emits the tool’s own value, place and time', async () => {
+    const { registerAnalysisSource } = await import('./docentAnalysisTools')
+    registerAnalysisSource(frameSource())
+    const { chunks } = await runToolCall('find_extremum', { kind: 'max' })
+    const card = chunks.find(c =>
+      c.type === 'action' && (c as any).action.type === 'measurement') as any
+    expect(card).toBeDefined()
+    // The units are the frame's, and they are not negotiable.
+    expect(card.action.valueText).toContain('mg m-2')
+    expect(typeof card.action.lat).toBe('number')
+    expect(typeof card.action.lon).toBe('number')
+  })
+
+  it('carries a mean for a region summary, with no coordinates', async () => {
+    // A region has no single point, and inventing one would be the same
+    // class of error the card exists to prevent.
+    const { registerAnalysisSource } = await import('./docentAnalysisTools')
+    registerAnalysisSource(frameSource())
+    const { chunks } = await runToolCall('summarize_region', { region_name: 'alaska' })
+    const card = chunks.find(c =>
+      c.type === 'action' && (c as any).action.type === 'measurement') as any
+    expect(card).toBeDefined()
+    expect(card.action.valueText).toContain('mg m-2')
+    expect(card.action.lat).toBeUndefined()
+    expect(card.action.lon).toBeUndefined()
+  })
+
+  it('emits no card when the tool refused', async () => {
+    const { registerAnalysisSource } = await import('./docentAnalysisTools')
+    registerAnalysisSource(frameSource())
+    const { chunks } = await runToolCall('summarize_region', { region_name: 'Mordor' })
+    expect(chunks.some(c =>
+      c.type === 'action' && (c as any).action.type === 'measurement')).toBe(false)
+  })
+
+  it('emits none at all when the tools are unavailable', async () => {
+    const { registerAnalysisSource } = await import('./docentAnalysisTools')
+    registerAnalysisSource(null)
+    const { chunks } = await runToolCall('search_datasets', { query: 'smoke' })
+    expect(chunks.some(c =>
+      c.type === 'action' && (c as any).action.type === 'measurement')).toBe(false)
+  })
 })
 
 describe('processMessage — §A6 find_extremum moves the globe itself', () => {

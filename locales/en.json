@@ -268,6 +268,8 @@
   "chat.header.title": "Orbit",
   "chat.input.label": "Ask Orbit",
   "chat.input.placeholder": "Ask about any dataset…",
+  "chat.measurement.at": "{lat}, {lon}",
+  "chat.measurement.eyebrow": "Measured",
   "chat.messages.aria": "Conversation",
   "chat.panel.aria": "Orbit — digital docent",
   "chat.send.aria": "Send message",

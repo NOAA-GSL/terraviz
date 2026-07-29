@@ -1782,6 +1782,10 @@ export async function* processMessage(
       let accumulatedText = ''
       // §A6 — one Analyze chip per distinct region per attempt.
       const analysisChipsThisAttempt = new Set<string>()
+      // §A6 — and one card per distinct reading. A model comparing two
+      // regions genuinely produced two measurements and should show
+      // both; the same measurement twice is a retry, not a result.
+      const analysisReadingsThisAttempt = new Set<string>()
       // §A6 — and one camera move. The first successful find_extremum
       // is the answer to the question; a later one is usually the
       // model comparing regions, and flying on each would drag the
@@ -2145,6 +2149,47 @@ export async function* processMessage(
               // picker showing a region it cannot select. Deduped per
               // turn, because a model comparing three regions would
               // otherwise stack three chips on one message.
+              // §A6 — state the reading ourselves.
+              //
+              // The number has now been mis-reported in every way the
+              // shape allows: wrong units, a unit belonging to a
+              // dataset recommended in the same reply, a value taken
+              // from a neighbouring row's metadata, a silently
+              // narrowed region, a dropped minus sign, and finally no
+              // location at all. The prompt asks for `valueText`
+              // verbatim; the payload no longer contains the parts to
+              // rebuild it from. Both were necessary and neither is
+              // sufficient, because a model that wants to paraphrase
+              // can always paraphrase.
+              //
+              // So the authoritative reading is rendered from the
+              // executor's own result, beside the prose rather than
+              // inside it. If the sentence and the card disagree, that
+              // is now visible instead of invisible — which is the
+              // same move as `ce85aca`: ask a path that cannot lie the
+              // same question, and surface the disagreement.
+              if (result.ok) {
+                const measured = result as {
+                  valueText?: string; meanText?: string
+                  lat?: number; lon?: number
+                  frameTime?: string; dataset?: string
+                }
+                const text = measured.valueText ?? measured.meanText
+                if (text && !analysisReadingsThisAttempt.has(text)) {
+                  analysisReadingsThisAttempt.add(text)
+                  yield {
+                    type: 'action',
+                    action: {
+                      type: 'measurement',
+                      valueText: text,
+                      ...(Number.isFinite(measured.lat) ? { lat: measured.lat } : {}),
+                      ...(Number.isFinite(measured.lon) ? { lon: measured.lon } : {}),
+                      ...(measured.frameTime ? { frameTime: measured.frameTime } : {}),
+                      ...(measured.dataset ? { dataset: measured.dataset } : {}),
+                    },
+                  }
+                }
+              }
               // §A6 — move the globe ourselves rather than asking the
               // model to call `fly_to` with the coordinates it just
               // read back.
