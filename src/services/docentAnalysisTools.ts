@@ -459,7 +459,22 @@ export function executeFindExtremum(
     lon: roundCoord(found.lon),
     value: round3(found.value),
     units: scale.units,
-    valueText: valueText(round3(found.value), scale, kind === 'max' && found.value >= scale.vmax),
+    // The scope is welded to the number rather than left in a
+    // neighbouring `region` field.
+    //
+    // A prompt rule already asked for the region to be stated, and it
+    // was not: live, "the worst smoke is at 47.5N 119.5W, 0.00023
+    // kg m-2" came back with no mention that the search had been
+    // narrowed, reading as a claim about the whole dataset when the
+    // frame's real maximum was elsewhere. Three instruction-shaped
+    // fixes have now failed that way (name the region, quote the
+    // units, keep the minus sign) and the two that held were both
+    // structural. So the scope goes where it cannot be dropped
+    // without dropping the number too.
+    valueText:
+      valueText(round3(found.value), scale, kind === 'max' && found.value >= scale.vmax)
+      + (kind === 'max' ? ', the highest anywhere in ' : ', the lowest anywhere in ')
+      + scope.label,
     precision: precisionNote(scale),
     ...(found.plateau
       ? {

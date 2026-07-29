@@ -468,3 +468,59 @@ describe('a value is attributed to the dataset it was measured from', () => {
     expect(executeProbeValue({ lat: 45, lon: -100 }).dataset).toBe('Wildfire Smoke Overhead')
   })
 })
+
+describe('an extremum carries the scope it was found in', () => {
+  // Live failure: "the worst smoke is at 47.5N 119.5W, 0.00023 kg m-2"
+  // came back for a frame whose real maximum was more than twice that
+  // and elsewhere — the model had narrowed the search and said nothing,
+  // so a regional answer read as a claim about the whole dataset. A
+  // prompt rule already asked for the region to be named and did not
+  // survive the sentence. So the scope rides inside the quotable string:
+  // dropping it now means dropping the number too.
+  it('says so when the search covered the whole dataset', () => {
+    registerAnalysisSource(makeSource({
+      frame: () => ({ snapshot: snap(4, 4, () => 100), scale: SCALE, options: OPTIONS }),
+    }))
+    expect(executeFindExtremum({ kind: 'max' }).valueText)
+      .toBe('100 mg m-2, the highest anywhere in the whole dataset')
+  })
+
+  it('names the region when the search was narrowed to one', () => {
+    registerAnalysisSource(makeSource({
+      frame: () => ({ snapshot: snap(64, 64, () => 100), scale: SCALE, options: OPTIONS }),
+    }))
+    const r = executeFindExtremum({ kind: 'max', region_name: 'gulf of mexico' })
+    // The table's spelling, not the caller's — the chip, the panel and
+    // the sentence all have to agree on which box was measured.
+    expect(r.valueText).toContain('the highest anywhere in Gulf of Mexico')
+    expect(r.valueText).not.toContain('the whole dataset')
+  })
+
+  it('distinguishes a view-scoped search from a dataset-wide one', () => {
+    registerAnalysisSource(makeSource({
+      frame: () => ({ snapshot: snap(64, 64, () => 100), scale: SCALE, options: OPTIONS }),
+      visibleBounds: () => ({ n: 50, s: 30, w: -125, e: -100 }),
+    }))
+    expect(executeFindExtremum({ kind: 'max', region: 'view' }).valueText)
+      .toContain('the highest anywhere in the current view')
+  })
+
+  it('reads as a minimum when asked for one', () => {
+    registerAnalysisSource(makeSource({
+      frame: () => ({ snapshot: snap(4, 4, () => 100), scale: SCALE, options: OPTIONS }),
+    }))
+    expect(executeFindExtremum({ kind: 'min' }).valueText)
+      .toBe('100 mg m-2, the lowest anywhere in the whole dataset')
+  })
+
+  it('keeps the clipping caveat and the scope in one sentence', () => {
+    // Both caveats are structural, so neither can be dropped without
+    // the other — "at least X, the highest anywhere in Y" is the whole
+    // claim, and it is one string.
+    registerAnalysisSource(makeSource({
+      frame: () => ({ snapshot: snap(4, 4, () => 255), scale: SCALE, options: OPTIONS }),
+    }))
+    const r = executeFindExtremum({ kind: 'max' })
+    expect(r.valueText).toBe('at least 255 mg m-2, the highest anywhere in the whole dataset')
+  })
+})

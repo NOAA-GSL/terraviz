@@ -908,7 +908,8 @@ The failure this is written to prevent, verbatim from a real session: asked "whe
 - **Say the value by quoting \`valueText\` (or \`meanText\`) EXACTLY.** It arrives already written the way it should be said — number, units, and an "at least" when the field is clipping. Do not rebuild it from the separate \`value\` and \`units\` fields, do not round it further, and above all **never convert or substitute the units**. If a dataset's units look unfamiliar, quote them anyway; unfamiliar is not wrong. This has gone wrong in exactly one way: a column-integrated dataset measured in \`kg m-2\` was reported as "micrograms per cubic metre", a concentration unit belonging to a *different* dataset that the same reply went on to recommend. Two datasets about the same subject do not share units.
 - **A value belongs to the dataset it was measured from.** If you mention any other dataset in the same reply, do not attach a measured number to it — you have measured only the one on screen.
 - **Respect \`precision\`.** Every result carries a quantisation note. Do not state more digits than it allows, and do not present a single extreme value as more exact than the note says it is.
-- **Say what the number is OF, every time.** A result carries \`region\` and \`frameTime\`; both belong in your sentence. "The smoke is worst at 47.5°N, 119.5°W" reads as a claim about the whole dataset — if \`region\` says otherwise, the answer is wrong by omission. Say "the worst in <region>", and name the time the globe is showing. These are animations; a value with no time is a claim about an unnamed instant.
+- **Say when the number is FROM.** Every result carries \`frameTime\` — the instant the globe is showing. Name it. These are animations; a value with no time is a claim about an unnamed instant. (What the number is *of* is already inside \`valueText\`: quoting that string whole states the area the search covered, which is why it must not be trimmed.)
+- **Search the whole dataset unless the user named a place.** "Where is it worst?" is a question about everything on screen. Narrowing to a region without being asked produces a smaller number somewhere else entirely, and the user has no way to tell.
 - **Honour \`plateau\` when it appears.** The extreme value is shared by many cells, so there is no single worst *spot* — describe it as worst across an area, and treat the coordinates as a representative point rather than a pinpoint.
 - **Honour \`saturated\` when it appears.** The field is clipping at the top of its scale, so the number is a floor: say "at least", not an exact figure.
 - **Read \`coverage\` and any \`caveat\` out loud.** A mean over a quarter of a region is a different claim from a mean over all of it, and the user cannot see the difference unless you say it.
@@ -996,7 +997,7 @@ export function getFindExtremumTool(): LLMTool {
     type: 'function',
     function: {
       name: 'find_extremum',
-      description: 'Find where the currently loaded dataset is at its highest or lowest in the frame on screen, and by how much. Returns latitude, longitude, the value and its units. Use this for "where is it worst / strongest / lowest" questions. After it returns you may call `fly_to` and `add_marker` with the coordinates so the user can see the place.',
+      description: 'Find where the currently loaded dataset is at its highest or lowest in the frame on screen, and by how much. Returns latitude, longitude, the value and its units. Use this for "where is it worst / strongest / lowest" questions. The app flies the globe to the result and drops a pin by itself — do NOT call `fly_to` or `add_marker` afterwards.',
       parameters: {
         type: 'object',
         properties: {
@@ -1007,11 +1008,11 @@ export function getFindExtremumTool(): LLMTool {
           },
           region_name: {
             type: 'string',
-            description: 'Optional named region to search within, from the same set `summarize_region` accepts.',
+            description: 'Optional named region to search within, from the same set `summarize_region` accepts. Omit it — the default is the whole dataset, which is what "where is it worst?" asks. Passing a region narrows the search and yields a different, smaller answer, so pass one ONLY when the user named a place.',
           },
           bbox: {
             type: 'object',
-            description: 'Optional explicit bounding box to search within.',
+            description: 'Optional explicit bounding box to search within. Same rule as `region_name`: omit it unless the user asked about a specific area.',
             properties: {
               north: { type: 'number' },
               south: { type: 'number' },

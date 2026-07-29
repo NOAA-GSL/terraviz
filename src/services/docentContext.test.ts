@@ -17,6 +17,7 @@ import {
   getAddMarkerTool,
   getToggleLabelsTool,
   getHighlightRegionTool,
+  getFindExtremumTool,
   buildViewContextSection,
 } from './docentContext'
 
@@ -903,6 +904,28 @@ describe('§A6 — the value carve-out', () => {
     expect(prompt).toContain('precision')
     expect(prompt).toContain('coverage')
     expect(prompt).toContain('noData')
+  })
+
+  it('does not contradict itself about who flies the globe', () => {
+    // The carve-out says the app flies; the tool description used to
+    // say "you may call fly_to and add_marker afterwards". A model
+    // handed both follows one of them, and the one it followed was the
+    // one that sent the globe to China.
+    const desc = getFindExtremumTool().function.description ?? ''
+    expect(desc).toMatch(/do NOT call `fly_to` or `add_marker`/i)
+    expect(desc).not.toMatch(/you may call `fly_to`/i)
+  })
+
+  it('says the search defaults to everything, in the prompt and on the argument', () => {
+    // Live failure: "the worst smoke is at 47.5N 119.5W, 0.00023 kg m-2"
+    // for a frame whose maximum was more than twice that. The tool was
+    // never told that passing a region changes the answer, and the
+    // reply gave no sign one had been passed.
+    const prompt = buildSystemPrompt([], null, 'general', false, null, null, null, undefined, true)
+    expect(prompt).toMatch(/search the whole dataset unless the user named a place/i)
+    const props = getFindExtremumTool().function.parameters?.properties as
+      Record<string, { description?: string }> | undefined
+    expect(props?.region_name?.description).toMatch(/the default is the whole dataset/i)
   })
 })
 

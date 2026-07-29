@@ -2098,7 +2098,14 @@ export async function* processMessage(
                 call.name === 'probe_value' ? executeProbeValue(call.arguments, currentTime)
                 : call.name === 'summarize_region' ? executeSummarizeRegion(call.arguments, currentTime)
                 : executeFindExtremum(call.arguments, currentTime)
-              logger.info(`[Docent] ${call.name} → ${result.ok ? 'ok' : `refused: ${result.error}`}`)
+              // Args as well as outcome: when an answer looks wrong the
+              // first question is always what it was asked, and a
+              // region the model narrowed to without saying so is
+              // invisible in the reply itself.
+              logger.info(
+                `[Docent] ${call.name}(${JSON.stringify(call.arguments)}) → `
+                + (result.ok ? `ok: ${(result as { valueText?: string }).valueText ?? 'ok'}` : `refused: ${result.error}`),
+              )
               // `scope` is for us, not the model — strip it before the
               // result goes into the prompt so it cannot be mistaken
               // for something to quote.
