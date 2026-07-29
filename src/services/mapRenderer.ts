@@ -589,11 +589,13 @@ export class MapRenderer implements GlobeRenderer {
    * "no dataset carrying values" against a globe that had one.
    *
    * The deadline path is safe because `addLayer` needs only the style
-   * *parsed*, not every source *loaded* — MapLibre sets its internal
-   * loaded flag when the style JSON is applied, which for an inline
-   * style like this one happens synchronously after `setStyle`. Only
-   * `Map#loaded()` waits for sources, and that is exactly the wait being
-   * bypassed.
+   * *parsed*, not every source *loaded*. This renderer hands MapLibre a
+   * style **object** in the `Map` constructor (`style:
+   * createGlobeStyle(...)`), so there is no style-document fetch to wait
+   * on — construction applies it and MapLibre's internal loaded flag,
+   * the one `addLayer` checks, is set from there. `Map#loaded()` is the
+   * separate question of whether every *source* has finished, and that
+   * is exactly the wait being bypassed.
    *
    * Runs once; whichever trigger arrives first wins.
    */
