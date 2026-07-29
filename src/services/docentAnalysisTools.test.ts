@@ -280,3 +280,55 @@ describe('executeFindExtremum', () => {
     expect(r.value).toBeCloseTo(90, 6)
   })
 })
+
+describe('saying what the number is of', () => {
+  it('carries the frame time, because these are animations', () => {
+    // Without it, "the smoke is worst at 47.5N" is a claim about an
+    // unnamed instant of an 85-frame forecast.
+    registerAnalysisSource(makeSource())
+    const t = 'Jul 28, 2026 at 12:00 PM'
+    expect(executeProbeValue({ lat: 45, lon: -100 }, t).frameTime).toBe(t)
+    expect(executeSummarizeRegion({}, t).frameTime).toBe(t)
+    expect(executeFindExtremum({}, t).frameTime).toBe(t)
+  })
+
+  it('omits the time rather than inventing one when there is none', () => {
+    registerAnalysisSource(makeSource())
+    expect(executeFindExtremum({}, null).frameTime).toBeUndefined()
+    expect(executeFindExtremum({}).frameTime).toBeUndefined()
+  })
+
+  it('names the region on every scoped answer', () => {
+    // The live failure: find_extremum scoped to a region, and the
+    // answer read as a whole-dataset claim because the region was
+    // never mentioned.
+    registerAnalysisSource(makeSource())
+    expect(executeFindExtremum({ region_name: 'mexico' }).region).toBe('Mexico')
+    expect(executeFindExtremum({}).region).toMatch(/whole dataset/i)
+  })
+
+  it('flags an extremum that is clipping at the top of the scale', () => {
+    // A max of exactly vmax means the field saturates there — a floor,
+    // not a measurement. Quoting it as exact overstates the encoding.
+    registerAnalysisSource(makeSource({
+      frame: () => ({ snapshot: snap(4, 4, () => 255), scale: SCALE, options: OPTIONS }),
+    }))
+    const r = executeFindExtremum({ kind: 'max' })
+    expect(r.value).toBeCloseTo(255, 6)
+    expect(r.saturated).toMatch(/at least/i)
+  })
+
+  it('says nothing about saturation for an unclipped field', () => {
+    registerAnalysisSource(makeSource())
+    expect(executeFindExtremum({ kind: 'max' }).saturated).toBeUndefined()
+  })
+
+  it('never flags a minimum as saturated', () => {
+    // vmin is the bottom of the scale, and the no-data band already
+    // covers "nothing here" — a min is not a clipped reading.
+    registerAnalysisSource(makeSource({
+      frame: () => ({ snapshot: snap(4, 4, () => 255), scale: SCALE, options: OPTIONS }),
+    }))
+    expect(executeFindExtremum({ kind: 'min' }).saturated).toBeUndefined()
+  })
+})

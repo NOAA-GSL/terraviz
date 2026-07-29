@@ -2086,10 +2086,12 @@ export async function* processMessage(
             ) {
               // §A6. Local and synchronous — the whole frame is already
               // in memory, so this is arithmetic, not a fetch.
+              // `currentTime` is the label the globe is showing, so the
+              // answer and the screen name the same instant.
               const result =
-                call.name === 'probe_value' ? executeProbeValue(call.arguments)
-                : call.name === 'summarize_region' ? executeSummarizeRegion(call.arguments)
-                : executeFindExtremum(call.arguments)
+                call.name === 'probe_value' ? executeProbeValue(call.arguments, currentTime)
+                : call.name === 'summarize_region' ? executeSummarizeRegion(call.arguments, currentTime)
+                : executeFindExtremum(call.arguments, currentTime)
               logger.info(`[Docent] ${call.name} → ${result.ok ? 'ok' : `refused: ${result.error}`}`)
               // `scope` is for us, not the model — strip it before the
               // result goes into the prompt so it cannot be mistaken

@@ -907,6 +907,8 @@ The failure this is written to prevent, verbatim from a real session: asked "whe
 - **Call a tool rather than estimating.** "How much smoke is over Colorado?" means \`summarize_region({ region_name: "colorado" })\`, not a guess from the picture.
 - **Quote the units** that come back, verbatim. Do not convert to units you prefer.
 - **Respect \`precision\`.** Every result carries a quantisation note. Do not state more digits than it allows, and do not present a single extreme value as more exact than the note says it is.
+- **Say what the number is OF, every time.** A result carries \`region\` and \`frameTime\`; both belong in your sentence. "The smoke is worst at 47.5°N, 119.5°W" reads as a claim about the whole dataset — if \`region\` says otherwise, the answer is wrong by omission. Say "the worst in <region>", and name the time the globe is showing. These are animations; a value with no time is a claim about an unnamed instant.
+- **Honour \`saturated\` when it appears.** The field is clipping at the top of its scale, so the number is a floor: say "at least", not an exact figure.
 - **Read \`coverage\` and any \`caveat\` out loud.** A mean over a quarter of a region is a different claim from a mean over all of it, and the user cannot see the difference unless you say it.
 - **\`noData: true\` means the dataset covers that point and reports nothing there.** That is not "a low value" and not "outside coverage" — say the dataset shows nothing there.
 - **When a tool returns \`ok: false\`, say what it says.** Do not retry with a different region hoping for a number, and do not fall back to describing the colours.

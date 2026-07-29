@@ -124,6 +124,11 @@ export interface ProbeValueResult {
   ok: boolean
   error?: string
   dataset?: string
+  /** Which frame this measures. These datasets are animations — an
+   *  85-frame forecast for the shipped rows — so a value without a time
+   *  is a claim about an unnamed instant. Sourced from the same label
+   *  the globe shows, so the answer and the screen agree. */
+  frameTime?: string
   lat?: number
   lon?: number
   value?: number
@@ -137,7 +142,10 @@ export interface ProbeValueResult {
 }
 
 /** The value at one point of the displayed frame. */
-export function executeProbeValue(args: Record<string, unknown>): ProbeValueResult {
+export function executeProbeValue(
+  args: Record<string, unknown>,
+  frameTime?: string | null,
+): ProbeValueResult {
   const frame = source?.frame()
   if (!frame) return { ok: false, error: 'No dataset carrying values is loaded.' }
   const lat = Number(args.lat)
@@ -159,6 +167,7 @@ export function executeProbeValue(args: Record<string, unknown>): ProbeValueResu
   return {
     ok: true,
     dataset: source?.datasetTitle() ?? undefined,
+    ...(frameTime ? { frameTime } : {}),
     lat: round3(lat),
     lon: round3(lon),
     value: round3(lumaToValue(luma, scale)),
@@ -223,6 +232,11 @@ export interface SummarizeRegionResult {
   ok: boolean
   error?: string
   dataset?: string
+  /** Which frame this measures. These datasets are animations — an
+   *  85-frame forecast for the shipped rows — so a value without a time
+   *  is a claim about an unnamed instant. Sourced from the same label
+   *  the globe shows, so the answer and the screen agree. */
+  frameTime?: string
   region?: string
   /** Not sent to the model — consumed by `docentService` to decide
    *  whether the Analyze chip can be offered for this answer. */
@@ -250,7 +264,10 @@ export interface SummarizeRegionResult {
 const LOW_COVERAGE = 0.25
 
 /** Area-weighted statistics over a region of the displayed frame. */
-export function executeSummarizeRegion(args: Record<string, unknown>): SummarizeRegionResult {
+export function executeSummarizeRegion(
+  args: Record<string, unknown>,
+  frameTime?: string | null,
+): SummarizeRegionResult {
   const frame = source?.frame()
   if (!frame) return { ok: false, error: 'No dataset carrying values is loaded.' }
   const scope = resolveScope(args)
@@ -269,6 +286,7 @@ export function executeSummarizeRegion(args: Record<string, unknown>): Summarize
   return {
     ok: true,
     dataset: source?.datasetTitle() ?? undefined,
+    ...(frameTime ? { frameTime } : {}),
     region: scope.label,
     scope: scope.scope,
     units: stats.units,
@@ -295,11 +313,21 @@ export interface FindExtremumResult {
   ok: boolean
   error?: string
   dataset?: string
+  /** Which frame this measures. These datasets are animations — an
+   *  85-frame forecast for the shipped rows — so a value without a time
+   *  is a claim about an unnamed instant. Sourced from the same label
+   *  the globe shows, so the answer and the screen agree. */
+  frameTime?: string
   region?: string
   /** Not sent to the model — consumed by `docentService` to decide
    *  whether the Analyze chip can be offered for this answer. */
   scope?: ResolvedScope
   kind?: 'max' | 'min'
+  /** Present when the extremum lands on the top of the colour scale.
+   *  A field that clips there reports its maximum as exactly `vmax`,
+   *  which is a floor rather than a measurement, and quoting it as an
+   *  exact figure overstates what the encoding can carry. */
+  saturated?: string
   lat?: number
   lon?: number
   value?: number
@@ -315,7 +343,10 @@ export interface FindExtremumResult {
  * rides along with every result: a single extreme texel sits at the top
  * of the compression noise, not above it.
  */
-export function executeFindExtremum(args: Record<string, unknown>): FindExtremumResult {
+export function executeFindExtremum(
+  args: Record<string, unknown>,
+  frameTime?: string | null,
+): FindExtremumResult {
   const frame = source?.frame()
   if (!frame) return { ok: false, error: 'No dataset carrying values is loaded.' }
   const scope = resolveScope(args)
@@ -335,6 +366,7 @@ export function executeFindExtremum(args: Record<string, unknown>): FindExtremum
   return {
     ok: true,
     dataset: source?.datasetTitle() ?? undefined,
+    ...(frameTime ? { frameTime } : {}),
     region: scope.label,
     scope: scope.scope,
     kind,
@@ -343,5 +375,12 @@ export function executeFindExtremum(args: Record<string, unknown>): FindExtremum
     value: round3(found.value),
     units: scale.units,
     precision: precisionNote(scale),
+    ...(kind === 'max' && found.value >= scale.vmax
+      ? {
+          saturated:
+            `This sits at the very top of the dataset's scale (${scale.vmax}${scale.units ? ` ${scale.units}` : ''}), ` +
+            'so it is a floor, not a measurement — the true value is at least this and may be higher. Say "at least".',
+        }
+      : {}),
   }
 }
