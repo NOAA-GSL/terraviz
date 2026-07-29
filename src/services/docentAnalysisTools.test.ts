@@ -332,3 +332,37 @@ describe('saying what the number is of', () => {
     expect(executeFindExtremum({ kind: 'min' }).saturated).toBeUndefined()
   })
 })
+
+describe('coordinates', () => {
+  it('keeps a western longitude precise, not rounded to significant figures', () => {
+    // Three significant figures turns -119.53 into -120 — half a
+    // degree, about 50 km — while leaving -9.53 alone. Precision that
+    // varies with magnitude is not precision.
+    registerAnalysisSource(makeSource())
+    const r = executeProbeValue({ lat: 47.531, lon: -119.534 })
+    expect(r.lon).toBeCloseTo(-119.534, 9)
+    expect(r.lat).toBeCloseTo(47.531, 9)
+  })
+
+  it('keeps the sign, which is the whole difference between Washington and China', () => {
+    registerAnalysisSource(makeSource())
+    const r = executeProbeValue({ lat: 47.5, lon: -119.5 })
+    expect(r.lon).toBe(-119.5)
+    expect(r.lon).toBeLessThan(0)
+  })
+
+  it('reports the extremum’s position without magnitude-dependent rounding', () => {
+    registerAnalysisSource(makeSource({
+      frame: () => ({
+        snapshot: snap(64, 64, (x, y) => (x === 40 && y === 20 ? 250 : 100)),
+        scale: SCALE,
+        options: OPTIONS,
+      }),
+    }))
+    const r = executeFindExtremum({ kind: 'max' })
+    // Inside the dataset box, and carrying more than three significant
+    // figures of longitude.
+    expect(r.lon!).toBeLessThan(0)
+    expect(Math.abs(r.lon! - Math.round(r.lon!))).toBeGreaterThan(0)
+  })
+})

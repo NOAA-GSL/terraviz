@@ -94,6 +94,21 @@ export function isAnalysisAvailable(): boolean {
   }
 }
 
+/**
+ * Coordinates round to a fixed number of decimals, never to
+ * significant digits.
+ *
+ * `round3` is right for a *value*, whose precision is capped by the
+ * transport. It is wrong for a coordinate: three significant figures
+ * turns -119.53 into -120, half a degree and about 50 km out, while
+ * leaving -9.53 untouched. Precision that varies with magnitude is not
+ * precision. Three decimals is ~111 m, matching the rounding
+ * `src/analytics/camera.ts` already applies to lat/lon.
+ */
+function roundCoord(value: number): number {
+  return Number.isFinite(value) ? Math.round(value * 1000) / 1000 : value
+}
+
 /** Three significant digits, matching `formatProbeReading` — the
  *  measured encoder RMSE is about one luma step, so more digits than
  *  the hover readout shows would be false precision in a sentence the
@@ -168,8 +183,8 @@ export function executeProbeValue(
     ok: true,
     dataset: source?.datasetTitle() ?? undefined,
     ...(frameTime ? { frameTime } : {}),
-    lat: round3(lat),
-    lon: round3(lon),
+    lat: roundCoord(lat),
+    lon: roundCoord(lon),
     value: round3(lumaToValue(luma, scale)),
     units: scale.units,
     noData: isTransparentLuma(luma, scale),
@@ -370,8 +385,8 @@ export function executeFindExtremum(
     region: scope.label,
     scope: scope.scope,
     kind,
-    lat: round3(found.lat),
-    lon: round3(found.lon),
+    lat: roundCoord(found.lat),
+    lon: roundCoord(found.lon),
     value: round3(found.value),
     units: scale.units,
     precision: precisionNote(scale),
