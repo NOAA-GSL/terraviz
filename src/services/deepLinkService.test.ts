@@ -63,6 +63,24 @@ describe('parseDatasetFromUrl', () => {
     expect(parseDatasetFromUrl('dataset/INTERNAL_SOS_999')).toBe('INTERNAL_SOS_999')
   })
 
+  // Every entry point shares one grammar, so a link the web boot path
+  // rejects must not sneak in through the native deep-link handler.
+  it('rejects nested segments and over-long refs, same as the web path', () => {
+    expect(parseDatasetFromUrl('https://terraviz.zyra-project.org/dataset/foo/extra')).toBeNull()
+    expect(parseDatasetFromUrl('dataset/foo/extra')).toBeNull()
+    const tooLong = 'a'.repeat(65)
+    expect(parseDatasetFromUrl(`https://terraviz.zyra-project.org/dataset/${tooLong}`)).toBeNull()
+    expect(parseDatasetFromUrl(`zyra://dataset/${tooLong}`)).toBeNull()
+  })
+
+  it('parses the slug form on every entry point', () => {
+    expect(parseDatasetFromUrl('zyra://dataset/north-america-smoke')).toBe('north-america-smoke')
+    expect(parseDatasetFromUrl('https://terraviz.zyra-project.org/dataset/north-america-smoke'))
+      .toBe('north-america-smoke')
+    expect(parseDatasetFromUrl('https://terraviz.zyra-project.org/?dataset=north-america-smoke'))
+      .toBe('north-america-smoke')
+  })
+
   it('returns null for empty string', () => {
     expect(parseDatasetFromUrl('')).toBeNull()
   })

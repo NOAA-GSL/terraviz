@@ -100,8 +100,11 @@ export function parseDatasetFromUrl(url: string): string | null {
       host.endsWith('.pages.dev') ||
       host === 'localhost'
     if (isKnownHost) {
-      const pathMatch = parsed.pathname.match(/\/dataset\/([A-Za-z0-9_-]+)/)
-      if (pathMatch) return pathMatch[1]
+      // Same parser the web boot path uses, so a link that resolves
+      // in the browser resolves in the native app and vice versa —
+      // including its length cap and its refusal of nested segments.
+      const fromPath = parseDatasetPathname(parsed.pathname)
+      if (fromPath) return fromPath
 
       // Query param: ?dataset=INTERNAL_SOS_123 (validated, known hosts only)
       const queryRef = parsed.searchParams.get('dataset')
@@ -110,8 +113,9 @@ export function parseDatasetFromUrl(url: string): string | null {
 
     return null
   } catch {
-    // Not a valid URL — try as a bare path
-    const bareMatch = url.match(/dataset\/([A-Za-z0-9_-]+)/)
-    return bareMatch ? bareMatch[1] : null
+    // Not a valid URL — try as a bare path. Normalising the leading
+    // slash routes it through the same parser rather than a second,
+    // looser regex that would accept refs the others reject.
+    return parseDatasetPathname(url.startsWith('/') ? url : `/${url}`)
   }
 }
