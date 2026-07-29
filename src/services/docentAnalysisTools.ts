@@ -128,6 +128,29 @@ function quantisationStep(scale: ColorScale): number {
   return (scale.vmax - scale.vmin) / 255
 }
 
+/**
+ * A finished, ready-to-quote rendering of one value.
+ *
+ * `units` alone was not enough. Asked where the smoke was worst with a
+ * column-integrated dataset loaded — units `kg m-2` — the model
+ * answered "150 micrograms per cubic metre", which is a *concentration*
+ * unit belonging to the near-surface dataset it went on to recommend in
+ * the same message. It substituted a familiar unit for the real one.
+ * The prompt already said to quote units verbatim; the instruction lost
+ * to the pull of a unit it had seen a thousand times for smoke.
+ *
+ * So the number and its units arrive pre-joined, exactly as they should
+ * be said, and the prompt asks for this string rather than for a
+ * faithful re-rendering of two separate fields. Same lesson as the
+ * fly-to: hand over the finished artifact instead of the parts.
+ */
+function valueText(value: number, scale: ColorScale, atLeast = false): string {
+  const prefix = atLeast ? 'at least ' : ''
+  return scale.units
+    ? `${prefix}${value} ${scale.units}`
+    : `${prefix}${value}`
+}
+
 function precisionNote(scale: ColorScale): string {
   const step = round3(quantisationStep(scale))
   return scale.units
@@ -137,6 +160,11 @@ function precisionNote(scale: ColorScale): string {
 
 export interface ProbeValueResult {
   ok: boolean
+  /** The value and its units, already joined and ready to quote. The
+   *  model is asked for this rather than for a faithful re-rendering of
+   *  `value` and `units`, because it substituted a plausible-looking
+   *  unit from a different dataset when left to compose them. */
+  valueText?: string
   error?: string
   dataset?: string
   /** Which frame this measures. These datasets are animations — an
@@ -187,6 +215,7 @@ export function executeProbeValue(
     lon: roundCoord(lon),
     value: round3(lumaToValue(luma, scale)),
     units: scale.units,
+    valueText: valueText(round3(lumaToValue(luma, scale)), scale),
     noData: isTransparentLuma(luma, scale),
     precision: precisionNote(scale),
   }
@@ -245,6 +274,11 @@ function resolveScope(
 
 export interface SummarizeRegionResult {
   ok: boolean
+  /** The value and its units, already joined and ready to quote. The
+   *  model is asked for this rather than for a faithful re-rendering of
+   *  `value` and `units`, because it substituted a plausible-looking
+   *  unit from a different dataset when left to compose them. */
+  meanText?: string
   error?: string
   dataset?: string
   /** Which frame this measures. These datasets are animations — an
@@ -305,6 +339,7 @@ export function executeSummarizeRegion(
     region: scope.label,
     scope: scope.scope,
     units: stats.units,
+    meanText: valueText(round3(stats.mean), scale),
     mean: round3(stats.mean),
     median: round3(stats.median),
     min: round3(stats.min),
@@ -326,6 +361,11 @@ export function executeSummarizeRegion(
 
 export interface FindExtremumResult {
   ok: boolean
+  /** The value and its units, already joined and ready to quote. The
+   *  model is asked for this rather than for a faithful re-rendering of
+   *  `value` and `units`, because it substituted a plausible-looking
+   *  unit from a different dataset when left to compose them. */
+  valueText?: string
   error?: string
   dataset?: string
   /** Which frame this measures. These datasets are animations — an
@@ -389,6 +429,7 @@ export function executeFindExtremum(
     lon: roundCoord(found.lon),
     value: round3(found.value),
     units: scale.units,
+    valueText: valueText(round3(found.value), scale, kind === 'max' && found.value >= scale.vmax),
     precision: precisionNote(scale),
     ...(kind === 'max' && found.value >= scale.vmax
       ? {

@@ -879,6 +879,17 @@ describe('§A6 — the value carve-out', () => {
     expect(prompt).toMatch(/northern China/i)
   })
 
+  it('asks for the pre-joined value string, not a rebuild from parts', () => {
+    // Live failure: kg m-2 reported as micrograms per cubic metre, the
+    // unit of the dataset the same reply recommended. Quoting a
+    // finished string removes the step where that substitution happened.
+    const prompt = buildSystemPrompt([], null, 'general', false, null, null, null, undefined, true)
+    expect(prompt).toMatch(/`valueText`/)
+    expect(prompt).toMatch(/never convert or substitute the units/i)
+    expect(prompt).toMatch(/unfamiliar is not wrong/i)
+    expect(prompt).toMatch(/do not attach a measured number to it/i)
+  })
+
   it('forbids answering a values question by recommending another dataset', () => {
     // The specific wrong turn observed live: the related-dataset reflex
     // firing on a question that was never about discovery.

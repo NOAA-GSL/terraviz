@@ -366,3 +366,57 @@ describe('coordinates', () => {
     expect(Math.abs(r.lon! - Math.round(r.lon!))).toBeGreaterThan(0)
   })
 })
+
+describe('units travel joined to the number', () => {
+  // Live failure: a column-integrated dataset in kg m-2 was reported as
+  // "150 micrograms per cubic metre" — a concentration unit belonging to
+  // the near-surface dataset the same reply recommended. `units` as a
+  // separate field lost to a unit the model had seen a thousand times
+  // for smoke, so the value now arrives pre-joined and quotable.
+  const COLUMN: ColorScale = { ...SCALE, vmax: 5e-4, units: 'kg m-2' }
+  const COLUMN_OPTS: DatasetOverlayOptions = { ...OPTIONS, colorScale: COLUMN }
+
+  it('joins value and units for a probe', () => {
+    registerAnalysisSource(makeSource({
+      frame: () => ({ snapshot: snap(4, 4, () => 128), scale: COLUMN, options: COLUMN_OPTS }),
+    }))
+    const r = executeProbeValue({ lat: 45, lon: -100 })
+    expect(r.valueText).toBe(`${r.value} kg m-2`)
+    expect(r.valueText).not.toMatch(/microgram|µg|per cubic/i)
+  })
+
+  it('joins the mean for a region', () => {
+    registerAnalysisSource(makeSource({
+      frame: () => ({ snapshot: snap(4, 4, () => 128), scale: COLUMN, options: COLUMN_OPTS }),
+    }))
+    const r = executeSummarizeRegion({})
+    expect(r.meanText).toBe(`${r.mean} kg m-2`)
+  })
+
+  it('folds the clipping caveat into the quotable string', () => {
+    // So "at least" is not something the model has to remember to add.
+    registerAnalysisSource(makeSource({
+      frame: () => ({ snapshot: snap(4, 4, () => 255), scale: COLUMN, options: COLUMN_OPTS }),
+    }))
+    const r = executeFindExtremum({ kind: 'max' })
+    expect(r.valueText).toMatch(/^at least /)
+    expect(r.valueText).toContain('kg m-2')
+  })
+
+  it('says "at least" only when the field is actually clipping', () => {
+    registerAnalysisSource(makeSource({
+      frame: () => ({ snapshot: snap(4, 4, () => 100), scale: COLUMN, options: COLUMN_OPTS }),
+    }))
+    expect(executeFindExtremum({ kind: 'max' }).valueText).not.toMatch(/at least/)
+  })
+
+  it('omits units cleanly for a scale that carries none', () => {
+    const bare: ColorScale = { ...COLUMN, units: undefined }
+    registerAnalysisSource(makeSource({
+      frame: () => ({ snapshot: snap(4, 4, () => 128), scale: bare, options: { ...OPTIONS, colorScale: bare } }),
+    }))
+    const r = executeProbeValue({ lat: 45, lon: -100 })
+    expect(r.valueText).toBe(String(r.value))
+    expect(r.valueText).not.toContain('undefined')
+  })
+})
