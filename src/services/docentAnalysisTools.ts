@@ -304,6 +304,11 @@ export interface SummarizeRegionResult {
    *  `value` and `units`, because it substituted a plausible-looking
    *  unit from a different dataset when left to compose them. */
   meanText?: string
+  /** Median, percentiles and range as one written string, units stated
+   *  once. Same reason as `meanText`: a statistic the model has to
+   *  assemble from a bare number plus a `units` field is a statistic it
+   *  can assemble wrongly. */
+  distributionText?: string
   error?: string
   dataset?: string
   /** Which frame this measures. These datasets are animations — an
@@ -365,6 +370,15 @@ export function executeSummarizeRegion(
     scope: scope.scope,
     units: stats.units,
     meanText: valueText(round3(stats.mean), scale),
+    // Every other statistic joined into one string, units stated once.
+    // Six bare numbers beside a `units` field is the same invitation
+    // to recombine that produced a column loading quoted in a
+    // concentration unit — and only the mean had a written form to
+    // quote instead. Now none of them need one.
+    distributionText:
+      `median ${valueText(round3(stats.median), scale)}, `
+      + `10th–90th percentile ${round3(stats.p10)} to ${valueText(round3(stats.p90), scale)}, `
+      + `full range ${round3(stats.min)} to ${valueText(round3(stats.max), scale)}`,
     mean: round3(stats.mean),
     median: round3(stats.median),
     min: round3(stats.min),

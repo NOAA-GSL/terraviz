@@ -875,19 +875,22 @@ describe('§A6 — the value carve-out', () => {
     const prompt = buildSystemPrompt([], null, 'general', false, null, null, null, undefined, true)
     expect(prompt).toMatch(/find_extremum` moves the globe for you/i)
     expect(prompt).toMatch(/do not call `fly_to` or `add_marker` yourself/i)
-    // The signed-degrees rule survives for any other fly_to call.
+    // The signed-degrees rule survives for any other fly_to call —
+    // stated as a rule now, with no example coordinate to copy.
     expect(prompt).toMatch(/signed decimal degrees/i)
-    expect(prompt).toMatch(/northern China/i)
+    expect(prompt).toMatch(/opposite side of the planet/i)
   })
 
   it('asks for the pre-joined value string, not a rebuild from parts', () => {
-    // Live failure: kg m-2 reported as micrograms per cubic metre, the
-    // unit of the dataset the same reply recommended. Quoting a
-    // finished string removes the step where that substitution happened.
+    // Live failure: a column loading in kg m-2 restated in a
+    // concentration unit belonging to a different dataset. Quoting a
+    // finished string removes the step where that substitution
+    // happened — and the rule now says so without naming the unit,
+    // which the model was reading as a suggestion.
     const prompt = buildSystemPrompt([], null, 'general', false, null, null, null, undefined, true)
     expect(prompt).toMatch(/`valueText`/)
-    expect(prompt).toMatch(/never convert or substitute the units/i)
-    expect(prompt).toMatch(/unfamiliar is not wrong/i)
+    expect(prompt).toMatch(/do not translate the units into more familiar ones/i)
+    expect(prompt).toMatch(/they are still correct/i)
     expect(prompt).toMatch(/do not attach a measured number to it/i)
   })
 
@@ -904,6 +907,37 @@ describe('§A6 — the value carve-out', () => {
     expect(prompt).toContain('precision')
     expect(prompt).toContain('coverage')
     expect(prompt).toContain('noData')
+  })
+
+  it('never quotes a wrong answer it is trying to prevent', () => {
+    // The most expensive lesson of this phase. Three rules were
+    // written as "here is the bad output, do not produce it", and the
+    // model produced all three — the estimate-from-the-picture opener
+    // almost word for word, the concentration unit that belongs to a
+    // different dataset, and the coordinate pair used to illustrate a
+    // dropped minus sign. A wrong answer in the prompt is a wrong
+    // answer the model has read; salience does not carry the "not".
+    // Rules here state what to do. Failures are described, never
+    // transcribed.
+    const prompt = buildSystemPrompt([], null, 'general', false, null, null, null, undefined, true)
+    // The three that actually came back, verbatim.
+    expect(prompt).not.toMatch(/smoke levels are highest over/i)
+    expect(prompt).not.toMatch(/micrograms per cubic met/i)
+    expect(prompt).not.toMatch(/47\.5/)
+    expect(prompt).not.toMatch(/119\.5/)
+    // And the shape of the mistake, so a future rule cannot reintroduce
+    // one by quoting a transcript.
+    expect(prompt).not.toMatch(/verbatim from a real session/i)
+    expect(prompt).not.toMatch(/the answer began "/i)
+  })
+
+  it('asks for the measured answer first, with no preamble to call a tool', () => {
+    // Observed: two narration sentences before the number, one of them
+    // announcing the tool call. The global CALL TOOLS SILENTLY rule is
+    // hundreds of lines earlier and lost.
+    const prompt = buildSystemPrompt([], null, 'general', false, null, null, null, undefined, true)
+    expect(prompt).toMatch(/no sentence about being about to check/i)
+    expect(prompt).toMatch(/first words the user reads should already be the measured answer/i)
   })
 
   it('does not contradict itself about who flies the globe', () => {

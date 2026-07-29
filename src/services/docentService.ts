@@ -2109,7 +2109,27 @@ export async function* processMessage(
               // `scope` is for us, not the model — strip it before the
               // result goes into the prompt so it cannot be mistaken
               // for something to quote.
-              const { scope: resultScope, ...forModel } = result as typeof result & { scope?: ResolvedScope }
+              //
+              // The raw parts go with it. Every unit-bearing number
+              // already has a written form beside it (`valueText`,
+              // `meanText`, `distributionText`), and a rule asking the
+              // model to prefer the written one over `value` + `units`
+              // has now failed twice against a unit it finds more
+              // plausible for the subject. A rule it can decline is a
+              // rule; a field that isn't there is a constraint. What
+              // stays is what has no unit to get wrong: coordinates,
+              // coverage, an area named in its own key, and the prose
+              // caveats.
+              const {
+                scope: resultScope,
+                value: _value, units: _units,
+                mean: _mean, median: _median, min: _min, max: _max, p10: _p10, p90: _p90,
+                ...forModel
+              } = result as typeof result & {
+                scope?: ResolvedScope
+                value?: number; units?: string
+                mean?: number; median?: number; min?: number; max?: number; p10?: number; p90?: number
+              }
               conversationMessages.push({
                 role: 'tool',
                 tool_call_id: call.id,

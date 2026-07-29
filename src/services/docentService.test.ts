@@ -2751,7 +2751,7 @@ describe('processMessage — §A6 value tools', () => {
     expect(names).toEqual(expect.arrayContaining(['probe_value', 'summarize_region', 'find_extremum']))
   })
 
-  it('feeds real statistics back to the model', async () => {
+  it('feeds real statistics back to the model, already written out', async () => {
     const { registerAnalysisSource } = await import('./docentAnalysisTools')
     registerAnalysisSource(frameSource())
     const { round2 } = await runToolCall('summarize_region', { region_name: 'alaska' })
@@ -2759,9 +2759,41 @@ describe('processMessage — §A6 value tools', () => {
     expect(toolMsg.tool_call_id).toBe('c1')
     const payload = JSON.parse(toolMsg.content)
     expect(payload.ok).toBe(true)
-    expect(payload.mean).toBeCloseTo(200, 6)
-    expect(payload.units).toBe('mg m-2')
+    expect(payload.meanText).toBe('200 mg m-2')
+    expect(payload.distributionText).toContain('mg m-2')
     expect(payload.precision).toMatch(/quantised/i)
+  })
+
+  it('sends no unit-bearing number the model could reassemble wrongly', async () => {
+    // A rule asking it to prefer `meanText` over `mean` + `units` lost
+    // twice to a unit it found more plausible for the subject. The
+    // fields are gone rather than deprecated: what is not in the
+    // payload cannot be recombined, and every number that needs units
+    // already arrives carrying them.
+    const { registerAnalysisSource } = await import('./docentAnalysisTools')
+    registerAnalysisSource(frameSource())
+    const { round2 } = await runToolCall('summarize_region', { region_name: 'alaska' })
+    const payload = JSON.parse(round2!.find((m: any) => m.role === 'tool').content)
+    for (const bare of ['units', 'mean', 'median', 'min', 'max', 'p10', 'p90']) {
+      expect(payload[bare]).toBeUndefined()
+    }
+    // Unit-free facts stay — they have nothing to get wrong.
+    expect(payload.coverage).toBeDefined()
+    expect(payload.region).toBe('Alaska')
+  })
+
+  it('sends an extremum as a place and a written value, nothing looser', async () => {
+    const { registerAnalysisSource } = await import('./docentAnalysisTools')
+    registerAnalysisSource(frameSource())
+    const { round2 } = await runToolCall('find_extremum', { kind: 'max' })
+    const payload = JSON.parse(round2!.find((m: any) => m.role === 'tool').content)
+    expect(payload.valueText).toContain('mg m-2')
+    expect(payload.value).toBeUndefined()
+    expect(payload.units).toBeUndefined()
+    // The coordinates stay: they carry no unit to substitute, and the
+    // model needs them for the sentence.
+    expect(typeof payload.lat).toBe('number')
+    expect(typeof payload.lon).toBe('number')
   })
 
   it('keeps the internal scope out of the model’s copy', async () => {
