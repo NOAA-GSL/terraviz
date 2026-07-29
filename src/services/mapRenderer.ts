@@ -541,79 +541,148 @@ export class MapRenderer implements GlobeRenderer {
     // Add earth tile layer (2d — renders below labels), then skybox layer
     // (3d — renders after everything, uses depth test for stars behind globe).
     // Move label layers above the earth tile layer so they aren't darkened.
-    this.map.on('load', () => {
-      logger.info(`[MapRenderer] Map loaded with ${this.projection} projection`)
+    //
+    // `load` is the right signal and stays the primary one, but it is
+    // not a *guaranteed* one: see `buildGlobeLayers` for why there is a
+    // deadline behind it.
+    this.map.on('load', () => this.buildGlobeLayers(container, 'load'))
+    this.styleDeadline = setTimeout(
+      () => this.buildGlobeLayers(container, 'deadline'),
+      MapRenderer.STYLE_READY_DEADLINE_MS,
+    )
+  }
 
-      // Collapse the compact attribution control so it doesn't cover the auto-rotate button
-      const attrib = container.querySelector('.maplibregl-ctrl-attrib.maplibregl-compact')
-      attrib?.classList.remove('maplibregl-compact-show')
+  /**
+   * Longest we wait for MapLibre's `load` before building the globe's
+   * own layers anyway.
+   *
+   * Generous, because the happy path must never take this branch on a
+   * merely-slow connection — `load` firing at eight seconds is fine and
+   * common, and building early would only add a redundant code path to
+   * every session.
+   */
+  private static readonly STYLE_READY_DEADLINE_MS = 8_000
 
-      // The earth tile layer (day/night sphere shader, atmospheric
-      // glow) and the skybox are 3D effects designed for globe
-      // projection — they paint a textured Earth sphere + a
-      // starfield over the basemap. In mercator they'd draw the
-      // sphere on top of the flat raster tiles and obliterate the
-      // basemap; the §6.9 catalog Map view explicitly wants the
-      // raw flat GIBS composite as its basemap. Skipping the
-      // custom layers entirely in mercator keeps the surface a
-      // clean Blue/Black Marble raster — which is what the Map
-      // view's bbox overlays need to read against.
-      if (this.projection === 'mercator') {
-        // Preload still runs so the GIBS HTTP cache warms for the
-        // main globe even when the Map view mounts first.
-        if (isMobile()) {
-          this.map!.once('idle', () => preloadLowZoomTiles())
-        } else {
-          preloadLowZoomTiles()
-        }
-        return
-      }
+  private globeLayersBuilt = false
+  private styleDeadline: ReturnType<typeof setTimeout> | null = null
 
-      this.earthLayer = createEarthTileLayer()
-
-      // Layer order: black-marble → [capture] → blue-marble → [earth-tile] → labels → [skybox]
-      // Insert capture layer between Black Marble and Blue Marble
-      this.map!.addLayer(
-        this.earthLayer.captureLayer as unknown as maplibregl.LayerSpecification,
-        'blue-marble-layer',
+  /**
+   * Build the earth tile layer, the capture layer and the skybox, and
+   * flush any dataset texture buffered before they existed.
+   *
+   * **Why this is not simply the `load` handler.** MapLibre fires `load`
+   * only once *every source in the style* reports loaded, and the style
+   * declares `openmaptiles` by TileJSON `url` — a network fetch to
+   * OpenFreeMap that must resolve before the map is considered loaded.
+   * That source exists for the labels and boundaries overlays, which are
+   * **off by default** and live behind a Tools toggle. So a slow or
+   * unreachable third-party basemap host could hold the globe's own
+   * layers hostage indefinitely: no earth layer, so a dataset already
+   * fetched and decoded sat in `pendingTexture` forever, and the globe
+   * showed bare raster tiles with no day/night, no atmosphere, and — for
+   * a data-encoded row — no probe source and therefore no value readout
+   * and no Analyze panel. An optional decoration must not be able to
+   * cost the visitor the thing they actually asked for.
+   *
+   * Observed in the visual-report harness, where OpenFreeMap is
+   * unreachable: `load` never fired, and a data-encoded scene reported
+   * "no dataset carrying values" against a globe that had one.
+   *
+   * The deadline path is safe because `addLayer` needs only the style
+   * *parsed*, not every source *loaded* — MapLibre sets its internal
+   * loaded flag when the style JSON is applied, which for an inline
+   * style like this one happens synchronously after `setStyle`. Only
+   * `Map#loaded()` waits for sources, and that is exactly the wait being
+   * bypassed.
+   *
+   * Runs once; whichever trigger arrives first wins.
+   */
+  private buildGlobeLayers(container: HTMLElement, trigger: 'load' | 'deadline'): void {
+    if (this.globeLayersBuilt || !this.map) return
+    this.globeLayersBuilt = true
+    if (this.styleDeadline) {
+      clearTimeout(this.styleDeadline)
+      this.styleDeadline = null
+    }
+    if (trigger === 'deadline') {
+      logger.warn(
+        '[MapRenderer] Map `load` did not fire within ' +
+          `${MapRenderer.STYLE_READY_DEADLINE_MS}ms — a style source is still ` +
+          'pending. Building the globe layers anyway so the dataset is not ' +
+          'held up by the basemap.',
       )
-      // Insert main earth effects layer after Blue Marble (at end of 2d layers)
-      this.map!.addLayer(this.earthLayer.layer as unknown as maplibregl.LayerSpecification)
+    }
+    logger.info(`[MapRenderer] Map loaded with ${this.projection} projection`)
 
-      // Move label/boundary layers above the earth tile layer
-      for (const id of this.allOverlayLayerIds) {
-        try { this.map!.moveLayer(id) } catch { /* layer may not exist */ }
-      }
+    // Collapse the compact attribution control so it doesn't cover the auto-rotate button
+    const attrib = container.querySelector('.maplibregl-ctrl-attrib.maplibregl-compact')
+    attrib?.classList.remove('maplibregl-compact-show')
 
-      // Add skybox as a separate 3d layer (renders after all 2d layers)
-      this.map!.addLayer(this.earthLayer.skyboxLayer as unknown as maplibregl.LayerSpecification)
-
-      // Apply any dataset texture/video that was buffered before the layer was ready
-      if (this.pendingTexture) {
-        const opts = this.pendingDatasetOptions ?? undefined
-        this.earthLayer.setDatasetTexture(this.pendingTexture, opts)
-        this.pendingTexture = null
-        this.pendingDatasetOptions = null
-        this.applyBaseLayerVisibility(opts)
-      } else if (this.pendingVideo) {
-        const opts = this.pendingDatasetOptions ?? undefined
-        this.earthLayer.setDatasetVideo(this.pendingVideo, opts)
-        this.pendingVideo = null
-        this.pendingDatasetOptions = null
-        this.applyBaseLayerVisibility(opts)
-      }
-
-      logger.info('[MapRenderer] Earth tile + capture + skybox layers added, labels moved above')
-
-      // Preload low-zoom tiles into browser/SW cache.
-      // Mobile: wait for 'idle' (initial viewport tiles rendered) to avoid bandwidth contention.
-      // Desktop: start immediately after layer setup.
+    // The earth tile layer (day/night sphere shader, atmospheric
+    // glow) and the skybox are 3D effects designed for globe
+    // projection — they paint a textured Earth sphere + a
+    // starfield over the basemap. In mercator they'd draw the
+    // sphere on top of the flat raster tiles and obliterate the
+    // basemap; the §6.9 catalog Map view explicitly wants the
+    // raw flat GIBS composite as its basemap. Skipping the
+    // custom layers entirely in mercator keeps the surface a
+    // clean Blue/Black Marble raster — which is what the Map
+    // view's bbox overlays need to read against.
+    if (this.projection === 'mercator') {
+      // Preload still runs so the GIBS HTTP cache warms for the
+      // main globe even when the Map view mounts first.
       if (isMobile()) {
         this.map!.once('idle', () => preloadLowZoomTiles())
       } else {
         preloadLowZoomTiles()
       }
-    })
+      return
+    }
+
+    this.earthLayer = createEarthTileLayer()
+
+    // Layer order: black-marble → [capture] → blue-marble → [earth-tile] → labels → [skybox]
+    // Insert capture layer between Black Marble and Blue Marble
+    this.map!.addLayer(
+      this.earthLayer.captureLayer as unknown as maplibregl.LayerSpecification,
+      'blue-marble-layer',
+    )
+    // Insert main earth effects layer after Blue Marble (at end of 2d layers)
+    this.map!.addLayer(this.earthLayer.layer as unknown as maplibregl.LayerSpecification)
+
+    // Move label/boundary layers above the earth tile layer
+    for (const id of this.allOverlayLayerIds) {
+      try { this.map!.moveLayer(id) } catch { /* layer may not exist */ }
+    }
+
+    // Add skybox as a separate 3d layer (renders after all 2d layers)
+    this.map!.addLayer(this.earthLayer.skyboxLayer as unknown as maplibregl.LayerSpecification)
+
+    // Apply any dataset texture/video that was buffered before the layer was ready
+    if (this.pendingTexture) {
+      const opts = this.pendingDatasetOptions ?? undefined
+      this.earthLayer.setDatasetTexture(this.pendingTexture, opts)
+      this.pendingTexture = null
+      this.pendingDatasetOptions = null
+      this.applyBaseLayerVisibility(opts)
+    } else if (this.pendingVideo) {
+      const opts = this.pendingDatasetOptions ?? undefined
+      this.earthLayer.setDatasetVideo(this.pendingVideo, opts)
+      this.pendingVideo = null
+      this.pendingDatasetOptions = null
+      this.applyBaseLayerVisibility(opts)
+    }
+
+    logger.info('[MapRenderer] Earth tile + capture + skybox layers added, labels moved above')
+
+    // Preload low-zoom tiles into browser/SW cache.
+    // Mobile: wait for 'idle' (initial viewport tiles rendered) to avoid bandwidth contention.
+    // Desktop: start immediately after layer setup.
+    if (isMobile()) {
+      this.map!.once('idle', () => preloadLowZoomTiles())
+    } else {
+      preloadLowZoomTiles()
+    }
   }
 
   /** Return the underlying MapLibre map instance. */
@@ -1305,6 +1374,13 @@ export class MapRenderer implements GlobeRenderer {
    */
   dispose(): void {
     this.stopAutoRotate()
+    // A panel can be torn down (a 4→1 layout change) before the style
+    // ever settles, and a pending deadline would then build layers on a
+    // removed map.
+    if (this.styleDeadline) {
+      clearTimeout(this.styleDeadline)
+      this.styleDeadline = null
+    }
     // Before map.remove(): the unsubscribe closure captures `map`, so
     // dropping the reference first would strand the handlers.
     this.clearLatLngCallbacks()
