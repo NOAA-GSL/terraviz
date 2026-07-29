@@ -59,8 +59,12 @@ export interface DocentAnalysisSource {
     scale: ColorScale
     options: DatasetOverlayOptions
   } | null
-  /** Title of the dataset the numbers came from, so a tool result can
-   *  say what it measured rather than leaving the model to assume. */
+  /** Fallback title, used only when the frame carries no identity of
+   *  its own (a dataset published before `datasetTitle` was stamped on
+   *  its overlay options). Prefer `frame().options.datasetTitle`: app
+   *  state and the primary renderer are separate facts, and reporting
+   *  one dataset's numbers under another's name is worse than
+   *  reporting no name. */
   datasetTitle(): string | null
   /** The box currently on screen, for questions scoped to the view. */
   visibleBounds(): LatLonBounds | null
@@ -151,6 +155,27 @@ function valueText(value: number, scale: ColorScale, atLeast = false): string {
     : `${prefix}${value}`
 }
 
+/**
+ * What to call the dataset these numbers came from.
+ *
+ * The frame's own stamp wins. `datasetTitle()` reads
+ * `appState.currentDataset`, which is a different fact from whatever
+ * texture the primary renderer is holding — a multi-globe layout, a
+ * tour switching panels, or a load landing between the two can leave
+ * them describing different datasets. When that happens the honest
+ * answer is the dataset the frame came from, because that is the one
+ * the numbers are of.
+ *
+ * This matters most where the two datasets are siblings. The shipped
+ * smoke rows share a bounding box exactly, so a mix-up cannot be seen
+ * in the coordinates — but one is a column loading in `kg m-2` and the
+ * other a near-surface concentration in `kg m-3`, three orders of
+ * magnitude apart. Same place, same grid, entirely different quantity.
+ */
+function frameDatasetTitle(options: DatasetOverlayOptions): string | undefined {
+  return options.datasetTitle ?? source?.datasetTitle() ?? undefined
+}
+
 function precisionNote(scale: ColorScale): string {
   const step = round3(quantisationStep(scale))
   return scale.units
@@ -209,7 +234,7 @@ export function executeProbeValue(
 
   return {
     ok: true,
-    dataset: source?.datasetTitle() ?? undefined,
+    dataset: frameDatasetTitle(options),
     ...(frameTime ? { frameTime } : {}),
     lat: roundCoord(lat),
     lon: roundCoord(lon),
@@ -334,7 +359,7 @@ export function executeSummarizeRegion(
 
   return {
     ok: true,
-    dataset: source?.datasetTitle() ?? undefined,
+    dataset: frameDatasetTitle(options),
     ...(frameTime ? { frameTime } : {}),
     region: scope.label,
     scope: scope.scope,
@@ -420,7 +445,7 @@ export function executeFindExtremum(
 
   return {
     ok: true,
-    dataset: source?.datasetTitle() ?? undefined,
+    dataset: frameDatasetTitle(options),
     ...(frameTime ? { frameTime } : {}),
     region: scope.label,
     scope: scope.scope,

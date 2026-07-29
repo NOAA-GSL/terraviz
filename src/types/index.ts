@@ -360,6 +360,17 @@ export interface DatasetOverlayOptions {
    *  This is the field that carries data-encoded mode to all four
    *  render surfaces. */
   colorScale?: ColorScale
+  /** Which dataset these options were built from.
+   *
+   *  Carried so a *frame* can say what it is, rather than a reader
+   *  having to ask app state and hope the two agree. `appState
+   *  .currentDataset` and the primary renderer's texture are separate
+   *  facts: a 2/4-globe layout, a tour switching panels, or a load
+   *  landing between them can leave one describing a dataset the other
+   *  is not showing. Anything that reports numbers has to attribute
+   *  them to the dataset they were actually measured from. */
+  datasetId?: string
+  datasetTitle?: string
 }
 
 /**

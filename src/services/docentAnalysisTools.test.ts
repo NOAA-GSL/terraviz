@@ -420,3 +420,51 @@ describe('units travel joined to the number', () => {
     expect(r.valueText).not.toContain('undefined')
   })
 })
+
+describe('a value is attributed to the dataset it was measured from', () => {
+  // The two shipped smoke rows share a bounding box exactly, so a
+  // mix-up is invisible in the coordinates — but one is a column
+  // loading in kg m-2 and the other a near-surface concentration in
+  // kg m-3, three orders of magnitude apart. Reporting one under the
+  // other's name is the worst available outcome: right place, right
+  // grid, wrong quantity, and nothing on screen contradicting it.
+  const COLUMN: ColorScale = { ...SCALE, vmax: 5e-4, units: 'kg m-2' }
+  const COLUMN_OPTS: DatasetOverlayOptions = {
+    boundingBox: { n: 85, s: 5, w: -175, e: -20 },
+    colorScale: COLUMN,
+    datasetId: 'INTERNAL_SMOKE_COLUMN',
+    datasetTitle: 'Wildfire Smoke Overhead',
+  }
+
+  it('names the frame’s dataset, not whatever app state believes', () => {
+    registerAnalysisSource(makeSource({
+      frame: () => ({ snapshot: snap(4, 4, () => 128), scale: COLUMN, options: COLUMN_OPTS }),
+      // App state has drifted onto the sibling row — the exact
+      // divergence a multi-globe layout or a mid-load switch produces.
+      datasetTitle: () => 'RRFS Smoke — Near-Surface, North America',
+    }))
+    expect(executeProbeValue({ lat: 45, lon: -100 }).dataset).toBe('Wildfire Smoke Overhead')
+    expect(executeSummarizeRegion({}).dataset).toBe('Wildfire Smoke Overhead')
+    expect(executeFindExtremum({}).dataset).toBe('Wildfire Smoke Overhead')
+  })
+
+  it('reports the units of the frame it measured', () => {
+    // The units come from the frame's own scale, so they cannot drift
+    // apart from the name now that both ride the same options object.
+    registerAnalysisSource(makeSource({
+      frame: () => ({ snapshot: snap(4, 4, () => 128), scale: COLUMN, options: COLUMN_OPTS }),
+      datasetTitle: () => 'RRFS Smoke — Near-Surface, North America',
+    }))
+    const r = executeProbeValue({ lat: 45, lon: -100 })
+    expect(r.units).toBe('kg m-2')
+    expect(r.valueText).toContain('kg m-2')
+    expect(r.valueText).not.toContain('m-3')
+  })
+
+  it('falls back to app state for a frame with no stamp', () => {
+    // Options built before identity was stamped still get a name
+    // rather than none.
+    registerAnalysisSource(makeSource())
+    expect(executeProbeValue({ lat: 45, lon: -100 }).dataset).toBe('Wildfire Smoke Overhead')
+  })
+})

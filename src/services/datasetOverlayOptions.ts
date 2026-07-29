@@ -79,6 +79,11 @@ export function overlayOptionsFromDataset(
     isFlippedInY: dataset.isFlippedInY,
     celestialBody: dataset.celestialBody,
     colorScale,
+    // Identity travels with the geometry and the scale, so whatever
+    // ends up holding these options can say which dataset they
+    // describe without consulting app state.
+    datasetId: dataset.id,
+    datasetTitle: dataset.title,
   }
 }
 
