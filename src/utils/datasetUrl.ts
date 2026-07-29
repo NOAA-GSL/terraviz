@@ -132,6 +132,26 @@ export function buildDatasetPath(dataset: DatasetUrlRef, search = ''): string {
 }
 
 /**
+ * The dataset a token-gated draft preview URL is scoped to, or null
+ * when this isn't a preview URL.
+ *
+ * A `?preview=<token>&dataset=<ref>` URL only resolves with its token
+ * attached, so the address bar has to be left alone while that draft
+ * is what's on screen. It must *not* be left alone once the visitor
+ * navigates to a different dataset — that's a real navigation, and
+ * holding the spent token there would leave the URL naming the draft
+ * while the globe showed something else.
+ *
+ * Callers resolve the returned reference through the catalog before
+ * comparing, since the URL may name the draft by slug or id.
+ */
+export function previewDatasetRef(search: string): string | null {
+  const params = new URLSearchParams(search)
+  if (!params.has('preview')) return null
+  return params.get('dataset')
+}
+
+/**
  * Build the URL to show once no dataset is loaded — `goHome()`, or a
  * viewport promotion that lands on an empty panel. Strips the
  * `/dataset/<ref>` path segment and the `dataset` / `preview` query

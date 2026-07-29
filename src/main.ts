@@ -70,7 +70,9 @@ import { initDeepLinks } from './services/deepLinkService'
 import {
   buildDatasetPath,
   buildNoDatasetPath,
+  isDatasetRef,
   parseDatasetPathname,
+  previewDatasetRef,
 } from './utils/datasetUrl'
 import { recordVisit, writeLastSession } from './services/visitMemory'
 import { getCatalogMode, setCatalogMode } from './utils/catalogMode'
@@ -736,13 +738,20 @@ class InteractiveSphere {
    *  canonical `/dataset/<slug>` path form, or the `?dataset=` query
    *  param older links carry. Either may name the dataset by slug,
    *  ULID, or legacy id; all three resolve through
-   *  `getDatasetById`. Returns the raw reference when nothing
-   *  matches, so the loader surfaces a "not found" naming what the
-   *  visitor actually asked for. */
+   *  `getDatasetById`. A well-formed reference that isn't in the
+   *  catalog is returned as-is, so the loader surfaces a "not found"
+   *  naming what the visitor actually asked for.
+   *
+   *  Both forms are validated against the same alphabet. The path
+   *  form gets that from `parseDatasetPathname`; applying it to the
+   *  query form too means a malformed `?dataset=` value (markup,
+   *  spaces) is ignored rather than laundered into a
+   *  `/dataset/<percent-encoded-junk>` path by the canonicalize step
+   *  — a URL that wouldn't parse back on reload. */
   private getDatasetIdFromUrl(): string | null {
     const params = new URLSearchParams(window.location.search)
     const raw = params.get('dataset') ?? parseDatasetPathname(window.location.pathname)
-    if (!raw) return null
+    if (!raw || !isDatasetRef(raw)) return null
     return dataService.getDatasetById(raw)?.id ?? raw
   }
 
@@ -753,13 +762,23 @@ class InteractiveSphere {
    * the resulting URL still boots to the same "not found", and it
    * keeps naming what the visitor actually asked for.
    *
-   * No-ops on a token-gated draft preview: a `?preview=` URL is only
-   * valid with its token attached, and rewriting it to the public
-   * path would 404 on reload.
+   * Leaves a token-gated draft preview's URL alone *while the draft
+   * is what's being written* — `?preview=` is only valid with its
+   * token attached, so canonicalizing it to the public path would
+   * 404 on reload. Switching to a different dataset from inside a
+   * preview session is a real navigation and gets a real URL:
+   * `buildDatasetPath` drops the spent token. Skipping that write
+   * would leave the address bar naming the draft while the globe
+   * showed something else, and a reload would snap back to the
+   * draft.
    */
   private writeDatasetUrl(id: string, mode: 'push' | 'replace'): void {
     const search = window.location.search
-    if (new URLSearchParams(search).has('preview')) return
+    const previewRef = previewDatasetRef(search)
+    if (previewRef !== null) {
+      const previewId = dataService.getDatasetById(previewRef)?.id ?? previewRef
+      if (previewId === id) return
+    }
     const next = buildDatasetPath(dataService.getDatasetById(id) ?? { id }, search)
     if (next === `${window.location.pathname}${search}`) return
     if (mode === 'push') {

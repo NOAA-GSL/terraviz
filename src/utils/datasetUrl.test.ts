@@ -6,6 +6,7 @@ import {
   datasetUrlRef,
   isDatasetRef,
   parseDatasetPathname,
+  previewDatasetRef,
   resolveDatasetRef,
 } from './datasetUrl'
 
@@ -125,6 +126,25 @@ describe('buildDatasetPath', () => {
 
   it('drops a draft-preview token rather than pointing it at another dataset', () => {
     expect(buildDatasetPath(SMOKE, '?preview=tok&dataset=DRAFT')).toBe('/dataset/north-america-smoke')
+  })
+})
+
+describe('previewDatasetRef', () => {
+  it('names the draft a preview URL is scoped to', () => {
+    expect(previewDatasetRef('?preview=tok&dataset=DRAFT01')).toBe('DRAFT01')
+  })
+
+  it('is null for an ordinary URL, so nothing is pinned', () => {
+    expect(previewDatasetRef('')).toBeNull()
+    expect(previewDatasetRef('?dataset=01KYK82VR6KDQK0915JNMQQ8RG')).toBeNull()
+    expect(previewDatasetRef('?catalog=true')).toBeNull()
+  })
+
+  it('is null for a token with no dataset — nothing to pin', () => {
+    // `getPreviewParamsFromUrl` requires both params, so a lone
+    // `?preview=` never boots a draft. Reporting no pinned dataset
+    // keeps this agreeing with that.
+    expect(previewDatasetRef('?preview=tok')).toBeNull()
   })
 })
 
