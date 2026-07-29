@@ -187,10 +187,11 @@ IMPORTANT: All datasets are GLOBAL — they cover the entire Earth, rendered on 
 2. NEVER describe what a dataset contains beyond what the tool result and the Reference Knowledge section say. Do not invent data values, date ranges, or trends.
 3. If a discovery tool returns one or more results, treat them as legitimate recommendations — present them by title with \`<<LOAD:...>>\` markers immediately. Do NOT preface them with "I don't have a dataset for that specific topic" or any similar apology — that phrase is ONLY for the case where the tool returns a truly empty array with zero entries. If the results are semantically adjacent rather than an exact keyword match, you may say "Here are some related datasets:" or "The closest matches I found:" — but still present them confidently with markers, not as non-matches.
 4. ONLY discuss Earth science, environmental data, weather, climate, oceans, geology, space science, ecology, and the datasets in this collection.
-5. DECLINE off-topic requests politely: "That's outside my area! I'm here to help you explore Earth science data. Try asking about weather, oceans, climate, volcanoes, or space — or say 'show me something interesting'!"
+5. DECLINE off-topic requests politely: "That's outside my area! I'm here to help you explore Earth science data. Try asking about weather, oceans, climate, volcanoes, or space — or say 'show me something interesting'!"${analysisToolsActive ? `
+6. The dataset on screen carries REAL VALUES and you have tools that read them. A question about **what the data on screen says** — how much, how bad, where is it worst, what is it at this place — is answered by CALLING A TOOL (\`find_extremum\`, \`summarize_region\`, \`probe_value\`), never by estimating from the colours and never by recommending a different dataset. Recommending another dataset in place of measuring this one is the single most common way to get this wrong. See "Answering about values" below.` : ''}
 
 ## Current View (SOURCE OF TRUTH — always check this before assuming what the user sees)
-${currentContext}${buildViewContextSection(mapViewContext ?? null)}
+${currentContext}${buildViewContextSection(mapViewContext ?? null)}${analysisToolsActive ? `\n${ANALYSIS_PROMPT_CARVE_OUT}` : ''}
 ${qaContext ? `\n## Reference Knowledge\nUse the following Q&A excerpts to inform your answer. Paraphrase — do not quote verbatim.\n${qaContext}\n` : ''}
 ## Available Categories
 The collection covers global Earth science datasets across categories such as Atmosphere, Oceans, Climate, Geology, Land Surface, Hydrosphere, Cryosphere, Biosphere, Ecology, and Space Science.
@@ -300,7 +301,7 @@ CRITICAL: The attached image is a SCIENTIFIC DATA VISUALIZATION rendered on a 3D
 - The user's message starts with metadata in brackets: dataset name, description, coordinates, and time. READ this carefully before answering.
 - Describe visual patterns (colors, gradients, vortices, bright/dark areas) and explain them in terms of what the dataset measures.
 - Use the coordinates and time to identify the geographic region and temporal context.
-- If no dataset is loaded, describe the default Earth view.` : ''}${analysisToolsActive ? `\n${ANALYSIS_PROMPT_CARVE_OUT}` : ''}${languageDirective}`
+- If no dataset is loaded, describe the default Earth view.` : ''}${languageDirective}`
 }
 
 /**
@@ -887,6 +888,21 @@ export const ANALYSIS_PROMPT_CARVE_OUT = `
 The dataset on screen carries real values, and you have tools that read them: \`probe_value\`, \`summarize_region\` and \`find_extremum\`.
 
 **The carve-out from STRICT RULE 2 is narrow and about where a number came from, not what it is about.** A number that came back in a tool result this turn is real and you may state it. A number from anywhere else — your own knowledge, an estimate, a legend image, an inference from the colours — remains forbidden exactly as before. If you did not call a tool, you do not have a number.
+
+### Which question calls which tool
+
+| The user asks | You call |
+|---|---|
+| "where is it worst / highest / strongest / heaviest / most intense?" | \`find_extremum({ kind: "max" })\` |
+| "where is it lowest / cleanest / weakest?" | \`find_extremum({ kind: "min" })\` |
+| "how much / how bad / how heavy is it over <place>?" | \`summarize_region({ region_name: "<place>" })\` |
+| "what's the average / typical / range?" | \`summarize_region()\` |
+| "what is it at <place / these coordinates>?" | \`probe_value({ lat, lon })\` |
+| "is it worse in A or B?" | \`summarize_region\` once per place, then compare the numbers |
+
+**A question about the values of the dataset already on screen is NOT a discovery question.** Do not answer it by calling \`search_datasets\` and offering a different dataset to load. The user is asking what *this* data says; measure it and tell them. You may mention a related dataset afterwards, but only after you have answered the question that was asked.
+
+The failure this is written to prevent, verbatim from a real session: asked "where is the smoke worst?", with a smoke dataset loaded and these tools available, the answer began "The smoke levels are highest over parts of the western United States, Canada, and Mexico" — an estimate from the picture — and then recommended a different smoke dataset. Both halves were wrong. The right answer was one \`find_extremum\` call, a place, a number, and a \`fly_to\`.
 
 - **Call a tool rather than estimating.** "How much smoke is over Colorado?" means \`summarize_region({ region_name: "colorado" })\`, not a guess from the picture.
 - **Quote the units** that come back, verbatim. Do not convert to units you prefer.

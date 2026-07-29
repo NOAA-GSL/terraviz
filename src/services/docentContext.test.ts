@@ -836,6 +836,45 @@ describe('§A6 — the value carve-out', () => {
     expect(prompt).toMatch(/from anywhere else.*remains forbidden/is)
   })
 
+  it('carries the same weight as the rules it competes with', () => {
+    // The first revision appended this at the very end, after the
+    // vision block. It lost: asked "where is the smoke worst?" with a
+    // data-encoded dataset loaded, the model estimated from the colours
+    // and then recommended a different dataset — the behaviour STRICT
+    // RULES 1 and 3 push toward, stated five times and earlier.
+    const prompt = buildSystemPrompt([], null, 'general', false, null, null, null, undefined, true)
+    const ruleSix = prompt.indexOf('6. The dataset on screen carries REAL VALUES')
+    const strictRules = prompt.indexOf('## STRICT RULES')
+    const carveOut = prompt.indexOf('## Answering about values')
+    // The specific instruction that beat it: the related-dataset
+    // reflex. Anchoring on the first mention of `search_datasets`
+    // would be meaningless — STRICT RULE 1 names it too.
+    const relatedReflex = prompt.indexOf('Suggest related datasets when relevant')
+    expect(ruleSix).toBeGreaterThan(strictRules)
+    expect(relatedReflex).toBeGreaterThan(-1)
+    expect(ruleSix).toBeLessThan(relatedReflex)
+    expect(carveOut).toBeGreaterThan(-1)
+    expect(carveOut).toBeLessThan(relatedReflex)
+  })
+
+  it('maps the phrasings a user actually types to a tool', () => {
+    // "where is it worst" was the exact question that failed, and the
+    // exact one with no worked example in the first revision.
+    const prompt = buildSystemPrompt([], null, 'general', false, null, null, null, undefined, true)
+    expect(prompt).toMatch(/where is it worst[^|]*\|[^|]*find_extremum/i)
+    expect(prompt).toMatch(/lowest[^|]*\|[^|]*find_extremum/i)
+    expect(prompt).toMatch(/how much[^|]*\|[^|]*summarize_region/i)
+    expect(prompt).toMatch(/what is it at[^|]*\|[^|]*probe_value/i)
+  })
+
+  it('forbids answering a values question by recommending another dataset', () => {
+    // The specific wrong turn observed live: the related-dataset reflex
+    // firing on a question that was never about discovery.
+    const prompt = buildSystemPrompt([], null, 'general', false, null, null, null, undefined, true)
+    expect(prompt).toMatch(/NOT a discovery question/i)
+    expect(prompt).toMatch(/do not answer it by calling `search_datasets`/i)
+  })
+
   it('tells the model to repeat coverage, precision and no-data rather than smooth them over', () => {
     const prompt = buildSystemPrompt([], null, 'general', false, null, null, null, undefined, true)
     expect(prompt).toContain('precision')
