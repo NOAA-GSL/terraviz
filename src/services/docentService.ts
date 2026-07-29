@@ -8,7 +8,13 @@
 import type { Dataset, ChatMessage, ChatAction, DocentConfig, LegendCache, MapViewContext, LLMContextSnapshot, ReadingLevel } from '../types'
 import { streamChat, checkAvailability, type AvailabilityResult, type LLMMessage, type LLMContentPart, type LLMToolCall } from './llmProvider'
 import { isAvailable as isAppleIntelligenceAvailable, streamChatLocal } from './appleIntelligenceProvider'
-import { buildSystemPrompt, buildCompressedHistory, buildLanguageReminderMessage, getSearchCatalogTool, getSearchDatasetsTool, getListFeaturedDatasetsTool, getSearchEventsTool, getLoadDatasetTool, getLoadFrameTool, getFlyToTool, getSetTimeTool, getFitBoundsTool, getAddMarkerTool, getToggleLabelsTool, getHighlightRegionTool } from './docentContext'
+import { buildSystemPrompt, buildCompressedHistory, buildLanguageReminderMessage, getSearchCatalogTool, getSearchDatasetsTool, getListFeaturedDatasetsTool, getSearchEventsTool, getLoadDatasetTool, getLoadFrameTool, getFlyToTool, getSetTimeTool, getFitBoundsTool, getAddMarkerTool, getToggleLabelsTool, getHighlightRegionTool, getProbeValueTool, getSummarizeRegionTool, getFindExtremumTool } from './docentContext'
+import {
+  executeFindExtremum,
+  executeProbeValue,
+  executeSummarizeRegion,
+  isAnalysisAvailable,
+} from './docentAnalysisTools'
 import { fetchApprovedEvents, type PublicEvent } from './eventsService'
 import { parseIntent, generateResponse, searchDatasets, evaluateAutoLoad } from './docentEngine'
 import { clearDegraded as clearDegradedState, markDegraded as markDegradedState } from './docentDegradedState'
@@ -1481,12 +1487,21 @@ export async function* processMessage(
     // `turnIndex` is still computed above for `getRelevantQA` (which tunes
     // its output based on conversation depth), but is NOT passed to the
     // prompt builder anymore.
+    // §A6. One decision, read twice: it gates both the prompt's
+    // carve-out and the tool array below. Computing it separately in
+    // each place would let them drift, and either direction is a bug —
+    // the permission without the tools invites answering from memory,
+    // the tools without the permission leaves the model forbidden from
+    // stating what came back.
+    const analysisToolsActive = isAnalysisAvailable()
+
     const systemPrompt = buildSystemPrompt(
       datasets, currentDataset, cfg.readingLevel, visionActive,
       !visionActive ? legendDescription : null,
       !visionActive ? currentTime : null,
       qaContext || null,
       mapViewContext,
+      analysisToolsActive,
     )
 
     if (cfg.debugPrompt) {
@@ -1729,6 +1744,12 @@ export async function* processMessage(
       getAddMarkerTool(),
       getToggleLabelsTool(),
       getHighlightRegionTool(),
+      // Absent unless a data-encoded frame is readable. Not disabled,
+      // not stubbed — absent, so a picture dataset leaves Orbit exactly
+      // as it behaves today (CONTRIBUTING §LLM Integrations rule 2).
+      ...(analysisToolsActive
+        ? [getProbeValueTool(), getSummarizeRegionTool(), getFindExtremumTool()]
+        : []),
     ]
 
     // Auto-switch to vision model when using the default CF proxy
@@ -1819,7 +1840,10 @@ export async function* processMessage(
                   chunk.call.name === 'search_catalog' ||
                   chunk.call.name === 'search_datasets' ||
                   chunk.call.name === 'list_featured_datasets' ||
-                  chunk.call.name === 'search_events'
+                  chunk.call.name === 'search_events' ||
+                  chunk.call.name === 'probe_value' ||
+                  chunk.call.name === 'summarize_region' ||
+                  chunk.call.name === 'find_extremum'
                 ) {
                   // All discovery tools need a tool-result message sent back
                   // to the LLM — queue for the end-of-round dispatch below.
@@ -2047,6 +2071,23 @@ export async function* processMessage(
                 })
               }
               logger.info(`[Docent] list_featured_datasets → ${result.datasets.length} result(s)`)
+              conversationMessages.push({
+                role: 'tool',
+                tool_call_id: call.id,
+                content: JSON.stringify(result),
+              })
+            } else if (
+              call.name === 'probe_value' ||
+              call.name === 'summarize_region' ||
+              call.name === 'find_extremum'
+            ) {
+              // §A6. Local and synchronous — the whole frame is already
+              // in memory, so this is arithmetic, not a fetch.
+              const result =
+                call.name === 'probe_value' ? executeProbeValue(call.arguments)
+                : call.name === 'summarize_region' ? executeSummarizeRegion(call.arguments)
+                : executeFindExtremum(call.arguments)
+              logger.info(`[Docent] ${call.name} → ${result.ok ? 'ok' : `refused: ${result.error}`}`)
               conversationMessages.push({
                 role: 'tool',
                 tool_call_id: call.id,

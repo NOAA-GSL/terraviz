@@ -808,3 +808,64 @@ describe('buildSystemPrompt — Phase 5 markers', () => {
     expect(prompt).not.toContain('Geographic Context')
   })
 })
+
+describe('§A6 — the value carve-out', () => {
+  it('is absent by default, so the existing prompt is unchanged', () => {
+    const prompt = buildSystemPrompt([], null)
+    expect(prompt).not.toContain('Answering about values')
+    // The rules it carves out of must still be there, unweakened.
+    expect(prompt).toContain('Do not invent data values')
+    expect(prompt).toContain('never invent or estimate color scales')
+  })
+
+  it('appears only when the tools are actually offered', () => {
+    const prompt = buildSystemPrompt([], null, 'general', false, null, null, null, undefined, true)
+    expect(prompt).toContain('Answering about values')
+    expect(prompt).toContain('probe_value')
+  })
+
+  it('keeps the original prohibitions intact alongside it', () => {
+    // The carve-out is about provenance, not topic. If it ever reads as
+    // "you may discuss values", the model fills the gaps between tool
+    // calls from memory and the answers become indistinguishable from
+    // the real ones.
+    const prompt = buildSystemPrompt([], null, 'general', false, null, null, null, undefined, true)
+    expect(prompt).toContain('Do not invent data values')
+    expect(prompt).toContain('never invent or estimate color scales')
+    expect(prompt).toMatch(/came back in a tool result.*is real/is)
+    expect(prompt).toMatch(/from anywhere else.*remains forbidden/is)
+  })
+
+  it('tells the model to repeat coverage, precision and no-data rather than smooth them over', () => {
+    const prompt = buildSystemPrompt([], null, 'general', false, null, null, null, undefined, true)
+    expect(prompt).toContain('precision')
+    expect(prompt).toContain('coverage')
+    expect(prompt).toContain('noData')
+  })
+})
+
+describe('§A6 — the published scale in the dataset context', () => {
+  const withScale = {
+    id: 'INTERNAL_SMOKE',
+    title: 'Wildfire Smoke Overhead',
+    colorScale: { stops: [], vmin: 0, vmax: 5e-4, units: 'kg m-2' },
+  } as unknown as Dataset
+
+  it('states the publisher’s own range, marked as not an estimate', () => {
+    const ctx = buildCurrentDatasetContext(withScale)
+    expect(ctx).toContain('Value scale: 0 to 0.0005 kg m-2')
+    expect(ctx).toMatch(/not an estimate/i)
+  })
+
+  it('still routes specific values through a tool', () => {
+    // Stating the range is safe — it is published metadata. Stating a
+    // value at a place is not, and the two are easy to conflate.
+    const ctx = buildCurrentDatasetContext(withScale)
+    expect(ctx).toMatch(/specific.*value.*tool result/is)
+  })
+
+  it('says nothing for a dataset that carries no scale', () => {
+    const ctx = buildCurrentDatasetContext({ id: 'X', title: 'Old Picture' } as unknown as Dataset)
+    expect(ctx).not.toContain('Value scale')
+  })
+})
