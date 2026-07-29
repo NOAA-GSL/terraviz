@@ -36,6 +36,7 @@ import {
   windowForBounds,
   zonalMeans,
 } from './datasetStats'
+import { latLonToTexelUv, uvToTexelInSize } from './datasetProbe'
 import type { LumaSnapshot } from './glLumaSampler'
 import type { ColorScale, DatasetOverlayOptions } from '../types'
 
@@ -617,5 +618,74 @@ describe('LUMA_LEVELS', () => {
   it('is the number of values the transport can carry', () => {
     // Guards the histogram's claim to be exact rather than binned.
     expect(LUMA_LEVELS).toBe(256)
+  })
+})
+
+describe('a reported location survives the trip back through the probe', () => {
+  // The seam nothing covered. `findExtremum` picks a texel and converts
+  // it to lat/lon; the hover readout takes a lat/lon and converts it to
+  // a texel. Both directions had tests. The *composition* did not, and
+  // the composition is what the user exercises: Orbit names a place,
+  // they point at that place, and the two must agree about which texel
+  // that is.
+  //
+  // Reported live: an extremum whose coordinates read "No data" when
+  // probed by hand. The value was real; the place named for it was not
+  // verifiable from inside the answer.
+  const cases: Array<[string, DatasetOverlayOptions]> = [
+    ['the live RRFS bbox', RRFS],
+    ['a global frame', {}],
+    ['a southern box', { boundingBox: { n: -10, s: -55, w: -80, e: -35 } }],
+    ['a box crossing the antimeridian', { boundingBox: { n: 60, s: 20, w: 150, e: -150 } }],
+    ['a flipped frame', { ...RRFS, isFlippedInY: true }],
+  ]
+
+  for (const [name, options] of cases) {
+    it(`round-trips on ${name}`, () => {
+      const width = 128
+      const height = 64
+      // One plume, off-centre in both axes so a flip or a transpose
+      // cannot pass by symmetry.
+      const px = 31
+      const py = 12
+      const s = snap(width, height, (x, y) =>
+        (Math.abs(x - px) <= 2 && Math.abs(y - py) <= 2 ? 200 : 100))
+
+      const hit = findExtremum(s, SCALE, 'max', options)!
+      expect(hit.x).toBe(px)
+      expect(hit.y).toBe(py)
+
+      const uv = latLonToTexelUv(hit.lat, hit.lon, options)
+      expect(uv).not.toBeNull()
+      const back = uvToTexelInSize(width, height, uv!)!
+      expect(back.sx).toBe(hit.x)
+      expect(back.sy).toBe(hit.y)
+      // And the value found there is the value reported, which is the
+      // claim the user is actually checking when they point at it.
+      expect(s.data[back.sy * width + back.sx]).toBe(200)
+    })
+  }
+
+  it('round-trips after the coordinates are rounded for display', () => {
+    // Three decimals is about a thousandth of a texel on these grids,
+    // so rounding must never move the answer to a neighbouring cell.
+    // `round3` once did exactly that by rounding to three *significant*
+    // figures instead.
+    const width = 4096
+    const height = 2048
+    const px = 2731
+    const py = 907
+    const s = snap(8, 8, () => 100)
+    const data = new Uint8Array(width * height).fill(100)
+    data[py * width + px] = 240
+    const big: LumaSnapshot = { data, width, height }
+    void s
+
+    const hit = findExtremum(big, SCALE, 'max', RRFS)!
+    const rounded = { lat: Math.round(hit.lat * 1000) / 1000, lon: Math.round(hit.lon * 1000) / 1000 }
+    const uv = latLonToTexelUv(rounded.lat, rounded.lon, RRFS)!
+    const back = uvToTexelInSize(width, height, uv)!
+    expect(back.sx).toBe(px)
+    expect(back.sy).toBe(py)
   })
 })

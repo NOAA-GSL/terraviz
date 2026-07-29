@@ -453,6 +453,18 @@ class InteractiveSphere {
         frame: () => this.viewports.getPrimary()?.analysisFrame() ?? null,
         visibleBounds: () => this.viewports.getPrimary()?.visibleBounds() ?? null,
         datasetTitle: () => this.appState.currentDataset?.title ?? null,
+        // Deliberately the renderer's own probe rather than a second
+        // read of `analysisFrame()`. The point is to ask a different
+        // path the same question: this is the call the hover readout
+        // makes, with the renderer's probe source and bounding box, so
+        // if it and the snapshot have drifted apart the cross-check
+        // sees it. Reading the frame again here would agree with
+        // itself and prove nothing.
+        probeAt: (lat, lon) => {
+          const reading = this.viewports.getPrimary()?.probeValueAt(lat, lon)
+          if (!reading) return null
+          return { value: reading.value, noData: reading.noData === true }
+        },
       })
       // Playlists — mount the manager panel host and wire the
       // playback state machine to the regular loadDataset flow.

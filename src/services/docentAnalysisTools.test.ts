@@ -26,6 +26,7 @@ import {
 } from './docentAnalysisTools'
 import type { LumaSnapshot } from './glLumaSampler'
 import type { ColorScale, DatasetOverlayOptions } from '../types'
+import { logger } from '../utils/logger'
 
 /** vmin 0 / vmax 255 makes luma and value numerically equal, so an
  *  expectation can be read straight off the fixture. */
@@ -522,5 +523,76 @@ describe('an extremum carries the scope it was found in', () => {
     }))
     const r = executeFindExtremum({ kind: 'max' })
     expect(r.valueText).toBe('at least 255 mg m-2, the highest anywhere in the whole dataset')
+  })
+})
+
+describe('the globe gets asked whether it agrees', () => {
+  // Reported live: an extremum whose coordinates, probed by hand on the
+  // globe, read "No data". The reducer and the coordinate mapping are
+  // both right — their composition is unit-tested across five bbox
+  // shapes in datasetStats.test.ts — so the divergence has to be the
+  // snapshot and the renderer's probe holding different state. Nothing
+  // was comparing them, so it took a person pointing at the globe.
+  // `vi.spyOn` hands back the *same* spy on a second call, so without
+  // the clear the counts accumulate across tests in this block and
+  // every assertion after the first one is really asserting history.
+  const warn = () => vi.spyOn(logger, 'warn').mockImplementation(() => {}).mockClear()
+
+  it('says nothing when the two paths agree', () => {
+    const spy = warn()
+    registerAnalysisSource(makeSource({
+      frame: () => ({ snapshot: snap(4, 4, () => 200), scale: SCALE, options: OPTIONS }),
+      probeAt: () => ({ value: 200, noData: false }),
+    }))
+    expect(executeFindExtremum({ kind: 'max' }).ok).toBe(true)
+    expect(spy).not.toHaveBeenCalled()
+  })
+
+  it('warns when the probe reports no data where the answer points', () => {
+    // The exact live symptom.
+    const spy = warn()
+    registerAnalysisSource(makeSource({
+      frame: () => ({ snapshot: snap(4, 4, () => 200), scale: SCALE, options: OPTIONS }),
+      probeAt: () => ({ value: 0, noData: true }),
+    }))
+    const r = executeFindExtremum({ kind: 'max' })
+    // Still answers — an unverifiable location beats no answer, as long
+    // as it is not silent.
+    expect(r.ok).toBe(true)
+    expect(spy).toHaveBeenCalledOnce()
+    expect(String(spy.mock.calls[0][0])).toMatch(/globe disagrees/i)
+    expect(String(spy.mock.calls[0][0])).toMatch(/no data/i)
+  })
+
+  it('warns when the probe reports a different value there', () => {
+    const spy = warn()
+    registerAnalysisSource(makeSource({
+      frame: () => ({ snapshot: snap(4, 4, () => 200), scale: SCALE, options: OPTIONS }),
+      probeAt: () => ({ value: 12, noData: false }),
+    }))
+    executeFindExtremum({ kind: 'max' })
+    expect(spy).toHaveBeenCalledOnce()
+  })
+
+  it('tolerates a disagreement inside one quantisation step', () => {
+    // The two paths read the same byte through different transports;
+    // one luma step apart is the transport, not a bug, and warning on
+    // it would train the reader to ignore the warning.
+    const spy = warn()
+    registerAnalysisSource(makeSource({
+      frame: () => ({ snapshot: snap(4, 4, () => 200), scale: SCALE, options: OPTIONS }),
+      probeAt: () => ({ value: 200.9, noData: false }),
+    }))
+    executeFindExtremum({ kind: 'max' })
+    expect(spy).not.toHaveBeenCalled()
+  })
+
+  it('skips the check for a host that cannot probe', () => {
+    const spy = warn()
+    registerAnalysisSource(makeSource({
+      frame: () => ({ snapshot: snap(4, 4, () => 200), scale: SCALE, options: OPTIONS }),
+    }))
+    expect(executeFindExtremum({ kind: 'max' }).ok).toBe(true)
+    expect(spy).not.toHaveBeenCalled()
   })
 })

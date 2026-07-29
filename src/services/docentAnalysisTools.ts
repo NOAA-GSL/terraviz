@@ -68,6 +68,18 @@ export interface DocentAnalysisSource {
   datasetTitle(): string | null
   /** The box currently on screen, for questions scoped to the view. */
   visibleBounds(): LatLonBounds | null
+  /** The value at a point as the **hover readout** would report it —
+   *  the renderer's own probe path, its own source and its own
+   *  bounding box, not the frame this module measured.
+   *
+   *  Exists to be disagreed with. Reported live: an extremum whose
+   *  coordinates, pointed at by hand on the globe, read "No data". The
+   *  reducer and the mapping are both right in isolation — the
+   *  composition is unit-tested across five bbox shapes — so a
+   *  divergence has to come from the two paths being handed different
+   *  state, which nothing was comparing. Optional: a host that cannot
+   *  probe simply skips the check. */
+  probeAt?(lat: number, lon: number): { value: number; noData: boolean } | null
 }
 
 let source: DocentAnalysisSource | null = null
@@ -442,6 +454,50 @@ export interface FindExtremumResult {
  * rides along with every result: a single extreme texel sits at the top
  * of the compression noise, not above it.
  */
+/**
+ * Point the globe's own readout at the answer and see if it agrees.
+ *
+ * The internal round trip — texel → lat/lon → texel — is unit-tested
+ * across five bounding-box shapes including the antimeridian and a
+ * flipped frame, so it cannot be what fails. Checking it at runtime
+ * would be asserting something the tests already prove.
+ *
+ * What is *not* proven is that this module and the hover readout are
+ * looking at the same thing. They reach the pixels by different routes:
+ * this one over a whole-frame snapshot with the overlay options that
+ * travelled with it, the readout over a 1×1 sample with the renderer's
+ * own probe source and bounding box. Those pieces have come apart
+ * before — `ef54065` lost the probe source on the buffered texture
+ * path, `2ca7417` had the frame and the title arriving from different
+ * datasets — and each time the symptom was a confident answer with
+ * nothing on screen contradicting it.
+ *
+ * Reported live: an extremum whose coordinates, probed by hand, read
+ * "No data". That is the disagreement, and it took a person pointing at
+ * the globe to find. Now the executor points at the globe itself.
+ * Advisory: the answer is still returned, because a location that
+ * cannot be cross-checked is worth reporting — just not silently.
+ */
+function crossCheckLocation(
+  found: { lat: number; lon: number; value: number; x: number; y: number },
+  scale: ColorScale,
+): void {
+  const reading = source?.probeAt?.(roundCoord(found.lat), roundCoord(found.lon))
+  if (reading === undefined) return // Host offers no probe; nothing to compare.
+  const expected = round3(found.value)
+  if (reading && !reading.noData && Math.abs(reading.value - found.value) <= quantisationStep(scale)) {
+    return
+  }
+  logger.warn(
+    '[Docent] find_extremum: the globe disagrees about this location. '
+    + `Snapshot texel (${found.x}, ${found.y}) reads ${expected}${scale.units ? ` ${scale.units}` : ''} `
+    + `at ${roundCoord(found.lat)}, ${roundCoord(found.lon)}, but probing that point returns `
+    + (reading === null ? 'nothing at all' : reading.noData ? 'no data' : `${round3(reading.value)}`)
+    + '. The value came from a different grid than the one on screen — '
+    + 'the reported place is not trustworthy.',
+  )
+}
+
 export function executeFindExtremum(
   args: Record<string, unknown>,
   frameTime?: string | null,
@@ -461,6 +517,7 @@ export function executeFindExtremum(
   if (!found) {
     return { ok: false, error: `No texels in ${scope.label} carry data in the displayed frame.` }
   }
+  crossCheckLocation(found, scale)
 
   return {
     ok: true,
