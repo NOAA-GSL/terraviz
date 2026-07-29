@@ -98,6 +98,30 @@ describe('renderDatasetEditPage', () => {
     )
   })
 
+  // The slug of a published dataset is its public URL, and the
+  // server refuses to rename it (`slug_locked`). Showing that up
+  // front beats letting the publisher type a new one and bounce off
+  // a 409 on save.
+  it('locks the slug field once the dataset is published', async () => {
+    const fetchFn = vi.fn().mockResolvedValue(
+      detailResponse(dataset({ published_at: '2026-04-03T00:00:00Z' })),
+    )
+    await renderDatasetEditPage(mount, '01EDIT0000000000000000000', {
+      fetchFn: fetchFn as unknown as typeof fetch,
+    })
+    const slug = mount.querySelector<HTMLInputElement>('#dataset-slug')
+    expect(slug?.readOnly).toBe(true)
+    expect(slug?.value).toBe('edit-me')
+  })
+
+  it('leaves the slug field editable while the dataset is a draft', async () => {
+    const fetchFn = vi.fn().mockResolvedValue(detailResponse(dataset()))
+    await renderDatasetEditPage(mount, '01EDIT0000000000000000000', {
+      fetchFn: fetchFn as unknown as typeof fetch,
+    })
+    expect(mount.querySelector<HTMLInputElement>('#dataset-slug')?.readOnly).toBe(false)
+  })
+
   it('redirects a non-owner (can_edit=false) to the read-only detail page instead of the form', async () => {
     const fetchFn = vi.fn().mockResolvedValue(detailResponse(dataset({ can_edit: false })))
     const navigate = vi.fn<(url: string) => void>()
