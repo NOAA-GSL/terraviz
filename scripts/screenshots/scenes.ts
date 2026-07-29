@@ -388,12 +388,17 @@ export const scenes: Scene[] = [
   {
     name: 'analyze-panel',
     description:
-      'Analyze panel for a data-encoded dataset — region picker, palette-coloured histogram, area-weighted statistics, coverage and the quantisation caveat',
+      'Analyze panel for a data-encoded dataset — region picker, palette-coloured histogram, area-weighted statistics, coverage, the quantisation caveat, and a drawn transect with its value profile',
     fixtures: catalogReportFixtures(),
     // Loads a dataset onto the WebGL globe; the panel is captured as a
     // crop, which the Weblate capturer ignores anyway.
     skipWeblate: true,
-    crop: '.analyze-panel',
+    // The panel now scrolls — statistics *and* a transect no longer fit
+    // in one screenful at either viewport. The full shot catches the top
+    // (histogram, tiles, coverage) and this crop catches the transect,
+    // which `Locator.screenshot` scrolls into view for us. Taken after
+    // the full shot, so that scroll cannot disturb it.
+    crop: '.analyze-transect-section',
     async setup(page) {
       await openCatalog(page)
       await openDataEncodedDataset(page)
@@ -405,33 +410,23 @@ export const scenes: Scene[] = [
       // computed nothing would otherwise capture as a plausible-looking
       // empty state.
       await page.locator('.analyze-stat').first().waitFor({ state: 'visible' })
-    },
-  },
 
-  {
-    name: 'analyze-transect',
-    description:
-      'Analyze panel with a transect drawn — the value profile along a great circle, its own colour strip, and the length / range tiles',
-    fixtures: catalogReportFixtures(),
-    skipWeblate: true,
-    crop: '.analyze-panel',
-    async setup(page) {
-      await openCatalog(page)
-      await openDataEncodedDataset(page)
-      await page.locator('#tools-menu-toggle').click()
-      await page.locator('#tools-menu-popover:not(.hidden)').waitFor()
-      await page.locator('#tools-menu-analyze').click()
-      await page.locator('.analyze-stat').first().waitFor({ state: 'visible' })
-
+      // The transect is drawn into *this* scene rather than given one of
+      // its own. A separate scene meant one more page that loads the
+      // globe and takes a WebGL2 context, and the run is already close
+      // enough to the limit that adding it made three later scenes —
+      // including this one at the mobile viewport — fail to get a
+      // sampler and render the empty state instead. One scene, both
+      // surfaces: the transect section renders below the statistics, so
+      // the crop is a superset of what this captured before.
       await page.locator('.analyze-transect-section button').first().click()
-      // Two clicks on the globe place the endpoints. Offsets rather
-      // than lat/lon because the picker reads map coordinates from the
-      // pointer, which is the path being exercised.
-      const globe = page.locator('#map-container canvas').first()
+      // Clicks in canvas space rather than by lat/lon, because reading
+      // the pointer's map coordinates is the path being exercised.
+      const globe = page.locator('.map-viewport canvas').first()
       const box = await globe.boundingBox()
-      if (!box) throw new Error('analyze-transect: no globe canvas to click')
-      await page.mouse.click(box.x + box.width * 0.38, box.y + box.height * 0.36)
-      await page.mouse.click(box.x + box.width * 0.62, box.y + box.height * 0.58)
+      if (!box) throw new Error('analyze-panel: no globe canvas to click')
+      await page.mouse.click(box.x + box.width * 0.4, box.y + box.height * 0.38)
+      await page.mouse.click(box.x + box.width * 0.6, box.y + box.height * 0.56)
       await page.locator('.analyze-transect').waitFor({ state: 'visible' })
     },
   },
