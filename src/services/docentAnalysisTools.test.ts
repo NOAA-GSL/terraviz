@@ -20,6 +20,7 @@ import {
   executeFindExtremum,
   executeProbeValue,
   executeSummarizeRegion,
+  analysisAvailability,
   isAnalysisAvailable,
   registerAnalysisSource,
   type DocentAnalysisSource,
@@ -594,5 +595,46 @@ describe('the globe gets asked whether it agrees', () => {
     }))
     expect(executeFindExtremum({ kind: 'max' }).ok).toBe(true)
     expect(spy).not.toHaveBeenCalled()
+  })
+})
+
+describe('the gate says which way it went', () => {
+  // Reported live: no measurement card on a build that renders them.
+  // The cards were fine; the tools had never been offered, and nothing
+  // said so — Orbit answered about values from somewhere else and the
+  // reply looked measured. A closed gate is correct behaviour. Closing
+  // silently is what cost the debugging round.
+  it('names a missing registration', () => {
+    registerAnalysisSource(null)
+    expect(analysisAvailability()).toEqual({ available: false, reason: 'no-source-registered' })
+  })
+
+  it('distinguishes a registered source with no readable frame', () => {
+    // A picture dataset, a browser with no WebGL2, a dataset mid-load —
+    // and, most likely in production today, a globe whose earth layer
+    // was never built because the basemap host stalled (#337), so the
+    // renderer never assigned a probe source.
+    registerAnalysisSource(makeSource({ frame: () => null }))
+    expect(analysisAvailability()).toEqual({ available: false, reason: 'no-frame' })
+  })
+
+  it('reports a source that throws separately from one that declines', () => {
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {}).mockClear()
+    registerAnalysisSource(makeSource({ frame: () => { throw new Error('renderer gone') } }))
+    expect(analysisAvailability()).toEqual({ available: false, reason: 'source-threw' })
+    expect(warn).toHaveBeenCalled()
+  })
+
+  it('is available with a readable frame', () => {
+    registerAnalysisSource(makeSource())
+    expect(analysisAvailability()).toEqual({ available: true, reason: 'ok' })
+  })
+
+  it('keeps isAnalysisAvailable in step with it', () => {
+    // Two readings of one fact; drift either way is a bug.
+    for (const src of [null, makeSource({ frame: () => null }), makeSource()]) {
+      registerAnalysisSource(src)
+      expect(isAnalysisAvailable()).toBe(analysisAvailability().available)
+    }
   })
 })

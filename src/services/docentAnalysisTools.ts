@@ -100,13 +100,37 @@ export function registerAnalysisSource(src: DocentAnalysisSource | null): void {
  * three, and it is the same call the executors make.
  */
 export function isAnalysisAvailable(): boolean {
+  return analysisAvailability().available
+}
+
+/**
+ * The same check, with the reason attached.
+ *
+ * When the tools are absent Orbit answers about values anyway — from
+ * the picture, or from a sibling dataset's metadata — and the reply
+ * looks exactly like a measured one. Reported live: no measurement card
+ * on a build that renders them, which is the visible symptom of a gate
+ * that closed silently. The gate closing is legitimate; closing without
+ * saying so is what cost a debugging round.
+ *
+ * `no-frame` is the interesting one, and its most likely cause today is
+ * a bug this branch does not own: when the basemap's TileJSON host
+ * stalls, MapLibre never fires `load`, the earth layer is never built,
+ * and the renderer never assigns `probeSource` — so a decoded,
+ * data-carrying dataset is on the globe with nothing able to read it
+ * (zyra-project/terraviz#337).
+ */
+export function analysisAvailability(): { available: boolean; reason: string } {
+  if (!source) return { available: false, reason: 'no-source-registered' }
   try {
-    return source?.frame() != null
+    return source.frame() != null
+      ? { available: true, reason: 'ok' }
+      : { available: false, reason: 'no-frame' }
   } catch (err) {
     // A renderer torn down between registration and the check. Absent
     // beats throwing inside prompt assembly.
     logger.warn('[Docent] analysis source threw during availability check:', err)
-    return false
+    return { available: false, reason: 'source-threw' }
   }
 }
 

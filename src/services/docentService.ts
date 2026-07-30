@@ -13,7 +13,7 @@ import {
   executeFindExtremum,
   executeProbeValue,
   executeSummarizeRegion,
-  isAnalysisAvailable,
+  analysisAvailability,
   type FindExtremumResult,
   type ResolvedScope,
 } from './docentAnalysisTools'
@@ -1495,7 +1495,17 @@ export async function* processMessage(
     // the permission without the tools invites answering from memory,
     // the tools without the permission leaves the model forbidden from
     // stating what came back.
-    const analysisToolsActive = isAnalysisAvailable()
+    const analysisAvail = analysisAvailability()
+    const analysisToolsActive = analysisAvail.available
+    // Say which way the gate went, every turn.
+    //
+    // When it closes, Orbit answers about values anyway — from the
+    // picture, or from a sibling dataset's metadata — and the reply is
+    // indistinguishable from a measured one. Reported live as "no
+    // measurement card" on a build that renders them, which took a
+    // round to trace back to the tools never having been offered. The
+    // gate closing is correct behaviour; closing silently is not.
+    logger.info(`[Docent] value tools: ${analysisToolsActive ? 'offered' : `absent (${analysisAvail.reason})`}`)
 
     const systemPrompt = buildSystemPrompt(
       datasets, currentDataset, cfg.readingLevel, visionActive,

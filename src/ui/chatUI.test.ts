@@ -468,6 +468,52 @@ describe('handleSend streaming', () => {
     })
   })
 
+  it('renders a measurement card for a measurement action', async () => {
+    // Reported live: no card visible on a build that has this code.
+    // The render path had never been asserted end-to-end — only that
+    // docentService emits the chunk — so this pins the other half.
+    const { processMessage } = await import('../services/docentService')
+    const mockedProcessMessage = vi.mocked(processMessage)
+
+    mockedProcessMessage.mockImplementation(async function* () {
+      yield { type: 'delta' as const, text: 'The smoke is worst over Canada.' }
+      yield {
+        type: 'action' as const,
+        action: {
+          type: 'measurement' as const,
+          valueText: '0.000427 kg m-2, the highest anywhere in Canada',
+          lat: 54.2,
+          lon: -101.4,
+          frameTime: 'Jul 31, 2026, 07:00 AM',
+          dataset: 'Wildfire Smoke Overhead',
+        },
+      }
+      yield { type: 'done' as const, fallback: false }
+    })
+
+    const cb = makeCallbacks()
+    cb.getDatasets.mockReturnValue([])
+    cb.getCurrentDataset.mockReturnValue(null)
+    initChatUI(cb)
+    openChat()
+
+    const input = document.getElementById('chat-input') as HTMLTextAreaElement
+    input.value = 'where is it worst'
+    ;(document.getElementById('chat-send') as HTMLButtonElement).click()
+
+    await vi.waitFor(() => {
+      const card = document.querySelector('.chat-measurement')
+      expect(card).not.toBeNull()
+      const shown = card!.textContent ?? ''
+      expect(shown).toContain('0.000427 kg m-2')
+      expect(shown).toContain('Canada')
+      // Signed floats become compass letters only at render time.
+      expect(shown).toContain('54.20°N')
+      expect(shown).toContain('101.40°W')
+      expect(shown).toContain('Wildfire Smoke Overhead')
+    })
+  })
+
   it('renders a cited event card for an event-citation action', async () => {
     const { processMessage } = await import('../services/docentService')
     const mockedProcessMessage = vi.mocked(processMessage)
