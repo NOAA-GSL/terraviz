@@ -78,6 +78,12 @@ function makeCallbacks(): MockCallbacks {
     onOpenBrowse: vi.fn(),
     onVoiceAudioFocus: vi.fn(),
     onShowAnalysis: vi.fn(),
+    // Globe-control seams. Absent here, every assertion about whether
+    // the camera moved silently passes on `undefined` — which is how a
+    // measurement's fly-to reached production without a test noticing
+    // it was being queued and never run.
+    onFlyTo: vi.fn(),
+    onAddMarker: vi.fn(),
   } as MockCallbacks
 }
 
@@ -512,6 +518,89 @@ describe('handleSend streaming', () => {
       expect(shown).toContain('101.40°W')
       expect(shown).toContain('Wildfire Smoke Overhead')
     })
+  })
+
+  it('moves the globe for a measurement even when the reply offers a dataset to load', async () => {
+    // Reported live: the reading was right, the card rendered, and the
+    // globe never moved. The same reply recommended a different dataset,
+    // and globe actions are held until a pending Load is tapped — which
+    // is correct for an event card (Load, then fly to where it happened)
+    // and wrong for a measurement, which describes the frame already on
+    // the globe.
+    const { processMessage } = await import('../services/docentService')
+    const mockedProcessMessage = vi.mocked(processMessage)
+
+    mockedProcessMessage.mockImplementation(async function* () {
+      yield { type: 'delta' as const, text: 'The smoke is worst in northern Canada.' }
+      yield {
+        type: 'action' as const,
+        action: {
+          type: 'measurement' as const,
+          valueText: 'at least 0.0005 kg m-2, the highest anywhere in the whole dataset',
+          lat: 65.879,
+          lon: -121.851,
+        },
+      }
+      yield { type: 'action' as const, action: { type: 'fly-to' as const, lat: 65.879, lon: -121.851, fromMeasurement: true as const } }
+      yield {
+        type: 'action' as const,
+        action: { type: 'add-marker' as const, lat: 65.879, lng: -121.851, label: '0.0005 kg m-2', fromMeasurement: true as const },
+      }
+      // The recommendation that used to hold the camera hostage.
+      yield {
+        type: 'action' as const,
+        action: { type: 'load-dataset' as const, datasetId: 'DS_OTHER', datasetTitle: 'Wildfire Smoke Forecast' },
+      }
+      yield { type: 'done' as const, fallback: false }
+    })
+
+    const cb = makeCallbacks()
+    cb.getDatasets.mockReturnValue([])
+    cb.getCurrentDataset.mockReturnValue(null)
+    initChatUI(cb)
+    openChat()
+
+    const input = document.getElementById('chat-input') as HTMLTextAreaElement
+    input.value = 'where is the smoke worst'
+    ;(document.getElementById('chat-send') as HTMLButtonElement).click()
+
+    await vi.waitFor(() => {
+      expect(cb.onFlyTo).toHaveBeenCalledWith(65.879, -121.851, undefined)
+      expect(cb.onAddMarker).toHaveBeenCalledWith(65.879, -121.851, '0.0005 kg m-2')
+    })
+    // And the unrelated dataset was not loaded as a side effect.
+    expect(cb.onLoadDataset).not.toHaveBeenCalled()
+  })
+
+  it('still holds an untagged fly-to behind a pending Load', async () => {
+    // The event-card ordering this deferral exists for must survive.
+    const { processMessage } = await import('../services/docentService')
+    const mockedProcessMessage = vi.mocked(processMessage)
+
+    mockedProcessMessage.mockImplementation(async function* () {
+      yield { type: 'delta' as const, text: 'There is an outbreak.' }
+      yield { type: 'action' as const, action: { type: 'fly-to' as const, lat: 10, lon: 20 } }
+      yield {
+        type: 'action' as const,
+        action: { type: 'load-dataset' as const, datasetId: 'DS_OTHER', datasetTitle: 'Some Dataset' },
+      }
+      yield { type: 'done' as const, fallback: false }
+    })
+
+    const cb = makeCallbacks()
+    cb.getDatasets.mockReturnValue([])
+    cb.getCurrentDataset.mockReturnValue(null)
+    initChatUI(cb)
+    openChat()
+
+    const input = document.getElementById('chat-input') as HTMLTextAreaElement
+    input.value = 'what is happening'
+    ;(document.getElementById('chat-send') as HTMLButtonElement).click()
+
+    await vi.waitFor(() => {
+      expect(getMessages()).toHaveLength(2)
+    })
+    expect(cb.onFlyTo).not.toHaveBeenCalled()
   })
 
   it('renders a cited event card for an event-citation action', async () => {

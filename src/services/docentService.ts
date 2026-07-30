@@ -1759,11 +1759,15 @@ export async function* processMessage(
       const ext = r as FindExtremumResult
       if (ext.kind && Number.isFinite(ext.lat) && Number.isFinite(ext.lon) && !flewThisTurn) {
         flewThisTurn = true
-        yield { type: 'action', action: { type: 'fly-to', lat: ext.lat!, lon: ext.lon! } }
+        // `fromMeasurement` so the chat does not hold these behind a
+        // Load button for some *other* dataset the same reply happens
+        // to recommend — this camera move belongs to the frame already
+        // on the globe.
+        yield { type: 'action', action: { type: 'fly-to', lat: ext.lat!, lon: ext.lon!, fromMeasurement: true } }
         const label = `${ext.value ?? ''} ${ext.units ?? ''}`.trim()
         yield {
           type: 'action',
-          action: { type: 'add-marker', lat: ext.lat!, lng: ext.lon!, ...(label ? { label } : {}) },
+          action: { type: 'add-marker', lat: ext.lat!, lng: ext.lon!, fromMeasurement: true, ...(label ? { label } : {}) },
         }
       }
     }

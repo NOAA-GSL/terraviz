@@ -414,7 +414,21 @@ export type ChatRole = 'user' | 'docent'
  */
 export type ChatAction =
   | { type: 'load-dataset'; datasetId: string; datasetTitle: string }
-  | { type: 'fly-to'; lat: number; lon: number; altitude?: number }
+  /**
+   * `fromMeasurement` marks a camera move that belongs to the dataset
+   * **already on the globe** — a §A6 reading — rather than to a dataset
+   * this message is offering to load.
+   *
+   * The distinction is load-bearing at the chat's flush point. Globe
+   * actions are normally held until any pending `load-dataset` in the
+   * same message is tapped, which is right for an event card: Load,
+   * then fly to where it happened. It is wrong for a measurement.
+   * Reported live: Orbit measured the current frame correctly, showed
+   * the card, and the globe never moved, because the same reply also
+   * recommended a different dataset and the camera move was waiting on
+   * a Load nobody clicked.
+   */
+  | { type: 'fly-to'; lat: number; lon: number; altitude?: number; fromMeasurement?: true }
   | {
       /** Seek the loaded time-enabled dataset to {@link isoDate}. */
       type: 'set-time'
@@ -431,7 +445,7 @@ export type ChatAction =
       error?: string
     }
   | { type: 'fit-bounds'; bounds: [number, number, number, number]; label?: string }
-  | { type: 'add-marker'; lat: number; lng: number; label?: string }
+  | { type: 'add-marker'; lat: number; lng: number; label?: string; fromMeasurement?: true }
   | { type: 'toggle-labels'; visible: boolean }
   | { type: 'highlight-region'; geojson: GeoJSON.GeoJSON; label?: string }
   /**

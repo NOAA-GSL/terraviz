@@ -379,6 +379,26 @@ export function flushPendingGlobeActions(): void {
   }
 }
 
+/**
+ * Run just the globe actions that belong to a §A6 measurement.
+ *
+ * Everything else in the queue may legitimately be waiting on a
+ * `load-dataset` in the same message — an event card streams Load, Fly
+ * and Seek together and the fly has to follow the load. A measurement
+ * is the opposite case: it describes the dataset that is *already*
+ * loaded, so a Load button for some other dataset in the same reply
+ * must not gate it.
+ */
+function flushMeasurementGlobeActions(): void {
+  const keep: ChatAction[] = []
+  for (const action of pendingGlobeActions) {
+    const owned = (action.type === 'fly-to' || action.type === 'add-marker') && action.fromMeasurement
+    if (owned) executeGlobeAction(action)
+    else keep.push(action)
+  }
+  pendingGlobeActions = keep
+}
+
 // --- Session persistence ---
 
 function saveSession(): void {
@@ -1493,6 +1513,12 @@ async function handleSend(): Promise<void> {
           const currentDataset = callbacks?.getCurrentDataset()
           const allAlreadyLoaded = loadActions.length > 0
             && loadActions.every(a => a.type === 'load-dataset' && a.datasetId === currentDataset?.id)
+          // A measurement's camera move is about the frame already on
+          // the globe, so it never waits on a Load button. Reported
+          // live: the reading was right, the card rendered, and the
+          // globe sat still because the same reply also recommended a
+          // different dataset and the fly-to was queued behind it.
+          flushMeasurementGlobeActions()
           if (loadActions.length === 0 || allAlreadyLoaded) {
             flushPendingGlobeActions()
           } else {
