@@ -429,6 +429,45 @@ describe('handleSend streaming', () => {
     })
   })
 
+  it('renders a unit exponent however the model wrote it', async () => {
+    // §A6 answers quote units from the dataset's own sidecar as plain
+    // text ("kg m-2"). Live, the model re-set them in LaTeX — "at least
+    // 427 mg m$^{-2}$" — and this chat has no math renderer, so the
+    // markup reached the reader raw. Fixed in the renderer rather than
+    // with another prompt rule: after ten failed instructions about how
+    // to write a value, notation is a rendering concern.
+    const { processMessage } = await import('../services/docentService')
+    const mockedProcessMessage = vi.mocked(processMessage)
+
+    mockedProcessMessage.mockImplementation(async function* () {
+      // Every notation seen or plausible, plus a price that must survive:
+      // the conversion is all-or-nothing per exponent and only fires on
+      // something shaped like one.
+      yield { type: 'delta' as const, text: 'At least 427 mg m$^{-2}$, or 2 kg m^{-3}, or 5 m^2, costing $30.' }
+      yield { type: 'done' as const, fallback: false }
+    })
+
+    const cb = makeCallbacks()
+    cb.getDatasets.mockReturnValue([])
+    cb.getCurrentDataset.mockReturnValue(null)
+    initChatUI(cb)
+    openChat()
+
+    const input = document.getElementById('chat-input') as HTMLTextAreaElement
+    input.value = 'how bad is it'
+    ;(document.getElementById('chat-send') as HTMLButtonElement).click()
+
+    await vi.waitFor(() => {
+      const rendered = document.querySelector('#chat-messages')?.textContent ?? ''
+      expect(rendered).toContain('427 mg m\u207b\u00b2')
+      expect(rendered).toContain('2 kg m\u207b\u00b3')
+      expect(rendered).toContain('5 m\u00b2')
+      // The exponents are gone; the price is not.
+      expect(rendered).not.toContain('^')
+      expect(rendered).toContain('$30')
+    })
+  })
+
   it('renders a cited event card for an event-citation action', async () => {
     const { processMessage } = await import('../services/docentService')
     const mockedProcessMessage = vi.mocked(processMessage)

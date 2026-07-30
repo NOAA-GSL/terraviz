@@ -1961,13 +1961,63 @@ function wireActionButtons(container: Element): void {
 /**
  * Minimal markdown: **bold**, bullet lists, and newlines.
  */
+/** Unicode superscripts, for the exponent in a unit. */
+const SUPERSCRIPT_CHARS: Record<string, string> = {
+  '0': '⁰', '1': '¹', '2': '²', '3': '³', '4': '⁴',
+  '5': '⁵', '6': '⁶', '7': '⁷', '8': '⁸', '9': '⁹',
+  '-': '⁻', '−': '⁻', '+': '⁺',
+}
+
+/** All-or-nothing: an exponent we cannot render entirely is left alone
+ *  rather than half-converted. */
+function toSuperscript(exponent: string): string | null {
+  let out = ''
+  for (const ch of exponent) {
+    const mapped = SUPERSCRIPT_CHARS[ch]
+    if (!mapped) return null
+    out += mapped
+  }
+  return out
+}
+
+/**
+ * Render a unit exponent however the model chose to write it.
+ *
+ * §A6 answers quote units from the dataset's own sidecar — `kg m-2`,
+ * plain text — and the model has taken to re-setting them in LaTeX
+ * (`m$^{-2}$`), which this chat has no math renderer for, so the markup
+ * reached the user raw.
+ *
+ * Fixed here rather than with another prompt rule, on the evidence of
+ * this phase: rules about how to write a value have failed repeatedly,
+ * and the notation is a rendering concern anyway. Whatever the model
+ * picks, the reader sees units.
+ *
+ * Deliberately narrow. Only an exponent is converted, and only when
+ * every character of it maps; `$` pairs that are not wrapping one are
+ * untouched, so prices survive.
+ */
+function renderUnitExponents(line: string): string {
+  return line
+    // kg m$^{-2}$ — LaTeX inline math around the exponent alone.
+    .replace(/\$\^\{([^}]{1,4})\}\$/g, (m, exp) => toSuperscript(exp) ?? m)
+    // $\text{kg m}^{-2}$ and friends: math delimiters wrapping a unit.
+    .replace(/\$([^$\n]{1,24}?)\^\{([^}]{1,4})\}\$/g, (m, base, exp) => {
+      const sup = toSuperscript(exp)
+      return sup ? `${base}${sup}` : m
+    })
+    // Bare TeX exponents, no delimiters.
+    .replace(/\^\{([^}]{1,4})\}/g, (m, exp) => toSuperscript(exp) ?? m)
+    .replace(/\^(-?\d{1,3})(?![\w^])/g, (m, exp) => toSuperscript(exp) ?? m)
+}
+
 function renderMarkdownLite(html: string): string {
   const lines = html.split('\n')
   const out: string[] = []
   let inList = false
 
   for (const rawLine of lines) {
-    let line = rawLine.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    let line = renderUnitExponents(rawLine).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
     // Convert markdown links [text](url) → clickable <a> (new tab)
     line = line.replace(
       /\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g,
