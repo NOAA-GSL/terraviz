@@ -581,7 +581,13 @@ export function executeFindExtremum(
     // after the chat scrolls away, long outliving the sentence that
     // carried the caveat. Same reason `valueText` exists at all; the
     // pin needed its own because the scope clause does not fit a label.
-    pinLabel: valueText(round3(found.value), scale, kind === 'max' && found.value >= scale.vmax),
+    pinLabel:
+      valueText(round3(found.value), scale, kind === 'max' && found.value >= scale.vmax)
+      // One pin over a field where the extreme value is shared reads as
+      // *the* spot. On the live smoke row the maximum was tied across
+      // 109 cells in 36 separate patches, and the marker marked one of
+      // them — true, and misleading without the count beside it.
+      + (found.patchCount > 1 ? ` · 1 of ${found.patchCount} tied areas` : ''),
     precision: precisionNote(scale),
     ...(found.plateau
       ? {

@@ -246,6 +246,10 @@ export interface ProbeReading {
    *  caller should say "no data" rather than print a number that
    *  happens to sit at the bottom of the range. */
   noData: boolean
+  /** One luma step in physical units — the finest difference this
+   *  transport can carry. Present so the formatter can stop short of
+   *  printing digits the data does not have. */
+  quantisationStep?: number
 }
 
 /**
@@ -270,6 +274,7 @@ export function probeDatasetValue(
     value: lumaToValue(luma, scale),
     units: scale.units,
     noData: isTransparentLuma(luma, scale),
+    quantisationStep: (scale.vmax - scale.vmin) / 255,
   }
 }
 
@@ -283,9 +288,33 @@ export function probeDatasetValue(
  * palette's no-data band says so rather than printing a number that
  * happens to sit at the bottom of the range.
  */
+/**
+ * How many decimals this transport can actually justify.
+ *
+ * Three significant figures is the house convention, and for most
+ * values it is also honest. It stops being honest when the third digit
+ * is finer than one luma step: the live column-loading row has a step
+ * of about 1.96e-6, so `0.0000700` claims resolution to 1e-7 on data
+ * quantised fifty times more coarsely. The trailing digit is not a
+ * measurement, it is an artefact of the divide.
+ *
+ * So the step sets a floor: round to the decimal place of the step's
+ * leading digit, then let three significant figures cap it from the
+ * other side. Trailing zeros are dropped, because a zero the data
+ * cannot support reads exactly like one it can.
+ */
+function decimalsForStep(step: number): number | null {
+  if (!Number.isFinite(step) || step <= 0) return null
+  return Math.max(0, -Math.floor(Math.log10(step)))
+}
+
 export function formatProbeReading(reading: ProbeReading): string {
   if (reading.noData) return t('probe.noData')
-  const value = formatNumber(reading.value, { maximumSignificantDigits: 3 })
+  const decimals = reading.quantisationStep != null ? decimalsForStep(reading.quantisationStep) : null
+  const shown = decimals != null
+    ? Number(reading.value.toFixed(decimals))
+    : reading.value
+  const value = formatNumber(shown, { maximumSignificantDigits: 3 })
   return reading.units
     ? t('probe.value', { value, units: reading.units })
     : t('probe.valueNoUnits', { value })

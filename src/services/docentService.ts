@@ -1331,10 +1331,12 @@ async function* yieldActionsForValidIds(
   validIds: Set<string>,
   datasets: Dataset[],
   yieldedIds: Set<string>,
+  /** Gate for the measured-answer suggestion cap; defaults to open. */
+  allowSuggestion: () => boolean = () => true,
 ): AsyncGenerator<DocentStreamChunk> {
   for (const idStr of validIds) {
     const dataset = datasets.find(d => d.id === idStr)
-    if (dataset && !yieldedIds.has(dataset.id)) {
+    if (dataset && !yieldedIds.has(dataset.id) && allowSuggestion()) {
       yieldedIds.add(dataset.id)
       yield {
         type: 'action',
@@ -1358,6 +1360,7 @@ async function* emitValidatedActions(
   datasets: Dataset[],
   yieldedIds: Set<string>,
   events: readonly PublicEvent[] = [],
+  allowSuggestion: () => boolean = () => true,
 ): AsyncGenerator<DocentStreamChunk> {
   const { cleanedText, validIds, invalidIds, globeActions } = validateAndCleanText(accumulatedText, datasets, events)
   // Rewrite whenever the text was modified — covers stripped markers, hallucinated IDs,
@@ -1369,7 +1372,7 @@ async function* emitValidatedActions(
   if (needsRewrite) {
     yield { type: 'rewrite', text: cleanedText }
   }
-  yield* yieldActionsForValidIds(validIds, datasets, yieldedIds)
+  yield* yieldActionsForValidIds(validIds, datasets, yieldedIds, allowSuggestion)
 
   // Yield globe-control actions extracted from inline markers
   for (const ga of globeActions) {
@@ -1772,6 +1775,29 @@ export async function* processMessage(
       }
     }
 
+    /**
+     * A measured answer gets at most one dataset suggestion.
+     *
+     * "Where is the smoke worst?" came back as two sentences of answer
+     * followed by three datasets with paragraph-length descriptions.
+     * The prompt permits a related dataset *afterwards* and the answer
+     * did come first, so no rule was broken — the ratio was simply
+     * wrong, and it is the mild form of the failure `e5ff06d` fixed:
+     * discovery crowding out the question that was asked.
+     *
+     * Capped here rather than asked for in the prose, on this phase's
+     * evidence. Only applies when we actually measured something; an
+     * ordinary discovery turn is untouched.
+     */
+    const MEASURED_ANSWER_SUGGESTION_CAP = 1
+    let suggestionsThisTurn = 0
+    const suggestionAllowed = (): boolean => {
+      if (measuredTextsThisTurn.size === 0) return true
+      if (suggestionsThisTurn >= MEASURED_ANSWER_SUGGESTION_CAP) return false
+      suggestionsThisTurn++
+      return true
+    }
+
     let measuredContext = ''
     if (analysisToolsActive) {
       const kind = valuesQuestionKind(input)
@@ -1976,7 +2002,7 @@ export async function* processMessage(
                     }
                   }
 
-                  if (resolvedId && !yieldedIds.has(resolvedId)) {
+                  if (resolvedId && !yieldedIds.has(resolvedId) && suggestionAllowed()) {
                     yieldedIds.add(resolvedId)
                     yield {
                       type: 'action',
@@ -2291,7 +2317,7 @@ export async function* processMessage(
           // Self-heal the degraded badge so the user knows
           // functionality is restored without a manual reload.
           clearDegradedState()
-          yield* emitValidatedActions(accumulatedText, datasets, yieldedIds, approvedEvents)
+          yield* emitValidatedActions(accumulatedText, datasets, yieldedIds, approvedEvents, suggestionAllowed)
 
           // Safety net: if the LLM mentioned dataset titles from search_catalog
           // results in its prose but didn't emit <<LOAD:...>> markers for them,
@@ -2315,6 +2341,7 @@ export async function* processMessage(
                 lowerText.includes(titleLower) ||
                 (titleShort.length >= 8 && lowerText.includes(titleShort))
               ) {
+                if (!suggestionAllowed()) continue
                 yieldedIds.add(sr.id)
                 logger.info(`[Docent] Auto-injecting Load button for "${sr.title}" (${sr.id}) — title found in prose but no marker emitted`)
                 yield {

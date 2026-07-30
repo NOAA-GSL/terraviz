@@ -2896,6 +2896,14 @@ describe('processMessage — §A6 find_extremum moves the globe itself', () => {
   } as any
   const OPTIONS2 = { boundingBox: { n: 85, s: 5, w: -175, e: -20 }, colorScale: SCALE2 } as any
 
+  /** Three loadable rows, so the suggestion cap has something to cap. */
+  const THREE = [
+    makeDataset({ id: 'DS_A', title: 'Smoke A' }),
+    makeDataset({ id: 'DS_B', title: 'Smoke B' }),
+    makeDataset({ id: 'DS_C', title: 'Smoke C' }),
+  ]
+  const THREE_MARKERS = THREE.map(d => `<<LOAD:${d.id}>>`).join('\n')
+
   function peakSource() {
     // One hot texel in the western half, so the extremum lands at a
     // negative longitude — the sign is the whole point of this.
@@ -2913,7 +2921,12 @@ describe('processMessage — §A6 find_extremum moves the globe itself', () => {
   // `ask` matters now: a superlative question is measured up front,
   // before the model gets a turn, so a test aimed at the tool-call path
   // has to ask something that does not trigger that.
-  async function run(calls: { id: string; name: string; arguments: Record<string, unknown> }[], ask = 'where is it worst?') {
+  async function run(
+    calls: { id: string; name: string; arguments: Record<string, unknown> }[],
+    ask = 'where is it worst?',
+    reply = 'The peak is over the west.',
+    ds = datasets,
+  ) {
     const { streamChat } = await import('./llmProvider')
     const mocked = vi.mocked(streamChat)
     let first = true
@@ -2923,12 +2936,12 @@ describe('processMessage — §A6 find_extremum moves the globe itself', () => {
         for (const c of calls) yield { type: 'tool_call' as const, call: c }
         yield { type: 'done' as const }
       } else {
-        yield { type: 'delta' as const, text: 'The peak is over the west.' }
+        yield { type: 'delta' as const, text: reply }
         yield { type: 'done' as const }
       }
     })
     const chunks: DocentStreamChunk[] = []
-    for await (const c of processMessage(ask, [], datasets, null, baseConfig)) chunks.push(c)
+    for await (const c of processMessage(ask, [], ds, null, baseConfig)) chunks.push(c)
     return chunks
   }
 
@@ -3015,6 +3028,47 @@ describe('processMessage — §A6 find_extremum moves the globe itself', () => {
     expect(marker[0].label).toContain('mg m-2')
     // And the pin stays short — the scope clause belongs in the card.
     expect(marker[0].label).not.toContain('anywhere in')
+  })
+
+  it('says how many places tie when the pin marks one of several', async () => {
+    // Live: the maximum was shared by 109 cells in 36 separate patches
+    // and one pin marked one of them. True, and read as *the* spot.
+    const w = 32, h = 32
+    const data = new Uint8Array(w * h)
+    data.fill(80)
+    // Three separate peaks, none adjacent.
+    data[4 * w + 4] = 255
+    data[12 * w + 20] = 255
+    data[24 * w + 8] = 255
+    const { registerAnalysisSource } = await import('./docentAnalysisTools')
+    registerAnalysisSource({
+      frame: () => ({ snapshot: { data, width: w, height: h }, scale: SCALE2, options: OPTIONS2 }),
+      datasetTitle: () => 'Wildfire Smoke Overhead',
+      visibleBounds: () => ({ n: 85, s: 5, w: -175, e: -20 }),
+    } as any)
+    const chunks = await run([], 'Where is the smoke worst?')
+    expect(actions(chunks, 'add-marker')[0].label).toContain('1 of 3 tied areas')
+  })
+
+  it('caps dataset suggestions on a measured answer', async () => {
+    // "Where is the smoke worst?" answered in two sentences, then three
+    // datasets with paragraph-length descriptions. No rule was broken —
+    // the answer did come first — but discovery crowded out the
+    // question that was asked.
+    const { registerAnalysisSource } = await import('./docentAnalysisTools')
+    registerAnalysisSource(peakSource())
+    const chunks = await run([], 'Where is the smoke worst?', `The peak is over the west.\n${THREE_MARKERS}`, THREE)
+    expect(actions(chunks, 'measurement')).toHaveLength(1)
+    expect(actions(chunks, 'load-dataset')).toHaveLength(1)
+  })
+
+  it('leaves an ordinary discovery turn uncapped', async () => {
+    // The cap is about a measured answer, not about suggestions.
+    const { registerAnalysisSource } = await import('./docentAnalysisTools')
+    registerAnalysisSource(peakSource())
+    const chunks = await run([], 'what datasets show smoke?', `Here are some.\n${THREE_MARKERS}`, THREE)
+    expect(actions(chunks, 'measurement')).toHaveLength(0)
+    expect(actions(chunks, 'load-dataset')).toHaveLength(3)
   })
 
   it('leaves the pin a bare value when the field is not clipping', async () => {

@@ -9,6 +9,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import {
+  formatProbeReading,
   latLonToTexelUv,
   lonSpanDegrees,
   sphereUvToLatLon,
@@ -337,5 +338,48 @@ describe('lonSpanDegrees', () => {
     // is exactly the bug the wrap arithmetic exists to prevent, so the
     // name says which of the two answers is correct.
     expect(lonSpanDegrees({ boundingBox: { n: 60, s: -60, w: 150, e: -150 } })).toBe(60)
+  })
+})
+
+describe('a reading does not print digits the transport cannot carry', () => {
+  // The live column-loading row spans 0 to 5e-4 over 256 codes, so one
+  // luma step is about 1.96e-6. Three significant figures on a value of
+  // 7e-5 renders "0.0000700" — resolution to 1e-7, on data quantised
+  // fifty times more coarsely. The trailing digit is an artefact of the
+  // divide, not a measurement, and it sits in the corner of the screen
+  // next to a globe that looks authoritative.
+  const STEP = 5e-4 / 255
+
+  it('drops a digit finer than one luma step', () => {
+    // 3 significant figures would render 0.0000734 — a final digit at
+    // 1e-7 on a field quantised at ~2e-6.
+    const shown = formatProbeReading({ value: 7.34e-5, units: 'kg m-2', noData: false, quantisationStep: STEP })
+    expect(shown).toContain('0.000073')
+    expect(shown).not.toContain('0.0000734')
+  })
+
+  it('keeps every digit the step does support', () => {
+    // A coarse scale: 0..255 over 256 codes is a step of 1, so integers
+    // are exactly what it can resolve.
+    const shown = formatProbeReading({ value: 137, units: 'mg m-2', noData: false, quantisationStep: 1 })
+    expect(shown).toContain('137')
+  })
+
+  it('still caps at three significant figures for a fine scale', () => {
+    // A step far below the third digit must not license a fourth.
+    const shown = formatProbeReading({ value: 1.23456, units: 'K', noData: false, quantisationStep: 1e-9 })
+    expect(shown).toContain('1.23')
+    expect(shown).not.toContain('1.2345')
+  })
+
+  it('falls back to the old behaviour when no step is known', () => {
+    // Readings built before the field existed still format, at the
+    // unbounded three significant figures.
+    const shown = formatProbeReading({ value: 7.34e-5, units: 'kg m-2', noData: false })
+    expect(shown).toContain('0.0000734')
+  })
+
+  it('says no data regardless of the step', () => {
+    expect(formatProbeReading({ value: 0, noData: true, quantisationStep: STEP })).toBeTruthy()
   })
 })
