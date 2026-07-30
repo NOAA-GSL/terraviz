@@ -467,6 +467,9 @@ export interface FindExtremumResult {
   lon?: number
   value?: number
   units?: string
+  /** The value, its units and any "at least", short enough for a map
+   *  pin. Not sent to the model — it has `valueText`. */
+  pinLabel?: string
   precision?: string
 }
 
@@ -570,6 +573,15 @@ export function executeFindExtremum(
       valueText(round3(found.value), scale, kind === 'max' && found.value >= scale.vmax)
       + (kind === 'max' ? ', the highest anywhere in ' : ', the lowest anywhere in ')
       + scope.label,
+    // The same string without the scope clause, for the map pin.
+    //
+    // Written here rather than assembled at the call site: the pin was
+    // built as `value + units` and so was the one artifact that dropped
+    // the "at least" — and it is the artifact that *stays on the globe*
+    // after the chat scrolls away, long outliving the sentence that
+    // carried the caveat. Same reason `valueText` exists at all; the
+    // pin needed its own because the scope clause does not fit a label.
+    pinLabel: valueText(round3(found.value), scale, kind === 'max' && found.value >= scale.vmax),
     precision: precisionNote(scale),
     ...(found.plateau
       ? {

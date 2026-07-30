@@ -1764,7 +1764,7 @@ export async function* processMessage(
         // to recommend — this camera move belongs to the frame already
         // on the globe.
         yield { type: 'action', action: { type: 'fly-to', lat: ext.lat!, lon: ext.lon!, fromMeasurement: true } }
-        const label = `${ext.value ?? ''} ${ext.units ?? ''}`.trim()
+        const label = ext.pinLabel ?? `${ext.value ?? ''} ${ext.units ?? ''}`.trim()
         yield {
           type: 'action',
           action: { type: 'add-marker', lat: ext.lat!, lng: ext.lon!, fromMeasurement: true, ...(label ? { label } : {}) },
@@ -2215,12 +2215,12 @@ export async function* processMessage(
               // caveats.
               const {
                 scope: resultScope,
-                value: _value, units: _units,
+                value: _value, units: _units, pinLabel: _pinLabel,
                 mean: _mean, median: _median, min: _min, max: _max, p10: _p10, p90: _p90,
                 ...forModel
               } = result as typeof result & {
                 scope?: ResolvedScope
-                value?: number; units?: string
+                value?: number; units?: string; pinLabel?: string
                 mean?: number; median?: number; min?: number; max?: number; p10?: number; p90?: number
               }
               conversationMessages.push({

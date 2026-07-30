@@ -2989,6 +2989,41 @@ describe('processMessage — §A6 find_extremum moves the globe itself', () => {
     expect(actions(chunks, 'add-marker')).toHaveLength(0)
   })
 
+  it('keeps the saturation caveat on the pin, not just in the sentence', async () => {
+    // The pin outlives the sentence: the chat scrolls, the marker stays
+    // on the globe. Built as `value + units` it was the one artifact
+    // that dropped "at least" — reassembled from parts, which is the
+    // exact failure `valueText` exists to prevent, reintroduced in the
+    // one place the caveat matters longest.
+    const { registerAnalysisSource } = await import('./docentAnalysisTools')
+    registerAnalysisSource(peakSource())
+    // A field that clips at the top of its scale — the common case for
+    // these rows, and the one where a bare number overstates.
+    const w = 32, h = 32
+    const data = new Uint8Array(w * h)
+    data.fill(80)
+    data[8 * w + 4] = 255
+    registerAnalysisSource({
+      frame: () => ({ snapshot: { data, width: w, height: h }, scale: SCALE2, options: OPTIONS2 }),
+      datasetTitle: () => 'Wildfire Smoke Overhead',
+      visibleBounds: () => ({ n: 85, s: 5, w: -175, e: -20 }),
+    } as any)
+    const chunks = await run([], 'Where is the smoke worst?')
+    const marker = actions(chunks, 'add-marker')
+    expect(marker).toHaveLength(1)
+    expect(marker[0].label).toMatch(/^at least /)
+    expect(marker[0].label).toContain('mg m-2')
+    // And the pin stays short — the scope clause belongs in the card.
+    expect(marker[0].label).not.toContain('anywhere in')
+  })
+
+  it('leaves the pin a bare value when the field is not clipping', async () => {
+    const { registerAnalysisSource } = await import('./docentAnalysisTools')
+    registerAnalysisSource(peakSource())
+    const chunks = await run([], 'Where is the smoke worst?')
+    expect(actions(chunks, 'add-marker')[0].label).toBe('250 mg m-2')
+  })
+
   it('measures a superlative question before the model gets a turn', async () => {
     // The failure this exists for: asked "Where is the smoke worst?"
     // with the tools offered, the model called nothing and wrote the
