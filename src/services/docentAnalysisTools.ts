@@ -590,3 +590,39 @@ export function executeFindExtremum(
       : {}),
   }
 }
+
+/**
+ * Does this message ask where the field peaks or bottoms out?
+ *
+ * Used to measure *before* the model answers, the way the catalog
+ * pre-searches and injects `[RELEVANT DATASETS]` rather than trusting
+ * the model to call `search_datasets`.
+ *
+ * The reason is a live failure that survived every prompt fix: asked
+ * "Where is the smoke worst?" with the tools offered, Orbit called
+ * nothing and wrote the answer anyway — "worst across an area", "at
+ * least 500 mg m-2", a coordinate, a timestamp. Every one of those is
+ * a phrase the carve-out uses to describe a *correct* answer, so the
+ * prompt had taught it the shape of the thing it was meant to compel.
+ * Three app-emitted artifacts were missing at once — no measurement
+ * card, no camera move, no marker — which is how we know no tool ran,
+ * and none of it was visible to the person reading the reply.
+ *
+ * Deliberately narrow, and biased toward missing a question rather
+ * than answering the wrong one: an explicit superlative about the
+ * loaded field. Anything subtler still goes through the model, which
+ * has the tools and is told to use them.
+ */
+export function valuesQuestionKind(message: string): 'max' | 'min' | null {
+  const text = message.toLowerCase()
+  // A named place means a regional question; `summarize_region` is the
+  // right tool and picking a region here would be guessing at one.
+  if (/\bin\s+(the\s+)?[a-z]/.test(text) && /\bhow much|average|typical\b/.test(text)) return null
+  const superlative = /\b(worst|highest|heaviest|densest|thickest|strongest|most intense|peak|maximum|max)\b/
+  const minimal = /\b(lowest|cleanest|clearest|weakest|least|minimum|min)\b/
+  const locational = /\b(where|which (place|area|region)|what (place|area|region))\b/
+  if (!locational.test(text)) return null
+  if (minimal.test(text)) return 'min'
+  if (superlative.test(text)) return 'max'
+  return null
+}

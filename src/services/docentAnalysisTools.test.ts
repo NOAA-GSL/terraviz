@@ -23,6 +23,7 @@ import {
   analysisAvailability,
   isAnalysisAvailable,
   registerAnalysisSource,
+  valuesQuestionKind,
   type DocentAnalysisSource,
 } from './docentAnalysisTools'
 import type { LumaSnapshot } from './glLumaSampler'
@@ -636,5 +637,38 @@ describe('the gate says which way it went', () => {
       registerAnalysisSource(src)
       expect(isAnalysisAvailable()).toBe(analysisAvailability().available)
     }
+  })
+})
+
+describe('valuesQuestionKind', () => {
+  // Biased toward missing a question rather than answering the wrong
+  // one: a false negative leaves the model to call the tool, which is
+  // the status quo. A false positive measures something nobody asked
+  // about and moves the globe for it.
+  it('catches the superlative phrasings people actually type', () => {
+    for (const q of [
+      'Where is the smoke worst?',
+      'where is it highest',
+      'Where is the smoke the most intense right now?',
+      'which region has the peak values',
+      'where is the maximum',
+    ]) expect(valuesQuestionKind(q)).toBe('max')
+  })
+
+  it('catches the other end too', () => {
+    for (const q of ['where is it lowest', 'Where is the air cleanest?', 'which area is the least affected']) {
+      expect(valuesQuestionKind(q)).toBe('min')
+    }
+  })
+
+  it('declines anything that is not a where-question about an extreme', () => {
+    for (const q of [
+      'what does this dataset show?',
+      'how much smoke is over Colorado?',
+      'what is the average',
+      'tell me about wildfire smoke',
+      'load the near-surface dataset',
+      'is this the worst fire season on record?', // about history, not the frame
+    ]) expect(valuesQuestionKind(q)).toBeNull()
   })
 })

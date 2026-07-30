@@ -14,7 +14,9 @@ import {
   executeProbeValue,
   executeSummarizeRegion,
   analysisAvailability,
+  valuesQuestionKind,
   type FindExtremumResult,
+  type SummarizeRegionResult,
   type ResolvedScope,
 } from './docentAnalysisTools'
 import { fetchApprovedEvents, type PublicEvent } from './eventsService'
@@ -1708,12 +1710,91 @@ export async function* processMessage(
         `[CURRENT EVENTS — reputable, curator-approved current events relevant to this node's data. This is INTERNAL context: never name this block or write any id in your reply — refer to an event by its headline. Surface one with an <<EVENT:ID>> marker on its own line: it shows a cited card AND loads the dataset that explains it, flying the globe to where and when it happened. Only the ids below are valid; never invent an event, headline, or source:\n${eventLines.join('\n')}]\n`
     }
 
+    // §A6 — measure before the model answers, rather than hoping it
+    // calls the tool.
+    //
+    // Exactly the pattern `[RELEVANT DATASETS]` above uses for
+    // discovery: the app runs the search itself and injects the result,
+    // because a tool the model *may* call is a tool it sometimes does
+    // not. Live, asked "Where is the smoke worst?" with the tools
+    // offered, Orbit called nothing and wrote the answer anyway —
+    // "worst across an area", "at least 500 mg m-2", a coordinate, a
+    // time. Every one of those phrases is how the carve-out describes a
+    // *correct* answer, so the prompt had handed it the shape of the
+    // thing the prompt was trying to compel. No card, no camera move,
+    // no marker: three app-emitted artifacts absent at once, and
+    // nothing in the reply to say so.
+    //
+    // Now the superlative case cannot miss. The number exists before
+    // the first token, the card and the camera move come from it, and
+    // the model's job shrinks to narrating a measurement it has been
+    // handed. It may still call the tools for anything else.
+    // Turn-level rather than per-attempt: the pre-measurement happens
+    // once, before the retry loop exists, and a retry must not fly the
+    // globe a second time or stack a duplicate card under the answer.
+    const measuredTextsThisTurn = new Set<string>()
+    let flewThisTurn = false
+    let preMeasuredText: string | null = null
+
+    /** The app's own account of a reading: the card, and for an
+     *  extremum the camera move and the pin. One place, so the
+     *  pre-measured path and the tool-call path cannot drift. */
+    function* emitMeasurement(r: FindExtremumResult | SummarizeRegionResult): Generator<DocentStreamChunk> {
+      const text = (r as FindExtremumResult).valueText ?? (r as SummarizeRegionResult).meanText
+      if (text && !measuredTextsThisTurn.has(text)) {
+        measuredTextsThisTurn.add(text)
+        const at = r as FindExtremumResult
+        yield {
+          type: 'action',
+          action: {
+            type: 'measurement',
+            valueText: text,
+            ...(Number.isFinite(at.lat) ? { lat: at.lat } : {}),
+            ...(Number.isFinite(at.lon) ? { lon: at.lon } : {}),
+            ...(r.frameTime ? { frameTime: r.frameTime } : {}),
+            ...(r.dataset ? { dataset: r.dataset } : {}),
+          },
+        }
+      }
+      const ext = r as FindExtremumResult
+      if (ext.kind && Number.isFinite(ext.lat) && Number.isFinite(ext.lon) && !flewThisTurn) {
+        flewThisTurn = true
+        yield { type: 'action', action: { type: 'fly-to', lat: ext.lat!, lon: ext.lon! } }
+        const label = `${ext.value ?? ''} ${ext.units ?? ''}`.trim()
+        yield {
+          type: 'action',
+          action: { type: 'add-marker', lat: ext.lat!, lng: ext.lon!, ...(label ? { label } : {}) },
+        }
+      }
+    }
+
+    let measuredContext = ''
+    if (analysisToolsActive) {
+      const kind = valuesQuestionKind(input)
+      if (kind) {
+        const measured = executeFindExtremum({ kind }, currentTime)
+        logger.info(`[Docent] pre-measured ${kind}: ${measured.ok ? measured.valueText : `refused: ${measured.error}`}`)
+        if (measured.ok && measured.valueText) {
+          preMeasuredText = measured.valueText
+          measuredContext =
+            `[MEASURED — this is a real reading taken from the frame on screen, not an estimate. `
+            + `State it using this exact wording and do not recompute, convert or re-round it: `
+            + `"${measured.valueText}"`
+            + (Number.isFinite(measured.lat) ? `, at ${measured.lat}, ${measured.lon} (signed degrees)` : '')
+            + (measured.frameTime ? `, ${measured.frameTime}` : '')
+            + `. ${measured.precision ?? ''} ${measured.plateau ?? ''} ${measured.saturated ?? ''}`.trimEnd()
+            + ` The app has already shown this reading and moved the globe to it — do not call another value tool for the same question.]\n`
+          yield* emitMeasurement(measured)
+        }
+      }
+    }
+
     const userMessage: LLMMessage = visionActive
       ? { role: 'user', content: [
           { type: 'image_url' as const, image_url: { url: screenshotDataUrl! } },
-          { type: 'text' as const, text: statePrefix + preSearchContext + visionText },
+          { type: 'text' as const, text: statePrefix + preSearchContext + measuredContext + visionText },
         ] as LLMContentPart[] }
-      : { role: 'user', content: statePrefix + preSearchContext + input }
+      : { role: 'user', content: statePrefix + preSearchContext + measuredContext + input }
 
     // Anchor a fresh language-reminder system message right before
     // the user's turn — the system prompt's respond-in-{language}
@@ -1791,16 +1872,10 @@ export async function* processMessage(
       let llmProducedText = false
       let accumulatedText = ''
       // §A6 — one Analyze chip per distinct region per attempt.
+      // (The card and the camera move are deduped per *turn* instead —
+      // see `measuredTextsThisTurn` — because the pre-measurement
+      // happens before this loop and a retry must not repeat it.)
       const analysisChipsThisAttempt = new Set<string>()
-      // §A6 — and one card per distinct reading. A model comparing two
-      // regions genuinely produced two measurements and should show
-      // both; the same measurement twice is a retry, not a result.
-      const analysisReadingsThisAttempt = new Set<string>()
-      // §A6 — and one camera move. The first successful find_extremum
-      // is the answer to the question; a later one is usually the
-      // model comparing regions, and flying on each would drag the
-      // globe around mid-explanation.
-      let analysisFlewThisAttempt = false
       // Phase 3: each attempt maintains its own conversation state that may
       // grow across multiple streamChat rounds as the LLM calls search_catalog
       // and we feed the results back.
@@ -2159,77 +2234,11 @@ export async function* processMessage(
               // picker showing a region it cannot select. Deduped per
               // turn, because a model comparing three regions would
               // otherwise stack three chips on one message.
-              // §A6 — state the reading ourselves.
-              //
-              // The number has now been mis-reported in every way the
-              // shape allows: wrong units, a unit belonging to a
-              // dataset recommended in the same reply, a value taken
-              // from a neighbouring row's metadata, a silently
-              // narrowed region, a dropped minus sign, and finally no
-              // location at all. The prompt asks for `valueText`
-              // verbatim; the payload no longer contains the parts to
-              // rebuild it from. Both were necessary and neither is
-              // sufficient, because a model that wants to paraphrase
-              // can always paraphrase.
-              //
-              // So the authoritative reading is rendered from the
-              // executor's own result, beside the prose rather than
-              // inside it. If the sentence and the card disagree, that
-              // is now visible instead of invisible — which is the
-              // same move as `ce85aca`: ask a path that cannot lie the
-              // same question, and surface the disagreement.
-              if (result.ok) {
-                const measured = result as {
-                  valueText?: string; meanText?: string
-                  lat?: number; lon?: number
-                  frameTime?: string; dataset?: string
-                }
-                const text = measured.valueText ?? measured.meanText
-                if (text && !analysisReadingsThisAttempt.has(text)) {
-                  analysisReadingsThisAttempt.add(text)
-                  yield {
-                    type: 'action',
-                    action: {
-                      type: 'measurement',
-                      valueText: text,
-                      ...(Number.isFinite(measured.lat) ? { lat: measured.lat } : {}),
-                      ...(Number.isFinite(measured.lon) ? { lon: measured.lon } : {}),
-                      ...(measured.frameTime ? { frameTime: measured.frameTime } : {}),
-                      ...(measured.dataset ? { dataset: measured.dataset } : {}),
-                    },
-                  }
-                }
-              }
-              // §A6 — move the globe ourselves rather than asking the
-              // model to call `fly_to` with the coordinates it just
-              // read back.
-              //
-              // It had to transcribe a signed float immediately after
-              // writing it as "119.5 degrees W", and dropped the minus:
-              // the answer said Washington state, the globe went to
-              // northern China. Prompting against that is a warning;
-              // this removes the step. The rendered "Flying to ..."
-              // line is derived from the action's own lat/lon, so it
-              // now agrees with the sentence above it by construction.
-              if (call.name === 'find_extremum' && result.ok && !analysisFlewThisAttempt) {
-                const found = result as FindExtremumResult
-                if (Number.isFinite(found.lat) && Number.isFinite(found.lon)) {
-                  analysisFlewThisAttempt = true
-                  yield { type: 'action', action: { type: 'fly-to', lat: found.lat!, lon: found.lon! } }
-                  // The pin names what was measured, so the place stays
-                  // labelled after the camera settles.
-                  const label = `${found.value ?? ''} ${found.units ?? ''}`.trim()
-                  yield {
-                    type: 'action',
-                    action: {
-                      type: 'add-marker',
-                      lat: found.lat!,
-                      lng: found.lon!,
-                      ...(label ? { label } : {}),
-                    },
-                  }
-                }
-              }
+              // §A6 — the app's account of the reading: card, camera,
+              // pin. Same helper the pre-measured path uses, so a
+              // number the model asked for and a number we took
+              // unprompted are presented identically.
+              if (result.ok) yield* emitMeasurement(result as FindExtremumResult | SummarizeRegionResult)
               if (result.ok && resultScope && resultScope.kind !== 'bbox') {
                 const key = `${resultScope.kind}:${resultScope.name ?? ''}`
                 if (!analysisChipsThisAttempt.has(key)) {

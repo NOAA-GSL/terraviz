@@ -2910,7 +2910,10 @@ describe('processMessage — §A6 find_extremum moves the globe itself', () => {
     } as any
   }
 
-  async function run(calls: { id: string; name: string; arguments: Record<string, unknown> }[]) {
+  // `ask` matters now: a superlative question is measured up front,
+  // before the model gets a turn, so a test aimed at the tool-call path
+  // has to ask something that does not trigger that.
+  async function run(calls: { id: string; name: string; arguments: Record<string, unknown> }[], ask = 'where is it worst?') {
     const { streamChat } = await import('./llmProvider')
     const mocked = vi.mocked(streamChat)
     let first = true
@@ -2925,7 +2928,7 @@ describe('processMessage — §A6 find_extremum moves the globe itself', () => {
       }
     })
     const chunks: DocentStreamChunk[] = []
-    for await (const c of processMessage('where is it worst?', [], datasets, null, baseConfig)) chunks.push(c)
+    for await (const c of processMessage(ask, [], datasets, null, baseConfig)) chunks.push(c)
     return chunks
   }
 
@@ -2978,20 +2981,74 @@ describe('processMessage — §A6 find_extremum moves the globe itself', () => {
   it('does not move the globe when the tool refused', async () => {
     const { registerAnalysisSource } = await import('./docentAnalysisTools')
     registerAnalysisSource(peakSource())
-    const chunks = await run([
-      { id: 'c1', name: 'find_extremum', arguments: { region_name: 'Mordor' } },
-    ])
+    const chunks = await run(
+      [{ id: 'c1', name: 'find_extremum', arguments: { region_name: 'Mordor' } }],
+      'tell me about this dataset',
+    )
     expect(actions(chunks, 'fly-to')).toHaveLength(0)
     expect(actions(chunks, 'add-marker')).toHaveLength(0)
+  })
+
+  it('measures a superlative question before the model gets a turn', async () => {
+    // The failure this exists for: asked "Where is the smoke worst?"
+    // with the tools offered, the model called nothing and wrote the
+    // answer anyway — plateau wording, "at least", a coordinate, a
+    // time, all of it borrowed from the carve-out's description of a
+    // correct answer. No card, no camera move, no marker.
+    const { registerAnalysisSource } = await import('./docentAnalysisTools')
+    registerAnalysisSource(peakSource())
+    // No tool calls at all: the model does what it did live.
+    const chunks = await run([], 'Where is the smoke worst?')
+    const card = actions(chunks, 'measurement')
+    expect(card).toHaveLength(1)
+    expect(card[0].valueText).toContain('mg m-2')
+    expect(actions(chunks, 'fly-to')).toHaveLength(1)
+    expect(actions(chunks, 'add-marker')).toHaveLength(1)
+  })
+
+  it('leaves an ordinary question alone', async () => {
+    // Biased toward missing a question rather than answering the wrong
+    // one: anything that is not an explicit superlative still goes
+    // through the model, which has the tools and is told to use them.
+    const { registerAnalysisSource } = await import('./docentAnalysisTools')
+    registerAnalysisSource(peakSource())
+    const chunks = await run([], 'what does this dataset show?')
+    expect(actions(chunks, 'measurement')).toHaveLength(0)
+    expect(actions(chunks, 'fly-to')).toHaveLength(0)
+  })
+
+  it('does not measure twice when the model also calls the tool', async () => {
+    // The pre-measurement and the tool-call path share one emitter, so
+    // the same reading cannot produce two cards or two camera moves.
+    const { registerAnalysisSource } = await import('./docentAnalysisTools')
+    registerAnalysisSource(peakSource())
+    const chunks = await run(
+      [{ id: 'c1', name: 'find_extremum', arguments: { kind: 'max' } }],
+      'Where is the smoke worst?',
+    )
+    expect(actions(chunks, 'measurement')).toHaveLength(1)
+    expect(actions(chunks, 'fly-to')).toHaveLength(1)
+    expect(actions(chunks, 'add-marker')).toHaveLength(1)
+  })
+
+  it('stays out of the way when the tools are unavailable', async () => {
+    const { registerAnalysisSource } = await import('./docentAnalysisTools')
+    registerAnalysisSource(null)
+    const chunks = await run([], 'Where is the smoke worst?')
+    expect(actions(chunks, 'measurement')).toHaveLength(0)
+    expect(actions(chunks, 'fly-to')).toHaveLength(0)
   })
 
   it('does not move the globe for the other two tools', async () => {
     const { registerAnalysisSource } = await import('./docentAnalysisTools')
     registerAnalysisSource(peakSource())
-    const chunks = await run([
-      { id: 'c1', name: 'summarize_region', arguments: {} },
-      { id: 'c2', name: 'probe_value', arguments: { lat: 45, lon: -100 } },
-    ])
+    const chunks = await run(
+      [
+        { id: 'c1', name: 'summarize_region', arguments: {} },
+        { id: 'c2', name: 'probe_value', arguments: { lat: 45, lon: -100 } },
+      ],
+      'what is the average here',
+    )
     expect(actions(chunks, 'fly-to')).toHaveLength(0)
   })
 })
