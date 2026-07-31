@@ -1,0 +1,7 @@
+{
+  "type": "continuous",
+  "base": "Oranges",
+  "transparent_range": 12,
+  "blend_range": 48,
+  "overall_alpha": 0.95
+}
