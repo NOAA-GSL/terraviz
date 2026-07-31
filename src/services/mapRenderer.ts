@@ -21,7 +21,7 @@ import type {
 import { setDatasetCreditsSource } from '../ui/creditsPanel'
 import { getSharedLumaSampler, type LumaSnapshot } from './glLumaSampler'
 import { DEFAULT_DISPLAY, type ColorScaleDisplay } from './colorScaleDisplay'
-import { contoursToGeoJson } from './datasetContours'
+import { contourSetToGeoJson, type ContourLevel } from './datasetContours'
 import { boundsRing, greatCirclePath, type TransectEndpoints } from './datasetStats'
 import type { ColorScale } from '../types/color-scale'
 import {
@@ -1157,31 +1157,65 @@ export class MapRenderer implements GlobeRenderer {
   private contourId: string | null = null
 
   /**
-   * Draw the isolines the Analyze panel extracted.
+   * Draw the contour set the Analyze panel extracted.
+   *
+   * Its own source and layer rather than `highlightRegion`, for two
+   * reasons. `highlightRegion` paints one fixed colour, and a contour map
+   * needs each line drawn at its own level's colour — which is a
+   * data-driven `['get', 'color']` over one FeatureCollection, not a
+   * source per level. And it always adds a `fill` layer, which over a
+   * MultiLineString draws nothing and is pure weight.
    *
    * Line only, no fill, for the same reason `showRegionOutline` refuses
    * one: a wash over the enclosed region would tint the values being
    * measured, and on this path nothing decorative is allowed to change
-   * what a colour means. A brighter stroke than the region box so the
-   * two read as different kinds of annotation when both are up — the box
-   * is where we looked, the contour is what we found.
+   * what a colour means. A dark halo underneath keeps a pale line legible
+   * over a pale part of the ramp — without it the lightest levels vanish
+   * into exactly the region they are describing.
    *
    * The geometry arrives already split at the antimeridian; see
    * `datasetContours.splitAtSeam` for why drawing it unsplit puts a
    * stripe across the globe.
    */
-  showContours(lines: { lat: number; lon: number }[][]): void {
+  showContours(levels: ContourLevel[]): void {
     this.clearContours()
-    if (!this.map || !lines.length) return
-    this.contourId = this.highlightRegion(
-      contoursToGeoJson(lines),
-      { color: '#ffd166', opacity: 0 },
-    )
+    if (!this.map || !this.map.isStyleLoaded() || !levels.length) return
+    const data = contourSetToGeoJson(levels)
+    if (!data.features.length) return
+
+    const id = `contours-${++this.highlightCounter}`
+    const sourceId = `${id}-source`
+    this.map.addSource(sourceId, { type: 'geojson', data })
+    this.map.addLayer({
+      id: `${id}-halo`,
+      type: 'line',
+      source: sourceId,
+      paint: {
+        'line-color': 'rgba(0, 0, 0, 0.55)',
+        'line-width': 3.5,
+      },
+    })
+    this.map.addLayer({
+      id: `${id}-line`,
+      type: 'line',
+      source: sourceId,
+      paint: {
+        'line-color': ['get', 'color'],
+        'line-width': 1.5,
+      },
+    })
+    this.contourId = id
   }
 
   clearContours(): void {
-    if (!this.contourId) return
-    this.removeHighlight(this.contourId)
+    if (!this.contourId || !this.map) {
+      this.contourId = null
+      return
+    }
+    const id = this.contourId
+    try { this.map.removeLayer(`${id}-line`) } catch { /* noop */ }
+    try { this.map.removeLayer(`${id}-halo`) } catch { /* noop */ }
+    try { this.map.removeSource(`${id}-source`) } catch { /* noop */ }
     this.contourId = null
   }
 

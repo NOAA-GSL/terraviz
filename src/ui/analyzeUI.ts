@@ -31,9 +31,15 @@ import {
   type TransectEndpoints,
   type TransectSample,
 } from '../services/datasetStats'
-import { extractContours, type ContourLine } from '../services/datasetContours'
+import { extractContourSet, type ContourLevel } from '../services/datasetContours'
 import type { LumaSnapshot } from '../services/glLumaSampler'
-import { DEFAULT_DISPLAY, type ColorScaleDisplay } from '../services/colorScaleDisplay'
+import {
+  DEFAULT_DISPLAY,
+  buildDisplayLut,
+  colorbarTicks,
+  displayColorAtValue,
+  type ColorScaleDisplay,
+} from '../services/colorScaleDisplay'
 import type { ColorScale } from '../types/color-scale'
 import type { DatasetOverlayOptions } from '../types'
 import { getRegionNames, resolveRegion } from '../data/regions'
@@ -89,7 +95,7 @@ export interface AnalyzeSource {
  * exists, and a test can drive the contour section with no map.
  */
 export interface ContourOverlay {
-  show(lines: ContourLine[]): void
+  show(levels: ContourLevel[]): void
   clear(): void
 }
 
@@ -150,6 +156,17 @@ let contourHost: HTMLElement | null = null
 /** Whether lines are currently on the globe, so the section can offer
  *  Draw or Clear rather than inferring it from the threshold. */
 let contourDrawn = false
+/**
+ * How many isolines to aim for.
+ *
+ * Passed to `colorbarTicks`, which rounds to a 1/2/5 × 10^k step and so
+ * returns near this rather than exactly it. Five is a starting point,
+ * not a measurement: on a smoke plume at low zoom, much past a dozen
+ * lines reads as hatching rather than as structure, and the right
+ * number is the sort of thing that only settles by looking at real
+ * fields.
+ */
+const CONTOUR_LEVEL_TARGET = 5
 /** The texel window the region statistics used, so the isoline covers
  *  exactly the region the numbers beside it describe. */
 let contourWindow: TexelWindow | undefined
@@ -613,9 +630,9 @@ function renderTransectSection(): void {
  *
  * Read at Draw time rather than subscribed to, which is this panel's
  * standing doctrine: computation is user-initiated and one-shot. Moving
- * the colorbar afterwards leaves the drawn line where it was until Draw
- * is pressed again, and the caption says so rather than leaving someone
- * to discover it.
+ * the colorbar afterwards leaves the drawn lines where they were until
+ * Draw is pressed again, and the caption says so rather than leaving
+ * someone to discover it.
  */
 function renderContourSection(): void {
   const host = contourHost
@@ -638,17 +655,36 @@ function renderContourSection(): void {
     return
   }
 
-  const { min, max } = src.display().threshold
-  const levels = [min, max].filter((v): v is number => v !== null && Number.isFinite(v))
+  const display = src.display()
+  const { min, max } = display.threshold
+  const { scale } = result
+
+  // Levels are the colour bar's own round-number ticks, not an even
+  // division of min..max. Two reasons: a tick lands on 1/2/5 × 10^k
+  // rather than on 3.47e-5, which is what every paper contour map does
+  // and what a reader can hold in their head; and because they are
+  // *the same* ticks the bar is labelled with, a line on the globe can
+  // be read against the legend without interpolating between labels.
+  //
+  // The threshold scopes rather than sets them. With no threshold the
+  // contours span the whole range; with one, they subdivide only the
+  // band the globe is isolating — which is the colour bar saying which
+  // part of the range is worth subdividing.
+  const inScope = (v: number): boolean =>
+    (min === null || v >= min) && (max === null || v <= max)
+  const lut = buildDisplayLut(scale, display)
+  const levels = colorbarTicks(scale, display, CONTOUR_LEVEL_TARGET)
+    .map(tick => tick.value)
+    .filter(v => Number.isFinite(v) && inScope(v))
 
   if (!levels.length) {
-    // Nothing isolated means nothing to outline. Point at the control
-    // that drives this rather than offering a dead button.
-    host.appendChild(message(t('analyze.contour.noThreshold')))
+    // Can happen with a narrow threshold band that no round tick falls
+    // inside. Say which control moves it rather than showing a dead
+    // button.
+    host.appendChild(message(t('analyze.contour.noLevels')))
     return
   }
 
-  const { scale } = result
   head.appendChild(
     actionButton(
       contourDrawn ? t('analyze.contour.clear') : t('analyze.contour.draw'),
@@ -656,9 +692,17 @@ function renderContourSection(): void {
         if (contourDrawn) {
           clearContours()
         } else {
-          const lines = levels.flatMap(level =>
-            extractContours(frame.snapshot, frame.scale, level, frame.options, contourWindow))
-          overlay.show(lines)
+          const set = extractContourSet(
+            frame.snapshot, frame.scale, levels, frame.options, contourWindow)
+          // Each line painted in the colour the globe is already using
+          // at that level, so the map and its own contours cannot
+          // disagree. A level the ramp hides gets no colour back and
+          // falls through to the default rather than being drawn in a
+          // colour that appears nowhere on the surface.
+          overlay.show(set.map((level): ContourLevel => {
+            const color = displayColorAtValue(lut, scale, level.value)
+            return color ? { ...level, color } : level
+          }))
           contourDrawn = true
         }
         renderContourSection()
@@ -666,31 +710,34 @@ function renderContourSection(): void {
     ),
   )
 
-  // The area the band covers, from the histogram rather than from the
-  // polygon the lines enclose — see `datasetContours`' header for why
-  // the counted number is the one to quote.
-  const above = min !== null ? areaAboveKm2(result.hist, scale, min) : result.stats.areaKm2
-  const aboveMax = max !== null ? areaAboveKm2(result.hist, scale, max) : 0
-  const banded = Math.max(0, above - aboveMax)
+  // Area at each level, from the histogram rather than from the polygons
+  // the lines enclose — see `datasetContours`' header for why the counted
+  // number is the one to quote. This is the newsroom question asked at
+  // every line rather than at one.
+  const list = document.createElement('ul')
+  list.className = 'analyze-contour-levels'
+  for (const value of levels) {
+    const row = document.createElement('li')
+    const swatch = document.createElement('span')
+    swatch.className = 'analyze-contour-swatch'
+    const color = displayColorAtValue(lut, scale, value)
+    if (color) swatch.style.background = color
+    row.appendChild(swatch)
+    const text = document.createElement('span')
+    text.textContent = t('analyze.contour.levelRow', {
+      level: formatStatValue(value, scale.units),
+      km2: formatNumber(Math.round(areaAboveKm2(result.hist, scale, value))),
+    })
+    row.appendChild(text)
+    list.appendChild(row)
+  }
+  host.appendChild(list)
 
   host.appendChild(
-    renderStatTile(
-      t('analyze.contour.area'),
-      t('analyze.contour.areaValue', {
-        km2: formatNumber(Math.round(banded)),
-      }),
-    ),
-  )
-  host.appendChild(
     caption(
-      levels.length === 2
-        ? t('analyze.contour.bandCaption', {
-          min: formatStatValue(min as number, scale.units),
-          max: formatStatValue(max as number, scale.units),
-        })
-        : t('analyze.contour.levelCaption', {
-          level: formatStatValue(levels[0], scale.units),
-        }),
+      min !== null || max !== null
+        ? t('analyze.contour.scopedCaption', { count: formatNumber(levels.length) })
+        : t('analyze.contour.rangeCaption', { count: formatNumber(levels.length) }),
     ),
   )
   host.appendChild(caption(t('analyze.contour.staleNote')))

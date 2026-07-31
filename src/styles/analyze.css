@@ -205,6 +205,37 @@
   font-weight: 600;
 }
 
+/* One row per isoline. The swatch is the same colour the line is drawn
+   in, which is the whole point of the level list: the reader matches a
+   line on the globe to a number here by colour, not by counting inward
+   from the edge. */
+.analyze-contour-levels {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.75rem;
+}
+
+.analyze-contour-levels li {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2, 0.5rem);
+}
+
+.analyze-contour-swatch {
+  inline-size: 1.5rem;
+  block-size: 0.1875rem;
+  border-radius: 1px;
+  flex: none;
+  /* A dark rule under the swatch for the same reason the globe draws a
+     halo under the line: a pale level is invisible on a pale surface. */
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55);
+  background: var(--color-border, rgba(255, 255, 255, 0.4));
+}
+
 /* Taller than the histogram: this one carries a shape worth reading,
    where the histogram carries a silhouette. */
 .analyze-transect {

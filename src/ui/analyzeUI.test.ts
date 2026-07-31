@@ -29,6 +29,7 @@ import {
 } from '../services/datasetStats'
 import { resolveRegion } from '../data/regions'
 import { DEFAULT_DISPLAY } from '../services/colorScaleDisplay'
+import type { ContourLevel } from '../services/datasetContours'
 import type { LumaSnapshot } from '../services/glLumaSampler'
 import type { ColorScale, DatasetOverlayOptions } from '../types'
 
@@ -672,18 +673,17 @@ describe('§A6 — opening pre-scoped from an Orbit chip', () => {
 /**
  * The contour section.
  *
- * Its threshold is A1's display threshold rather than one of the
- * panel's own, so most of what matters here is that the section tracks
- * that control honestly: absent when nothing is isolated, drawn from
- * the value the control held at the moment Draw was pressed, and gone
- * when the panel or the dataset goes.
+ * It draws a *set* of isolines at the colour bar's own round-number
+ * ticks, not one line at a threshold. The threshold scopes which ticks
+ * are drawn rather than being the level itself, so the two controls
+ * compose instead of competing.
  */
 function makeContours() {
-  const shown: { lat: number; lon: number }[][][] = []
+  const shown: ContourLevel[][] = []
   let clears = 0
   return {
     overlay: {
-      show(lines: { lat: number; lon: number }[][]) { shown.push(lines) },
+      show(levels: ContourLevel[]) { shown.push(levels) },
       clear() { clears++ },
     },
     shown: () => shown,
@@ -692,10 +692,9 @@ function makeContours() {
   }
 }
 
-/** A frame with a real gradient, so a threshold in the middle of the
- *  range actually produces a crossing. */
+/** A frame with a real gradient, so several levels actually cross it. */
 const RAMP = () => ({
-  snapshot: snap(16, 16, x => 20 + x * 14),
+  snapshot: snap(24, 24, x => 10 + x * 10),
   scale: SCALE,
   options: OPTIONS,
 })
@@ -705,86 +704,121 @@ const contourButton = () =>
     | HTMLButtonElement
     | undefined
 
+const levelRows = () =>
+  Array.from(document.querySelectorAll('.analyze-contour-levels li'))
+
 describe('contours', () => {
-  it('says where the threshold lives instead of offering a dead button', () => {
+  it('draws several lines across the range with no threshold set', () => {
     const c = makeContours()
     initAnalyzeUI(makeSource({ contours: () => c.overlay, frame: RAMP }))
     openAnalyzeUI()
-    // DEFAULT_DISPLAY has no threshold on either side.
+    contourButton()!.click()
+
+    expect(c.shown()).toHaveLength(1)
+    // A contour map, not a threshold outline: more than one level, each
+    // with its own value, ascending.
+    expect(c.last().length).toBeGreaterThan(1)
+    const values = c.last().map(l => l.value)
+    expect([...values].sort((a, b) => a - b)).toEqual(values)
+  })
+
+  it('uses round values, which is what makes them readable against the bar', () => {
+    const c = makeContours()
+    initAnalyzeUI(makeSource({ contours: () => c.overlay, frame: RAMP }))
+    openAnalyzeUI()
+    contourButton()!.click()
+    // vmin 0 / vmax 255 over a 1/2/5 x 10^k step lands on whole numbers.
+    for (const level of c.last()) {
+      expect(Number.isInteger(level.value)).toBe(true)
+    }
+  })
+
+  it('paints each line in the colour the globe uses at that level', () => {
+    const c = makeContours()
+    initAnalyzeUI(makeSource({ contours: () => c.overlay, frame: RAMP }))
+    openAnalyzeUI()
+    contourButton()!.click()
+    // Every level that traced something carries a colour, and the
+    // colours differ — one flat colour would mean the LUT lookup was
+    // ignoring the level.
+    const drawn = c.last().filter(l => l.lines.length > 0)
+    expect(drawn.length).toBeGreaterThan(1)
+    for (const level of drawn) expect(level.color).toMatch(/^rgb\(/)
+    expect(new Set(drawn.map(l => l.color)).size).toBeGreaterThan(1)
+  })
+
+  it('lets the threshold scope the levels rather than replace them', () => {
+    const wide = makeContours()
+    initAnalyzeUI(makeSource({ contours: () => wide.overlay, frame: RAMP }))
+    openAnalyzeUI()
+    contourButton()!.click()
+    const unscoped = wide.last().length
+
+    const narrow = makeContours()
+    initAnalyzeUI(makeSource({
+      contours: () => narrow.overlay,
+      frame: RAMP,
+      display: () => ({ ...DEFAULT_DISPLAY, threshold: { min: 100, max: 160 } }),
+    }))
+    openAnalyzeUI()
+    contourButton()!.click()
+
+    // Fewer lines, and every one inside the isolated band.
+    expect(narrow.last().length).toBeLessThan(unscoped)
+    expect(narrow.last().length).toBeGreaterThan(0)
+    for (const level of narrow.last()) {
+      expect(level.value).toBeGreaterThanOrEqual(100)
+      expect(level.value).toBeLessThanOrEqual(160)
+    }
+  })
+
+  it('reports the area above each line, not one number for the whole band', () => {
+    initAnalyzeUI(makeSource({ contours: () => makeContours().overlay, frame: RAMP }))
+    openAnalyzeUI()
+    const rows = levelRows()
+    expect(rows.length).toBeGreaterThan(1)
+    for (const row of rows) expect(row.textContent).toContain('km²')
+    // Area above a higher line can never exceed area above a lower one.
+    // Parse only the figure in front of `km²` — the row also carries the
+    // level itself, and stripping every non-digit glues the two numbers
+    // into one.
+    const areas = rows.map(r => {
+      const m = /([\d,]+)\s*km²/.exec(r.textContent ?? '')
+      expect(m).not.toBeNull()
+      return Number((m as RegExpExecArray)[1].replace(/,/g, ''))
+    })
+    for (let i = 1; i < areas.length; i++) {
+      expect(areas[i]).toBeLessThanOrEqual(areas[i - 1])
+    }
+  })
+
+  it('says so when the isolated band is too narrow to hold a round value', () => {
+    const c = makeContours()
+    initAnalyzeUI(makeSource({
+      contours: () => c.overlay,
+      frame: RAMP,
+      display: () => ({ ...DEFAULT_DISPLAY, threshold: { min: 100.4, max: 100.6 } }),
+    }))
+    openAnalyzeUI()
     expect(bodyText()).toContain('colour bar')
     expect(contourButton()).toBeUndefined()
     expect(c.shown()).toHaveLength(0)
   })
 
-  it('outlines the level the colour bar is isolating', () => {
-    const c = makeContours()
-    initAnalyzeUI(makeSource({
-      contours: () => c.overlay,
-      frame: RAMP,
-      display: () => ({ ...DEFAULT_DISPLAY, threshold: { min: 100, max: null } }),
-    }))
-    openAnalyzeUI()
-    contourButton()!.click()
-
-    expect(c.shown()).toHaveLength(1)
-    expect(c.last().length).toBeGreaterThan(0)
-    // vmin 0 / vmax 255 over a ramp of 20 + 14x: the 100 crossing sits
-    // between x = 5 (90) and x = 6 (104), so every vertex is in that
-    // column and none wandered to the frame's edge.
-    for (const line of c.last()) {
-      for (const p of line) expect(Number.isFinite(p.lon)).toBe(true)
-    }
-  })
-
-  it('reports the area of the band, not of the whole region', () => {
-    const c = makeContours()
-    initAnalyzeUI(makeSource({
-      contours: () => c.overlay,
-      frame: RAMP,
-      display: () => ({ ...DEFAULT_DISPLAY, threshold: { min: 100, max: 180 } }),
-    }))
-    openAnalyzeUI()
-    // Both bounds set, so the caption names a band rather than a level.
-    expect(bodyText()).toContain('isolating')
-    expect(bodyText()).toContain('km²')
-  })
-
-  it('draws both bounds when the colour bar isolates a band', () => {
-    const c = makeContours()
-    initAnalyzeUI(makeSource({
-      contours: () => c.overlay,
-      frame: RAMP,
-      display: () => ({ ...DEFAULT_DISPLAY, threshold: { min: 100, max: 180 } }),
-    }))
-    openAnalyzeUI()
-    contourButton()!.click()
-    // One isoline per bound, both non-empty on a monotonic ramp.
-    expect(c.last().length).toBeGreaterThanOrEqual(2)
-  })
-
   it('toggles to Clear once drawn, and takes the lines away', () => {
     const c = makeContours()
-    initAnalyzeUI(makeSource({
-      contours: () => c.overlay,
-      frame: RAMP,
-      display: () => ({ ...DEFAULT_DISPLAY, threshold: { min: 100, max: null } }),
-    }))
+    initAnalyzeUI(makeSource({ contours: () => c.overlay, frame: RAMP }))
     openAnalyzeUI()
     contourButton()!.click()
     const before = c.clears()
     contourButton()!.click()
     expect(c.clears()).toBe(before + 1)
-    // And offers to draw again rather than staying stuck on Clear.
     expect(contourButton()!.textContent).toBe('Outline on globe')
   })
 
   it('takes the outline with it when the panel closes', () => {
     const c = makeContours()
-    initAnalyzeUI(makeSource({
-      contours: () => c.overlay,
-      frame: RAMP,
-      display: () => ({ ...DEFAULT_DISPLAY, threshold: { min: 100, max: null } }),
-    }))
+    initAnalyzeUI(makeSource({ contours: () => c.overlay, frame: RAMP }))
     openAnalyzeUI()
     contourButton()!.click()
     const before = c.clears()
@@ -800,11 +834,7 @@ describe('contours', () => {
 
   it('clears the outline when the dataset underneath is replaced', () => {
     const c = makeContours()
-    initAnalyzeUI(makeSource({
-      contours: () => c.overlay,
-      frame: RAMP,
-      display: () => ({ ...DEFAULT_DISPLAY, threshold: { min: 100, max: null } }),
-    }))
+    initAnalyzeUI(makeSource({ contours: () => c.overlay, frame: RAMP }))
     openAnalyzeUI()
     contourButton()!.click()
     const before = c.clears()

@@ -20,7 +20,10 @@
  */
 import { describe, expect, it } from 'vitest'
 import {
+  MAX_CONTOUR_LEVELS,
+  contourSetToGeoJson,
   contoursToGeoJson,
+  extractContourSet,
   extractContours,
   splitAtSeam,
   type ContourPoint,
@@ -265,5 +268,114 @@ describe('vertex budget', () => {
     const lines = extractContours(noisy, DENSE, 100, GLOBAL)
     const cells = 31 * 31
     expect(vertexCount(lines)).toBeLessThanOrEqual(cells * 2 + lines.length)
+  })
+})
+
+/**
+ * The multi-level path.
+ *
+ * The load-bearing test is the equivalence one: walking the cells once
+ * and testing every level inside that walk has to produce exactly what
+ * N separate walks would. That optimisation exists because the shipped
+ * frames are ~8.4M texels and per-level passes would stall visibly, and
+ * an optimisation that quietly changes the geometry is worse than the
+ * stall it avoided.
+ */
+describe('extractContourSet', () => {
+  const RAMP = snap(24, 16, x => x * 10)
+
+  it('agrees exactly with one separate pass per level', () => {
+    const levels = [30, 60, 90, 150, 210]
+    const set = extractContourSet(RAMP, DENSE, levels, GLOBAL)
+    expect(set.map(l => l.value)).toEqual(levels)
+    for (const level of set) {
+      expect(level.lines).toEqual(extractContours(RAMP, DENSE, level.value, GLOBAL))
+    }
+  })
+
+  it('sorts and de-duplicates the levels it was handed', () => {
+    const set = extractContourSet(RAMP, DENSE, [90, 30, 90, 60, 30], GLOBAL)
+    expect(set.map(l => l.value)).toEqual([30, 60, 90])
+  })
+
+  it('drops non-finite levels but keeps the rest', () => {
+    const set = extractContourSet(RAMP, DENSE, [Number.NaN, 60, Number.POSITIVE_INFINITY], GLOBAL)
+    expect(set.map(l => l.value)).toEqual([60])
+  })
+
+  it('keeps a level that traced nothing, rather than dropping it', () => {
+    // 5000 is far above the ramp's top. The caller needs to tell "this
+    // level is outside the data" from "this level was never asked for" —
+    // a legend entry that should be greyed versus one that is absent.
+    const set = extractContourSet(RAMP, DENSE, [60, 5000], GLOBAL)
+    expect(set).toHaveLength(2)
+    expect(set[1].value).toBe(5000)
+    expect(set[1].lines).toEqual([])
+    expect(set[0].lines.length).toBeGreaterThan(0)
+  })
+
+  it('caps the level count', () => {
+    const many = Array.from({ length: MAX_CONTOUR_LEVELS + 20 }, (_, i) => i + 1)
+    expect(extractContourSet(RAMP, DENSE, many, GLOBAL)).toHaveLength(MAX_CONTOUR_LEVELS)
+  })
+
+  it('returns empty levels rather than nothing for a frame too small to hold a cell', () => {
+    const set = extractContourSet(snap(1, 8, () => 100), DENSE, [50, 100], GLOBAL)
+    expect(set.map(l => l.value)).toEqual([50, 100])
+    expect(set.every(l => l.lines.length === 0)).toBe(true)
+  })
+
+  it('returns nothing at all when asked for no levels', () => {
+    expect(extractContourSet(RAMP, DENSE, [], GLOBAL)).toEqual([])
+  })
+
+  it('still refuses to trace the no-data boundary at any level', () => {
+    // Left half absent, right half a real ramp. No level may produce a
+    // line at the absent boundary — the failure mode this whole module
+    // is built around, now checked across a set rather than one level.
+    const frame = snap(12, 8, x => (x < 4 ? 0 : 20 + (x - 4) * 25))
+    const set = extractContourSet(frame, SCALE, [40, 80, 120, 160], GLOBAL)
+    // Cells touching the absent columns are skipped, so no vertex can
+    // sit west of the x = 4 centre. Width 12 → centre 4 is u = 0.375,
+    // lon −45.
+    for (const level of set) {
+      for (const line of level.lines) {
+        for (const p of line) expect(p.lon).toBeGreaterThan(-45)
+      }
+    }
+    expect(set.some(l => l.lines.length > 0)).toBe(true)
+  })
+})
+
+describe('contourSetToGeoJson', () => {
+  it('carries value and colour per level so the map can paint each line', () => {
+    const fc = contourSetToGeoJson([
+      { value: 10, color: '#112233', lines: [[{ lat: 1, lon: 2 }, { lat: 3, lon: 4 }]] },
+      { value: 20, color: '#445566', lines: [[{ lat: 5, lon: 6 }, { lat: 7, lon: 8 }]] },
+    ])
+    expect(fc.features).toHaveLength(2)
+    expect(fc.features[0].properties).toEqual({ value: 10, color: '#112233' })
+    expect(fc.features[1].geometry).toEqual({
+      type: 'MultiLineString',
+      coordinates: [[[6, 5], [8, 7]]],
+    })
+  })
+
+  it('omits a level that traced nothing', () => {
+    // An empty MultiLineString is a feature MapLibre carries and can
+    // never draw.
+    const fc = contourSetToGeoJson([
+      { value: 10, lines: [] },
+      { value: 20, lines: [[{ lat: 0, lon: 0 }, { lat: 1, lon: 1 }]] },
+    ])
+    expect(fc.features).toHaveLength(1)
+    expect(fc.features[0].properties?.value).toBe(20)
+  })
+
+  it('falls back to a visible colour when the caller set none', () => {
+    const fc = contourSetToGeoJson([
+      { value: 1, lines: [[{ lat: 0, lon: 0 }, { lat: 1, lon: 1 }]] },
+    ])
+    expect(fc.features[0].properties?.color).toBe('#ffd166')
   })
 })
