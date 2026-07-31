@@ -207,6 +207,91 @@ export const WORKFLOW_TEMPLATES: readonly WorkflowTemplate[] = [
   "attribution_text": "NOAA"
 }`,
   },
+  {
+    // NOAA GSL's global FV3-Chem smoke model, published to a THREDDS
+    // catalog as one GRIB2 file per forecast hour
+    // (`gsl.noaa.gov/thredds/.../fv3-chem-0p25deg-grib2/`). Two things
+    // about that catalog shape drove this template:
+    //
+    //   1. The directory holds only the *latest* cycle — each run
+    //      overwrites it — and the filenames (`<YYDDDHHmm><FFF>`, a
+    //      12-digit code: cycle stamp + 3-digit forecast hour) carry a
+    //      day-of-year cycle stamp, not the `YYYYMMDD`/`HH` the cycle
+    //      placeholders (`{{cycle_date}}` / `{{cycle_hour}}`) emit. So
+    //      the per-frame-URL approach `gefs-cycle-sos` uses can't
+    //      address these files, and we don't try. Instead `acquire
+    //      http --sync-dir` lists the catalog and pulls every
+    //      12-digit file; the render stages walk that directory and
+    //      `compose-video --glob` orders frames by name (which sorts
+    //      f000→f168, the forecast order). No date arithmetic, so it
+    //      always tracks whatever cycle is currently posted.
+    //   2. Each file is a ~185 MB multi-variable GRIB2, not a
+    //      ready-made frame, so unlike `http-frames-sos` the synced
+    //      directory has to be *rendered*: `extract-variable` selects
+    //      the smoke field (MASSDEN on the "entire atmosphere" level —
+    //      the vertically integrated / column-mass-density smoke),
+    //      `reproject` wraps the 0–360 global grid to ±180 (plate
+    //      carrée, what the sphere shader expects — plan §Reprojection
+    //      lives in Zyra), and `heatmap` colourises to PNG frames.
+    //
+    // Because there is no `scan-frames` stage, the metadata sidecar's
+    // `data_*` range variables would never resolve, so the template
+    // deliberately omits them and dates the abstract with `{{run_date}}`
+    // instead — honest about being "the latest posted cycle" rather
+    // than claiming a precise valid-time range it can't derive.
+    //
+    // Caveats a live run against the pinned zyra container must
+    // confirm (kept here rather than hidden, in the spirit of the
+    // spike-validated note above): the exact directory-input arg the
+    // `process`/`visualize` stages accept (`input-dir` here), the
+    // `extract-variable` selector spelling for MASSDEN, and — a real
+    // deployment risk — that the GHA runner's egress is not
+    // Cloudflare-blocked by `gsl.noaa.gov` the way a browser/CLI from
+    // an unlisted IP is.
+    id: 'fv3-chem-smoke-sos',
+    labelKey: 'publisher.workflows.template.fv3ChemSmoke',
+    pipelineYaml: `stages:
+  - stage: acquire
+    command: http
+    args:
+      url: https://gsl.noaa.gov/thredds/fileServer/fv3-chem-0p25deg-grib2/
+      sync-dir: /work/grib
+      pattern: '^[0-9]{12}$'
+  - stage: process
+    command: extract-variable
+    args:
+      input-dir: /work/grib
+      variable: MASSDEN
+      level: 'entire atmosphere (considered as a single layer)'
+      format: geotiff
+      output-dir: /work/tif
+  - stage: process
+    command: reproject
+    args:
+      input-dir: /work/tif
+      output-dir: /work/wrapped
+  - stage: visualize
+    command: heatmap
+    args:
+      input-dir: /work/wrapped
+      output-dir: /work/images/frames
+      cmap: inferno
+  - stage: visualize
+    command: compose-video
+    args:
+      frames: /work/images/frames
+      glob: '*.png'
+      output: /work/output/dataset.mp4
+`,
+    metadataTemplate: `{
+  "title": "Global smoke forecast (NOAA GSL FV3-Chem)",
+  "abstract": "Vertically integrated smoke (column mass density) from NOAA GSL's global FV3-Chem model at 0.25°. Shows the most recent forecast cycle posted to the GSL THREDDS catalog; regenerated {{run_date}}.",
+  "keywords": ["real-time", "forecast", "smoke", "air quality", "aerosols"],
+  "organization": "NOAA Global Systems Laboratory",
+  "attribution_text": "NOAA Global Systems Laboratory (GSL)",
+  "website_link": "https://gsl.noaa.gov/thredds/catalog/fv3-chem-0p25deg-grib2/catalog.html"
+}`,
+  },
 ]
 
 /**
