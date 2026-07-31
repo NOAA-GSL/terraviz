@@ -85,6 +85,17 @@ export interface AnalyzeSource {
   regionOutline?(): RegionOutline | null
   /** Drawing isolines on the globe. Same optionality, same reason. */
   contours?(): ContourOverlay | null
+  /**
+   * The frame the globe is showing, as the label it displays.
+   *
+   * These datasets are animations — an 85-frame forecast for the shipped
+   * rows — so every number on this panel is a claim about one instant,
+   * and until now the panel never said which. Injected rather than read
+   * from the DOM here so the panel keeps its one-way dependency, and
+   * sourced from the same label Orbit's tools stamp on their results, so
+   * the two cannot disagree about which frame was measured.
+   */
+  frameTime?(): string | null
 }
 
 /**
@@ -156,6 +167,13 @@ let contourHost: HTMLElement | null = null
 /** Whether lines are currently on the globe, so the section can offer
  *  Draw or Clear rather than inferring it from the threshold. */
 let contourDrawn = false
+/** The frame label the drawn contours were computed from. */
+let contourFrameTime: string | null = null
+/** Interval handle for the staleness watch, live only while lines are up. */
+let contourWatch: number | null = null
+/** Set when the watch removed the lines, so the section can say why they
+ *  went rather than leaving the user to wonder. Cleared on the next draw. */
+let contourStaleCleared = false
 /**
  * How many isolines to aim for.
  *
@@ -486,6 +504,14 @@ function renderRegionBlock(
   body.appendChild(renderHistogramCaption(scale))
   body.appendChild(renderStats(stats))
   body.appendChild(renderCoverage(stats))
+  const measuredAt = src.frameTime?.()
+  // Which instant these numbers describe. These are animations, so a
+  // statistic with no frame named is a claim about an unnamed moment —
+  // the same reason Orbit's tool results carry a `frameTime`. Absent for
+  // a dataset with no time label, where there is nothing to name.
+  if (measuredAt) {
+    body.appendChild(caption(t('analyze.frameTime', { time: measuredAt })))
+  }
   body.appendChild(renderPrecisionNote(scale))
   body.appendChild(renderExport(src))
 }
@@ -704,6 +730,9 @@ function renderContourSection(): void {
             return color ? { ...level, color } : level
           }))
           contourDrawn = true
+          contourStaleCleared = false
+          contourFrameTime = src.frameTime?.() ?? null
+          startContourWatch()
         }
         renderContourSection()
       },
@@ -740,12 +769,66 @@ function renderContourSection(): void {
         : t('analyze.contour.rangeCaption', { count: formatNumber(levels.length) }),
     ),
   )
+  if (contourStaleCleared) host.appendChild(message(t('analyze.contour.staleCleared')))
   host.appendChild(caption(t('analyze.contour.staleNote')))
 }
 
 function clearContours(): void {
   source?.contours?.()?.clear()
   contourDrawn = false
+  contourFrameTime = null
+  stopContourWatch()
+}
+
+/**
+ * How often to ask whether the globe has moved to another frame.
+ *
+ * A string compare twice a second, and only while lines are actually on
+ * the globe. The panel's standing rule is that nothing here runs per
+ * frame or per pointer event; this runs at neither rate, and the
+ * alternative — a seam from the playback controller into this panel —
+ * is a larger change than removing a stale annotation warrants.
+ */
+const CONTOUR_WATCH_MS = 500
+
+/**
+ * Remove the lines once the globe is showing a different frame.
+ *
+ * Contours are computed from one frame and never recomputed, so on a
+ * playing animation they very quickly describe something that is no
+ * longer on screen — a confident isoline over a field it was not
+ * measured from. Every other annotation this panel draws is cleared when
+ * the thing explaining it goes away: the region box on dataset change,
+ * the transect on close, all of them on dispose. Playback was the case
+ * that got missed.
+ *
+ * Clearing rather than recomputing is deliberate. Recomputing means a
+ * full ~8 MB readback, which `glLumaSampler`'s docstring is emphatic
+ * cannot happen per displayed frame. Removing the line costs nothing and
+ * is honest; following it live is a separate piece of work with a
+ * separate budget.
+ */
+function startContourWatch(): void {
+  stopContourWatch()
+  const src = source
+  if (!src?.frameTime) return
+  contourWatch = window.setInterval(() => {
+    if (!contourDrawn) {
+      stopContourWatch()
+      return
+    }
+    const now = src.frameTime?.() ?? null
+    if (now === contourFrameTime) return
+    clearContours()
+    contourStaleCleared = true
+    renderContourSection()
+  }, CONTOUR_WATCH_MS)
+}
+
+function stopContourWatch(): void {
+  if (contourWatch === null) return
+  window.clearInterval(contourWatch)
+  contourWatch = null
 }
 
 function actionButton(text: string, onClick: () => void): HTMLButtonElement {

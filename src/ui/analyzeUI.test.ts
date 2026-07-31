@@ -9,7 +9,7 @@
  * a user looking for the wrong problem), and that the export carries
  * enough context to be falsifiable later.
  */
-import { describe, expect, it, beforeEach, vi } from 'vitest'
+import { describe, expect, it, afterEach, beforeEach, vi } from 'vitest'
 import {
   closeAnalyzeUI,
   currentResult,
@@ -840,5 +840,125 @@ describe('contours', () => {
     const before = c.clears()
     notifyAnalyzeDatasetChanged('INTERNAL_SOMETHING_ELSE')
     expect(c.clears()).toBeGreaterThan(before)
+  })
+})
+
+/**
+ * Time.
+ *
+ * Every number this panel shows is measured from one frame of an
+ * animation, and until now the panel never said which — and a drawn
+ * contour went on sitting over the globe after playback had moved on,
+ * describing a field it was not measured from. Both are the same
+ * failure the panel already guards everywhere else: an annotation
+ * outliving the thing that explains it.
+ */
+describe('frame time', () => {
+  it('names the frame the numbers were measured from', () => {
+    initAnalyzeUI(makeSource({ frameTime: () => '2026-07-31 12:00Z' }))
+    openAnalyzeUI()
+    expect(bodyText()).toContain('2026-07-31 12:00Z')
+  })
+
+  it('says nothing when the dataset has no time label to name', () => {
+    initAnalyzeUI(makeSource({ frameTime: () => null }))
+    openAnalyzeUI()
+    expect(bodyText()).not.toContain('Measured on the frame')
+  })
+
+  it('works for a source that does not implement the seam at all', () => {
+    initAnalyzeUI(makeSource())
+    openAnalyzeUI()
+    expect(bodyText()).not.toContain('Measured on the frame')
+  })
+})
+
+describe('contours going stale as the globe plays', () => {
+  beforeEach(() => { vi.useFakeTimers() })
+  afterEach(() => { vi.useRealTimers() })
+
+  /** A source whose reported frame can be moved from the test. */
+  function movingSource(c: ReturnType<typeof makeContours>) {
+    let now = 'frame-1'
+    return {
+      src: makeSource({
+        contours: () => c.overlay,
+        frame: RAMP,
+        frameTime: () => now,
+      }),
+      advance: (to: string) => { now = to },
+    }
+  }
+
+  it('removes the lines once the globe shows a different frame', () => {
+    const c = makeContours()
+    const m = movingSource(c)
+    initAnalyzeUI(m.src)
+    openAnalyzeUI()
+    contourButton()!.click()
+    expect(c.shown()).toHaveLength(1)
+    const before = c.clears()
+
+    m.advance('frame-2')
+    vi.advanceTimersByTime(600)
+
+    expect(c.clears()).toBeGreaterThan(before)
+    // And says why, rather than leaving the lines to vanish unexplained.
+    expect(bodyText()).toContain('moved to another frame')
+  })
+
+  it('leaves them alone while the globe stays on the same frame', () => {
+    const c = makeContours()
+    initAnalyzeUI(movingSource(c).src)
+    openAnalyzeUI()
+    contourButton()!.click()
+    const before = c.clears()
+
+    vi.advanceTimersByTime(5000)
+
+    expect(c.clears()).toBe(before)
+    expect(bodyText()).not.toContain('moved to another frame')
+  })
+
+  it('offers to draw again, and drops the explanation once you do', () => {
+    const c = makeContours()
+    const m = movingSource(c)
+    initAnalyzeUI(m.src)
+    openAnalyzeUI()
+    contourButton()!.click()
+    m.advance('frame-2')
+    vi.advanceTimersByTime(600)
+    expect(contourButton()!.textContent).toBe('Outline on globe')
+
+    contourButton()!.click()
+    expect(c.shown()).toHaveLength(2)
+    expect(bodyText()).not.toContain('moved to another frame')
+  })
+
+  it('stops watching once the panel closes, so no timer outlives it', () => {
+    const c = makeContours()
+    const m = movingSource(c)
+    initAnalyzeUI(m.src)
+    openAnalyzeUI()
+    contourButton()!.click()
+    closeAnalyzeUI()
+    const after = c.clears()
+
+    // A watch still running would call clear() again on the next tick.
+    m.advance('frame-2')
+    vi.advanceTimersByTime(2000)
+    expect(c.clears()).toBe(after)
+  })
+
+  it('does not watch a source that cannot report a frame', () => {
+    // No `frameTime` seam: nothing to compare, so nothing is removed and
+    // the lines stay exactly as drawn.
+    const c = makeContours()
+    initAnalyzeUI(makeSource({ contours: () => c.overlay, frame: RAMP }))
+    openAnalyzeUI()
+    contourButton()!.click()
+    const before = c.clears()
+    vi.advanceTimersByTime(5000)
+    expect(c.clears()).toBe(before)
   })
 })
