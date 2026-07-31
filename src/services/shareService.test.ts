@@ -62,13 +62,26 @@ describe('shareDataset', () => {
 })
 
 describe('buildDatasetShareUrl', () => {
-  it('generates a /dataset/ path URL using current origin', () => {
-    const url = buildDatasetShareUrl('INTERNAL_SOS_123')
+  it('names the dataset by slug so the copied link is human-readable', () => {
+    const url = buildDatasetShareUrl({ id: '01KYK82VR6KDQK0915JNMQQ8RG', slug: 'north-america-smoke' })
+    expect(url).toContain('/dataset/north-america-smoke')
+  })
+
+  it('falls back to the id when the row carries no slug', () => {
+    const url = buildDatasetShareUrl({ id: 'INTERNAL_SOS_123' })
     expect(url).toContain('/dataset/INTERNAL_SOS_123')
   })
 
-  it('encodes special characters in dataset ID', () => {
-    const url = buildDatasetShareUrl('ID WITH SPACES')
+  it('falls back to the id when the slug is malformed', () => {
+    // Underscores aren't in the slug alphabet — the synthesised
+    // SOS_ONLY_* rows build theirs that way. Emitting it would
+    // produce a link that wouldn't round-trip.
+    const url = buildDatasetShareUrl({ id: 'SOS_ONLY_x', slug: 'not_a_valid_slug' })
+    expect(url).toContain('/dataset/SOS_ONLY_x')
+  })
+
+  it('encodes special characters in the reference', () => {
+    const url = buildDatasetShareUrl({ id: 'ID WITH SPACES' })
     expect(url).toContain('/dataset/ID%20WITH%20SPACES')
   })
 })

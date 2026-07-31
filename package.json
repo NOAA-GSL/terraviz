@@ -50,6 +50,7 @@
     "db:dump-schema": "tsx scripts/dump-catalog-schema.ts",
     "gen:node-key": "tsx scripts/gen-node-key.ts",
     "check:luma-range": "npx tsx scripts/luma-range-check",
+    "export:dataset-video": "python3 scripts/export-dataset-video/export_dataset_video.py",
     "check:pages-bindings": "tsx scripts/check-pages-bindings.ts",
     "refresh:sos-snapshot": "tsx scripts/refresh-sos-snapshot.ts",
     "tauri": "tauri",

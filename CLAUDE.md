@@ -299,6 +299,7 @@ npm run screenshots:smoke   # gating interaction tests (search, Orbit, nav)
 | `src/utils/catalogMode.ts` | Catalog mode — `?catalog=true` URL routing |
 | `src/utils/embedMode.ts` | Embed mode — `?embed=1` minimal-chrome URL routing for iframe hosting (`docs/EMBED_URL_GRAMMAR.md`) |
 | `src/utils/posterDeepLinks.ts` | Poster deep-link handlers |
+| `src/utils/datasetUrl.ts` | Dataset URL grammar — the canonical `/dataset/<slug>` path form, the slug/ULID/legacy-id reference resolution `dataService.getDatasetById` delegates to, and the builders that swap a dataset in or out of the address bar while preserving `?catalog=`/`?embed=`/`?layout=` |
 | `functions/api/ingest.ts` | Cloudflare Pages Function — receives telemetry batches, stamps `event_type` / `environment` / `country` / `internal` server-side, writes to Workers Analytics Engine |
 
 > **Note:** the table above is the **SPA** module map. It is

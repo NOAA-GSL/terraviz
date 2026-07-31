@@ -72,7 +72,14 @@ import { TourEngine, type TourTelemetryMeta } from './services/tourEngine'
 import { showTourControls, hideTourControls, hideAllTourTextBoxes, hideAllTourImages, hideAllTourVideos, hideAllTourPopups, hideAllTourQuestions } from './ui/tourUI'
 import { initLegendForDataset, clearLegendCache, loadConfig } from './services/docentService'
 import { isMobile, IS_MOBILE_NATIVE, getCloudTextureUrl } from './utils/deviceCapability'
-import { initDeepLinks, parseDatasetPathname } from './services/deepLinkService'
+import { initDeepLinks } from './services/deepLinkService'
+import {
+  buildDatasetPath,
+  buildNoDatasetPath,
+  isDatasetRef,
+  parseDatasetPathname,
+  previewDatasetRef,
+} from './utils/datasetUrl'
 import { recordVisit, writeLastSession } from './services/visitMemory'
 import { getCatalogMode, setCatalogMode } from './utils/catalogMode'
 import { applyEmbedMode } from './utils/embedMode'
@@ -593,12 +600,12 @@ class InteractiveSphere {
 
       const datasetId = previewFailed ? null : this.getDatasetIdFromUrl()
       if (datasetId) {
-        // Canonicalize a path-form deep link (`/dataset/<id>`) to the
-        // query form so in-app `?dataset=` pushState navigation doesn't
-        // stack a query onto the old path.
-        if (parseDatasetPathname(window.location.pathname)) {
-          window.history.replaceState({}, '', `/?dataset=${encodeURIComponent(datasetId)}`)
-        }
+        // Canonicalize whatever form the visitor arrived on \u2014 an old
+        // `?dataset=<ULID>` link, or `/dataset/<legacy_id>` \u2014 to
+        // `/dataset/<slug>`, so the address bar reads as something
+        // worth pasting into a message and anything copied from here
+        // spreads the human-friendly form.
+        this.writeDatasetUrl(datasetId, 'replace')
         this.setLoadingStatus('Loading dataset\u2026', 50)
         await this.loadDataset(datasetId, 'url')
         this.setLoading(false)
@@ -812,11 +819,68 @@ class InteractiveSphere {
   }
 
   /** Extract the dataset to boot with from the current URL — the
-   *  `?dataset=` query param, or the `/dataset/<id>` path form that
-   *  share links and blog posts emit (served via the SPA fallback). */
+   *  canonical `/dataset/<slug>` path form, or the `?dataset=` query
+   *  param older links carry. Either may name the dataset by slug,
+   *  ULID, or legacy id; all three resolve through
+   *  `getDatasetById`. A well-formed reference that isn't in the
+   *  catalog is returned as-is, so the loader surfaces a "not found"
+   *  naming what the visitor actually asked for.
+   *
+   *  Both forms are validated against the same alphabet. The path
+   *  form gets that from `parseDatasetPathname`; applying it to the
+   *  query form too means a malformed `?dataset=` value (markup,
+   *  spaces) is ignored rather than laundered into a
+   *  `/dataset/<percent-encoded-junk>` path by the canonicalize step
+   *  — a URL that wouldn't parse back on reload. */
   private getDatasetIdFromUrl(): string | null {
     const params = new URLSearchParams(window.location.search)
-    return params.get('dataset') ?? parseDatasetPathname(window.location.pathname)
+    const raw = params.get('dataset') ?? parseDatasetPathname(window.location.pathname)
+    if (!raw || !isDatasetRef(raw)) return null
+    return dataService.getDatasetById(raw)?.id ?? raw
+  }
+
+  /**
+   * Write the canonical `/dataset/<slug>` URL for a dataset into the
+   * address bar. A reference that isn't in the loaded catalog is
+   * written through as-is (`/dataset/<ref>`) rather than resolved —
+   * the resulting URL still boots to the same "not found", and it
+   * keeps naming what the visitor actually asked for.
+   *
+   * Leaves a token-gated draft preview's URL alone *while the draft
+   * is what's being written* — `?preview=` is only valid with its
+   * token attached, so canonicalizing it to the public path would
+   * 404 on reload. Switching to a different dataset from inside a
+   * preview session is a real navigation and gets a real URL:
+   * `buildDatasetPath` drops the spent token. Skipping that write
+   * would leave the address bar naming the draft while the globe
+   * showed something else, and a reload would snap back to the
+   * draft.
+   */
+  private writeDatasetUrl(id: string, mode: 'push' | 'replace'): void {
+    const search = window.location.search
+    const previewRef = previewDatasetRef(search)
+    if (previewRef !== null) {
+      const previewId = dataService.getDatasetById(previewRef)?.id ?? previewRef
+      if (previewId === id) return
+    }
+    const next = buildDatasetPath(dataService.getDatasetById(id) ?? { id }, search)
+    if (next === `${window.location.pathname}${search}`) return
+    if (mode === 'push') {
+      window.history.pushState({}, '', next)
+    } else {
+      window.history.replaceState({}, '', next)
+    }
+  }
+
+  /** Reset the address bar to the no-dataset form, keeping whatever
+   *  mode the visitor arrived in (`?catalog=true`, `?embed=1`). */
+  private clearDatasetUrl(mode: 'push' | 'replace'): void {
+    const next = buildNoDatasetPath(window.location.pathname, window.location.search)
+    if (mode === 'push') {
+      window.history.pushState({}, '', next)
+    } else {
+      window.history.replaceState({}, '', next)
+    }
   }
 
   /**
@@ -2603,7 +2667,7 @@ class InteractiveSphere {
     this.dismissBrowseAfterLoad()
     this.announce('Loading dataset\u2026')
     this.showLoadingScreen('Loading dataset\u2026', 20)
-    window.history.pushState({}, '', `?dataset=${encodeURIComponent(id)}`)
+    this.writeDatasetUrl(id, 'push')
     await this.loadDataset(id, 'browse')
     if (gen !== this.loadGeneration) {
       logger.debug('[App] selectDatasetFromChat superseded:', id, 'gen:', gen, 'current:', this.loadGeneration)
@@ -2716,14 +2780,14 @@ class InteractiveSphere {
     this.infoDisplayOverride = null
     if (newDataset) {
       this.renderInfoPanel()
-      window.history.replaceState({}, '', `?dataset=${encodeURIComponent(newDataset.id)}`)
+      this.writeDatasetUrl(newDataset.id, 'replace')
       notifyDatasetChanged(newDataset)
       setHelpActiveDataset(newDataset.id)
       this.renderer?.setCanvasDescription(`3D globe showing ${newDataset.title}`)
     } else {
       const infoPanel = document.getElementById('info-panel')
       if (infoPanel) infoPanel.classList.add('hidden')
-      window.history.replaceState({}, '', window.location.pathname)
+      this.clearDatasetUrl('replace')
       notifyDatasetChanged(null)
       setHelpActiveDataset(null)
       this.renderer?.setCanvasDescription('Interactive 3D globe showing Earth')
@@ -3288,19 +3352,16 @@ class InteractiveSphere {
     closeChat()
     this.announce('Loading dataset\u2026')
     this.showLoadingScreen('Loading dataset\u2026', 20)
-    // Preserve `?catalog=true` across the dataset-load URL transition
-    // so the catalog↔sphere tab control (Phase 1 §3.2) can offer a
-    // "back to catalog" affordance. The body class stays set so CSS
-    // continues to recognise the catalog-mode surface; the regular
-    // load flow swaps the visible browse panel for the globe via
-    // `dismissBrowseAfterLoad()`. Read `getCatalogMode()` once so
-    // the URL state we observe and the tab state we update agree
-    // by construction.
+    // `writeDatasetUrl` carries the existing query across, which
+    // preserves `?catalog=true` so the catalog↔sphere tab control
+    // (Phase 1 §3.2) can offer a "back to catalog" affordance. The
+    // body class stays set so CSS continues to recognise the
+    // catalog-mode surface; the regular load flow swaps the visible
+    // browse panel for the globe via `dismissBrowseAfterLoad()`.
+    // Read `getCatalogMode()` before the write so the URL state we
+    // observe and the tab state we update agree by construction.
     const inCatalogMode = getCatalogMode()
-    const nextParams = new URLSearchParams()
-    if (inCatalogMode) nextParams.set('catalog', 'true')
-    nextParams.set('dataset', id)
-    window.history.pushState({}, '', `?${nextParams.toString()}`)
+    this.writeDatasetUrl(id, 'push')
     // The globe is now the active surface — drop the
     // `catalog-empty` flag so CSS reveals `#map-grid`. The
     // `catalog-mode` body class stays (sticky session marker).
@@ -3389,7 +3450,7 @@ class InteractiveSphere {
       r.toggleBoundaries?.(false)
     }
     syncToolsMenuState({ labels: false, borders: false, terrain: false, autoRotate: false })
-    window.history.pushState({}, '', window.location.pathname)
+    this.clearDatasetUrl('push')
 
     this.showLoadingScreen('Loading Earth\u2026', 20)
     if (this.renderer) {

@@ -995,6 +995,7 @@
   "publisher.datasetForm.help.playbackFps": "Optional, image-sequence datasets only. How many source frames play per second — 1 holds each frame for a second. Blank uses the catalog default (30), which plays a short sequence in under a second. Changing this re-encodes the whole video.",
   "publisher.datasetForm.help.radiusMi": "Optional. Radius of the celestial body in miles (pair with a non-Earth body for proportional sizing).",
   "publisher.datasetForm.help.slug": "Auto-derived from the title; edit to customise. Must start with a letter and use lowercase letters, digits, and hyphens only.",
+  "publisher.datasetForm.help.slugPublished": "Locked — this is the dataset's public web address, and changing it would break links people have already shared. Slugs are editable while a dataset is still a draft.",
   "publisher.datasetForm.help.tags": "Press Enter or comma to add. Free-form labels — use for what categories and keywords don't already cover.",
   "publisher.datasetForm.help.thumbnail": "Optional. PNG, JPEG, or WebP — the image shown on the browse card. Upload one above, or paste an `r2:` / absolute HTTPS reference.",
   "publisher.datasetForm.help.timeRange": "Times entered in your local timezone are stored as UTC. Set both Start and End together (or neither); the publish-readiness check enforces start ≤ end.",
