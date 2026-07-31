@@ -141,8 +141,9 @@ export function parseColorScale(input: unknown): ColorScale | null {
   // never tried.
   if (dataMinLuma !== undefined && dataMinLuma !== null) {
     if (!isFiniteNumber(dataMinLuma)) return null
-    // 254 rather than 255: a band covering every code leaves no data,
-    // and would put a zero in `lumaToValue`'s denominator.
+    // 254 rather than 255: at 255 the band swallows every code but one,
+    // and `lumaToValue`'s `255 - lo` denominator goes to zero. A scale
+    // with a single data code is degenerate on both counts.
     if (!Number.isInteger(dataMinLuma) || dataMinLuma < 0 || dataMinLuma > 254) return null
     scale.dataMinLuma = dataMinLuma
   }

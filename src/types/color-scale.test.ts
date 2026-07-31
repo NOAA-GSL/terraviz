@@ -186,7 +186,7 @@ describe('dataMinLuma', () => {
   it.each([
     ['a non-integer code', 11.5],
     ['a negative code', -1],
-    ['255, which would leave no data and a zero denominator', 255],
+    ['255, which leaves a single data code and a zero denominator', 255],
     ['a code past the 8-bit range', 300],
     ['a string', '12'],
     ['NaN', Number.NaN],
