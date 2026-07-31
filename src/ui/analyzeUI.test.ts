@@ -877,14 +877,17 @@ describe('contours going stale as the globe plays', () => {
   beforeEach(() => { vi.useFakeTimers() })
   afterEach(() => { vi.useRealTimers() })
 
-  /** A source whose reported frame can be moved from the test. */
+  /** A source whose reported frame can be moved from the test.
+   *
+   *  Drives `frameId` — the playhead identity — not `frameTime`, which
+   *  is the human label and is the wrong thing to compare. */
   function movingSource(c: ReturnType<typeof makeContours>) {
-    let now = 'frame-1'
+    let now = '0'
     return {
       src: makeSource({
         contours: () => c.overlay,
         frame: RAMP,
-        frameTime: () => now,
+        frameId: () => now,
       }),
       advance: (to: string) => { now = to },
     }
@@ -899,7 +902,7 @@ describe('contours going stale as the globe plays', () => {
     expect(c.shown()).toHaveLength(1)
     const before = c.clears()
 
-    m.advance('frame-2')
+    m.advance('1.5')
     vi.advanceTimersByTime(600)
 
     expect(c.clears()).toBeGreaterThan(before)
@@ -926,7 +929,7 @@ describe('contours going stale as the globe plays', () => {
     initAnalyzeUI(m.src)
     openAnalyzeUI()
     contourButton()!.click()
-    m.advance('frame-2')
+    m.advance('1.5')
     vi.advanceTimersByTime(600)
     expect(contourButton()!.textContent).toBe('Outline on globe')
 
@@ -945,14 +948,17 @@ describe('contours going stale as the globe plays', () => {
     const after = c.clears()
 
     // A watch still running would call clear() again on the next tick.
-    m.advance('frame-2')
+    m.advance('1.5')
     vi.advanceTimersByTime(2000)
     expect(c.clears()).toBe(after)
   })
 
-  it('does not watch a source that cannot report a frame', () => {
-    // No `frameTime` seam: nothing to compare, so nothing is removed and
-    // the lines stay exactly as drawn.
+  it('says so, loudly, when it cannot identify the frame at all', () => {
+    // No `frameId` seam: nothing to compare, so nothing can be removed.
+    // The lines stay — but the panel must SAY they are pinned, rather
+    // than going quietly inert and letting a stale outline look
+    // supervised. `15a5926` is the precedent: a gate that closes
+    // silently costs an evening aimed at the wrong half of the feature.
     const c = makeContours()
     initAnalyzeUI(makeSource({ contours: () => c.overlay, frame: RAMP }))
     openAnalyzeUI()
@@ -960,6 +966,33 @@ describe('contours going stale as the globe plays', () => {
     const before = c.clears()
     vi.advanceTimersByTime(5000)
     expect(c.clears()).toBe(before)
+    expect(bodyText()).toContain('pinned to one frame')
+  })
+
+  it('does not claim to watch when the frame id is null at draw time', () => {
+    // A seam that exists but reports nothing is the same blindness as no
+    // seam at all, and must read the same way on the surface.
+    const c = makeContours()
+    initAnalyzeUI(makeSource({
+      contours: () => c.overlay, frame: RAMP, frameId: () => null,
+    }))
+    openAnalyzeUI()
+    contourButton()!.click()
+    // Baseline after drawing: `clears()` counts lifecycle clears
+    // (init, refresh) too, so only the delta across the timer means
+    // "the watch fired".
+    const before = c.clears()
+    vi.advanceTimersByTime(5000)
+    expect(c.clears()).toBe(before)
+    expect(bodyText()).toContain('pinned to one frame')
+  })
+
+  it('does not show the pinned warning when it IS watching', () => {
+    const c = makeContours()
+    initAnalyzeUI(movingSource(c).src)
+    openAnalyzeUI()
+    contourButton()!.click()
+    expect(bodyText()).not.toContain('pinned to one frame')
   })
 })
 

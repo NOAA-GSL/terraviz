@@ -1120,6 +1120,25 @@ export class MapRenderer implements GlobeRenderer {
     return { snapshot, scale: options.colorScale, options }
   }
 
+  /**
+   * Identity of the frame currently on the globe.
+   *
+   * The *same* expression `glLumaSampler` keys its snapshot cache on, so
+   * "this string changed" and "the sampler would read a different frame"
+   * are the same statement by construction rather than by coincidence.
+   *
+   * Deliberately not the `#time-label` text: that is snapped to the
+   * dataset's display interval, so several video frames can share one
+   * label, and it is hidden entirely for a dataset without start/end
+   * times — a watch built on it goes silently inert exactly when it is
+   * most needed. Costs a property read; no readback, no upload.
+   */
+  currentFrameId(): string | null {
+    const source = this.probeSource
+    if (!source) return null
+    return source instanceof HTMLVideoElement ? `${source.currentTime}` : 'static'
+  }
+
   // --- Analysed-region outline (Analyze §A3) ---
 
   private regionOutlineId: string | null = null

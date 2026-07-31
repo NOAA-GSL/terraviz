@@ -462,6 +462,12 @@ class InteractiveSphere {
         // panel and an Orbit answer can never name different frames for
         // the same measurement.
         frameTime: () => readCurrentTime(),
+        // Identity, not display. `readCurrentTime` reads the *label*,
+        // which is snapped to the display interval and hidden outright
+        // for a dataset without start/end times — useless for telling
+        // whether the frame moved. This is the video playhead, the same
+        // value the luma sampler keys its snapshot cache on.
+        frameId: () => this.viewports.getPrimary()?.currentFrameId() ?? null,
       })
       // The same frame, reachable from Orbit's tool executors (§A6).
       // Registered rather than passed down: `processMessage` already

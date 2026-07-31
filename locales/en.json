@@ -9,6 +9,7 @@
   "analyze.contour.staleCleared": "The globe moved to another frame, so the outline was removed rather than left describing data it was not measured from. Draw it again for the frame showing now.",
   "analyze.contour.staleNote": "Drawn from the colour bar as it was when you pressed the button. Move it and outline again to follow it.",
   "analyze.contour.title": "Where the line falls",
+  "analyze.contour.unwatched": "This outline is pinned to one frame and can't tell when the globe moves on, so it won't clear itself. Draw it again after seeking.",
   "analyze.coverage": "{percent}% of this region has data ({count} grid cells).",
   "analyze.empty.noDataset": "Load a dataset that carries values to analyze it. Older datasets are pictures, so there are no numbers to measure.",
   "analyze.empty.noValues": "No data in this region.",

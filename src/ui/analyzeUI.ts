@@ -96,6 +96,19 @@ export interface AnalyzeSource {
    * the two cannot disagree about which frame was measured.
    */
   frameTime?(): string | null
+  /**
+   * Identity of the frame on the globe — not for display, only for
+   * telling whether it changed.
+   *
+   * Separate from `frameTime()` on purpose. That one is the label a
+   * human reads, and it is the wrong thing to compare against: it is
+   * snapped to the dataset's display interval, so several video frames
+   * share one label, and it is absent entirely for a dataset with no
+   * start/end times. A watch built on it compares null to null forever
+   * and never fires — silently, which is the failure mode `15a5926`
+   * already taught this codebase to distrust.
+   */
+  frameId?(): string | null
 }
 
 /**
@@ -167,8 +180,9 @@ let contourHost: HTMLElement | null = null
 /** Whether lines are currently on the globe, so the section can offer
  *  Draw or Clear rather than inferring it from the threshold. */
 let contourDrawn = false
-/** The frame label the drawn contours were computed from. */
-let contourFrameTime: string | null = null
+/** Identity of the frame the drawn contours were computed from, as
+ *  reported by `frameId()`. Compared, never displayed. */
+let contourFrameId: string | null = null
 /** Interval handle for the staleness watch, live only while lines are up. */
 let contourWatch: number | null = null
 /** Set when the watch removed the lines, so the section can say why they
@@ -739,7 +753,7 @@ function renderContourSection(): void {
           }))
           contourDrawn = true
           contourStaleCleared = false
-          contourFrameTime = src.frameTime?.() ?? null
+          contourFrameId = src.frameId?.() ?? null
           startContourWatch()
         }
         renderContourSection()
@@ -778,13 +792,19 @@ function renderContourSection(): void {
     ),
   )
   if (contourStaleCleared) host.appendChild(message(t('analyze.contour.staleCleared')))
+  // Drawn, but with no way to notice the globe moving on. Say it on the
+  // surface: a guard that cannot run is worth exactly as much as the
+  // user's knowledge that it cannot run.
+  if (contourDrawn && contourWatch === null) {
+    host.appendChild(message(t('analyze.contour.unwatched')))
+  }
   host.appendChild(caption(t('analyze.contour.staleNote')))
 }
 
 function clearContours(): void {
   source?.contours?.()?.clear()
   contourDrawn = false
-  contourFrameTime = null
+  contourFrameId = null
   stopContourWatch()
 }
 
@@ -819,14 +839,17 @@ const CONTOUR_WATCH_MS = 500
 function startContourWatch(): void {
   stopContourWatch()
   const src = source
-  if (!src?.frameTime) return
+  // No way to identify the frame means no way to notice it changing.
+  // Say so on the surface rather than running a watch that compares
+  // null to null forever and reports nothing.
+  if (!src?.frameId || contourFrameId === null) return
   contourWatch = window.setInterval(() => {
     if (!contourDrawn) {
       stopContourWatch()
       return
     }
-    const now = src.frameTime?.() ?? null
-    if (now === contourFrameTime) return
+    const now = src.frameId?.() ?? null
+    if (now === contourFrameId) return
     clearContours()
     contourStaleCleared = true
     renderContourSection()
