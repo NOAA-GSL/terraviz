@@ -42,6 +42,21 @@
  *     test and the cell's own min/max happen once; each level then costs
  *     a comparison against that range and, for the few cells it actually
  *     crosses, a marching-squares case.
+ *
+ *     This is a *user-initiated* pass, and it is not cheap even so.
+ *     Measured on a synthetic 4096x2048 field with four plume-shaped
+ *     blobs, twelve levels: **1595 ms** as first written, **376 ms** now,
+ *     for byte-identical output. Almost all of that came from two places
+ *     that looked free — five closures allocated on every emitting cell,
+ *     and `h${x},${y}` string edge keys built and hashed once per
+ *     crossing. Nine tenths of the time was in emitting segments rather
+ *     than in walking 8.4 million cells, which is the opposite of where
+ *     it looks like it should be. Measure before optimising this file.
+ *
+ *     The number that matters downstream: even at 376 ms this is about
+ *     2.7 extractions per second against 30 fps playback, so contours
+ *     cannot track a playing video and the Analyze panel drops them when
+ *     the frame moves rather than pretending they are still current.
  *  4. **The antimeridian splits a line rather than crossing it.** A
  *     polyline whose longitudes jump from +179 to −179 is drawn by
  *     MapLibre as a stripe straight back across the globe. Lines are cut
@@ -110,6 +125,22 @@ const SEAM_JUMP_DEGREES = 180
 interface CodeTable {
   value: Float64Array
   absent: Uint8Array
+  /**
+   * Lowest code that is *not* absent, when absence is a contiguous band
+   * at the bottom of the range. Both sidecar forms produce exactly that
+   * — `luma < dataMinLuma` and `luma / 255 < transparentRange` are both
+   * "below a cutoff" — which lets the cell walk decide rule 1 from its
+   * lowest corner alone instead of testing all four.
+   */
+  absentBelow: number
+  /**
+   * Absence is that low band *and* values rise with the code, so a
+   * cell's value range can be read off its code range. False sends the
+   * walk down the general path: the fast tests are an optimisation, not
+   * a new contract, and a table shaped differently than expected must
+   * come out with the same lines rather than with quietly wrong ones.
+   */
+  monotone: boolean
 }
 
 function buildCodeTable(scale: ColorScale): CodeTable {
@@ -119,7 +150,28 @@ function buildCodeTable(scale: ColorScale): CodeTable {
     value[luma] = lumaToValue(luma, scale)
     absent[luma] = isTransparentLuma(luma, scale) ? 1 : 0
   }
-  return { value, absent }
+
+  // Verified, not assumed. The fast path tests only the lowest corner
+  // for absence, so a table with an absent code *above* a present one
+  // would let absent texels into the contours — the rule-1 mistake, back
+  // by a side door. 256 iterations to rule it out is free.
+  let absentBelow = 0
+  while (absentBelow < LUMA_LEVELS && absent[absentBelow] === 1) absentBelow++
+  let monotone = true
+  for (let luma = absentBelow; luma < LUMA_LEVELS; luma++) {
+    if (absent[luma] === 1) { monotone = false; break }
+  }
+  // `lumaToValue` is affine and increasing for vmax > vmin, but an
+  // inverted scale is expressible and would flip which corner is the
+  // cell minimum. Read the direction off the table rather than trusting
+  // the arithmetic upstream.
+  if (monotone) {
+    for (let luma = 1; luma < LUMA_LEVELS; luma++) {
+      if (value[luma] < value[luma - 1]) { monotone = false; break }
+    }
+  }
+
+  return { value, absent, absentBelow, monotone }
 }
 
 /**
@@ -131,17 +183,25 @@ function buildCodeTable(scale: ColorScale): CodeTable {
  * two-point stubs. Keying on the edge makes that exact. Keying on the
  * interpolated float coordinates would make it approximate, and the
  * epsilon would have to change with the frame's resolution.
+ *
+ * An integer rather than the `h${x},${y}` string this started as. Both
+ * identify the same edge, but the string is built, hashed and collected
+ * once per crossing, and there are hundreds of thousands of those on a
+ * shipped frame — enough that it was most of the extraction's cost.
+ * `(y * width + x) * 2 + orientation` is unique for every edge of a
+ * frame and stays well inside the safe-integer range: even a
+ * 16384 × 8192 frame tops out around 2.7e8.
  */
-type EdgeKey = string
+type EdgeKey = number
 
 /** Horizontal edge between texel centres `(x, y)` and `(x + 1, y)`. */
-function hKey(x: number, y: number): EdgeKey {
-  return `h${x},${y}`
+function hKey(x: number, y: number, width: number): EdgeKey {
+  return (y * width + x) * 2
 }
 
 /** Vertical edge between texel centres `(x, y)` and `(x, y + 1)`. */
-function vKey(x: number, y: number): EdgeKey {
-  return `v${x},${y}`
+function vKey(x: number, y: number, width: number): EdgeKey {
+  return (y * width + x) * 2 + 1
 }
 
 interface Node {
@@ -154,12 +214,28 @@ interface Node {
   links: EdgeKey[]
 }
 
-function linkNodes(nodes: Map<EdgeKey, Node>, a: EdgeKey, b: EdgeKey): void {
-  const na = nodes.get(a)
-  const nb = nodes.get(b)
-  if (!na || !nb || a === b) return
-  if (!na.links.includes(b)) na.links.push(b)
-  if (!nb.links.includes(a)) nb.links.push(a)
+/**
+ * Ensure both endpoints of a segment exist and join them.
+ *
+ * One call rather than the create-then-link pair this replaced, because
+ * the pair looked up each key twice — `has` then `set` to create, `get`
+ * again to link — and the lookups are the hot path. The coordinates are
+ * only used if the node is new; an edge already crossed by a
+ * neighbouring cell keeps the position it was given first, which is the
+ * same position, since both cells interpolate the same two corners.
+ */
+function connect(
+  nodes: Map<EdgeKey, Node>,
+  ka: EdgeKey, ax: number, ay: number,
+  kb: EdgeKey, bx: number, by: number,
+): void {
+  if (ka === kb) return
+  let na = nodes.get(ka)
+  if (na === undefined) { na = { x: ax, y: ay, links: [] }; nodes.set(ka, na) }
+  let nb = nodes.get(kb)
+  if (nb === undefined) { nb = { x: bx, y: by, links: [] }; nodes.set(kb, nb) }
+  if (!na.links.includes(kb)) na.links.push(kb)
+  if (!nb.links.includes(ka)) nb.links.push(ka)
 }
 
 /**
@@ -222,33 +298,71 @@ export function extractContourSet(
   const lowest = wanted[0]
   const highest = wanted[wanted.length - 1]
 
+  // Hoisted out of a loop that runs once per cell — around 8.4 million
+  // times on a shipped frame, where a property load per corner is not a
+  // rounding error.
+  const values = table.value
+  const absentFlags = table.absent
+  const { absentBelow, monotone } = table
+  const levelCount = wanted.length
+
   for (let y = y0; y < y1 - 1; y++) {
+    const rowA = y * width
+    const rowB = rowA + width
     for (let x = x0; x < x1 - 1; x++) {
       // Corners clockwise from the top-left, in image space (y grows
       // downward), matching the snapshot's own row order.
-      const c0 = data[y * width + x]
-      const c1 = data[y * width + x + 1]
-      const c2 = data[(y + 1) * width + x + 1]
-      const c3 = data[(y + 1) * width + x]
+      const c0 = data[rowA + x]
+      const c1 = data[rowA + x + 1]
+      const c2 = data[rowB + x + 1]
+      const c3 = data[rowB + x]
 
-      // Rule 1: one absent corner and the cell says nothing at all, at
-      // any level.
-      if (table.absent[c0] || table.absent[c1] || table.absent[c2] || table.absent[c3]) continue
+      let cellMin: number
+      let cellMax: number
+      if (monotone) {
+        // Both of the tests below answer from the *code* range, so a
+        // cell crossed by no level — nearly all of them — never touches
+        // the value table at all. This is the difference between the
+        // extraction taking a moment and it locking the tab up.
+        let lo = c0 < c1 ? c0 : c1
+        if (c2 < lo) lo = c2
+        if (c3 < lo) lo = c3
+        // Rule 1, in one compare: absence is a contiguous low band, so
+        // the lowest corner settles it for all four.
+        if (lo < absentBelow) continue
+        let hi = c0 > c1 ? c0 : c1
+        if (c2 > hi) hi = c2
+        if (c3 > hi) hi = c3
+        cellMin = values[lo]
+        cellMax = values[hi]
+      } else {
+        // Rule 1: one absent corner and the cell says nothing at all, at
+        // any level.
+        if (absentFlags[c0] || absentFlags[c1] || absentFlags[c2] || absentFlags[c3]) continue
+        const a = values[c0]
+        const b = values[c1]
+        const c = values[c2]
+        const d = values[c3]
+        cellMin = a < b ? a : b
+        if (c < cellMin) cellMin = c
+        if (d < cellMin) cellMin = d
+        cellMax = a > b ? a : b
+        if (c > cellMax) cellMax = c
+        if (d > cellMax) cellMax = d
+      }
 
-      const v0 = table.value[c0]
-      const v1 = table.value[c1]
-      const v2 = table.value[c2]
-      const v3 = table.value[c3]
-
-      // The cell's own range, computed once. A level outside it cannot
-      // cross this cell, which is the early-out that makes the extra
-      // levels nearly free: on a typical frame the overwhelming majority
-      // of cells are crossed by no level at all.
-      const cellMin = Math.min(v0, v1, v2, v3)
-      const cellMax = Math.max(v0, v1, v2, v3)
+      // A level outside the cell's own range cannot cross it, which is
+      // the early-out that makes the extra levels nearly free: on a
+      // typical frame the overwhelming majority of cells are crossed by
+      // no level at all.
       if (highest <= cellMin || lowest > cellMax) continue
 
-      for (let li = 0; li < wanted.length; li++) {
+      const v0 = values[c0]
+      const v1 = values[c1]
+      const v2 = values[c2]
+      const v3 = values[c3]
+
+      for (let li = 0; li < levelCount; li++) {
         const level = wanted[li]
         // `b = value >= level`, so every corner at or above the level
         // makes code 15 and every corner below makes code 0 — neither
@@ -262,26 +376,31 @@ export function extractContourSet(
           | (v3 >= level ? 8 : 0)
         if (code === 0 || code === 15) continue
 
-        const nodeAt = (key: EdgeKey, nx: number, ny: number): EdgeKey => {
-          if (!nodes.has(key)) nodes.set(key, { x: nx, y: ny, links: [] })
-          return key
-        }
-        const top = (): EdgeKey =>
-          nodeAt(hKey(x, y), x + crossFraction(v0, v1, level), y)
-        const right = (): EdgeKey =>
-          nodeAt(vKey(x + 1, y), x + 1, y + crossFraction(v1, v2, level))
-        const bottom = (): EdgeKey =>
-          nodeAt(hKey(x, y + 1), x + crossFraction(v3, v2, level), y + 1)
-        const left = (): EdgeKey =>
-          nodeAt(vKey(x, y), x, y + crossFraction(v0, v3, level))
+        // The cell's four edge identities and crossing positions, as
+        // plain numbers. This used to be five closures, allocated on
+        // every emitting cell and dead again before the switch ended;
+        // measured on a 4096x2048 frame they and the string keys were
+        // roughly nine tenths of the whole extraction. The two unused
+        // `crossFraction` calls per cell are a subtract, a divide and a
+        // clamp — far cheaper than the allocation they replace.
+        const kTop = hKey(x, y, width)
+        const kRight = vKey(x + 1, y, width)
+        const kBottom = hKey(x, y + 1, width)
+        const kLeft = vKey(x, y, width)
+        const xTop = x + crossFraction(v0, v1, level)
+        const yRight = y + crossFraction(v1, v2, level)
+        const xBottom = x + crossFraction(v3, v2, level)
+        const yLeft = y + crossFraction(v0, v3, level)
+        const xRight = x + 1
+        const yBottom = y + 1
 
         switch (code) {
-          case 1: case 14: linkNodes(nodes, left(), top()); break
-          case 2: case 13: linkNodes(nodes, top(), right()); break
-          case 3: case 12: linkNodes(nodes, left(), right()); break
-          case 4: case 11: linkNodes(nodes, right(), bottom()); break
-          case 6: case 9: linkNodes(nodes, top(), bottom()); break
-          case 7: case 8: linkNodes(nodes, left(), bottom()); break
+          case 1: case 14: connect(nodes, kLeft, x, yLeft, kTop, xTop, y); break
+          case 2: case 13: connect(nodes, kTop, xTop, y, kRight, xRight, yRight); break
+          case 3: case 12: connect(nodes, kLeft, x, yLeft, kRight, xRight, yRight); break
+          case 4: case 11: connect(nodes, kRight, xRight, yRight, kBottom, xBottom, yBottom); break
+          case 6: case 9: connect(nodes, kTop, xTop, y, kBottom, xBottom, yBottom); break
+          case 7: case 8: connect(nodes, kLeft, x, yLeft, kBottom, xBottom, yBottom); break
           // Saddles. Two opposite corners are above and two below, and
           // the cell alone cannot say whether the high ground is joined
           // or the low ground is. Resolved by the cell's own mean, the
@@ -289,21 +408,21 @@ export function extractContourSet(
           // side that stays connected.
           case 5: {
             if ((v0 + v1 + v2 + v3) / 4 >= level) {
-              linkNodes(nodes, left(), bottom())
-              linkNodes(nodes, top(), right())
+              connect(nodes, kLeft, x, yLeft, kBottom, xBottom, yBottom)
+              connect(nodes, kTop, xTop, y, kRight, xRight, yRight)
             } else {
-              linkNodes(nodes, left(), top())
-              linkNodes(nodes, right(), bottom())
+              connect(nodes, kLeft, x, yLeft, kTop, xTop, y)
+              connect(nodes, kRight, xRight, yRight, kBottom, xBottom, yBottom)
             }
             break
           }
           case 10: {
             if ((v0 + v1 + v2 + v3) / 4 >= level) {
-              linkNodes(nodes, left(), top())
-              linkNodes(nodes, right(), bottom())
+              connect(nodes, kLeft, x, yLeft, kTop, xTop, y)
+              connect(nodes, kRight, xRight, yRight, kBottom, xBottom, yBottom)
             } else {
-              linkNodes(nodes, left(), bottom())
-              linkNodes(nodes, top(), right())
+              connect(nodes, kLeft, x, yLeft, kBottom, xBottom, yBottom)
+              connect(nodes, kTop, xTop, y, kRight, xRight, yRight)
             }
             break
           }

@@ -347,6 +347,68 @@ describe('extractContourSet', () => {
   })
 })
 
+describe('the fast cell test', () => {
+  /**
+   * The cell walk settles two questions from the raw luma codes rather
+   * than the mapped values: whether any corner is absent (from the
+   * lowest code alone) and what the cell's value range is (from its
+   * code range). Both shortcuts hold only while absence is a contiguous
+   * band at the bottom and values rise with the code, so `buildCodeTable`
+   * verifies that and sends anything else down the general path.
+   *
+   * An inverted scale is the case where it does not hold, and it is also
+   * the only one where the two paths can be compared directly: with
+   * vmin and vmax swapped, value = 255 − luma, so the isoline at level L
+   * falls on exactly the texels the upright scale puts at 255 − L. Same
+   * crossings, same interpolation, opposite code path.
+   *
+   * (The contiguity half of the guard is not reachable through either
+   * sidecar form today — both express absence as "below a cutoff". It
+   * is there so that a future `isTransparentLuma` with a hole in it
+   * fails safe into the general path instead of silently letting absent
+   * texels into the contours.)
+   */
+  const DESCENDING: ColorScale = { ...DENSE, vmin: 255, vmax: 0 }
+
+  // Sines on both axes, so the field has genuine saddles rather than one
+  // monotone ramp. The saddle is the case where the two paths could
+  // disagree and still return perfectly plausible lines.
+  const field = snap(24, 16, (x, y) =>
+    Math.round(128 + 100 * Math.sin((x / 24) * Math.PI * 2) * Math.cos((y / 16) * Math.PI * 2)))
+
+  /** Every vertex, order-independent: the two paths may walk the graph
+   *  from different ends, but they must touch the same points. */
+  const fingerprint = (lines: ContourPoint[][]): string[] =>
+    lines.flat().map(p => `${p.lat.toFixed(6)},${p.lon.toFixed(6)}`).sort()
+
+  it('agrees with the general path on the same crossings', () => {
+    // 180.5 rather than 180 on purpose: every texel here is an integer,
+    // and a level sitting exactly on one would be counted as "above" by
+    // both scales instead of by one, which is the single input where
+    // the mirrored levels are not complementary.
+    const fast = extractContours(field, DENSE, 180.5, GLOBAL)
+    const general = extractContours(field, DESCENDING, 255 - 180.5, GLOBAL)
+
+    expect(fast.length).toBeGreaterThan(0)
+    expect(vertexCount(general)).toBe(vertexCount(fast))
+    expect(fingerprint(general)).toEqual(fingerprint(fast))
+  })
+
+  it('still refuses to trace the no-data boundary on the general path', () => {
+    // The same fixture as the fast-path version above: left half absent,
+    // right half uniformly high. Falling back must not cost the rule
+    // the whole module exists to enforce.
+    const frame = snap(8, 8, x => (x < 4 ? 0 : 200))
+    const sparse: ColorScale = { ...SCALE, vmin: 255, vmax: 0 }
+    expect(extractContours(frame, sparse, 100, GLOBAL)).toEqual([])
+
+    // …and the same frame with no absent band does produce the line, so
+    // the assertion above is about absence rather than about a descending
+    // scale finding nothing.
+    expect(extractContours(frame, DESCENDING, 100, GLOBAL).length).toBeGreaterThan(0)
+  })
+})
+
 describe('contourSetToGeoJson', () => {
   it('carries value and colour per level so the map can paint each line', () => {
     const fc = contourSetToGeoJson([
