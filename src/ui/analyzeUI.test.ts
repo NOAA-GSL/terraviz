@@ -962,3 +962,26 @@ describe('contours going stale as the globe plays', () => {
     expect(c.clears()).toBe(before)
   })
 })
+
+describe('contours and the region scope', () => {
+  it('removes the lines when the scope changes under them', () => {
+    // Contours are extracted against the region's texel window, so
+    // whole-dataset lines left on the globe beside a panel quoting
+    // Alabama's areas is the same annotation-outliving-its-explanation
+    // failure the playback watch prevents, one trigger further along.
+    const c = makeContours()
+    initAnalyzeUI(makeSource({ contours: () => c.overlay, frame: RAMP }))
+    openAnalyzeUI()
+    contourButton()!.click()
+    expect(c.shown()).toHaveLength(1)
+    const before = c.clears()
+
+    select().value = 'named:Alabama'
+    select().dispatchEvent(new Event('change', { bubbles: true }))
+
+    expect(c.clears()).toBeGreaterThan(before)
+    // And offers to draw again for the region now selected, rather than
+    // claiming lines are up.
+    expect(contourButton()?.textContent).toBe('Outline on globe')
+  })
+})

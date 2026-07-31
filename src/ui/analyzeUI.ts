@@ -426,6 +426,14 @@ function refresh(body: HTMLElement): void {
   lastFrame = null
   transectHost = null
   contourHost = null
+  // Anything already drawn was extracted against the *previous* frame
+  // and the previous region window, so it cannot survive a recompute.
+  // Changing the scope from the whole dataset to Alabama and leaving the
+  // old lines up would put whole-dataset contours on the globe beside a
+  // panel quoting Alabama's areas — the same annotation-outliving-its-
+  // explanation failure the playback watch exists to prevent, one
+  // trigger further along.
+  clearContours()
 
   const src = source
   if (!src) {
