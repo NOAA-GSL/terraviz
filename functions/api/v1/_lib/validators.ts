@@ -480,7 +480,9 @@ function validateRenderEncoding(
           'color_scale',
           'invalid_value',
           'color_scale must be a JSON object with >= 2 ordered palette stops ' +
-            '({ t, rgba }) and finite, distinct vmin / vmax.',
+            '({ t, rgba }) and finite, distinct vmin / vmax. An optional ' +
+            'dataMinLuma must be an integer in 0..254, and must agree with ' +
+            'transparentRange about where data starts when both are given.',
         ),
       )
       return

@@ -41,7 +41,10 @@ That throws the numbers away at render time and costs two things:
 The fix: stop encoding the picture, encode the **data**. Render frames as
 grayscale where luma *is* the normalised value (black = `vmin`/no data, white =
 `vmax`), and carry the palette + scale as a sidecar the shader applies at
-display time. This makes transparency exact, makes datasets repalettable
+display time. (Black means both `vmin` and "no data" only because the two
+coincide for every field published so far; a sidecar may now set
+`dataMinLuma` to reserve a band of low codes for absence and put `vmin` at the
+first code above it.) This makes transparency exact, makes datasets repalettable
 without re-encoding, and makes the values readable on the globe.
 
 From terraviz#326. **Backwards compatibility is a hard requirement:** every
@@ -385,8 +388,12 @@ Steps 2 and 3 can run in parallel once step 1 clears; 4 depends on both.
   MP4 downloads as grayscale. Options include client-side colorized export or
   shipping the sidecar in the zip. Eric flagged this explicitly.
 - Diverging-field datasets (temperature anomaly) where zero is mid-scale, not
-  no-data. This scheme assumes they coincide; those need a reserved sentinel or
-  a separate mask.
+  no-data. The original scheme assumed the two coincide. The sentinel half of
+  that is now built — `ColorScale.dataMinLuma` reserves a band of low codes as
+  "no data" and moves `vmin` to the first code above it, so a field whose
+  minimum is a real measurement is expressible. What is still missing is a
+  publisher: no pipeline emits a diverging field yet, so the anomaly and
+  difference display modes stay designed rather than built.
 - `dataset_renditions` and the dormant colour columns.
 
 ### Why the chroma planes aren't spare precision
