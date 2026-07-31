@@ -289,6 +289,69 @@ export async function findFramesMeta(workdir: string): Promise<string | null> {
   return null
 }
 
+/**
+ * Materialize inline palettes before `zyra run` sees the pipeline.
+ *
+ * A `visualize heatmap` stage may carry its colour palette inline as a
+ * `cmap_inline` string — the same JSON `--cmap-file` would otherwise
+ * load from a URL — so a publisher can colour a data-encoded dataset
+ * without hosting a palette file. For each such stage we write the JSON
+ * to `{workdir}/cmap-<i>.json` (the container sees the workdir at
+ * `/work`), point `cmap_file` at it, and drop `cmap_inline` — an
+ * unknown arg zyra would otherwise reject. Both kebab and snake
+ * spellings are accepted, mirroring `pipelineArg`.
+ *
+ * Throws on a `cmap_inline` that is not valid JSON: cheaper to fail
+ * here than after a container spin-up, and a malformed palette would
+ * otherwise fail deep inside zyra's `load_palette_spec` with a worse
+ * message. Returns the pipeline unchanged when no stage uses it.
+ */
+export async function materializeInlinePalettes(
+  pipelineJson: string,
+  workdir: string,
+): Promise<string> {
+  let doc: { stages?: unknown }
+  try {
+    doc = JSON.parse(pipelineJson) as { stages?: unknown }
+  } catch {
+    return pipelineJson
+  }
+  if (!Array.isArray(doc.stages)) return pipelineJson
+  let count = 0
+  for (let i = 0; i < doc.stages.length; i++) {
+    const stage = doc.stages[i]
+    if (typeof stage !== 'object' || stage === null) continue
+    const stageArgs = (stage as { args?: unknown }).args
+    if (typeof stageArgs !== 'object' || stageArgs === null || Array.isArray(stageArgs)) continue
+    const a = stageArgs as Record<string, unknown>
+    const inline = a['cmap_inline'] ?? a['cmap-inline']
+    if (inline === undefined) continue
+    let text: string
+    if (typeof inline === 'string') {
+      try {
+        JSON.parse(inline)
+      } catch {
+        throw new Error(`stages[${i}].args.cmap_inline is not valid JSON`)
+      }
+      text = inline
+    } else if (typeof inline === 'object' && inline !== null) {
+      text = JSON.stringify(inline)
+    } else {
+      throw new Error(`stages[${i}].args.cmap_inline must be a JSON string or object`)
+    }
+    const name = `cmap-${i}.json`
+    await writeFile(join(workdir, name), text)
+    a['cmap_file'] = `/work/${name}`
+    delete a['cmap_inline']
+    delete a['cmap-inline']
+    count++
+  }
+  if (count > 0) {
+    log(`materialized ${count} inline palette${count === 1 ? '' : 's'} → /work/cmap-*.json`)
+  }
+  return JSON.stringify(doc)
+}
+
 async function phaseFetch(client: TerravizClient, args: Args): Promise<number> {
   const result = await client.getWorkflow<WorkflowEnvelope>(args.workflowId)
   if (!result.ok) {
@@ -315,6 +378,21 @@ async function phaseFetch(client: TerravizClient, args: Args): Promise<number> {
       status: 'failed',
       gha_run_id: args.ghaRunId,
       error_summary: sanitizeErrorSummary(`pipeline placeholder rendering: ${detail}`),
+    })
+    return 2
+  }
+  // Write any `cmap_inline` palette to a `/work` file and repoint
+  // `cmap_file` at it, so a data-encoded dataset's colours travel in the
+  // stored pipeline instead of a separately-hosted palette URL.
+  try {
+    renderedPipeline = await materializeInlinePalettes(renderedPipeline, args.workdir)
+  } catch (e) {
+    const detail = e instanceof Error ? e.message : String(e)
+    log(`FAIL: inline palette materialization → ${detail}`)
+    await client.postWorkflowRunStatus(args.workflowId, args.runId, {
+      status: 'failed',
+      gha_run_id: args.ghaRunId,
+      error_summary: sanitizeErrorSummary(`inline palette: ${detail}`),
     })
     return 2
   }

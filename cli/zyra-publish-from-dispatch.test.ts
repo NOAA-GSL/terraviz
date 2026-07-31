@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { mkdtemp, mkdir, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, writeFile, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -7,6 +7,7 @@ import {
   deriveFrameParams,
   expectedOutputKind,
   findFramesMeta,
+  materializeInlinePalettes,
   parseArgs,
   readColorScaleFields,
   readPaddedFrameNames,
@@ -418,5 +419,56 @@ describe('readColorScaleFields', () => {
       units: 'x'.repeat(20_000),
     })
     expect(await withSidecar(huge)).toEqual({})
+  })
+})
+
+describe('materializeInlinePalettes', () => {
+  const heatmap = (args: Record<string, unknown>) =>
+    JSON.stringify({
+      stages: [
+        { stage: 'process', command: 'convert-format', args: { format: 'geotiff' } },
+        { stage: 'visualize', command: 'heatmap', args },
+        { stage: 'visualize', command: 'compose-video', args: { output: '/work/output/dataset.mp4' } },
+      ],
+    })
+
+  it('writes cmap_inline to /work/cmap-<i>.json and repoints cmap_file', async () => {
+    const workdir = await mkdtemp(join(tmpdir(), 'zyra-pal-'))
+    const palette = '{"type":"continuous","base":"Oranges","transparent_range":12}'
+    const out = await materializeInlinePalettes(
+      heatmap({ data_encoded: true, cmap_inline: palette, vmax: 0.0003 }),
+      workdir,
+    )
+    const stage = JSON.parse(out).stages[1].args
+    // cmap_file now points at the container path; cmap_inline is gone.
+    expect(stage.cmap_file).toBe('/work/cmap-1.json')
+    expect(stage.cmap_inline).toBeUndefined()
+    // the bytes on disk are the palette verbatim.
+    expect(await readFile(join(workdir, 'cmap-1.json'), 'utf8')).toBe(palette)
+  })
+
+  it('accepts the kebab spelling (cmap-inline)', async () => {
+    const workdir = await mkdtemp(join(tmpdir(), 'zyra-pal-'))
+    const out = await materializeInlinePalettes(
+      heatmap({ 'cmap-inline': '{"type":"continuous","base":"YlOrBr"}' }),
+      workdir,
+    )
+    const stage = JSON.parse(out).stages[1].args
+    expect(stage.cmap_file).toBe('/work/cmap-1.json')
+    expect(stage['cmap-inline']).toBeUndefined()
+  })
+
+  it('throws on a cmap_inline that is not valid JSON — before any container run', async () => {
+    const workdir = await mkdtemp(join(tmpdir(), 'zyra-pal-'))
+    await expect(
+      materializeInlinePalettes(heatmap({ cmap_inline: '{not json' }), workdir),
+    ).rejects.toThrow(/cmap_inline is not valid JSON/)
+  })
+
+  it('leaves a pipeline without cmap_inline untouched', async () => {
+    const workdir = await mkdtemp(join(tmpdir(), 'zyra-pal-'))
+    const input = heatmap({ data_encoded: true, cmap_file: 'https://host/p.json' })
+    const out = await materializeInlinePalettes(input, workdir)
+    expect(JSON.parse(out)).toEqual(JSON.parse(input))
   })
 })
