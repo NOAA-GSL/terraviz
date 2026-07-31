@@ -3,8 +3,12 @@ name: "CodeQL Advanced"
 on:
   push:
     branches: [ "main" ]
+  # `claude/**` alongside main so a stacked PR — one targeting another
+  # branch rather than main — is analysed rather than skipped. See the
+  # longer note in ci.yml: the checks were not failing on those PRs,
+  # they were never running.
   pull_request:
-    branches: [ "main" ]
+    branches: [ "main", "claude/**" ]
   schedule:
     - cron: '35 14 * * 6'
 
