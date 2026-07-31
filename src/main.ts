@@ -450,6 +450,14 @@ class InteractiveSphere {
             clear: () => primary.clearRegionOutline(),
           }
         },
+        contours: () => {
+          const primary = this.viewports.getPrimary()
+          if (!primary) return null
+          return {
+            show: (lines) => primary.showContours(lines),
+            clear: () => primary.clearContours(),
+          }
+        },
       })
       // The same frame, reachable from Orbit's tool executors (§A6).
       // Registered rather than passed down: `processMessage` already

@@ -21,6 +21,7 @@ import type {
 import { setDatasetCreditsSource } from '../ui/creditsPanel'
 import { getSharedLumaSampler, type LumaSnapshot } from './glLumaSampler'
 import { DEFAULT_DISPLAY, type ColorScaleDisplay } from './colorScaleDisplay'
+import { contoursToGeoJson } from './datasetContours'
 import { boundsRing, greatCirclePath, type TransectEndpoints } from './datasetStats'
 import type { ColorScale } from '../types/color-scale'
 import {
@@ -1151,6 +1152,39 @@ export class MapRenderer implements GlobeRenderer {
     this.regionOutlineId = null
   }
 
+  // --- Isolines (Analyze §A5) ---
+
+  private contourId: string | null = null
+
+  /**
+   * Draw the isolines the Analyze panel extracted.
+   *
+   * Line only, no fill, for the same reason `showRegionOutline` refuses
+   * one: a wash over the enclosed region would tint the values being
+   * measured, and on this path nothing decorative is allowed to change
+   * what a colour means. A brighter stroke than the region box so the
+   * two read as different kinds of annotation when both are up — the box
+   * is where we looked, the contour is what we found.
+   *
+   * The geometry arrives already split at the antimeridian; see
+   * `datasetContours.splitAtSeam` for why drawing it unsplit puts a
+   * stripe across the globe.
+   */
+  showContours(lines: { lat: number; lon: number }[][]): void {
+    this.clearContours()
+    if (!this.map || !lines.length) return
+    this.contourId = this.highlightRegion(
+      contoursToGeoJson(lines),
+      { color: '#ffd166', opacity: 0 },
+    )
+  }
+
+  clearContours(): void {
+    if (!this.contourId) return
+    this.removeHighlight(this.contourId)
+    this.contourId = null
+  }
+
   // --- Transect picking (Analyze §A4) ---
 
   /** Vertices in the drawn line. Enough that the curve reads as smooth
@@ -1627,6 +1661,7 @@ export class MapRenderer implements GlobeRenderer {
     this.clearLatLngCallbacks()
     this.clearTransect()
     this.clearRegionOutline()
+    this.clearContours()
     // The probe sampler is page-shared and deliberately NOT disposed
     // here — other panels may still be using it, and tearing down its
     // context would take their readouts with it. Dropping the source

@@ -17,6 +17,7 @@
  */
 
 import {
+  areaAboveKm2,
   buildHistogram,
   sampleTransect,
   summarize,
@@ -26,9 +27,11 @@ import {
   type LatLonBounds,
   type LumaHistogram,
   type RegionStats,
+  type TexelWindow,
   type TransectEndpoints,
   type TransectSample,
 } from '../services/datasetStats'
+import { extractContours, type ContourLine } from '../services/datasetContours'
 import type { LumaSnapshot } from '../services/glLumaSampler'
 import { DEFAULT_DISPLAY, type ColorScaleDisplay } from '../services/colorScaleDisplay'
 import type { ColorScale } from '../types/color-scale'
@@ -74,6 +77,20 @@ export interface AnalyzeSource {
   /** Drawing the analysed box on the globe. Same optionality, same
    *  reason. */
   regionOutline?(): RegionOutline | null
+  /** Drawing isolines on the globe. Same optionality, same reason. */
+  contours?(): ContourOverlay | null
+}
+
+/**
+ * The globe's side of the contours: draw the isoline, and take it away.
+ *
+ * Same seam shape as `RegionOutline` and `TransectPicker`, for the same
+ * reason — the panel computes geometry and never learns that MapLibre
+ * exists, and a test can drive the contour section with no map.
+ */
+export interface ContourOverlay {
+  show(lines: ContourLine[]): void
+  clear(): void
 }
 
 /**
@@ -127,6 +144,15 @@ let openedFor: string | null = null
 let transectHost: HTMLElement | null = null
 let transectEnds: TransectEndpoints | null = null
 let transectArmed = false
+/** The contour section's own container, so changing the threshold
+ *  redraws the isoline without recomputing the histogram above it. */
+let contourHost: HTMLElement | null = null
+/** Whether lines are currently on the globe, so the section can offer
+ *  Draw or Clear rather than inferring it from the threshold. */
+let contourDrawn = false
+/** The texel window the region statistics used, so the isoline covers
+ *  exactly the region the numbers beside it describe. */
+let contourWindow: TexelWindow | undefined
 let lastTransect: { samples: TransectSample[]; scale: ColorScale } | null = null
 /**
  * The frame everything on screen was computed from.
@@ -154,6 +180,7 @@ let lastFrame: {
 export function initAnalyzeUI(src: AnalyzeSource): void {
   source?.transect?.()?.clear()
   source?.regionOutline?.()?.clear()
+  clearContours()
   source = src
   scope = { kind: 'dataset' }
   transectEnds = null
@@ -172,11 +199,13 @@ export function closeAnalyzeUI(): void {
   // would be an annotation with nothing on screen left to explain or
   // remove it.
   clearTransect()
+  clearContours()
   source?.regionOutline?.()?.clear()
   root?.remove()
   root = null
   openedFor = null
   transectHost = null
+  contourHost = null
   lastFrame = null
   document.removeEventListener('keydown', onEscape, true)
   lastTrigger?.focus()
@@ -361,6 +390,7 @@ function refresh(body: HTMLElement): void {
   lastResult = null
   lastFrame = null
   transectHost = null
+  contourHost = null
 
   const src = source
   if (!src) {
@@ -375,6 +405,7 @@ function refresh(body: HTMLElement): void {
     // data-encoded work takes. The box goes with the numbers it was
     // explaining.
     src.regionOutline?.()?.clear()
+    clearContours()
     body.appendChild(message(t('analyze.empty.noDataset')))
     return
   }
@@ -390,6 +421,18 @@ function refresh(body: HTMLElement): void {
     transectHost.className = 'analyze-transect-section'
     body.appendChild(transectHost)
     renderTransectSection()
+  }
+
+  // Same availability-not-state rule as the transect: present whenever
+  // there is a globe to draw on. Unlike the transect it needs the
+  // region block to have produced a histogram, which `renderContourSection`
+  // checks for itself rather than being gated here — the two reasons a
+  // section can be absent should not be spelled in two places.
+  if (src.contours?.()) {
+    contourHost = document.createElement('section')
+    contourHost.className = 'analyze-contour-section'
+    body.appendChild(contourHost)
+    renderContourSection()
   }
 }
 
@@ -420,6 +463,7 @@ function renderRegionBlock(
   }
   const hist = buildHistogram(snapshot, scale, options, window ?? undefined)
   lastResult = { stats, hist, scale }
+  contourWindow = window ?? undefined
 
   body.appendChild(renderHistogram(hist, scale, src.display()))
   body.appendChild(renderHistogramCaption(scale))
@@ -555,6 +599,106 @@ function renderTransectSection(): void {
   // inline action in the header row.
   exportBtn.className = 'analyze-export'
   host.appendChild(exportBtn)
+}
+
+/**
+ * The contour block: outline whatever the colorbar's threshold is
+ * isolating, and say how much area that is.
+ *
+ * The threshold is A1's, not one of this panel's own. That makes the
+ * line and the colour agree by construction — what the globe is
+ * isolating is what gets outlined and what gets measured — at the cost
+ * of the contour being tied to a viewing control, so resetting the
+ * palette takes it away. That tradeoff was chosen deliberately.
+ *
+ * Read at Draw time rather than subscribed to, which is this panel's
+ * standing doctrine: computation is user-initiated and one-shot. Moving
+ * the colorbar afterwards leaves the drawn line where it was until Draw
+ * is pressed again, and the caption says so rather than leaving someone
+ * to discover it.
+ */
+function renderContourSection(): void {
+  const host = contourHost
+  const overlay = source?.contours?.()
+  const src = source
+  if (!host || !overlay || !src) return
+  host.replaceChildren()
+
+  const head = document.createElement('div')
+  head.className = 'analyze-contour-head'
+  const label = document.createElement('h3')
+  label.textContent = t('analyze.contour.title')
+  head.appendChild(label)
+  host.appendChild(head)
+
+  const frame = lastFrame
+  const result = lastResult
+  if (!frame || !result) {
+    host.appendChild(message(t('analyze.empty.noValues')))
+    return
+  }
+
+  const { min, max } = src.display().threshold
+  const levels = [min, max].filter((v): v is number => v !== null && Number.isFinite(v))
+
+  if (!levels.length) {
+    // Nothing isolated means nothing to outline. Point at the control
+    // that drives this rather than offering a dead button.
+    host.appendChild(message(t('analyze.contour.noThreshold')))
+    return
+  }
+
+  const { scale } = result
+  head.appendChild(
+    actionButton(
+      contourDrawn ? t('analyze.contour.clear') : t('analyze.contour.draw'),
+      () => {
+        if (contourDrawn) {
+          clearContours()
+        } else {
+          const lines = levels.flatMap(level =>
+            extractContours(frame.snapshot, frame.scale, level, frame.options, contourWindow))
+          overlay.show(lines)
+          contourDrawn = true
+        }
+        renderContourSection()
+      },
+    ),
+  )
+
+  // The area the band covers, from the histogram rather than from the
+  // polygon the lines enclose — see `datasetContours`' header for why
+  // the counted number is the one to quote.
+  const above = min !== null ? areaAboveKm2(result.hist, scale, min) : result.stats.areaKm2
+  const aboveMax = max !== null ? areaAboveKm2(result.hist, scale, max) : 0
+  const banded = Math.max(0, above - aboveMax)
+
+  host.appendChild(
+    renderStatTile(
+      t('analyze.contour.area'),
+      t('analyze.contour.areaValue', {
+        km2: formatNumber(Math.round(banded)),
+      }),
+    ),
+  )
+  host.appendChild(
+    caption(
+      levels.length === 2
+        ? t('analyze.contour.bandCaption', {
+          min: formatStatValue(min as number, scale.units),
+          max: formatStatValue(max as number, scale.units),
+        })
+        : t('analyze.contour.levelCaption', {
+          level: formatStatValue(levels[0], scale.units),
+        }),
+    ),
+  )
+  host.appendChild(caption(t('analyze.contour.staleNote')))
+}
+
+function clearContours(): void {
+  source?.contours?.()?.clear()
+  contourDrawn = false
 }
 
 function actionButton(text: string, onClick: () => void): HTMLButtonElement {

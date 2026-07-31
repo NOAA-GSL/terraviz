@@ -668,3 +668,147 @@ describe('§A6 — opening pre-scoped from an Orbit chip', () => {
     expect(select().value).toBe('named:Alaska')
   })
 })
+
+/**
+ * The contour section.
+ *
+ * Its threshold is A1's display threshold rather than one of the
+ * panel's own, so most of what matters here is that the section tracks
+ * that control honestly: absent when nothing is isolated, drawn from
+ * the value the control held at the moment Draw was pressed, and gone
+ * when the panel or the dataset goes.
+ */
+function makeContours() {
+  const shown: { lat: number; lon: number }[][][] = []
+  let clears = 0
+  return {
+    overlay: {
+      show(lines: { lat: number; lon: number }[][]) { shown.push(lines) },
+      clear() { clears++ },
+    },
+    shown: () => shown,
+    last: () => shown[shown.length - 1],
+    clears: () => clears,
+  }
+}
+
+/** A frame with a real gradient, so a threshold in the middle of the
+ *  range actually produces a crossing. */
+const RAMP = () => ({
+  snapshot: snap(16, 16, x => 20 + x * 14),
+  scale: SCALE,
+  options: OPTIONS,
+})
+
+const contourButton = () =>
+  Array.from(document.querySelectorAll('.analyze-contour-head .analyze-action'))[0] as
+    | HTMLButtonElement
+    | undefined
+
+describe('contours', () => {
+  it('says where the threshold lives instead of offering a dead button', () => {
+    const c = makeContours()
+    initAnalyzeUI(makeSource({ contours: () => c.overlay, frame: RAMP }))
+    openAnalyzeUI()
+    // DEFAULT_DISPLAY has no threshold on either side.
+    expect(bodyText()).toContain('colour bar')
+    expect(contourButton()).toBeUndefined()
+    expect(c.shown()).toHaveLength(0)
+  })
+
+  it('outlines the level the colour bar is isolating', () => {
+    const c = makeContours()
+    initAnalyzeUI(makeSource({
+      contours: () => c.overlay,
+      frame: RAMP,
+      display: () => ({ ...DEFAULT_DISPLAY, threshold: { min: 100, max: null } }),
+    }))
+    openAnalyzeUI()
+    contourButton()!.click()
+
+    expect(c.shown()).toHaveLength(1)
+    expect(c.last().length).toBeGreaterThan(0)
+    // vmin 0 / vmax 255 over a ramp of 20 + 14x: the 100 crossing sits
+    // between x = 5 (90) and x = 6 (104), so every vertex is in that
+    // column and none wandered to the frame's edge.
+    for (const line of c.last()) {
+      for (const p of line) expect(Number.isFinite(p.lon)).toBe(true)
+    }
+  })
+
+  it('reports the area of the band, not of the whole region', () => {
+    const c = makeContours()
+    initAnalyzeUI(makeSource({
+      contours: () => c.overlay,
+      frame: RAMP,
+      display: () => ({ ...DEFAULT_DISPLAY, threshold: { min: 100, max: 180 } }),
+    }))
+    openAnalyzeUI()
+    // Both bounds set, so the caption names a band rather than a level.
+    expect(bodyText()).toContain('isolating')
+    expect(bodyText()).toContain('km²')
+  })
+
+  it('draws both bounds when the colour bar isolates a band', () => {
+    const c = makeContours()
+    initAnalyzeUI(makeSource({
+      contours: () => c.overlay,
+      frame: RAMP,
+      display: () => ({ ...DEFAULT_DISPLAY, threshold: { min: 100, max: 180 } }),
+    }))
+    openAnalyzeUI()
+    contourButton()!.click()
+    // One isoline per bound, both non-empty on a monotonic ramp.
+    expect(c.last().length).toBeGreaterThanOrEqual(2)
+  })
+
+  it('toggles to Clear once drawn, and takes the lines away', () => {
+    const c = makeContours()
+    initAnalyzeUI(makeSource({
+      contours: () => c.overlay,
+      frame: RAMP,
+      display: () => ({ ...DEFAULT_DISPLAY, threshold: { min: 100, max: null } }),
+    }))
+    openAnalyzeUI()
+    contourButton()!.click()
+    const before = c.clears()
+    contourButton()!.click()
+    expect(c.clears()).toBe(before + 1)
+    // And offers to draw again rather than staying stuck on Clear.
+    expect(contourButton()!.textContent).toBe('Outline on globe')
+  })
+
+  it('takes the outline with it when the panel closes', () => {
+    const c = makeContours()
+    initAnalyzeUI(makeSource({
+      contours: () => c.overlay,
+      frame: RAMP,
+      display: () => ({ ...DEFAULT_DISPLAY, threshold: { min: 100, max: null } }),
+    }))
+    openAnalyzeUI()
+    contourButton()!.click()
+    const before = c.clears()
+    closeAnalyzeUI()
+    expect(c.clears()).toBeGreaterThan(before)
+  })
+
+  it('is absent when there is no globe to draw on', () => {
+    initAnalyzeUI(makeSource({ frame: RAMP }))
+    openAnalyzeUI()
+    expect(document.querySelector('.analyze-contour-section')).toBeNull()
+  })
+
+  it('clears the outline when the dataset underneath is replaced', () => {
+    const c = makeContours()
+    initAnalyzeUI(makeSource({
+      contours: () => c.overlay,
+      frame: RAMP,
+      display: () => ({ ...DEFAULT_DISPLAY, threshold: { min: 100, max: null } }),
+    }))
+    openAnalyzeUI()
+    contourButton()!.click()
+    const before = c.clears()
+    notifyAnalyzeDatasetChanged('INTERNAL_SOMETHING_ELSE')
+    expect(c.clears()).toBeGreaterThan(before)
+  })
+})
