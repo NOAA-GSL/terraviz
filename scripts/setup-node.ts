@@ -2,18 +2,21 @@
  * `npm run setup` — provision a Terraviz node's Cloudflare resources
  * and wire its Pages bindings.
  *
- * Automates Phases 2, 3, 4 and 8 of `docs/SELF_HOSTING.md`: create
- * the D1 / KV / R2 / Vectorize resources, repoint `wrangler.toml` at
- * them, apply both migration sets, and write every binding to both
- * the Production and Preview environments.
+ * Automates Phases 2, 3, 4, 6, 7 and 8 of `docs/SELF_HOSTING.md`:
+ * create the D1 / KV / R2 / Vectorize resources, repoint
+ * `wrangler.toml` at them, apply both migration sets, provision the
+ * Cloudflare Access application + policies + service token, generate
+ * the preview signing key, and write every binding to both the
+ * Production and Preview environments.
  *
  * ## What it deliberately does not do
  *
- * Account creation, Workers Paid, nameservers, Zero Trust onboarding,
- * the Pages project itself, Cloudflare Access, and the first SSO
- * sign-in. Those are either billing/registrar actions or one-time
- * dashboard flows; the guide covers them and this tool tells you when
- * one is blocking it.
+ * Account creation, Workers Paid, nameservers, Zero Trust onboarding
+ * and identity-provider choice, the Pages project itself, the node
+ * keypair (`npm run gen:node-key` owns that), and the first SSO
+ * sign-in. Those are billing/registrar actions, one-time dashboard
+ * flows, or owned by an existing command; the guide covers them and
+ * this tool names whichever one is blocking it.
  *
  * ## Plan by default
  *
@@ -51,6 +54,13 @@ import {
   planBindings,
   type SecretSource,
 } from './lib/setup/bindings-plan.ts'
+import {
+  AccessApi,
+  ensureAccessApplication,
+  ensurePolicies,
+  ensureServiceToken,
+  publisherDestinations,
+} from './lib/setup/access.ts'
 import { PagesProjectWriter } from './lib/setup/cf-pages-write.ts'
 import {
   applyMigrations,
@@ -64,8 +74,10 @@ import {
   type CommandResult,
   type CommandRunner,
 } from './lib/setup/provision.ts'
+import { ensureSecrets } from './lib/setup/secrets.ts'
 import {
   applyEnvOverrides,
+  DEFAULT_NAMES,
   hydrateState,
   serialiseState,
   VECTORIZE_METADATA_PROPERTIES,
@@ -74,7 +86,14 @@ import {
 } from './lib/setup/state.ts'
 import { repointWranglerToml, stillPinnedUpstream } from './lib/setup/wrangler-toml.ts'
 
-const STEPS = ['resources', 'wrangler-toml', 'migrations', 'bindings'] as const
+const STEPS = [
+  'resources',
+  'wrangler-toml',
+  'migrations',
+  'access',
+  'secrets',
+  'bindings',
+] as const
 type Step = (typeof STEPS)[number]
 
 export interface SetupDeps {
@@ -143,22 +162,35 @@ Options
   --config=<path>         Wrangler config (default wrangler.toml)
 
 Environment
-  CLOUDFLARE_ACCOUNT_ID          Required for the bindings step.
-  CLOUDFLARE_API_TOKEN           Required for the bindings step.
-                                 Needs Account -> Cloudflare Pages -> Edit.
+  CLOUDFLARE_ACCOUNT_ID          Required by the access and bindings steps.
+  CLOUDFLARE_API_TOKEN           Required by the access and bindings steps.
+                                 Needs Account -> Cloudflare Pages -> Edit,
+                                 Access: Apps and Policies -> Edit,
+                                 Access: Service Tokens -> Edit, and
+                                 Access: Organizations -> Read.
   CLOUDFLARE_PAGES_PROJECT_NAME  Defaults to the state file's value.
+  TERRAVIZ_HOSTNAME              Your public host, e.g. terraviz.your-org.org.
+                                 Without it only *.pages.dev is gated.
+  TERRAVIZ_STAFF_EMAIL_DOMAIN    Email domain for the Allow policy, e.g.
+                                 your-org.org. Without it no human can sign in.
+  TERRAVIZ_ACCESS_APP_NAME       Defaults to "Terraviz Publisher".
+  TERRAVIZ_SERVICE_TOKEN_NAME    Defaults to "terraviz-cli".
   ACCESS_TEAM_DOMAIN, ACCESS_AUD, TRUSTED_PUBLISHER_DOMAINS,
   R2_PUBLIC_BASE, GITHUB_OWNER, GITHUB_REPO
                                  Optional; set the matching binding when present.
+                                 The access step discovers the first two.
 
 Secrets are read from the environment first, then from .dev.vars, and only
 for names the binding manifest declares as secrets. Their values are never
-logged and never written to the state file.
+logged and never written to the state file. The one exception is the service
+token secret, which Cloudflare returns exactly once at creation -- it is
+printed once, and you must save it.
 
 Prerequisites this tool cannot do for you (see docs/SELF_HOSTING.md):
   Phase 0  Cloudflare account, Workers Paid, domain on Cloudflare DNS
   Phase 5  the Pages project itself
-  Phase 6  Cloudflare Access application + service token
+  Phase 6.1 Zero Trust onboarding + an identity provider
+  Phase 7  npm run gen:node-key (owns the node keypair)
   Phase 11 the first SSO sign-in
 `
 
@@ -385,10 +417,155 @@ export async function runSetup(deps: SetupDeps): Promise<number> {
     }
   }
 
+  // `.dev.vars` is read once and threaded through the secrets and
+  // bindings steps. Re-reading after the secrets step wrote it would
+  // work on disk but makes the two steps implicitly coupled through
+  // the filesystem, which is exactly the sort of ordering dependency
+  // this tool exists to remove.
+  let devVarsText: string | null = deps.exists(opts.devVarsPath)
+    ? deps.readFile(opts.devVarsPath)
+    : null
+
+  // ── Step: access ────────────────────────────────────────────────
+  if (opts.steps.has('access')) {
+    deps.stdout.write('── Phase 6 — Cloudflare Access ─────────────────────\n')
+    const appName = state.accessAppName ?? DEFAULT_NAMES.accessApp
+    const tokenName = state.serviceTokenName ?? DEFAULT_NAMES.serviceToken
+    const pagesHost = `${state.pagesProject}.pages.dev`
+    const destinations = state.hostname
+      ? publisherDestinations(state.hostname, pagesHost)
+      : publisherDestinations(pagesHost)
+
+    if (!state.hostname) {
+      deps.stdout.write(
+        '  ! TERRAVIZ_HOSTNAME is unset — only the *.pages.dev host will be\n' +
+          '    gated. Set it and re-run to cover your custom domain.\n',
+      )
+    }
+
+    if (!opts.apply) {
+      deps.stdout.write(`  would ensure application  ${appName}\n`)
+      for (const d of destinations) deps.stdout.write(`    destination  ${d}\n`)
+      deps.stdout.write(
+        `  would ensure policy       Staff (Allow, emails ending in ` +
+          `${state.staffEmailDomain ?? '<TERRAVIZ_STAFF_EMAIL_DOMAIN unset>'})\n` +
+          `  would ensure policy       Automation (Service Auth)\n` +
+          `  would ensure token        ${tokenName}\n\n`,
+      )
+    } else {
+      const token = deps.env.CLOUDFLARE_API_TOKEN
+      if (!token || !state.accountId) {
+        deps.stderr.write(
+          '  ✘ CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID are required.\n' +
+            '    The token needs Access: Apps and Policies → Edit and\n' +
+            '    Access: Service Tokens → Edit.\n\n',
+        )
+        return 2
+      }
+      const api = new AccessApi({
+        apiToken: token,
+        accountId: state.accountId,
+        fetchImpl: deps.fetchImpl,
+      })
+      try {
+        const teamDomain = await api.getTeamDomain()
+        if (!teamDomain) {
+          deps.stderr.write(
+            '  ✘ could not read the Zero Trust organization.\n' +
+              '    Either Zero Trust has not been onboarded on this account\n' +
+              '    (do that once in the dashboard — Phase 6.1), or the token\n' +
+              '    lacks Access: Organizations → Read.\n\n',
+          )
+          return 1
+        }
+        state.accessTeamDomain = teamDomain
+        persist()
+        deps.stdout.write(`  team domain  ${teamDomain}\n`)
+
+        const { app, created } = await ensureAccessApplication(api, {
+          name: appName,
+          destinations,
+        })
+        state.accessAppId = app.id
+        state.accessAppName = app.name
+        state.accessAud = app.aud
+        persist()
+        deps.stdout.write(`  application  ${app.name}  ${verb(created)} (aud ${app.aud})\n`)
+
+        const tok = await ensureServiceToken(api, tokenName)
+        state.serviceTokenId = tok.id
+        state.serviceTokenName = tok.name
+        state.serviceTokenClientId = tok.clientId
+        persist()
+        deps.stdout.write(`  token        ${tok.name}  ${verb(tok.created)}\n`)
+
+        const policies = await ensurePolicies(api, app.id, {
+          emailDomain: state.staffEmailDomain,
+          serviceTokenId: tok.id,
+        })
+        deps.stdout.write(
+          `  policies     ${[...policies.created, ...policies.existing].join(', ') || '(none)'}` +
+            `  (${policies.created.length} created)\n`,
+        )
+        if (!state.staffEmailDomain) {
+          deps.stdout.write(
+            '  ! no Staff policy — set TERRAVIZ_STAFF_EMAIL_DOMAIN and re-run,\n' +
+              '    or add the Allow policy by hand. Without it no human can sign in.\n',
+          )
+        }
+
+        // Printed once, never persisted, never re-retrievable.
+        if (tok.created && tok.clientSecret) {
+          deps.stdout.write(
+            '\n  ┌─ Service token — Cloudflare shows the secret ONCE ─────────\n' +
+              '  │ Save these now (password manager, and as GitHub repo secrets\n' +
+              '  │ CF_ACCESS_CLIENT_ID / CF_ACCESS_CLIENT_SECRET for Phase 13.2).\n' +
+              '  │\n' +
+              `  │ export CF_ACCESS_CLIENT_ID=${tok.clientId ?? '(missing)'}\n` +
+              `  │ export CF_ACCESS_CLIENT_SECRET=${tok.clientSecret}\n` +
+              '  └────────────────────────────────────────────────────────────\n\n',
+          )
+        } else if (!tok.created) {
+          deps.stdout.write(
+            '  ! adopted an existing token, so its secret is not recoverable —\n' +
+              '    Cloudflare only returns it at creation. Use the value you saved,\n' +
+              '    or delete the token in Zero Trust and re-run to mint a new one.\n\n',
+          )
+        }
+      } catch (e) {
+        deps.stderr.write(`  ✘ ${errText(e)}\n\n`)
+        return 1
+      }
+    }
+  }
+
+  // ── Step: secrets ───────────────────────────────────────────────
+  if (opts.steps.has('secrets')) {
+    deps.stdout.write('── Phase 7 — node secrets ──────────────────────────\n')
+    const result = ensureSecrets(devVarsText)
+    for (const o of result.outcomes) {
+      const label =
+        o.status === 'present' ? 'present  ' : o.status === 'generated' ? 'generated' : 'MANUAL   '
+      deps.stdout.write(`  ${label}  ${o.name}${o.action ? `  — ${o.action}` : ''}\n`)
+    }
+    if (result.text !== null) {
+      if (opts.apply) {
+        deps.writeFile(opts.devVarsPath, result.text)
+        deps.stdout.write(`  wrote ${opts.devVarsPath}\n`)
+      } else {
+        deps.stdout.write(`  would write ${opts.devVarsPath}\n`)
+      }
+      // Thread the new text through so the bindings step below can
+      // push the freshly-generated key in the same run.
+      if (opts.apply) devVarsText = result.text
+    }
+    deps.stdout.write('\n')
+  }
+
   // ── Step: bindings ──────────────────────────────────────────────
   if (opts.steps.has('bindings')) {
     deps.stdout.write('── Phase 8 — Pages bindings (Production + Preview) ──\n')
-    const devVars = deps.exists(opts.devVarsPath) ? deps.readFile(opts.devVarsPath) : null
+    const devVars = devVarsText
     const secrets = collectSecrets(deps.env, devVars)
     const plan = planBindings(state, secrets, [...EXPECTED_BINDINGS, ...OPTIONAL_EXTRAS])
     deps.stdout.write(formatBindingsPlan(plan) + '\n\n')
@@ -455,11 +632,18 @@ export async function runSetup(deps: SetupDeps): Promise<number> {
 
   // ── Next steps ──────────────────────────────────────────────────
   if (opts.apply) {
+    const host = state.hostname ? `https://${state.hostname}` : 'https://<your-host>'
     deps.stdout.write(
       'Next:\n' +
         '  1. Redeploy — bindings take effect on the next deployment, not immediately.\n' +
         '  2. npm run check:pages-bindings      (audits what we just wrote)\n' +
-        '  3. npm run terraviz -- verify-deploy --server https://<your-host>\n',
+        '  3. Provision the node identity (Phase 9), with the service token:\n' +
+        '       npm run terraviz -- init-node \\\n' +
+        `           --server ${host} \\\n` +
+        '           --client-id "$CF_ACCESS_CLIENT_ID" \\\n' +
+        '           --client-secret "$CF_ACCESS_CLIENT_SECRET" \\\n' +
+        '           --display-name "..." --base-url ' + host + '\n' +
+        `  4. npm run terraviz -- verify-deploy --server ${host}\n`,
     )
   } else {
     deps.stdout.write('Re-run with --apply to execute.\n')

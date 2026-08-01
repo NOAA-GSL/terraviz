@@ -349,3 +349,186 @@ describe('runSetup — state persistence', () => {
     expect(h.writes.has('.terraviz-setup.json')).toBe(false)
   })
 })
+
+describe('runSetup — access step', () => {
+  const state = JSON.stringify({
+    accountId: 'acct',
+    pagesProject: 'my-node',
+    hostname: 'terraviz.example.org',
+    staffEmailDomain: 'example.org',
+  })
+
+  /** Minimal Access API stub keyed by "METHOD /suffix". */
+  function accessFetch(routes: Record<string, unknown>, seen: string[] = []): typeof fetch {
+    return (async (url: string, init?: RequestInit) => {
+      const method = init?.method ?? 'GET'
+      const path = new URL(url).pathname.replace(/^\/client\/v4\/accounts\/[^/]+/, '')
+      seen.push(`${method} ${path}`)
+      const key = `${method} ${path}`
+      if (!(key in routes)) {
+        return new Response(JSON.stringify({ success: false, errors: [{ message: 'no stub' }] }), {
+          status: 404,
+          statusText: 'Not Found',
+        })
+      }
+      return new Response(JSON.stringify({ success: true, result: routes[key] }), { status: 200 })
+    }) as unknown as typeof fetch
+  }
+
+  const HAPPY = {
+    'GET /access/organizations': { auth_domain: 'acme.cloudflareaccess.com' },
+    'GET /access/apps': [],
+    'POST /access/apps': { id: 'app1', name: 'Terraviz Publisher', aud: 'AUD123' },
+    'GET /access/service_tokens': [],
+    'POST /access/service_tokens': {
+      id: 'tok1',
+      name: 'terraviz-cli',
+      client_id: 'CID',
+      client_secret: 'CSECRET',
+    },
+    'GET /access/apps/app1/policies': [],
+    'POST /access/apps/app1/policies': { id: 'p', name: 'x', decision: 'allow' },
+  }
+
+  it('plans without touching the network or needing credentials', async () => {
+    const h = harness({
+      argv: ['--only=access'],
+      files: { '.terraviz-setup.json': state },
+      fetchImpl: (async () => {
+        throw new Error('plan mode must not call the API')
+      }) as unknown as typeof fetch,
+    })
+    expect(await runSetup(h.deps)).toBe(0)
+    expect(h.out()).toContain('terraviz.example.org/api/v1/publish')
+    expect(h.out()).toContain('my-node.pages.dev/publish/*')
+  })
+
+  it('records the team domain and AUD, and prints the token secret once', async () => {
+    const h = harness({
+      argv: ['--only=access', '--apply'],
+      env: { CLOUDFLARE_API_TOKEN: 'tok' },
+      files: { '.terraviz-setup.json': state },
+      fetchImpl: accessFetch(HAPPY),
+    })
+    expect(await runSetup(h.deps)).toBe(0)
+    const saved = JSON.parse(h.writes.get('.terraviz-setup.json')!)
+    expect(saved.accessTeamDomain).toBe('acme.cloudflareaccess.com')
+    expect(saved.accessAud).toBe('AUD123')
+    expect(saved.accessAppId).toBe('app1')
+    expect(saved.serviceTokenId).toBe('tok1')
+    expect(h.out()).toContain('CSECRET')
+  })
+
+  // The client secret is unrecoverable, so it must never be the thing
+  // that lands in a file the operator forgets about.
+  it('never persists the service token secret', async () => {
+    const h = harness({
+      argv: ['--only=access', '--apply'],
+      env: { CLOUDFLARE_API_TOKEN: 'tok' },
+      files: { '.terraviz-setup.json': state },
+      fetchImpl: accessFetch(HAPPY),
+    })
+    await runSetup(h.deps)
+    expect(h.writes.get('.terraviz-setup.json')).not.toContain('CSECRET')
+  })
+
+  it('warns that an adopted token has no recoverable secret', async () => {
+    const h = harness({
+      argv: ['--only=access', '--apply'],
+      env: { CLOUDFLARE_API_TOKEN: 'tok' },
+      files: { '.terraviz-setup.json': state },
+      fetchImpl: accessFetch({
+        ...HAPPY,
+        'GET /access/service_tokens': [{ id: 'tok1', name: 'terraviz-cli', client_id: 'CID' }],
+      }),
+    })
+    expect(await runSetup(h.deps)).toBe(0)
+    expect(h.out()).toContain('not recoverable')
+  })
+
+  it('stops with a pointer at Zero Trust onboarding when there is no organization', async () => {
+    const h = harness({
+      argv: ['--only=access', '--apply'],
+      env: { CLOUDFLARE_API_TOKEN: 'tok' },
+      files: { '.terraviz-setup.json': state },
+      fetchImpl: accessFetch({}),
+    })
+    expect(await runSetup(h.deps)).toBe(1)
+    expect(h.errOut()).toContain('Zero Trust')
+  })
+
+  it('flags a missing staff domain — without it no human can sign in', async () => {
+    const h = harness({
+      argv: ['--only=access', '--apply'],
+      env: { CLOUDFLARE_API_TOKEN: 'tok' },
+      files: {
+        '.terraviz-setup.json': JSON.stringify({
+          accountId: 'acct',
+          pagesProject: 'my-node',
+          hostname: 'terraviz.example.org',
+        }),
+      },
+      fetchImpl: accessFetch(HAPPY),
+    })
+    expect(await runSetup(h.deps)).toBe(0)
+    expect(h.out()).toContain('no human can sign in')
+  })
+
+  it('requires credentials before it will write', async () => {
+    const h = harness({
+      argv: ['--only=access', '--apply'],
+      files: { '.terraviz-setup.json': state },
+    })
+    expect(await runSetup(h.deps)).toBe(2)
+    expect(h.errOut()).toContain('Access: Apps and Policies')
+  })
+})
+
+describe('runSetup — secrets step', () => {
+  it('generates the preview key and names gen:node-key for the other', async () => {
+    const h = harness({
+      argv: ['--only=secrets', '--apply'],
+      files: { '.dev.vars': 'DEV_BYPASS_ACCESS=true\n' },
+    })
+    expect(await runSetup(h.deps)).toBe(0)
+    const written = h.writes.get('.dev.vars')!
+    expect(written).toContain('PREVIEW_SIGNING_KEY=')
+    expect(written).toContain('DEV_BYPASS_ACCESS=true')
+    expect(h.out()).toContain('gen:node-key')
+  })
+
+  it('writes nothing in plan mode', async () => {
+    const h = harness({ argv: ['--only=secrets'], files: { '.dev.vars': 'A=1\n' } })
+    await runSetup(h.deps)
+    expect(h.writes.has('.dev.vars')).toBe(false)
+    expect(h.out()).toContain('would write')
+  })
+
+  // The whole point of generating into .dev.vars: one run can create
+  // the key and push it, without the value passing through a shell.
+  it('feeds the generated key straight into the bindings step', async () => {
+    let body: string | undefined
+    const h = harness({
+      argv: ['--only=secrets,bindings', '--apply'],
+      env: { CLOUDFLARE_API_TOKEN: 'tok' },
+      files: {
+        '.dev.vars': 'NODE_ID_PRIVATE_KEY_PEM=nk\n',
+        '.terraviz-setup.json': JSON.stringify({
+          accountId: 'a',
+          d1: { name: 'db', id: 'x' },
+          telemetryKv: { name: 'TELEMETRY_KILL_SWITCH', id: 'k1' },
+          catalogKv: { name: 'CATALOG_KV', id: 'k2' },
+        }),
+      },
+      fetchImpl: (async (_u: string, init: RequestInit) => {
+        body = String(init.body)
+        return new Response(JSON.stringify({ success: true }), { status: 200 })
+      }) as unknown as typeof fetch,
+    })
+    expect(await runSetup(h.deps)).toBe(0)
+    const parsed = JSON.parse(body!)
+    expect(parsed.deployment_configs.production.env_vars.PREVIEW_SIGNING_KEY.type).toBe(
+      'secret_text',
+    )
+  })
+})

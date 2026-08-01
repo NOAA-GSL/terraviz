@@ -103,6 +103,8 @@ npm run setup -- --apply     # provision + wire
 | **2** | Creates (or adopts) the D1 database, both KV namespaces, the R2 bucket, the Vectorize index and its three metadata indexes. |
 | **3** | Repoints the `wrangler.toml` resource IDs at what it just created. |
 | **4** | Applies both migration sets, in the order that works. |
+| **6** | Discovers your Access team domain; creates the publisher application (six destinations), the Staff and Automation policies, and the service token — returning the AUD (`W13`) and the token pair (`W14`/`W15`). |
+| **7** | Generates `PREVIEW_SIGNING_KEY` into `.dev.vars`. |
 | **8** | Writes every binding, variable and available secret to **both** Production and Preview. |
 
 It is **plan-by-default** — a bare `npm run setup` prints what it
@@ -117,25 +119,39 @@ It reads the same manifest the audit does
 so it cannot provision a deploy that
 `npm run check:pages-bindings` then calls broken.
 
-**Still do Phases 0, 5, 6, 7, 11 by hand** — accounts and billing,
-the Pages project, Cloudflare Access, key generation, and the first
-SSO sign-in. The tool names any of these that is blocking it, and
-re-running after you finish one fills in the bindings it couldn't
-resolve before. A typical Tier 2 install is:
+**Five things stay manual**, and they cluster at the start:
+
+| Phase | Why the tool can't |
+|---|---|
+| **0** | Cloudflare account, Workers Paid, nameservers — billing and registrar actions. |
+| **5** | The Pages project. The dashboard's Git-integration handshake is an OAuth flow with no API. |
+| **6.1** | Zero Trust onboarding + choosing an identity provider. One-time, per account. |
+| **7** (half) | The node keypair — `npm run gen:node-key` owns it, because it also writes `node-public-key.txt` that Phase 9 reads and stamps your local D1. One command. |
+| **11** | The first SSO sign-in, which is what makes you admin. |
+
+The tool names whichever of these is blocking it. A typical Tier 2
+install:
 
 ```bash
-# Phases 0 and 5 in the dashboard, then:
-npm run setup -- --apply --only=resources,wrangler-toml,migrations
+# Phases 0 and 5 in the dashboard, plus Zero Trust onboarding (6.1). Then:
+export CLOUDFLARE_ACCOUNT_ID=<W1> CLOUDFLARE_API_TOKEN=<W11>
+export TERRAVIZ_HOSTNAME=<W2> TERRAVIZ_STAFF_EMAIL_DOMAIN=your-org.org
+export CLOUDFLARE_PAGES_PROJECT_NAME=<W10>
 
-# Phase 6 in the Zero Trust dashboard, Phase 7 locally:
-npm run gen:node-key
-export ACCESS_TEAM_DOMAIN=... ACCESS_AUD=... PREVIEW_SIGNING_KEY=...
-npm run setup -- --apply --only=bindings
+npm run gen:node-key          # Phase 7, the half the tool doesn't own
+npm run setup                 # read the plan
+npm run setup -- --apply      # Phases 2, 3, 4, 6, 7, 8 in one pass
 
-# then redeploy, and verify (Phase 10)
+# save the service-token pair it prints — Cloudflare shows it once —
+# then redeploy, and run Phases 9 to 12.
 ```
 
 `npm run setup -- --help` lists every flag and environment variable.
+
+**Token scope.** The single `CLOUDFLARE_API_TOKEN` this needs:
+Account → **Cloudflare Pages: Edit**, **Access: Apps and Policies:
+Edit**, **Access: Service Tokens: Edit**, **Access: Organizations:
+Read**, and — only if you enable CI migrations (13.6) — **D1: Edit**.
 
 ---
 
@@ -554,6 +570,15 @@ middleware fails closed: without `ACCESS_TEAM_DOMAIN` and
 `ACCESS_AUD`, every `/api/v1/publish/**` route returns 503
 `access_unconfigured`, and the `terraviz` CLI cannot do anything.
 
+> **Automated.** Once you have done 6.1 (Zero Trust onboarding, which
+> is a one-time dashboard flow), `npm run setup -- --apply
+> --only=access` does 6.2 and 6.3: it discovers your team domain,
+> creates the application with all six destinations, creates both
+> policies, mints the service token, and attaches it. It records the
+> AUD and prints the token pair once. The click-by-click below is the
+> reference for what it builds, and the path to take if you would
+> rather do it by hand.
+
 ## 6.1 Set up Zero Trust
 
 Zero Trust dashboard → complete onboarding if you haven't. You'll
@@ -656,6 +681,12 @@ else so public traffic passes unchallenged.
 Two secrets are yours to create, and neither exists until you make
 it. The previous guide asked you to set both in the bindings table
 before introducing the commands that generate them.
+
+> **Half automated.** `npm run setup` generates `PREVIEW_SIGNING_KEY`
+> into `.dev.vars` and pushes it in the same run. It deliberately does
+> *not* generate the node keypair — `npm run gen:node-key` owns that,
+> because it also writes `node-public-key.txt` (which Phase 9 reads)
+> and stamps your local D1. Run that one command first.
 
 ## 7.1 Node identity keypair
 
@@ -1451,6 +1482,19 @@ exercised.
   before its Step 11 applied `CATALOG_DB`).
 - `npm run setup` end to end in plan mode, and its migration step
   under `--apply --local-migrations` against a clean database.
+
+**Modelled from documentation, not executed.** The Cloudflare Access
+request/response shapes in `scripts/lib/setup/access.ts` — the
+application, policy and service-token bodies, and the organization
+read that discovers the team domain — were written against
+Cloudflare's documented API and against what
+`functions/api/v1/_lib/access-auth.ts` proves about the resulting
+JWTs. No live account was available to exercise them. The body
+builders are pure and unit-tested so the shape is pinned and
+reviewable, and a mismatch surfaces as a Cloudflare validation error
+naming the field rather than as a silent misconfiguration — but the
+first real `--only=access --apply` is still the true test. Run it
+before the bindings step and check the Zero Trust dashboard.
 
 **Not verified — no Cloudflare account was available in this
 environment.** Every dashboard click path, the Access application

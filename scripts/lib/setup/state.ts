@@ -33,6 +33,8 @@ export const DEFAULT_NAMES = {
   vectorizeIndex: 'terraviz-datasets',
   analyticsDataset: 'terraviz_events',
   pagesProject: 'terraviz',
+  accessApp: 'Terraviz Publisher',
+  serviceToken: 'terraviz-cli',
 } as const
 
 /** The three metadata indexes the Vectorize query filters require. */
@@ -70,13 +72,33 @@ export interface SetupState {
 
   /**
    * Cloudflare Access team domain (W12) and application audience tag
-   * (W13). Slice 2 provisions these; slice 1 consumes them if the
-   * operator already has them, so a re-run after Access is set up
-   * fills in `ACCESS_TEAM_DOMAIN` / `ACCESS_AUD` without a second
-   * tool.
+   * (W13). The `access` step discovers the first and creates the
+   * application that issues the second; both can also be supplied by
+   * an operator who set Access up by hand.
    */
   accessTeamDomain?: string
   accessAud?: string
+
+  /** Access application the `access` step created or adopted. */
+  accessAppId?: string
+  accessAppName?: string
+
+  /**
+   * Email domain for the application's Allow policy — the humans who
+   * publish (`@your-org.org`).
+   */
+  staffEmailDomain?: string
+
+  /**
+   * Service token identity. The client *secret* is deliberately
+   * absent: Cloudflare returns it once at creation, and this file
+   * lives unencrypted in the working tree. The id and client_id
+   * cannot authenticate on their own, so recording them is safe and
+   * lets a re-run adopt the token rather than mint a duplicate.
+   */
+  serviceTokenId?: string
+  serviceTokenName?: string
+  serviceTokenClientId?: string
 
   /** Comma-separated email domains for `TRUSTED_PUBLISHER_DOMAINS`. */
   trustedPublisherDomains?: string
@@ -145,6 +167,12 @@ export function hydrateState(raw: unknown): SetupState {
       : [],
     accessTeamDomain: str('accessTeamDomain'),
     accessAud: str('accessAud'),
+    accessAppId: str('accessAppId'),
+    accessAppName: str('accessAppName'),
+    staffEmailDomain: str('staffEmailDomain'),
+    serviceTokenId: str('serviceTokenId'),
+    serviceTokenName: str('serviceTokenName'),
+    serviceTokenClientId: str('serviceTokenClientId'),
     trustedPublisherDomains: str('trustedPublisherDomains'),
     r2PublicBase: str('r2PublicBase'),
     githubOwner: str('githubOwner'),
@@ -169,6 +197,9 @@ export interface SetupEnv {
   TERRAVIZ_AE_DATASET?: string
   ACCESS_TEAM_DOMAIN?: string
   ACCESS_AUD?: string
+  TERRAVIZ_STAFF_EMAIL_DOMAIN?: string
+  TERRAVIZ_ACCESS_APP_NAME?: string
+  TERRAVIZ_SERVICE_TOKEN_NAME?: string
   TRUSTED_PUBLISHER_DOMAINS?: string
   R2_PUBLIC_BASE?: string
   GITHUB_OWNER?: string
@@ -201,6 +232,9 @@ export function applyEnvOverrides(state: SetupState, env: SetupEnv): SetupState 
   if (env.TERRAVIZ_AE_DATASET) next.analyticsDataset = { name: env.TERRAVIZ_AE_DATASET }
   if (env.ACCESS_TEAM_DOMAIN) next.accessTeamDomain = env.ACCESS_TEAM_DOMAIN
   if (env.ACCESS_AUD) next.accessAud = env.ACCESS_AUD
+  if (env.TERRAVIZ_STAFF_EMAIL_DOMAIN) next.staffEmailDomain = env.TERRAVIZ_STAFF_EMAIL_DOMAIN
+  if (env.TERRAVIZ_ACCESS_APP_NAME) next.accessAppName = env.TERRAVIZ_ACCESS_APP_NAME
+  if (env.TERRAVIZ_SERVICE_TOKEN_NAME) next.serviceTokenName = env.TERRAVIZ_SERVICE_TOKEN_NAME
   if (env.TRUSTED_PUBLISHER_DOMAINS) next.trustedPublisherDomains = env.TRUSTED_PUBLISHER_DOMAINS
   if (env.R2_PUBLIC_BASE) next.r2PublicBase = env.R2_PUBLIC_BASE
   if (env.GITHUB_OWNER) next.githubOwner = env.GITHUB_OWNER
