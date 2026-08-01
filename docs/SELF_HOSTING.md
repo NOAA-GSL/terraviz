@@ -91,11 +91,62 @@ W22 🔒 GITHUB_DISPATCH_TOKEN         ......................
 
 ## Shortcut: `npm run setup`
 
-Four of the phases below are mechanical, and a tool does them:
+Most of the phases below are mechanical, and a tool does them:
 
 ```bash
-npm run setup                # plan only — writes nothing
-npm run setup -- --apply     # provision + wire
+npm run setup -- --manual        # what only a human can do, with click paths
+npm run setup -- --interactive   # answer the questions, guided and validated
+npm run setup                    # plan only — writes nothing
+npm run setup -- --apply         # provision + wire
+```
+
+**If you are installing for the first time, start with those top two.**
+`--manual` prints the prerequisites no API can do for you — Workers
+Paid, DNS, Zero Trust, the API token and its exact permission list —
+each with what breaks if you skip it. `--interactive` then asks for
+the handful of values only you know, explains where each one comes
+from, and rejects a wrong answer *at the prompt* rather than three
+phases later:
+
+```
+[2/5] Public hostname
+    The address people will visit. Its zone must already be on
+    Cloudflare DNS — Cloudflare provisions the certificate and the
+    CNAME for you, but only for a zone it controls.
+    Hostname only: no https://, no trailing path.
+    e.g. terraviz.your-org.org
+  Public hostname: https://terraviz.example.org
+    → drop the https:// — just the hostname
+  Public hostname: terraviz.example.org
+```
+
+It asks only what it cannot discover: anything already in your
+environment or recorded by an earlier run is skipped, so a second run
+asks nothing. Answers are saved as you go, so an interview abandoned
+halfway does not start over.
+
+Every run — interactive or not — ends with a **handoff report**: the
+values you still have to paste into somewhere this tool cannot reach,
+each with its destination, and the value itself where it is known and
+not secret.
+
+```
+════ Values you need to paste elsewhere ════
+
+  ✓ already handled    → do this    · optional
+
+── Wherever your build runs
+   → VITE_API_ORIGIN = https://terraviz.example.org
+   · VITE_EARTH_ASSET_BASE
+       from: your own CDN, after mirroring the Earth basemap textures
+
+── GitHub → Settings → Secrets and variables → Actions
+   → CF_ACCESS_CLIENT_SECRET
+       from: same — save it at creation or rotate the token
+   → TERRAVIZ_SERVER = https://terraviz.example.org
+
+── Already handled — recorded in .terraviz-setup.json
+   ✓ ACCESS_AUD = 7c1e…
 ```
 
 | Phase | What the tool does |
@@ -142,21 +193,32 @@ so it cannot provision a deploy that
 | **13.2** (part) | Writing GitHub Actions secrets, which requires libsodium sealed-box encryption (BLAKE2b, absent from `node:crypto`). Rather than add a dependency, `npm run setup -- --github-secrets` prints the exact `gh secret set` script, with values as `"$VAR"` references so it is safe to paste anywhere. |
 
 The tool names whichever of these is blocking it. A typical Tier 2
-install:
+install, guided:
 
 ```bash
-# Phases 0 and 5 in the dashboard, plus Zero Trust onboarding (6.1). Then:
+npm run setup -- --manual         # do these in the dashboard first
+export CLOUDFLARE_API_TOKEN=...   # from --manual step 3
+
+npm run gen:node-key              # Phase 7, the half the tool doesn't own
+npm run setup -- --interactive    # answer 4-5 questions, see the plan
+npm run setup -- --interactive --apply
+
+# save the service-token pair it prints — Cloudflare shows it once —
+# work through the handoff report, then redeploy and run Phases 9-12.
+```
+
+Or non-interactively, if you would rather drive it from a script:
+
+```bash
 export CLOUDFLARE_ACCOUNT_ID=<W1> CLOUDFLARE_API_TOKEN=<W11>
 export TERRAVIZ_HOSTNAME=<W2> TERRAVIZ_STAFF_EMAIL_DOMAIN=your-org.org
 export CLOUDFLARE_PAGES_PROJECT_NAME=<W10>
-
-npm run gen:node-key          # Phase 7, the half the tool doesn't own
-npm run setup                 # read the plan
-npm run setup -- --apply      # Phases 2, 3, 4, 6, 7, 8 in one pass
-
-# save the service-token pair it prints — Cloudflare shows it once —
-# then redeploy, and run Phases 9 to 12.
+npm run setup -- --apply
 ```
+
+`--interactive` refuses to run without a terminal rather than
+blocking, so a CI job that reaches it fails cleanly instead of
+burning its timeout.
 
 `npm run setup -- --help` lists every flag and environment variable.
 
@@ -1538,6 +1600,9 @@ exercised.
   before its Step 11 applied `CATALOG_DB`).
 - `npm run setup` end to end in plan mode, and its migration step
   under `--apply --local-migrations` against a clean database.
+- The interactive interview end to end against a scripted terminal:
+  validation and re-prompting, defaults, optional skips, the
+  missing-token warning, and the handoff report.
 
 **Modelled from documentation, not executed.** Every Cloudflare API
 call `npm run setup` makes — Access applications, policies and

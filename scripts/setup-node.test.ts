@@ -694,3 +694,155 @@ describe('runSetup — github secrets', () => {
     expect(h.calls).toEqual([])
   })
 })
+
+describe('runSetup — interactive mode', () => {
+  /** A prompter that answers from a script and records what it saw. */
+  function scriptedPrompter(answers: Record<string, string>, confirmYes = true) {
+    const asked: string[] = []
+    const said: string[] = []
+    return {
+      asked,
+      said: () => said.join(''),
+      prompter: {
+        ask: async (q: { key: string }) => {
+          asked.push(q.key)
+          return answers[q.key] ?? null
+        },
+        confirm: async () => confirmYes,
+        say: (t: string) => void said.push(t),
+        close: () => {},
+      },
+    }
+  }
+
+  it('asks only for what it cannot discover', async () => {
+    const p = scriptedPrompter({
+      accountId: '8f4c1d2e9a7b6c5d4e3f2a1b0c9d8e7f',
+      hostname: 'a.example.org',
+      pagesProject: 'my-node',
+      staffEmailDomain: 'example.org',
+    })
+    const h = harness({
+      argv: ['--interactive', '--only=bindings'],
+      env: { TERRAVIZ_HOSTNAME: 'already.set' },
+      files: {},
+      prompter: p.prompter,
+    })
+    await runSetup(h.deps)
+    expect(p.asked).not.toContain('hostname')
+    expect(p.asked).toContain('accountId')
+  })
+
+  it('records answers into state', async () => {
+    const p = scriptedPrompter({
+      accountId: '8f4c1d2e9a7b6c5d4e3f2a1b0c9d8e7f',
+      hostname: 'a.example.org',
+      pagesProject: 'my-node',
+      staffEmailDomain: 'example.org',
+      trustedPublisherDomains: 'example.org',
+    })
+    const h = harness({
+      argv: ['--interactive', '--only=bindings'],
+      files: {},
+      prompter: p.prompter,
+    })
+    await runSetup(h.deps)
+    const saved = JSON.parse(h.writes.get('.terraviz-setup.json')!)
+    expect(saved.accountId).toBe('8f4c1d2e9a7b6c5d4e3f2a1b0c9d8e7f')
+    expect(saved.hostname).toBe('a.example.org')
+    expect(saved.staffEmailDomain).toBe('example.org')
+  })
+
+  // Saving in plan mode is an exception to "plan writes nothing", so
+  // it has to be announced rather than silent.
+  it('announces that it saved answers on a plan run', async () => {
+    const p = scriptedPrompter({ accountId: '8f4c1d2e9a7b6c5d4e3f2a1b0c9d8e7f' })
+    const h = harness({ argv: ['--interactive', '--only=bindings'], files: {}, prompter: p.prompter })
+    await runSetup(h.deps)
+    expect(p.said()).toContain('Answers saved')
+  })
+
+  it('warns when the API token is missing from the shell', async () => {
+    const p = scriptedPrompter({})
+    const h = harness({ argv: ['--interactive', '--only=bindings'], files: {}, prompter: p.prompter })
+    await runSetup(h.deps)
+    expect(p.said()).toContain('CLOUDFLARE_API_TOKEN is not set')
+  })
+
+  it('aborts without applying when the confirmation is declined', async () => {
+    const p = scriptedPrompter({ accountId: '8f4c1d2e9a7b6c5d4e3f2a1b0c9d8e7f' }, false)
+    const h = harness({
+      argv: ['--interactive', '--apply', '--only=bindings'],
+      env: { CLOUDFLARE_API_TOKEN: 'tok' },
+      files: {},
+      prompter: p.prompter,
+      fetchImpl: (async () => {
+        throw new Error('must not reach the API')
+      }) as unknown as typeof fetch,
+    })
+    expect(await runSetup(h.deps)).toBe(0)
+    expect(p.said()).toContain('Nothing applied')
+  })
+
+  // The whole point of --interactive is that a skipped question tells
+  // you how to supply it instead, rather than failing three phases on.
+  it('names the env var for a skipped required question', async () => {
+    const p = scriptedPrompter({})
+    const h = harness({ argv: ['--interactive', '--only=bindings'], files: {}, prompter: p.prompter })
+    await runSetup(h.deps)
+    expect(p.said()).toContain('CLOUDFLARE_ACCOUNT_ID')
+  })
+
+  it('includes feature-gated questions when --with is given', async () => {
+    const p = scriptedPrompter({})
+    const h = harness({
+      argv: ['--interactive', '--with=r2', '--only=bindings'],
+      files: {},
+      prompter: p.prompter,
+    })
+    await runSetup(h.deps)
+    expect(p.asked).toContain('r2PublicBase')
+  })
+
+  // Without a prompter (no TTY), the interview must fall through
+  // rather than hang.
+  it('does not block when no prompter is available', async () => {
+    const h = harness({ argv: ['--interactive', '--only=bindings'], files: {} })
+    expect(await runSetup(h.deps)).toBe(0)
+  })
+})
+
+describe('runSetup — manual instructions', () => {
+  it('prints the prerequisites and exits without touching anything', async () => {
+    const h = harness({ argv: ['--manual'] })
+    expect(await runSetup(h.deps)).toBe(0)
+    expect(h.out()).toContain('Enable Workers Paid')
+    expect(h.out()).toContain('Complete Zero Trust onboarding')
+    expect(h.writes.size).toBe(0)
+    expect(h.calls).toEqual([])
+  })
+
+  it('adds the R2 token step under --with=r2', async () => {
+    const h = harness({ argv: ['--manual', '--with=r2'] })
+    await runSetup(h.deps)
+    expect(h.out()).toContain('Mint the R2 S3 API token')
+  })
+
+  it('rejects an unknown feature', async () => {
+    const h = harness({ argv: ['--with=bogus'] })
+    expect(await runSetup(h.deps)).toBe(2)
+    expect(h.errOut()).toContain('unknown feature')
+  })
+})
+
+describe('runSetup — handoff report', () => {
+  it('ends every run with the paste-elsewhere checklist', async () => {
+    const h = harness({
+      argv: ['--only=bindings'],
+      files: { '.terraviz-setup.json': JSON.stringify({ hostname: 'a.example.org' }) },
+    })
+    await runSetup(h.deps)
+    expect(h.out()).toContain('Values you need to paste elsewhere')
+    expect(h.out()).toContain('VITE_API_ORIGIN = https://a.example.org')
+  })
+})

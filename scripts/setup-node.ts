@@ -68,6 +68,17 @@ import {
 import { PagesProjectWriter } from './lib/setup/cf-pages-write.ts'
 import { CfApi, matchZone } from './lib/setup/cf-request.ts'
 import { renderGithubSecretsScript } from './lib/setup/github-secrets.ts'
+import { buildHandoff, renderHandoff } from './lib/setup/handoff.ts'
+import {
+  applyAnswer,
+  pendingQuestions,
+  renderManualSteps,
+} from './lib/setup/interview.ts'
+import {
+  InteractivePrompter,
+  NonInteractivePrompter,
+  type Prompter,
+} from './lib/setup/prompt.ts'
 import {
   ensureCustomDomain,
   ensurePagesProject,
@@ -150,6 +161,13 @@ export interface SetupDeps {
   writeFile: (path: string, contents: string) => void
   exists: (path: string) => boolean
   fetchImpl?: typeof fetch
+  /**
+   * Interactive prompting. Absent (or non-interactive) means every
+   * question resolves to null, which callers report as a missing
+   * value rather than blocking — a prompt that waits forever in CI is
+   * worse than a clean failure.
+   */
+  prompter?: Prompter
 }
 
 interface Options {
@@ -160,6 +178,9 @@ interface Options {
   devVarsPath: string
   localMigrations: boolean
   githubSecrets: boolean
+  interactive: boolean
+  manual: boolean
+  features: Set<'r2' | 'transcode'>
   help: boolean
 }
 
@@ -172,6 +193,9 @@ function parseArgs(argv: string[]): Options | { error: string } {
     devVarsPath: '.dev.vars',
     localMigrations: false,
     githubSecrets: false,
+    interactive: false,
+    manual: false,
+    features: new Set(),
     help: false,
   }
   for (const arg of argv) {
@@ -179,6 +203,17 @@ function parseArgs(argv: string[]): Options | { error: string } {
     else if (arg === '--help' || arg === '-h') opts.help = true
     else if (arg === '--local-migrations') opts.localMigrations = true
     else if (arg === '--github-secrets') opts.githubSecrets = true
+    else if (arg === '--interactive' || arg === '-i') opts.interactive = true
+    else if (arg === '--manual') opts.manual = true
+    else if (arg.startsWith('--with=')) {
+      const wanted = arg.slice('--with='.length).split(',').map(s => s.trim())
+      const valid = ['r2', 'transcode']
+      const bad = wanted.filter(w => !valid.includes(w))
+      if (bad.length > 0) {
+        return { error: `unknown feature(s): ${bad.join(', ')}. Valid: ${valid.join(', ')}` }
+      }
+      opts.features = new Set(wanted as Array<'r2' | 'transcode'>)
+    }
     else if (arg.startsWith('--only=')) {
       const wanted = arg.slice('--only='.length).split(',').map(s => s.trim())
       const bad = wanted.filter(w => !STEPS.includes(w as Step))
@@ -213,6 +248,16 @@ Steps (default run: ${DEFAULT_STEPS.join(', ')})
 r2 and waf are opt-in via --only. waf rewrites the zone's custom-rule
 list (the rulesets API replaces rather than appends), so it is something
 you ask for rather than something that happens on the way past.
+
+Guided setup
+  -i, --interactive       Ask for the values it can't discover, with
+                          instructions for where each one comes from, and
+                          validate each answer before accepting it.
+  --manual                Print the prerequisites no API can do for you
+                          (Workers Paid, DNS, Zero Trust, the API token)
+                          with click-by-click instructions, and exit.
+  --with=<features>       Include optional features in the interview and
+                          the handoff report: r2, transcode.
 
 Options
   --apply                 Actually make changes. Off by default.
@@ -332,6 +377,11 @@ export async function runSetup(deps: SetupDeps): Promise<number> {
     return 0
   }
 
+  if (opts.manual) {
+    deps.stdout.write(renderManualSteps(opts.features))
+    return 0
+  }
+
   let state = hydrateState(
     deps.exists(opts.statePath) ? safeJson(deps.readFile(opts.statePath)) : null,
   )
@@ -341,10 +391,83 @@ export async function runSetup(deps: SetupDeps): Promise<number> {
     if (opts.apply) deps.writeFile(opts.statePath, serialiseState(state))
   }
 
+  // ── Interview ───────────────────────────────────────────────────
+  if (opts.interactive) {
+    const prompter = deps.prompter ?? new NonInteractivePrompter(deps.stdout.write)
+    const pending = pendingQuestions(state, deps.env, { features: opts.features })
+
+    prompter.say(
+      '\nTerraviz node setup — interactive\n\n' +
+        'This asks only for values it cannot discover, explains where each\n' +
+        'one comes from, and checks the shape before accepting it. Nothing\n' +
+        'is written until you confirm at the end.\n\n' +
+        'Run `npm run setup -- --manual` for the prerequisites no API can\n' +
+        'do for you (Workers Paid, DNS, Zero Trust, the API token).\n\n',
+    )
+
+    if (pending.length === 0) {
+      prompter.say('Everything is already answered — nothing to ask.\n\n')
+    }
+
+    for (const [index, question] of pending.entries()) {
+      prompter.say(`\n[${index + 1}/${pending.length}] ${question.label}\n`)
+      const answer = await prompter.ask(question)
+      if (answer === null) {
+        if (!question.optional) {
+          prompter.say(
+            `    skipped — set ${question.envVar} and re-run, or answer next time\n`,
+          )
+        }
+        continue
+      }
+      state = applyAnswer(state, question.key, answer)
+      // Persist as we go: an interview abandoned halfway should not
+      // have to be repeated from the top.
+      if (opts.apply) deps.writeFile(opts.statePath, serialiseState(state))
+    }
+
+    // Answers are worth keeping even on a plan run — the whole point
+    // of the interview is that you only answer once. Announced rather
+    // than silent, because "plan mode writes nothing" is otherwise the
+    // promise this makes an exception to.
+    if (!opts.apply) {
+      deps.writeFile(opts.statePath, serialiseState(state))
+      prompter.say(`\n  Answers saved to ${opts.statePath}.\n`)
+    }
+
+    if (!deps.env.CLOUDFLARE_API_TOKEN) {
+      prompter.say(
+        '\n  ! CLOUDFLARE_API_TOKEN is not set in this shell.\n' +
+          '    Everything that talks to Cloudflare needs it. See\n' +
+          '    `npm run setup -- --manual` step 3 for the permission list.\n',
+      )
+    }
+
+    if (opts.apply) {
+      prompter.say('\n')
+      const go = await prompter.confirm(
+        'Apply these changes to your Cloudflare account?',
+        false,
+      )
+      if (!go) {
+        prompter.say('  Nothing applied. Answers saved — re-run when ready.\n')
+        prompter.close()
+        return 0
+      }
+    }
+    prompter.close()
+    deps.stdout.write('\n')
+  }
+
   const mode = opts.apply ? 'APPLY' : 'PLAN (no changes — pass --apply to execute)'
   deps.stdout.write(`Terraviz node setup — ${mode}\n`)
   deps.stdout.write(`  state:   ${opts.statePath}\n`)
   deps.stdout.write(`  project: ${state.pagesProject}\n\n`)
+
+  // Only known once the pages step has actually looked; undefined
+  // means "we never checked", which the handoff report words
+  // differently from either answer.
+  let gitConnected: boolean | undefined
 
   // ── Step: pages ─────────────────────────────────────────────────
   if (opts.steps.has('pages')) {
@@ -371,6 +494,7 @@ export async function runSetup(deps: SetupDeps): Promise<number> {
       })
       try {
         const res = await ensurePagesProject(api, { name: state.pagesProject })
+        gitConnected = res.gitConnected
         deps.stdout.write(`  project  ${res.project.name}  ${verb(res.created)}\n`)
         if (!res.gitConnected) {
           deps.stdout.write(
@@ -886,6 +1010,24 @@ export async function runSetup(deps: SetupDeps): Promise<number> {
   }
 
   // ── Next steps ──────────────────────────────────────────────────
+  // ── Handoff ─────────────────────────────────────────────────────
+  // The values that have to go somewhere this tool cannot reach. A
+  // provisioner that stops at "done" leaves the most forgettable part
+  // of an install undocumented.
+  deps.stdout.write(
+    renderHandoff(
+      buildHandoff(state, {
+        features: opts.features,
+        gitConnected,
+        available: new Set(
+          Object.entries(deps.env)
+            .filter(([, v]) => Boolean(v))
+            .map(([k]) => k),
+        ),
+      }),
+    ),
+  )
+
   if (opts.apply) {
     const host = state.hostname ? `https://${state.hostname}` : 'https://<your-host>'
     deps.stdout.write(
@@ -957,8 +1099,40 @@ const isMain = (() => {
   }
 })()
 
+/**
+ * Build the real prompter, or a non-blocking stub when there is no
+ * terminal. `mute` swaps stdout's write so a secret answer is read
+ * without echo — see prompt.ts for why it is not asterisk-masked.
+ */
+async function createPrompter(interactive: boolean): Promise<Prompter> {
+  if (!interactive || !process.stdin.isTTY) {
+    return new NonInteractivePrompter(s => process.stdout.write(s))
+  }
+  const { createInterface } = await import('node:readline/promises')
+  const rl = createInterface({ input: process.stdin, output: process.stdout, terminal: true })
+  let muted = false
+  const original = process.stdout.write.bind(process.stdout)
+  ;(process.stdout as unknown as { write: (c: string) => boolean }).write = (chunk: string) =>
+    muted ? true : original(chunk)
+  return new InteractivePrompter(
+    rl,
+    { write: (chunk: string) => original(chunk) },
+    on => void (muted = on),
+  )
+}
+
 if (isMain) {
+  const wantsInteractive =
+    process.argv.includes('--interactive') || process.argv.includes('-i')
+  if (wantsInteractive && !process.stdin.isTTY) {
+    process.stderr.write(
+      'setup: --interactive needs a terminal. Set the values as environment\n' +
+        'variables instead (npm run setup -- --help lists them).\n',
+    )
+    process.exit(2)
+  }
   const code = await runSetup({
+    prompter: await createPrompter(wantsInteractive),
     argv: process.argv.slice(2),
     env: process.env as SetupEnv & Record<string, string | undefined>,
     stdout: { write: s => process.stdout.write(s) },
