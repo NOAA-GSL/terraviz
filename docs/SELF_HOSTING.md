@@ -46,8 +46,14 @@ after Phase 5; Tier 3 operators add Phase 14.
 
 Every phase that *produces* a value tells you to write it down
 here. Every phase that *consumes* one refers to it by line number.
-Copy this block into a scratch file before you start — a password
-manager note is a good home for the ones marked 🔒.
+
+**If you use `npm run setup`, most of this is kept for you** in
+`.terraviz-setup.json` — the resource IDs, the Access AUD, the team
+domain. What it cannot keep is anything marked 🔒: secrets are never
+written to that file, and the service-token secret (`W15`) is shown
+by Cloudflare exactly once. Capture those yourself, in a password
+manager. The worksheet below is still the reference for a by-hand
+install, and for knowing what you should have when the tool is done.
 
 ```
 ── Phase 0 ───────────────────────────────────────────────
@@ -66,7 +72,8 @@ W9   Analytics Engine dataset name  ...... terraviz_events
 
 ── Phase 5 ───────────────────────────────────────────────
 W10  Pages project name             ......................
-W11 🔒 CLOUDFLARE_API_TOKEN (deploy) ......................
+W11 🔒 CLOUDFLARE_API_TOKEN          ......................
+        scope: see the token table below
 
 ── Phase 6 ───────────────────────────────────────────────
 W12  Access team domain             ......................
@@ -161,6 +168,14 @@ not secret.
 | **13.1** *(opt-in)* | Sets the R2 CORS policy and attaches the public bucket domain. |
 | **13.2/13.3** *(opt-in)* | Appends the two WAF skip rules, preserving your existing rules. |
 
+Two flags select different things, and it is worth keeping them
+straight: **`--only=` picks which steps run**, while **`--with=`
+declares which optional features you want**, which is what adds the
+matching questions to the interview and the matching sections to the
+handoff report. So `--with=r2 --only=r2` both asks you for the public
+asset origin and then configures it; `--with=transcode` adds no step
+at all, it just includes the transcode secrets in the handoff.
+
 `r2` and `waf` are opt-in via `--only=r2` / `--only=waf`, not part of
 a default run. The rulesets API replaces a zone's whole custom-rule
 list rather than appending to it, so rewriting your zone security
@@ -169,8 +184,8 @@ on the way past. (The merge preserves every existing rule and is
 tested for exactly that; a failed read aborts rather than writing.)
 
 It is **plan-by-default** — a bare `npm run setup` prints what it
-would do and exits. It is idempotent: it lists before it creates, so
-re-running adopts rather than duplicates. And it is resumable —
+would do and exits. It is idempotent: re-running adopts what already
+exists rather than duplicating it. And it is resumable —
 resolved IDs land in `.terraviz-setup.json` (gitignored, never any
 secret values) as they are found, so a run that dies partway through
 picks up where it left off.
@@ -407,6 +422,11 @@ isn't being read — check you copied it to `.dev.vars`, not
 
 # Phase 2 — Create the Cloudflare resources
 
+> **Automated.** `npm run setup -- --apply --only=resources` runs all
+> of this and records the IDs for you. Re-running adopts what already
+> exists rather than making a second `sphere-feedback`. The commands
+> below are the same thing by hand.
+
 **Nothing consumes these yet.** This phase exists so that when
 Phases 3 and 8 ask for IDs, you already have them written down.
 Run the whole block, then fill in `W4`–`W9`.
@@ -454,6 +474,13 @@ the R2 and Vectorize commands; add them later if you upgrade.
 IDs**. Replace them now that yours exist. This is the step the old
 guide put *first*, which made it impossible to complete.
 
+> **Automated.** `npm run setup -- --apply --only=wrangler-toml` does
+> this from the IDs the resources step recorded. It edits per binding
+> block rather than by string replace — the two D1 blocks share a
+> `database_name` and the two KV blocks share a section header, so a
+> global replace cannot tell them apart. It refuses to apply while any
+> ID is still unknown.
+
 | Block | Field | Ships as | Replace with |
 |---|---|---|---|
 | `[[d1_databases]]` `FEEDBACK_DB` | `database_id` | `78fbe5c3-…` | `W4` |
@@ -484,6 +511,12 @@ wrangler d1 info CATALOG_DB     # should print YOUR database, 0 tables
 # Phase 4 — Create the schema
 
 Two migration sets live in this repo, keyed by **binding name**.
+
+> **Automated.** `npm run setup -- --apply --only=migrations` applies
+> both, in the order that works, and distinguishes the expected
+> `catalog-schema.sql` failure below from a real one. Add
+> `--local-migrations` to rehearse against the local `.wrangler/`
+> database first.
 
 ```bash
 wrangler d1 migrations apply CATALOG_DB  --remote    # migrations/catalog/
@@ -817,6 +850,15 @@ openssl rand -base64 32      # → W18
 
 Everything referenced below now exists. Pages → your project →
 **Settings → Bindings** (and **Variables and secrets**).
+
+> **Automated.** `npm run setup -- --apply --only=bindings` writes
+> every one of these to both environments in a single API call —
+> roughly forty dashboard interactions, and the step where the
+> per-environment mistake below actually happens. It reads the same
+> manifest `check:pages-bindings` audits against, so it cannot
+> produce a deploy that audit then calls broken. Anything it has no
+> value for is listed as skipped with the reason, rather than written
+> blank.
 
 > ⚠️ **Set every entry on BOTH Production and Preview.** The
 > environment selector is at the top of the page, and forgetting it

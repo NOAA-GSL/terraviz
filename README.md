@@ -362,7 +362,7 @@ See **[ROADMAP.md](ROADMAP.md)** for the web app roadmap and **[docs/DESKTOP_APP
 ## 📚 Key Files to Review
 
 - **[ROADMAP.md](ROADMAP.md)** - Prioritized web app roadmap
-- **[docs/SELF_HOSTING.md](docs/SELF_HOSTING.md)** - Deploy your own Terraviz instance on Cloudflare Pages (Pages, D1, AE, KV, Access, Grafana)
+- **[docs/SELF_HOSTING.md](docs/SELF_HOSTING.md)** - Deploy your own Terraviz instance on Cloudflare Pages (Pages, D1, AE, KV, Access, Grafana). Most of the install is automated — `npm run setup -- --manual` lists the prerequisites only a human can do, `npm run setup -- --interactive` walks you through the rest.
 - **[docs/ANALYTICS.md](docs/ANALYTICS.md)** - Analytics pipeline reference (schema, privacy posture, how to add events)
 - **[docs/ANALYTICS_CONTRIBUTING.md](docs/ANALYTICS_CONTRIBUTING.md)** - Contributor + reviewer guide for analytics changes (privacy invariants, review checklist)
 - **[docs/PRIVACY.md](docs/PRIVACY.md)** - User-facing privacy policy
