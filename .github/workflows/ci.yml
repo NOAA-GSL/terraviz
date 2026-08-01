@@ -194,7 +194,7 @@ jobs:
       # bindings point at the same physical D1, so the catalog
       # migrations are all the catalog backend / hero feature needs.
       # Feedback-DB schema changes are rare and applied by hand
-      # (docs/SELF_HOSTING.md Step 5).
+      # (docs/SELF_HOSTING.md Phase 8).
       #
       # Gated to `main` only: preview and production point at the SAME
       # physical D1 instance (one database_id in wrangler.toml), so
