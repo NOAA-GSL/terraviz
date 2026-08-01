@@ -2,21 +2,25 @@
  * `npm run setup` — provision a Terraviz node's Cloudflare resources
  * and wire its Pages bindings.
  *
- * Automates Phases 2, 3, 4, 6, 7 and 8 of `docs/SELF_HOSTING.md`:
- * create the D1 / KV / R2 / Vectorize resources, repoint
- * `wrangler.toml` at them, apply both migration sets, provision the
- * Cloudflare Access application + policies + service token, generate
- * the preview signing key, and write every binding to both the
- * Production and Preview environments.
+ * Automates Phases 5, 2, 3, 4, 6, 7, 8 and (opt-in) 13.1 to 13.3 of
+ * `docs/SELF_HOSTING.md`: create the Pages project and attach its
+ * custom domain, create the D1 / KV / R2 / Vectorize resources,
+ * repoint `wrangler.toml` at them, apply both migration sets,
+ * provision the Cloudflare Access application + policies + service
+ * token, generate the preview signing key, write every binding to
+ * both environments, and — when asked — set the R2 CORS policy and
+ * public domain and append the two WAF skip rules.
  *
  * ## What it deliberately does not do
  *
  * Account creation, Workers Paid, nameservers, Zero Trust onboarding
- * and identity-provider choice, the Pages project itself, the node
- * keypair (`npm run gen:node-key` owns that), and the first SSO
- * sign-in. Those are billing/registrar actions, one-time dashboard
- * flows, or owned by an existing command; the guide covers them and
- * this tool names whichever one is blocking it.
+ * and identity-provider choice, connecting the Pages project to a Git
+ * remote (an OAuth handshake with no API), minting the R2 S3 token
+ * (it needs a token that can mint tokens — a security boundary worth
+ * keeping manual), writing GitHub Actions secrets (they need
+ * libsodium sealed-box encryption; it prints the `gh` commands
+ * instead), the node keypair (`npm run gen:node-key` owns that), and
+ * the first SSO sign-in.
  *
  * ## Plan by default
  *
@@ -62,6 +66,25 @@ import {
   publisherDestinations,
 } from './lib/setup/access.ts'
 import { PagesProjectWriter } from './lib/setup/cf-pages-write.ts'
+import { CfApi, matchZone } from './lib/setup/cf-request.ts'
+import { renderGithubSecretsScript } from './lib/setup/github-secrets.ts'
+import {
+  ensureCustomDomain,
+  ensurePagesProject,
+  PagesProjectApi,
+} from './lib/setup/pages-project.ts'
+import {
+  buildCorsRules,
+  ensureR2CustomDomain,
+  R2ConfigApi,
+  toDashboardJson,
+} from './lib/setup/r2-config.ts'
+import {
+  buildFeedbackRule,
+  buildTranscodeRule,
+  ensureWafRules,
+  WafApi,
+} from './lib/setup/waf.ts'
 import {
   applyMigrations,
   ensureD1,
@@ -87,14 +110,35 @@ import {
 import { repointWranglerToml, stillPinnedUpstream } from './lib/setup/wrangler-toml.ts'
 
 const STEPS = [
+  'pages',
   'resources',
   'wrangler-toml',
   'migrations',
   'access',
   'secrets',
   'bindings',
+  'r2',
+  'waf',
 ] as const
 type Step = (typeof STEPS)[number]
+
+/**
+ * Steps a bare run performs. `waf` is excluded deliberately: it
+ * rewrites the zone's custom-rule list, and the rulesets API replaces
+ * rather than appends, so it is something you ask for rather than
+ * something that happens on the way past. `r2` is excluded because
+ * the public bucket domain is a Phase 13 add-on many nodes never
+ * need.
+ */
+const DEFAULT_STEPS: Step[] = [
+  'pages',
+  'resources',
+  'wrangler-toml',
+  'migrations',
+  'access',
+  'secrets',
+  'bindings',
+]
 
 export interface SetupDeps {
   argv: string[]
@@ -115,23 +159,26 @@ interface Options {
   wranglerPath: string
   devVarsPath: string
   localMigrations: boolean
+  githubSecrets: boolean
   help: boolean
 }
 
 function parseArgs(argv: string[]): Options | { error: string } {
   const opts: Options = {
     apply: false,
-    steps: new Set(STEPS),
+    steps: new Set(DEFAULT_STEPS),
     statePath: '.terraviz-setup.json',
     wranglerPath: 'wrangler.toml',
     devVarsPath: '.dev.vars',
     localMigrations: false,
+    githubSecrets: false,
     help: false,
   }
   for (const arg of argv) {
     if (arg === '--apply') opts.apply = true
     else if (arg === '--help' || arg === '-h') opts.help = true
     else if (arg === '--local-migrations') opts.localMigrations = true
+    else if (arg === '--github-secrets') opts.githubSecrets = true
     else if (arg.startsWith('--only=')) {
       const wanted = arg.slice('--only='.length).split(',').map(s => s.trim())
       const bad = wanted.filter(w => !STEPS.includes(w as Step))
@@ -147,17 +194,32 @@ function parseArgs(argv: string[]): Options | { error: string } {
 }
 
 const HELP = `
-npm run setup — provision a Terraviz node (SELF_HOSTING.md Phases 2, 3, 4, 8)
+npm run setup — provision a Terraviz node (docs/SELF_HOSTING.md)
 
   npm run setup                     Plan only. Writes nothing.
-  npm run setup -- --apply          Create resources, repoint wrangler.toml,
-                                    apply migrations, wire Pages bindings.
+  npm run setup -- --apply          Run the default steps.
+
+Steps (default run: ${DEFAULT_STEPS.join(', ')})
+  pages          Phase 5     Pages project + custom domain
+  resources      Phase 2     D1, KV x2, R2, Vectorize + metadata indexes
+  wrangler-toml  Phase 3     repoint the resource ids
+  migrations     Phase 4     both migration sets, in the order that works
+  access         Phase 6     Access app, policies, service token
+  secrets        Phase 7     generate PREVIEW_SIGNING_KEY
+  bindings       Phase 8     every binding, both environments
+  r2             Phase 13.1  CORS policy + public bucket domain   [opt-in]
+  waf            Phase 13.2  transcode + feedback skip rules      [opt-in]
+
+r2 and waf are opt-in via --only. waf rewrites the zone's custom-rule
+list (the rulesets API replaces rather than appends), so it is something
+you ask for rather than something that happens on the way past.
 
 Options
   --apply                 Actually make changes. Off by default.
   --only=<steps>          Comma-separated subset of: ${STEPS.join(', ')}
   --local-migrations      Apply migrations to the local .wrangler/ DB
                           instead of --remote. Useful for a dry run.
+  --github-secrets        Print the \`gh secret set\` script and exit.
   --state=<path>          State file (default .terraviz-setup.json)
   --config=<path>         Wrangler config (default wrangler.toml)
 
@@ -188,8 +250,9 @@ printed once, and you must save it.
 
 Prerequisites this tool cannot do for you (see docs/SELF_HOSTING.md):
   Phase 0  Cloudflare account, Workers Paid, domain on Cloudflare DNS
-  Phase 5  the Pages project itself
+  Phase 5  connecting the Pages project to a Git remote (OAuth, no API)
   Phase 6.1 Zero Trust onboarding + an identity provider
+  Phase 13.1 minting the R2 S3 API token (needs a token that mints tokens)
   Phase 7  npm run gen:node-key (owns the node keypair)
   Phase 11 the first SSO sign-in
 `
@@ -250,6 +313,25 @@ export async function runSetup(deps: SetupDeps): Promise<number> {
   }
 
   // ── State ───────────────────────────────────────────────────────
+  let stateForSecrets = hydrateState(
+    deps.exists(opts.statePath) ? safeJson(deps.readFile(opts.statePath)) : null,
+  )
+  stateForSecrets = applyEnvOverrides(stateForSecrets, deps.env)
+
+  if (opts.githubSecrets) {
+    const repo =
+      stateForSecrets.githubOwner && stateForSecrets.githubRepo
+        ? `${stateForSecrets.githubOwner}/${stateForSecrets.githubRepo}`
+        : undefined
+    const available = new Set(
+      Object.entries(deps.env)
+        .filter(([, v]) => Boolean(v))
+        .map(([k]) => k),
+    )
+    deps.stdout.write(renderGithubSecretsScript({ repo, available }) + '\n')
+    return 0
+  }
+
   let state = hydrateState(
     deps.exists(opts.statePath) ? safeJson(deps.readFile(opts.statePath)) : null,
   )
@@ -263,6 +345,56 @@ export async function runSetup(deps: SetupDeps): Promise<number> {
   deps.stdout.write(`Terraviz node setup — ${mode}\n`)
   deps.stdout.write(`  state:   ${opts.statePath}\n`)
   deps.stdout.write(`  project: ${state.pagesProject}\n\n`)
+
+  // ── Step: pages ─────────────────────────────────────────────────
+  if (opts.steps.has('pages')) {
+    deps.stdout.write('── Phase 5 — Pages project ─────────────────────────\n')
+    if (!opts.apply) {
+      deps.stdout.write(
+        `  would ensure project  ${state.pagesProject} (production branch main)\n` +
+          (state.hostname
+            ? `  would ensure domain   ${state.hostname}\n\n`
+            : '  ! TERRAVIZ_HOSTNAME unset — no custom domain will be attached\n\n'),
+      )
+    } else {
+      const token = deps.env.CLOUDFLARE_API_TOKEN
+      if (!token || !state.accountId) {
+        deps.stderr.write(
+          '  ✘ CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID are required.\n' +
+            '    The token needs Account → Cloudflare Pages → Edit.\n\n',
+        )
+        return 2
+      }
+      const api = new PagesProjectApi(state.accountId, {
+        apiToken: token,
+        fetchImpl: deps.fetchImpl,
+      })
+      try {
+        const res = await ensurePagesProject(api, { name: state.pagesProject })
+        deps.stdout.write(`  project  ${res.project.name}  ${verb(res.created)}\n`)
+        if (!res.gitConnected) {
+          deps.stdout.write(
+            '  ! Direct Upload project — Cloudflare will NOT run your build.\n' +
+              '    The Git connection is an OAuth handshake with no API; connect it\n' +
+              '    in the dashboard, or deploy from CI with `wrangler pages deploy dist/`.\n' +
+              '    Either way the VITE_* build variables must be set wherever the\n' +
+              '    build actually runs (Phase 5.2).\n',
+          )
+        }
+        if (state.hostname) {
+          const domain = await ensureCustomDomain(api, state.pagesProject, state.hostname)
+          deps.stdout.write(
+            `  domain   ${domain.name}  ${verb(domain.created)}` +
+              `${domain.status ? ` (${domain.status})` : ''}\n`,
+          )
+        }
+        deps.stdout.write('\n')
+      } catch (e) {
+        deps.stderr.write(`  ✘ ${errText(e)}\n\n`)
+        return 1
+      }
+    }
+  }
 
   // ── Step: resources ─────────────────────────────────────────────
   if (opts.steps.has('resources')) {
@@ -627,6 +759,129 @@ export async function runSetup(deps: SetupDeps): Promise<number> {
           '  pieces (Access values from Phase 6, secrets from Phase 7, and the\n' +
           '  Phase 13 add-ons). Re-run once you have them.\n\n',
       )
+    }
+  }
+
+  // ── Step: r2 ────────────────────────────────────────────────────
+  if (opts.steps.has('r2')) {
+    deps.stdout.write('── Phase 13.1 — R2 public domain + CORS ────────────\n')
+    const site = state.hostname ? `https://${state.hostname}` : null
+    if (!site) {
+      deps.stderr.write(
+        '  ✘ TERRAVIZ_HOSTNAME is required — the CORS policy is built from\n' +
+          '    your site origin, and guessing it would silently block uploads.\n\n',
+      )
+      return 2
+    }
+    const rules = buildCorsRules({ site, includeLocalhost: true, includeTauri: true })
+    const publicDomain = state.r2PublicBase?.replace(/^https?:\/\//, '')
+
+    if (!opts.apply) {
+      deps.stdout.write(
+        `  would set CORS on  ${state.r2Bucket.name}\n` +
+          `    read   ${rules[0].allowed.methods.join('/')} from ` +
+          `${rules[0].allowed.origins.join(', ')}\n` +
+          `    write  ${rules[1].allowed.methods.join('/')} from ` +
+          `${rules[1].allowed.origins.join(', ')}\n` +
+          (publicDomain
+            ? `  would attach domain  ${publicDomain}\n\n`
+            : '  ! R2_PUBLIC_BASE unset — no public domain will be attached\n\n'),
+      )
+    } else {
+      const token = deps.env.CLOUDFLARE_API_TOKEN
+      if (!token || !state.accountId) {
+        deps.stderr.write(
+          '  ✘ CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID are required.\n' +
+            '    The token needs Workers R2 Storage → Edit and Zone → Read.\n\n',
+        )
+        return 2
+      }
+      const api = new R2ConfigApi(state.accountId, {
+        apiToken: token,
+        fetchImpl: deps.fetchImpl,
+      })
+      try {
+        await api.putCors(state.r2Bucket.name, rules)
+        deps.stdout.write(`  CORS     applied to ${state.r2Bucket.name}\n`)
+      } catch (e) {
+        // The dashboard's JSON editor takes a different encoding of
+        // the same policy, so a failed call still leaves the operator
+        // with something they can paste rather than re-derive.
+        deps.stderr.write(
+          `  ✘ CORS: ${errText(e)}\n\n` +
+            '  Paste this into R2 → bucket → Settings → CORS policy instead:\n' +
+            JSON.stringify(toDashboardJson(rules), null, 2) +
+            '\n\n',
+        )
+        return 1
+      }
+      if (publicDomain) {
+        try {
+          const res = await ensureR2CustomDomain(api, state.r2Bucket.name, publicDomain)
+          deps.stdout.write(`  domain   ${res.domain}  ${verb(res.created)}\n\n`)
+        } catch (e) {
+          deps.stderr.write(`  ✘ ${errText(e)}\n\n`)
+          return 1
+        }
+      } else {
+        deps.stdout.write(
+          '  ! R2_PUBLIC_BASE unset — set it and re-run to attach a public\n' +
+            '    domain. Without one, R2-hosted assets do not resolve.\n\n',
+        )
+      }
+    }
+  }
+
+  // ── Step: waf ───────────────────────────────────────────────────
+  if (opts.steps.has('waf')) {
+    deps.stdout.write('── Phase 13.2 / 13.3 — WAF skip rules ──────────────\n')
+    const wanted = [buildTranscodeRule(), buildFeedbackRule()]
+    if (!state.hostname) {
+      deps.stderr.write(
+        '  ✘ TERRAVIZ_HOSTNAME is required to resolve the zone.\n\n',
+      )
+      return 2
+    }
+    if (!opts.apply) {
+      for (const rule of wanted) {
+        deps.stdout.write(`  would add  ${rule.description}\n`)
+      }
+      deps.stdout.write(
+        '  Existing custom rules are preserved — new rules are appended last.\n\n',
+      )
+    } else {
+      const token = deps.env.CLOUDFLARE_API_TOKEN
+      if (!token) {
+        deps.stderr.write(
+          '  ✘ CLOUDFLARE_API_TOKEN is required (Zone → Zone WAF → Edit).\n\n',
+        )
+        return 2
+      }
+      try {
+        const zones = await new CfApi({
+          apiToken: token,
+          fetchImpl: deps.fetchImpl,
+        }).requireResult<Array<{ id: string; name?: string }>>('/zones?per_page=200')
+        const zone = matchZone(zones, state.hostname)
+        if (!zone) {
+          deps.stderr.write(
+            `  ✘ no Cloudflare zone on this account matches ${state.hostname}\n\n`,
+          )
+          return 1
+        }
+        const waf = new WafApi(zone.id, { apiToken: token, fetchImpl: deps.fetchImpl })
+        const res = await ensureWafRules(waf, wanted, true)
+        deps.stdout.write(
+          `  zone     ${zone.name} (${res.existing} existing rule(s) preserved)\n` +
+            (res.added.length
+              ? res.added.map(d => `  added    ${d}\n`).join('')
+              : '  nothing to add — both rules already present\n') +
+            '\n',
+        )
+      } catch (e) {
+        deps.stderr.write(`  ✘ ${errText(e)}\n\n`)
+        return 1
+      }
     }
   }
 

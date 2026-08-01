@@ -532,3 +532,165 @@ describe('runSetup — secrets step', () => {
     )
   })
 })
+
+describe('runSetup — step selection', () => {
+  // waf rewrites the zone's custom-rule list and the rulesets API
+  // replaces rather than appends, so it must never run just because
+  // someone typed --apply.
+  it('excludes waf and r2 from a default run', async () => {
+    const h = harness({ files: { 'wrangler.toml': 'name = "x"\n' } })
+    await runSetup(h.deps)
+    expect(h.out()).not.toContain('WAF skip rules')
+    expect(h.out()).not.toContain('R2 public domain')
+  })
+
+  it('runs them when asked explicitly', async () => {
+    const h = harness({
+      argv: ['--only=waf'],
+      files: { '.terraviz-setup.json': JSON.stringify({ hostname: 'a.example.org' }) },
+    })
+    expect(await runSetup(h.deps)).toBe(0)
+    expect(h.out()).toContain('WAF skip rules')
+  })
+
+  it('includes the Pages project step by default', async () => {
+    const h = harness({ files: { 'wrangler.toml': 'name = "x"\n' } })
+    await runSetup(h.deps)
+    expect(h.out()).toContain('Phase 5 — Pages project')
+  })
+})
+
+describe('runSetup — pages step', () => {
+  const state = JSON.stringify({
+    accountId: 'acct',
+    pagesProject: 'my-node',
+    hostname: 'terraviz.example.org',
+  })
+
+  function pagesFetch(routes: Record<string, unknown>): typeof fetch {
+    return (async (url: string, init?: RequestInit) => {
+      const method = init?.method ?? 'GET'
+      const path = new URL(url).pathname.replace(/^\/client\/v4/, '')
+      const key = `${method} ${path}`
+      if (!(key in routes)) {
+        return new Response(JSON.stringify({ success: false, errors: [{ message: 'missing' }] }), {
+          status: 404,
+          statusText: 'Not Found',
+        })
+      }
+      return new Response(JSON.stringify({ success: true, result: routes[key] }), { status: 200 })
+    }) as unknown as typeof fetch
+  }
+
+  it('creates the project and attaches the domain', async () => {
+    const h = harness({
+      argv: ['--only=pages', '--apply'],
+      env: { CLOUDFLARE_API_TOKEN: 'tok' },
+      files: { '.terraviz-setup.json': state },
+      fetchImpl: pagesFetch({
+        'POST /accounts/acct/pages/projects': { name: 'my-node' },
+        'GET /accounts/acct/pages/projects/my-node/domains': [],
+        'POST /accounts/acct/pages/projects/my-node/domains': {
+          name: 'terraviz.example.org',
+          status: 'pending',
+        },
+      }),
+    })
+    expect(await runSetup(h.deps)).toBe(0)
+    expect(h.out()).toContain('project  my-node  created')
+    expect(h.out()).toContain('terraviz.example.org')
+  })
+
+  // Direct Upload means Cloudflare never runs the build, so the
+  // VITE_* variables have to live in CI instead. Silence here would
+  // produce a site built without them.
+  it('warns that a created project is Direct Upload', async () => {
+    const h = harness({
+      argv: ['--only=pages', '--apply'],
+      env: { CLOUDFLARE_API_TOKEN: 'tok' },
+      files: { '.terraviz-setup.json': state },
+      fetchImpl: pagesFetch({
+        'POST /accounts/acct/pages/projects': { name: 'my-node' },
+        'GET /accounts/acct/pages/projects/my-node/domains': [],
+        'POST /accounts/acct/pages/projects/my-node/domains': { name: 'x' },
+      }),
+    })
+    await runSetup(h.deps)
+    expect(h.out()).toContain('Direct Upload')
+    expect(h.out()).toContain('VITE_*')
+  })
+
+  it('stays quiet about Direct Upload for a Git-connected project', async () => {
+    const h = harness({
+      argv: ['--only=pages', '--apply'],
+      env: { CLOUDFLARE_API_TOKEN: 'tok' },
+      files: { '.terraviz-setup.json': state },
+      fetchImpl: pagesFetch({
+        'GET /accounts/acct/pages/projects/my-node': {
+          name: 'my-node',
+          source: { type: 'github' },
+        },
+        'GET /accounts/acct/pages/projects/my-node/domains': [
+          { name: 'terraviz.example.org', status: 'active' },
+        ],
+      }),
+    })
+    expect(await runSetup(h.deps)).toBe(0)
+    expect(h.out()).not.toContain('Direct Upload')
+  })
+})
+
+describe('runSetup — r2 step', () => {
+  it('refuses to guess the site origin', async () => {
+    const h = harness({
+      argv: ['--only=r2', '--apply'],
+      env: { CLOUDFLARE_API_TOKEN: 'tok' },
+      files: { '.terraviz-setup.json': JSON.stringify({ accountId: 'a' }) },
+    })
+    expect(await runSetup(h.deps)).toBe(2)
+    expect(h.errOut()).toContain('TERRAVIZ_HOSTNAME is required')
+  })
+
+  it('shows the origins it would allow', async () => {
+    const h = harness({
+      argv: ['--only=r2'],
+      files: { '.terraviz-setup.json': JSON.stringify({ hostname: 'a.example.org' }) },
+    })
+    expect(await runSetup(h.deps)).toBe(0)
+    expect(h.out()).toContain('GET/HEAD')
+    expect(h.out()).toContain('https://a.example.org')
+  })
+
+  // A failed API call must still leave the operator with something
+  // they can paste, rather than a policy they have to re-derive.
+  it('prints the dashboard JSON when the CORS call fails', async () => {
+    const h = harness({
+      argv: ['--only=r2', '--apply'],
+      env: { CLOUDFLARE_API_TOKEN: 'tok' },
+      files: {
+        '.terraviz-setup.json': JSON.stringify({ accountId: 'a', hostname: 'a.example.org' }),
+      },
+      fetchImpl: (async () =>
+        new Response(JSON.stringify({ success: false, errors: [{ code: 10000, message: 'nope' }] }), {
+          status: 403,
+          statusText: 'Forbidden',
+        })) as unknown as typeof fetch,
+    })
+    expect(await runSetup(h.deps)).toBe(1)
+    expect(h.errOut()).toContain('AllowedOrigins')
+    expect(h.errOut()).toContain('Content-Range')
+  })
+})
+
+describe('runSetup — github secrets', () => {
+  it('prints the script and exits without touching anything', async () => {
+    const h = harness({
+      argv: ['--github-secrets'],
+      files: { '.terraviz-setup.json': JSON.stringify({ githubOwner: 'me', githubRepo: 'mine' }) },
+    })
+    expect(await runSetup(h.deps)).toBe(0)
+    expect(h.out()).toContain('gh secret set CF_ACCESS_CLIENT_ID --repo me/mine')
+    expect(h.writes.size).toBe(0)
+    expect(h.calls).toEqual([])
+  })
+})

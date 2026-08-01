@@ -100,12 +100,22 @@ npm run setup -- --apply     # provision + wire
 
 | Phase | What the tool does |
 |---|---|
+| **5** | Creates the Pages project with the right build settings and attaches your custom domain. |
 | **2** | Creates (or adopts) the D1 database, both KV namespaces, the R2 bucket, the Vectorize index and its three metadata indexes. |
 | **3** | Repoints the `wrangler.toml` resource IDs at what it just created. |
 | **4** | Applies both migration sets, in the order that works. |
 | **6** | Discovers your Access team domain; creates the publisher application (six destinations), the Staff and Automation policies, and the service token — returning the AUD (`W13`) and the token pair (`W14`/`W15`). |
 | **7** | Generates `PREVIEW_SIGNING_KEY` into `.dev.vars`. |
 | **8** | Writes every binding, variable and available secret to **both** Production and Preview. |
+| **13.1** *(opt-in)* | Sets the R2 CORS policy and attaches the public bucket domain. |
+| **13.2/13.3** *(opt-in)* | Appends the two WAF skip rules, preserving your existing rules. |
+
+`r2` and `waf` are opt-in via `--only=r2` / `--only=waf`, not part of
+a default run. The rulesets API replaces a zone's whole custom-rule
+list rather than appending to it, so rewriting your zone security
+config should be something you asked for, not something that happens
+on the way past. (The merge preserves every existing rule and is
+tested for exactly that; a failed read aborts rather than writing.)
 
 It is **plan-by-default** — a bare `npm run setup` prints what it
 would do and exits. It is idempotent: it lists before it creates, so
@@ -119,15 +129,17 @@ It reads the same manifest the audit does
 so it cannot provision a deploy that
 `npm run check:pages-bindings` then calls broken.
 
-**Five things stay manual**, and they cluster at the start:
+**What stays manual**, and why:
 
 | Phase | Why the tool can't |
 |---|---|
 | **0** | Cloudflare account, Workers Paid, nameservers — billing and registrar actions. |
-| **5** | The Pages project. The dashboard's Git-integration handshake is an OAuth flow with no API. |
+| **5** (part) | *Connecting* the project to a Git remote. That handshake is an OAuth flow between Cloudflare and GitHub with no API — a token cannot grant Cloudflare access to your repos on your behalf. The tool creates the project; you either click Connect, or deploy from CI with `wrangler pages deploy dist/`. |
 | **6.1** | Zero Trust onboarding + choosing an identity provider. One-time, per account. |
 | **7** (half) | The node keypair — `npm run gen:node-key` owns it, because it also writes `node-public-key.txt` that Phase 9 reads and stamps your local D1. One command. |
 | **11** | The first SSO sign-in, which is what makes you admin. |
+| **13.1** (part) | Minting the R2 S3 API token. Doing that over the API needs a bootstrap token that can *create tokens* — a strictly larger credential than anything else here, one that could mint itself more authority. Two clicks in the R2 dashboard, once. |
+| **13.2** (part) | Writing GitHub Actions secrets, which requires libsodium sealed-box encryption (BLAKE2b, absent from `node:crypto`). Rather than add a dependency, `npm run setup -- --github-secrets` prints the exact `gh secret set` script, with values as `"$VAR"` references so it is safe to paste anywhere. |
 
 The tool names whichever of these is blocking it. A typical Tier 2
 install:
@@ -149,9 +161,21 @@ npm run setup -- --apply      # Phases 2, 3, 4, 6, 7, 8 in one pass
 `npm run setup -- --help` lists every flag and environment variable.
 
 **Token scope.** The single `CLOUDFLARE_API_TOKEN` this needs:
-Account → **Cloudflare Pages: Edit**, **Access: Apps and Policies:
-Edit**, **Access: Service Tokens: Edit**, **Access: Organizations:
-Read**, and — only if you enable CI migrations (13.6) — **D1: Edit**.
+
+| Permission | For |
+|---|---|
+| Account → Cloudflare Pages → **Edit** | Phases 5 and 8 |
+| Account → Access: Apps and Policies → **Edit** | Phase 6 |
+| Account → Access: Service Tokens → **Edit** | Phase 6 |
+| Account → Access: Organizations → **Read** | discovering the team domain |
+| Account → Workers R2 Storage → **Edit** | Phase 13.1 (opt-in) |
+| Zone → Zone → **Read** | resolving the zone for 13.1 / 13.2 |
+| Zone → Zone WAF → **Edit** | Phase 13.2 (opt-in) |
+| Account → D1 → **Edit** | only if you enable CI migrations (13.6) |
+
+Grant only what you plan to run — each step names the permission it
+is missing rather than failing with a bare `10000: Authentication
+error`.
 
 ---
 
@@ -481,6 +505,16 @@ skipped.
 ## 5.1 Push your code
 
 Pages' Git connector watches a remote. Push to `W3`.
+
+> **Automated, mostly.** `npm run setup -- --apply --only=pages`
+> creates the project with these build settings and attaches your
+> custom domain. What it cannot do is *connect* the Git remote —
+> that handshake is OAuth between Cloudflare and GitHub, with no API.
+> A project it creates is **Direct Upload**, which means Cloudflare
+> never runs your build, so the `VITE_*` variables below must be set
+> wherever the build actually runs (your CI job). Click Connect in
+> the dashboard afterwards to convert it in place, or stay on Direct
+> Upload and deploy from CI.
 
 ## 5.2 Create the project
 
@@ -981,6 +1015,13 @@ Independent of each other. Add what you need.
 
 Needed before publisher asset uploads or the web zip-download work.
 
+> **Automated.** `npm run setup -- --apply --only=r2` sets the CORS
+> policy (built from your origins, so the two easy-to-mistype details
+> below cannot be got wrong) and attaches the public domain from
+> `R2_PUBLIC_BASE`. Step 4 — minting the S3 API token — stays manual
+> on purpose: automating it would need a token that can create
+> tokens.
+
 1. R2 → `terraviz-assets` → **Settings → Connect Domain** → e.g.
    `assets.<W2>`. Record as `W19`.
 2. Pages variable `R2_PUBLIC_BASE` = `https://<W19>`, both
@@ -1044,6 +1085,12 @@ engine's `frameRate` task assumes 30).
 (`W14`), `CF_ACCESS_CLIENT_SECRET` (`W15`), and optionally
 `CATALOG_R2_BUCKET`.
 
+`npm run setup -- --github-secrets` prints the exact `gh secret set`
+commands for all of them, annotated with what each is for and which
+ones your current shell can't supply. Values are emitted as `"$VAR"`
+references rather than inlined, so the script is safe to paste into a
+runbook.
+
 Both halves are required and fail closed. Missing
 `GITHUB_DISPATCH_TOKEN` → `/asset/complete` returns 503
 `github_dispatch_unconfigured`; the source bytes stay in R2 and the
@@ -1081,6 +1128,15 @@ moment...` interstitial and never reaches the Worker. ffmpeg
 finishes, the HLS bundle lands in R2, and the runner exits non-zero
 at stage 5. The CLI detects the challenge HTML and prints a
 one-line pointer at this section rather than a 30 KB blob.
+
+> **Automated (opt-in).** `npm run setup -- --apply --only=waf`
+> appends this rule *and* the 13.3 feedback rule, preserving every
+> existing rule in the zone. It is deliberately excluded from a
+> default run: the rulesets API replaces a zone's whole custom-rule
+> list rather than appending, so a careless implementation deletes
+> your WAF config. The merge is a pure, tested function, and a failed
+> read aborts rather than writing. Step 2 below (plain Bot Fight
+> Mode) has no per-path override and stays manual.
 
 **Step 1 — WAF Custom Rule.** Security → WAF → Custom rules →
 Create rule, `transcode-complete service token skip`:
@@ -1483,18 +1539,26 @@ exercised.
 - `npm run setup` end to end in plan mode, and its migration step
   under `--apply --local-migrations` against a clean database.
 
-**Modelled from documentation, not executed.** The Cloudflare Access
-request/response shapes in `scripts/lib/setup/access.ts` — the
-application, policy and service-token bodies, and the organization
-read that discovers the team domain — were written against
-Cloudflare's documented API and against what
-`functions/api/v1/_lib/access-auth.ts` proves about the resulting
-JWTs. No live account was available to exercise them. The body
-builders are pure and unit-tested so the shape is pinned and
-reviewable, and a mismatch surfaces as a Cloudflare validation error
-naming the field rather than as a silent misconfiguration — but the
-first real `--only=access --apply` is still the true test. Run it
-before the bindings step and check the Zero Trust dashboard.
+**Modelled from documentation, not executed.** Every Cloudflare API
+call `npm run setup` makes — Access applications, policies and
+service tokens; the Pages project and its custom domain; the R2 CORS
+policy and public domain; the WAF ruleset entrypoint; the Pages
+bindings PATCH — was written against Cloudflare's documented API and,
+for Access, against what `functions/api/v1/_lib/access-auth.ts`
+proves about the resulting JWTs. **No live Cloudflare account was
+available to exercise any of them.**
+
+What that risk is bounded by: every request body is built by a pure,
+unit-tested function, so the shape is pinned and reviewable in the
+diff; a shape mismatch surfaces as a Cloudflare validation error
+naming the field, not as a silent misconfiguration; the R2 step
+prints the dashboard-paste JSON if its call fails; and the WAF step
+refuses to write when its read failed. Plan mode makes no network
+calls at all.
+
+Run the risky steps one at a time on your first real install —
+`--only=pages`, then `--only=access`, then the rest — and check the
+dashboard between them.
 
 **Not verified — no Cloudflare account was available in this
 environment.** Every dashboard click path, the Access application
