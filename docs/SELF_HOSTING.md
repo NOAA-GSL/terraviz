@@ -89,6 +89,56 @@ W22 🔒 GITHUB_DISPATCH_TOKEN         ......................
 
 ---
 
+## Shortcut: `npm run setup`
+
+Four of the phases below are mechanical, and a tool does them:
+
+```bash
+npm run setup                # plan only — writes nothing
+npm run setup -- --apply     # provision + wire
+```
+
+| Phase | What the tool does |
+|---|---|
+| **2** | Creates (or adopts) the D1 database, both KV namespaces, the R2 bucket, the Vectorize index and its three metadata indexes. |
+| **3** | Repoints the `wrangler.toml` resource IDs at what it just created. |
+| **4** | Applies both migration sets, in the order that works. |
+| **8** | Writes every binding, variable and available secret to **both** Production and Preview. |
+
+It is **plan-by-default** — a bare `npm run setup` prints what it
+would do and exits. It is idempotent: it lists before it creates, so
+re-running adopts rather than duplicates. And it is resumable —
+resolved IDs land in `.terraviz-setup.json` (gitignored, never any
+secret values) as they are found, so a run that dies partway through
+picks up where it left off.
+
+It reads the same manifest the audit does
+([`scripts/lib/expected-bindings.ts`](../scripts/lib/expected-bindings.ts)),
+so it cannot provision a deploy that
+`npm run check:pages-bindings` then calls broken.
+
+**Still do Phases 0, 5, 6, 7, 11 by hand** — accounts and billing,
+the Pages project, Cloudflare Access, key generation, and the first
+SSO sign-in. The tool names any of these that is blocking it, and
+re-running after you finish one fills in the bindings it couldn't
+resolve before. A typical Tier 2 install is:
+
+```bash
+# Phases 0 and 5 in the dashboard, then:
+npm run setup -- --apply --only=resources,wrangler-toml,migrations
+
+# Phase 6 in the Zero Trust dashboard, Phase 7 locally:
+npm run gen:node-key
+export ACCESS_TEAM_DOMAIN=... ACCESS_AUD=... PREVIEW_SIGNING_KEY=...
+npm run setup -- --apply --only=bindings
+
+# then redeploy, and verify (Phase 10)
+```
+
+`npm run setup -- --help` lists every flag and environment variable.
+
+---
+
 # Phase 0 — Before you touch Cloudflare
 
 ## 0.1 Accounts and spend
@@ -334,9 +384,38 @@ wrangler d1 info CATALOG_DB     # should print YOUR database, 0 tables
 Two migration sets live in this repo, keyed by **binding name**.
 
 ```bash
-wrangler d1 migrations apply FEEDBACK_DB --remote    # migrations/
 wrangler d1 migrations apply CATALOG_DB  --remote    # migrations/catalog/
+wrangler d1 migrations apply FEEDBACK_DB --remote    # migrations/
 ```
+
+> ⚠️ **Run `CATALOG_DB` first. The order is not cosmetic.**
+>
+> `FEEDBACK_DB`'s `migrations_dir` is the repo-root `migrations/`,
+> which also contains **`catalog-schema.sql`** — a *generated
+> snapshot* of the fully-migrated catalog schema, written by
+> `npm run db:dump-schema` for reference. Wrangler has no way to know
+> it isn't a migration, so it queues it as one.
+>
+> On an empty database, running `FEEDBACK_DB` first means that
+> snapshot **applies for real**, creating the entire catalog schema
+> outside the migration tracker. Every subsequent `CATALOG_DB`
+> migration then fails on `table node_identity already exists`, and
+> the install cannot be completed. Verified on a clean database:
+>
+> ```
+> wrangler d1 migrations apply FEEDBACK_DB   → exit 0
+> wrangler d1 migrations apply CATALOG_DB    → exit 1
+>   ✘ table node_identity already exists at offset 13: SQLITE_ERROR
+> ```
+>
+> Run `CATALOG_DB` first and every table in the snapshot already
+> exists, so it fails on its first statement and changes nothing.
+>
+> **So the second command is expected to end with an error** —
+> `table analytics_daily already exists` — *after* applying the seven
+> real feedback migrations. That one failure is harmless. Any other
+> failure is not. (`npm run setup` handles this distinction for you;
+> it is also why `ci.yml` only ever auto-applies `CATALOG_DB`.)
 
 > ⚠️ **Always select by binding name, never by database name.**
 > Both `[[d1_databases]]` blocks declare
@@ -352,6 +431,7 @@ wrangler d1 migrations apply CATALOG_DB  --remote    # migrations/catalog/
 
 ```bash
 wrangler d1 migrations list CATALOG_DB --remote     # "No migrations to apply"
+wrangler d1 migrations list FEEDBACK_DB --remote    # only catalog-schema.sql pending
 ```
 
 That command diffs the whole `migrations/catalog/` directory
@@ -1362,6 +1442,15 @@ exercised.
 - The `TRUSTED_PUBLISHER_DOMAINS` behaviour, read from
   `provisioningDefaults()` and its tests.
 - The first-user admin bootstrap, read from `getOrCreatePublisher()`.
+- **The Phase 4 migration ordering**, both directions, against a
+  clean database. `CATALOG_DB` first leaves all 51 migrations
+  recorded and every table present; `FEEDBACK_DB` first exits 0 and
+  then makes `CATALOG_DB` fail with `table node_identity already
+  exists`. This is an install-stopper, and it is the order the
+  previous revision prescribed (its Step 5 applied `FEEDBACK_DB`
+  before its Step 11 applied `CATALOG_DB`).
+- `npm run setup` end to end in plan mode, and its migration step
+  under `--apply --local-migrations` against a clean database.
 
 **Not verified — no Cloudflare account was available in this
 environment.** Every dashboard click path, the Access application
@@ -1403,7 +1492,18 @@ the binding *name* — that's what the code reads.
 10. `npm run dev:functions` cannot run on a fresh clone, contrary
     to the mock-mode claims in `.dev.vars.example`.
 
+11. The migration order was backwards, and following it exactly makes
+    the catalog schema unapplyable. See Phase 4. (This one survived
+    into the first pass of *this* rewrite too — it only surfaced when
+    `npm run setup` ran the commands for real.)
+
 **Still open** (not fixed here, needs a code change):
+
+- `migrations/catalog-schema.sql` is a generated snapshot living
+  inside `FEEDBACK_DB`'s `migrations_dir`, which is the root cause of
+  the Phase 4 ordering trap. Moving it out of that directory (and
+  updating `db:dump-schema` plus the CI drift check) would remove the
+  hazard rather than document around it.
 
 - The `[ai]` binding blocking offline dev. `wrangler.toml` is
   documentation-only for Pages, so removing the block would cost
