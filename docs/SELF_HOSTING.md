@@ -1667,10 +1667,17 @@ quietly dependent on upstream infrastructure.
 | `VITE_EARTH_ASSET_BASE` | `https://d3sik7mbbzunjo.cloudfront.net/terraviz/basemaps` | Earth basemap textures (diffuse / night lights / normal / borders) for the photoreal Earth and 2D overlays — loaded by **every** node. | **Any independent node.** Mirror the static `.jpg`/`.png` files to your own bucket and point here. |
 | `VITE_VIDEO_PROXY_BASE` | `https://video-proxy.zyra-project.org/video` | Resolves **legacy SOS** `vimeo:` data refs into HLS/MP4. | Only if you ran `import-snapshot` and want video independent of upstream. The proxy worker isn't in this repo. |
 | `VITE_CAPTION_PROXY_BASE` | `https://video-proxy.zyra-project.org/captions` | CORS shim for legacy `sos.noaa.gov` `.srt` captions. | Same. |
+| `TERRAVIZ_DOCS_URL` | `https://github.com/zyra-project/terraviz/blob/main/docs/SELF_HOSTING.md` | Base for the 19 links the `/setup` console makes into this guide (17 anchored per phase). Read at **build** time by `npm run build:setup-page`. | Once your fork's copy of this guide diverges from upstream's. Set it to your own blob URL — including the branch, if yours isn't `main` — and rebuild. |
 
 Content you publish through the portal is transcoded to your own
 R2 (`r2:` data refs) and never touches either proxy — the proxies
 only matter for mirrored SOS rows.
+
+> `TERRAVIZ_DOCS_URL` only matters for people reading your node's
+> `/setup` without filling anything in. The console also retargets
+> those links at runtime from `W3`, your git remote — so anyone
+> actually working through the install gets your fork's guide as soon
+> as they enter it, whether or not you set the variable.
 
 The SOS metadata snapshot, the cloud-texture bucket, and NASA GIBS
 tiles are third-party **public data sources** shared by all nodes,

@@ -16,7 +16,10 @@ import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import {
+  applyDocLinks,
   applyShell,
+  docLinkRuntime,
+  resolveDocsUrl,
   assertSelfContained,
   assertValidatorsImplemented,
   CSP_META,
@@ -25,7 +28,7 @@ import {
   repairSummary,
   TOKEN_ALIASES,
 } from './shell'
-import { WORKSHEET } from './content'
+import { MARKDOWN_URL, WORKSHEET } from './content'
 
 const PAGE = resolve(__dirname, '../../public/setup.html')
 const html = (): string => readFileSync(PAGE, 'utf8')
@@ -66,6 +69,63 @@ describe('applyShell', () => {
     expect(() => applyShell('<html><body>no head markers</body></html>')).toThrow(
       /Cannot place the CSP/,
     )
+  })
+})
+
+describe('fork-friendly doc links', () => {
+  const doc = (anchor = '') => `<a href="${MARKDOWN_URL}${anchor}">d</a>`
+
+  it('defaults to the upstream guide when nothing is configured', () => {
+    expect(resolveDocsUrl({})).toBe(MARKDOWN_URL)
+    expect(resolveDocsUrl({ TERRAVIZ_DOCS_URL: '   ' })).toBe(MARKDOWN_URL)
+  })
+
+  it('takes the configured base and drops a trailing slash', () => {
+    expect(resolveDocsUrl({ TERRAVIZ_DOCS_URL: 'https://x.org/g.md/' })).toBe('https://x.org/g.md')
+  })
+
+  it('retargets every link and keeps each anchor', () => {
+    const { html, count } = applyDocLinks(
+      `${doc()}${doc('#phase-2--create-the-cloudflare-resources')}`,
+      'https://github.com/fork/repo/blob/main/docs/SELF_HOSTING.md',
+    )
+    expect(count).toBe(2)
+    expect(html).toContain('data-doc="#phase-2--create-the-cloudflare-resources"')
+    expect(html).toContain(
+      'href="https://github.com/fork/repo/blob/main/docs/SELF_HOSTING.md#phase-2--create-the-cloudflare-resources"',
+    )
+    expect(html).not.toContain(MARKDOWN_URL)
+  })
+
+  // The runtime layer is an enhancement. With JS off, or after an
+  // export drops the script, the static href must still work.
+  it('leaves a complete working href, not a fragment', () => {
+    const { html } = applyDocLinks(doc('#x'), 'https://e.org/g.md')
+    expect(html).toContain('href="https://e.org/g.md#x"')
+  })
+
+  it('is a no-op when the page has no doc links', () => {
+    const { html, count } = applyDocLinks('<p>none</p>', 'https://e.org/g.md')
+    expect(count).toBe(0)
+    expect(html).toBe('<p>none</p>')
+  })
+
+  // Coupling to render.ts's script scope would break on the next
+  // export; these two contracts are all the runtime may rely on.
+  it('reads only the W3 field and the storage key', () => {
+    const js = docLinkRuntime(MARKDOWN_URL)
+    expect(js).toContain('data-field="W3"')
+    expect(js).toContain('terraviz-setup-console-v1')
+  })
+
+  it('injects the runtime only when there are links to retarget', () => {
+    expect(applyShell('<html><head><title>t</title></head><body></body></html>').html)
+      .not.toContain('terraviz-setup-console-v1')
+    const withLinks = applyShell(
+      `<html><head><title>t</title></head><body>${doc('#a')}</body></html>`,
+    )
+    expect(withLinks.docLinks).toBe(1)
+    expect(withLinks.html).toContain('terraviz-setup-console-v1')
   })
 })
 
@@ -122,6 +182,13 @@ describe('the committed public/setup.html', () => {
 
   it('implements every validator its worksheet names', () => {
     expect(() => assertValidatorsImplemented(WORKSHEET, html())).not.toThrow()
+  })
+
+  it('tags every doc link so the runtime can retarget it', () => {
+    const page = html()
+    // 15 phases + the two standing references.
+    expect((page.match(/data-doc="/g) ?? []).length).toBeGreaterThanOrEqual(17)
+    expect(page).toContain('terraviz-setup-console-v1')
   })
 
   it('carries the CSP and the real favicon', () => {

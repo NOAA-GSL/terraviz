@@ -46,6 +46,7 @@ import {
   assertSelfContained,
   assertValidatorsImplemented,
   repairSummary,
+  resolveDocsUrl,
   TOKEN_ALIASES,
 } from './setup-page/shell'
 
@@ -97,7 +98,7 @@ function main(): void {
   // export, so anything fixed there is lost on the next one. The
   // shell restores what an export drops, then verifies the result —
   // see the header of scripts/setup-page/shell.ts.
-  const shell = applyShell(html)
+  const shell = applyShell(html, { docsUrl: resolveDocsUrl(process.env) })
   html = shell.html
   try {
     assertSelfContained(html)
@@ -105,6 +106,11 @@ function main(): void {
   } catch (error) {
     process.stderr.write(`\n${(error as Error).message}\n`)
     process.exit(1)
+  }
+
+  const docsUrl = resolveDocsUrl(process.env)
+  if (process.env.TERRAVIZ_DOCS_URL) {
+    process.stdout.write(`Doc links (${shell.docLinks}) point at ${docsUrl}\n`)
   }
 
   const repaired = repairSummary(shell.repairs)

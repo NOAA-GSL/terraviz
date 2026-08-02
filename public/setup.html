@@ -440,7 +440,7 @@ code{overflow-wrap:anywhere}
     <span style="background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:3px;padding:5px 10px;font:500 12px/1.2 var(--tv-font-sans);color:var(--tv-text-muted)">A domain already on Cloudflare DNS</span>
     <a href="#cost" style="background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-bottom:1px solid var(--tv-border-strong);border-radius:3px;padding:5px 10px;font:500 12px/1.2 var(--tv-font-sans);color:var(--tv-text-muted)">Free plan works — $5/mo buys back analytics</a>
   </div>
-  <p style="margin:0;font-size:13.5px;color:var(--tv-text-dim)">This page is a front door. The canonical text — every click path, every caveat — is <a href="https://github.com/zyra-project/terraviz/blob/main/docs/SELF_HOSTING.md">SELF_HOSTING.md</a>, and each phase links straight into it.</p>
+  <p style="margin:0;font-size:13.5px;color:var(--tv-text-dim)">This page is a front door. The canonical text — every click path, every caveat — is <a data-doc="" href="https://github.com/zyra-project/terraviz/blob/main/docs/SELF_HOSTING.md">SELF_HOSTING.md</a>, and each phase links straight into it.</p>
 </section>
 <section data-noprint="1" style="margin:0 0 44px">
   <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim);margin:0 0 12px">Step one · pick your node type</div>
@@ -950,7 +950,7 @@ cd terraviz &amp;&amp; npm install</pre>
     <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-accent);margin:0 0 7px">Gate</div>
     <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty"><code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">wrangler whoami</code> prints the account matching <span data-slot="W1" data-w="W1" style="cursor:pointer;padding:1px 5px;border-radius:3px"></span>.</p>
   </div>
-  <p style="margin:0;font-size:12.5px;color:var(--tv-text-dim)"><a href="https://github.com/zyra-project/terraviz/blob/main/docs/SELF_HOSTING.md#phase-0--before-you-touch-cloudflare">Full detail in SELF_HOSTING.md ↗</a></p>
+  <p style="margin:0;font-size:12.5px;color:var(--tv-text-dim)"><a data-doc="#phase-0--before-you-touch-cloudflare" href="https://github.com/zyra-project/terraviz/blob/main/docs/SELF_HOSTING.md#phase-0--before-you-touch-cloudflare">Full detail in SELF_HOSTING.md ↗</a></p>
 </section>
 <section id="p1" data-phase="1" data-min-tier="1" style="background:var(--tv-surface-2);border:1px solid var(--tv-border);border-radius:8px;padding:26px 30px;margin:0 0 16px;scroll-margin-top:20px">
   <div style="display:flex;align-items:flex-start;gap:15px;margin:0 0 18px">
@@ -996,7 +996,7 @@ npm run dev:functions<span style="color:var(--tv-text-dim)">      # http://local
     <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-accent);margin:0 0 7px">Gate</div>
     <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">All four endpoints answer: 200 with datasets, a real public key, role <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">admin</code>, and a mock-embedder search result. If <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">/publish/me</code> returns 503, you copied to <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">.dev.vars.example</code> rather than <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">.dev.vars</code>.</p>
   </div>
-  <p style="margin:0;font-size:12.5px;color:var(--tv-text-dim)"><a href="https://github.com/zyra-project/terraviz/blob/main/docs/SELF_HOSTING.md#phase-1--run-it-on-your-laptop">Full detail in SELF_HOSTING.md ↗</a></p>
+  <p style="margin:0;font-size:12.5px;color:var(--tv-text-dim)"><a data-doc="#phase-1--run-it-on-your-laptop" href="https://github.com/zyra-project/terraviz/blob/main/docs/SELF_HOSTING.md#phase-1--run-it-on-your-laptop">Full detail in SELF_HOSTING.md ↗</a></p>
 </section>
 <section id="p2" data-phase="2" data-min-tier="1" style="background:var(--tv-surface-2);border:1px solid var(--tv-border);border-radius:8px;padding:26px 30px;margin:0 0 16px;scroll-margin-top:20px">
   <div style="display:flex;align-items:flex-start;gap:15px;margin:0 0 18px">
@@ -1028,7 +1028,7 @@ npm run dev:functions<span style="color:var(--tv-text-dim)">      # http://local
     <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-accent);margin:0 0 7px">Gate</div>
     <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">W4 through W9 are all filled in.</p>
   </div>
-  <p style="margin:0;font-size:12.5px;color:var(--tv-text-dim)"><a href="https://github.com/zyra-project/terraviz/blob/main/docs/SELF_HOSTING.md#phase-2--create-the-cloudflare-resources">Full detail in SELF_HOSTING.md ↗</a></p>
+  <p style="margin:0;font-size:12.5px;color:var(--tv-text-dim)"><a data-doc="#phase-2--create-the-cloudflare-resources" href="https://github.com/zyra-project/terraviz/blob/main/docs/SELF_HOSTING.md#phase-2--create-the-cloudflare-resources">Full detail in SELF_HOSTING.md ↗</a></p>
 </section>
 <section id="p3" data-phase="3" data-min-tier="1" style="background:var(--tv-surface-2);border:1px solid var(--tv-border);border-radius:8px;padding:26px 30px;margin:0 0 16px;scroll-margin-top:20px">
   <div style="display:flex;align-items:flex-start;gap:15px;margin:0 0 18px">
@@ -1056,7 +1056,7 @@ npm run dev:functions<span style="color:var(--tv-text-dim)">      # http://local
     <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-accent);margin:0 0 7px">Gate</div>
     <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty"><code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">wrangler d1 info CATALOG_DB</code> shows your database, 0 tables.</p>
   </div>
-  <p style="margin:0;font-size:12.5px;color:var(--tv-text-dim)"><a href="https://github.com/zyra-project/terraviz/blob/main/docs/SELF_HOSTING.md#phase-3--point-the-repo-at-your-resources">Full detail in SELF_HOSTING.md ↗</a></p>
+  <p style="margin:0;font-size:12.5px;color:var(--tv-text-dim)"><a data-doc="#phase-3--point-the-repo-at-your-resources" href="https://github.com/zyra-project/terraviz/blob/main/docs/SELF_HOSTING.md#phase-3--point-the-repo-at-your-resources">Full detail in SELF_HOSTING.md ↗</a></p>
 </section>
 <section id="p4" data-phase="4" data-min-tier="1" style="background:var(--tv-surface-2);border:1px solid var(--tv-border);border-radius:8px;padding:26px 30px;margin:0 0 16px;scroll-margin-top:20px">
   <div style="display:flex;align-items:flex-start;gap:15px;margin:0 0 18px">
@@ -1095,7 +1095,7 @@ wrangler d1 migrations apply FEEDBACK_DB --remote<span style="color:var(--tv-tex
     <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-accent);margin:0 0 7px">Gate</div>
     <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">Both migration lists report nothing pending except <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">catalog-schema.sql</code> on FEEDBACK_DB. Re-run both after every <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">git pull</code> that brings new migration files — they are idempotent.</p>
   </div>
-  <p style="margin:0;font-size:12.5px;color:var(--tv-text-dim)"><a href="https://github.com/zyra-project/terraviz/blob/main/docs/SELF_HOSTING.md#phase-4--create-the-schema">Full detail in SELF_HOSTING.md ↗</a></p>
+  <p style="margin:0;font-size:12.5px;color:var(--tv-text-dim)"><a data-doc="#phase-4--create-the-schema" href="https://github.com/zyra-project/terraviz/blob/main/docs/SELF_HOSTING.md#phase-4--create-the-schema">Full detail in SELF_HOSTING.md ↗</a></p>
 </section>
 <section id="p5" data-phase="5" data-min-tier="1" style="background:var(--tv-surface-2);border:1px solid var(--tv-border);border-radius:8px;padding:26px 30px;margin:0 0 16px;scroll-margin-top:20px">
   <div style="display:flex;align-items:flex-start;gap:15px;margin:0 0 18px">
@@ -1130,7 +1130,7 @@ wrangler d1 migrations apply FEEDBACK_DB --remote<span style="color:var(--tv-tex
     <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-accent);margin:0 0 7px">Gate</div>
     <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">The build goes green, the site loads at <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px"><span data-slot="W10" data-w="W10" style="cursor:pointer;padding:1px 5px;border-radius:3px"></span>.pages.dev</code>, and then <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">https://<span data-slot="W2" data-w="W2" style="cursor:pointer;padding:1px 5px;border-radius:3px"></span></code> serves it over TLS. Backend features will not work yet — no bindings.</p>
   </div>
-  <p style="margin:0;font-size:12.5px;color:var(--tv-text-dim)"><a href="https://github.com/zyra-project/terraviz/blob/main/docs/SELF_HOSTING.md#phase-5--create-the-pages-project">Full detail in SELF_HOSTING.md ↗</a></p>
+  <p style="margin:0;font-size:12.5px;color:var(--tv-text-dim)"><a data-doc="#phase-5--create-the-pages-project" href="https://github.com/zyra-project/terraviz/blob/main/docs/SELF_HOSTING.md#phase-5--create-the-pages-project">Full detail in SELF_HOSTING.md ↗</a></p>
 </section>
 <section id="p6" data-phase="6" data-min-tier="2" style="background:var(--tv-surface-2);border:1px solid var(--tv-border);border-radius:8px;padding:26px 30px;margin:0 0 16px;scroll-margin-top:20px">
   <div style="display:flex;align-items:flex-start;gap:15px;margin:0 0 18px">
@@ -1165,7 +1165,7 @@ wrangler d1 migrations apply FEEDBACK_DB --remote<span style="color:var(--tv-tex
     <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-accent);margin:0 0 7px">Gate</div>
     <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">The AUD is copied, the token pair is in your password manager, and the token appears in the Automation policy's include list.</p>
   </div>
-  <p style="margin:0;font-size:12.5px;color:var(--tv-text-dim)"><a href="https://github.com/zyra-project/terraviz/blob/main/docs/SELF_HOSTING.md#phase-6--cloudflare-access-and-the-service-token">Full detail, plus the two optional Access apps ↗</a></p>
+  <p style="margin:0;font-size:12.5px;color:var(--tv-text-dim)"><a data-doc="#phase-6--cloudflare-access-and-the-service-token" href="https://github.com/zyra-project/terraviz/blob/main/docs/SELF_HOSTING.md#phase-6--cloudflare-access-and-the-service-token">Full detail, plus the two optional Access apps ↗</a></p>
 </section>
 <section id="p7" data-phase="7" data-min-tier="2" style="background:var(--tv-surface-2);border:1px solid var(--tv-border);border-radius:8px;padding:26px 30px;margin:0 0 16px;scroll-margin-top:20px">
   <div style="display:flex;align-items:flex-start;gap:15px;margin:0 0 18px">
@@ -1200,7 +1200,7 @@ openssl rand -base64 32<span style="color:var(--tv-text-dim)">    # W18</span></
     <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-accent);margin:0 0 7px">Gate</div>
     <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty"><code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">.dev.vars</code> holds a single-line private key, and <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">node-public-key.txt</code> holds an <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">ed25519:</code> line.</p>
   </div>
-  <p style="margin:0;font-size:12.5px;color:var(--tv-text-dim)"><a href="https://github.com/zyra-project/terraviz/blob/main/docs/SELF_HOSTING.md#phase-7--generate-your-nodes-secrets">Full detail in SELF_HOSTING.md ↗</a></p>
+  <p style="margin:0;font-size:12.5px;color:var(--tv-text-dim)"><a data-doc="#phase-7--generate-your-nodes-secrets" href="https://github.com/zyra-project/terraviz/blob/main/docs/SELF_HOSTING.md#phase-7--generate-your-nodes-secrets">Full detail in SELF_HOSTING.md ↗</a></p>
 </section>
 <section id="p8" data-phase="8" data-min-tier="1" style="background:var(--tv-surface-2);border:1px solid var(--tv-border);border-radius:8px;padding:26px 30px;margin:0 0 16px;scroll-margin-top:20px">
   <div style="display:flex;align-items:flex-start;gap:15px;margin:0 0 18px">
@@ -1358,7 +1358,7 @@ openssl rand -base64 32<span style="color:var(--tv-text-dim)">    # W18</span></
     <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-accent);margin:0 0 7px">Gate</div>
     <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">Bindings take effect on the <i>next</i> deployment — <b style="font-weight:600;color:var(--tv-text)">Deployments → ⋯ → Retry deployment</b>, or push a commit. Then open your node in a private window: the privacy disclosure banner appears on first load, and the network tab shows 204 responses from <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">/api/ingest</code>.</p>
   </div>
-  <p style="margin:0;font-size:12.5px;color:var(--tv-text-dim)"><a href="https://github.com/zyra-project/terraviz/blob/main/docs/SELF_HOSTING.md#phase-8--wire-bindings-variables-and-secrets">Full detail in SELF_HOSTING.md ↗</a></p>
+  <p style="margin:0;font-size:12.5px;color:var(--tv-text-dim)"><a data-doc="#phase-8--wire-bindings-variables-and-secrets" href="https://github.com/zyra-project/terraviz/blob/main/docs/SELF_HOSTING.md#phase-8--wire-bindings-variables-and-secrets">Full detail in SELF_HOSTING.md ↗</a></p>
 </section>
 <section id="p9" data-phase="9" data-min-tier="2" style="background:var(--tv-surface-2);border:1px solid var(--tv-border);border-radius:8px;padding:26px 30px;margin:0 0 16px;scroll-margin-top:20px">
   <div style="display:flex;align-items:flex-start;gap:15px;margin:0 0 18px">
@@ -1392,7 +1392,7 @@ openssl rand -base64 32<span style="color:var(--tv-text-dim)">    # W18</span></
     <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-accent);margin:0 0 7px">Gate</div>
     <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty"><code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">curl https://<span data-slot="W2" data-w="W2" style="cursor:pointer;padding:1px 5px;border-radius:3px"></span>/.well-known/terraviz.json</code> returns 200, with your display name and your real public key. Not 503.</p>
   </div>
-  <p style="margin:0;font-size:12.5px;color:var(--tv-text-dim)"><a href="https://github.com/zyra-project/terraviz/blob/main/docs/SELF_HOSTING.md#phase-9--provision-the-node-identity">Full detail, plus the wrangler fallback ↗</a></p>
+  <p style="margin:0;font-size:12.5px;color:var(--tv-text-dim)"><a data-doc="#phase-9--provision-the-node-identity" href="https://github.com/zyra-project/terraviz/blob/main/docs/SELF_HOSTING.md#phase-9--provision-the-node-identity">Full detail, plus the wrangler fallback ↗</a></p>
 </section>
 <section id="p10" data-phase="10" data-min-tier="1" style="background:var(--tv-surface-2);border:1px solid var(--tv-border);border-radius:8px;padding:26px 30px;margin:0 0 16px;scroll-margin-top:20px">
   <div style="display:flex;align-items:flex-start;gap:15px;margin:0 0 18px">
@@ -1423,7 +1423,7 @@ npm run terraviz -- verify-deploy --server https://<span data-slot="W2" data-w="
     <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-accent);margin:0 0 7px">Gate</div>
     <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">Bindings audit clean, and five of six deploy checks green.</p>
   </div>
-  <p style="margin:0;font-size:12.5px;color:var(--tv-text-dim)"><a href="https://github.com/zyra-project/terraviz/blob/main/docs/SELF_HOSTING.md#phase-10--verify">Full detail in SELF_HOSTING.md ↗</a></p>
+  <p style="margin:0;font-size:12.5px;color:var(--tv-text-dim)"><a data-doc="#phase-10--verify" href="https://github.com/zyra-project/terraviz/blob/main/docs/SELF_HOSTING.md#phase-10--verify">Full detail in SELF_HOSTING.md ↗</a></p>
 </section>
 <section id="p11" data-phase="11" data-min-tier="2" style="background:var(--tv-surface-2);border:1px solid var(--tv-border);border-radius:8px;padding:26px 30px;margin:0 0 16px;scroll-margin-top:20px">
   <div style="display:flex;align-items:flex-start;gap:15px;margin:0 0 18px">
@@ -1447,7 +1447,7 @@ npm run terraviz -- verify-deploy --server https://<span data-slot="W2" data-w="
     <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-accent);margin:0 0 7px">Gate</div>
     <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty"><code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">/publish/me</code> shows your email with role <b style="font-weight:600;color:var(--tv-text)">admin</b>, and the sidebar shows the Users tab.</p>
   </div>
-  <p style="margin:0;font-size:12.5px;color:var(--tv-text-dim)"><a href="https://github.com/zyra-project/terraviz/blob/main/docs/SELF_HOSTING.md#phase-11--sign-in-and-become-admin">Full detail, plus the no-admin escape hatch ↗</a></p>
+  <p style="margin:0;font-size:12.5px;color:var(--tv-text-dim)"><a data-doc="#phase-11--sign-in-and-become-admin" href="https://github.com/zyra-project/terraviz/blob/main/docs/SELF_HOSTING.md#phase-11--sign-in-and-become-admin">Full detail, plus the no-admin escape hatch ↗</a></p>
 </section>
 <section id="p12" data-phase="12" data-min-tier="2" style="background:var(--tv-surface-2);border:1px solid var(--tv-border);border-radius:8px;padding:26px 30px;margin:0 0 16px;scroll-margin-top:20px">
   <div style="display:flex;align-items:flex-start;gap:15px;margin:0 0 18px">
@@ -1480,7 +1480,7 @@ npm run terraviz -- import-snapshot \
     <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-accent);margin:0 0 7px">Gate</div>
     <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">Re-run <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">verify-deploy</code>. <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">catalog-populated</code> now passes and all six checks are green. That is a complete publisher node. Embedding jobs backfill semantic search asynchronously over the next ten minutes or so.</p>
   </div>
-  <p style="margin:0;font-size:12.5px;color:var(--tv-text-dim)"><a href="https://github.com/zyra-project/terraviz/blob/main/docs/SELF_HOSTING.md#phase-12--put-content-in">Full detail in SELF_HOSTING.md ↗</a></p>
+  <p style="margin:0;font-size:12.5px;color:var(--tv-text-dim)"><a data-doc="#phase-12--put-content-in" href="https://github.com/zyra-project/terraviz/blob/main/docs/SELF_HOSTING.md#phase-12--put-content-in">Full detail in SELF_HOSTING.md ↗</a></p>
 </section>
 <section id="p13" data-phase="13" data-min-tier="2" style="background:var(--tv-surface-2);border:1px solid var(--tv-border);border-radius:8px;padding:26px 30px;margin:0 0 16px;scroll-margin-top:20px">
   <div style="display:flex;align-items:flex-start;gap:15px;margin:0 0 18px">
@@ -1530,7 +1530,7 @@ npm run terraviz -- import-snapshot \
     <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-accent);margin:0 0 7px">Gate</div>
     <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">Whichever add-ons you chose report healthy.</p>
   </div>
-  <p style="margin:0;font-size:12.5px;color:var(--tv-text-dim)"><a href="https://github.com/zyra-project/terraviz/blob/main/docs/SELF_HOSTING.md#phase-13--optional-add-ons">All nine add-ons in full ↗</a></p>
+  <p style="margin:0;font-size:12.5px;color:var(--tv-text-dim)"><a data-doc="#phase-13--optional-add-ons" href="https://github.com/zyra-project/terraviz/blob/main/docs/SELF_HOSTING.md#phase-13--optional-add-ons">All nine add-ons in full ↗</a></p>
 </section>
 <section id="p14" data-phase="14" data-min-tier="3" data-exact-tier="3" style="background:var(--tv-surface-2);border:1px solid var(--tv-border);border-radius:8px;padding:26px 30px;margin:0 0 16px;scroll-margin-top:20px">
   <div style="display:flex;align-items:flex-start;gap:15px;margin:0 0 18px">
@@ -1548,7 +1548,7 @@ npm run terraviz -- import-snapshot \
     <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-accent);margin:0 0 7px">Gate</div>
     <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">A signed desktop build that talks to your API origin, not upstream.</p>
   </div>
-  <p style="margin:0;font-size:12.5px;color:var(--tv-text-dim)"><a href="https://github.com/zyra-project/terraviz/blob/main/docs/SELF_HOSTING.md#phase-14--desktop-app-fork-tier-3">Full detail in SELF_HOSTING.md ↗</a></p>
+  <p style="margin:0;font-size:12.5px;color:var(--tv-text-dim)"><a data-doc="#phase-14--desktop-app-fork-tier-3" href="https://github.com/zyra-project/terraviz/blob/main/docs/SELF_HOSTING.md#phase-14--desktop-app-fork-tier-3">Full detail in SELF_HOSTING.md ↗</a></p>
 </section>
 <section id="stuck" data-noprint="1" style="margin:44px 0 0;scroll-margin-top:20px">
   <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim);margin:0 0 12px">If you are stuck right now</div>
@@ -1606,7 +1606,7 @@ npm run terraviz -- import-snapshot \
       <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">No service token configured. Re-run with the token env vars, and confirm the token is attached to a Service Auth policy on the publisher app.</p>
     </div>
   </div>
-  <p style="margin:16px 0 0;font-size:12.5px;color:var(--tv-text-dim)"><a href="https://github.com/zyra-project/terraviz/blob/main/docs/SELF_HOSTING.md#reference-e--troubleshooting">All sixteen symptoms in SELF_HOSTING.md ↗</a></p>
+  <p style="margin:16px 0 0;font-size:12.5px;color:var(--tv-text-dim)"><a data-doc="#reference-e--troubleshooting" href="https://github.com/zyra-project/terraviz/blob/main/docs/SELF_HOSTING.md#reference-e--troubleshooting">All sixteen symptoms in SELF_HOSTING.md ↗</a></p>
 </section>
 <section data-noprint="1" style="margin:44px 0 0">
   <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim);margin:0 0 12px">After a successful launch</div>
@@ -1636,8 +1636,8 @@ npm run terraviz -- import-snapshot \
 </section>
 <footer data-noprint="1" style="margin:52px 0 0;padding-top:24px;border-top:1px solid var(--tv-border);display:flex;flex-wrap:wrap;gap:22px;align-items:baseline">
   <p style="margin:0;font-size:13.5px;color:var(--tv-text-dim);flex:1;min-width:280px;text-wrap:pretty">If something here is wrong or under-documented, open an issue. Most of this exists because someone hit a snag and it was worth writing down.</p>
-  <a href="https://github.com/zyra-project/terraviz/blob/main/docs/SELF_HOSTING.md" style="font-size:13.5px">SELF_HOSTING.md ↗</a>
-  <a href="https://github.com/zyra-project/terraviz/blob/main/docs/SELF_HOSTING.md#reference-a--complete-variable-inventory" style="font-size:13.5px">Variable inventory ↗</a>
+  <a data-doc="" href="https://github.com/zyra-project/terraviz/blob/main/docs/SELF_HOSTING.md" style="font-size:13.5px">SELF_HOSTING.md ↗</a>
+  <a data-doc="#reference-a--complete-variable-inventory" href="https://github.com/zyra-project/terraviz/blob/main/docs/SELF_HOSTING.md#reference-a--complete-variable-inventory" style="font-size:13.5px">Variable inventory ↗</a>
 </footer>
 </main>
 </div>
@@ -2206,6 +2206,36 @@ document.addEventListener('click', e => {
 });
 
 repaint();
+</script>
+<script>
+(function () {
+  var KEY = 'terraviz-setup-console-v1';
+  var FALLBACK = "https://github.com/zyra-project/terraviz/blob/main/docs/SELF_HOSTING.md";
+  var SLUG = /^[\w.-]+\/[\w.-]+$/;
+  function remote() {
+    var el = document.querySelector('[data-field="W3"]');
+    if (el && el.value && el.value.trim()) return el.value.trim();
+    try {
+      var s = JSON.parse(localStorage.getItem(KEY) || '{}');
+      return ((s.vals || {}).W3 || '').trim();
+    } catch (e) { return ''; }
+  }
+  function paint() {
+    var r = remote();
+    var base = SLUG.test(r)
+      ? 'https://github.com/' + r + '/blob/main/docs/SELF_HOSTING.md'
+      : FALLBACK;
+    var links = document.querySelectorAll('[data-doc]');
+    for (var i = 0; i < links.length; i++) {
+      links[i].setAttribute('href', base + links[i].getAttribute('data-doc'));
+    }
+  }
+  document.addEventListener('input', function (e) {
+    var t = e.target;
+    if (t && t.getAttribute && t.getAttribute('data-field') === 'W3') paint();
+  });
+  paint();
+})();
 </script>
 </body>
 </html>
