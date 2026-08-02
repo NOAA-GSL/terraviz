@@ -22,10 +22,29 @@ Terraviz is built to be self-hosted. A museum, a lab or a school can
 run its own instance, publish its own datasets, and federate with
 others — the public site is one node, not the product.
 
-Start at **[`/setup`](https://terraviz.zyra-project.org/setup)**: a
-guided, resumable install console that filters itself to the kind of
-node you want, fills your values into every command, and prints a
-pre-flight checklist.
+Two ways in. They cover the same install — pick by where you are:
+
+- **[The install console](https://terraviz.zyra-project.org/setup)**
+  — a guided, resumable checklist in the browser. Filters itself to
+  the kind of node you want, substitutes your values into every
+  command, and prints a pre-flight sheet. **Use this first**, before
+  you have cloned anything, to size the job up and collect the
+  values you will need.
+- **[docs/SELF_HOSTING.md](docs/SELF_HOSTING.md)** — the canonical
+  reference, and the one to work from once you have a checkout. It
+  is the long form: every click path, every caveat, the
+  troubleshooting table. **Use this while you install.** It travels
+  with the repo, so it always matches the revision you are on.
+
+The console links into the Markdown per phase, so moving from one to
+the other is a click. It is generated from the same modules
+`npm run setup` uses, which is what keeps its binding list and
+prerequisites honest.
+
+> On a fork, the console link above serves **upstream’s** revision.
+> Your checkout’s `docs/SELF_HOSTING.md` is the one that matches
+> your code — and once you finish Phase 5, your own node serves its
+> own `/setup`, generated from your checkout.
 
 | Tier | | |
 |---|---|---|
@@ -38,9 +57,6 @@ npm run setup -- --manual        # the prerequisites only a human can do
 npm run setup -- --interactive   # guided, validated, resumable
 ```
 
-The canonical reference is
-[docs/SELF_HOSTING.md](docs/SELF_HOSTING.md); `/setup` is the front
-door to it.
 
 ## ✨ Features
 
