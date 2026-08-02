@@ -157,6 +157,22 @@ describe('InteractivePrompter', () => {
     expect(cap.text()).not.toContain('hunter2')
   })
 
+  // Muting is a process-wide side effect on stdout. Leaving it on
+  // after a failed read means the operator types blind for the rest of
+  // the run — including through whatever handles the failure.
+  it('unmutes when the secret read rejects', async () => {
+    const muteCalls: boolean[] = []
+    const rl: ReadlineLike = {
+      question: async () => {
+        throw new Error('aborted')
+      },
+      close: () => {},
+    }
+    const p = new InteractivePrompter(rl, capture().out, on => muteCalls.push(on))
+    await expect(p.ask({ key: 'k', label: 'Token', secret: true })).rejects.toThrow('aborted')
+    expect(muteCalls).toEqual([true, false])
+  })
+
   it('unmutes even when the secret answer is empty', async () => {
     const { rl } = scripted(['', 'x'])
     const muteCalls: boolean[] = []

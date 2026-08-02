@@ -208,8 +208,16 @@ export class InteractivePrompter implements Prompter {
       if (question.secret) {
         this.out.write(promptLine(question))
         this.mute(true)
-        answer = await this.rl.question('')
-        this.mute(false)
+        // `finally`, not a trailing call: muting is a process-wide side
+        // effect on stdout. If the read rejects — an aborted signal, a
+        // closed stream, Ctrl-C — an unmuted terminal is the only way
+        // the operator can see anything they type for the rest of the
+        // run, including in whatever error path handles the rejection.
+        try {
+          answer = await this.rl.question('')
+        } finally {
+          this.mute(false)
+        }
         this.out.write(answer.trim() ? `(${answer.trim().length} characters)\n` : '\n')
       } else {
         answer = await this.rl.question(promptLine(question))
