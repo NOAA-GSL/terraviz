@@ -16,6 +16,32 @@ A WebGL-based globe that streams environmental data from the [Science On a Spher
 
 ![Terraviz interface showing the Earth globe with the dataset browse panel](initial-interface.jpg)
 
+## 🌍 Run your own node
+
+Terraviz is built to be self-hosted. A museum, a lab or a school can
+run its own instance, publish its own datasets, and federate with
+others — the public site is one node, not the product.
+
+Start at **[`/setup`](https://terraviz.zyra-project.org/setup)**: a
+guided, resumable install console that filters itself to the kind of
+node you want, fills your values into every command, and prints a
+pre-flight checklist.
+
+| Tier | | |
+|---|---|---|
+| **Viewer node** | ~30 min | Globe, upstream catalog, Orbit, telemetry. No publishing. |
+| **Publisher node** | 2–3 h | Your own datasets and tours, the publisher portal, semantic search, events, blog. The usual choice. |
+| **Publisher + desktop** | +1 h | The above, plus branded desktop builds with your own update feed. |
+
+```bash
+npm run setup -- --manual        # the prerequisites only a human can do
+npm run setup -- --interactive   # guided, validated, resumable
+```
+
+The canonical reference is
+[docs/SELF_HOSTING.md](docs/SELF_HOSTING.md); `/setup` is the front
+door to it.
+
 ## ✨ Features
 
 - Searchable, filterable dataset browser with category and sub-category navigation, expandable cards, and thumbnails
@@ -140,11 +166,16 @@ that want to operate their own dataset catalog. Self-contained — no
 extra services required for local development.
 
 ```bash
-# 1. Generate the node identity keypair (one-time per clone).
-npm run gen:node-key
-
-# 2. Reset the local D1 (apply migrations + seed ~20 SOS rows).
+# 1. Reset the local D1 (apply migrations + seed ~20 SOS rows).
+#    This seeds node_identity with a PLACEHOLDER public key.
 npm run db:reset
+
+# 2. Generate the keypair and stamp its public half onto the row
+#    step 1 just seeded. This order matters: run gen:node-key first
+#    and it finds no row, warns, and exits 0 — then db:reset re-seeds
+#    the placeholder, which your node goes on to serve from
+#    /.well-known/terraviz.json.
+npm run gen:node-key
 
 # 3. Configure the publisher-API dev bypass.
 cp .dev.vars.example .dev.vars
@@ -166,6 +197,18 @@ npm run dev    # in pane 2
 curl http://localhost:8788/api/v1/catalog | jq '.datasets | length'
 # → 20
 ```
+
+> **Step 4 fails on a fresh clone.** `wrangler pages dev` opens an
+> authenticated remote proxy session before it serves anything,
+> because `wrangler.toml` declares an `[ai]` binding — and it does
+> that regardless of `MOCK_AI=true`. You get `Could not start remote
+> dev session. No credentials found.`
+>
+> Two ways past it: run `wrangler login` once (everything else still
+> runs locally), or comment out the `[ai]` block while you work,
+> which is the only genuinely offline loop today. Nothing in the
+> deploy reads that block — Pages takes its bindings from the
+> dashboard — but do not commit the change.
 
 The full developer walkthrough — bindings, data model, and the
 publishing CLI — lives in
