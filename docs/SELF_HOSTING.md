@@ -89,7 +89,9 @@ W18 🔒 PREVIEW_SIGNING_KEY           ......................
 
 ── Phase 13 (optional add-ons) ───────────────────────────
 W19  R2 public origin               ......................
-W20 🔒 R2_ACCESS_KEY_ID / SECRET     ......................
+W20 🔒 R2_ACCESS_KEY_ID              ......................
+W20b 🔒 R2_SECRET_ACCESS_KEY         ......................
+        shown once, at mint time — with W20
 W21  R2 S3 endpoint                 ......................
 W22 🔒 GITHUB_DISPATCH_TOKEN         ......................
 ```
@@ -307,6 +309,40 @@ npm install
 build artifacts and gitignored; if a later build complains about
 missing tokens, `npm run tokens && npm run locales` regenerates
 them.
+
+## 0.4 What the tool finds out, and what only you can
+
+Seven things in this guide cannot be done by an API, and
+`npm run setup -- --manual` prints all seven with their click paths.
+They are not equally your problem, and the difference is worth
+knowing before you start ticking boxes.
+
+**Five of the seven, a later step detects.** You do not need to
+verify them, remember them, or write anything down — if one is not
+done, the tool says so, by name, at the point it matters:
+
+| Prerequisite | Needed by | How you find out |
+|---|---|---|
+| Put your domain on Cloudflare DNS | Phase 5 | Attaching the custom domain prints Cloudflare's status for it, which never reaches `active` for a zone Cloudflare does not control |
+| Mint a Cloudflare API token | Phase 5 | The first API call fails and names the missing permission |
+| Complete Zero Trust onboarding | Phase 6 | Reading the team domain 404s, and the tool says so |
+| Generate the node keypair | Phase 7 | The secrets step reports `NODE_ID_PRIVATE_KEY_PEM` absent |
+| Connect Pages to your Git remote | Phase 5 | Project creation reports whether a Git source is attached |
+
+**Two are genuinely on you**, because nothing in the API can see
+them:
+
+| Prerequisite | Needed by | Why it cannot be detected |
+|---|---|---|
+| **Workers Paid ($5/mo)** | Phase 8 onward | Billing state is not exposed to the token. A free-plan account provisions everything successfully and then silently drops Analytics Engine writes |
+| **Mint the R2 S3 API token** | Phase 13.1 | Automating it would need a token that can mint tokens — a credential able to grant itself more authority. It stays manual on purpose. (The secret is also shown exactly once, so capture all three values then) |
+
+That asymmetry is the whole reason the pre-flight list is short.
+Confirm those two; let the tool tell you about the rest.
+
+> This table is generated from `MANUAL_STEPS` in
+> `scripts/lib/setup/interview.ts` on the [`/setup`](/setup) page,
+> which is where to look if it ever disagrees with this one.
 
 ---
 
@@ -877,7 +913,7 @@ Everything referenced below now exists. Pages → your project →
 | `TELEMETRY_KILL_SWITCH` | KV | `W5` | ✅ | Fails **open** — ingest keeps working, you just lose the kill lever |
 | `CATALOG_KV` | KV | `W6` | | `/api/v1/catalog` burns ~5 D1 reads per browse-page load |
 | `CATALOG_R2` | R2 | `terraviz-assets` (`W7`) | | Asset uploads and feedback screenshots |
-| `AI` | Workers AI | *(no value)* | ✅ | Orbit + embeddings degrade to fallbacks |
+| `AI` | Workers AI | *(no value)* | ✅ | `/api/v1/search` returns **200** with `{ degraded: 'unconfigured' }` and a `Warning` header — the route never 5xxs for a missing binding. Orbit's `[RELEVANT DATASETS]` block stays empty and chips fall back to the local engine |
 | `CATALOG_VECTORIZE` | Vectorize | `terraviz-datasets` (`W8`) | | Semantic search returns empty |
 
 ## 8.2 Plaintext variables
@@ -914,7 +950,36 @@ wrangler pages secret put PREVIEW_SIGNING_KEY     --project-name <W10>
 > admin — see Phase 11. Domain matching is exact and
 > case-insensitive; `noaa.gov` does not match `x.noaa.gov`.
 
-## 8.4 Redeploy
+## 8.4 The seven the audit also expects
+
+`EXPECTED_BINDINGS` in `scripts/lib/expected-bindings.ts` carries
+**19** entries; 8.1–8.3 above are twelve of them. The remaining seven
+belong to add-ons you configure in Phase 13, and they are listed here
+because **`npm run check:pages-bindings` reports them as missing
+whether or not you want the add-on.** That is deliberate — the audit
+would rather name a value you have chosen not to set than stay quiet
+about one you meant to. If you are not running the add-on, the
+corresponding rows are expected to read MISSING and you can ignore
+them.
+
+Plaintext:
+
+| Variable | Add-on | Value | Without it |
+|---|---|---|---|
+| `R2_PUBLIC_BASE` | 13.1 | `W19` — the R2 bucket's public origin | HLS manifests, `r2:datasets/…` assets and `r2:tours/…` JSON resolve to `r2_unconfigured`. **`R2_S3_ENDPOINT` is not a fallback here** — it signs S3-API access, not public reads, so falling through would produce an `hls` URL that 403s at play time |
+| `GITHUB_OWNER` | 13.2 | repo owner hosting `transcode-hls` | With `GITHUB_REPO` + `GITHUB_DISPATCH_TOKEN`, builds the `repository_dispatch` URL |
+| `GITHUB_REPO` | 13.2 | repo name hosting `transcode-hls` | See `GITHUB_OWNER` |
+
+Secrets:
+
+| Secret | Add-on | Value | Without it |
+|---|---|---|---|
+| `R2_S3_ENDPOINT` | 13.1 | `W21` — `https://<acct>.r2.cloudflarestorage.com` | The `migrate-r2-hls` / `-assets` / `-tours` CLIs (and their rollbacks) fail at credential validation. The operator's shell needs the same value |
+| `R2_ACCESS_KEY_ID` | 13.1 | `W20` | As above |
+| `R2_SECRET_ACCESS_KEY` | 13.1 | `W20b` — shown once, when the token is minted | As above |
+| `GITHUB_DISPATCH_TOKEN` | 13.2 | `W22` — fine-grained PAT with Contents: write, or a classic PAT with `repo` | Video-upload finalisation 503s with `github_dispatch_unconfigured` |
+
+## 8.5 Redeploy
 
 Bindings take effect on the *next* deployment, not immediately.
 **Deployments → ⋯ → Retry deployment**, or push a commit.

@@ -1,0 +1,724 @@
+/**
+ * Editorial content for the generated `/setup` page.
+ *
+ * Everything in this file is prose and judgement: the phase
+ * narrative, the traps, the gate sentences, the framing of the
+ * dependency map. It is written by hand and reviewed like any other
+ * copy.
+ *
+ * Everything the page says about *data* — which bindings exist, what
+ * breaks without each one, which values the operator is asked for,
+ * which prerequisites the tool can detect — is NOT here. That is
+ * imported from the modules the setup tool itself uses, so the page
+ * cannot disagree with `npm run setup`. See `render.ts`.
+ *
+ * The split matters: a wrong sentence here is a documentation bug an
+ * editor can see. A wrong binding list would be a lie the operator
+ * only discovers at 2am, and that class of bug is what this
+ * generator exists to make impossible.
+ *
+ * The two imports below are the exception that proves the rule: they
+ * are type-only, and they exist so that a worksheet field naming a
+ * question or a validator that the tool no longer has is a compile
+ * error in *this* file, next to the prose that got it wrong.
+ */
+
+import type { AnswerKey } from '../lib/setup/interview'
+import type { validators } from '../lib/setup/prompt'
+
+/** Names of the validators `prompt.ts` actually implements. */
+export type ValidatorName = keyof typeof validators
+
+export type Tier = 1 | 2 | 3
+
+export interface CodeBlock {
+  /** Lines of the block. `#`-prefixed trailing text renders dimmed. */
+  code: string
+  /** Optional heading above the block. */
+  label?: string
+}
+
+export interface Callout {
+  kind: 'trap' | 'note' | 'gate'
+  title: string
+  /** Paragraphs. Inline `code` spans use backticks. */
+  body: string[]
+  code?: CodeBlock
+}
+
+export interface Phase {
+  n: number
+  /** Nav label — short. */
+  label: string
+  /** Slide-style heading. */
+  title: string
+  /** Minimum tier that needs this phase. 3 = Tier 3 only. */
+  minTier: Tier
+  /** Tier 3-only (the desktop fork). */
+  tierExact?: Tier
+  duration: string
+  /** Sub-heading beside the duration. */
+  aside?: string
+  /** Opening paragraphs. */
+  intro: string[]
+  /** Worksheet keys this phase produces. */
+  produces?: string[]
+  /** The `npm run setup` invocation that does this phase, if any. */
+  automated?: CodeBlock
+  /** Prose explaining what the automated path does and does not do. */
+  automatedNote?: string[]
+  /** Blocks and callouts, in render order. */
+  body?: Array<Callout | CodeBlock>
+  /** Collapsed "Do it by hand" section. */
+  manual?: {
+    summary: string
+    body: Array<Callout | CodeBlock | { html: string }>
+  }
+  /** The one thing that proves this phase worked. */
+  gate: string
+  /** Short form for the printable pre-flight sheet. */
+  gateShort: string
+  /** Anchor in SELF_HOSTING.md. */
+  anchor: string
+  /** Link text override. */
+  linkText?: string
+}
+
+export const PHASES: Phase[] = [
+  {
+    n: 0,
+    label: 'Before Cloudflare',
+    title: 'Before you touch Cloudflare',
+    minTier: 1,
+    duration: '≈20 min',
+    aside: 'all tiers · nothing here is automatable',
+    intro: [
+      'Billing, a registrar, and a login. Get these four values written down and everything after this has something to stand on.',
+    ],
+    produces: ['ORG', 'TRUST', 'W1', 'W2', 'W3'],
+    body: [
+      {
+        code: `node --version          # must be >= 20
+npm install -g wrangler
+wrangler login          # opens a browser
+wrangler whoami         # confirms the account
+
+git clone https://github.com/{{W3}}.git
+cd terraviz && npm install`,
+      },
+    ],
+    gate: '`wrangler whoami` prints the account matching {{W1}}.',
+    gateShort: 'wrangler whoami prints the account you meant to use.',
+    anchor: 'phase-0--before-you-touch-cloudflare',
+  },
+  {
+    n: 1,
+    label: 'Run it locally',
+    title: 'Run it on your laptop',
+    minTier: 1,
+    duration: '≈15 min',
+    aside: 'all tiers',
+    intro: [
+      "Do this before touching Cloudflare. Five minutes now tells you whether a problem later is yours or the deploy's — and that's worth a great deal at hour three.",
+    ],
+    body: [
+      { code: 'npm run dev          # http://localhost:5173' },
+      {
+        kind: 'trap',
+        title: 'Order matters',
+        body: [
+          'Run these three in exactly this order. Reversing the last two leaves your node identity holding the literal placeholder key, and `/.well-known/terraviz.json` will serve it. The script warns but exits 0, so it is easy to miss.',
+          '`npm run db:reset` does all three in the right order.',
+        ],
+        code: {
+          code: `npm run db:migrate    # 1. schema into .wrangler/ SQLite
+npm run db:seed       # 2. 20 datasets + the node_identity row
+npm run gen:node-key  # 3. keypair, and stamps its public half
+                      #    onto the row seeded in step 2`,
+        },
+      },
+      {
+        kind: 'trap',
+        title: 'Known blocker · dev:functions needs credentials',
+        body: [
+          'On a fresh clone, `npm run dev:functions` fails with "Could not start remote dev session. No credentials found." The cause: `wrangler.toml` declares an `[ai]` binding, and wrangler runs those in remote mode unconditionally — even though `MOCK_AI=true` exists precisely so you do not need the real service.',
+          '**Two fixes, pick one.** Run `wrangler login` first — the proxy session opens and everything else still runs locally. Or comment out the `[ai]` block while you work, which is the only route to a genuinely offline dev loop. Nothing in the deploy depends on it; Pages reads its bindings from the dashboard, not from this file. Do not commit the change.',
+        ],
+      },
+      {
+        code: `cp .dev.vars.example .dev.vars
+npm run gen:node-key       # appends NODE_ID_PRIVATE_KEY_PEM
+npm run dev:functions      # http://localhost:8788`,
+      },
+    ],
+    gate: 'All four endpoints answer: 200 with datasets, a real public key, role `admin`, and a mock-embedder search result. If `/publish/me` returns 503, you copied to `.dev.vars.example` rather than `.dev.vars`.',
+    gateShort: 'Globe renders at :5173; all four curl checks answer 200 at :8788.',
+    anchor: 'phase-1--run-it-on-your-laptop',
+  },
+  {
+    n: 2,
+    label: 'Create resources',
+    title: 'Create the Cloudflare resources',
+    minTier: 1,
+    duration: '≈10 min',
+    aside: 'all tiers',
+    intro: [
+      'Nothing consumes these yet — and that is deliberate. This phase exists so that when Phases 3 and 8 ask for IDs, you already have them written down.',
+    ],
+    produces: ['W4', 'W5', 'W6', 'W7', 'W8', 'W9'],
+    automated: { code: 'npm run setup -- --apply --only=resources' },
+    automatedNote: [
+      'Creates or adopts the D1 database, both KV namespaces, the R2 bucket, and the Vectorize index with its three metadata indexes — and records every ID for you. Re-running adopts what already exists rather than making a second one.',
+    ],
+    gate: 'W4 through W9 are all filled in.',
+    gateShort: 'W4–W9 are written down. Nothing consumes them yet — that is the point.',
+    anchor: 'phase-2--create-the-cloudflare-resources',
+  },
+  {
+    n: 3,
+    label: 'Point the repo',
+    title: 'Point the repo at your resources',
+    minTier: 1,
+    duration: '≈5 min',
+    aside: 'all tiers',
+    intro: [
+      "`wrangler.toml` ships with the upstream project's real resource IDs. Replace them now that yours exist.",
+    ],
+    automated: { code: 'npm run setup -- --apply --only=wrangler-toml' },
+    automatedNote: [
+      'It edits per binding block rather than by string replace — the two D1 blocks share a database name and the two KV blocks share a section header, so a global replace cannot tell them apart. It refuses to apply while any ID is still unknown.',
+    ],
+    body: [
+      {
+        kind: 'note',
+        title: 'Why this file matters when Pages ignores it',
+        body: [
+          'Pages reads its live bindings from the dashboard. But every wrangler command you run from your shell resolves its target through `wrangler.toml`. Getting this wrong means Phase 4 runs migrations against **upstream\u2019s database**, not yours.',
+        ],
+      },
+    ],
+    gate: '`wrangler d1 info CATALOG_DB` shows your database, 0 tables.',
+    gateShort: 'wrangler d1 info CATALOG_DB shows your database, 0 tables.',
+    anchor: 'phase-3--point-the-repo-at-your-resources',
+  },
+  {
+    n: 4,
+    label: 'Create the schema',
+    title: 'Create the schema',
+    minTier: 1,
+    duration: '≈10 min',
+    aside: 'all tiers · the one that bites',
+    intro: [],
+    body: [
+      {
+        kind: 'trap',
+        title: 'Run CATALOG_DB first, and the order is not cosmetic',
+        body: [
+          "FEEDBACK_DB's migrations directory is the repo root, which also contains `catalog-schema.sql` — a generated snapshot of the fully-migrated catalog schema. Wrangler has no way to know it is not a migration, so it queues it as one.",
+          'On an empty database, running FEEDBACK_DB first means that snapshot **applies for real**, creating the entire catalog schema outside the migration tracker. Every subsequent CATALOG_DB migration then fails on `table node_identity already exists`, and the install cannot be completed. Run CATALOG_DB first and the snapshot fails harmlessly on its first statement instead.',
+          '**So the second command is expected to end with an error** — `table analytics_daily already exists` — after applying the seven real feedback migrations. That one failure is harmless. Any other failure is not.',
+        ],
+      },
+    ],
+    automated: { code: 'npm run setup -- --apply --only=migrations' },
+    automatedNote: [
+      'Applies both sets in the order that works, and distinguishes the expected failure above from a real one. Add `--local-migrations` to rehearse against your local database first.',
+    ],
+    manual: {
+      summary: 'Do it by hand',
+      body: [
+        {
+          code: `wrangler d1 migrations apply CATALOG_DB  --remote   # first!
+wrangler d1 migrations apply FEEDBACK_DB --remote   # ends in a harmless error`,
+        },
+        {
+          html: '<b>Always select by binding name, never by database name.</b> Both blocks declare <code>database_name = "sphere-feedback"</code> with different migration dirs. Passing the bare name is ambiguous; wrangler silently applies the wrong set and leaves the catalog tables uncreated. The symptom lands much later as <code>table datasets has no column named bbox_n</code> when someone clicks Save draft.',
+        },
+      ],
+    },
+    gate: 'Both migration lists report nothing pending except `catalog-schema.sql` on FEEDBACK_DB. Re-run both after every `git pull` that brings new migration files — they are idempotent.',
+    gateShort: 'migrations list CATALOG_DB reports nothing pending.',
+    anchor: 'phase-4--create-the-schema',
+  },
+  {
+    n: 5,
+    label: 'Pages project',
+    title: 'Create the Pages project',
+    minTier: 1,
+    duration: '≈25 min',
+    aside: 'all tiers · Tier 1 finishes here',
+    intro: [],
+    produces: ['W10', 'W11'],
+    automated: { code: 'npm run setup -- --apply --only=pages' },
+    automatedNote: [
+      "Creates the project with the right build settings and attaches your custom domain. What it *cannot* do is connect the Git remote — that handshake is an OAuth flow between Cloudflare and GitHub with no API behind it. A project the tool creates is Direct Upload, so Cloudflare never runs your build and the `VITE_*` variables must be set wherever the build actually runs. Click Connect in the dashboard afterwards to convert it in place, or stay on Direct Upload and deploy from CI.",
+    ],
+    body: [
+      {
+        kind: 'note',
+        title: 'Pick exactly one deploy path',
+        body: [
+          "The repo ships a `deploy` job that targets the project name `terraviz`. On a fresh fork it either fails for lack of secrets or — worse, if you have set them — deploys to a project that is not yours.",
+          '**Dashboard Git integration (recommended):** delete or disable the deploy job in `ci.yml` and `poster.yml`. Keep type-check, unit-tests and build — they are fork-safe and need no secrets.',
+          '**GitHub Actions (Direct Upload):** set repo secrets for your API token and account ID, change every `--project-name` to yours, set the repo variable `TERRAVIZ_SERVER`, and do *not* connect the Git integration. Note that forks land with Actions disabled and no secrets — GitHub never copies those.',
+        ],
+      },
+    ],
+    gate: 'The build goes green, the site loads at `{{W10}}.pages.dev`, and then `https://{{W2}}` serves it over TLS. Backend features will not work yet — no bindings.',
+    gateShort: 'Build goes green, then https://your-hostname serves the app over TLS.',
+    anchor: 'phase-5--create-the-pages-project',
+  },
+  {
+    n: 6,
+    label: 'Access + token',
+    title: 'Cloudflare Access and the service token',
+    minTier: 2,
+    duration: '≈25 min',
+    aside: 'Tier 2+ · everything after this depends on it',
+    intro: [
+      'Access is not optional for a publisher node. The middleware fails closed: without a team domain and an AUD, every publish route returns 503 and the CLI can do nothing.',
+    ],
+    produces: ['W12', 'W13', 'W14', 'W15'],
+    body: [
+      {
+        kind: 'note',
+        title: 'Do this part yourself first',
+        body: [
+          'Complete **Zero Trust onboarding** in the dashboard and add at least one identity provider. One-time PIN over email works and needs no IdP setup; Google, Okta or Entra are better for a real team. You will choose a team name — your team domain becomes `{{W12}}`.',
+        ],
+      },
+    ],
+    automated: { code: 'npm run setup -- --apply --only=access' },
+    automatedNote: [
+      'Discovers your team domain, creates the publisher application with all six destinations, creates both policies, mints the service token and attaches it. It records the AUD and prints the token pair **once** — have somewhere to put it.',
+    ],
+    gate: "The AUD is copied, the token pair is in your password manager, and the token appears in the Automation policy's include list.",
+    gateShort: 'AUD copied, token pair saved, token attached to the Automation policy.',
+    anchor: 'phase-6--cloudflare-access-and-the-service-token',
+    linkText: 'Full detail, plus the two optional Access apps',
+  },
+  {
+    n: 7,
+    label: 'Node secrets',
+    title: "Generate your node's secrets",
+    minTier: 2,
+    duration: '≈5 min',
+    aside: 'Tier 2+',
+    intro: ['Two secrets are yours to create, and neither exists until you make it.'],
+    produces: ['W16', 'W17', 'W18'],
+    body: [
+      {
+        code: `npm run gen:node-key       # W16 into .dev.vars, W17 into node-public-key.txt
+openssl rand -base64 32    # W18`,
+      },
+      {
+        kind: 'trap',
+        title: 'Back up the private key somewhere durable',
+        body: [
+          "It signs your node's federation responses. Regenerating it means re-provisioning your identity.",
+        ],
+      },
+    ],
+    automatedNote: [
+      'The setup tool generates the preview signing key for you, but deliberately does *not* generate the node keypair — `gen:node-key` owns that, because it also writes the public key file Phase 9 reads and stamps your local database. Both files are gitignored.',
+    ],
+    gate: '`.dev.vars` holds a single-line private key, and `node-public-key.txt` holds an `ed25519:` line.',
+    gateShort: '.dev.vars holds the private key; node-public-key.txt exists.',
+    anchor: 'phase-7--generate-your-nodes-secrets',
+  },
+  {
+    n: 8,
+    label: 'Wire bindings',
+    title: 'Wire bindings, variables and secrets',
+    minTier: 1,
+    duration: '≈20 min by hand, or one command',
+    aside: 'all tiers',
+    intro: [
+      'Everything referenced here now exists. This is roughly forty dashboard interactions by hand, which is exactly why it is worth letting the tool do it.',
+    ],
+    automated: { code: 'npm run setup -- --apply --only=bindings' },
+    automatedNote: [
+      'Writes every entry to both environments in a single call, from the same manifest the audit checks against — so it cannot produce a deploy that Phase 10 then calls broken. Anything it has no value for is listed as skipped, with the reason, rather than written blank.',
+    ],
+    body: [
+      {
+        kind: 'trap',
+        title: 'Set every entry on BOTH Production and Preview',
+        body: [
+          'The environment selector is at the top of the page and forgetting it is the most common cutover failure — "works on preview, breaks on production", or the reverse. Phase 10\u2019s audit catches it, but only if you run it.',
+        ],
+      },
+    ],
+    gate: 'Bindings take effect on the *next* deployment — **Deployments → ⋯ → Retry deployment**, or push a commit. Then open your node in a private window: the privacy disclosure banner appears on first load, and the network tab shows 204 responses from `/api/ingest`.',
+    gateShort: 'Privacy banner appears on first load; /api/ingest returns 204.',
+    anchor: 'phase-8--wire-bindings-variables-and-secrets',
+  },
+  {
+    n: 9,
+    label: 'Node identity',
+    title: 'Provision the node identity',
+    minTier: 2,
+    duration: '≈5 min',
+    aside: 'Tier 2+',
+    intro: [],
+    body: [
+      {
+        kind: 'trap',
+        title: 'Your production identity table is empty right now',
+        body: [
+          'The migrations create the table but never populate it, and neither `db:seed` nor `gen:node-key` touches remote D1 — both only write your local SQLite file. Until you run the command below, the well-known endpoint 503s and **every publish fails**: dataset inserts stamp their origin node from that table, and the column is NOT NULL.',
+        ],
+      },
+      {
+        code: `npm run terraviz -- init-node \\
+  --server "$TERRAVIZ_SERVER" \\
+  --client-id "$CF_ACCESS_CLIENT_ID" \\
+  --client-secret "$CF_ACCESS_CLIENT_SECRET" \\
+  --display-name "Terraviz — Your Org" \\
+  --base-url "https://{{W2}}" \\
+  --contact ops@{{ORG}}`,
+      },
+    ],
+    automatedNote: [
+      'It reads your public key file automatically and writes through the publisher API, so it needs only the service token — no wrangler, no direct database access. Idempotent: re-running updates the row in place, preserving the node ID so existing references stay valid.',
+    ],
+    gate: '`curl https://{{W2}}/.well-known/terraviz.json` returns 200, with your display name and your real public key. Not 503.',
+    gateShort: '/.well-known/terraviz.json returns 200 with your public key, not 503.',
+    anchor: 'phase-9--provision-the-node-identity',
+    linkText: 'Full detail, plus the wrangler fallback',
+  },
+  {
+    n: 10,
+    label: 'Verify',
+    title: 'Verify',
+    minTier: 1,
+    duration: '≈5 min',
+    aside: 'all tiers',
+    intro: [
+      'Run both. They check different layers and neither subsumes the other: one asks whether the dashboard\u2019s binding state matches what the code expects, the other asks whether the deployed node actually answers correctly.',
+    ],
+    body: [
+      {
+        code: `# layer 1 — bindings
+CLOUDFLARE_API_TOKEN={{W11}} \\
+CLOUDFLARE_ACCOUNT_ID={{W1}} \\
+CLOUDFLARE_PAGES_PROJECT_NAME={{W10}} \\
+npm run check:pages-bindings
+
+# layer 2 — does the node answer?
+TERRAVIZ_ACCESS_CLIENT_ID={{W14}} \\
+TERRAVIZ_ACCESS_CLIENT_SECRET={{W15}} \\
+npm run terraviz -- verify-deploy --server https://{{W2}}`,
+      },
+    ],
+    gate: 'Bindings audit clean, and five of six deploy checks green.',
+    gateShort: 'Bindings audit clean; verify-deploy green except catalog-populated.',
+    anchor: 'phase-10--verify',
+  },
+  {
+    n: 11,
+    label: 'Become admin',
+    title: 'Sign in and become admin',
+    minTier: 2,
+    duration: '≈5 min',
+    aside: 'Tier 2+ · no SQL required',
+    intro: [
+      'Open `https://{{W2}}/publish` in a browser. Access challenges you, you sign in, and the middleware provisions a row for your email.',
+    ],
+    body: [
+      {
+        kind: 'gate',
+        title: 'How the first admin happens',
+        body: [
+          '**The first human to sign in on a deploy with no active admin is bootstrapped to admin automatically.** Service tokens are excluded — a machine credential never self-elevates. So on a fresh node, you become the admin by signing in.',
+          'Everyone after you lands as a pending reviewer, and you approve and promote them from the Users tab. Admins cannot demote themselves or remove the last admin, so a node always keeps one operator.',
+        ],
+      },
+    ],
+    gate: '`/publish/me` shows your email with role **admin**, and the sidebar shows the Users tab.',
+    gateShort: '/publish/me shows your email with role admin, and a Users tab.',
+    anchor: 'phase-11--sign-in-and-become-admin',
+    linkText: 'Full detail, plus the no-admin escape hatch',
+  },
+  {
+    n: 12,
+    label: 'Put content in',
+    title: 'Put content in',
+    minTier: 2,
+    duration: '≈15 min',
+    aside: 'Tier 2+ · the last required phase',
+    intro: [
+      'Your node works but its catalog is empty. Publish your own from `/publish/datasets/new` — metadata-only drafts work immediately, asset uploads need Phase 13.1 first. Or mirror the upstream catalog for ~600 datasets to look at.',
+    ],
+    body: [
+      {
+        code: `npx tsx scripts/refresh-sos-snapshot.ts
+
+npm run terraviz -- import-snapshot \\
+  --server "$TERRAVIZ_SERVER" \\
+  --client-id "$CF_ACCESS_CLIENT_ID" \\
+  --client-secret "$CF_ACCESS_CLIENT_SECRET" \\
+  --dry-run                          # always dry-run first, then drop it`,
+      },
+      {
+        kind: 'note',
+        title: 'Know the tradeoff before you mirror',
+        body: [
+          "Those rows carry legacy video references that resolve through **upstream's** proxy, so their playback depends on upstream's uptime unless you mirror the proxy too. Content you publish yourself is transcoded to your own storage and never touches it. Import is idempotent — re-running skips rows already published.",
+        ],
+      },
+    ],
+    gate: 'Re-run `verify-deploy`. `catalog-populated` now passes and all six checks are green. That is a complete publisher node. Embedding jobs backfill semantic search asynchronously over the next ten minutes or so.',
+    gateShort: 'verify-deploy: all six checks green. That is a complete node.',
+    anchor: 'phase-12--put-content-in',
+  },
+  {
+    n: 13,
+    label: 'Optional add-ons',
+    title: 'Optional add-ons',
+    minTier: 2,
+    duration: 'optional',
+    aside: 'Tier 2+ · independent of each other',
+    intro: [
+      'Add what you need, when you need it. Nothing here blocks a working node — but the first one is required before publishers can upload assets.',
+    ],
+    gate: 'Whichever add-ons you chose report healthy.',
+    gateShort: 'Whichever add-ons you chose report healthy.',
+    anchor: 'phase-13--optional-add-ons',
+    linkText: 'All nine add-ons in full',
+  },
+  {
+    n: 14,
+    label: 'Desktop app',
+    title: 'Desktop app fork',
+    minTier: 3,
+    tierExact: 3,
+    duration: '≈1 h',
+    aside: 'Tier 3 only',
+    intro: [
+      "Three upstream-pinned values need changing. Leave them and your users' apps poll *upstream's* releases and reject anything you sign.",
+    ],
+    gate: 'A signed desktop build that talks to your API origin, not upstream.',
+    gateShort: 'A signed desktop build that talks to your API origin, not upstream.',
+    anchor: 'phase-14--desktop-app-fork-tier-3',
+  },
+]
+
+/** The 13.x add-ons, summarised. Full text stays in the Markdown. */
+export const ADDONS = [
+  {
+    id: '13.1',
+    title: 'R2 public domain and CORS',
+    flag: '--only=r2',
+    body: "Needed before publisher asset uploads or zip downloads work. R2's CORS is strict: HEAD must be listed explicitly even though Fetch treats it as simple, and Content-Range must be exposed or the download dialog cannot read a file's size. The tool builds the policy from your origins so neither can be mistyped. **Minting the S3 API token stays manual on purpose** — automating it would need a token that can create tokens.",
+  },
+  {
+    id: '13.2',
+    title: 'Video transcode',
+    flag: '--github-secrets',
+    body: 'Video uploads hand off to a GitHub Actions workflow running the ffmpeg spherical HLS ladder. Both halves — Pages bindings and GitHub secrets — are required and fail closed. Free-tier Actions covers roughly 50 uploads a month; R2 storage is what actually costs, at ~250 MB per minute of 4K source.',
+    extra:
+      '**There is a WAF trap here.** Access service tokens bypass Access but not Bot Fight Mode. The runner\u2019s final callback gets an interstitial, ffmpeg finishes, the bundle lands, and the job still exits non-zero. You need a WAF skip rule on that path — and on the Free plan, plain Bot Fight Mode has no per-path override, so disabling it zone-wide is the recommended option.',
+  },
+  {
+    id: '13.4',
+    title: 'Analytics long-term export',
+    flag: 'recommended',
+    body: 'Analytics Engine retains 30–90 days. A daily job drains each completed day into an archive bucket plus rollups — that is the data behind the in-app analytics tab. Run the backfill once while AE still remembers.',
+  },
+  {
+    id: '13.9',
+    title: 'Content-Security-Policy',
+    flag: 'worth doing',
+    body: '**The repo ships no CSP.** Upstream enforces one at the Cloudflare edge, which a fork does not inherit. Your node works without one; you should still add your own. Remember `blob:` — the app uses it for preview tours and screenshots. Test playback, VR and a tour before locking it down.',
+  },
+]
+
+/** Symptom → cause → fix. The full sixteen live in the Markdown. */
+export const TROUBLESHOOTING = [
+  {
+    symptom: '503 access_unconfigured on the publisher API',
+    fix: 'The team domain or the AUD is missing — most often set on Production but not Preview. Confirm with the bindings audit rather than by eye.',
+  },
+  {
+    symptom: '401 "Invalid or expired Access assertion"',
+    fix: "Your AUD does not match the application that issued the JWT. Re-copy it from the application's Overview tab. A token minted for a different application in the same team is rejected by design.",
+  },
+  {
+    symptom: 'Access blocks your own staff account',
+    fix: 'The policy uses **Emails** (exact match against one address) instead of **Emails ending in** (suffix match). See Phase 6.',
+  },
+  {
+    symptom: 'Save draft 500s: "table datasets has no column named bbox_n"',
+    fix: 'The catalog migrations were not applied — usually because `migrations apply` was given the database *name* instead of the binding name. Confirm with `migrations list CATALOG_DB --remote`.',
+  },
+  {
+    symptom: 'well-known 503s, or publishing fails on origin_node',
+    fix: "Remote node identity is empty — Phase 9 was not run. The local seed and key-gen paths do **not** write remote D1. The 503's own error text tells you to run `gen:node-key`; that hint is wrong. Use `init-node`.",
+  },
+  {
+    symptom: 'Ingest returns 204 but nothing lands in Analytics Engine',
+    fix: "The binding is missing in the environment serving traffic — check *both* Production and Preview. The function silently skips the write when it is undefined. (A 403 instead means the CORS gate rejected it: curl does not send an Origin header unless you pass one.)",
+  },
+  {
+    symptom: 'Portal shows "Your session has expired"',
+    fix: 'Expected before your Access application covers the publish paths. Cloudflare answers with a cross-origin redirect the portal can detect but cannot follow. The Refresh button is the escape hatch — refreshing triggers Access at top-level navigation, you sign in, and the next fetch succeeds.',
+  },
+  {
+    symptom: 'Zip download shows "size unknown"',
+    fix: 'R2 CORS. No console error means the request succeeded but the length headers were not exposed — add both to ExposeHeaders. An allow-origin error means it was blocked outright, usually because HEAD is not in AllowedMethods. R2 treats HEAD and GET as distinct even though Fetch does not.',
+  },
+  {
+    symptom: 'Orbit stops showing dataset chips after working briefly',
+    fix: 'Free-tier neuron exhaustion, not a fault. The chat panel shows a reduced-functionality badge and quota resets daily. A docent turn burns roughly 50 neurons, so about 200 turns a day exhausts the free ceiling — sustained use needs Workers Paid.',
+  },
+  {
+    symptom: 'verify-deploy SKIPs the publisher checks',
+    fix: 'No service token configured. Re-run with the token env vars, and confirm the token is attached to a Service Auth policy on the publisher app.',
+  },
+]
+
+/** Week-one operational advice. */
+export const WEEK_ONE = [
+  {
+    title: 'Document who can flip the kill switches',
+    body: 'You have two: a KV key that makes clients back off, and an environment variable. Write down who is allowed to use them.',
+  },
+  {
+    title: 'Put token expiry in a calendar',
+    body: 'A silently expired API token is a silently broken dashboard, and it will happen on a day nobody is looking.',
+  },
+  {
+    title: 'Watch errors by category',
+    body: 'A flood of network errors usually means an asset CDN rate-limiting you. Auth errors mean an LLM key issue.',
+  },
+  {
+    title: 'Test your own feedback loop',
+    body: 'File a report through the in-app form and confirm it arrives in the portal. Do it before a visitor does.',
+  },
+  {
+    title: 'Add a Content-Security-Policy',
+    body: "The repo ships none, and upstream's edge policy does not travel with a fork. See Phase 13.9 — and test playback, VR and a tour before you lock it down.",
+    wide: true,
+  },
+]
+
+/**
+ * Worksheet presentation metadata.
+ *
+ * The *values* an operator is asked for come from the setup tool's
+ * own `QUESTIONS`. This adds only what the tool has no reason to
+ * carry: the W-numbers `SELF_HOSTING.md` uses, which phase produces
+ * each one, and the substitution token that appears in command
+ * blocks before a value is filled in.
+ *
+ * `fromTool` names the `AnswerKey` when the interview asks for this
+ * value directly. Everything else is either discovered by the tool
+ * (an ID Cloudflare assigns), generated locally (a keypair), or
+ * shown once and never stored (a service-token secret) — and the
+ * page says which, because "how many things must I actually type?"
+ * is the question that decides whether someone starts at all.
+ */
+export type Origin = 'asked' | 'discovered' | 'generated' | 'shown-once' | 'default'
+
+export interface WorksheetField {
+  id: string
+  label: string
+  phase: number
+  token: string
+  placeholder: string
+  note?: string
+  secret?: boolean
+  origin: Origin
+  /**
+   * The interview's `AnswerKey`, when the tool asks for this value.
+   * Typed against the tool rather than left as a string, so renaming a
+   * question fails to compile here instead of surfacing later as a
+   * `crossCheck` message. The runtime check in `render.ts` still
+   * earns its keep: `AnswerKey` is a hand-written union, so a question
+   * can be dropped from `QUESTIONS` while its key lives on in the type.
+   */
+  fromTool?: AnswerKey
+  /** Validator name from `scripts/lib/setup/prompt.ts`. */
+  validator?: ValidatorName
+  /** Consuming phases — drives the dependency map. */
+  consumedBy: number[]
+  /** Minimum tier that needs it. */
+  minTier: Tier
+}
+
+export const WORKSHEET: WorksheetField[] = [
+  { id: 'ORG', label: 'Your org domain', phase: 0, token: 'your-org.org', placeholder: 'your-org.org', note: 'The Access policy matches "emails ending in" this. A domain, not an address.', origin: 'asked', fromTool: 'staffEmailDomain', validator: 'emailDomain', consumedBy: [6, 8, 9], minTier: 2 },
+  { id: 'W1', label: 'Cloudflare account ID', phase: 0, token: '‹account-id›', placeholder: '32-char hex', note: 'Dashboard sidebar, and in every dashboard URL.', origin: 'asked', fromTool: 'accountId', validator: 'accountId', consumedBy: [5, 10, 13], minTier: 1 },
+  { id: 'W2', label: 'Node hostname', phase: 0, token: '‹your-hostname›', placeholder: 'terraviz.your-org.org', note: 'Hostname only. No https://, no trailing path.', origin: 'asked', fromTool: 'hostname', validator: 'hostname', consumedBy: [5, 6, 8, 9, 10, 13, 14], minTier: 1 },
+  { id: 'W3', label: 'Git remote', phase: 0, token: '‹owner/repo›', placeholder: 'owner/repo', note: 'Where Pages watches for builds.', origin: 'asked', fromTool: 'githubRepo', validator: 'repoSlug', consumedBy: [5, 14], minTier: 1 },
+  { id: 'TRUST', label: 'Auto-approve domains', phase: 0, token: '‹trusted-domains›', placeholder: 'your-org.org,partner.org', note: 'Optional. Sign-ins from these domains skip the approval queue but land READ-ONLY (role reviewer). It grants nobody admin — the first sign-in does that. Blank means you approve everyone by hand.', origin: 'asked', fromTool: 'trustedPublisherDomains', validator: 'emailDomainList', consumedBy: [8, 11], minTier: 2 },
+  { id: 'W4', label: 'D1 database ID', phase: 2, token: '‹d1-id›', placeholder: 'from wrangler d1 create', note: 'The one value you cannot recover from a later error.', origin: 'discovered', consumedBy: [3, 8], minTier: 1 },
+  { id: 'W5', label: 'KV — TELEMETRY_KILL_SWITCH', phase: 2, token: '‹kv-killswitch-id›', placeholder: '32-char hex', origin: 'discovered', consumedBy: [3, 8], minTier: 1 },
+  { id: 'W6', label: 'KV — CATALOG_KV', phase: 2, token: '‹catalog-kv-id›', placeholder: '32-char hex', origin: 'discovered', consumedBy: [3, 8], minTier: 2 },
+  { id: 'W7', label: 'R2 bucket name', phase: 2, token: 'terraviz-assets', placeholder: 'terraviz-assets', note: 'Yours to rename; keep the bindings in sync if you do.', origin: 'default', consumedBy: [8, 13], minTier: 2 },
+  { id: 'W8', label: 'Vectorize index', phase: 2, token: 'terraviz-datasets', placeholder: 'terraviz-datasets', origin: 'default', consumedBy: [8], minTier: 2 },
+  { id: 'W9', label: 'Analytics Engine dataset', phase: 2, token: 'terraviz_events', placeholder: 'terraviz_events', note: 'Nothing to create — it appears on first write.', origin: 'default', consumedBy: [8, 13], minTier: 1 },
+  { id: 'W10', label: 'Pages project name', phase: 5, token: '‹pages-project›', placeholder: 'terraviz', origin: 'asked', fromTool: 'pagesProject', validator: 'projectName', consumedBy: [6, 8, 10], minTier: 1 },
+  { id: 'W11', label: 'CLOUDFLARE_API_TOKEN', phase: 5, token: '‹api-token›', placeholder: 'token value', note: 'Minimum scope: Account → Cloudflare Pages → Edit.', secret: true, origin: 'generated', consumedBy: [10, 13], minTier: 1 },
+  { id: 'W12', label: 'Access team domain', phase: 6, token: '‹team›.cloudflareaccess.com', placeholder: 'your-org.cloudflareaccess.com', note: 'Team domain only, no https://. The tool discovers this for you.', origin: 'discovered', consumedBy: [8], minTier: 2 },
+  { id: 'W13', label: 'Access AUD (publisher app)', phase: 6, token: '‹access-aud›', placeholder: '64-char hex', note: 'Application → Overview → Application Audience Tag.', validator: 'aud', origin: 'discovered', consumedBy: [8], minTier: 2 },
+  { id: 'W14', label: 'CF_ACCESS_CLIENT_ID', phase: 6, token: '‹client-id›', placeholder: '….access', secret: true, origin: 'shown-once', consumedBy: [9, 10, 12, 13], minTier: 2 },
+  { id: 'W15', label: 'CF_ACCESS_CLIENT_SECRET', phase: 6, token: '‹client-secret›', placeholder: 'shown once', note: 'Cloudflare shows this exactly once. Save it before closing the dialog.', secret: true, origin: 'shown-once', consumedBy: [9, 10, 12, 13], minTier: 2 },
+  { id: 'W16', label: 'NODE_ID_PRIVATE_KEY_PEM', phase: 7, token: '‹node-private-key›', placeholder: 'from .dev.vars', note: 'Back this up. Regenerating it means re-provisioning your identity.', secret: true, origin: 'generated', consumedBy: [8], minTier: 2 },
+  { id: 'W17', label: 'Node public key', phase: 7, token: 'ed25519:‹public-key›', placeholder: 'ed25519:…', note: 'Written to node-public-key.txt by gen:node-key.', origin: 'generated', consumedBy: [9], minTier: 2 },
+  { id: 'W18', label: 'PREVIEW_SIGNING_KEY', phase: 7, token: '‹preview-signing-key›', placeholder: 'openssl rand -base64 32', secret: true, origin: 'generated', consumedBy: [8], minTier: 2 },
+  { id: 'W19', label: 'R2 public origin', phase: 13, token: 'assets.‹your-hostname›', placeholder: 'https://assets.your-org.org', note: 'Optional — Phase 13.1.', origin: 'asked', fromTool: 'r2PublicBase', validator: 'url', consumedBy: [13], minTier: 2 },
+  { id: 'W20', label: 'R2_ACCESS_KEY_ID', phase: 13, token: '‹r2-access-key›', placeholder: 'R2 S3 API token', note: 'Optional — Phase 13.1.', secret: true, origin: 'shown-once', consumedBy: [13], minTier: 2 },
+  { id: 'W20b', label: 'R2_SECRET_ACCESS_KEY', phase: 13, token: '‹r2-secret-key›', placeholder: 'shown once at mint time', note: 'Optional — Phase 13.1. Paired with the access key id.', secret: true, origin: 'shown-once', consumedBy: [13], minTier: 2 },
+  { id: 'W21', label: 'R2 S3 endpoint', phase: 13, token: '‹r2-s3-endpoint›', placeholder: 'https://….r2.cloudflarestorage.com', note: 'Optional — Phase 13.1.', origin: 'shown-once', consumedBy: [13], minTier: 2 },
+  { id: 'W22', label: 'GITHUB_DISPATCH_TOKEN', phase: 13, token: '‹github-dispatch-token›', placeholder: 'PAT with repo scope', note: 'Optional — Phase 13.2 video transcode.', secret: true, origin: 'generated', consumedBy: [13], minTier: 2 },
+]
+
+export const ORIGIN_LABELS: Record<Origin, { label: string; hint: string }> = {
+  asked: { label: 'you supply', hint: 'The interview asks for this one and validates your answer.' },
+  discovered: { label: 'Cloudflare assigns', hint: 'Created or read by the tool. You never type it.' },
+  generated: { label: 'you generate', hint: 'A local command or dashboard action produces it.' },
+  'shown-once': { label: 'shown once', hint: 'Cloudflare displays it a single time. Save it immediately.' },
+  default: { label: 'has a default', hint: 'Ships with a working value; change only if you renamed the resource.' },
+}
+
+/** Readings called out under the dependency map. */
+export const MAP_READINGS = [
+  {
+    title: 'The long bars are the expensive ones',
+    body: 'Your hostname and the Access service token stretch across most of the install. Mistype the hostname in Phase 0 and you will be correcting it in six later places; lose the token secret and you re-mint and re-attach across five.',
+  },
+  {
+    title: 'Phase 2 produces nothing anyone needs yet',
+    body: 'Six values born, none consumed until Phase 3. That gap is deliberate — it is what lets Phase 3 and Phase 8 ask for IDs you already have written down instead of sending you back to the dashboard mid-edit.',
+  },
+  {
+    title: 'The add-ons are self-contained',
+    body: 'Everything Phase 13 produces, Phase 13 also consumes — no bar leaves it. That is why the add-ons are genuinely optional, and why you can come back for them a month later without unpicking anything.',
+  },
+]
+
+export const TIERS = [
+  {
+    n: 1 as Tier,
+    name: 'Viewer node',
+    duration: '~30 min',
+    body: 'Globe, upstream catalog, Orbit chat, telemetry. No publishing. Stops after Phase 5.',
+  },
+  {
+    n: 2 as Tier,
+    name: 'Publisher node',
+    duration: '2–3 h',
+    body: 'Your own datasets and tours, the publisher portal, semantic search, events, blog. The usual choice.',
+  },
+  {
+    n: 3 as Tier,
+    name: 'Publisher + desktop',
+    duration: '+1 h',
+    body: 'Everything in Tier 2, plus branded Tauri desktop builds with your own update feed.',
+  },
+]
+
+export const MARKDOWN_URL =
+  'https://github.com/zyra-project/terraviz/blob/main/docs/SELF_HOSTING.md'
