@@ -167,6 +167,29 @@ These are the rules that silently produce a wrong-looking dataset. Each has a
 | **No** `basemap` on a data-encoded heatmap | data-encoded bypasses the basemap; the globe supplies Earth | ignored at best; keep it clean |
 | `vmin`/`vmax` from real data | required; a too-high vmax pushes everything near 0 | near-black globe with faint detail |
 
+## When the request can't be built
+
+Not every ask maps onto a pipeline. Before saying "no", establish *where* the
+wall is — the three tiers route to completely different fixes, and they look
+identical from a failed run. Full table + escalation guidance in
+[references/capability-gaps.md](references/capability-gaps.md).
+
+- **Tier 1 — allowlist gap.** zyra has the command; `ZYRA_STAGE_ALLOWLIST`
+  doesn't list it, so `/validate` rejects it. Blocked today: `acquire thredds`,
+  `visualize sos`, `visualize vector`, `visualize timeseries`, `acquire api`.
+  Fix = add the entry *and* confirm the pinned runner container has it.
+- **Tier 2 — zyra gap.** Nobody can. Confirmed: **unit rescaling** (nothing
+  multiplies a variable by a constant, which is why `kg m-2` hovers as
+  `0.0000124`) and **vector/shapefile/GeoJSON geometry** (the toolkit is
+  raster-only). Fix = an upstream `NOAA-GSL/zyra` issue.
+- **Tier 3 — client gap.** The pipeline could emit it; the globe can't consume
+  it (dynamic legend, non-equirectangular sources, animated vector fields).
+
+Say which tier it is, what the fix costs, and — importantly — what the user can
+do *today*. A blocked request usually has a decent raster-shaped workaround;
+offer it alongside the escalation. Get explicit approval before filing any
+issue: it's public and outward-facing.
+
 ## Debugging: what the globe is telling you
 
 Match the symptom, don't guess. Deep version in
@@ -221,3 +244,6 @@ TerraViz nodes themselves. Send an ordinary UA (the bundled scripts do).
 - [references/verification.md](references/verification.md) — validating a YAML
   against the repo's real validators, checking URLs, confirming the publish
   attached the scale.
+- [references/capability-gaps.md](references/capability-gaps.md) — the zyra
+  command inventory vs the terraviz allowlist, the three gap tiers, and how to
+  escalate (fork issue vs upstream `NOAA-GSL/zyra` issue).
