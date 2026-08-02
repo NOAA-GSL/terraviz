@@ -17,6 +17,11 @@
   origin here, that is the signal to reconsider the change, not the
   policy.
 
+  This also blocks the analytics beacon Cloudflare Pages injects into
+  every deployed HTML file. privacy.html already blocks the same
+  beacon via script-src 'none'; matching it keeps a third-party
+  script off an operator-facing page on a privacy-first project.
+
   No frame-ancestors: browsers ignore it when it arrives in a
   <meta> element, and say so in the console. privacy.html carries it
   anyway and takes the console error for a directive that was never
@@ -279,6 +284,17 @@ summary::-webkit-details-marker{display:none}
 input:focus{outline:none;border-color:rgba(77,166,255,.5)!important;background:rgba(255,255,255,.08)!important}
 ::selection{background:rgba(77,166,255,.3)}
 code{overflow-wrap:anywhere}
+/* The values FAB is fixed to the viewport but the text column is not, so
+   below ~1100px it lands on top of the copy. A half-screen window on a
+   1920 monitor is 960px — squarely in that band, and this page is meant
+   to be read beside a terminal. Shrink it to a puck. */
+@media (max-width:1100px){
+  [data-fab] [data-fab-label]{display:none}
+  [data-fab]{padding:12px 14px!important;gap:0!important}
+  /* Shrinking it is not enough — the text column has to give up the band
+     the puck occupies (26px offset + 87px puck + breathing room). */
+  [data-main]{padding-right:130px!important}
+}
 @media print{
   body{background:#fff}
   [data-noprint]{display:none!important}
@@ -316,13 +332,21 @@ code{overflow-wrap:anywhere}
   </div>
   <div style="background:var(--tv-surface-3);border:1px solid var(--tv-border);border-radius:6px;padding:11px 12px;margin:0 0 18px">
     <div style="display:flex;justify-content:space-between;align-items:baseline;margin:0 0 7px">
-      <span style="font:600 10.5px/1 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim)">Progress</span>
+      <span style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim)">Progress</span>
       <span data-progress="1" style="font:500 12px/1 var(--tv-font-mono);color:var(--tv-accent)"></span>
     </div>
     <div style="height:5px;background:var(--tv-surface-3);border-radius:3px;overflow:hidden">
       <div data-progress-bar="1" style="height:100%;background:var(--tv-accent);border-radius:3px;transition:width .3s ease;width:0%"></div>
     </div>
   </div>
+  <div style="display:flex;flex-direction:column;gap:1px;margin:0 0 18px">
+    <div style="font:600 9.5px/1.35 var(--tv-font-sans);letter-spacing:.14em;text-transform:uppercase;color:var(--tv-text-dim);padding:0 7px;margin:0 0 7px">Before you begin</div>
+    <a href="#cost" style="padding:5px 7px;border-radius:4px;border:none;font:400 13px/1.3 var(--tv-font-sans);color:var(--tv-text-muted)">What it costs</a>
+    <a href="#preflight" style="padding:5px 7px;border-radius:4px;border:none;font:400 13px/1.3 var(--tv-font-sans);color:var(--tv-text-muted)">Your install sheet</a>
+    <a href="#map" style="padding:5px 7px;border-radius:4px;border:none;font:400 13px/1.3 var(--tv-font-sans);color:var(--tv-text-muted)">Where values come from</a>
+  </div>
+
+  <div style="font:600 9.5px/1.35 var(--tv-font-sans);letter-spacing:.14em;text-transform:uppercase;color:var(--tv-text-dim);padding:0 7px;margin:0 0 7px">The install</div>
   <nav style="display:flex;flex-direction:column;gap:1px;margin:0 0 20px"><a href="#p0" data-nav="0" style="display:flex;align-items:center;gap:9px;padding:5px 7px;border-radius:4px;border:none;font:400 13px/1.3 var(--tv-font-sans);color:var(--tv-text-muted)">
     <span data-nav-dot="1" style="flex:0 0 15px;height:15px;border-radius:50%;border:1.5px solid var(--tv-border-strong);display:flex;align-items:center;justify-content:center;font:600 9px/1 var(--tv-font-sans);color:transparent"></span>
     <span style="flex:0 0 17px;font:500 11px/1 var(--tv-font-mono);color:var(--tv-text-dim)">00</span>
@@ -398,26 +422,28 @@ code{overflow-wrap:anywhere}
     <span style="flex:0 0 17px;font:500 11px/1 var(--tv-font-mono);color:var(--tv-text-dim)">14</span>
     <span>Desktop app</span>
   </a></nav>
+
   <div style="display:flex;flex-direction:column;gap:1px;border-top:1px solid var(--tv-border);padding-top:12px">
-    <a href="#preflight" style="padding:5px 7px;border-radius:4px;border:none;font:400 13px/1.3 var(--tv-font-sans);color:var(--tv-text-muted)">Pre-flight sheet</a>
-    <a href="#map" style="padding:5px 7px;border-radius:4px;border:none;font:400 13px/1.3 var(--tv-font-sans);color:var(--tv-text-muted)">Dependency map</a>
+    <div style="font:600 9.5px/1.35 var(--tv-font-sans);letter-spacing:.14em;text-transform:uppercase;color:var(--tv-text-dim);padding:0 7px;margin:0 0 7px">Reference</div>
     <a href="#stuck" style="padding:5px 7px;border-radius:4px;border:none;font:400 13px/1.3 var(--tv-font-sans);color:var(--tv-text-muted)">When it goes wrong</a>
+    <a href="#trust" style="padding:5px 7px;border-radius:4px;border:none;font:400 13px/1.3 var(--tv-font-sans);color:var(--tv-text-muted)">What we actually tested</a>
   </div>
 </aside>
 <main data-main="1" style="padding:54px 52px 140px;max-width:940px">
 <section data-noprint="1" style="margin:0 0 44px">
-  <div style="font:600 10.5px/1 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim);margin:0 0 14px">Self-hosting a Terraviz node</div>
+  <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim);margin:0 0 14px">Self-hosting a Terraviz node</div>
   <h1 style="font:300 46px/1.12 var(--tv-font-sans);letter-spacing:-.005em;color:var(--tv-text);margin:0 0 18px;max-width:17ch;text-wrap:pretty">You can have your own node running this afternoon.</h1>
-  <p style="margin:0 0 22px;max-width:60ch;font-size:17px;color:var(--tv-text-muted);text-wrap:pretty">15 phases, ordered so no step ever asks for a value an earlier step has not already produced. Type your values in once and every command on this page fills itself in. Tick things off as you go — this page remembers where you stopped.</p>
+  <p style="margin:0 0 14px;max-width:60ch;font-size:17px;color:var(--tv-text-muted);text-wrap:pretty">By the end, the globe is running at your own address, showing your own datasets, and only your team can publish to it. Getting there means setting up a handful of Cloudflare services, pointing your copy of the code at them, and putting your first data in.</p>
+  <p style="margin:0 0 22px;max-width:60ch;font-size:17px;color:var(--tv-text-muted);text-wrap:pretty">Work straight down the page. Nothing asks you for something an earlier step has not already handed you, so you will not get halfway and discover you needed to do something else first. Fill in your details once and every command below fills itself in. Tick off each step as you finish it — this page remembers where you stopped, so you can walk away and come back.</p>
   <div style="display:flex;flex-wrap:wrap;gap:9px;margin:0 0 24px">
     <span style="background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:3px;padding:5px 10px;font:500 12px/1.2 var(--tv-font-sans);color:var(--tv-text-muted)">≈2–3 h for a publisher node</span>
-    <span style="background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:3px;padding:5px 10px;font:500 12px/1.2 var(--tv-font-sans);color:var(--tv-text-muted)">$5/mo Workers Paid</span>
     <span style="background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:3px;padding:5px 10px;font:500 12px/1.2 var(--tv-font-sans);color:var(--tv-text-muted)">A domain already on Cloudflare DNS</span>
+    <a href="#cost" style="background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-bottom:1px solid var(--tv-border-strong);border-radius:3px;padding:5px 10px;font:500 12px/1.2 var(--tv-font-sans);color:var(--tv-text-muted)">Free plan works — $5/mo buys back analytics</a>
   </div>
   <p style="margin:0;font-size:13.5px;color:var(--tv-text-dim)">This page is a front door. The canonical text — every click path, every caveat — is <a href="https://github.com/zyra-project/terraviz/blob/main/docs/SELF_HOSTING.md">SELF_HOSTING.md</a>, and each phase links straight into it.</p>
 </section>
 <section data-noprint="1" style="margin:0 0 44px">
-  <div style="font:600 10.5px/1 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim);margin:0 0 12px">Step one · pick your node type</div>
+  <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim);margin:0 0 12px">Step one · pick your node type</div>
   <p style="margin:0 0 16px;max-width:62ch;color:var(--tv-text-muted);text-wrap:pretty">This is the only decision that changes the shape of the install. Pick one and the rest of the page shows you only the phases, bindings and variables that node type needs.</p>
   <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px">
     <button data-tier="1" style="text-align:left;cursor:pointer;border-radius:8px;padding:18px;font-family:var(--tv-font-sans)">
@@ -446,21 +472,89 @@ code{overflow-wrap:anywhere}
     </button>
   </div>
 </section>
+<section id="cost" data-noprint="1" style="background:var(--tv-surface-2);border:1px solid var(--tv-border);border-radius:8px;padding:28px 30px;margin:0 0 44px;scroll-margin-top:20px">
+  <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim);margin:0 0 12px">What it costs</div>
+  <h2 style="font:700 27px/1.2 var(--tv-font-sans);letter-spacing:-.01em;color:var(--tv-text);margin:0 0 12px">You can run this on the free plan</h2>
+  <p style="margin:0 0 22px;max-width:64ch;color:var(--tv-text-muted);text-wrap:pretty">Nothing in the install requires a paid Cloudflare account. Two features lose something without one, and both were built to degrade quietly rather than break. Pick the plan you are on and the rest of the page adjusts to it.</p>
+  <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px;margin:0 0 16px">
+    <button data-plan="free" style="text-align:left;cursor:pointer;border-radius:6px;padding:20px 22px;font-family:var(--tv-font-sans)">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin:0 0 16px">
+        <span style="display:flex;align-items:center;gap:9px">
+          <span data-plan-tick="free" style="flex:none;width:16px;height:16px;border-radius:50%;border:1.5px solid;display:flex;align-items:center;justify-content:center;font:600 9px/1 var(--tv-font-sans)"></span>
+          <span style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-warn)">Free plan</span>
+        </span>
+        <span style="font:500 12px/1 var(--tv-font-mono);color:var(--tv-text-dim)">$0</span>
+      </div>
+      <div style="margin:0 0 14px">
+        <div style="font:600 13.5px/1.4 var(--tv-font-sans);color:var(--tv-text);margin:0 0 5px">Usage analytics stop recording</div>
+        <p style="margin:0;font-size:13px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">Analytics Engine is not on the free plan. Telemetry requests still answer 204 — the writes are simply dropped. No analytics tab, no Grafana. The emergency kill switch still works.</p>
+      </div>
+      <div style="margin:0 0 0">
+        <div style="font:600 13.5px/1.4 var(--tv-font-sans);color:var(--tv-text);margin:0 0 5px">Orbit throttles after ~200 conversations a day</div>
+        <p style="margin:0;font-size:13px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">Workers AI gives you roughly 10,000 neurons daily and a docent turn costs about 50. Past that the chat panel shows a &quot;Reduced functionality&quot; badge and the quota resets overnight.</p>
+      </div>
+    </button>
+    <button data-plan="paid" style="text-align:left;cursor:pointer;border-radius:6px;padding:20px 22px;font-family:var(--tv-font-sans)">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin:0 0 16px">
+        <span style="display:flex;align-items:center;gap:9px">
+          <span data-plan-tick="paid" style="flex:none;width:16px;height:16px;border-radius:50%;border:1.5px solid;display:flex;align-items:center;justify-content:center;font:600 9px/1 var(--tv-font-sans)"></span>
+          <span style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-accent)">Workers Paid</span>
+        </span>
+        <span style="font:500 12px/1 var(--tv-font-mono);color:var(--tv-text-dim)">$5/mo</span>
+      </div>
+      <div style="margin:0 0 14px">
+        <div style="font:600 13.5px/1.4 var(--tv-font-sans);color:var(--tv-text);margin:0 0 5px">Both of those go away</div>
+        <p style="margin:0;font-size:13px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">Visits and dataset views record properly, the in-app dashboards fill in, and Orbit answers all day without throttling.</p>
+      </div>
+      <div style="margin:0 0 0">
+        <div style="font:600 13.5px/1.4 var(--tv-font-sans);color:var(--tv-text);margin:0 0 5px">Storage is billed on top</div>
+        <p style="margin:0;font-size:13px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">Only if you publish your own video: an R2 4K ladder runs about 250 MB per minute of source, billed until you delete it. Metadata, images and tours are negligible.</p>
+      </div>
+    </button>
+  </div>
+
+  <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim);margin:0 0 10px">Who runs Orbit's language model</div>
+  <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px;margin:0 0 16px">
+    <button data-ai="workers" style="text-align:left;cursor:pointer;border-radius:6px;padding:18px 20px;font-family:var(--tv-font-sans)">
+      <div style="font:600 14px/1.3 var(--tv-font-sans);color:var(--tv-text);margin:0 0 6px">Cloudflare Workers AI</div>
+      <p style="margin:0;font-size:13px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">Nothing to run or maintain — the <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">AI</code> binding is all it needs. &lt;span data-when=&quot;free&quot;&gt;Throttles after roughly 200 conversations a day on the free plan.&lt;/span&gt;&lt;span data-when=&quot;paid&quot;&gt;Included in your $5.&lt;/span&gt;</p>
+    </button>
+    <button data-ai="local" style="text-align:left;cursor:pointer;border-radius:6px;padding:18px 20px;font-family:var(--tv-font-sans)">
+      <div style="font:600 14px/1.3 var(--tv-font-sans);color:var(--tv-text);margin:0 0 6px">A model you run yourself</div>
+      <p style="margin:0;font-size:13px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">Ollama, LM Studio, or anything OpenAI-compatible on your own network. No throttle and no per-turn cost, whichever plan you are on — and visitor questions never leave your building.</p>
+    </button>
+  </div>
+
+  <div data-when="local" style="background:rgba(34,197,94,.07);border:1px solid rgba(34,197,94,.24);border-left:3px solid var(--tv-success);border-radius:6px;padding:16px 18px;margin:0 0 18px">
+    <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-success);margin:0 0 8px">You will need one extra thing</div>
+    <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">Your model has to be reachable from Cloudflare's network, so a laptop on the museum wifi will not do — it needs a stable address. Phase 8 shows the variables to set, and the `AI` binding stays wired either way, because embeddings still use it.</p>
+  </div>
+
+  <div data-when="free" style="background:var(--tv-warn-bg);border:1px solid var(--tv-warn-border);border-left:3px solid var(--tv-warn);border-radius:6px;padding:16px 18px;margin:0 0 18px">
+    <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-warn);margin:0 0 8px">Free plan · what changed on this page</div>
+    <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">The Analytics Engine dataset and its binding have gone from the worksheet, the dependency map and Phase 8 — there is nothing for you to create. The long-term analytics add-on is hidden too. Everything else is unchanged: you are installing the same node.</p>
+  </div>
+  <p style="margin:0;max-width:64ch;font-size:13.5px;color:var(--tv-text-dim);text-wrap:pretty">For a gallery kiosk, a pilot, or a node you are still making your mind up about, free is a perfectly respectable place to run. Pay the $5 when you need to report on reach, or when Orbit is going to carry a busy public floor.</p>
+</section>
 <section id="preflight" data-sheet="1" style="background:var(--tv-surface-2);border:1px solid var(--tv-border);border-radius:8px;padding:28px 30px;margin:0 0 44px;scroll-margin-top:20px">
   <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:20px;margin:0 0 6px">
-    <h2 style="font:700 27px/1.2 var(--tv-font-sans);letter-spacing:-.01em;color:var(--tv-text);margin:0">Pre-flight sheet</h2>
+    <h2 style="font:700 27px/1.2 var(--tv-font-sans);letter-spacing:-.01em;color:var(--tv-text);margin:0">Your install sheet</h2>
     <button data-act="print" data-noprint="1" style="flex:none;cursor:pointer;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:6px;padding:7px 12px;font:500 12px/1 var(--tv-font-sans);color:var(--tv-text-muted)">Print this page</button>
   </div>
-  <p style="margin:0 0 24px;max-width:62ch;color:var(--tv-text-muted);text-wrap:pretty">Print it, keep it next to the keyboard. Left side is what only a human can do; right side is the one thing that proves each phase worked.</p>
-  <div data-sheetgrid="1" style="display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,1fr);gap:34px">
-    <div>
-      <div style="font:600 10.5px/1 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim);margin:0 0 14px;padding-bottom:8px;border-bottom:1px solid var(--tv-border)">Before you start — no API can do these</div>
-      <div style="display:flex;flex-direction:column;gap:13px"><div style="display:flex;gap:10px;align-items:flex-start">
+  <p style="margin:0 0 28px;max-width:62ch;color:var(--tv-text-muted);text-wrap:pretty">One page to print and keep next to the keyboard. On the left, what to sort out before you start. On the right, the install itself — every step, one line each, saying what finished looks like. Tick your way down.</p>
+  <div data-sheetgrid="1">
+    <div style="margin:0 0 32px">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;gap:16px;margin:0 0 6px">
+      <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim)">Before you start · only you can do these</div>
+      <div style="font:400 12px/1.35 var(--tv-font-sans);color:var(--tv-text-dim)">7 things, about 20 minutes</div>
+    </div>
+    <p style="margin:0 0 16px;padding-bottom:14px;border-bottom:1px solid var(--tv-border);font-size:13px;color:var(--tv-text-dim);max-width:66ch;text-wrap:pretty">An account, a domain, a login — the things no script can do on your behalf. Most the setup tool will notice if you skip; the ones marked <i>on you</i> it cannot, so those are the ones to be sure about. The first is the only one you can decline outright — see &lt;a href=&quot;#cost&quot;&gt;what it costs&lt;/a&gt;.</p>
+      <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:13px 28px"><div style="display:flex;gap:10px;align-items:flex-start">
     <button data-toggle="pf-workers-paid" data-check="1" style="flex:none;margin-top:2px"></button>
     <div style="min-width:0">
       <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:0 0 3px">
         <span style="font:600 13.5px/1.4 var(--tv-font-sans);color:var(--tv-text)">1. Enable Workers Paid ($5/month)</span>
-        <span style="flex:none;background:var(--tv-warn-bg);color:var(--tv-warn);border:1px solid var(--tv-warn-border);border-radius:999px;padding:2px 8px;font:600 9px/1.5 var(--tv-font-sans);letter-spacing:.07em;text-transform:uppercase">on you</span>
+        <span title="Nothing will warn you if you skip this one." style="flex:none;background:var(--tv-warn-bg);color:var(--tv-warn);border:1px solid var(--tv-warn-border);border-radius:999px;padding:2px 8px;font:600 9px/1.5 var(--tv-font-sans);letter-spacing:.07em;text-transform:uppercase">on you</span>
       </div>
       <div style="font-size:13px;line-height:1.5;color:var(--tv-text-muted);text-wrap:pretty">Analytics Engine is not on the free plan, and Workers AI free-tier neurons run out after roughly 200 Orbit turns. Both fail soft, which is worse than failing loudly: telemetry silently stops recording and Orbit quietly degrades mid-demo.</div>
     </div>
@@ -470,7 +564,7 @@ code{overflow-wrap:anywhere}
     <div style="min-width:0">
       <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:0 0 3px">
         <span style="font:600 13.5px/1.4 var(--tv-font-sans);color:var(--tv-text)">2. Put your domain on Cloudflare DNS</span>
-        <span style="flex:none;background:var(--tv-accent-bg);color:var(--tv-accent);border:1px solid var(--tv-accent-border);border-radius:999px;padding:2px 8px;font:600 9px/1.5 var(--tv-font-sans);letter-spacing:.07em;text-transform:uppercase">setup checks this</span>
+        <span title="If you skip this, the setup tool will tell you." style="flex:none;background:var(--tv-accent-bg);color:var(--tv-accent);border:1px solid var(--tv-accent-border);border-radius:999px;padding:2px 8px;font:600 9px/1.5 var(--tv-font-sans);letter-spacing:.07em;text-transform:uppercase">setup will catch this</span>
       </div>
       <div style="font-size:13px;line-height:1.5;color:var(--tv-text-muted);text-wrap:pretty">Pages provisions the certificate and CNAME for your custom domain, and R2 can only serve a public bucket from a zone Cloudflare controls. Neither works on a domain hosted elsewhere.</div>
     </div>
@@ -480,7 +574,7 @@ code{overflow-wrap:anywhere}
     <div style="min-width:0">
       <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:0 0 3px">
         <span style="font:600 13.5px/1.4 var(--tv-font-sans);color:var(--tv-text)">3. Mint a Cloudflare API token</span>
-        <span style="flex:none;background:var(--tv-accent-bg);color:var(--tv-accent);border:1px solid var(--tv-accent-border);border-radius:999px;padding:2px 8px;font:600 9px/1.5 var(--tv-font-sans);letter-spacing:.07em;text-transform:uppercase">setup checks this</span>
+        <span title="If you skip this, the setup tool will tell you." style="flex:none;background:var(--tv-accent-bg);color:var(--tv-accent);border:1px solid var(--tv-accent-border);border-radius:999px;padding:2px 8px;font:600 9px/1.5 var(--tv-font-sans);letter-spacing:.07em;text-transform:uppercase">setup will catch this</span>
       </div>
       <div style="font-size:13px;line-height:1.5;color:var(--tv-text-muted);text-wrap:pretty">Everything this tool does runs through it.</div>
     </div>
@@ -490,7 +584,7 @@ code{overflow-wrap:anywhere}
     <div style="min-width:0">
       <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:0 0 3px">
         <span style="font:600 13.5px/1.4 var(--tv-font-sans);color:var(--tv-text)">4. Complete Zero Trust onboarding</span>
-        <span style="flex:none;background:var(--tv-accent-bg);color:var(--tv-accent);border:1px solid var(--tv-accent-border);border-radius:999px;padding:2px 8px;font:600 9px/1.5 var(--tv-font-sans);letter-spacing:.07em;text-transform:uppercase">setup checks this</span>
+        <span title="If you skip this, the setup tool will tell you." style="flex:none;background:var(--tv-accent-bg);color:var(--tv-accent);border:1px solid var(--tv-accent-border);border-radius:999px;padding:2px 8px;font:600 9px/1.5 var(--tv-font-sans);letter-spacing:.07em;text-transform:uppercase">setup will catch this</span>
       </div>
       <div style="font-size:13px;line-height:1.5;color:var(--tv-text-muted);text-wrap:pretty">The Access application that gates the publisher API cannot exist until the account has a Zero Trust organization and at least one identity provider. Without it every /api/v1/publish/** route 503s.</div>
     </div>
@@ -500,7 +594,7 @@ code{overflow-wrap:anywhere}
     <div style="min-width:0">
       <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:0 0 3px">
         <span style="font:600 13.5px/1.4 var(--tv-font-sans);color:var(--tv-text)">5. Generate the node keypair</span>
-        <span style="flex:none;background:var(--tv-accent-bg);color:var(--tv-accent);border:1px solid var(--tv-accent-border);border-radius:999px;padding:2px 8px;font:600 9px/1.5 var(--tv-font-sans);letter-spacing:.07em;text-transform:uppercase">setup checks this</span>
+        <span title="If you skip this, the setup tool will tell you." style="flex:none;background:var(--tv-accent-bg);color:var(--tv-accent);border:1px solid var(--tv-accent-border);border-radius:999px;padding:2px 8px;font:600 9px/1.5 var(--tv-font-sans);letter-spacing:.07em;text-transform:uppercase">setup will catch this</span>
       </div>
       <div style="font-size:13px;line-height:1.5;color:var(--tv-text-muted);text-wrap:pretty">Signs your node federation responses and is advertised at /.well-known/terraviz.json. The generator also writes node-public-key.txt, which <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">terraviz init-node</code> reads in Phase 9.</div>
     </div>
@@ -510,7 +604,7 @@ code{overflow-wrap:anywhere}
     <div style="min-width:0">
       <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:0 0 3px">
         <span style="font:600 13.5px/1.4 var(--tv-font-sans);color:var(--tv-text)">6. Connect the Pages project to your Git remote (or skip it)</span>
-        <span style="flex:none;background:var(--tv-accent-bg);color:var(--tv-accent);border:1px solid var(--tv-accent-border);border-radius:999px;padding:2px 8px;font:600 9px/1.5 var(--tv-font-sans);letter-spacing:.07em;text-transform:uppercase">setup checks this</span>
+        <span title="If you skip this, the setup tool will tell you." style="flex:none;background:var(--tv-accent-bg);color:var(--tv-accent);border:1px solid var(--tv-accent-border);border-radius:999px;padding:2px 8px;font:600 9px/1.5 var(--tv-font-sans);letter-spacing:.07em;text-transform:uppercase">setup will catch this</span>
       </div>
       <div style="font-size:13px;line-height:1.5;color:var(--tv-text-muted);text-wrap:pretty">The Cloudflare↔GitHub handshake is an OAuth flow with no API, so this tool creates a Direct Upload project. Cloudflare will not run your build until you connect a remote, which means the VITE_* build variables have to be set wherever the build actually happens.</div>
     </div>
@@ -520,88 +614,92 @@ code{overflow-wrap:anywhere}
     <div style="min-width:0">
       <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:0 0 3px">
         <span style="font:600 13.5px/1.4 var(--tv-font-sans);color:var(--tv-text)">7. Mint the R2 S3 API token</span>
-        <span style="flex:none;background:var(--tv-warn-bg);color:var(--tv-warn);border:1px solid var(--tv-warn-border);border-radius:999px;padding:2px 8px;font:600 9px/1.5 var(--tv-font-sans);letter-spacing:.07em;text-transform:uppercase">on you</span>
+        <span title="Nothing will warn you if you skip this one." style="flex:none;background:var(--tv-warn-bg);color:var(--tv-warn);border:1px solid var(--tv-warn-border);border-radius:999px;padding:2px 8px;font:600 9px/1.5 var(--tv-font-sans);letter-spacing:.07em;text-transform:uppercase">on you</span>
       </div>
       <div style="font-size:13px;line-height:1.5;color:var(--tv-text-muted);text-wrap:pretty">Server-side presigned uploads and digest verification need S3-API credentials. Automating this would require a token that can create tokens — a credential that could grant itself more authority — so it stays a deliberate manual step.</div>
     </div>
   </div></div>
     </div>
     <div>
-      <div style="font:600 10.5px/1 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim);margin:0 0 14px;padding-bottom:8px;border-bottom:1px solid var(--tv-border)">The gate for each phase</div>
-      <div style="display:flex;flex-direction:column;gap:7px"><div data-phase-row="0" style="display:flex;gap:10px;align-items:flex-start">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;gap:16px;margin:0 0 6px">
+      <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim)">The install itself · what finished looks like</div>
+      <div style="font:400 12px/1.35 var(--tv-font-sans);color:var(--tv-text-dim)">tick as you go</div>
+    </div>
+    <p style="margin:0 0 16px;padding-bottom:14px;border-bottom:1px solid var(--tv-border);font-size:13px;color:var(--tv-text-dim);max-width:66ch;text-wrap:pretty">Every step in order, with the one thing you should see once it has landed. Not extra work — it is the same check that sits at the foot of each step below, gathered here so the printed sheet stands on its own.</p>
+      <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:9px 28px"><div data-phase-row="0" style="display:flex;gap:10px;align-items:flex-start">
     <button data-toggle="p0" data-check="1" style="flex:none;margin-top:1px"></button>
     <div style="flex:none;width:22px;font:500 11.5px/1.5 var(--tv-font-mono);color:var(--tv-text-dim)">00</div>
-    <div style="font-size:13.5px;line-height:1.5;color:var(--tv-text-muted);text-wrap:pretty">wrangler whoami prints the account you meant to use.</div>
+    <div style="font-size:13.5px;line-height:1.5;color:var(--tv-text-muted);text-wrap:pretty">You are logged in to the right Cloudflare account.</div>
   </div>
   <div data-phase-row="1" style="display:flex;gap:10px;align-items:flex-start">
     <button data-toggle="p1" data-check="1" style="flex:none;margin-top:1px"></button>
     <div style="flex:none;width:22px;font:500 11.5px/1.5 var(--tv-font-mono);color:var(--tv-text-dim)">01</div>
-    <div style="font-size:13.5px;line-height:1.5;color:var(--tv-text-muted);text-wrap:pretty">Globe renders at :5173; all four curl checks answer 200 at :8788.</div>
+    <div style="font-size:13.5px;line-height:1.5;color:var(--tv-text-muted);text-wrap:pretty">The globe loads on your laptop and all four test URLs answer.</div>
   </div>
   <div data-phase-row="2" style="display:flex;gap:10px;align-items:flex-start">
     <button data-toggle="p2" data-check="1" style="flex:none;margin-top:1px"></button>
     <div style="flex:none;width:22px;font:500 11.5px/1.5 var(--tv-font-mono);color:var(--tv-text-dim)">02</div>
-    <div style="font-size:13.5px;line-height:1.5;color:var(--tv-text-muted);text-wrap:pretty">W4–W9 are written down. Nothing consumes them yet — that is the point.</div>
+    <div style="font-size:13.5px;line-height:1.5;color:var(--tv-text-muted);text-wrap:pretty">You have written down the six IDs Cloudflare just gave you.</div>
   </div>
   <div data-phase-row="3" style="display:flex;gap:10px;align-items:flex-start">
     <button data-toggle="p3" data-check="1" style="flex:none;margin-top:1px"></button>
     <div style="flex:none;width:22px;font:500 11.5px/1.5 var(--tv-font-mono);color:var(--tv-text-dim)">03</div>
-    <div style="font-size:13.5px;line-height:1.5;color:var(--tv-text-muted);text-wrap:pretty">wrangler d1 info CATALOG_DB shows your database, 0 tables.</div>
+    <div style="font-size:13.5px;line-height:1.5;color:var(--tv-text-muted);text-wrap:pretty">Your commands now point at your database, not the original project’s.</div>
   </div>
   <div data-phase-row="4" style="display:flex;gap:10px;align-items:flex-start">
     <button data-toggle="p4" data-check="1" style="flex:none;margin-top:1px"></button>
     <div style="flex:none;width:22px;font:500 11.5px/1.5 var(--tv-font-mono);color:var(--tv-text-dim)">04</div>
-    <div style="font-size:13.5px;line-height:1.5;color:var(--tv-text-muted);text-wrap:pretty">migrations list CATALOG_DB reports nothing pending.</div>
+    <div style="font-size:13.5px;line-height:1.5;color:var(--tv-text-muted);text-wrap:pretty">Your database has its tables, with nothing left to apply.</div>
   </div>
   <div data-phase-row="5" style="display:flex;gap:10px;align-items:flex-start">
     <button data-toggle="p5" data-check="1" style="flex:none;margin-top:1px"></button>
     <div style="flex:none;width:22px;font:500 11.5px/1.5 var(--tv-font-mono);color:var(--tv-text-dim)">05</div>
-    <div style="font-size:13.5px;line-height:1.5;color:var(--tv-text-muted);text-wrap:pretty">Build goes green, then https://your-hostname serves the app over TLS.</div>
+    <div style="font-size:13.5px;line-height:1.5;color:var(--tv-text-muted);text-wrap:pretty">The site loads at your own domain, over HTTPS.</div>
   </div>
   <div data-phase-row="6" style="display:flex;gap:10px;align-items:flex-start">
     <button data-toggle="p6" data-check="1" style="flex:none;margin-top:1px"></button>
     <div style="flex:none;width:22px;font:500 11.5px/1.5 var(--tv-font-mono);color:var(--tv-text-dim)">06</div>
-    <div style="font-size:13.5px;line-height:1.5;color:var(--tv-text-muted);text-wrap:pretty">AUD copied, token pair saved, token attached to the Automation policy.</div>
+    <div style="font-size:13.5px;line-height:1.5;color:var(--tv-text-muted);text-wrap:pretty">Staff sign-in works, and the token pair is saved somewhere safe.</div>
   </div>
   <div data-phase-row="7" style="display:flex;gap:10px;align-items:flex-start">
     <button data-toggle="p7" data-check="1" style="flex:none;margin-top:1px"></button>
     <div style="flex:none;width:22px;font:500 11.5px/1.5 var(--tv-font-mono);color:var(--tv-text-dim)">07</div>
-    <div style="font-size:13.5px;line-height:1.5;color:var(--tv-text-muted);text-wrap:pretty">.dev.vars holds the private key; node-public-key.txt exists.</div>
+    <div style="font-size:13.5px;line-height:1.5;color:var(--tv-text-muted);text-wrap:pretty">Your node has its own signing key, and you have backed it up.</div>
   </div>
   <div data-phase-row="8" style="display:flex;gap:10px;align-items:flex-start">
     <button data-toggle="p8" data-check="1" style="flex:none;margin-top:1px"></button>
     <div style="flex:none;width:22px;font:500 11.5px/1.5 var(--tv-font-mono);color:var(--tv-text-dim)">08</div>
-    <div style="font-size:13.5px;line-height:1.5;color:var(--tv-text-muted);text-wrap:pretty">Privacy banner appears on first load; /api/ingest returns 204.</div>
+    <div style="font-size:13.5px;line-height:1.5;color:var(--tv-text-muted);text-wrap:pretty">Your node can reach its database, storage and AI. Check in a private window.</div>
   </div>
   <div data-phase-row="9" style="display:flex;gap:10px;align-items:flex-start">
     <button data-toggle="p9" data-check="1" style="flex:none;margin-top:1px"></button>
     <div style="flex:none;width:22px;font:500 11.5px/1.5 var(--tv-font-mono);color:var(--tv-text-dim)">09</div>
-    <div style="font-size:13.5px;line-height:1.5;color:var(--tv-text-muted);text-wrap:pretty">/.well-known/terraviz.json returns 200 with your public key, not 503.</div>
+    <div style="font-size:13.5px;line-height:1.5;color:var(--tv-text-muted);text-wrap:pretty">Your node can say who it is when another node asks.</div>
   </div>
   <div data-phase-row="10" style="display:flex;gap:10px;align-items:flex-start">
     <button data-toggle="p10" data-check="1" style="flex:none;margin-top:1px"></button>
     <div style="flex:none;width:22px;font:500 11.5px/1.5 var(--tv-font-mono);color:var(--tv-text-dim)">10</div>
-    <div style="font-size:13.5px;line-height:1.5;color:var(--tv-text-muted);text-wrap:pretty">Bindings audit clean; verify-deploy green except catalog-populated.</div>
+    <div style="font-size:13.5px;line-height:1.5;color:var(--tv-text-muted);text-wrap:pretty">Both checks pass, except the empty-catalog one — that is expected here.</div>
   </div>
   <div data-phase-row="11" style="display:flex;gap:10px;align-items:flex-start">
     <button data-toggle="p11" data-check="1" style="flex:none;margin-top:1px"></button>
     <div style="flex:none;width:22px;font:500 11.5px/1.5 var(--tv-font-mono);color:var(--tv-text-dim)">11</div>
-    <div style="font-size:13.5px;line-height:1.5;color:var(--tv-text-muted);text-wrap:pretty">/publish/me shows your email with role admin, and a Users tab.</div>
+    <div style="font-size:13.5px;line-height:1.5;color:var(--tv-text-muted);text-wrap:pretty">You are signed in as the admin and can add the rest of your team.</div>
   </div>
   <div data-phase-row="12" style="display:flex;gap:10px;align-items:flex-start">
     <button data-toggle="p12" data-check="1" style="flex:none;margin-top:1px"></button>
     <div style="flex:none;width:22px;font:500 11.5px/1.5 var(--tv-font-mono);color:var(--tv-text-dim)">12</div>
-    <div style="font-size:13.5px;line-height:1.5;color:var(--tv-text-muted);text-wrap:pretty">verify-deploy: all six checks green. That is a complete node.</div>
+    <div style="font-size:13.5px;line-height:1.5;color:var(--tv-text-muted);text-wrap:pretty">All six checks pass. Your node is finished.</div>
   </div>
   <div data-phase-row="13" style="display:flex;gap:10px;align-items:flex-start">
     <button data-toggle="p13" data-check="1" style="flex:none;margin-top:1px"></button>
     <div style="flex:none;width:22px;font:500 11.5px/1.5 var(--tv-font-mono);color:var(--tv-text-dim)">13</div>
-    <div style="font-size:13.5px;line-height:1.5;color:var(--tv-text-muted);text-wrap:pretty">Whichever add-ons you chose report healthy.</div>
+    <div style="font-size:13.5px;line-height:1.5;color:var(--tv-text-muted);text-wrap:pretty">The extras you chose are working.</div>
   </div>
   <div data-phase-row="14" style="display:flex;gap:10px;align-items:flex-start">
     <button data-toggle="p14" data-check="1" style="flex:none;margin-top:1px"></button>
     <div style="flex:none;width:22px;font:500 11.5px/1.5 var(--tv-font-mono);color:var(--tv-text-dim)">14</div>
-    <div style="font-size:13.5px;line-height:1.5;color:var(--tv-text-muted);text-wrap:pretty">A signed desktop build that talks to your API origin, not upstream.</div>
+    <div style="font-size:13.5px;line-height:1.5;color:var(--tv-text-muted);text-wrap:pretty">Your desktop app talks to your node, not the original one.</div>
   </div></div>
     </div>
   </div>
@@ -611,7 +709,7 @@ code{overflow-wrap:anywhere}
   <p style="margin:0 0 6px;max-width:64ch;color:var(--tv-text-muted);text-wrap:pretty">A filled dot is where a value is <b style="font-weight:600;color:var(--tv-text)">born</b>; the rings are every later phase that <b style="font-weight:600;color:var(--tv-text)">needs</b> it. Read the shape, not the rows: nothing ever reaches backwards.</p>
   <p style="margin:0 0 22px;max-width:64ch;font-size:13.5px;color:var(--tv-text-dim);text-wrap:pretty">Dots turn blue as you fill each value in, so this doubles as a resume view. Click a row to edit it; click a phase number to jump there.</p>
   <div data-map-head="1" style="display:grid;grid-template-columns:224px repeat(15,minmax(0,1fr));align-items:center;margin:0 0 6px;padding-bottom:8px;border-bottom:1px solid var(--tv-border)">
-    <div style="font:600 10.5px/1 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim)">Value</div><a href="#p0" data-col="0" style="justify-self:center;border:none;font:500 11px/1 var(--tv-font-mono);color:var(--tv-text-dim);padding:3px 2px">00</a><a href="#p1" data-col="1" style="justify-self:center;border:none;font:500 11px/1 var(--tv-font-mono);color:var(--tv-text-dim);padding:3px 2px">01</a><a href="#p2" data-col="2" style="justify-self:center;border:none;font:500 11px/1 var(--tv-font-mono);color:var(--tv-text-dim);padding:3px 2px">02</a><a href="#p3" data-col="3" style="justify-self:center;border:none;font:500 11px/1 var(--tv-font-mono);color:var(--tv-text-dim);padding:3px 2px">03</a><a href="#p4" data-col="4" style="justify-self:center;border:none;font:500 11px/1 var(--tv-font-mono);color:var(--tv-text-dim);padding:3px 2px">04</a><a href="#p5" data-col="5" style="justify-self:center;border:none;font:500 11px/1 var(--tv-font-mono);color:var(--tv-text-dim);padding:3px 2px">05</a><a href="#p6" data-col="6" style="justify-self:center;border:none;font:500 11px/1 var(--tv-font-mono);color:var(--tv-text-dim);padding:3px 2px">06</a><a href="#p7" data-col="7" style="justify-self:center;border:none;font:500 11px/1 var(--tv-font-mono);color:var(--tv-text-dim);padding:3px 2px">07</a><a href="#p8" data-col="8" style="justify-self:center;border:none;font:500 11px/1 var(--tv-font-mono);color:var(--tv-text-dim);padding:3px 2px">08</a><a href="#p9" data-col="9" style="justify-self:center;border:none;font:500 11px/1 var(--tv-font-mono);color:var(--tv-text-dim);padding:3px 2px">09</a><a href="#p10" data-col="10" style="justify-self:center;border:none;font:500 11px/1 var(--tv-font-mono);color:var(--tv-text-dim);padding:3px 2px">10</a><a href="#p11" data-col="11" style="justify-self:center;border:none;font:500 11px/1 var(--tv-font-mono);color:var(--tv-text-dim);padding:3px 2px">11</a><a href="#p12" data-col="12" style="justify-self:center;border:none;font:500 11px/1 var(--tv-font-mono);color:var(--tv-text-dim);padding:3px 2px">12</a><a href="#p13" data-col="13" style="justify-self:center;border:none;font:500 11px/1 var(--tv-font-mono);color:var(--tv-text-dim);padding:3px 2px">13</a><a href="#p14" data-col="14" style="justify-self:center;border:none;font:500 11px/1 var(--tv-font-mono);color:var(--tv-text-dim);padding:3px 2px">14</a>
+    <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim)">Value</div><a href="#p0" data-col="0" style="justify-self:center;border:none;font:500 11px/1 var(--tv-font-mono);color:var(--tv-text-dim);padding:3px 2px">00</a><a href="#p1" data-col="1" style="justify-self:center;border:none;font:500 11px/1 var(--tv-font-mono);color:var(--tv-text-dim);padding:3px 2px">01</a><a href="#p2" data-col="2" style="justify-self:center;border:none;font:500 11px/1 var(--tv-font-mono);color:var(--tv-text-dim);padding:3px 2px">02</a><a href="#p3" data-col="3" style="justify-self:center;border:none;font:500 11px/1 var(--tv-font-mono);color:var(--tv-text-dim);padding:3px 2px">03</a><a href="#p4" data-col="4" style="justify-self:center;border:none;font:500 11px/1 var(--tv-font-mono);color:var(--tv-text-dim);padding:3px 2px">04</a><a href="#p5" data-col="5" style="justify-self:center;border:none;font:500 11px/1 var(--tv-font-mono);color:var(--tv-text-dim);padding:3px 2px">05</a><a href="#p6" data-col="6" style="justify-self:center;border:none;font:500 11px/1 var(--tv-font-mono);color:var(--tv-text-dim);padding:3px 2px">06</a><a href="#p7" data-col="7" style="justify-self:center;border:none;font:500 11px/1 var(--tv-font-mono);color:var(--tv-text-dim);padding:3px 2px">07</a><a href="#p8" data-col="8" style="justify-self:center;border:none;font:500 11px/1 var(--tv-font-mono);color:var(--tv-text-dim);padding:3px 2px">08</a><a href="#p9" data-col="9" style="justify-self:center;border:none;font:500 11px/1 var(--tv-font-mono);color:var(--tv-text-dim);padding:3px 2px">09</a><a href="#p10" data-col="10" style="justify-self:center;border:none;font:500 11px/1 var(--tv-font-mono);color:var(--tv-text-dim);padding:3px 2px">10</a><a href="#p11" data-col="11" style="justify-self:center;border:none;font:500 11px/1 var(--tv-font-mono);color:var(--tv-text-dim);padding:3px 2px">11</a><a href="#p12" data-col="12" style="justify-self:center;border:none;font:500 11px/1 var(--tv-font-mono);color:var(--tv-text-dim);padding:3px 2px">12</a><a href="#p13" data-col="13" style="justify-self:center;border:none;font:500 11px/1 var(--tv-font-mono);color:var(--tv-text-dim);padding:3px 2px">13</a><a href="#p14" data-col="14" style="justify-self:center;border:none;font:500 11px/1 var(--tv-font-mono);color:var(--tv-text-dim);padding:3px 2px">14</a>
   </div>
   <div data-map-row="ORG" data-w="ORG" data-produced="0" data-consumed="6,8,9" data-tier="2" style="display:grid;grid-template-columns:224px repeat(15,minmax(0,1fr));align-items:center;cursor:pointer;border-radius:4px">
     <div style="display:flex;align-items:baseline;gap:7px;padding:0 6px 0 4px;min-width:0">
@@ -673,7 +771,7 @@ code{overflow-wrap:anywhere}
       <span style="font-size:11.5px;color:var(--tv-text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">Vectorize index</span>
     </div><div data-cell="0" style="height:27px;display:flex;align-items:center;justify-content:center"><span data-mark="1"></span></div><div data-cell="1" style="height:27px;display:flex;align-items:center;justify-content:center"><span data-mark="1"></span></div><div data-cell="2" style="height:27px;display:flex;align-items:center;justify-content:center"><span data-mark="1"></span></div><div data-cell="3" style="height:27px;display:flex;align-items:center;justify-content:center"><span data-mark="1"></span></div><div data-cell="4" style="height:27px;display:flex;align-items:center;justify-content:center"><span data-mark="1"></span></div><div data-cell="5" style="height:27px;display:flex;align-items:center;justify-content:center"><span data-mark="1"></span></div><div data-cell="6" style="height:27px;display:flex;align-items:center;justify-content:center"><span data-mark="1"></span></div><div data-cell="7" style="height:27px;display:flex;align-items:center;justify-content:center"><span data-mark="1"></span></div><div data-cell="8" style="height:27px;display:flex;align-items:center;justify-content:center"><span data-mark="1"></span></div><div data-cell="9" style="height:27px;display:flex;align-items:center;justify-content:center"><span data-mark="1"></span></div><div data-cell="10" style="height:27px;display:flex;align-items:center;justify-content:center"><span data-mark="1"></span></div><div data-cell="11" style="height:27px;display:flex;align-items:center;justify-content:center"><span data-mark="1"></span></div><div data-cell="12" style="height:27px;display:flex;align-items:center;justify-content:center"><span data-mark="1"></span></div><div data-cell="13" style="height:27px;display:flex;align-items:center;justify-content:center"><span data-mark="1"></span></div><div data-cell="14" style="height:27px;display:flex;align-items:center;justify-content:center"><span data-mark="1"></span></div>
   </div>
-  <div data-map-row="W9" data-w="W9" data-produced="2" data-consumed="8,13" data-tier="1" style="display:grid;grid-template-columns:224px repeat(15,minmax(0,1fr));align-items:center;cursor:pointer;border-radius:4px">
+  <div data-map-row="W9" data-w="W9" data-produced="2" data-consumed="8,13" data-tier="1" data-paid-only="1" style="display:grid;grid-template-columns:224px repeat(15,minmax(0,1fr));align-items:center;cursor:pointer;border-radius:4px">
     <div style="display:flex;align-items:baseline;gap:7px;padding:0 6px 0 4px;min-width:0">
       <span data-map-id="1" style="flex:none;font:500 10.5px/1 var(--tv-font-mono)">W9</span>
       <span style="font-size:11.5px;color:var(--tv-text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">Analytics Engine dataset</span>
@@ -784,7 +882,7 @@ code{overflow-wrap:anywhere}
   </div>
 </section>
 <section data-noprint="1" style="background:var(--tv-accent-bg);border:1px solid var(--tv-accent-border);border-radius:8px;padding:28px 30px;margin:0 0 40px">
-  <div style="font:600 10.5px/1 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim);color:var(--tv-accent);margin:0 0 12px">Start here</div>
+  <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim);color:var(--tv-accent);margin:0 0 12px">Start here</div>
   <h2 style="font:700 27px/1.2 var(--tv-font-sans);letter-spacing:-.01em;color:var(--tv-text);margin:0 0 14px">Let the tool do the mechanical parts</h2>
   <p style="margin:0 0 18px;max-width:62ch;color:var(--tv-text-muted);text-wrap:pretty">Most of what follows is dashboard clicking that a script can do faster and without typos. <code style="font-family:var(--tv-font-mono);font-size:.92em">npm run setup</code> provisions the resources, rewrites the config, applies the migrations in the order that works, creates the Access application (<code style="font-family:var(--tv-font-mono);font-size:.92em">Terraviz Publisher</code>) with its <code style="font-family:var(--tv-font-mono);font-size:.92em">Staff</code> and <code style="font-family:var(--tv-font-mono);font-size:.92em">Automation</code> policies, and writes every binding to <i>both</i> environments.</p>
   <div style="position:relative;margin:0 0 14px">
@@ -824,14 +922,14 @@ npm run setup -- --apply</pre>
     <div style="flex:1;min-width:0">
       <div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin:0 0 4px">
         <span style="font:500 11.5px/1 var(--tv-font-mono);color:var(--tv-text-dim);letter-spacing:.06em">PHASE 00</span>
-        <span style="font:400 11.5px/1 var(--tv-font-sans);color:var(--tv-text-dim)">≈20 min · all tiers · nothing here is automatable</span>
+        <span style="font:400 11.5px/1.4 var(--tv-font-sans);color:var(--tv-text-dim)">≈20 min · all tiers · nothing here is automatable</span>
       </div>
       <h2 style="font:700 24px/1.25 var(--tv-font-sans);letter-spacing:-.01em;color:var(--tv-text);margin:0">Before you touch Cloudflare</h2>
     </div>
   </div>
-  <p style="margin:0 0 16px;max-width:64ch;color:var(--tv-text-muted);text-wrap:pretty">Billing, a registrar, and a login. Get these four values written down and everything after this has something to stand on.</p>
+  <p style="margin:0 0 16px;max-width:64ch;color:var(--tv-text-muted);text-wrap:pretty">An account, a registrar, and a login. Get these four values written down and everything after this has something to stand on.</p>
   <div style="display:flex;flex-wrap:wrap;gap:6px;margin:0 0 20px;align-items:center">
-      <span style="font:600 10.5px/1 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim);margin-right:3px">Produces</span>
+      <span style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim);margin-right:3px">Produces</span>
       <span data-w="ORG" style="cursor:pointer;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:3px;padding:4px 8px;font:500 11px/1.2 var(--tv-font-mono);color:var(--tv-text-muted)">ORG your org domain</span>
       <span data-w="TRUST" style="cursor:pointer;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:3px;padding:4px 8px;font:500 11px/1.2 var(--tv-font-mono);color:var(--tv-text-muted)">TRUST auto-approve domains</span>
       <span data-w="W1" style="cursor:pointer;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:3px;padding:4px 8px;font:500 11px/1.2 var(--tv-font-mono);color:var(--tv-text-muted)">W1 cloudflare account id</span>
@@ -849,7 +947,7 @@ cd terraviz &amp;&amp; npm install</pre>
   <button data-copy="1" style="position:absolute;top:7px;right:8px;background:rgba(255,255,255,.07);color:var(--tv-text-dim);border:1px solid var(--tv-border-strong);border-radius:3px;font:500 10px/1 var(--tv-font-sans);letter-spacing:.08em;text-transform:uppercase;padding:5px 8px;cursor:pointer">Copy</button>
 </div>
   <div style="background:var(--tv-accent-bg);border:1px solid var(--tv-accent-border);border-left:3px solid var(--tv-accent);border-radius:6px;padding:14px 16px;margin:0 0 14px">
-    <div style="font:600 10.5px/1 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-accent);margin:0 0 7px">Gate</div>
+    <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-accent);margin:0 0 7px">Gate</div>
     <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty"><code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">wrangler whoami</code> prints the account matching <span data-slot="W1" data-w="W1" style="cursor:pointer;padding:1px 5px;border-radius:3px"></span>.</p>
   </div>
   <p style="margin:0;font-size:12.5px;color:var(--tv-text-dim)"><a href="https://github.com/zyra-project/terraviz/blob/main/docs/SELF_HOSTING.md#phase-0--before-you-touch-cloudflare">Full detail in SELF_HOSTING.md ↗</a></p>
@@ -860,7 +958,7 @@ cd terraviz &amp;&amp; npm install</pre>
     <div style="flex:1;min-width:0">
       <div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin:0 0 4px">
         <span style="font:500 11.5px/1 var(--tv-font-mono);color:var(--tv-text-dim);letter-spacing:.06em">PHASE 01</span>
-        <span style="font:400 11.5px/1 var(--tv-font-sans);color:var(--tv-text-dim)">≈15 min · all tiers</span>
+        <span style="font:400 11.5px/1.4 var(--tv-font-sans);color:var(--tv-text-dim)">≈15 min · all tiers</span>
       </div>
       <h2 style="font:700 24px/1.25 var(--tv-font-sans);letter-spacing:-.01em;color:var(--tv-text);margin:0">Run it on your laptop</h2>
     </div>
@@ -871,7 +969,7 @@ cd terraviz &amp;&amp; npm install</pre>
   <button data-copy="1" style="position:absolute;top:7px;right:8px;background:rgba(255,255,255,.07);color:var(--tv-text-dim);border:1px solid var(--tv-border-strong);border-radius:3px;font:500 10px/1 var(--tv-font-sans);letter-spacing:.08em;text-transform:uppercase;padding:5px 8px;cursor:pointer">Copy</button>
 </div>
   <div style="background:var(--tv-error-bg);border:1px solid var(--tv-error-border);border-left:3px solid var(--tv-error);border-radius:6px;padding:15px 17px;margin:0 0 16px">
-  <div style="font:600 10.5px/1 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-error);margin:0 0 8px">Trap · Order matters</div>
+  <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-error);margin:0 0 8px">Trap · Order matters</div>
   <p style="margin:0 0 10px;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">Run these three in exactly this order. Reversing the last two leaves your node identity holding the literal placeholder key, and <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">/.well-known/terraviz.json</code> will serve it. The script warns but exits 0, so it is easy to miss.</p>
   <p style="margin:0 0 10px;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty"><code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">npm run db:reset</code> does all three in the right order.</p>
   <div style="position:relative;margin:0 0 14px">
@@ -883,7 +981,7 @@ npm run gen:node-key<span style="color:var(--tv-text-dim)">  # 3. keypair, and s
 </div>
 </div>
   <div style="background:var(--tv-error-bg);border:1px solid var(--tv-error-border);border-left:3px solid var(--tv-error);border-radius:6px;padding:15px 17px;margin:0 0 16px">
-  <div style="font:600 10.5px/1 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-error);margin:0 0 8px">Trap · Known blocker · dev:functions needs credentials</div>
+  <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-error);margin:0 0 8px">Trap · Known blocker · dev:functions needs credentials</div>
   <p style="margin:0 0 10px;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">On a fresh clone, <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">npm run dev:functions</code> fails with &quot;Could not start remote dev session. No credentials found.&quot; The cause: <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">wrangler.toml</code> declares an <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">[ai]</code> binding, and wrangler runs those in remote mode unconditionally — even though <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">MOCK_AI=true</code> exists precisely so you do not need the real service.</p>
   <p style="margin:0 0 10px;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty"><b style="font-weight:600;color:var(--tv-text)">Two fixes, pick one.</b> Run <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">wrangler login</code> first — the proxy session opens and everything else still runs locally. Or comment out the <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">[ai]</code> block while you work, which is the only route to a genuinely offline dev loop. Nothing in the deploy depends on it; Pages reads its bindings from the dashboard, not from this file. Do not commit the change.</p>
   
@@ -895,7 +993,7 @@ npm run dev:functions<span style="color:var(--tv-text-dim)">      # http://local
   <button data-copy="1" style="position:absolute;top:7px;right:8px;background:rgba(255,255,255,.07);color:var(--tv-text-dim);border:1px solid var(--tv-border-strong);border-radius:3px;font:500 10px/1 var(--tv-font-sans);letter-spacing:.08em;text-transform:uppercase;padding:5px 8px;cursor:pointer">Copy</button>
 </div>
   <div style="background:var(--tv-accent-bg);border:1px solid var(--tv-accent-border);border-left:3px solid var(--tv-accent);border-radius:6px;padding:14px 16px;margin:0 0 14px">
-    <div style="font:600 10.5px/1 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-accent);margin:0 0 7px">Gate</div>
+    <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-accent);margin:0 0 7px">Gate</div>
     <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">All four endpoints answer: 200 with datasets, a real public key, role <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">admin</code>, and a mock-embedder search result. If <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">/publish/me</code> returns 503, you copied to <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">.dev.vars.example</code> rather than <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">.dev.vars</code>.</p>
   </div>
   <p style="margin:0;font-size:12.5px;color:var(--tv-text-dim)"><a href="https://github.com/zyra-project/terraviz/blob/main/docs/SELF_HOSTING.md#phase-1--run-it-on-your-laptop">Full detail in SELF_HOSTING.md ↗</a></p>
@@ -906,14 +1004,14 @@ npm run dev:functions<span style="color:var(--tv-text-dim)">      # http://local
     <div style="flex:1;min-width:0">
       <div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin:0 0 4px">
         <span style="font:500 11.5px/1 var(--tv-font-mono);color:var(--tv-text-dim);letter-spacing:.06em">PHASE 02</span>
-        <span style="font:400 11.5px/1 var(--tv-font-sans);color:var(--tv-text-dim)">≈10 min · all tiers</span>
+        <span style="font:400 11.5px/1.4 var(--tv-font-sans);color:var(--tv-text-dim)">≈10 min · all tiers</span>
       </div>
       <h2 style="font:700 24px/1.25 var(--tv-font-sans);letter-spacing:-.01em;color:var(--tv-text);margin:0">Create the Cloudflare resources</h2>
     </div>
   </div>
   <p style="margin:0 0 16px;max-width:64ch;color:var(--tv-text-muted);text-wrap:pretty">Nothing consumes these yet — and that is deliberate. This phase exists so that when Phases 3 and 8 ask for IDs, you already have them written down.</p>
   <div style="display:flex;flex-wrap:wrap;gap:6px;margin:0 0 20px;align-items:center">
-      <span style="font:600 10.5px/1 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim);margin-right:3px">Produces</span>
+      <span style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim);margin-right:3px">Produces</span>
       <span data-w="W4" style="cursor:pointer;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:3px;padding:4px 8px;font:500 11px/1.2 var(--tv-font-mono);color:var(--tv-text-muted)">W4 d1 database id</span>
       <span data-w="W5" style="cursor:pointer;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:3px;padding:4px 8px;font:500 11px/1.2 var(--tv-font-mono);color:var(--tv-text-muted)">W5 kv — telemetry_kill_switch</span>
       <span data-w="W6" style="cursor:pointer;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:3px;padding:4px 8px;font:500 11px/1.2 var(--tv-font-mono);color:var(--tv-text-muted)">W6 kv — catalog_kv</span>
@@ -927,7 +1025,7 @@ npm run dev:functions<span style="color:var(--tv-text-dim)">      # http://local
 </div>
   <p style="margin:0 0 16px;max-width:64ch;font-size:13.5px;color:var(--tv-text-muted);text-wrap:pretty">Creates or adopts the D1 database, both KV namespaces, the R2 bucket, and the Vectorize index with its three metadata indexes — and records every ID for you. Re-running adopts what already exists rather than making a second one.</p>
   <div style="background:var(--tv-accent-bg);border:1px solid var(--tv-accent-border);border-left:3px solid var(--tv-accent);border-radius:6px;padding:14px 16px;margin:0 0 14px">
-    <div style="font:600 10.5px/1 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-accent);margin:0 0 7px">Gate</div>
+    <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-accent);margin:0 0 7px">Gate</div>
     <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">W4 through W9 are all filled in.</p>
   </div>
   <p style="margin:0;font-size:12.5px;color:var(--tv-text-dim)"><a href="https://github.com/zyra-project/terraviz/blob/main/docs/SELF_HOSTING.md#phase-2--create-the-cloudflare-resources">Full detail in SELF_HOSTING.md ↗</a></p>
@@ -938,7 +1036,7 @@ npm run dev:functions<span style="color:var(--tv-text-dim)">      # http://local
     <div style="flex:1;min-width:0">
       <div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin:0 0 4px">
         <span style="font:500 11.5px/1 var(--tv-font-mono);color:var(--tv-text-dim);letter-spacing:.06em">PHASE 03</span>
-        <span style="font:400 11.5px/1 var(--tv-font-sans);color:var(--tv-text-dim)">≈5 min · all tiers</span>
+        <span style="font:400 11.5px/1.4 var(--tv-font-sans);color:var(--tv-text-dim)">≈5 min · all tiers</span>
       </div>
       <h2 style="font:700 24px/1.25 var(--tv-font-sans);letter-spacing:-.01em;color:var(--tv-text);margin:0">Point the repo at your resources</h2>
     </div>
@@ -950,12 +1048,12 @@ npm run dev:functions<span style="color:var(--tv-text-dim)">      # http://local
 </div>
   <p style="margin:0 0 16px;max-width:64ch;font-size:13.5px;color:var(--tv-text-muted);text-wrap:pretty">It edits per binding block rather than by string replace — the two D1 blocks share a database name and the two KV blocks share a section header, so a global replace cannot tell them apart. It refuses to apply while any ID is still unknown.</p>
   <div style="background:var(--tv-warn-bg);border:1px solid var(--tv-warn-border);border-left:3px solid var(--tv-warn);border-radius:6px;padding:15px 17px;margin:0 0 16px">
-  <div style="font:600 10.5px/1 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-warn);margin:0 0 8px">Worth knowing · Why this file matters when Pages ignores it</div>
+  <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-warn);margin:0 0 8px">Worth knowing · Why this file matters when Pages ignores it</div>
   <p style="margin:0 0 10px;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">Pages reads its live bindings from the dashboard. But every wrangler command you run from your shell resolves its target through <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">wrangler.toml</code>. Getting this wrong means Phase 4 runs migrations against <b style="font-weight:600;color:var(--tv-text)">upstream’s database</b>, not yours.</p>
   
 </div>
   <div style="background:var(--tv-accent-bg);border:1px solid var(--tv-accent-border);border-left:3px solid var(--tv-accent);border-radius:6px;padding:14px 16px;margin:0 0 14px">
-    <div style="font:600 10.5px/1 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-accent);margin:0 0 7px">Gate</div>
+    <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-accent);margin:0 0 7px">Gate</div>
     <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty"><code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">wrangler d1 info CATALOG_DB</code> shows your database, 0 tables.</p>
   </div>
   <p style="margin:0;font-size:12.5px;color:var(--tv-text-dim)"><a href="https://github.com/zyra-project/terraviz/blob/main/docs/SELF_HOSTING.md#phase-3--point-the-repo-at-your-resources">Full detail in SELF_HOSTING.md ↗</a></p>
@@ -966,7 +1064,7 @@ npm run dev:functions<span style="color:var(--tv-text-dim)">      # http://local
     <div style="flex:1;min-width:0">
       <div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin:0 0 4px">
         <span style="font:500 11.5px/1 var(--tv-font-mono);color:var(--tv-text-dim);letter-spacing:.06em">PHASE 04</span>
-        <span style="font:400 11.5px/1 var(--tv-font-sans);color:var(--tv-text-dim)">≈10 min · all tiers · the one that bites</span>
+        <span style="font:400 11.5px/1.4 var(--tv-font-sans);color:var(--tv-text-dim)">≈10 min · all tiers · the one that bites</span>
       </div>
       <h2 style="font:700 24px/1.25 var(--tv-font-sans);letter-spacing:-.01em;color:var(--tv-text);margin:0">Create the schema</h2>
     </div>
@@ -978,14 +1076,14 @@ npm run dev:functions<span style="color:var(--tv-text-dim)">      # http://local
 </div>
   <p style="margin:0 0 16px;max-width:64ch;font-size:13.5px;color:var(--tv-text-muted);text-wrap:pretty">Applies both sets in the order that works, and distinguishes the expected failure above from a real one. Add <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">--local-migrations</code> to rehearse against your local database first.</p>
   <div style="background:var(--tv-error-bg);border:1px solid var(--tv-error-border);border-left:3px solid var(--tv-error);border-radius:6px;padding:15px 17px;margin:0 0 16px">
-  <div style="font:600 10.5px/1 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-error);margin:0 0 8px">Trap · Run CATALOG_DB first, and the order is not cosmetic</div>
+  <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-error);margin:0 0 8px">Trap · Run CATALOG_DB first, and the order is not cosmetic</div>
   <p style="margin:0 0 10px;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">FEEDBACK_DB's migrations directory is the repo root, which also contains <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">catalog-schema.sql</code> — a generated snapshot of the fully-migrated catalog schema. Wrangler has no way to know it is not a migration, so it queues it as one.</p>
   <p style="margin:0 0 10px;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">On an empty database, running FEEDBACK_DB first means that snapshot <b style="font-weight:600;color:var(--tv-text)">applies for real</b>, creating the entire catalog schema outside the migration tracker. Every subsequent CATALOG_DB migration then fails on <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">table node_identity already exists</code>, and the install cannot be completed. Run CATALOG_DB first and the snapshot fails harmlessly on its first statement instead.</p>
   <p style="margin:0 0 10px;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty"><b style="font-weight:600;color:var(--tv-text)">So the second command is expected to end with an error</b> — <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">table analytics_daily already exists</code> — after applying the seven real feedback migrations. That one failure is harmless. Any other failure is not.</p>
   
 </div>
   <details style="border-top:1px solid var(--tv-border);padding-top:13px;margin:0 0 14px">
-    <summary style="display:block;cursor:pointer;font:500 13px/1 var(--tv-font-sans);color:var(--tv-accent);list-style:none">+ Do it by hand</summary>
+    <summary style="display:block;cursor:pointer;font:500 13px/1.4 var(--tv-font-sans);color:var(--tv-accent);list-style:none">+ Do it by hand</summary>
     <div style="padding-top:14px"><div style="position:relative;margin:0 0 14px">
   <pre style="margin:0;background:var(--tv-surface-code);border:1px solid var(--tv-border);color:var(--tv-text-muted);font:400 12.5px/1.8 var(--tv-font-mono);padding:36px 16px 15px;border-radius:6px;overflow-x:auto">wrangler d1 migrations apply CATALOG_DB  --remote<span style="color:var(--tv-text-dim)">   # first!</span>
 wrangler d1 migrations apply FEEDBACK_DB --remote<span style="color:var(--tv-text-dim)">   # ends in a harmless error</span></pre>
@@ -994,7 +1092,7 @@ wrangler d1 migrations apply FEEDBACK_DB --remote<span style="color:var(--tv-tex
     <p style="margin:0 0 10px;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);max-width:64ch;text-wrap:pretty"><b>Always select by binding name, never by database name.</b> Both blocks declare <code>database_name = "sphere-feedback"</code> with different migration dirs. Passing the bare name is ambiguous; wrangler silently applies the wrong set and leaves the catalog tables uncreated. The symptom lands much later as <code>table datasets has no column named bbox_n</code> when someone clicks Save draft.</p></div>
   </details>
   <div style="background:var(--tv-accent-bg);border:1px solid var(--tv-accent-border);border-left:3px solid var(--tv-accent);border-radius:6px;padding:14px 16px;margin:0 0 14px">
-    <div style="font:600 10.5px/1 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-accent);margin:0 0 7px">Gate</div>
+    <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-accent);margin:0 0 7px">Gate</div>
     <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">Both migration lists report nothing pending except <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">catalog-schema.sql</code> on FEEDBACK_DB. Re-run both after every <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">git pull</code> that brings new migration files — they are idempotent.</p>
   </div>
   <p style="margin:0;font-size:12.5px;color:var(--tv-text-dim)"><a href="https://github.com/zyra-project/terraviz/blob/main/docs/SELF_HOSTING.md#phase-4--create-the-schema">Full detail in SELF_HOSTING.md ↗</a></p>
@@ -1005,14 +1103,14 @@ wrangler d1 migrations apply FEEDBACK_DB --remote<span style="color:var(--tv-tex
     <div style="flex:1;min-width:0">
       <div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin:0 0 4px">
         <span style="font:500 11.5px/1 var(--tv-font-mono);color:var(--tv-text-dim);letter-spacing:.06em">PHASE 05</span>
-        <span style="font:400 11.5px/1 var(--tv-font-sans);color:var(--tv-text-dim)">≈25 min · all tiers · Tier 1 finishes here</span>
+        <span style="font:400 11.5px/1.4 var(--tv-font-sans);color:var(--tv-text-dim)">≈25 min · all tiers · Tier 1 finishes here</span>
       </div>
       <h2 style="font:700 24px/1.25 var(--tv-font-sans);letter-spacing:-.01em;color:var(--tv-text);margin:0">Create the Pages project</h2>
     </div>
   </div>
   
   <div style="display:flex;flex-wrap:wrap;gap:6px;margin:0 0 20px;align-items:center">
-      <span style="font:600 10.5px/1 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim);margin-right:3px">Produces</span>
+      <span style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim);margin-right:3px">Produces</span>
       <span data-w="W10" style="cursor:pointer;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:3px;padding:4px 8px;font:500 11px/1.2 var(--tv-font-mono);color:var(--tv-text-muted)">W10 pages project name</span>
       <span data-w="W11" style="cursor:pointer;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:3px;padding:4px 8px;font:500 11px/1.2 var(--tv-font-mono);color:var(--tv-text-muted)">W11 cloudflare_api_token</span>
     </div>
@@ -1022,14 +1120,14 @@ wrangler d1 migrations apply FEEDBACK_DB --remote<span style="color:var(--tv-tex
 </div>
   <p style="margin:0 0 16px;max-width:64ch;font-size:13.5px;color:var(--tv-text-muted);text-wrap:pretty">Creates the project with the right build settings and attaches your custom domain. What it <i>cannot</i> do is connect the Git remote — that handshake is an OAuth flow between Cloudflare and GitHub with no API behind it. A project the tool creates is Direct Upload, so Cloudflare never runs your build and the <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">VITE_*</code> variables must be set wherever the build actually runs. Click Connect in the dashboard afterwards to convert it in place, or stay on Direct Upload and deploy from CI.</p>
   <div style="background:var(--tv-warn-bg);border:1px solid var(--tv-warn-border);border-left:3px solid var(--tv-warn);border-radius:6px;padding:15px 17px;margin:0 0 16px">
-  <div style="font:600 10.5px/1 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-warn);margin:0 0 8px">Worth knowing · Pick exactly one deploy path</div>
+  <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-warn);margin:0 0 8px">Worth knowing · Pick exactly one deploy path</div>
   <p style="margin:0 0 10px;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">The repo ships a <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">deploy</code> job that targets the project name <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">terraviz</code>. On a fresh fork it either fails for lack of secrets or — worse, if you have set them — deploys to a project that is not yours.</p>
   <p style="margin:0 0 10px;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty"><b style="font-weight:600;color:var(--tv-text)">Dashboard Git integration (recommended):</b> delete or disable the deploy job in <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">ci.yml</code> and <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">poster.yml</code>. Keep type-check, unit-tests and build — they are fork-safe and need no secrets.</p>
   <p style="margin:0 0 10px;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty"><b style="font-weight:600;color:var(--tv-text)">GitHub Actions (Direct Upload):</b> set repo secrets for your API token and account ID, change every <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">--project-name</code> to yours, set the repo variable <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">TERRAVIZ_SERVER</code>, and do <i>not</i> connect the Git integration. Note that forks land with Actions disabled and no secrets — GitHub never copies those.</p>
   
 </div>
   <div style="background:var(--tv-accent-bg);border:1px solid var(--tv-accent-border);border-left:3px solid var(--tv-accent);border-radius:6px;padding:14px 16px;margin:0 0 14px">
-    <div style="font:600 10.5px/1 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-accent);margin:0 0 7px">Gate</div>
+    <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-accent);margin:0 0 7px">Gate</div>
     <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">The build goes green, the site loads at <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px"><span data-slot="W10" data-w="W10" style="cursor:pointer;padding:1px 5px;border-radius:3px"></span>.pages.dev</code>, and then <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">https://<span data-slot="W2" data-w="W2" style="cursor:pointer;padding:1px 5px;border-radius:3px"></span></code> serves it over TLS. Backend features will not work yet — no bindings.</p>
   </div>
   <p style="margin:0;font-size:12.5px;color:var(--tv-text-dim)"><a href="https://github.com/zyra-project/terraviz/blob/main/docs/SELF_HOSTING.md#phase-5--create-the-pages-project">Full detail in SELF_HOSTING.md ↗</a></p>
@@ -1040,14 +1138,14 @@ wrangler d1 migrations apply FEEDBACK_DB --remote<span style="color:var(--tv-tex
     <div style="flex:1;min-width:0">
       <div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin:0 0 4px">
         <span style="font:500 11.5px/1 var(--tv-font-mono);color:var(--tv-text-dim);letter-spacing:.06em">PHASE 06</span>
-        <span style="font:400 11.5px/1 var(--tv-font-sans);color:var(--tv-text-dim)">≈25 min · Tier 2+ · everything after this depends on it</span>
+        <span style="font:400 11.5px/1.4 var(--tv-font-sans);color:var(--tv-text-dim)">≈25 min · Tier 2+ · everything after this depends on it</span>
       </div>
       <h2 style="font:700 24px/1.25 var(--tv-font-sans);letter-spacing:-.01em;color:var(--tv-text);margin:0">Cloudflare Access and the service token</h2>
     </div>
   </div>
   <p style="margin:0 0 16px;max-width:64ch;color:var(--tv-text-muted);text-wrap:pretty">Access is not optional for a publisher node. The middleware fails closed: without a team domain and an AUD, every publish route returns 503 and the CLI can do nothing.</p>
   <div style="display:flex;flex-wrap:wrap;gap:6px;margin:0 0 20px;align-items:center">
-      <span style="font:600 10.5px/1 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim);margin-right:3px">Produces</span>
+      <span style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim);margin-right:3px">Produces</span>
       <span data-w="W12" style="cursor:pointer;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:3px;padding:4px 8px;font:500 11px/1.2 var(--tv-font-mono);color:var(--tv-text-muted)">W12 access team domain</span>
       <span data-w="W13" style="cursor:pointer;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:3px;padding:4px 8px;font:500 11px/1.2 var(--tv-font-mono);color:var(--tv-text-muted)">W13 access aud (publisher app)</span>
       <span data-w="W14" style="cursor:pointer;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:3px;padding:4px 8px;font:500 11px/1.2 var(--tv-font-mono);color:var(--tv-text-muted)">W14 cf_access_client_id</span>
@@ -1059,12 +1157,12 @@ wrangler d1 migrations apply FEEDBACK_DB --remote<span style="color:var(--tv-tex
 </div>
   <p style="margin:0 0 16px;max-width:64ch;font-size:13.5px;color:var(--tv-text-muted);text-wrap:pretty">Discovers your team domain, creates the publisher application with all six destinations, creates both policies, mints the service token and attaches it. It records the AUD and prints the token pair <b style="font-weight:600;color:var(--tv-text)">once</b> — have somewhere to put it.</p>
   <div style="background:var(--tv-warn-bg);border:1px solid var(--tv-warn-border);border-left:3px solid var(--tv-warn);border-radius:6px;padding:15px 17px;margin:0 0 16px">
-  <div style="font:600 10.5px/1 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-warn);margin:0 0 8px">Worth knowing · Do this part yourself first</div>
+  <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-warn);margin:0 0 8px">Worth knowing · Do this part yourself first</div>
   <p style="margin:0 0 10px;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">Complete <b style="font-weight:600;color:var(--tv-text)">Zero Trust onboarding</b> in the dashboard and add at least one identity provider. One-time PIN over email works and needs no IdP setup; Google, Okta or Entra are better for a real team. You will choose a team name — your team domain becomes <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px"><span data-slot="W12" data-w="W12" style="cursor:pointer;padding:1px 5px;border-radius:3px"></span></code>.</p>
   
 </div>
   <div style="background:var(--tv-accent-bg);border:1px solid var(--tv-accent-border);border-left:3px solid var(--tv-accent);border-radius:6px;padding:14px 16px;margin:0 0 14px">
-    <div style="font:600 10.5px/1 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-accent);margin:0 0 7px">Gate</div>
+    <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-accent);margin:0 0 7px">Gate</div>
     <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">The AUD is copied, the token pair is in your password manager, and the token appears in the Automation policy's include list.</p>
   </div>
   <p style="margin:0;font-size:12.5px;color:var(--tv-text-dim)"><a href="https://github.com/zyra-project/terraviz/blob/main/docs/SELF_HOSTING.md#phase-6--cloudflare-access-and-the-service-token">Full detail, plus the two optional Access apps ↗</a></p>
@@ -1075,14 +1173,14 @@ wrangler d1 migrations apply FEEDBACK_DB --remote<span style="color:var(--tv-tex
     <div style="flex:1;min-width:0">
       <div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin:0 0 4px">
         <span style="font:500 11.5px/1 var(--tv-font-mono);color:var(--tv-text-dim);letter-spacing:.06em">PHASE 07</span>
-        <span style="font:400 11.5px/1 var(--tv-font-sans);color:var(--tv-text-dim)">≈5 min · Tier 2+</span>
+        <span style="font:400 11.5px/1.4 var(--tv-font-sans);color:var(--tv-text-dim)">≈5 min · Tier 2+</span>
       </div>
       <h2 style="font:700 24px/1.25 var(--tv-font-sans);letter-spacing:-.01em;color:var(--tv-text);margin:0">Generate your node's secrets</h2>
     </div>
   </div>
   <p style="margin:0 0 16px;max-width:64ch;color:var(--tv-text-muted);text-wrap:pretty">Two secrets are yours to create, and neither exists until you make it.</p>
   <div style="display:flex;flex-wrap:wrap;gap:6px;margin:0 0 20px;align-items:center">
-      <span style="font:600 10.5px/1 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim);margin-right:3px">Produces</span>
+      <span style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim);margin-right:3px">Produces</span>
       <span data-w="W16" style="cursor:pointer;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:3px;padding:4px 8px;font:500 11px/1.2 var(--tv-font-mono);color:var(--tv-text-muted)">W16 node_id_private_key_pem</span>
       <span data-w="W17" style="cursor:pointer;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:3px;padding:4px 8px;font:500 11px/1.2 var(--tv-font-mono);color:var(--tv-text-muted)">W17 node public key</span>
       <span data-w="W18" style="cursor:pointer;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:3px;padding:4px 8px;font:500 11px/1.2 var(--tv-font-mono);color:var(--tv-text-muted)">W18 preview_signing_key</span>
@@ -1094,12 +1192,12 @@ openssl rand -base64 32<span style="color:var(--tv-text-dim)">    # W18</span></
   <button data-copy="1" style="position:absolute;top:7px;right:8px;background:rgba(255,255,255,.07);color:var(--tv-text-dim);border:1px solid var(--tv-border-strong);border-radius:3px;font:500 10px/1 var(--tv-font-sans);letter-spacing:.08em;text-transform:uppercase;padding:5px 8px;cursor:pointer">Copy</button>
 </div>
   <div style="background:var(--tv-error-bg);border:1px solid var(--tv-error-border);border-left:3px solid var(--tv-error);border-radius:6px;padding:15px 17px;margin:0 0 16px">
-  <div style="font:600 10.5px/1 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-error);margin:0 0 8px">Trap · Back up the private key somewhere durable</div>
+  <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-error);margin:0 0 8px">Trap · Back up the private key somewhere durable</div>
   <p style="margin:0 0 10px;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">It signs your node's federation responses. Regenerating it means re-provisioning your identity.</p>
   
 </div>
   <div style="background:var(--tv-accent-bg);border:1px solid var(--tv-accent-border);border-left:3px solid var(--tv-accent);border-radius:6px;padding:14px 16px;margin:0 0 14px">
-    <div style="font:600 10.5px/1 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-accent);margin:0 0 7px">Gate</div>
+    <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-accent);margin:0 0 7px">Gate</div>
     <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty"><code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">.dev.vars</code> holds a single-line private key, and <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">node-public-key.txt</code> holds an <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">ed25519:</code> line.</p>
   </div>
   <p style="margin:0;font-size:12.5px;color:var(--tv-text-dim)"><a href="https://github.com/zyra-project/terraviz/blob/main/docs/SELF_HOSTING.md#phase-7--generate-your-nodes-secrets">Full detail in SELF_HOSTING.md ↗</a></p>
@@ -1110,7 +1208,7 @@ openssl rand -base64 32<span style="color:var(--tv-text-dim)">    # W18</span></
     <div style="flex:1;min-width:0">
       <div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin:0 0 4px">
         <span style="font:500 11.5px/1 var(--tv-font-mono);color:var(--tv-text-dim);letter-spacing:.06em">PHASE 08</span>
-        <span style="font:400 11.5px/1 var(--tv-font-sans);color:var(--tv-text-dim)">≈20 min by hand, or one command · all tiers</span>
+        <span style="font:400 11.5px/1.4 var(--tv-font-sans);color:var(--tv-text-dim)">≈20 min by hand, or one command · all tiers</span>
       </div>
       <h2 style="font:700 24px/1.25 var(--tv-font-sans);letter-spacing:-.01em;color:var(--tv-text);margin:0">Wire bindings, variables and secrets</h2>
     </div>
@@ -1122,12 +1220,12 @@ openssl rand -base64 32<span style="color:var(--tv-text-dim)">    # W18</span></
 </div>
   <p style="margin:0 0 16px;max-width:64ch;font-size:13.5px;color:var(--tv-text-muted);text-wrap:pretty">Writes every entry to both environments in a single call, from the same manifest the audit checks against — so it cannot produce a deploy that Phase 10 then calls broken. Anything it has no value for is listed as skipped, with the reason, rather than written blank.</p>
   <div style="background:var(--tv-error-bg);border:1px solid var(--tv-error-border);border-left:3px solid var(--tv-error);border-radius:6px;padding:15px 17px;margin:0 0 16px">
-  <div style="font:600 10.5px/1 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-error);margin:0 0 8px">Trap · Set every entry on BOTH Production and Preview</div>
+  <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-error);margin:0 0 8px">Trap · Set every entry on BOTH Production and Preview</div>
   <p style="margin:0 0 10px;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">The environment selector is at the top of the page and forgetting it is the most common cutover failure — &quot;works on preview, breaks on production&quot;, or the reverse. Phase 10’s audit catches it, but only if you run it.</p>
   
 </div>
   <div style="display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,.6fr) minmax(0,.45fr) minmax(0,2.4fr);gap:1px;background:var(--tv-border);border:1px solid var(--tv-border);border-radius:6px;overflow:hidden;font-size:12.5px;margin:0 0 18px">
-  <div style="background:var(--tv-surface-3);padding:9px 12px;font:600 10.5px/1 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim)">Name</div><div style="background:var(--tv-surface-3);padding:9px 12px;font:600 10.5px/1 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim)">Type</div><div style="background:var(--tv-surface-3);padding:9px 12px;font:600 10.5px/1 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim)">Envs</div><div style="background:var(--tv-surface-3);padding:9px 12px;font:600 10.5px/1 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim)">What the audit says when it is missing</div>
+  <div style="background:var(--tv-surface-3);padding:9px 12px;font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim)">Name</div><div style="background:var(--tv-surface-3);padding:9px 12px;font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim)">Type</div><div style="background:var(--tv-surface-3);padding:9px 12px;font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim)">Envs</div><div style="background:var(--tv-surface-3);padding:9px 12px;font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim)">What the audit says when it is missing</div>
   <div data-binding-row="1" data-tier="2" style="display:contents">
     <div style="background:var(--tv-surface-2);padding:10px 12px;font-family:var(--tv-font-mono);overflow-wrap:anywhere">ACCESS_TEAM_DOMAIN</div>
     <div style="background:var(--tv-surface-2);padding:10px 12px;color:var(--tv-text-dim)">plaintext</div>
@@ -1188,7 +1286,7 @@ openssl rand -base64 32<span style="color:var(--tv-text-dim)">    # W18</span></
     <div style="background:var(--tv-surface-2);padding:10px 12px;color:var(--tv-text-dim)">both</div>
     <div style="background:var(--tv-surface-2);padding:10px 12px;color:var(--tv-text-muted)">Sphere feedback D1 — same physical database as CATALOG_DB on the reference deploy, separate binding for migration scoping.</div>
   </div>
-  <div data-binding-row="1" data-tier="1" style="display:contents">
+  <div data-binding-row="1" data-tier="1" data-paid-only="1" style="display:contents">
     <div style="background:var(--tv-surface-2);padding:10px 12px;font-family:var(--tv-font-mono);overflow-wrap:anywhere">ANALYTICS</div>
     <div style="background:var(--tv-surface-2);padding:10px 12px;color:var(--tv-text-dim)">analytics_engine</div>
     <div style="background:var(--tv-surface-2);padding:10px 12px;color:var(--tv-text-dim)">both</div>
@@ -1243,8 +1341,21 @@ openssl rand -base64 32<span style="color:var(--tv-text-dim)">    # W18</span></
     <div style="background:var(--tv-surface-2);padding:10px 12px;color:var(--tv-text-muted)">GitHub fine-grained PAT (Contents: write on the workflow repo) or classic PAT with <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">repo</code> scope. Used by /asset/.../complete to fire the transcode-hls repository_dispatch on a video upload.</div>
   </div>
 </div>
+  <p data-when="free" style="margin:0 0 18px;max-width:64ch;font-size:13.5px;color:var(--tv-text-dim);text-wrap:pretty">The <code style="font-family:var(--tv-font-mono);font-size:.92em">ANALYTICS</code> binding is not listed because you chose the free plan — there is no Analytics Engine dataset to point it at. The audit will report it as MISSING; that is correct and you can leave it. <a href="#cost">Change plan</a></p>
+  <div data-when="local">
+  <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim);margin:0 0 10px">Your own model — three more variables</div>
+  <p style="margin:0 0 14px;max-width:64ch;font-size:13.5px;color:var(--tv-text-muted);text-wrap:pretty">Set these alongside the bindings above, on both environments. Keep the <code style="font-family:var(--tv-font-mono);font-size:.92em">AI</code> binding wired even so — Orbit’s chat will use your model, but dataset embeddings still run through Workers AI.</p>
+  <div style="display:grid;grid-template-columns:minmax(0,1.35fr) minmax(0,.85fr) minmax(0,2.7fr);gap:1px;background:var(--tv-border);border:1px solid var(--tv-border);border-radius:6px;overflow:hidden;font-size:12.5px;margin:0 0 18px">
+    <div style="background:var(--tv-surface-3);padding:9px 12px;font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim)">Name</div><div style="background:var(--tv-surface-3);padding:9px 12px;font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim)">Kind</div><div style="background:var(--tv-surface-3);padding:9px 12px;font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim)">Value</div>
+    <div style="background:var(--tv-surface-2);padding:10px 12px;font-family:var(--tv-font-mono);overflow-wrap:anywhere">ORBIT_LLM_BASE_URL</div><div style="background:var(--tv-surface-2);padding:10px 12px;color:var(--tv-text-dim)">plaintext</div><div style="background:var(--tv-surface-2);padding:10px 12px;color:var(--tv-text-muted)">Your endpoint, reachable from the public internet. Ollama’s default path ends <code style="font-family:var(--tv-font-mono)">/v1</code>.</div>\n    <div style="background:var(--tv-surface-2);padding:10px 12px;font-family:var(--tv-font-mono);overflow-wrap:anywhere">ORBIT_LLM_MODEL</div><div style="background:var(--tv-surface-2);padding:10px 12px;color:var(--tv-text-dim)">plaintext</div><div style="background:var(--tv-surface-2);padding:10px 12px;color:var(--tv-text-muted)">The model name as your server reports it.</div>\n    <div style="background:var(--tv-surface-2);padding:10px 12px;font-family:var(--tv-font-mono);overflow-wrap:anywhere">ORBIT_LLM_API_KEY</div><div style="background:var(--tv-surface-2);padding:10px 12px;color:var(--tv-error)">secret</div><div style="background:var(--tv-surface-2);padding:10px 12px;color:var(--tv-text-muted)">Whatever your server expects. Set something even if it ignores it, so the endpoint is not open to anyone who finds it.</div>
+  </div>
+  <div style="background:var(--tv-warn-bg);border:1px solid var(--tv-warn-border);border-left:3px solid var(--tv-warn);border-radius:6px;padding:14px 16px;margin:0 0 18px">
+    <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-warn);margin:0 0 7px">Check the names against the repo</div>
+    <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">These three come from the Orbit provider docs rather than from the bindings audit, so nothing verifies them at build time the way the rows above are verified. Confirm them in <code style="font-family:var(--tv-font-mono);font-size:.92em">.dev.vars.example</code> before you rely on them.</p>
+  </div>
+</div>
   <div style="background:var(--tv-accent-bg);border:1px solid var(--tv-accent-border);border-left:3px solid var(--tv-accent);border-radius:6px;padding:14px 16px;margin:0 0 14px">
-    <div style="font:600 10.5px/1 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-accent);margin:0 0 7px">Gate</div>
+    <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-accent);margin:0 0 7px">Gate</div>
     <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">Bindings take effect on the <i>next</i> deployment — <b style="font-weight:600;color:var(--tv-text)">Deployments → ⋯ → Retry deployment</b>, or push a commit. Then open your node in a private window: the privacy disclosure banner appears on first load, and the network tab shows 204 responses from <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">/api/ingest</code>.</p>
   </div>
   <p style="margin:0;font-size:12.5px;color:var(--tv-text-dim)"><a href="https://github.com/zyra-project/terraviz/blob/main/docs/SELF_HOSTING.md#phase-8--wire-bindings-variables-and-secrets">Full detail in SELF_HOSTING.md ↗</a></p>
@@ -1255,7 +1366,7 @@ openssl rand -base64 32<span style="color:var(--tv-text-dim)">    # W18</span></
     <div style="flex:1;min-width:0">
       <div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin:0 0 4px">
         <span style="font:500 11.5px/1 var(--tv-font-mono);color:var(--tv-text-dim);letter-spacing:.06em">PHASE 09</span>
-        <span style="font:400 11.5px/1 var(--tv-font-sans);color:var(--tv-text-dim)">≈5 min · Tier 2+</span>
+        <span style="font:400 11.5px/1.4 var(--tv-font-sans);color:var(--tv-text-dim)">≈5 min · Tier 2+</span>
       </div>
       <h2 style="font:700 24px/1.25 var(--tv-font-sans);letter-spacing:-.01em;color:var(--tv-text);margin:0">Provision the node identity</h2>
     </div>
@@ -1263,7 +1374,7 @@ openssl rand -base64 32<span style="color:var(--tv-text-dim)">    # W18</span></
   
   <p style="margin:0 0 16px;max-width:64ch;font-size:13.5px;color:var(--tv-text-muted);text-wrap:pretty">It reads your public key file automatically and writes through the publisher API, so it needs only the service token — no wrangler, no direct database access. Idempotent: re-running updates the row in place, preserving the node ID so existing references stay valid.</p>
   <div style="background:var(--tv-error-bg);border:1px solid var(--tv-error-border);border-left:3px solid var(--tv-error);border-radius:6px;padding:15px 17px;margin:0 0 16px">
-  <div style="font:600 10.5px/1 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-error);margin:0 0 8px">Trap · Your production identity table is empty right now</div>
+  <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-error);margin:0 0 8px">Trap · Your production identity table is empty right now</div>
   <p style="margin:0 0 10px;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">The migrations create the table but never populate it, and neither <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">db:seed</code> nor <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">gen:node-key</code> touches remote D1 — both only write your local SQLite file. Until you run the command below, the well-known endpoint 503s and <b style="font-weight:600;color:var(--tv-text)">every publish fails</b>: dataset inserts stamp their origin node from that table, and the column is NOT NULL.</p>
   
 </div>
@@ -1278,7 +1389,7 @@ openssl rand -base64 32<span style="color:var(--tv-text-dim)">    # W18</span></
   <button data-copy="1" style="position:absolute;top:7px;right:8px;background:rgba(255,255,255,.07);color:var(--tv-text-dim);border:1px solid var(--tv-border-strong);border-radius:3px;font:500 10px/1 var(--tv-font-sans);letter-spacing:.08em;text-transform:uppercase;padding:5px 8px;cursor:pointer">Copy</button>
 </div>
   <div style="background:var(--tv-accent-bg);border:1px solid var(--tv-accent-border);border-left:3px solid var(--tv-accent);border-radius:6px;padding:14px 16px;margin:0 0 14px">
-    <div style="font:600 10.5px/1 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-accent);margin:0 0 7px">Gate</div>
+    <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-accent);margin:0 0 7px">Gate</div>
     <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty"><code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">curl https://<span data-slot="W2" data-w="W2" style="cursor:pointer;padding:1px 5px;border-radius:3px"></span>/.well-known/terraviz.json</code> returns 200, with your display name and your real public key. Not 503.</p>
   </div>
   <p style="margin:0;font-size:12.5px;color:var(--tv-text-dim)"><a href="https://github.com/zyra-project/terraviz/blob/main/docs/SELF_HOSTING.md#phase-9--provision-the-node-identity">Full detail, plus the wrangler fallback ↗</a></p>
@@ -1289,7 +1400,7 @@ openssl rand -base64 32<span style="color:var(--tv-text-dim)">    # W18</span></
     <div style="flex:1;min-width:0">
       <div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin:0 0 4px">
         <span style="font:500 11.5px/1 var(--tv-font-mono);color:var(--tv-text-dim);letter-spacing:.06em">PHASE 10</span>
-        <span style="font:400 11.5px/1 var(--tv-font-sans);color:var(--tv-text-dim)">≈5 min · all tiers</span>
+        <span style="font:400 11.5px/1.4 var(--tv-font-sans);color:var(--tv-text-dim)">≈5 min · all tiers</span>
       </div>
       <h2 style="font:700 24px/1.25 var(--tv-font-sans);letter-spacing:-.01em;color:var(--tv-text);margin:0">Verify</h2>
     </div>
@@ -1309,7 +1420,7 @@ npm run terraviz -- verify-deploy --server https://<span data-slot="W2" data-w="
   <button data-copy="1" style="position:absolute;top:7px;right:8px;background:rgba(255,255,255,.07);color:var(--tv-text-dim);border:1px solid var(--tv-border-strong);border-radius:3px;font:500 10px/1 var(--tv-font-sans);letter-spacing:.08em;text-transform:uppercase;padding:5px 8px;cursor:pointer">Copy</button>
 </div>
   <div style="background:var(--tv-accent-bg);border:1px solid var(--tv-accent-border);border-left:3px solid var(--tv-accent);border-radius:6px;padding:14px 16px;margin:0 0 14px">
-    <div style="font:600 10.5px/1 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-accent);margin:0 0 7px">Gate</div>
+    <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-accent);margin:0 0 7px">Gate</div>
     <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">Bindings audit clean, and five of six deploy checks green.</p>
   </div>
   <p style="margin:0;font-size:12.5px;color:var(--tv-text-dim)"><a href="https://github.com/zyra-project/terraviz/blob/main/docs/SELF_HOSTING.md#phase-10--verify">Full detail in SELF_HOSTING.md ↗</a></p>
@@ -1320,20 +1431,20 @@ npm run terraviz -- verify-deploy --server https://<span data-slot="W2" data-w="
     <div style="flex:1;min-width:0">
       <div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin:0 0 4px">
         <span style="font:500 11.5px/1 var(--tv-font-mono);color:var(--tv-text-dim);letter-spacing:.06em">PHASE 11</span>
-        <span style="font:400 11.5px/1 var(--tv-font-sans);color:var(--tv-text-dim)">≈5 min · Tier 2+ · no SQL required</span>
+        <span style="font:400 11.5px/1.4 var(--tv-font-sans);color:var(--tv-text-dim)">≈5 min · Tier 2+ · no SQL required</span>
       </div>
       <h2 style="font:700 24px/1.25 var(--tv-font-sans);letter-spacing:-.01em;color:var(--tv-text);margin:0">Sign in and become admin</h2>
     </div>
   </div>
   <p style="margin:0 0 16px;max-width:64ch;color:var(--tv-text-muted);text-wrap:pretty">Open <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">https://<span data-slot="W2" data-w="W2" style="cursor:pointer;padding:1px 5px;border-radius:3px"></span>/publish</code> in a browser. Access challenges you, you sign in, and the middleware provisions a row for your email.</p>
   <div style="background:var(--tv-accent-bg);border:1px solid var(--tv-accent-border);border-left:3px solid var(--tv-accent);border-radius:6px;padding:15px 17px;margin:0 0 16px">
-  <div style="font:600 10.5px/1 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-accent);margin:0 0 8px">How it works · How the first admin happens</div>
+  <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-accent);margin:0 0 8px">How it works · How the first admin happens</div>
   <p style="margin:0 0 10px;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty"><b style="font-weight:600;color:var(--tv-text)">The first human to sign in on a deploy with no active admin is bootstrapped to admin automatically.</b> Service tokens are excluded — a machine credential never self-elevates. So on a fresh node, you become the admin by signing in.</p>
   <p style="margin:0 0 10px;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">Everyone after you lands as a pending reviewer, and you approve and promote them from the Users tab. Admins cannot demote themselves or remove the last admin, so a node always keeps one operator.</p>
   
 </div>
   <div style="background:var(--tv-accent-bg);border:1px solid var(--tv-accent-border);border-left:3px solid var(--tv-accent);border-radius:6px;padding:14px 16px;margin:0 0 14px">
-    <div style="font:600 10.5px/1 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-accent);margin:0 0 7px">Gate</div>
+    <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-accent);margin:0 0 7px">Gate</div>
     <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty"><code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">/publish/me</code> shows your email with role <b style="font-weight:600;color:var(--tv-text)">admin</b>, and the sidebar shows the Users tab.</p>
   </div>
   <p style="margin:0;font-size:12.5px;color:var(--tv-text-dim)"><a href="https://github.com/zyra-project/terraviz/blob/main/docs/SELF_HOSTING.md#phase-11--sign-in-and-become-admin">Full detail, plus the no-admin escape hatch ↗</a></p>
@@ -1344,7 +1455,7 @@ npm run terraviz -- verify-deploy --server https://<span data-slot="W2" data-w="
     <div style="flex:1;min-width:0">
       <div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin:0 0 4px">
         <span style="font:500 11.5px/1 var(--tv-font-mono);color:var(--tv-text-dim);letter-spacing:.06em">PHASE 12</span>
-        <span style="font:400 11.5px/1 var(--tv-font-sans);color:var(--tv-text-dim)">≈15 min · Tier 2+ · the last required phase</span>
+        <span style="font:400 11.5px/1.4 var(--tv-font-sans);color:var(--tv-text-dim)">≈15 min · Tier 2+ · the last required phase</span>
       </div>
       <h2 style="font:700 24px/1.25 var(--tv-font-sans);letter-spacing:-.01em;color:var(--tv-text);margin:0">Put content in</h2>
     </div>
@@ -1361,12 +1472,12 @@ npm run terraviz -- import-snapshot \
   <button data-copy="1" style="position:absolute;top:7px;right:8px;background:rgba(255,255,255,.07);color:var(--tv-text-dim);border:1px solid var(--tv-border-strong);border-radius:3px;font:500 10px/1 var(--tv-font-sans);letter-spacing:.08em;text-transform:uppercase;padding:5px 8px;cursor:pointer">Copy</button>
 </div>
   <div style="background:var(--tv-warn-bg);border:1px solid var(--tv-warn-border);border-left:3px solid var(--tv-warn);border-radius:6px;padding:15px 17px;margin:0 0 16px">
-  <div style="font:600 10.5px/1 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-warn);margin:0 0 8px">Worth knowing · Know the tradeoff before you mirror</div>
+  <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-warn);margin:0 0 8px">Worth knowing · Know the tradeoff before you mirror</div>
   <p style="margin:0 0 10px;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">Those rows carry legacy video references that resolve through <b style="font-weight:600;color:var(--tv-text)">upstream's</b> proxy, so their playback depends on upstream's uptime unless you mirror the proxy too. Content you publish yourself is transcoded to your own storage and never touches it. Import is idempotent — re-running skips rows already published.</p>
   
 </div>
   <div style="background:var(--tv-accent-bg);border:1px solid var(--tv-accent-border);border-left:3px solid var(--tv-accent);border-radius:6px;padding:14px 16px;margin:0 0 14px">
-    <div style="font:600 10.5px/1 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-accent);margin:0 0 7px">Gate</div>
+    <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-accent);margin:0 0 7px">Gate</div>
     <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">Re-run <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">verify-deploy</code>. <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">catalog-populated</code> now passes and all six checks are green. That is a complete publisher node. Embedding jobs backfill semantic search asynchronously over the next ten minutes or so.</p>
   </div>
   <p style="margin:0;font-size:12.5px;color:var(--tv-text-dim)"><a href="https://github.com/zyra-project/terraviz/blob/main/docs/SELF_HOSTING.md#phase-12--put-content-in">Full detail in SELF_HOSTING.md ↗</a></p>
@@ -1377,7 +1488,7 @@ npm run terraviz -- import-snapshot \
     <div style="flex:1;min-width:0">
       <div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin:0 0 4px">
         <span style="font:500 11.5px/1 var(--tv-font-mono);color:var(--tv-text-dim);letter-spacing:.06em">PHASE 13</span>
-        <span style="font:400 11.5px/1 var(--tv-font-sans);color:var(--tv-text-dim)">optional · Tier 2+ · independent of each other</span>
+        <span style="font:400 11.5px/1.4 var(--tv-font-sans);color:var(--tv-text-dim)">optional · Tier 2+ · independent of each other</span>
       </div>
       <h2 style="font:700 24px/1.25 var(--tv-font-sans);letter-spacing:-.01em;color:var(--tv-text);margin:0">Optional add-ons</h2>
     </div>
@@ -1399,7 +1510,7 @@ npm run terraviz -- import-snapshot \
         <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">Video uploads hand off to a GitHub Actions workflow running the ffmpeg spherical HLS ladder. Both halves — Pages bindings and GitHub secrets — are required and fail closed. Free-tier Actions covers roughly 50 uploads a month; R2 storage is what actually costs, at ~250 MB per minute of 4K source.</p>
         <p style="margin:8px 0 0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty"><b style="font-weight:600;color:var(--tv-text)">There is a WAF trap here.</b> Access service tokens bypass Access but not Bot Fight Mode. The runner’s final callback gets an interstitial, ffmpeg finishes, the bundle lands, and the job still exits non-zero. You need a WAF skip rule on that path — and on the Free plan, plain Bot Fight Mode has no per-path override, so disabling it zone-wide is the recommended option.</p>
       </div>
-    <div style="border:1px solid var(--tv-border);border-radius:6px;padding:15px 17px">
+    <div data-paid-only="1" style="border:1px solid var(--tv-border);border-radius:6px;padding:15px 17px">
         <div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin:0 0 6px">
           <div style="font:500 15px/1.3 var(--tv-font-sans);color:var(--tv-text)">13.4 · Analytics long-term export</div>
           <span style="flex:none;font:500 11px/1 var(--tv-font-mono);color:var(--tv-accent)">recommended</span>
@@ -1416,7 +1527,7 @@ npm run terraviz -- import-snapshot \
         
       </div></div>
   <div style="background:var(--tv-accent-bg);border:1px solid var(--tv-accent-border);border-left:3px solid var(--tv-accent);border-radius:6px;padding:14px 16px;margin:0 0 14px">
-    <div style="font:600 10.5px/1 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-accent);margin:0 0 7px">Gate</div>
+    <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-accent);margin:0 0 7px">Gate</div>
     <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">Whichever add-ons you chose report healthy.</p>
   </div>
   <p style="margin:0;font-size:12.5px;color:var(--tv-text-dim)"><a href="https://github.com/zyra-project/terraviz/blob/main/docs/SELF_HOSTING.md#phase-13--optional-add-ons">All nine add-ons in full ↗</a></p>
@@ -1427,68 +1538,78 @@ npm run terraviz -- import-snapshot \
     <div style="flex:1;min-width:0">
       <div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin:0 0 4px">
         <span style="font:500 11.5px/1 var(--tv-font-mono);color:var(--tv-text-dim);letter-spacing:.06em">PHASE 14</span>
-        <span style="font:400 11.5px/1 var(--tv-font-sans);color:var(--tv-text-dim)">≈1 h · Tier 3 only</span>
+        <span style="font:400 11.5px/1.4 var(--tv-font-sans);color:var(--tv-text-dim)">≈1 h · Tier 3 only</span>
       </div>
       <h2 style="font:700 24px/1.25 var(--tv-font-sans);letter-spacing:-.01em;color:var(--tv-text);margin:0">Desktop app fork</h2>
     </div>
   </div>
   <p style="margin:0 0 16px;max-width:64ch;color:var(--tv-text-muted);text-wrap:pretty">Three upstream-pinned values need changing. Leave them and your users' apps poll <i>upstream's</i> releases and reject anything you sign.</p>
   <div style="background:var(--tv-accent-bg);border:1px solid var(--tv-accent-border);border-left:3px solid var(--tv-accent);border-radius:6px;padding:14px 16px;margin:0 0 14px">
-    <div style="font:600 10.5px/1 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-accent);margin:0 0 7px">Gate</div>
+    <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-accent);margin:0 0 7px">Gate</div>
     <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">A signed desktop build that talks to your API origin, not upstream.</p>
   </div>
   <p style="margin:0;font-size:12.5px;color:var(--tv-text-dim)"><a href="https://github.com/zyra-project/terraviz/blob/main/docs/SELF_HOSTING.md#phase-14--desktop-app-fork-tier-3">Full detail in SELF_HOSTING.md ↗</a></p>
 </section>
 <section id="stuck" data-noprint="1" style="margin:44px 0 0;scroll-margin-top:20px">
-  <div style="font:600 10.5px/1 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim);margin:0 0 12px">If you are stuck right now</div>
+  <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim);margin:0 0 12px">If you are stuck right now</div>
   <h2 style="font:700 28px/1.2 var(--tv-font-sans);letter-spacing:-.01em;color:var(--tv-text);margin:0 0 14px">The ten symptoms people actually hit</h2>
   <p style="margin:0 0 22px;max-width:62ch;color:var(--tv-text-muted);text-wrap:pretty">Find your symptom, not your phase. Most of these exist because someone hit the snag and it was worth writing down — if yours is not here, that is worth an issue.</p>
   <div style="display:flex;flex-direction:column;gap:2px">
     <div style="background:var(--tv-surface-2);border:1px solid var(--tv-border);border-radius:8px;padding:16px 18px">
       <div style="font:500 14px/1.4 var(--tv-font-mono);color:var(--tv-error);margin:0 0 6px">503 access_unconfigured on the publisher API</div>
+      
       <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">The team domain or the AUD is missing — most often set on Production but not Preview. Confirm with the bindings audit rather than by eye.</p>
     </div>
     <div style="background:var(--tv-surface-2);border:1px solid var(--tv-border);border-radius:8px;padding:16px 18px">
       <div style="font:500 14px/1.4 var(--tv-font-mono);color:var(--tv-error);margin:0 0 6px">401 &quot;Invalid or expired Access assertion&quot;</div>
+      
       <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">Your AUD does not match the application that issued the JWT. Re-copy it from the application's Overview tab. A token minted for a different application in the same team is rejected by design.</p>
     </div>
     <div style="background:var(--tv-surface-2);border:1px solid var(--tv-border);border-radius:8px;padding:16px 18px">
       <div style="font:500 14px/1.4 var(--tv-font-mono);color:var(--tv-error);margin:0 0 6px">Access blocks your own staff account</div>
+      
       <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">The policy uses <b style="font-weight:600;color:var(--tv-text)">Emails</b> (exact match against one address) instead of <b style="font-weight:600;color:var(--tv-text)">Emails ending in</b> (suffix match). See Phase 6.</p>
     </div>
     <div style="background:var(--tv-surface-2);border:1px solid var(--tv-border);border-radius:8px;padding:16px 18px">
       <div style="font:500 14px/1.4 var(--tv-font-mono);color:var(--tv-error);margin:0 0 6px">Save draft 500s: &quot;table datasets has no column named bbox_n&quot;</div>
+      
       <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">The catalog migrations were not applied — usually because <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">migrations apply</code> was given the database <i>name</i> instead of the binding name. Confirm with <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">migrations list CATALOG_DB --remote</code>.</p>
     </div>
     <div style="background:var(--tv-surface-2);border:1px solid var(--tv-border);border-radius:8px;padding:16px 18px">
       <div style="font:500 14px/1.4 var(--tv-font-mono);color:var(--tv-error);margin:0 0 6px">well-known 503s, or publishing fails on origin_node</div>
+      
       <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">Remote node identity is empty — Phase 9 was not run. The local seed and key-gen paths do <b style="font-weight:600;color:var(--tv-text)">not</b> write remote D1. The 503's own error text tells you to run <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">gen:node-key</code>; that hint is wrong. Use <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">init-node</code>.</p>
     </div>
     <div style="background:var(--tv-surface-2);border:1px solid var(--tv-border);border-radius:8px;padding:16px 18px">
       <div style="font:500 14px/1.4 var(--tv-font-mono);color:var(--tv-error);margin:0 0 6px">Ingest returns 204 but nothing lands in Analytics Engine</div>
+      <p data-when="free" style="margin:0 0 8px;font-size:13.5px;line-height:1.55;color:var(--tv-warn);text-wrap:pretty">On the free plan this is expected, not a fault — there is no Analytics Engine to write to. Nothing to fix.</p>
       <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">The binding is missing in the environment serving traffic — check <i>both</i> Production and Preview. The function silently skips the write when it is undefined. (A 403 instead means the CORS gate rejected it: curl does not send an Origin header unless you pass one.)</p>
     </div>
     <div style="background:var(--tv-surface-2);border:1px solid var(--tv-border);border-radius:8px;padding:16px 18px">
       <div style="font:500 14px/1.4 var(--tv-font-mono);color:var(--tv-error);margin:0 0 6px">Portal shows &quot;Your session has expired&quot;</div>
+      
       <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">Expected before your Access application covers the publish paths. Cloudflare answers with a cross-origin redirect the portal can detect but cannot follow. The Refresh button is the escape hatch — refreshing triggers Access at top-level navigation, you sign in, and the next fetch succeeds.</p>
     </div>
     <div style="background:var(--tv-surface-2);border:1px solid var(--tv-border);border-radius:8px;padding:16px 18px">
       <div style="font:500 14px/1.4 var(--tv-font-mono);color:var(--tv-error);margin:0 0 6px">Zip download shows &quot;size unknown&quot;</div>
+      
       <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">R2 CORS. No console error means the request succeeded but the length headers were not exposed — add both to ExposeHeaders. An allow-origin error means it was blocked outright, usually because HEAD is not in AllowedMethods. R2 treats HEAD and GET as distinct even though Fetch does not.</p>
     </div>
     <div style="background:var(--tv-surface-2);border:1px solid var(--tv-border);border-radius:8px;padding:16px 18px">
       <div style="font:500 14px/1.4 var(--tv-font-mono);color:var(--tv-error);margin:0 0 6px">Orbit stops showing dataset chips after working briefly</div>
+      
       <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">Free-tier neuron exhaustion, not a fault. The chat panel shows a reduced-functionality badge and quota resets daily. A docent turn burns roughly 50 neurons, so about 200 turns a day exhausts the free ceiling — sustained use needs Workers Paid.</p>
     </div>
     <div style="background:var(--tv-surface-2);border:1px solid var(--tv-border);border-radius:8px;padding:16px 18px">
       <div style="font:500 14px/1.4 var(--tv-font-mono);color:var(--tv-error);margin:0 0 6px">verify-deploy SKIPs the publisher checks</div>
+      
       <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">No service token configured. Re-run with the token env vars, and confirm the token is attached to a Service Auth policy on the publisher app.</p>
     </div>
   </div>
   <p style="margin:16px 0 0;font-size:12.5px;color:var(--tv-text-dim)"><a href="https://github.com/zyra-project/terraviz/blob/main/docs/SELF_HOSTING.md#reference-e--troubleshooting">All sixteen symptoms in SELF_HOSTING.md ↗</a></p>
 </section>
 <section data-noprint="1" style="margin:44px 0 0">
-  <div style="font:600 10.5px/1 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim);margin:0 0 12px">After a successful launch</div>
+  <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim);margin:0 0 12px">After a successful launch</div>
   <h2 style="font:700 28px/1.2 var(--tv-font-sans);letter-spacing:-.01em;color:var(--tv-text);margin:0 0 20px">Five things worth doing in week one</h2>
   <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px">
     <div style="background:var(--tv-surface-2);border:1px solid var(--tv-border);border-radius:8px;padding:16px 18px">
@@ -1520,8 +1641,8 @@ npm run terraviz -- import-snapshot \
 </footer>
 </main>
 </div>
-<button data-act="drawer" data-noprint="1" style="position:fixed;right:26px;bottom:26px;z-index:40;display:flex;align-items:center;gap:10px;background:var(--tv-accent-strong);color:#fff;border:none;border-radius:6px;padding:13px 18px;font:500 13.5px/1 var(--tv-font-sans);cursor:pointer;box-shadow:0 6px 22px rgba(0,0,0,.45)">
-  <span>Your values</span>
+<button data-act="drawer" data-fab="1" data-noprint="1" title="Your values" style="position:fixed;right:26px;bottom:26px;z-index:40;display:flex;align-items:center;gap:10px;background:var(--tv-accent-strong);color:#fff;border:none;border-radius:6px;padding:13px 18px;font:500 13.5px/1 var(--tv-font-sans);cursor:pointer;box-shadow:0 6px 22px rgba(0,0,0,.45)">
+  <span data-fab-label="1">Your values</span>
   <span data-drawer-count="1" style="font:500 12px/1 var(--tv-font-mono);background:rgba(255,255,255,.16);padding:4px 7px;border-radius:3px"></span>
 </button>
 <div data-drawer="1" data-noprint="1" style="display:none;position:fixed;inset:0;z-index:50;justify-content:flex-end">
@@ -1653,7 +1774,7 @@ npm run terraviz -- import-snapshot \
     <div data-error="W8" style="display:none;font:400 11.5px/1.5 var(--tv-font-sans);color:var(--tv-error);margin-top:4px"></div>
     
   </div>
-      <div data-field-row="W9" data-tier="1" style="margin:0 0 14px">
+      <div data-field-row="W9" data-tier="1" data-paid-only="1" style="margin:0 0 14px">
     <div style="display:flex;align-items:center;gap:7px;margin:0 0 5px;flex-wrap:wrap">
       <label style="font:500 11.5px/1.3 var(--tv-font-mono);color:var(--tv-text-muted)">W9</label>
       <span style="font:400 12.5px/1.3 var(--tv-font-sans);color:var(--tv-text)">Analytics Engine dataset</span>
@@ -1824,7 +1945,7 @@ npm run terraviz -- import-snapshot \
 </div>
 <script>
 const KEY = 'terraviz-setup-console-v1';
-const FIELDS = [{"id":"ORG","token":"your-org.org","secret":false,"tier":2,"validator":"emailDomain"},{"id":"W1","token":"‹account-id›","secret":false,"tier":1,"validator":"accountId"},{"id":"W2","token":"‹your-hostname›","secret":false,"tier":1,"validator":"hostname"},{"id":"W3","token":"‹owner/repo›","secret":false,"tier":1,"validator":"repoSlug"},{"id":"TRUST","token":"‹trusted-domains›","secret":false,"tier":2,"validator":"emailDomainList"},{"id":"W4","token":"‹d1-id›","secret":false,"tier":1,"validator":null},{"id":"W5","token":"‹kv-killswitch-id›","secret":false,"tier":1,"validator":null},{"id":"W6","token":"‹catalog-kv-id›","secret":false,"tier":2,"validator":null},{"id":"W7","token":"terraviz-assets","secret":false,"tier":2,"validator":null},{"id":"W8","token":"terraviz-datasets","secret":false,"tier":2,"validator":null},{"id":"W9","token":"terraviz_events","secret":false,"tier":1,"validator":null},{"id":"W10","token":"‹pages-project›","secret":false,"tier":1,"validator":"projectName"},{"id":"W11","token":"‹api-token›","secret":true,"tier":1,"validator":null},{"id":"W12","token":"‹team›.cloudflareaccess.com","secret":false,"tier":2,"validator":null},{"id":"W13","token":"‹access-aud›","secret":false,"tier":2,"validator":"aud"},{"id":"W14","token":"‹client-id›","secret":true,"tier":2,"validator":null},{"id":"W15","token":"‹client-secret›","secret":true,"tier":2,"validator":null},{"id":"W16","token":"‹node-private-key›","secret":true,"tier":2,"validator":null},{"id":"W17","token":"ed25519:‹public-key›","secret":false,"tier":2,"validator":null},{"id":"W18","token":"‹preview-signing-key›","secret":true,"tier":2,"validator":null},{"id":"W19","token":"assets.‹your-hostname›","secret":false,"tier":2,"validator":"url"},{"id":"W20","token":"‹r2-access-key›","secret":true,"tier":2,"validator":null},{"id":"W20b","token":"‹r2-secret-key›","secret":true,"tier":2,"validator":null},{"id":"W21","token":"‹r2-s3-endpoint›","secret":false,"tier":2,"validator":null},{"id":"W22","token":"‹github-dispatch-token›","secret":true,"tier":2,"validator":null}];
+const FIELDS = [{"id":"ORG","token":"your-org.org","secret":false,"tier":2,"paidOnly":false,"validator":"emailDomain"},{"id":"W1","token":"‹account-id›","secret":false,"tier":1,"paidOnly":false,"validator":"accountId"},{"id":"W2","token":"‹your-hostname›","secret":false,"tier":1,"paidOnly":false,"validator":"hostname"},{"id":"W3","token":"‹owner/repo›","secret":false,"tier":1,"paidOnly":false,"validator":"repoSlug"},{"id":"TRUST","token":"‹trusted-domains›","secret":false,"tier":2,"paidOnly":false,"validator":"emailDomainList"},{"id":"W4","token":"‹d1-id›","secret":false,"tier":1,"paidOnly":false,"validator":null},{"id":"W5","token":"‹kv-killswitch-id›","secret":false,"tier":1,"paidOnly":false,"validator":null},{"id":"W6","token":"‹catalog-kv-id›","secret":false,"tier":2,"paidOnly":false,"validator":null},{"id":"W7","token":"terraviz-assets","secret":false,"tier":2,"paidOnly":false,"validator":null},{"id":"W8","token":"terraviz-datasets","secret":false,"tier":2,"paidOnly":false,"validator":null},{"id":"W9","token":"terraviz_events","secret":false,"tier":1,"paidOnly":true,"validator":null},{"id":"W10","token":"‹pages-project›","secret":false,"tier":1,"paidOnly":false,"validator":"projectName"},{"id":"W11","token":"‹api-token›","secret":true,"tier":1,"paidOnly":false,"validator":null},{"id":"W12","token":"‹team›.cloudflareaccess.com","secret":false,"tier":2,"paidOnly":false,"validator":null},{"id":"W13","token":"‹access-aud›","secret":false,"tier":2,"paidOnly":false,"validator":"aud"},{"id":"W14","token":"‹client-id›","secret":true,"tier":2,"paidOnly":false,"validator":null},{"id":"W15","token":"‹client-secret›","secret":true,"tier":2,"paidOnly":false,"validator":null},{"id":"W16","token":"‹node-private-key›","secret":true,"tier":2,"paidOnly":false,"validator":null},{"id":"W17","token":"ed25519:‹public-key›","secret":false,"tier":2,"paidOnly":false,"validator":null},{"id":"W18","token":"‹preview-signing-key›","secret":true,"tier":2,"paidOnly":false,"validator":null},{"id":"W19","token":"assets.‹your-hostname›","secret":false,"tier":2,"paidOnly":false,"validator":"url"},{"id":"W20","token":"‹r2-access-key›","secret":true,"tier":2,"paidOnly":false,"validator":null},{"id":"W20b","token":"‹r2-secret-key›","secret":true,"tier":2,"paidOnly":false,"validator":null},{"id":"W21","token":"‹r2-s3-endpoint›","secret":false,"tier":2,"paidOnly":false,"validator":null},{"id":"W22","token":"‹github-dispatch-token›","secret":true,"tier":2,"paidOnly":false,"validator":null}];
 const PHASE_COUNT = 15;
 const V = {
   accountId: v => /^[0-9a-f]{32}$/i.test(v) ? null : 'expected 32 hex characters',
@@ -1840,10 +1961,14 @@ const V = {
   projectName: v => /^[a-z0-9][a-z0-9-]{0,57}[a-z0-9]$/.test(v) ? null : 'lowercase letters, digits and dashes only'
 };
 
-let state = { tier: 2, vals: {}, done: {} };
+let state = { tier: 2, plan: 'paid', ai: 'workers', vals: {}, done: {} };
 try {
   const raw = localStorage.getItem(KEY);
-  if (raw) { const s = JSON.parse(raw); state.tier = s.tier || 2; state.vals = s.vals || {}; state.done = s.done || {}; }
+  if (raw) {
+    const s = JSON.parse(raw);
+    state.tier = s.tier || 2; state.plan = s.plan || 'paid'; state.ai = s.ai || 'workers';
+    state.vals = s.vals || {}; state.done = s.done || {};
+  }
 } catch (e) {}
 
 const SECRET = new Set(FIELDS.filter(f => f.secret).map(f => f.id));
@@ -1851,7 +1976,7 @@ function persist() {
   try {
     const vals = {};
     for (const k in state.vals) if (!SECRET.has(k)) vals[k] = state.vals[k];
-    localStorage.setItem(KEY, JSON.stringify({ tier: state.tier, vals: vals, done: state.done }));
+    localStorage.setItem(KEY, JSON.stringify({ tier: state.tier, plan: state.plan, ai: state.ai, vals: vals, done: state.done }));
   } catch (e) {}
 }
 
@@ -1899,14 +2024,46 @@ function paintTier() {
   q('[data-phase-row]').forEach(el => {
     el.style.display = visiblePhase(Number(el.getAttribute('data-phase-row'))) ? 'flex' : 'none';
   });
+  const free = state.plan === 'free';
+  const okPlan = el => !(free && el.hasAttribute('data-paid-only'));
   q('[data-field-row]').forEach(el => {
-    el.style.display = Number(el.getAttribute('data-tier')) <= state.tier ? '' : 'none';
+    el.style.display = (Number(el.getAttribute('data-tier')) <= state.tier && okPlan(el)) ? '' : 'none';
   });
   q('[data-binding-row]').forEach(el => {
-    el.style.display = Number(el.getAttribute('data-tier')) <= state.tier ? 'contents' : 'none';
+    el.style.display = (Number(el.getAttribute('data-tier')) <= state.tier && okPlan(el)) ? 'contents' : 'none';
   });
   q('[data-map-row]').forEach(el => {
-    el.style.display = Number(el.getAttribute('data-tier')) <= state.tier ? 'grid' : 'none';
+    el.style.display = (Number(el.getAttribute('data-tier')) <= state.tier && okPlan(el)) ? 'grid' : 'none';
+  });
+  q('[data-paid-only]').forEach(el => {
+    if (el.hasAttribute('data-field-row') || el.hasAttribute('data-binding-row') || el.hasAttribute('data-map-row')) return;
+    el.style.display = free ? 'none' : '';
+  });
+  q('[data-when]').forEach(el => {
+    const w = el.getAttribute('data-when');
+    const on = w === 'free' ? free : w === 'paid' ? !free : state.ai === w;
+    el.style.display = on ? '' : 'none';
+  });
+  q('[data-plan]').forEach(b => {
+    const on = b.getAttribute('data-plan') === state.plan;
+    const hue = b.getAttribute('data-plan') === 'free' ? '255,204,102' : '77,166,255';
+    b.style.cssText = b.style.cssText.replace(/(background|border|box-shadow):[^;]*;?/g, '') +
+      (on ? ';background:rgba(' + hue + ',.1);border:1px solid rgb(' + hue + ');box-shadow:0 0 0 1px rgba(' + hue + ',.2)'
+          : ';background:var(--tv-surface-2);border:1px solid var(--tv-border)');
+    const tick = b.querySelector('[data-plan-tick]');
+    if (tick) {
+      tick.textContent = on ? '✓' : '';
+      tick.style.background = on ? 'rgb(' + hue + ')' : 'transparent';
+      tick.style.borderColor = on ? 'rgb(' + hue + ')' : 'var(--tv-border-strong)';
+      tick.style.color = on ? 'var(--tv-bg)' : 'transparent';
+    }
+  });
+  q('[data-ai]').forEach(b => {
+    const on = b.getAttribute('data-ai') === state.ai;
+    const hue = b.getAttribute('data-ai') === 'local' ? '34,197,94' : '77,166,255';
+    b.style.cssText = b.style.cssText.replace(/(background|border):[^;]*;?/g, '') +
+      (on ? ';background:rgba(' + hue + ',.1);border:1px solid rgb(' + hue + ')'
+          : ';background:var(--tv-surface-2);border:1px solid var(--tv-border)');
   });
   q('[data-tier]').forEach(b => {
     if (b.tagName !== 'BUTTON') return;
@@ -1935,7 +2092,7 @@ function paintProgress() {
     d.style.color = on ? 'var(--tv-bg)' : 'transparent';
     d.textContent = on ? '✓' : '';
   });
-  const relevant = FIELDS.filter(f => f.tier <= state.tier);
+  const relevant = FIELDS.filter(f => f.tier <= state.tier && !(state.plan === 'free' && f.paidOnly));
   const filled = relevant.filter(f => (state.vals[f.id] || '').trim()).length;
   const fc = document.querySelector('[data-fill-count]');
   if (fc) fc.textContent = filled + ' / ' + relevant.length;
@@ -2019,7 +2176,7 @@ document.addEventListener('input', e => {
 });
 
 document.addEventListener('click', e => {
-  const el = e.target.closest('[data-toggle],[data-w],[data-copy],[data-tier],[data-act]');
+  const el = e.target.closest('[data-toggle],[data-w],[data-copy],[data-tier],[data-plan],[data-ai],[data-act]');
   if (!el) return;
   if (el.hasAttribute('data-copy')) {
     const pre = el.parentElement.querySelector('pre');
@@ -2031,6 +2188,8 @@ document.addEventListener('click', e => {
   if (el.tagName === 'BUTTON' && el.hasAttribute('data-tier')) {
     state.tier = Number(el.getAttribute('data-tier')); persist(); repaint(); return;
   }
+  if (el.hasAttribute('data-plan')) { state.plan = el.getAttribute('data-plan'); persist(); repaint(); return; }
+  if (el.hasAttribute('data-ai')) { state.ai = el.getAttribute('data-ai'); persist(); repaint(); return; }
   const tog = el.getAttribute('data-toggle');
   if (tog) { state.done[tog] = !state.done[tog]; persist(); paintChecks(); paintProgress(); return; }
   const act = el.getAttribute('data-act');

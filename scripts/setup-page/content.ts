@@ -16,7 +16,7 @@
  * editor can see. A wrong binding list would be a lie the operator
  * only discovers at 2am, and that class of bug is what this
  * generator exists to make impossible.
- *
+*
  * The two imports below are the exception that proves the rule: they
  * are type-only, and they exist so that a worksheet field naming a
  * question or a validator that the tool no longer has is a compile
@@ -93,7 +93,7 @@ export const PHASES: Phase[] = [
     duration: '≈20 min',
     aside: 'all tiers · nothing here is automatable',
     intro: [
-      'Billing, a registrar, and a login. Get these four values written down and everything after this has something to stand on.',
+      'An account, a registrar, and a login. Get these four values written down and everything after this has something to stand on.',
     ],
     produces: ['ORG', 'TRUST', 'W1', 'W2', 'W3'],
     body: [
@@ -108,7 +108,7 @@ cd terraviz && npm install`,
       },
     ],
     gate: '`wrangler whoami` prints the account matching {{W1}}.',
-    gateShort: 'wrangler whoami prints the account you meant to use.',
+    gateShort: 'You are logged in to the right Cloudflare account.',
     anchor: 'phase-0--before-you-touch-cloudflare',
   },
   {
@@ -152,7 +152,7 @@ npm run dev:functions      # http://localhost:8788`,
       },
     ],
     gate: 'All four endpoints answer: 200 with datasets, a real public key, role `admin`, and a mock-embedder search result. If `/publish/me` returns 503, you copied to `.dev.vars.example` rather than `.dev.vars`.',
-    gateShort: 'Globe renders at :5173; all four curl checks answer 200 at :8788.',
+    gateShort: 'The globe loads on your laptop and all four test URLs answer.',
     anchor: 'phase-1--run-it-on-your-laptop',
   },
   {
@@ -171,7 +171,7 @@ npm run dev:functions      # http://localhost:8788`,
       'Creates or adopts the D1 database, both KV namespaces, the R2 bucket, and the Vectorize index with its three metadata indexes — and records every ID for you. Re-running adopts what already exists rather than making a second one.',
     ],
     gate: 'W4 through W9 are all filled in.',
-    gateShort: 'W4–W9 are written down. Nothing consumes them yet — that is the point.',
+    gateShort: 'You have written down the six IDs Cloudflare just gave you.',
     anchor: 'phase-2--create-the-cloudflare-resources',
   },
   {
@@ -198,7 +198,7 @@ npm run dev:functions      # http://localhost:8788`,
       },
     ],
     gate: '`wrangler d1 info CATALOG_DB` shows your database, 0 tables.',
-    gateShort: 'wrangler d1 info CATALOG_DB shows your database, 0 tables.',
+    gateShort: 'Your commands now point at your database, not the original project\u2019s.',
     anchor: 'phase-3--point-the-repo-at-your-resources',
   },
   {
@@ -237,7 +237,7 @@ wrangler d1 migrations apply FEEDBACK_DB --remote   # ends in a harmless error`,
       ],
     },
     gate: 'Both migration lists report nothing pending except `catalog-schema.sql` on FEEDBACK_DB. Re-run both after every `git pull` that brings new migration files — they are idempotent.',
-    gateShort: 'migrations list CATALOG_DB reports nothing pending.',
+    gateShort: 'Your database has its tables, with nothing left to apply.',
     anchor: 'phase-4--create-the-schema',
   },
   {
@@ -265,7 +265,7 @@ wrangler d1 migrations apply FEEDBACK_DB --remote   # ends in a harmless error`,
       },
     ],
     gate: 'The build goes green, the site loads at `{{W10}}.pages.dev`, and then `https://{{W2}}` serves it over TLS. Backend features will not work yet — no bindings.',
-    gateShort: 'Build goes green, then https://your-hostname serves the app over TLS.',
+    gateShort: 'The site loads at your own domain, over HTTPS.',
     anchor: 'phase-5--create-the-pages-project',
   },
   {
@@ -293,7 +293,7 @@ wrangler d1 migrations apply FEEDBACK_DB --remote   # ends in a harmless error`,
       'Discovers your team domain, creates the publisher application with all six destinations, creates both policies, mints the service token and attaches it. It records the AUD and prints the token pair **once** — have somewhere to put it.',
     ],
     gate: "The AUD is copied, the token pair is in your password manager, and the token appears in the Automation policy's include list.",
-    gateShort: 'AUD copied, token pair saved, token attached to the Automation policy.',
+    gateShort: 'Staff sign-in works, and the token pair is saved somewhere safe.',
     anchor: 'phase-6--cloudflare-access-and-the-service-token',
     linkText: 'Full detail, plus the two optional Access apps',
   },
@@ -323,7 +323,7 @@ openssl rand -base64 32    # W18`,
       'The setup tool generates the preview signing key for you, but deliberately does *not* generate the node keypair — `gen:node-key` owns that, because it also writes the public key file Phase 9 reads and stamps your local database. Both files are gitignored.',
     ],
     gate: '`.dev.vars` holds a single-line private key, and `node-public-key.txt` holds an `ed25519:` line.',
-    gateShort: '.dev.vars holds the private key; node-public-key.txt exists.',
+    gateShort: 'Your node has its own signing key, and you have backed it up.',
     anchor: 'phase-7--generate-your-nodes-secrets',
   },
   {
@@ -350,7 +350,7 @@ openssl rand -base64 32    # W18`,
       },
     ],
     gate: 'Bindings take effect on the *next* deployment — **Deployments → ⋯ → Retry deployment**, or push a commit. Then open your node in a private window: the privacy disclosure banner appears on first load, and the network tab shows 204 responses from `/api/ingest`.',
-    gateShort: 'Privacy banner appears on first load; /api/ingest returns 204.',
+    gateShort: 'Your node can reach its database, storage and AI. Check in a private window.',
     anchor: 'phase-8--wire-bindings-variables-and-secrets',
   },
   {
@@ -383,7 +383,7 @@ openssl rand -base64 32    # W18`,
       'It reads your public key file automatically and writes through the publisher API, so it needs only the service token — no wrangler, no direct database access. Idempotent: re-running updates the row in place, preserving the node ID so existing references stay valid.',
     ],
     gate: '`curl https://{{W2}}/.well-known/terraviz.json` returns 200, with your display name and your real public key. Not 503.',
-    gateShort: '/.well-known/terraviz.json returns 200 with your public key, not 503.',
+    gateShort: 'Your node can say who it is when another node asks.',
     anchor: 'phase-9--provision-the-node-identity',
     linkText: 'Full detail, plus the wrangler fallback',
   },
@@ -412,7 +412,7 @@ npm run terraviz -- verify-deploy --server https://{{W2}}`,
       },
     ],
     gate: 'Bindings audit clean, and five of six deploy checks green.',
-    gateShort: 'Bindings audit clean; verify-deploy green except catalog-populated.',
+    gateShort: 'Both checks pass, except the empty-catalog one — that is expected here.',
     anchor: 'phase-10--verify',
   },
   {
@@ -436,7 +436,7 @@ npm run terraviz -- verify-deploy --server https://{{W2}}`,
       },
     ],
     gate: '`/publish/me` shows your email with role **admin**, and the sidebar shows the Users tab.',
-    gateShort: '/publish/me shows your email with role admin, and a Users tab.',
+    gateShort: 'You are signed in as the admin and can add the rest of your team.',
     anchor: 'phase-11--sign-in-and-become-admin',
     linkText: 'Full detail, plus the no-admin escape hatch',
   },
@@ -469,7 +469,7 @@ npm run terraviz -- import-snapshot \\
       },
     ],
     gate: 'Re-run `verify-deploy`. `catalog-populated` now passes and all six checks are green. That is a complete publisher node. Embedding jobs backfill semantic search asynchronously over the next ten minutes or so.',
-    gateShort: 'verify-deploy: all six checks green. That is a complete node.',
+    gateShort: 'All six checks pass. Your node is finished.',
     anchor: 'phase-12--put-content-in',
   },
   {
@@ -483,7 +483,7 @@ npm run terraviz -- import-snapshot \\
       'Add what you need, when you need it. Nothing here blocks a working node — but the first one is required before publishers can upload assets.',
     ],
     gate: 'Whichever add-ons you chose report healthy.',
-    gateShort: 'Whichever add-ons you chose report healthy.',
+    gateShort: 'The extras you chose are working.',
     anchor: 'phase-13--optional-add-ons',
     linkText: 'All nine add-ons in full',
   },
@@ -499,13 +499,21 @@ npm run terraviz -- import-snapshot \\
       "Three upstream-pinned values need changing. Leave them and your users' apps poll *upstream's* releases and reject anything you sign.",
     ],
     gate: 'A signed desktop build that talks to your API origin, not upstream.',
-    gateShort: 'A signed desktop build that talks to your API origin, not upstream.',
+    gateShort: 'Your desktop app talks to your node, not the original one.',
     anchor: 'phase-14--desktop-app-fork-tier-3',
   },
 ]
 
 /** The 13.x add-ons, summarised. Full text stays in the Markdown. */
-export const ADDONS = [
+export const ADDONS: Array<{
+  id: string
+  title: string
+  flag: string
+  body: string
+  extra?: string
+  /** Hidden when the operator says they are on the free plan. */
+  paidOnly?: boolean
+}> = [
   {
     id: '13.1',
     title: 'R2 public domain and CORS',
@@ -524,6 +532,7 @@ export const ADDONS = [
     id: '13.4',
     title: 'Analytics long-term export',
     flag: 'recommended',
+    paidOnly: true,
     body: 'Analytics Engine retains 30–90 days. A daily job drains each completed day into an archive bucket plus rollups — that is the data behind the in-app analytics tab. Run the backfill once while AE still remembers.',
   },
   {
@@ -645,6 +654,8 @@ export interface WorksheetField {
   consumedBy: number[]
   /** Minimum tier that needs it. */
   minTier: Tier
+  /** Only exists on a paid Cloudflare plan (Analytics Engine). */
+  paidOnly?: boolean
 }
 
 export const WORKSHEET: WorksheetField[] = [
@@ -658,7 +669,7 @@ export const WORKSHEET: WorksheetField[] = [
   { id: 'W6', label: 'KV — CATALOG_KV', phase: 2, token: '‹catalog-kv-id›', placeholder: '32-char hex', origin: 'discovered', consumedBy: [3, 8], minTier: 2 },
   { id: 'W7', label: 'R2 bucket name', phase: 2, token: 'terraviz-assets', placeholder: 'terraviz-assets', note: 'Yours to rename; keep the bindings in sync if you do.', origin: 'default', consumedBy: [8, 13], minTier: 2 },
   { id: 'W8', label: 'Vectorize index', phase: 2, token: 'terraviz-datasets', placeholder: 'terraviz-datasets', origin: 'default', consumedBy: [8], minTier: 2 },
-  { id: 'W9', label: 'Analytics Engine dataset', phase: 2, token: 'terraviz_events', placeholder: 'terraviz_events', note: 'Nothing to create — it appears on first write.', origin: 'default', consumedBy: [8, 13], minTier: 1 },
+  { id: 'W9', label: 'Analytics Engine dataset', phase: 2, token: 'terraviz_events', placeholder: 'terraviz_events', note: 'Nothing to create — it appears on first write.', origin: 'default', consumedBy: [8, 13], minTier: 1, paidOnly: true },
   { id: 'W10', label: 'Pages project name', phase: 5, token: '‹pages-project›', placeholder: 'terraviz', origin: 'asked', fromTool: 'pagesProject', validator: 'projectName', consumedBy: [6, 8, 10], minTier: 1 },
   { id: 'W11', label: 'CLOUDFLARE_API_TOKEN', phase: 5, token: '‹api-token›', placeholder: 'token value', note: 'Minimum scope: Account → Cloudflare Pages → Edit.', secret: true, origin: 'generated', consumedBy: [10, 13], minTier: 1 },
   { id: 'W12', label: 'Access team domain', phase: 6, token: '‹team›.cloudflareaccess.com', placeholder: 'your-org.cloudflareaccess.com', note: 'Team domain only, no https://. The tool discovers this for you.', origin: 'discovered', consumedBy: [8], minTier: 2 },

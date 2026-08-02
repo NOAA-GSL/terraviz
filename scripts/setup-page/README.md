@@ -72,21 +72,40 @@ could quietly become wrong:
 5. Non-dense phase numbering, which would desync the nav and the map.
 6. More than three self-certified manual steps, which would
    invalidate the pre-flight sheet's framing.
-7. A worksheet field naming a validator the inline script does not
+7. A missing `ANALYTICS` binding, or a `paidOnly` worksheet set that
+   is not exactly `W9` — both would break the free-plan filter
+   silently.
+8. A worksheet field naming a validator the inline script does not
    implement — which would silently accept any input for that field.
 
-Checks 2 and 7 are also enforced at compile time now: `fromTool` is
-typed as the interview's `AnswerKey` and `validator` as
-`keyof typeof validators`, so a renamed question or validator fails
-to build in `content.ts`. The runtime checks still earn their place —
-`AnswerKey` is a hand-written union, so a question can be deleted
-from `QUESTIONS` while its key survives in the type.
+Checks 2 and 8 are also enforced at compile time: `fromTool` is typed
+as the interview's `AnswerKey` and `validator` as
+`keyof typeof validators`, so a renamed question or validator fails to
+build in `content.ts`. The runtime checks still earn their place —
+`AnswerKey` is a hand-written union, so a question can be deleted from
+`QUESTIONS` while its key survives in the type.
+
+## The plan chooser
+
+Workers Paid is the one prerequisite an operator can decline, so the
+cost panel is a **selector**, not a table. Choosing *Free plan* drops
+the Analytics Engine dataset (`W9`), its binding row, its dependency-map
+row and add-on 13.4 — none of which can exist without a paid account —
+and reframes the "ingest returns 204" troubleshooting entry as expected
+behaviour rather than a fault.
+
+A second selector chooses who runs Orbit's model. Picking *a model you
+run yourself* reveals three extra variables in Phase 8. Those names come
+from the Orbit provider docs rather than from a module `crossCheck` can
+verify, and the block says so.
+
+Both choices persist alongside tier and progress.
 
 ## Known seams
 
 **Validator behaviour is duplicated.** `render.ts` re-declares the
 regexes from `prompt.ts` inside the page's inline script, because that
-script runs in the browser with no module loader. Check 7 confirms
+script runs in the browser with no module loader. Check 8 confirms
 every named validator *exists* in both places; nothing confirms the
 two implementations still *agree*. They are deliberately trivial, and
 the authoritative copies stay in the tool.
@@ -94,20 +113,21 @@ the authoritative copies stay in the tool.
 **Token names are aliased.** `build-setup-page.ts` maps the page's
 `--tv-*` names onto the repo's tokens. The aliases were verified
 against `src/styles/tokens.css` and carry literal fallbacks, so the
-page renders either way. Three `--tv-*` names have no repo
-equivalent and stay literal on purpose — the reasoning is in the
-comment above the alias block, and that block is the only place that
-needs to know.
+page renders either way. Three `--tv-*` names have no repo equivalent
+and stay literal on purpose — the reasoning is in the comment above
+the alias block, and that block is the only place that needs to know.
 
 ## Self-contained means self-contained
 
 The page must render off a laptop, a checkout, or a broken preview —
 that is the situation someone is in when they open it. So the design
 tokens are inlined, the sidebar mark is inline SVG rather than an
-`<img src="/…">`, and the CSP is `default-src 'none'`, which cannot
-be satisfied by a page that fetches anything. The one external
-reference left is `/favicon.ico`, which 404s harmlessly under
-`file://` exactly as `privacy.html`'s does.
+`<img src="/…">`, and the CSP is `default-src 'none'`, which cannot be
+satisfied by a page that fetches anything. That CSP also blocks the
+analytics beacon Cloudflare Pages injects into every deployed HTML
+file, matching what `privacy.html` already does with `script-src
+'none'`. The one external reference left is `/favicon.ico`, which
+404s harmlessly under `file://` exactly as `privacy.html`'s does.
 
 **Tier assignment for bindings is inferred** from a name pattern in
 `render.ts`. If a Tier 1 node ever needs one of the catalog bindings,

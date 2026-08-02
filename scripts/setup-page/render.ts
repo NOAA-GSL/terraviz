@@ -47,6 +47,20 @@ import {
 } from './content'
 
 /**
+ * The sidebar mark, inlined rather than linked.
+ *
+ * This page's whole premise is that it still works when the deploy
+ * does not — read off a laptop, off a checkout, off a broken
+ * preview. An `<img src="/...">` breaks under `file://` and under any
+ * host that does not serve the SPA root, which is precisely the
+ * situation someone is in when they open it.
+ *
+ * Gradient and clip-path ids are prefixed `tvg-` because SVG ids
+ * share the document namespace once inlined.
+ */
+const GLOBE_MARK = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="26" height="26" aria-hidden="true" focusable="false" style="display:block;flex:none"><defs><radialGradient id="tvg-sphere" cx="40%" cy="35%" r="50%"><stop offset="0%" stop-color="#4FC3F7"></stop><stop offset="60%" stop-color="#1565C0"></stop><stop offset="100%" stop-color="#0D2137"></stop></radialGradient><radialGradient id="tvg-shine" cx="35%" cy="30%" r="45%"><stop offset="0%" stop-color="white" stop-opacity="0.3"></stop><stop offset="100%" stop-color="white" stop-opacity="0"></stop></radialGradient><clipPath id="tvg-clip"><circle cx="16" cy="16" r="14.08"></circle></clipPath></defs><circle cx="16" cy="16" r="14.72" fill="#0a1628"></circle><circle cx="16" cy="16" r="14.08" fill="url(#tvg-sphere)"></circle><g clip-path="url(#tvg-clip)" fill="none" stroke="rgba(255,255,255,0.15)" stroke-width="1"><ellipse cx="16" cy="16" rx="14.08" ry="1.92"></ellipse><ellipse cx="16" cy="10.56" rx="11.2" ry="1.6"></ellipse><ellipse cx="16" cy="21.44" rx="11.2" ry="1.6"></ellipse><ellipse cx="16" cy="16" rx="1.92" ry="14.08"></ellipse><ellipse cx="11.84" cy="16" rx="1.28" ry="13.44"></ellipse><ellipse cx="20.16" cy="16" rx="1.28" ry="13.44"></ellipse></g><g clip-path="url(#tvg-clip)" fill="rgba(76,175,80,0.5)" stroke="none"><path d="M12.16 7.04 Q13.44 8 12.8 10.24 Q11.52 11.52 12.16 12.8 Q13.44 15.36 12.16 17.6 Q11.2 19.84 11.84 22.4 Q11.2 20.8 10.56 18.56 Q10.24 16 10.88 13.44 Q10.56 11.2 11.2 8.96 Z"></path><path d="M16.64 8 Q17.92 8.96 18.56 10.88 Q19.2 12.8 18.24 15.36 Q17.6 17.6 17.92 19.84 Q17.28 18.56 16.96 16 Q16.64 13.44 17.28 10.88 Q16.64 9.6 16 8.64 Z"></path></g><circle cx="16" cy="16" r="14.08" fill="url(#tvg-shine)"></circle><circle cx="16" cy="16" r="14.08" fill="none" stroke="rgba(255,255,255,0.12)" stroke-width="1"></circle></svg>`
+
+/**
  * The validators `runtime()` defines on its inline `V` object. Kept
  * beside the checks rather than derived from the generated string:
  * parsing our own output to find out what we emitted would be a
@@ -154,22 +168,41 @@ export function crossCheck(): void {
     )
   }
 
-  // 7. Every validator a worksheet field names must exist in the
+  // 7. The free-plan filter hides the Analytics Engine binding by name.
+  //    If that binding is ever renamed, the filter would silently stop
+  //    matching and the page would tell free-plan operators to wire a
+  //    binding they cannot create.
+  if (!EXPECTED_BINDINGS.some(b => b.name === 'ANALYTICS')) {
+    problems.push(
+      'no binding named ANALYTICS — the free-plan filter in render.ts matches on ' +
+        'that name and needs updating',
+    )
+  }
+  const paidFields = WORKSHEET.filter(w => w.paidOnly)
+  if (paidFields.length !== 1 || paidFields[0].id !== 'W9') {
+    problems.push(
+      'expected exactly one paidOnly worksheet field (W9, the Analytics Engine ' +
+        'dataset); found: ' +
+        (paidFields.map(w => w.id).join(', ') || 'none'),
+    )
+  }
+
+  // 8. Every validator a worksheet field names must exist in the
   //    page's inline script. Behaviour still cannot be compared across
   //    the module boundary, but a field pointing at a validator the
   //    browser does not have would silently accept anything — the one
   //    failure mode of this seam that costs nothing to close.
-  const missing = [
+  const missingValidators = [
     ...new Set(
       WORKSHEET.map(w => w.validator).filter(
         (v): v is NonNullable<typeof v> => Boolean(v),
       ),
     ),
   ].filter(v => !INLINE_VALIDATORS.has(v))
-  if (missing.length) {
+  if (missingValidators.length) {
     problems.push(
       `worksheet fields name validators the inline script does not implement: ` +
-        `${missing.join(', ')} (add them to V in runtime(), and to INLINE_VALIDATORS)`,
+        `${missingValidators.join(', ')} (add them to V in runtime(), and to INLINE_VALIDATORS)`,
     )
   }
 
@@ -237,7 +270,7 @@ const CALLOUT_LABEL: Record<Callout['kind'], string> = {
 function callout(c: Callout): string {
   const s = CALLOUT_STYLE[c.kind]
   return `<div style="background:${s.bg};border:1px solid ${s.border};border-left:3px solid ${s.accent};border-radius:6px;padding:15px 17px;margin:0 0 16px">
-  <div style="font:600 10.5px/1 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:${s.accent};margin:0 0 8px">${esc(CALLOUT_LABEL[c.kind])} · ${esc(c.title)}</div>
+  <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:${s.accent};margin:0 0 8px">${esc(CALLOUT_LABEL[c.kind])} · ${esc(c.title)}</div>
   ${c.body.map(p => `<p style="margin:0 0 10px;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">${withSlots(p)}</p>`).join('\n  ')}
   ${c.code ? code(c.code) : ''}
 </div>`
@@ -255,7 +288,97 @@ function isCode(x: unknown): x is CodeBlock {
 const CARD =
   'background:var(--tv-surface-2);border:1px solid var(--tv-border);border-radius:8px'
 const EYEBROW =
-  'font:600 10.5px/1 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim)'
+  'font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim)'
+
+/**
+ * The cost panel.
+ *
+ * `MANUAL_STEPS` presents Workers Paid as a flat prerequisite, which is
+ * how the tool needs to treat it — but it is the one prerequisite an
+ * operator can decline, and both things they lose were deliberately
+ * built to fail soft. For a small museum a recurring card charge can
+ * be more friction than a day of staff time, so the free path is named
+ * here rather than left implicit.
+ */
+function costPanel(): string {
+  const col = (
+    plan: 'free' | 'paid',
+    label: string,
+    price: string,
+    accent: string,
+    items: Array<[string, string]>,
+  ): string => `<button data-plan="${plan}" style="text-align:left;cursor:pointer;border-radius:6px;padding:20px 22px;font-family:var(--tv-font-sans)">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin:0 0 16px">
+        <span style="display:flex;align-items:center;gap:9px">
+          <span data-plan-tick="${plan}" style="flex:none;width:16px;height:16px;border-radius:50%;border:1.5px solid;display:flex;align-items:center;justify-content:center;font:600 9px/1 var(--tv-font-sans)"></span>
+          <span style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:${accent}">${esc(label)}</span>
+        </span>
+        <span style="font:500 12px/1 var(--tv-font-mono);color:var(--tv-text-dim)">${esc(price)}</span>
+      </div>
+      ${items
+        .map(
+          ([t, b], i) => `<div style="margin:0 0 ${i === items.length - 1 ? '0' : '14px'}">
+        <div style="font:600 13.5px/1.4 var(--tv-font-sans);color:var(--tv-text);margin:0 0 5px">${esc(t)}</div>
+        <p style="margin:0;font-size:13px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">${inline(b)}</p>
+      </div>`,
+        )
+        .join('\n      ')}
+    </button>`
+
+  const aiCard = (
+    id: 'workers' | 'local',
+    title: string,
+    body: string,
+  ): string => `<button data-ai="${id}" style="text-align:left;cursor:pointer;border-radius:6px;padding:18px 20px;font-family:var(--tv-font-sans)">
+      <div style="font:600 14px/1.3 var(--tv-font-sans);color:var(--tv-text);margin:0 0 6px">${esc(title)}</div>
+      <p style="margin:0;font-size:13px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">${inline(body)}</p>
+    </button>`
+
+  return `<section id="cost" data-noprint="1" style="${CARD};padding:28px 30px;margin:0 0 44px;scroll-margin-top:20px">
+  <div style="${EYEBROW};margin:0 0 12px">What it costs</div>
+  <h2 style="font:700 27px/1.2 var(--tv-font-sans);letter-spacing:-.01em;color:var(--tv-text);margin:0 0 12px">You can run this on the free plan</h2>
+  <p style="margin:0 0 22px;max-width:64ch;color:var(--tv-text-muted);text-wrap:pretty">Nothing in the install requires a paid Cloudflare account. Two features lose something without one, and both were built to degrade quietly rather than break. Pick the plan you are on and the rest of the page adjusts to it.</p>
+  <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px;margin:0 0 16px">
+    ${col('free', 'Free plan', '$0', 'var(--tv-warn)', [
+      [
+        'Usage analytics stop recording',
+        'Analytics Engine is not on the free plan. Telemetry requests still answer 204 — the writes are simply dropped. No analytics tab, no Grafana. The emergency kill switch still works.',
+      ],
+      [
+        'Orbit throttles after ~200 conversations a day',
+        'Workers AI gives you roughly 10,000 neurons daily and a docent turn costs about 50. Past that the chat panel shows a "Reduced functionality" badge and the quota resets overnight.',
+      ],
+    ])}
+    ${col('paid', 'Workers Paid', '$5/mo', 'var(--tv-accent)', [
+      [
+        'Both of those go away',
+        'Visits and dataset views record properly, the in-app dashboards fill in, and Orbit answers all day without throttling.',
+      ],
+      [
+        'Storage is billed on top',
+        'Only if you publish your own video: an R2 4K ladder runs about 250 MB per minute of source, billed until you delete it. Metadata, images and tours are negligible.',
+      ],
+    ])}
+  </div>
+
+  <div style="${EYEBROW};margin:0 0 10px">Who runs Orbit's language model</div>
+  <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px;margin:0 0 16px">
+    ${aiCard('workers', 'Cloudflare Workers AI', 'Nothing to run or maintain — the \`AI\` binding is all it needs. <span data-when="free">Throttles after roughly 200 conversations a day on the free plan.</span><span data-when="paid">Included in your $5.</span>')}
+    ${aiCard('local', 'A model you run yourself', 'Ollama, LM Studio, or anything OpenAI-compatible on your own network. No throttle and no per-turn cost, whichever plan you are on — and visitor questions never leave your building.')}
+  </div>
+
+  <div data-when="local" style="background:rgba(34,197,94,.07);border:1px solid rgba(34,197,94,.24);border-left:3px solid var(--tv-success);border-radius:6px;padding:16px 18px;margin:0 0 18px">
+    <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-success);margin:0 0 8px">You will need one extra thing</div>
+    <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">Your model has to be reachable from Cloudflare's network, so a laptop on the museum wifi will not do — it needs a stable address. Phase 8 shows the variables to set, and the \`AI\` binding stays wired either way, because embeddings still use it.</p>
+  </div>
+
+  <div data-when="free" style="background:var(--tv-warn-bg);border:1px solid var(--tv-warn-border);border-left:3px solid var(--tv-warn);border-radius:6px;padding:16px 18px;margin:0 0 18px">
+    <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-warn);margin:0 0 8px">Free plan · what changed on this page</div>
+    <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">The Analytics Engine dataset and its binding have gone from the worksheet, the dependency map and Phase 8 — there is nothing for you to create. The long-term analytics add-on is hidden too. Everything else is unchanged: you are installing the same node.</p>
+  </div>
+  <p style="margin:0;max-width:64ch;font-size:13.5px;color:var(--tv-text-dim);text-wrap:pretty">For a gallery kiosk, a pilot, or a node you are still making your mind up about, free is a perfectly respectable place to run. Pay the $5 when you need to report on reach, or when Orbit is going to carry a busy public floor.</p>
+</section>`
+}
 
 function tierPicker(): string {
   return `<section data-noprint="1" style="margin:0 0 44px">
@@ -288,8 +411,8 @@ function preflight(): string {
   const step = (s: ManualStep, i: number): string => {
     const detected = s.verification === 'detected'
     const badge = detected
-      ? `<span style="flex:none;background:var(--tv-accent-bg);color:var(--tv-accent);border:1px solid var(--tv-accent-border);border-radius:999px;padding:2px 8px;font:600 9px/1.5 var(--tv-font-sans);letter-spacing:.07em;text-transform:uppercase">setup checks this</span>`
-      : `<span style="flex:none;background:var(--tv-warn-bg);color:var(--tv-warn);border:1px solid var(--tv-warn-border);border-radius:999px;padding:2px 8px;font:600 9px/1.5 var(--tv-font-sans);letter-spacing:.07em;text-transform:uppercase">on you</span>`
+      ? `<span title="If you skip this, the setup tool will tell you." style="flex:none;background:var(--tv-accent-bg);color:var(--tv-accent);border:1px solid var(--tv-accent-border);border-radius:999px;padding:2px 8px;font:600 9px/1.5 var(--tv-font-sans);letter-spacing:.07em;text-transform:uppercase">setup will catch this</span>`
+      : `<span title="Nothing will warn you if you skip this one." style="flex:none;background:var(--tv-warn-bg);color:var(--tv-warn);border:1px solid var(--tv-warn-border);border-radius:999px;padding:2px 8px;font:600 9px/1.5 var(--tv-font-sans);letter-spacing:.07em;text-transform:uppercase">on you</span>`
     return `<div style="display:flex;gap:10px;align-items:flex-start">
     <button data-toggle="pf-${esc(s.id)}" data-check="1" style="flex:none;margin-top:2px"></button>
     <div style="min-width:0">
@@ -310,20 +433,35 @@ function preflight(): string {
   </div>`,
   ).join('\n  ')
 
+  const sectionHead = (label: string, aside: string, blurb: string): string =>
+    `<div style="display:flex;justify-content:space-between;align-items:baseline;gap:16px;margin:0 0 6px">
+      <div style="${EYEBROW}">${esc(label)}</div>
+      <div style="font:400 12px/1.35 var(--tv-font-sans);color:var(--tv-text-dim)">${esc(aside)}</div>
+    </div>
+    <p style="margin:0 0 16px;padding-bottom:14px;border-bottom:1px solid var(--tv-border);font-size:13px;color:var(--tv-text-dim);max-width:66ch;text-wrap:pretty">${inline(blurb)}</p>`
+
   return `<section id="preflight" data-sheet="1" style="${CARD};padding:28px 30px;margin:0 0 44px;scroll-margin-top:20px">
   <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:20px;margin:0 0 6px">
-    <h2 style="font:700 27px/1.2 var(--tv-font-sans);letter-spacing:-.01em;color:var(--tv-text);margin:0">Pre-flight sheet</h2>
+    <h2 style="font:700 27px/1.2 var(--tv-font-sans);letter-spacing:-.01em;color:var(--tv-text);margin:0">Your install sheet</h2>
     <button data-act="print" data-noprint="1" style="flex:none;cursor:pointer;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:6px;padding:7px 12px;font:500 12px/1 var(--tv-font-sans);color:var(--tv-text-muted)">Print this page</button>
   </div>
-  <p style="margin:0 0 24px;max-width:62ch;color:var(--tv-text-muted);text-wrap:pretty">Print it, keep it next to the keyboard. Left side is what only a human can do; right side is the one thing that proves each phase worked.</p>
-  <div data-sheetgrid="1" style="display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,1fr);gap:34px">
-    <div>
-      <div style="${EYEBROW};margin:0 0 14px;padding-bottom:8px;border-bottom:1px solid var(--tv-border)">Before you start — no API can do these</div>
-      <div style="display:flex;flex-direction:column;gap:13px">${MANUAL_STEPS.map(step).join('\n  ')}</div>
+  <p style="margin:0 0 28px;max-width:62ch;color:var(--tv-text-muted);text-wrap:pretty">One page to print and keep next to the keyboard. On the left, what to sort out before you start. On the right, the install itself — every step, one line each, saying what finished looks like. Tick your way down.</p>
+  <div data-sheetgrid="1">
+    <div style="margin:0 0 32px">
+      ${sectionHead(
+        'Before you start · only you can do these',
+        `${MANUAL_STEPS.length} things, about 20 minutes`,
+        'An account, a domain, a login — the things no script can do on your behalf. Most the setup tool will notice if you skip; the ones marked *on you* it cannot, so those are the ones to be sure about. The first is the only one you can decline outright — see <a href="#cost">what it costs</a>.',
+      )}
+      <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:13px 28px">${MANUAL_STEPS.map(step).join('\n  ')}</div>
     </div>
     <div>
-      <div style="${EYEBROW};margin:0 0 14px;padding-bottom:8px;border-bottom:1px solid var(--tv-border)">The gate for each phase</div>
-      <div style="display:flex;flex-direction:column;gap:7px">${gates}</div>
+      ${sectionHead(
+        'The install itself · what finished looks like',
+        'tick as you go',
+        'Every step in order, with the one thing you should see once it has landed. Not extra work — it is the same check that sits at the foot of each step below, gathered here so the printed sheet stands on its own.',
+      )}
+      <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:9px 28px">${gates}</div>
     </div>
   </div>
 </section>`
@@ -335,7 +473,7 @@ function dependencyMap(): string {
     const cells = PHASES.map(
       p => `<div data-cell="${p.n}" style="height:27px;display:flex;align-items:center;justify-content:center"><span data-mark="1"></span></div>`,
     ).join('')
-    return `<div data-map-row="${esc(w.id)}" data-w="${esc(w.id)}" data-produced="${w.phase}" data-consumed="${w.consumedBy.join(',')}" data-tier="${w.minTier}" style="display:grid;grid-template-columns:224px repeat(${PHASES.length},minmax(0,1fr));align-items:center;cursor:pointer;border-radius:4px">
+    return `<div data-map-row="${esc(w.id)}" data-w="${esc(w.id)}" data-produced="${w.phase}" data-consumed="${w.consumedBy.join(',')}" data-tier="${w.minTier}"${w.paidOnly ? ' data-paid-only="1"' : ''} style="display:grid;grid-template-columns:224px repeat(${PHASES.length},minmax(0,1fr));align-items:center;cursor:pointer;border-radius:4px">
     <div style="display:flex;align-items:baseline;gap:7px;padding:0 6px 0 4px;min-width:0">
       <span data-map-id="1" style="flex:none;font:500 10.5px/1 var(--tv-font-mono)">${esc(w.id)}</span>
       <span style="font-size:11.5px;color:var(--tv-text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(w.label)}</span>
@@ -383,7 +521,7 @@ function bindingsTable(): string {
   const tierOf = (b: ExpectedBinding): number =>
     /^(CATALOG_(DB|KV|R2|VECTORIZE)|ACCESS_|NODE_ID|PREVIEW_SIGNING)/.test(b.name) ? 2 : 1
   const row = (b: ExpectedBinding): string =>
-    `<div data-binding-row="1" data-tier="${tierOf(b)}" style="display:contents">
+    `<div data-binding-row="1" data-tier="${tierOf(b)}"${b.name === 'ANALYTICS' ? ' data-paid-only="1"' : ''} style="display:contents">
     <div style="background:var(--tv-surface-2);padding:10px 12px;font-family:var(--tv-font-mono);overflow-wrap:anywhere">${esc(b.name)}</div>
     <div style="background:var(--tv-surface-2);padding:10px 12px;color:var(--tv-text-dim)">${esc(b.type)}</div>
     <div style="background:var(--tv-surface-2);padding:10px 12px;color:var(--tv-text-dim)">${b.environments.length === 2 ? 'both' : esc(b.environments.join(', '))}</div>
@@ -398,6 +536,48 @@ function bindingsTable(): string {
   return `<div style="display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,.6fr) minmax(0,.45fr) minmax(0,2.4fr);gap:1px;background:var(--tv-border);border:1px solid var(--tv-border);border-radius:6px;overflow:hidden;font-size:12.5px;margin:0 0 18px">
   ${head}
   ${EXPECTED_BINDINGS.map(row).join('\n  ')}
+</div>`
+}
+
+/**
+ * The three variables Orbit needs when it talks to a model the operator
+ * runs. Unlike everything else on this page these names come from the
+ * provider docs rather than from a module `crossCheck` can verify, so the
+ * block says so rather than implying the same guarantee.
+ */
+function localModelVars(): string {
+  const rows: Array<[string, string, string]> = [
+    [
+      'ORBIT_LLM_BASE_URL',
+      'plaintext',
+      "Your endpoint, reachable from the public internet. Ollama\u2019s default path ends <code style=\"font-family:var(--tv-font-mono)\">/v1</code>.",
+    ],
+    ['ORBIT_LLM_MODEL', 'plaintext', 'The model name as your server reports it.'],
+    [
+      'ORBIT_LLM_API_KEY',
+      'secret',
+      'Whatever your server expects. Set something even if it ignores it, so the endpoint is not open to anyone who finds it.',
+    ],
+  ]
+  const head = ['Name', 'Kind', 'Value']
+    .map(x => `<div style="background:var(--tv-surface-3);padding:9px 12px;${EYEBROW}">${esc(x)}</div>`)
+    .join('')
+  return `<div data-when="local">
+  <div style="${EYEBROW};margin:0 0 10px">Your own model \u2014 three more variables</div>
+  <p style="margin:0 0 14px;max-width:64ch;font-size:13.5px;color:var(--tv-text-muted);text-wrap:pretty">Set these alongside the bindings above, on both environments. Keep the <code style="font-family:var(--tv-font-mono);font-size:.92em">AI</code> binding wired even so \u2014 Orbit\u2019s chat will use your model, but dataset embeddings still run through Workers AI.</p>
+  <div style="display:grid;grid-template-columns:minmax(0,1.35fr) minmax(0,.85fr) minmax(0,2.7fr);gap:1px;background:var(--tv-border);border:1px solid var(--tv-border);border-radius:6px;overflow:hidden;font-size:12.5px;margin:0 0 18px">
+    ${head}
+    ${rows
+      .map(
+        ([n, k, v]) =>
+          `<div style="background:var(--tv-surface-2);padding:10px 12px;font-family:var(--tv-font-mono);overflow-wrap:anywhere">${esc(n)}</div><div style="background:var(--tv-surface-2);padding:10px 12px;color:${k === 'secret' ? 'var(--tv-error)' : 'var(--tv-text-dim)'}">${esc(k)}</div><div style="background:var(--tv-surface-2);padding:10px 12px;color:var(--tv-text-muted)">${v}</div>`,
+      )
+      .join('\\n    ')}
+  </div>
+  <div style="background:var(--tv-warn-bg);border:1px solid var(--tv-warn-border);border-left:3px solid var(--tv-warn);border-radius:6px;padding:14px 16px;margin:0 0 18px">
+    <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-warn);margin:0 0 7px">Check the names against the repo</div>
+    <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">These three come from the Orbit provider docs rather than from the bindings audit, so nothing verifies them at build time the way the rows above are verified. Confirm them in <code style="font-family:var(--tv-font-mono);font-size:.92em">.dev.vars.example</code> before you rely on them.</p>
+  </div>
 </div>`
 }
 
@@ -432,11 +612,17 @@ function phaseSection(p: Phase): string {
     else if (isCode(item)) parts.push(code(item))
   }
 
-  if (p.n === 8) parts.push(bindingsTable())
+  if (p.n === 8) {
+    parts.push(bindingsTable())
+    parts.push(
+      `<p data-when="free" style="margin:0 0 18px;max-width:64ch;font-size:13.5px;color:var(--tv-text-dim);text-wrap:pretty">The <code style="font-family:var(--tv-font-mono);font-size:.92em">ANALYTICS</code> binding is not listed because you chose the free plan \u2014 there is no Analytics Engine dataset to point it at. The audit will report it as MISSING; that is correct and you can leave it. <a href="#cost">Change plan</a></p>`,
+    )
+    parts.push(localModelVars())
+  }
   if (p.n === 13) {
     parts.push(
       `<div style="display:flex;flex-direction:column;gap:10px;margin:0 0 16px">${ADDONS.map(
-        a => `<div style="border:1px solid var(--tv-border);border-radius:6px;padding:15px 17px">
+        a => `<div${a.paidOnly ? ' data-paid-only="1"' : ''} style="border:1px solid var(--tv-border);border-radius:6px;padding:15px 17px">
         <div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin:0 0 6px">
           <div style="font:500 15px/1.3 var(--tv-font-sans);color:var(--tv-text)">${esc(a.id)} · ${esc(a.title)}</div>
           <span style="flex:none;font:500 11px/1 var(--tv-font-mono);color:var(--tv-accent)">${esc(a.flag)}</span>
@@ -457,13 +643,13 @@ function phaseSection(p: Phase): string {
       })
       .join('\n    ')
     parts.push(`<details style="border-top:1px solid var(--tv-border);padding-top:13px;margin:0 0 14px">
-    <summary style="display:block;cursor:pointer;font:500 13px/1 var(--tv-font-sans);color:var(--tv-accent);list-style:none">+ ${esc(p.manual.summary)}</summary>
+    <summary style="display:block;cursor:pointer;font:500 13px/1.4 var(--tv-font-sans);color:var(--tv-accent);list-style:none">+ ${esc(p.manual.summary)}</summary>
     <div style="padding-top:14px">${body}</div>
   </details>`)
   }
 
   parts.push(`<div style="background:var(--tv-accent-bg);border:1px solid var(--tv-accent-border);border-left:3px solid var(--tv-accent);border-radius:6px;padding:14px 16px;margin:0 0 14px">
-    <div style="font:600 10.5px/1 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-accent);margin:0 0 7px">Gate</div>
+    <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-accent);margin:0 0 7px">Gate</div>
     <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">${withSlots(p.gate)}</p>
   </div>`)
 
@@ -473,7 +659,7 @@ function phaseSection(p: Phase): string {
     <div style="flex:1;min-width:0">
       <div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin:0 0 4px">
         <span style="font:500 11.5px/1 var(--tv-font-mono);color:var(--tv-text-dim);letter-spacing:.06em">PHASE ${String(p.n).padStart(2, '0')}</span>
-        <span style="font:400 11.5px/1 var(--tv-font-sans);color:var(--tv-text-dim)">${esc(p.duration)}${p.aside ? ' · ' + esc(p.aside) : ''}</span>
+        <span style="font:400 11.5px/1.4 var(--tv-font-sans);color:var(--tv-text-dim)">${esc(p.duration)}${p.aside ? ' · ' + esc(p.aside) : ''}</span>
       </div>
       <h2 style="font:700 24px/1.25 var(--tv-font-sans);letter-spacing:-.01em;color:var(--tv-text);margin:0">${esc(p.title)}</h2>
     </div>
@@ -487,7 +673,7 @@ function phaseSection(p: Phase): string {
 function worksheetDrawer(): string {
   const field = (w: WorksheetField): string => {
     const o = ORIGIN_LABELS[w.origin]
-    return `<div data-field-row="${esc(w.id)}" data-tier="${w.minTier}" style="margin:0 0 14px">
+    return `<div data-field-row="${esc(w.id)}" data-tier="${w.minTier}"${w.paidOnly ? ' data-paid-only="1"' : ''} style="margin:0 0 14px">
     <div style="display:flex;align-items:center;gap:7px;margin:0 0 5px;flex-wrap:wrap">
       <label style="font:500 11.5px/1.3 var(--tv-font-mono);color:var(--tv-text-muted)">${esc(w.id)}</label>
       <span style="font:400 12.5px/1.3 var(--tv-font-sans);color:var(--tv-text)">${esc(w.label)}</span>
@@ -536,6 +722,7 @@ function troubleshooting(): string {
     ${TROUBLESHOOTING.map(
       t => `<div style="${CARD};padding:16px 18px">
       <div style="font:500 14px/1.4 var(--tv-font-mono);color:var(--tv-error);margin:0 0 6px">${esc(t.symptom)}</div>
+      ${t.symptom.indexOf('Ingest returns 204') === 0 ? '<p data-when=\"free\" style=\"margin:0 0 8px;font-size:13.5px;line-height:1.55;color:var(--tv-warn);text-wrap:pretty\">On the free plan this is expected, not a fault \u2014 there is no Analytics Engine to write to. Nothing to fix.</p>' : ''}
       <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">${inline(t.fix)}</p>
     </div>`,
     ).join('\n    ')}
@@ -585,28 +772,26 @@ function sidebar(): string {
       <div data-progress-bar="1" style="height:100%;background:var(--tv-accent);border-radius:3px;transition:width .3s ease;width:0%"></div>
     </div>
   </div>
+  <div style="display:flex;flex-direction:column;gap:1px;margin:0 0 18px">
+    <div style="${GROUP_HEAD}">Before you begin</div>
+    <a href="#cost" style="${SIDE_LINK}">What it costs</a>
+    <a href="#preflight" style="${SIDE_LINK}">Your install sheet</a>
+    <a href="#map" style="${SIDE_LINK}">Where values come from</a>
+  </div>
+
+  <div style="${GROUP_HEAD}">The install</div>
   <nav style="display:flex;flex-direction:column;gap:1px;margin:0 0 20px">${links}</nav>
+
   <div style="display:flex;flex-direction:column;gap:1px;border-top:1px solid var(--tv-border);padding-top:12px">
-    <a href="#preflight" style="padding:5px 7px;border-radius:4px;border:none;font:400 13px/1.3 var(--tv-font-sans);color:var(--tv-text-muted)">Pre-flight sheet</a>
-    <a href="#map" style="padding:5px 7px;border-radius:4px;border:none;font:400 13px/1.3 var(--tv-font-sans);color:var(--tv-text-muted)">Dependency map</a>
-    <a href="#stuck" style="padding:5px 7px;border-radius:4px;border:none;font:400 13px/1.3 var(--tv-font-sans);color:var(--tv-text-muted)">When it goes wrong</a>
+    <div style="${GROUP_HEAD}">Reference</div>
+    <a href="#stuck" style="${SIDE_LINK}">When it goes wrong</a>
+    <a href="#trust" style="${SIDE_LINK}">What we actually tested</a>
   </div>
 </aside>`
 }
 
-/**
- * The sidebar mark, inlined rather than linked.
- *
- * This page's whole premise is that it still works when the deploy
- * does not — read off a laptop, off a checkout, off a broken
- * preview. An `<img src="/...">` breaks under `file://` and under any
- * host that does not serve the SPA root, which is precisely the
- * situation someone is in when they open it.
- *
- * Gradient and clip-path ids are prefixed `tvg-` because SVG ids
- * share the document namespace once inlined.
- */
-const GLOBE_MARK = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="26" height="26" aria-hidden="true" focusable="false" style="display:block;flex:none"><defs><radialGradient id="tvg-sphere" cx="40%" cy="35%" r="50%"><stop offset="0%" stop-color="#4FC3F7"></stop><stop offset="60%" stop-color="#1565C0"></stop><stop offset="100%" stop-color="#0D2137"></stop></radialGradient><radialGradient id="tvg-shine" cx="35%" cy="30%" r="45%"><stop offset="0%" stop-color="white" stop-opacity="0.3"></stop><stop offset="100%" stop-color="white" stop-opacity="0"></stop></radialGradient><clipPath id="tvg-clip"><circle cx="16" cy="16" r="14.08"></circle></clipPath></defs><circle cx="16" cy="16" r="14.72" fill="#0a1628"></circle><circle cx="16" cy="16" r="14.08" fill="url(#tvg-sphere)"></circle><g clip-path="url(#tvg-clip)" fill="none" stroke="rgba(255,255,255,0.15)" stroke-width="1"><ellipse cx="16" cy="16" rx="14.08" ry="1.92"></ellipse><ellipse cx="16" cy="10.56" rx="11.2" ry="1.6"></ellipse><ellipse cx="16" cy="21.44" rx="11.2" ry="1.6"></ellipse><ellipse cx="16" cy="16" rx="1.92" ry="14.08"></ellipse><ellipse cx="11.84" cy="16" rx="1.28" ry="13.44"></ellipse><ellipse cx="20.16" cy="16" rx="1.28" ry="13.44"></ellipse></g><g clip-path="url(#tvg-clip)" fill="rgba(76,175,80,0.5)" stroke="none"><path d="M12.16 7.04 Q13.44 8 12.8 10.24 Q11.52 11.52 12.16 12.8 Q13.44 15.36 12.16 17.6 Q11.2 19.84 11.84 22.4 Q11.2 20.8 10.56 18.56 Q10.24 16 10.88 13.44 Q10.56 11.2 11.2 8.96 Z"></path><path d="M16.64 8 Q17.92 8.96 18.56 10.88 Q19.2 12.8 18.24 15.36 Q17.6 17.6 17.92 19.84 Q17.28 18.56 16.96 16 Q16.64 13.44 17.28 10.88 Q16.64 9.6 16 8.64 Z"></path></g><circle cx="16" cy="16" r="14.08" fill="url(#tvg-shine)"></circle><circle cx="16" cy="16" r="14.08" fill="none" stroke="rgba(255,255,255,0.12)" stroke-width="1"></circle></svg>`
+const SIDE_LINK = 'padding:5px 7px;border-radius:4px;border:none;font:400 13px/1.3 var(--tv-font-sans);color:var(--tv-text-muted)'
+const GROUP_HEAD = 'font:600 9.5px/1.35 var(--tv-font-sans);letter-spacing:.14em;text-transform:uppercase;color:var(--tv-text-dim);padding:0 7px;margin:0 0 7px'
 
 // ── Runtime ───────────────────────────────────────────────────────
 
@@ -615,10 +800,9 @@ const GLOBE_MARK = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" 
  * bundle broken, which is exactly when someone reads it.
  *
  * Validators are re-declared here rather than imported: this string
- * runs in the browser with no module loader. Their *behaviour* cannot
- * be cross-checked against `prompt.ts`, so the shapes are kept trivial
- * and the authoritative copies stay in the tool. Their *existence*
- * can be, and is — see `INLINE_VALIDATORS` and check 7.
+ * runs in the browser with no module loader. `crossCheck` cannot
+ * catch a drift between the two, so the shapes are kept trivial and
+ * the authoritative check stays in the tool.
  */
 function runtime(fields: WorksheetField[]): string {
   const meta = fields.map(f => ({
@@ -626,6 +810,7 @@ function runtime(fields: WorksheetField[]): string {
     token: f.token,
     secret: Boolean(f.secret),
     tier: f.minTier,
+    paidOnly: Boolean(f.paidOnly),
     validator: f.validator ?? null,
   }))
   return `
@@ -646,10 +831,14 @@ const V = {
   projectName: v => /^[a-z0-9][a-z0-9-]{0,57}[a-z0-9]$/.test(v) ? null : 'lowercase letters, digits and dashes only'
 };
 
-let state = { tier: 2, vals: {}, done: {} };
+let state = { tier: 2, plan: 'paid', ai: 'workers', vals: {}, done: {} };
 try {
   const raw = localStorage.getItem(KEY);
-  if (raw) { const s = JSON.parse(raw); state.tier = s.tier || 2; state.vals = s.vals || {}; state.done = s.done || {}; }
+  if (raw) {
+    const s = JSON.parse(raw);
+    state.tier = s.tier || 2; state.plan = s.plan || 'paid'; state.ai = s.ai || 'workers';
+    state.vals = s.vals || {}; state.done = s.done || {};
+  }
 } catch (e) {}
 
 const SECRET = new Set(FIELDS.filter(f => f.secret).map(f => f.id));
@@ -657,7 +846,7 @@ function persist() {
   try {
     const vals = {};
     for (const k in state.vals) if (!SECRET.has(k)) vals[k] = state.vals[k];
-    localStorage.setItem(KEY, JSON.stringify({ tier: state.tier, vals: vals, done: state.done }));
+    localStorage.setItem(KEY, JSON.stringify({ tier: state.tier, plan: state.plan, ai: state.ai, vals: vals, done: state.done }));
   } catch (e) {}
 }
 
@@ -705,14 +894,46 @@ function paintTier() {
   q('[data-phase-row]').forEach(el => {
     el.style.display = visiblePhase(Number(el.getAttribute('data-phase-row'))) ? 'flex' : 'none';
   });
+  const free = state.plan === 'free';
+  const okPlan = el => !(free && el.hasAttribute('data-paid-only'));
   q('[data-field-row]').forEach(el => {
-    el.style.display = Number(el.getAttribute('data-tier')) <= state.tier ? '' : 'none';
+    el.style.display = (Number(el.getAttribute('data-tier')) <= state.tier && okPlan(el)) ? '' : 'none';
   });
   q('[data-binding-row]').forEach(el => {
-    el.style.display = Number(el.getAttribute('data-tier')) <= state.tier ? 'contents' : 'none';
+    el.style.display = (Number(el.getAttribute('data-tier')) <= state.tier && okPlan(el)) ? 'contents' : 'none';
   });
   q('[data-map-row]').forEach(el => {
-    el.style.display = Number(el.getAttribute('data-tier')) <= state.tier ? 'grid' : 'none';
+    el.style.display = (Number(el.getAttribute('data-tier')) <= state.tier && okPlan(el)) ? 'grid' : 'none';
+  });
+  q('[data-paid-only]').forEach(el => {
+    if (el.hasAttribute('data-field-row') || el.hasAttribute('data-binding-row') || el.hasAttribute('data-map-row')) return;
+    el.style.display = free ? 'none' : '';
+  });
+  q('[data-when]').forEach(el => {
+    const w = el.getAttribute('data-when');
+    const on = w === 'free' ? free : w === 'paid' ? !free : state.ai === w;
+    el.style.display = on ? '' : 'none';
+  });
+  q('[data-plan]').forEach(b => {
+    const on = b.getAttribute('data-plan') === state.plan;
+    const hue = b.getAttribute('data-plan') === 'free' ? '255,204,102' : '77,166,255';
+    b.style.cssText = b.style.cssText.replace(/(background|border|box-shadow):[^;]*;?/g, '') +
+      (on ? ';background:rgba(' + hue + ',.1);border:1px solid rgb(' + hue + ');box-shadow:0 0 0 1px rgba(' + hue + ',.2)'
+          : ';background:var(--tv-surface-2);border:1px solid var(--tv-border)');
+    const tick = b.querySelector('[data-plan-tick]');
+    if (tick) {
+      tick.textContent = on ? '\u2713' : '';
+      tick.style.background = on ? 'rgb(' + hue + ')' : 'transparent';
+      tick.style.borderColor = on ? 'rgb(' + hue + ')' : 'var(--tv-border-strong)';
+      tick.style.color = on ? 'var(--tv-bg)' : 'transparent';
+    }
+  });
+  q('[data-ai]').forEach(b => {
+    const on = b.getAttribute('data-ai') === state.ai;
+    const hue = b.getAttribute('data-ai') === 'local' ? '34,197,94' : '77,166,255';
+    b.style.cssText = b.style.cssText.replace(/(background|border):[^;]*;?/g, '') +
+      (on ? ';background:rgba(' + hue + ',.1);border:1px solid rgb(' + hue + ')'
+          : ';background:var(--tv-surface-2);border:1px solid var(--tv-border)');
   });
   q('[data-tier]').forEach(b => {
     if (b.tagName !== 'BUTTON') return;
@@ -741,7 +962,7 @@ function paintProgress() {
     d.style.color = on ? 'var(--tv-bg)' : 'transparent';
     d.textContent = on ? '✓' : '';
   });
-  const relevant = FIELDS.filter(f => f.tier <= state.tier);
+  const relevant = FIELDS.filter(f => f.tier <= state.tier && !(state.plan === 'free' && f.paidOnly));
   const filled = relevant.filter(f => (state.vals[f.id] || '').trim()).length;
   const fc = document.querySelector('[data-fill-count]');
   if (fc) fc.textContent = filled + ' / ' + relevant.length;
@@ -825,7 +1046,7 @@ document.addEventListener('input', e => {
 });
 
 document.addEventListener('click', e => {
-  const el = e.target.closest('[data-toggle],[data-w],[data-copy],[data-tier],[data-act]');
+  const el = e.target.closest('[data-toggle],[data-w],[data-copy],[data-tier],[data-plan],[data-ai],[data-act]');
   if (!el) return;
   if (el.hasAttribute('data-copy')) {
     const pre = el.parentElement.querySelector('pre');
@@ -837,6 +1058,8 @@ document.addEventListener('click', e => {
   if (el.tagName === 'BUTTON' && el.hasAttribute('data-tier')) {
     state.tier = Number(el.getAttribute('data-tier')); persist(); repaint(); return;
   }
+  if (el.hasAttribute('data-plan')) { state.plan = el.getAttribute('data-plan'); persist(); repaint(); return; }
+  if (el.hasAttribute('data-ai')) { state.ai = el.getAttribute('data-ai'); persist(); repaint(); return; }
   const tog = el.getAttribute('data-toggle');
   if (tog) { state.done[tog] = !state.done[tog]; persist(); paintChecks(); paintProgress(); return; }
   const act = el.getAttribute('data-act');
@@ -887,6 +1110,11 @@ export function renderSetupPage(opts: RenderOptions): string {
   origin here, that is the signal to reconsider the change, not the
   policy.
 
+  This also blocks the analytics beacon Cloudflare Pages injects into
+  every deployed HTML file. privacy.html already blocks the same
+  beacon via script-src 'none'; matching it keeps a third-party
+  script off an operator-facing page on a privacy-first project.
+
   No frame-ancestors: browsers ignore it when it arrives in a
   <meta> element, and say so in the console. privacy.html carries it
   anyway and takes the console error for a directive that was never
@@ -908,6 +1136,17 @@ summary::-webkit-details-marker{display:none}
 input:focus{outline:none;border-color:rgba(77,166,255,.5)!important;background:rgba(255,255,255,.08)!important}
 ::selection{background:rgba(77,166,255,.3)}
 code{overflow-wrap:anywhere}
+/* The values FAB is fixed to the viewport but the text column is not, so
+   below ~1100px it lands on top of the copy. A half-screen window on a
+   1920 monitor is 960px — squarely in that band, and this page is meant
+   to be read beside a terminal. Shrink it to a puck. */
+@media (max-width:1100px){
+  [data-fab] [data-fab-label]{display:none}
+  [data-fab]{padding:12px 14px!important;gap:0!important}
+  /* Shrinking it is not enough — the text column has to give up the band
+     the puck occupies (26px offset + 87px puck + breathing room). */
+  [data-main]{padding-right:130px!important}
+}
 @media print{
   body{background:#fff}
   [data-noprint]{display:none!important}
@@ -938,14 +1177,16 @@ code{overflow-wrap:anywhere}
   const hero = `<section data-noprint="1" style="margin:0 0 44px">
   <div style="${EYEBROW};margin:0 0 14px">Self-hosting a Terraviz node</div>
   <h1 style="font:300 46px/1.12 var(--tv-font-sans);letter-spacing:-.005em;color:var(--tv-text);margin:0 0 18px;max-width:17ch;text-wrap:pretty">You can have your own node running this afternoon.</h1>
-  <p style="margin:0 0 22px;max-width:60ch;font-size:17px;color:var(--tv-text-muted);text-wrap:pretty">${PHASES.length} phases, ordered so no step ever asks for a value an earlier step has not already produced. Type your values in once and every command on this page fills itself in. Tick things off as you go — this page remembers where you stopped.</p>
+  <p style="margin:0 0 14px;max-width:60ch;font-size:17px;color:var(--tv-text-muted);text-wrap:pretty">By the end, the globe is running at your own address, showing your own datasets, and only your team can publish to it. Getting there means setting up a handful of Cloudflare services, pointing your copy of the code at them, and putting your first data in.</p>
+  <p style="margin:0 0 22px;max-width:60ch;font-size:17px;color:var(--tv-text-muted);text-wrap:pretty">Work straight down the page. Nothing asks you for something an earlier step has not already handed you, so you will not get halfway and discover you needed to do something else first. Fill in your details once and every command below fills itself in. Tick off each step as you finish it — this page remembers where you stopped, so you can walk away and come back.</p>
   <div style="display:flex;flex-wrap:wrap;gap:9px;margin:0 0 24px">
-    ${['≈2–3 h for a publisher node', '$5/mo Workers Paid', 'A domain already on Cloudflare DNS']
+    ${['≈2–3 h for a publisher node', 'A domain already on Cloudflare DNS']
       .map(
         t =>
           `<span style="background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:3px;padding:5px 10px;font:500 12px/1.2 var(--tv-font-sans);color:var(--tv-text-muted)">${esc(t)}</span>`,
       )
       .join('\n    ')}
+    <a href="#cost" style="background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-bottom:1px solid var(--tv-border-strong);border-radius:3px;padding:5px 10px;font:500 12px/1.2 var(--tv-font-sans);color:var(--tv-text-muted)">Free plan works — $5/mo buys back analytics</a>
   </div>
   <p style="margin:0;font-size:13.5px;color:var(--tv-text-dim)">This page is a front door. The canonical text — every click path, every caveat — is <a href="${MARKDOWN_URL}">SELF_HOSTING.md</a>, and each phase links straight into it.</p>
 </section>`
@@ -992,6 +1233,7 @@ ${sidebar()}
 <main data-main="1" style="padding:54px 52px 140px;max-width:940px">
 ${hero}
 ${tierPicker()}
+${costPanel()}
 ${preflight()}
 ${dependencyMap()}
 ${setupPanel}
@@ -1006,8 +1248,8 @@ ${weekOne()}
 </footer>
 </main>
 </div>
-<button data-act="drawer" data-noprint="1" style="position:fixed;right:26px;bottom:26px;z-index:40;display:flex;align-items:center;gap:10px;background:var(--tv-accent-strong);color:#fff;border:none;border-radius:6px;padding:13px 18px;font:500 13.5px/1 var(--tv-font-sans);cursor:pointer;box-shadow:0 6px 22px rgba(0,0,0,.45)">
-  <span>Your values</span>
+<button data-act="drawer" data-fab="1" data-noprint="1" title="Your values" style="position:fixed;right:26px;bottom:26px;z-index:40;display:flex;align-items:center;gap:10px;background:var(--tv-accent-strong);color:#fff;border:none;border-radius:6px;padding:13px 18px;font:500 13.5px/1 var(--tv-font-sans);cursor:pointer;box-shadow:0 6px 22px rgba(0,0,0,.45)">
+  <span data-fab-label="1">Your values</span>
   <span data-drawer-count="1" style="font:500 12px/1 var(--tv-font-mono);background:rgba(255,255,255,.16);padding:4px 7px;border-radius:3px"></span>
 </button>
 ${worksheetDrawer()}
