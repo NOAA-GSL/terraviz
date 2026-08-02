@@ -113,8 +113,10 @@ the palette JSON as a **string** arg on the heatmap stage:
       cmap_inline: '{"type":"continuous","base":"Oranges","transparent_range":12,"blend_range":48,"overall_alpha":0.95}'
 ```
 The runner (`materializeInlinePalettes` in `cli/zyra-publish-from-dispatch.ts`,
-`--phase=fetch`) writes it to `/work/cmap-<stage>.json`, repoints `cmap_file`,
-and drops `cmap_inline` before `zyra run`. It's a scalar string (passes the
+`--phase=fetch`) writes it to `/work/cmap-<stageIndex>.json` (the zero-based index of the stage
+in `stages[]`), repoints `cmap_file`, and drops `cmap_inline` before `zyra run`.
+It must sit on a `heatmap` stage — anywhere else is a hard error, since no other
+command reads a palette file. It's a scalar string (passes the
 validator), rides in `pipeline_json`, and hard-fails on invalid JSON. Bounded by
 `MAX_PIPELINE_ARG_LENGTH` (2 KB). **Requires the deployed runner build to
 include the materialize step** — before that, use a hosted `cmap_file` URL. (A

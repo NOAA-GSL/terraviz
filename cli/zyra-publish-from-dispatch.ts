@@ -296,15 +296,28 @@ export async function findFramesMeta(workdir: string): Promise<string | null> {
  * `cmap_inline` string — the same JSON `--cmap-file` would otherwise
  * load from a URL — so a publisher can colour a data-encoded dataset
  * without hosting a palette file. For each such stage we write the JSON
- * to `{workdir}/cmap-<i>.json` (the container sees the workdir at
- * `/work`), point `cmap_file` at it, and drop `cmap_inline` — an
- * unknown arg zyra would otherwise reject. Both kebab and snake
- * spellings are accepted, mirroring `pipelineArg`.
+ * to `{workdir}/cmap-<stageIndex>.json` — the zero-based index of the
+ * stage in `stages[]`, so a workdir listing maps straight back to the
+ * pipeline (the container sees the workdir at `/work`) — point
+ * `cmap_file` at it, and drop `cmap_inline`, an unknown arg zyra would
+ * otherwise reject. Both kebab and snake spellings are accepted,
+ * mirroring `pipelineArg`.
  *
- * Throws on a `cmap_inline` that is not valid JSON: cheaper to fail
- * here than after a container spin-up, and a malformed palette would
- * otherwise fail deep inside zyra's `load_palette_spec` with a worse
- * message. Returns the pipeline unchanged when no stage uses it.
+ * Throws, rather than warning or skipping, on three authoring mistakes,
+ * because each one otherwise surfaces far from its cause:
+ *
+ *   - `cmap_inline` on a stage that is not `heatmap`. Only the
+ *     data-encoded heatmap path consumes a palette file, so rewriting it
+ *     into `cmap_file` elsewhere would hand zyra an arg that command does
+ *     not accept and fail the run with an unrelated "unrecognized
+ *     arguments" message. Silently ignoring it is worse still: the
+ *     heatmap then has no palette and publishes a grayscale globe, which
+ *     is the hardest data-encoded symptom to trace back.
+ *   - a `cmap_inline` that is not valid JSON, which would otherwise fail
+ *     deep inside zyra's `load_palette_spec` after a container spin-up.
+ *   - a `cmap_inline` that is neither a JSON string nor an object.
+ *
+ * Returns the pipeline unchanged when no stage uses it.
  */
 export async function materializeInlinePalettes(
   pipelineJson: string,
@@ -326,6 +339,14 @@ export async function materializeInlinePalettes(
     const a = stageArgs as Record<string, unknown>
     const inline = a['cmap_inline'] ?? a['cmap-inline']
     if (inline === undefined) continue
+    const command = (stage as { command?: unknown }).command
+    if (command !== 'heatmap') {
+      throw new Error(
+        `stages[${i}].args.cmap_inline is only supported on a "heatmap" stage ` +
+          `(this stage is "${String(command)}") — only the data-encoded heatmap ` +
+          `path reads a palette file`,
+      )
+    }
     let text: string
     if (typeof inline === 'string') {
       try {

@@ -465,6 +465,26 @@ describe('materializeInlinePalettes', () => {
     ).rejects.toThrow(/cmap_inline is not valid JSON/)
   })
 
+  it('refuses cmap_inline on a non-heatmap stage', async () => {
+    // Rewriting it into cmap_file on, say, compose-video would hand zyra an
+    // arg that command does not accept ("unrecognized arguments"), pointing
+    // the author at the wrong stage. Silently skipping is worse: the heatmap
+    // would render grayscale with no hint why.
+    const workdir = await mkdtemp(join(tmpdir(), 'zyra-pal-'))
+    const pipeline = JSON.stringify({
+      stages: [
+        {
+          stage: 'visualize',
+          command: 'compose-video',
+          args: { output: '/work/output/dataset.mp4', cmap_inline: '{"type":"continuous"}' },
+        },
+      ],
+    })
+    await expect(materializeInlinePalettes(pipeline, workdir)).rejects.toThrow(
+      /only supported on a "heatmap" stage.*compose-video/s,
+    )
+  })
+
   it('leaves a pipeline without cmap_inline untouched', async () => {
     const workdir = await mkdtemp(join(tmpdir(), 'zyra-pal-'))
     const input = heatmap({ data_encoded: true, cmap_file: 'https://host/p.json' })

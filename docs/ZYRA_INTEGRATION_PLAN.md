@@ -792,14 +792,15 @@ palette spec (`{type, base, transparent_range, …}`), which zyra loads
 from a path/URL/s3 — a named `--cmap` is ignored on the data-encoded
 path. Rather than hosting one palette file per dataset, a stage may
 carry the palette **inline** as a `cmap_inline` string (the same JSON):
-the runner writes it to `{workdir}/cmap-<stage>.json`, repoints
-`cmap_file` at `/work/cmap-<stage>.json`, and drops `cmap_inline`
+the runner writes it to `{workdir}/cmap-<stageIndex>.json` (the
+zero-based index of the stage in `stages[]`, so a workdir listing maps
+back to the pipeline), repoints `cmap_file` at it, and drops `cmap_inline`
 before `zyra run` (`materializeInlinePalettes` in
 `cli/zyra-publish-from-dispatch.ts`, run in `--phase=fetch` right after
 placeholder interpolation). It is a plain scalar string, so it passes
 the pipeline validator unchanged and lives in the stored
-`pipeline_json`; a `cmap_inline` that is not valid JSON is a hard fetch
-failure (cheaper than failing inside zyra's `load_palette_spec` after a
+`pipeline_json`; `cmap_inline` outside a `heatmap` stage, or one that is not valid JSON, is a
+hard fetch failure (cheaper than failing inside zyra's `load_palette_spec` after a
 container spin-up). Bounded by `MAX_PIPELINE_ARG_LENGTH` (2 KB) — ample
 for a continuous spec, adequate for most classified ones. A future
 publisher-form `palette_json` field can write into the same
