@@ -118,6 +118,45 @@ describe('fork-friendly doc links', () => {
     expect(js).toContain('terraviz-setup-console-v1')
   })
 
+  // The runtime writes a user-supplied value into an href. Reading the
+  // regex and concluding "that looks fine" is not evidence, so this
+  // runs the emitted script against hostile input and checks the
+  // origin that actually comes out.
+  describe('the emitted runtime, executed', () => {
+    const run = (w3: string): string => {
+      document.body.innerHTML =
+        `<input data-field="W3" value="${w3.replace(/"/g, '&quot;')}"/>` +
+        '<a data-doc="#phase-2" href="' + MARKDOWN_URL + '#phase-2"></a>'
+      const js = docLinkRuntime(MARKDOWN_URL).replace(/<\/?script>/g, '')
+      new Function(js)()
+      return document.querySelector('[data-doc]')!.getAttribute('href')!
+    }
+
+    it('retargets a real owner/repo', () => {
+      expect(run('museum/terraviz-fork')).toBe(
+        'https://github.com/museum/terraviz-fork/blob/main/docs/SELF_HOSTING.md#phase-2',
+      )
+    })
+
+    it.each([
+      ['a scheme', 'javascript:alert(1)'],
+      ['path traversal', '../..'],
+      ['a protocol-relative host', '//evil.org/x'],
+      ['userinfo confusion', 'evil.org%2f@x/y'],
+      ['empty', ''],
+    ])('falls back rather than trusting %s', (_label, w3) => {
+      expect(run(w3)).toBe(`${MARKDOWN_URL}#phase-2`)
+    })
+
+    // The construction, not the pattern, is what guarantees this.
+    it('never leaves github.com', () => {
+      for (const w3 of ['evil.com/x', 'a/b', '..-/x', '_/_']) {
+        const url = run(w3)
+        expect(new URL(url).origin, `${w3} escaped the origin`).toBe('https://github.com')
+      }
+    })
+  })
+
   it('injects the runtime only when there are links to retarget', () => {
     expect(applyShell('<html><head><title>t</title></head><body></body></html>').html)
       .not.toContain('terraviz-setup-console-v1')

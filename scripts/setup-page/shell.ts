@@ -125,7 +125,7 @@ export function docLinkRuntime(fallback: string): string {
 (function () {
   var KEY = 'terraviz-setup-console-v1';
   var FALLBACK = ${JSON.stringify(fallback)};
-  var SLUG = /^[\\w.-]+\\/[\\w.-]+$/;
+  var SLUG = /^([\\w.-]+)\\/([\\w.-]+)$/;
   function remote() {
     var el = document.querySelector('[data-field="W3"]');
     if (el && el.value && el.value.trim()) return el.value.trim();
@@ -134,11 +134,19 @@ export function docLinkRuntime(fallback: string): string {
       return ((s.vals || {}).W3 || '').trim();
     } catch (e) { return ''; }
   }
+  // Each half goes through encodeURIComponent and lands as exactly one
+  // path segment, so the origin is literally github.com whatever was
+  // typed — the guarantee comes from the construction, not from
+  // reading the pattern carefully. '..' is rejected rather than
+  // encoded, because encodeURIComponent leaves dots alone.
+  function docBase() {
+    var m = SLUG.exec(remote());
+    if (!m || m[1] === '..' || m[2] === '..') return FALLBACK;
+    return 'https://github.com/' + encodeURIComponent(m[1]) + '/' +
+      encodeURIComponent(m[2]) + '/blob/main/docs/SELF_HOSTING.md';
+  }
   function paint() {
-    var r = remote();
-    var base = SLUG.test(r)
-      ? 'https://github.com/' + r + '/blob/main/docs/SELF_HOSTING.md'
-      : FALLBACK;
+    var base = docBase();
     var links = document.querySelectorAll('[data-doc]');
     for (var i = 0; i < links.length; i++) {
       links[i].setAttribute('href', base + links[i].getAttribute('data-doc'));
