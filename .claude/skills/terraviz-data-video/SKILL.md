@@ -42,6 +42,29 @@ cost hours to rediscover.
 
 Follow these steps in order. Each links to a reference for depth.
 
+### 0. Look at the node before you build
+If you know the target node's URL, spend a minute with
+`scripts/node_inspect.py` — the public catalog API needs no credentials and
+answers three questions that are otherwise guesswork:
+
+```bash
+python3 scripts/node_inspect.py --node https://<node> duplicates "global dust forecast"
+python3 scripts/node_inspect.py --node https://<node> reference
+python3 scripts/node_inspect.py --node https://<node> check <dataset-id>
+```
+- **duplicates** — the node may already have this dataset under a different
+  name ("Global Smoke Forecast" vs "Wildfire Smoke Overhead"). Cheaper to find
+  out now than after a publish.
+- **reference** — lists every existing data-encoded dataset with its real
+  `vmin`/`vmax`/`units`/palette. A sibling that already renders correctly is the
+  best possible calibration hint, and it shows the node's house conventions.
+- **check** — after publishing, confirms `renderEncoding` + `colorScale`
+  actually attached, and warns if the palette is all-gray. This is the fastest
+  way to tell "never attached" from "attached but mis-tuned".
+
+Workflows themselves are publisher-authed (`/api/v1/publish/workflows`) — read
+those with the `terraviz` CLI (`terraviz list`) if you have credentials.
+
 ### 1. Pick a source that a CI runner can actually reach
 Prefer **NOAA Open Data on S3 (NODD)** over agency THREDDS servers.
 `gsl.noaa.gov` (and many `*.noaa.gov` sites) sit behind Cloudflare that **403s
@@ -61,20 +84,42 @@ is `COLMD` (column mass density), one record per species
 distribution. See [references/data-sources.md](references/data-sources.md).
 
 ### 3. Set vmin/vmax from the real data, not a guess
-`vmin: 0`, and **`vmax ≈ the p99.9** of the field. A vmax that's ~10× too high
+`vmin: 0`, and **`vmax` ≈ the p99.9** of the field. A vmax that's ~10× too high
 maps everything into the low/transparent end → a near-black globe (the single
 most common "it's broken" symptom). `scripts/sample_grib_range.py` prints
 percentiles; use p99.9 as vmax, or p99.99 to keep the most intense cores from
-clipping.
+clipping. Cross-check against a sibling dataset via `node_inspect.py reference`.
+
+Note that `vmax` is no longer merely cosmetic once a dataset is data-encoded: it
+*is* the calibration. Anything above it clamps to full luma and then reads back
+wrong under the cursor. Also weigh **unit readability** — a column-mass field in
+`kg m-2` reports as `0.0000124` on hover, which is technically right and
+practically unreadable; an optical-depth field (AOD, dimensionless ~0–2) or a
+rescaled unit reads far better. Zyra has no unit-scaling process command, so if
+readability matters, pick the variable accordingly at step 2.
 
 ### 4. Write the pipeline
 Start from [assets/model-cycle-data-encoded.template.yaml](assets/model-cycle-data-encoded.template.yaml)
 (a self-updating GEFS-Aerosols column-field pipeline) and adapt the `--pattern`,
-frame count, palette, and vmax. The proven five-stage shape:
+frame count, palette, and vmax. The stage shape:
 `convert-format` (fetch + `.idx`-subset + geotiff) → `reproject`
 (0–360 → ±180, regrid to 4096×2048) → `heatmap --data-encoded` → `scan-frames`
-(derive time range) → `compose-video`. Full arg reference and the placeholder
-grammar are in [references/pipeline-reference.md](references/pipeline-reference.md).
+(derive time range) → **publish frames, or `compose-video`**.
+
+**Prefer publishing frames over `compose-video` for data-encoded datasets.**
+Migration `0043_playback_fps.sql` puts it plainly: publishing frames directly is
+"what a data-encoded dataset must do to avoid a second lossy generation."
+`compose-video` encodes the luma to H.264, and the downstream HLS transcode
+encodes it *again* — two lossy generations over pixels whose values *are* the
+data, so hover readings drift. Ending on the frame set at
+`/work/images/frames` (which `/validate` accepts in place of the MP4 path) lets
+the transcode do the single encode, and lights up the `/frames` surface. The
+cost: set `playback_fps` on the dataset row by hand, or 41 frames play in ~1.4 s.
+`compose-video` still works and is simpler — use it when convenience beats
+last-bit fidelity, and keep its `fps` low so the loop is watchable.
+
+Full arg reference and the placeholder grammar are in
+[references/pipeline-reference.md](references/pipeline-reference.md).
 
 ### 5. Colorize with a palette (no hosting)
 The `heatmap` stage **writes** the `color_scale` sidecar from a palette spec.
@@ -117,6 +162,8 @@ These are the rules that silently produce a wrong-looking dataset. Each has a
 | **No** `width`/`height` on the heatmap stage | resizing would average values never measured; zyra hard-errors | stage fails: "cannot be used with --data-encoded" |
 | Regrid to 4096×2048 **in `reproject`**, not heatmap | reprojection resamples the *data* (legit); image resize averages *luma* | (how you get 4K without breaking #3) |
 | **No** `compose-video preset: sos` | it pins 4096×2048 and rescales the luma frames → corrupts values *silently* | subtly wrong hover values, no error |
+| Prefer frames output over `compose-video` | compose + HLS transcode = two lossy generations over value-bearing luma | hover values drift from the source data |
+| Cycle `LAG` must cover the *whole* run posting, not just f000 | a cycle posts incrementally over ~6–7 h; a short lag finds early frames and 404s late ones | fetch fails partway through the frame list |
 | **No** `basemap` on a data-encoded heatmap | data-encoded bypasses the basemap; the globe supplies Earth | ignored at best; keep it clean |
 | `vmin`/`vmax` from real data | required; a too-high vmax pushes everything near 0 | near-black globe with faint detail |
 
@@ -144,6 +191,10 @@ Match the symptom, don't guess. Deep version in
 
 ## Bundled scripts
 
+- `scripts/node_inspect.py --node <url> {duplicates|reference|check}` — reads a
+  live node's **public** catalog/search (no auth). Find an existing equivalent
+  dataset, crib calibration from a working sibling, or verify a published
+  dataset's data-encoded wiring. Stdlib only.
 - `scripts/sample_grib_range.py <s3-grib2-url> <idx-regex>` — fetches the `.idx`,
   range-GETs just the matching record, decodes with eccodes, prints
   min/max/mean/percentiles. Use it to pick `vmax` and to confirm your
@@ -151,6 +202,10 @@ Match the symptom, don't guess. Deep version in
 - `scripts/make_legend.py` — renders a colorbar PNG (opaque white background)
   matching a colormap + vmin/vmax + units, for the stopgap `legend_ref`. Needs
   `pip install matplotlib pillow numpy`.
+
+**HTTP tip that bites in both directions:** default `python-urllib` and
+`python-requests` User-Agents get 403'd by Cloudflare-fronted hosts — including
+TerraViz nodes themselves. Send an ordinary UA (the bundled scripts do).
 
 ## References
 
