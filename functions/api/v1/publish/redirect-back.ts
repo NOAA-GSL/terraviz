@@ -9,7 +9,7 @@
  * cookie to the application's URL paths. When the publisher portal
  * and the publisher API are gated by two different Access
  * applications (because the 5-destination-per-app limit forces a
- * split — see `SELF_HOSTING.md` §8f), a user who has signed into
+ * split — see `SELF_HOSTING.md` Phase 6.2), a user who has signed into
  * the portal app via SSO holds a cookie scoped to `/publish/` but
  * none scoped to `/api/v1/publish/`. A `fetch()` from the portal
  * to the API path doesn't carry any cookie that satisfies the API

@@ -81,7 +81,10 @@ TypeScript SPA built with Vite and MapLibre GL JS. Deployed on Cloudflare Pages 
 > Forking to deploy your own instance? See
 > [`docs/SELF_HOSTING.md`](docs/SELF_HOSTING.md) for the
 > end-to-end Cloudflare setup walkthrough (Pages, D1, AE, KV,
-> Access, optional Grafana).
+> Access, optional Grafana). Most of it is automated by
+> `npm run setup` (`scripts/setup-node.ts` +
+> `scripts/lib/setup/`); start with `npm run setup -- --manual`
+> for the parts no API can do.
 
 ### Key commands
 
@@ -91,6 +94,10 @@ npm run build        # tokens + tsc + vite build
 npm run type-check   # tsc --noEmit (must pass before committing)
 npm run test         # vitest run
 npm run tokens       # regenerate src/styles/tokens.css from tokens/*.json
+npm run setup        # provision a self-hosted node (plan by default)
+npm run setup -- --interactive   # guided, with instructions + validation
+npm run setup -- --manual        # the prerequisites no API can do for you
+
 npm run dev:desktop  # Tauri dev mode (requires Rust)
 npm run build:desktop # tsc + vite build + tauri build
 

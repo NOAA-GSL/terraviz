@@ -79,6 +79,11 @@ yarn-error.log*
 # a convenience for paste-into-portal flows.
 node-public-key.txt
 
+# `npm run setup` resumable state — per-operator Cloudflare resource
+# IDs for this node. Holds no secret values (see scripts/lib/setup/
+# state.ts), but the IDs are deployment-specific and never shared.
+.terraviz-setup.json
+
 # Test / coverage artifacts
 coverage/
 .terraviz/prod.env

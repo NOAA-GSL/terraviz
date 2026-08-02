@@ -8,7 +8,7 @@
 > The tab reads D1 rollups + an R2 archive that outlive Analytics
 > Engine's 30–90 day retention — but those are **populated by the
 > nightly export pipeline a self-hoster must enable first**
-> (`SELF_HOSTING.md` Step 17: R2 bucket, AE SQL-API secrets, the cron
+> (`SELF_HOSTING.md` Phase 13.4: R2 bucket, AE SQL-API secrets, the cron
 > workflow). Until that's wired, the tab has nothing to read; Grafana,
 > which queries the live AE stream directly, is the zero-setup option.
 > Either way, reach for Grafana when you want to write your own AE SQL

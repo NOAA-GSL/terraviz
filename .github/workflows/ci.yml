@@ -99,6 +99,12 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run type-check
+      # Both pages are generated and committed. `npm run build`
+      # regenerates them via `prebuild`, so a stale copy in the tree is
+      # invisible there — it only shows up as a diff after someone
+      # else builds. These are the checks that catch it.
+      - run: npm run check:privacy-page
+      - run: npm run check:setup-page
 
   unit-tests:
     name: Unit Tests
@@ -194,7 +200,7 @@ jobs:
       # bindings point at the same physical D1, so the catalog
       # migrations are all the catalog backend / hero feature needs.
       # Feedback-DB schema changes are rare and applied by hand
-      # (docs/SELF_HOSTING.md Step 5).
+      # (docs/SELF_HOSTING.md Phase 8).
       #
       # Gated to `main` only: preview and production point at the SAME
       # physical D1 instance (one database_id in wrangler.toml), so
