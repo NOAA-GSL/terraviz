@@ -40,69 +40,19 @@ import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { renderSetupPage, ContentDriftError } from './setup-page/render'
+import { WORKSHEET } from './setup-page/content'
+import {
+  applyShell,
+  assertSelfContained,
+  assertValidatorsImplemented,
+  repairSummary,
+  TOKEN_ALIASES,
+} from './setup-page/shell'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = resolve(HERE, '..')
 const TOKENS = resolve(ROOT, 'src/styles/tokens.css')
 const OUT = resolve(ROOT, 'public/setup.html')
-
-/**
- * Maps the page's `--tv-*` names onto the repo's design tokens.
- *
- * Verified against `src/styles/tokens.css` rather than guessed. Where
- * a repo token carries the same value the design asked for, the alias
- * points at it and the page tracks the palette. Where the repo has no
- * equivalent, the alias keeps its literal — pointing at a
- * near-miss token would be worse than not tracking, because it would
- * drift *away* from the design on the next palette change.
- *
- * Three cases are worth naming, since each looks like an oversight:
- *
- *   - `--tv-surface` / `--tv-surface-code` stay literal. The repo's
- *     `--color-surface` family is translucent white — glass meant to
- *     composite over the WebGL globe. This page is opaque document
- *     chrome with nested panels, and stacking translucency would make
- *     each nesting level progressively lighter.
- *   - `--tv-text-muted` maps to `--color-text-secondary`, not to
- *     `--color-text-muted`. The names invite the opposite pairing, but
- *     the values decide it: the design's #bbbbbb *is*
- *     `--color-text-secondary`; `--color-text-muted` is #999999.
- *   - `--tv-error` maps to `--color-error-soft` (#ff6b6b), the
- *     foreground red. `--color-error` (#ef4444) is the deeper red the
- *     `-bg` / `-border` literals below are derived from.
- *
- * The repo has no font tokens at all, so both font stacks stay
- * literal. If `tokens.css` gains any of the missing names, this block
- * is the only place that needs to know.
- */
-const ALIASES = `
-:root{
-  --tv-bg:              var(--color-bg,                    #0d0d12);
-  --tv-surface:         #121218;
-  --tv-surface-2:       var(--color-surface-alt,           rgba(255,255,255,.04));
-  --tv-surface-3:       var(--color-surface,               rgba(255,255,255,.06));
-  --tv-surface-code:    #08080b;
-  --tv-border:          var(--color-surface-border-subtle, rgba(255,255,255,.08));
-  --tv-border-strong:   var(--color-surface-border,        rgba(255,255,255,.1));
-  --tv-text:            var(--color-text,                  #e8eaf0);
-  --tv-text-muted:      var(--color-text-secondary,        #bbbbbb);
-  --tv-text-dim:        var(--color-text-dim,              #888888);
-  --tv-accent:          var(--color-accent,                #4da6ff);
-  --tv-accent-hover:    var(--color-accent-hover,          #6ab8ff);
-  --tv-accent-strong:   var(--color-accent-dark,           #0066cc);
-  --tv-accent-bg:       rgba(77,166,255,.07);
-  --tv-accent-border:   rgba(77,166,255,.24);
-  --tv-error:           var(--color-error-soft,            #ff6b6b);
-  --tv-error-bg:        rgba(239,68,68,.08);
-  --tv-error-border:    rgba(239,68,68,.22);
-  --tv-warn:            var(--color-warning,               #ffcc66);
-  --tv-warn-bg:         rgba(255,204,102,.07);
-  --tv-warn-border:     rgba(255,204,102,.22);
-  --tv-success:         var(--color-success,               #22c55e);
-  --tv-font-sans:       -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
-  --tv-font-mono:       ui-monospace,'SF Mono',Menlo,Consolas,monospace;
-}
-`
 
 function loadTokens(): string {
   if (!existsSync(TOKENS)) {
@@ -112,9 +62,9 @@ function loadTokens(): string {
     process.stderr.write(
       `warning: ${TOKENS} not found — using literal fallbacks for every token.\n`,
     )
-    return ALIASES
+    return TOKEN_ALIASES
   }
-  return `${readFileSync(TOKENS, 'utf8').trim()}\n${ALIASES}`
+  return `${readFileSync(TOKENS, 'utf8').trim()}\n${TOKEN_ALIASES}`
 }
 
 /**
@@ -141,6 +91,27 @@ function main(): void {
       process.exit(1)
     }
     throw error
+  }
+
+  // render.ts and content.ts are replaced wholesale by each design
+  // export, so anything fixed there is lost on the next one. The
+  // shell restores what an export drops, then verifies the result —
+  // see the header of scripts/setup-page/shell.ts.
+  const shell = applyShell(html)
+  html = shell.html
+  try {
+    assertSelfContained(html)
+    assertValidatorsImplemented(WORKSHEET, html)
+  } catch (error) {
+    process.stderr.write(`\n${(error as Error).message}\n`)
+    process.exit(1)
+  }
+
+  const repaired = repairSummary(shell.repairs)
+  if (repaired.length) {
+    process.stdout.write(
+      `Restored from shell.ts (an export had dropped it): ${repaired.join(', ')}\n`,
+    )
   }
 
   if (check) {

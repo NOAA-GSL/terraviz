@@ -38,6 +38,8 @@ would strip the types without ever checking them.
 | `content.ts` | Prose, traps, gate sentences, map framing. Hand-written, reviewed like copy. |
 | `render.ts` | Imports the setup tool's own modules and renders the page. |
 | `build-setup-page.ts` | CLI. Inlines tokens, writes or `--check`s. |
+| `shell.ts` | What an export must not be able to break. Reapplies the page shell, then verifies it. |
+| `shell.test.ts` | The guards, in the one file an export has never contained. |
 
 Everything factual comes from the modules `npm run setup` and
 `npm run check:pages-bindings` already use:
@@ -101,6 +103,44 @@ verify, and the block says so.
 
 Both choices persist alongside tier and progress.
 
+## Surviving a design export
+
+`render.ts` and `content.ts` are regenerated wholesale by the design
+tool and dropped in as replacements. That is the intended workflow —
+but it means **any repo-side edit to those two files is lost on the
+next export**. The first two exports both proved it, arriving with a
+favicon and a globe SVG that do not exist in `public/`, and no CSP.
+
+So the fixes are sorted by what happens when an export drops them:
+
+| Concern | If dropped | Owner |
+|---|---|---|
+| Token aliases | ships unthemed | `shell.ts` — reapplied |
+| Favicon | 404 | `shell.ts` — reapplied |
+| Sidebar mark | 404, breaks the offline premise | `shell.ts` — reapplied |
+| CSP | page ships unprotected | `shell.ts` — reapplied |
+| Any *new* external subresource | breaks the offline premise | `shell.ts` — build fails |
+| Backticks escaped in template literals | esbuild fails | build fails |
+| `TRUST` worksheet field | `crossCheck` 2 | build fails |
+| A validator the inline script lacks | field accepts anything | `shell.ts` — build fails |
+
+Anything in the "reapplied" rows needs no action: `applyShell()` puts
+it back and the build says which ones it had to restore. The rows that
+fail the build need a hand-fix, and all three are one-liners; the error
+message names the file and the change.
+
+`shell.ts` is idempotent, so it is correct against both a raw export
+and the current tree, where `render.ts` still carries the same fixes
+inline. Nothing has to be reverted to a broken state to keep it honest.
+
+The guards live in `shell.ts` and `shell.test.ts` rather than in
+`render.ts` **because those are files the export has never contained**.
+A guard inside `render.ts` disappears with the file it was meant to
+protect. `assertSelfContained` in particular exists to catch the
+breakage we have *not* seen yet: it fails on any subresource that is
+not inline, rather than only on the two filenames that have gone wrong
+so far.
+
 ## Known seams
 
 **Validator behaviour is duplicated.** `render.ts` re-declares the
@@ -110,14 +150,20 @@ every named validator *exists* in both places; nothing confirms the
 two implementations still *agree*. They are deliberately trivial, and
 the authoritative copies stay in the tool.
 
-**Token names are aliased.** `build-setup-page.ts` maps the page's
-`--tv-*` names onto the repo's tokens. The aliases were verified
+**Token names are aliased.** `TOKEN_ALIASES` in `shell.ts` maps the
+page's `--tv-*` names onto the repo's tokens. They were verified
 against `src/styles/tokens.css` and carry literal fallbacks, so the
 page renders either way. Three `--tv-*` names have no repo equivalent
 and stay literal on purpose — the reasoning is in the comment above
-the alias block, and that block is the only place that needs to know.
+the block, and that block is the only place that needs to know.
+`shell.test.ts` asserts that every `--color-*` an alias points at
+actually exists in `tokens.css`, so a token renamed upstream fails the
+build instead of silently freezing this page on its literal.
 
 ## Self-contained means self-contained
+
+Enforced by `assertSelfContained` in `shell.ts`, not by convention.
+
 
 The page must render off a laptop, a checkout, or a broken preview —
 that is the situation someone is in when they open it. So the design
