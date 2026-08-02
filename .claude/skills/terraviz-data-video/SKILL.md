@@ -1,21 +1,7 @@
 ---
 name: terraviz-data-video
 description: >-
-  Author and debug TerraViz/Zyra data-encoded ("data-driven") video workflows —
-  the pipelines that put a gridded model field (aerosols, smoke, dust, AOD,
-  PM, any GRIB2/NetCDF forecast) onto the globe with live hover values and a
-  client-recolored palette. Use this skill whenever the user is building,
-  editing, or debugging a Zyra workflow pipeline (convert-format → reproject →
-  heatmap → compose-video), adding a new model dataset to the catalog, wiring
-  up `heatmap --data-encoded` / `color_scale` / `cmap_inline` / palettes,
-  choosing vmin/vmax, writing a workflow metadata template, or troubleshooting
-  a black or grayscale globe, a missing legend, or absent hover values on a
-  data-encoded dataset. Also use it for picking a non-Cloudflare data source
-  (NOAA Open Data on S3 / NODD) and inspecting a GRIB2 `.idx` variable
-  inventory. Reach for it even when the user just says "add global X to the
-  globe", "make a data-driven video of Y", or "why is my dataset
-  black-and-white" — the data-encoded contract has many non-obvious gotchas
-  captured here that are painful to rediscover from scratch.
+  Author and debug TerraViz/Zyra data-encoded ("data-driven") video workflows — putting a gridded model field (aerosols, smoke, dust, AOD, PM, any GRIB2/NetCDF forecast) on the globe with live hover values and a client-recolored palette. Use whenever the user is building, editing, or debugging a Zyra workflow pipeline (convert-format → reproject → heatmap → compose-video), adding a model dataset to the catalog, wiring up `heatmap --data-encoded` / `color_scale` / `cmap_inline` / palettes, choosing vmin/vmax, writing a workflow metadata template, or troubleshooting a black or grayscale globe, a missing legend, or absent hover values. Also for picking a non-Cloudflare data source (NOAA Open Data on S3 / NODD), inspecting a GRIB2 `.idx` inventory, and triaging capability gaps (zyra vs the allowlist). Reach for it even when the user just says "add global X to the globe", "make a data-driven video of Y", or "why is my dataset black-and-white" — the data-encoded contract has non-obvious gotchas painful to rediscover.
 ---
 
 # TerraViz data-encoded video workflows
