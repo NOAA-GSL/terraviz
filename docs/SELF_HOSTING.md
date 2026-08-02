@@ -383,8 +383,15 @@ Reversing 2 and 3 leaves `node_identity.public_key` as the literal
 string `ed25519:placeholder-key-replaced-by-gen-node-key-script`,
 and `/.well-known/terraviz.json` will serve that placeholder. The
 script warns when you get it wrong ("No node_identity row found in
-local D1"), but it exits 0, so it's easy to miss. `npm run db:reset`
-does all three in the right order.
+local D1"), but it exits 0, so it's easy to miss.
+
+`npm run db:reset` is `clean-d1-state && db:migrate && db:seed` — the
+first two steps only. It re-seeds the placeholder and does **not**
+re-stamp the key, so follow it with the third step every time:
+
+```bash
+npm run db:reset && npm run gen:node-key
+```
 
 Then start the Functions dev server:
 

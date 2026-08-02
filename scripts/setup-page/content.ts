@@ -128,7 +128,7 @@ cd terraviz && npm install`,
         title: 'Order matters',
         body: [
           'Run these three in exactly this order. Reversing the last two leaves your node identity holding the literal placeholder key, and `/.well-known/terraviz.json` will serve it. The script warns but exits 0, so it is easy to miss.',
-          '`npm run db:reset` does all three in the right order.',
+          '`npm run db:reset` is only the first two steps — it re-seeds the placeholder and does not re-stamp the key. Follow it with `npm run gen:node-key` every time: `npm run db:reset && npm run gen:node-key`.',
         ],
         code: {
           code: `npm run db:migrate    # 1. schema into .wrangler/ SQLite
