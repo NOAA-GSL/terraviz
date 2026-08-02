@@ -120,12 +120,13 @@ export function applyDocLinks(
  * Reads the live input before falling back to storage, because the
  * page persists on a debounce and an `input` event can arrive first.
  */
-export function docLinkRuntime(fallback: string): string {
-  return `<script>
+export function docLinkScript(fallback: string): string {
+  return `
 (function () {
   var KEY = 'terraviz-setup-console-v1';
   var FALLBACK = ${JSON.stringify(fallback)};
   var SLUG = /^([\\w.-]+)\\/([\\w.-]+)$/;
+  var FRAG = /^#([\\w-]*)$/;
   function remote() {
     var el = document.querySelector('[data-field="W3"]');
     if (el && el.value && el.value.trim()) return el.value.trim();
@@ -149,7 +150,16 @@ export function docLinkRuntime(fallback: string): string {
     var base = docBase();
     var links = document.querySelectorAll('[data-doc]');
     for (var i = 0; i < links.length; i++) {
-      links[i].setAttribute('href', base + links[i].getAttribute('data-doc'));
+      // data-doc is written by applyDocLinks and is only ever
+      // '#a-z0-9-', but it is DOM text on the way into an href, and an
+      // href is a scheme-bearing sink. So: match an anchored
+      // allowlist, take the capture rather than the original string,
+      // and set it through URL.hash — the scheme and origin then come
+      // structurally from base, not from anything concatenated.
+      var m = FRAG.exec(links[i].getAttribute('data-doc') || '');
+      var u = new URL(base);
+      u.hash = m ? m[1] : '';
+      links[i].setAttribute('href', u.href);
     }
   }
   document.addEventListener('input', function (e) {
@@ -158,8 +168,21 @@ export function docLinkRuntime(fallback: string): string {
   });
   paint();
 })();
-</script>
 `
+}
+
+/**
+ * The same script wrapped for injection.
+ *
+ * Split from `docLinkScript` so tests can execute the body directly.
+ * The previous shape returned the wrapper and the test stripped the
+ * tags with a regex — which CodeQL correctly flagged as a bad HTML
+ * filter (it would not have matched `<SCRIPT>`). Harmless in a test
+ * over our own output, but a regex that pretends to parse HTML is
+ * worth not having at all.
+ */
+export function docLinkRuntime(fallback: string): string {
+  return `<script>\n${docLinkScript(fallback)}</script>\n`
 }
 
 // ── Design tokens ─────────────────────────────────────────────────

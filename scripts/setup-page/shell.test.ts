@@ -19,6 +19,7 @@ import {
   applyDocLinks,
   applyShell,
   docLinkRuntime,
+  docLinkScript,
   resolveDocsUrl,
   assertSelfContained,
   assertValidatorsImplemented,
@@ -127,8 +128,7 @@ describe('fork-friendly doc links', () => {
       document.body.innerHTML =
         `<input data-field="W3" value="${w3.replace(/"/g, '&quot;')}"/>` +
         '<a data-doc="#phase-2" href="' + MARKDOWN_URL + '#phase-2"></a>'
-      const js = docLinkRuntime(MARKDOWN_URL).replace(/<\/?script>/g, '')
-      new Function(js)()
+      new Function(docLinkScript(MARKDOWN_URL))()
       return document.querySelector('[data-doc]')!.getAttribute('href')!
     }
 
@@ -146,6 +146,18 @@ describe('fork-friendly doc links', () => {
       ['empty', ''],
     ])('falls back rather than trusting %s', (_label, w3) => {
       expect(run(w3)).toBe(`${MARKDOWN_URL}#phase-2`)
+    })
+
+    // data-doc is ours, but it reaches the href as DOM text. This is
+    // the flow CodeQL flagged; the fragment must never carry a scheme.
+    it('ignores a data-doc that is not a plain fragment', () => {
+      document.body.innerHTML =
+        '<input data-field="W3" value=""/>' +
+        `<a data-doc="javascript:alert(1)" href="${MARKDOWN_URL}"></a>`
+      new Function(docLinkScript(MARKDOWN_URL))()
+      const href = document.querySelector('[data-doc]')!.getAttribute('href')!
+      expect(href).toBe(MARKDOWN_URL)
+      expect(new URL(href).protocol).toBe('https:')
     })
 
     // The construction, not the pattern, is what guarantees this.

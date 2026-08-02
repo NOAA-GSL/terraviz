@@ -2208,10 +2208,12 @@ document.addEventListener('click', e => {
 repaint();
 </script>
 <script>
+
 (function () {
   var KEY = 'terraviz-setup-console-v1';
   var FALLBACK = "https://github.com/zyra-project/terraviz/blob/main/docs/SELF_HOSTING.md";
   var SLUG = /^([\w.-]+)\/([\w.-]+)$/;
+  var FRAG = /^#([\w-]*)$/;
   function remote() {
     var el = document.querySelector('[data-field="W3"]');
     if (el && el.value && el.value.trim()) return el.value.trim();
@@ -2235,7 +2237,16 @@ repaint();
     var base = docBase();
     var links = document.querySelectorAll('[data-doc]');
     for (var i = 0; i < links.length; i++) {
-      links[i].setAttribute('href', base + links[i].getAttribute('data-doc'));
+      // data-doc is written by applyDocLinks and is only ever
+      // '#a-z0-9-', but it is DOM text on the way into an href, and an
+      // href is a scheme-bearing sink. So: match an anchored
+      // allowlist, take the capture rather than the original string,
+      // and set it through URL.hash — the scheme and origin then come
+      // structurally from base, not from anything concatenated.
+      var m = FRAG.exec(links[i].getAttribute('data-doc') || '');
+      var u = new URL(base);
+      u.hash = m ? m[1] : '';
+      links[i].setAttribute('href', u.href);
     }
   }
   document.addEventListener('input', function (e) {
