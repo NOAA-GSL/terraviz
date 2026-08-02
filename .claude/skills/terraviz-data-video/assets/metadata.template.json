@@ -1,0 +1,12 @@
+{
+  "title": "Global Smoke Forecast",
+  "abstract": "Where wildfire smoke is drifting around the world. This animation from NOAA's global GEFS-Aerosols model traces smoke high in the atmosphere as winds carry it away from fires burning across the planet. Brighter areas mean thicker smoke overhead; dark areas are clear skies. The forecast runs from {{valid_iso:PT6H:PT9H}} out to {{valid_iso:PT6H:PT9H:PT120H}} — about five days — and refreshes automatically with each new model run.",
+  "keywords": ["smoke", "wildfire", "air quality", "aerosols", "forecast", "real-time"],
+  "start_time": "{{valid_iso:PT6H:PT9H}}",
+  "end_time": "{{valid_iso:PT6H:PT9H:PT120H}}",
+  "period": "PT3H",
+  "organization": "NOAA",
+  "attribution_text": "NOAA GEFS-Aerosols, via NOAA Open Data Dissemination (AWS Open Data)",
+  "website_link": "https://registry.opendata.aws/noaa-gefs/",
+  "license_statement": "NOAA data — a U.S. Government work, in the public domain."
+}
