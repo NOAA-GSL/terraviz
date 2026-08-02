@@ -110,7 +110,10 @@ describe('ensureD1', () => {
     expect(calls.filter(c => c[1] === 'list')).toHaveLength(2)
   })
 
-  it('tolerates a concurrent create that already-exists', async () => {
+  // Converging on the right end state is not the same as having
+  // created it; the operator-facing output says "created" or
+  // "adopted" off this flag.
+  it('reports a raced already-exists create as adopted, not created', async () => {
     let listed = 0
     const { run } = stubRunner([
       a => {
@@ -122,12 +125,12 @@ describe('ensureD1', () => {
         return undefined
       },
     ])
-    expect(await ensureD1(run, 'db')).toEqual({ id: 'raced', created: true })
+    expect(await ensureD1(run, 'db')).toEqual({ id: 'raced', created: false })
   })
 
   it('fails loudly when the id cannot be resolved after creating', async () => {
     const { run } = stubRunner([a => (a[1] === 'list' ? ok('[]') : ok())])
-    await expect(ensureD1(run, 'db')).rejects.toThrow(/could not resolve its ID/)
+    await expect(ensureD1(run, 'db')).rejects.toThrow(/ID could not be resolved/)
   })
 
   it('surfaces a list failure instead of pretending the resource is absent', async () => {
@@ -161,6 +164,21 @@ describe('ensureKv', () => {
       },
     ])
     expect(await ensureKv(run, 'CATALOG_KV')).toEqual({ id: 'n', created: true })
+  })
+
+  it('reports a raced already-exists create as adopted, not created', async () => {
+    let listed = 0
+    const { run } = stubRunner([
+      a => {
+        if (a[2] === 'create') return err('a namespace with this account ID and title already exists')
+        if (a[2] === 'list') {
+          listed += 1
+          return ok(listed === 1 ? '[]' : '[{"id":"raced","title":"CATALOG_KV"}]')
+        }
+        return undefined
+      },
+    ])
+    expect(await ensureKv(run, 'CATALOG_KV')).toEqual({ id: 'raced', created: false })
   })
 })
 
@@ -202,6 +220,13 @@ describe('ensureVectorizeIndex', () => {
     expect(await ensureVectorizeIndex(run, 'terraviz-datasets')).toEqual({ created: false })
     expect(calls.some(c => c[1] === 'create')).toBe(false)
   })
+
+  it('reports a raced already-exists create as adopted, not created', async () => {
+    const { run } = stubRunner([
+      a => (a[1] === 'list' ? ok('[]') : err('index already exists')),
+    ])
+    expect(await ensureVectorizeIndex(run, 'terraviz-datasets')).toEqual({ created: false })
+  })
 })
 
 describe('ensureVectorizeMetadata', () => {
@@ -236,9 +261,25 @@ describe('ensureVectorizeMetadata', () => {
 })
 
 describe('isSnapshotFileFailure', () => {
+  // Wrangler tables every pending migration, then names the one that
+  // failed. Both parts appear in real output, so both appear here.
+  const wranglerOutput = (failed: string, error: string) =>
+    [
+      '┌─────────────────────────────┬────────┐',
+      '│ name                        │ status │',
+      '├─────────────────────────────┼────────┤',
+      '│ 0007_feedback_reports.sql   │ ✅     │',
+      '│ catalog-schema.sql          │ ❌     │',
+      '└─────────────────────────────┴────────┘',
+      `Migration ${failed} failed with the following errors:`,
+      error,
+    ].join('\n')
+
   it('recognises the catalog-schema.sql collision', () => {
     expect(
-      isSnapshotFileFailure(err('table analytics_daily already exists at offset 13')),
+      isSnapshotFileFailure(
+        err(wranglerOutput('catalog-schema.sql', 'table analytics_daily already exists at offset 13')),
+      ),
     ).toBe(true)
   })
 
@@ -249,6 +290,24 @@ describe('isSnapshotFileFailure', () => {
   it('does not swallow a genuine migration failure', () => {
     expect(isSnapshotFileFailure(err('no such column: bbox_n'))).toBe(false)
     expect(isSnapshotFileFailure(err('Authentication error'))).toBe(false)
+  })
+
+  // The whole point of anchoring on the "Migration <name> failed"
+  // line: the snapshot's filename is in the pending-migrations table
+  // regardless of which file actually broke, so a substring search
+  // would call this harmless and continue over a real schema failure.
+  it('does not excuse a different migration that also says "already exists"', () => {
+    expect(
+      isSnapshotFileFailure(
+        err(wranglerOutput('0008_events.sql', 'table events already exists at offset 42')),
+      ),
+    ).toBe(false)
+  })
+
+  // Failing loudly on an unrecognised shape beats assuming the old one
+  // still holds; the caller prints the raw wrangler output.
+  it('does not guess when wrangler names no failing migration', () => {
+    expect(isSnapshotFileFailure(err('something already exists, somewhere'))).toBe(false)
   })
 })
 

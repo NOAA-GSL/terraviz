@@ -150,6 +150,27 @@ describe('AccessApi.getTeamDomain', () => {
     const { api } = stubApi({})
     expect(await api.getTeamDomain()).toBeNull()
   })
+
+  // Reporting an under-scoped token as "not onboarded" sends the
+  // operator to a dashboard page where the work is already done and
+  // there is nothing to fix — the actual remedy is on the token.
+  it('rethrows a permissions failure instead of reporting it as not-onboarded', async () => {
+    const { api } = stubApi(
+      {},
+      {
+        fail: {
+          status: 403,
+          body: { success: false, errors: [{ code: 10000, message: 'Authentication error' }] },
+        },
+      },
+    )
+    await expect(api.getTeamDomain()).rejects.toThrow(/Access: Organizations/)
+  })
+
+  it('rethrows a server-side failure rather than swallowing it', async () => {
+    const { api } = stubApi({}, { fail: { status: 500, body: { success: false } } })
+    await expect(api.getTeamDomain()).rejects.toThrow(/500/)
+  })
 })
 
 describe('AccessApi error handling', () => {

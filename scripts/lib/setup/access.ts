@@ -112,6 +112,22 @@ function explain(errors: Array<{ code?: number; message?: string }>): string {
   return joined
 }
 
+/**
+ * Carries the HTTP status alongside the message so callers can branch
+ * on *which* failure happened. Without it the only way to tell "no
+ * Zero Trust organization" (404) from "your token cannot read
+ * organizations" (403) is to pattern-match a human-readable string.
+ */
+export class AccessApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message)
+    this.name = 'AccessApiError'
+  }
+}
+
 export class AccessApi {
   constructor(private readonly opts: AccessApiOptions) {}
 
@@ -140,7 +156,10 @@ export class AccessApi {
     }
     if (!res.ok || parsed?.success === false) {
       const detail = parsed?.errors?.length ? explain(parsed.errors) : text.slice(0, 300)
-      throw new Error(`Cloudflare Access API ${res.status} ${res.statusText}: ${detail}`)
+      throw new AccessApiError(
+        `Cloudflare Access API ${res.status} ${res.statusText}: ${detail}`,
+        res.status,
+      )
     }
     if (!parsed || parsed.result === undefined) {
       throw new Error(`Cloudflare Access API returned no result for ${path}`)
@@ -153,13 +172,22 @@ export class AccessApi {
    * domain (`ACCESS_TEAM_DOMAIN`). Returns null when Zero Trust has
    * not been onboarded yet — that is a manual prerequisite, and a
    * null here is how the caller detects it.
+   *
+   * Only a 404 means that. A 403 means the token is missing Access:
+   * Organizations → Read; a 5xx or a network failure means neither.
+   * Collapsing all three into null would send an operator whose token
+   * is under-scoped to the Zero Trust onboarding page, where they will
+   * find the onboarding already done and no way forward — so
+   * everything except the 404 is rethrown with `explain()`'s hint
+   * intact.
    */
   async getTeamDomain(): Promise<string | null> {
     try {
       const org = await this.request<{ auth_domain?: string }>('/access/organizations')
       return org.auth_domain ?? null
-    } catch {
-      return null
+    } catch (err) {
+      if (err instanceof AccessApiError && err.status === 404) return null
+      throw err
     }
   }
 

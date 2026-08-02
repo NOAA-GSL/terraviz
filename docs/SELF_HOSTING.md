@@ -549,8 +549,10 @@ wrangler d1 migrations apply FEEDBACK_DB --remote    # migrations/
 > **So the second command is expected to end with an error** —
 > `table analytics_daily already exists` — *after* applying the seven
 > real feedback migrations. That one failure is harmless. Any other
-> failure is not. (`npm run setup` handles this distinction for you;
-> it is also why `ci.yml` only ever auto-applies `CATALOG_DB`.)
+> failure is not. (`npm run setup` handles this distinction for you,
+> keying on the `Migration <name> failed` line wrangler prints — a
+> failure in any *other* file still stops the run. It is also why
+> `ci.yml` only ever auto-applies `CATALOG_DB`.)
 
 > ⚠️ **Always select by binding name, never by database name.**
 > Both `[[d1_databases]]` blocks declare

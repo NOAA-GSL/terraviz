@@ -212,11 +212,39 @@ describe('runSetup — migrations step', () => {
       files: {},
       runner: async argv =>
         argv[3] === 'FEEDBACK_DB'
-          ? { code: 1, stdout: '', stderr: 'table analytics_daily already exists' }
+          ? {
+              code: 1,
+              stdout: '',
+              stderr:
+                'Migration catalog-schema.sql failed with the following errors:\n' +
+                'table analytics_daily already exists',
+            }
           : { code: 0, stdout: '', stderr: '' },
     })
     expect(await runSetup(h.deps)).toBe(0)
     expect(h.out()).toContain('catalog-schema.sql')
+  })
+
+  // The tolerance is for one known file, not for the phrase. A real
+  // FEEDBACK_DB migration failing this way is a schema problem, and
+  // continuing past it would report a broken install as a clean one.
+  it('does not extend that tolerance to a different already-exists failure', async () => {
+    const h = harness({
+      argv: ['--only=migrations', '--apply'],
+      files: {},
+      runner: async argv =>
+        argv[3] === 'FEEDBACK_DB'
+          ? {
+              code: 1,
+              stdout: '',
+              stderr:
+                'Migration 0008_events.sql failed with the following errors:\n' +
+                'table events already exists',
+            }
+          : { code: 0, stdout: '', stderr: '' },
+    })
+    expect(await runSetup(h.deps)).toBe(1)
+    expect(h.errOut()).toContain('0008_events.sql')
   })
 
   it('does not extend that tolerance to CATALOG_DB', async () => {

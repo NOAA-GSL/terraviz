@@ -726,11 +726,15 @@ export async function runSetup(deps: SetupDeps): Promise<number> {
       try {
         const teamDomain = await api.getTeamDomain()
         if (!teamDomain) {
+          // Narrow by construction: getTeamDomain() returns null only
+          // for a 404 (or an org with no auth domain) and rethrows
+          // everything else, so this is no longer the catch-all it
+          // once was and does not have to hedge about permissions.
           deps.stderr.write(
-            '  ✘ could not read the Zero Trust organization.\n' +
-              '    Either Zero Trust has not been onboarded on this account\n' +
-              '    (do that once in the dashboard — Phase 6.1), or the token\n' +
-              '    lacks Access: Organizations → Read.\n\n',
+            '  ✘ this account has no Zero Trust team domain yet.\n' +
+              '    Onboard Zero Trust once in the dashboard — Phase 6.1 —\n' +
+              '    then re-run. (A token missing Access: Organizations →\n' +
+              '    Read reports itself as an API error, not as this.)\n\n',
           )
           return 1
         }

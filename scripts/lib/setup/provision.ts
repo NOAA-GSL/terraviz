@@ -103,18 +103,23 @@ export async function ensureD1(run: CommandRunner, name: string): Promise<Ensure
   if (existing?.uuid) return { id: existing.uuid, created: false }
 
   const res = await run(['d1', 'create', name])
-  if (res.code !== 0 && !isAlreadyExists(res)) fail(`wrangler d1 create ${name}`, res)
+  // An already-exists error means something else won the race (or the
+  // list above could not see it). We converge on the same end state
+  // either way, but we did not create it — and `created` drives the
+  // "created"/"adopted" wording the operator reads.
+  const created = res.code === 0
+  if (!created && !isAlreadyExists(res)) fail(`wrangler d1 create ${name}`, res)
 
   // Re-list rather than parse the create output: the create banner's
   // shape has changed across wrangler majors, the list JSON has not.
   const after = (await listD1(run)).find(d => d.name === name)
   if (!after?.uuid) {
     throw new Error(
-      `Created D1 database "${name}" but could not resolve its ID from ` +
+      `D1 database "${name}" exists but its ID could not be resolved from ` +
         '`wrangler d1 list --json`. Set it by hand in .terraviz-setup.json.',
     )
   }
-  return { id: after.uuid, created: true }
+  return { id: after.uuid, created }
 }
 
 // ── KV ────────────────────────────────────────────────────────────
@@ -151,18 +156,19 @@ export async function ensureKv(run: CommandRunner, name: string): Promise<Ensure
   if (existing?.id) return { id: existing.id, created: false }
 
   const res = await run(['kv', 'namespace', 'create', name])
-  if (res.code !== 0 && !isAlreadyExists(res)) {
+  const created = res.code === 0
+  if (!created && !isAlreadyExists(res)) {
     fail(`wrangler kv namespace create ${name}`, res)
   }
 
   const after = (await listKv(run)).find(n => kvTitleMatches(n.title, name))
   if (!after?.id) {
     throw new Error(
-      `Created KV namespace "${name}" but could not resolve its ID from ` +
+      `KV namespace "${name}" exists but its ID could not be resolved from ` +
         '`wrangler kv namespace list`. Set it by hand in .terraviz-setup.json.',
     )
   }
-  return { id: after.id, created: true }
+  return { id: after.id, created }
 }
 
 // ── R2 ────────────────────────────────────────────────────────────
@@ -212,8 +218,9 @@ export async function ensureVectorizeIndex(
     `--dimensions=${dimensions}`,
     `--metric=${metric}`,
   ])
-  if (res.code !== 0 && !isAlreadyExists(res)) fail(`wrangler vectorize create ${name}`, res)
-  return { created: true }
+  const created = res.code === 0
+  if (!created && !isAlreadyExists(res)) fail(`wrangler vectorize create ${name}`, res)
+  return { created }
 }
 
 interface MetadataIndexList {
@@ -316,8 +323,28 @@ export async function applyMigrations(
  */
 export const SNAPSHOT_MIGRATION_FILE = 'catalog-schema.sql'
 
+/**
+ * True only for the known-harmless snapshot collision described above.
+ *
+ * Both halves are load-bearing. Matching "already exists" alone would
+ * swallow a genuine `FEEDBACK_DB` migration that happens to fail that
+ * way — a real schema problem reported as a clean install. Matching
+ * the filename alone is no better: wrangler prints a table of *every*
+ * pending migration before it reports the failure, so
+ * `catalog-schema.sql` appears in the output even when some other file
+ * is the one that broke. Hence the anchor on wrangler's own
+ * `Migration <name> failed with the following errors:` line, which
+ * names the single file that actually failed.
+ *
+ * If wrangler ever rephrases that line this returns false, and the
+ * caller stops and prints the raw wrangler output. That is the right
+ * way to fail: loud, with the real error attached, rather than
+ * continuing on an assumption that no longer holds.
+ */
 export function isSnapshotFileFailure(result: CommandResult): boolean {
   if (result.code === 0) return false
   const blob = `${result.stdout}\n${result.stderr}`
-  return /already exists/i.test(blob)
+  const escaped = SNAPSHOT_MIGRATION_FILE.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const failedHere = new RegExp(String.raw`Migration\s+${escaped}\s+failed`, 'i')
+  return failedHere.test(blob) && /already exists/i.test(blob)
 }
