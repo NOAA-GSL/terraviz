@@ -29,7 +29,7 @@ import { QUESTIONS, MANUAL_STEPS, type ManualStep } from '../lib/setup/interview
 import { DEFAULT_NAMES } from '../lib/setup/state'
 import { PUBLISHER_PATHS, STAFF_POLICY_NAME, AUTOMATION_POLICY_NAME } from '../lib/setup/access'
 import { UPSTREAM_PINNED_IDS } from '../lib/setup/wrangler-toml'
-import { CHECKED_ON, D1_PRICING, freeVideoDatasets, R2_PRICING, REFERENCE_NODE } from './pricing'
+import { CHECKED_ON, D1_PRICING, freeVideoDatasets, GITHUB_ACTIONS, R2_PRICING, REFERENCE_NODE } from './pricing'
 import {
   PHASES,
   WORKSHEET,
@@ -302,6 +302,28 @@ const EYEBROW =
  * here rather than left implicit.
  */
 /**
+ * The compute, which is not Cloudflare's at all.
+ *
+ * A reader totting up Cloudflare line items will conclude the node is
+ * nearly free and be right — while missing that transcoding video and
+ * running Zyra pipelines is real CPU work happening somewhere else
+ * entirely, on GitHub's runners. Worth naming, both because the
+ * subsidy is real and because it comes with a condition.
+ */
+function computePanel(): string {
+  return `<div style="background:var(--tv-surface-2);border:1px solid var(--tv-border);border-radius:8px;padding:22px 24px;margin:0 0 22px">
+  <div style="${EYEBROW};margin:0 0 10px">Compute · not on your Cloudflare bill</div>
+  <p style="margin:0 0 14px;max-width:68ch;font-size:13.5px;line-height:1.6;color:var(--tv-text-muted);text-wrap:pretty">Transcoding a video into its HLS ladder, and running a Zyra pipeline to build a data-encoded dataset, are the heaviest things your node does — and Cloudflare never sees them. They run as GitHub Actions in <em>your</em> repository, fired by the publisher API: <code style="font-family:var(--tv-font-mono);font-size:.92em">transcode-hls</code>, <code style="font-family:var(--tv-font-mono);font-size:.92em">zyra-run</code>, and the scheduled feed, analytics and refresh jobs.</p>
+
+  <p style="margin:0 0 14px;padding:12px 14px;background:rgba(34,197,94,.07);border:1px solid rgba(34,197,94,.24);border-left:3px solid var(--tv-success);border-radius:6px;max-width:68ch;font-size:13px;line-height:1.6;color:var(--tv-text-muted);text-wrap:pretty"><strong style="color:var(--tv-text)">Keep your fork public and that compute is free.</strong> GitHub's billing docs put it plainly: <em>"GitHub Actions usage is free for self-hosted runners and for public repositories that use standard GitHub-hosted runners."</em> An open-source node pays nothing for transcode. A <strong>private</strong> fork draws on your account's monthly Actions minutes instead, which is the one configuration where this stops being free.</p>
+
+  <p style="margin:0 0 14px;max-width:68ch;font-size:13px;line-height:1.6;color:var(--tv-text-muted);text-wrap:pretty"><strong style="color:var(--tv-text)">Within reason, though.</strong> GitHub's terms limit Actions to work connected to the repository it runs in — excluding <em>"any other activity unrelated to the production, testing, deployment, or publication of the software project associated with the repository."</em> Building and publishing your own node's datasets sits inside that. Pointing the runners at unrelated batch compute does not, and GitHub monitors for it. Jobs also stop hard at ${GITHUB_ACTIONS.jobLimitDays} days, and a free account runs at most ${GITHUB_ACTIONS.concurrentJobsFree} standard jobs at once.</p>
+
+  <p style="margin:0;font-size:11.5px;line-height:1.5;color:var(--tv-text-dim)">If your pipelines outgrow that — or you would rather not lean on it — self-hosted runners are free too, and you supply the hardware. Read on ${esc(CHECKED_ON)}: <a href="${GITHUB_ACTIONS.billingDocs}">billing</a> · <a href="${GITHUB_ACTIONS.limitsDocs}">limits</a> · <a href="${GITHUB_ACTIONS.termsDocs}">terms</a>.</p>
+</div>`
+}
+
+/**
  * Storage, which both plans are billed for identically.
  *
  * The cost panel used to file "storage is billed on top" under Workers
@@ -420,6 +442,7 @@ function costPanel(): string {
     <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">The Analytics Engine dataset and its binding have gone from the worksheet, the dependency map and Phase 8 — there is nothing for you to create. The long-term analytics add-on is hidden too. Everything else is unchanged: you are installing the same node.</p>
   </div>
   ${storagePanel()}
+  ${computePanel()}
 
   <p style="margin:0;max-width:64ch;font-size:13.5px;color:var(--tv-text-dim);text-wrap:pretty">For a gallery kiosk, a pilot, or a node you are still making your mind up about, free is a perfectly respectable place to run. Pay the $5 when you need to report on reach, or when Orbit is going to carry a busy public floor.</p>
 </section>`

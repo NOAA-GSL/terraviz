@@ -291,6 +291,18 @@ describe('the committed public/setup.html', () => {
     expect((page.match(/Workers Paid/g) ?? []).length).toBeGreaterThanOrEqual(2)
   })
 
+  // A reader totting up Cloudflare line items concludes the node is
+  // nearly free and is right — while missing that transcode is real
+  // CPU work on GitHub's runners, free only while the fork is public.
+  it('says where the compute happens and what it costs', () => {
+    const page = html()
+    expect(page).toContain('not on your Cloudflare bill')
+    expect(page).toContain('transcode-hls')
+    // Quoted, not paraphrased — it is someone else's policy.
+    expect(page).toContain('free for self-hosted runners and for public repositories')
+    expect(page).toContain('any other activity unrelated to the production')
+  })
+
   it('carries the CSP and the real favicon', () => {
     expect(html()).toContain(CSP_META)
     expect(html()).toContain(FAVICON_LINK)

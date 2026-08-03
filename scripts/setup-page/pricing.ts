@@ -44,6 +44,51 @@ export const D1_PRICING = {
 } as const
 
 /**
+ * Where the node's *compute* happens, and what it costs.
+ *
+ * Easy to miss when reading a Cloudflare bill: transcoding a video and
+ * running a Zyra data pipeline are not Cloudflare workloads at all.
+ * They run on GitHub Actions, fired by `repository_dispatch` from the
+ * publisher API — `transcode-hls.yml`, `zyra-run.yml`, and the
+ * scheduled `zyra-scheduler` / `import-events` / `analytics-export` /
+ * `refresh-video-sources` jobs. Cloudflare never sees that CPU time,
+ * which is why none of it appears in the storage numbers above.
+ *
+ * Quoted from GitHub's billing docs, read on CHECKED_ON:
+ *
+ *   "GitHub Actions usage is free for self-hosted runners and for
+ *    public repositories that use standard GitHub-hosted runners."
+ *
+ * So a fork kept public gets its transcode compute free. That is a
+ * real subsidy and worth saying plainly — but it comes with a
+ * condition from GitHub's terms, also quoted rather than paraphrased,
+ * because paraphrasing someone else's acceptable-use policy is how
+ * you end up misrepresenting it:
+ *
+ *   "...any other activity unrelated to the production, testing,
+ *    deployment, or publication of the software project associated
+ *    with the repository where GitHub Actions are used."
+ *
+ * Publishing a node's own datasets reads as within that. Pointing the
+ * runners at unrelated batch work does not.
+ */
+export const GITHUB_ACTIONS = {
+  /** Standard GitHub-hosted runners, public repositories. */
+  freeForPublicRepos: true,
+  /** Also free, if an operator would rather run their own hardware. */
+  freeForSelfHosted: true,
+  /** Hard stop per job, whatever the plan. */
+  jobLimitDays: 5,
+  /** Concurrent standard-runner jobs on a Free account. */
+  concurrentJobsFree: 20,
+  billingDocs:
+    'https://docs.github.com/en/billing/managing-billing-for-your-products/about-billing-for-github-actions',
+  limitsDocs: 'https://docs.github.com/en/actions/reference/limits',
+  termsDocs:
+    'https://docs.github.com/en/site-policy/github-terms/github-terms-for-additional-products-and-features',
+} as const
+
+/**
  * A real node's actual usage, used to calibrate the estimate.
  *
  * This is measured, not modelled. It is the project's own public
