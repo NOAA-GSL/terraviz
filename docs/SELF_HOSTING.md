@@ -286,9 +286,55 @@ the Cloudflare dashboard sidebar and in every dashboard URL.
 > up is headroom, and it fails soft: Orbit falls back to its local
 > keyword engine once the day's 10,000 Neurons are gone. For a kiosk
 > that will field questions all day, pay the $5. See
-> [§0.5](#05-what-the-free-plan-actually-costs-you) for the numbers.
+> [§0.6](#06-what-the-free-plan-actually-costs-you) for the numbers.
 
-## 0.2 Tools
+## 0.2 Fork the repository
+
+Everything after this assumes you are working from **your own copy**
+of `zyra-project/terraviz`, not from upstream. Phase 3 rewrites
+`wrangler.toml` with your resource IDs, Phase 5 points Cloudflare
+Pages at your remote, and Phase 13.2 runs the transcode workflow in
+your repo. None of that is possible against a repo you cannot push
+to.
+
+**Record the result as `W3`** — `owner/repo`. It is the value the
+`/setup` console reads to retarget its documentation links at your
+fork, and the one Phase 5 hands to the Pages Git integration.
+
+There are two ways to get your own copy, and they behave
+differently. Pick before you clone; changing your mind later means
+redoing Phase 5.
+
+| | GitHub's **Fork** button | A separate repository |
+|---|---|---|
+| Actions | **Disabled** until you enable them in the Actions tab | On by default |
+| Pulling upstream changes | Built in — Sync fork | Add a second remote by hand |
+| Secrets on PRs raised from it | Never sent | Sent as normal |
+| Shows as a fork of upstream | Yes | No |
+
+**Take the Fork button** unless you have a reason not to. Staying
+linked to upstream is how you get later fixes, and the disabled
+Actions are one click to turn on. Go to
+[the repository](https://github.com/zyra-project/terraviz), press
+**Fork**, and keep the default settings.
+
+**Take a separate repository** if your node is a hard divergence you
+never intend to sync, or if your organisation forbids forks of
+outside repos. Create an empty repo, then:
+
+```bash
+git clone https://github.com/zyra-project/terraviz.git
+cd terraviz
+git remote set-url origin https://github.com/<you>/terraviz.git
+git push -u origin main
+```
+
+> **Do not skip this and clone upstream directly.** The clone works,
+> the app runs locally, and nothing complains until Phase 3 has
+> rewritten `wrangler.toml` with your IDs and you have no remote of
+> your own to push them to.
+
+## 0.3 Tools
 
 ```bash
 node --version          # must be >= 20
@@ -305,10 +351,10 @@ below acts on the account you logged into.
 > `CLOUDFLARE_API_TOKEN` in the environment instead (see Phase 5.3
 > for the permission set) and skip `wrangler login`.
 
-## 0.3 Get the code
+## 0.4 Get the code
 
 ```bash
-git clone https://github.com/<you>/terraviz.git
+git clone https://github.com/<W3>.git
 cd terraviz
 npm install
 ```
@@ -319,14 +365,14 @@ build artifacts and gitignored; if a later build complains about
 missing tokens, `npm run tokens && npm run locales` regenerates
 them.
 
-## 0.4 What the tool finds out, and what only you can
+## 0.5 What the tool finds out, and what only you can
 
-Seven things in this guide cannot be done by an API, and
-`npm run setup -- --manual` prints all seven with their click paths.
+Eight things in this guide cannot be done by an API, and
+`npm run setup -- --manual` prints all eight with their click paths.
 They are not equally your problem, and the difference is worth
 knowing before you start ticking boxes.
 
-**Five of the seven, a later step detects.** You do not need to
+**Five of the eight, a later step detects.** You do not need to
 verify them, remember them, or write anything down — if one is not
 done, the tool says so, by name, at the point it matters:
 
@@ -338,22 +384,23 @@ done, the tool says so, by name, at the point it matters:
 | Generate the node keypair | Phase 7 | The secrets step reports `NODE_ID_PRIVATE_KEY_PEM` absent |
 | Connect Pages to your Git remote | Phase 5 | Project creation reports whether a Git source is attached |
 
-**Two are genuinely on you**, because nothing in the API can see
+**Three are genuinely on you**, because nothing in the API can see
 them:
 
 | Prerequisite | Needed by | Why it cannot be detected |
 |---|---|---|
+| **Fork the repository** ([§0.2](#02-fork-the-repository)) | Phase 3 onward | The tool asks for `W3` and validates its shape. It cannot check that the repo exists, that you own it, or that your checkout points at it |
 | **Workers Paid ($5/mo)** | Phase 8 onward | Billing state is not exposed to the token. A free-plan account provisions everything successfully, then throttles Orbit once the day's Workers AI allocation is spent |
 | **Mint the R2 S3 API token** | Phase 13.1 | Automating it would need a token that can mint tokens — a credential able to grant itself more authority. It stays manual on purpose. (The secret is also shown exactly once, so capture all three values then) |
 
 That asymmetry is the whole reason the pre-flight list is short.
-Confirm those two; let the tool tell you about the rest.
+Confirm those three; let the tool tell you about the rest.
 
 > This table is generated from `MANUAL_STEPS` in
 > `scripts/lib/setup/interview.ts` on the [`/setup`](/setup) page,
 > which is where to look if it ever disagrees with this one.
 
-## 0.5 What the free plan actually costs you
+## 0.6 What the free plan actually costs you
 
 Less than the rest of this guide used to claim. Every product a
 Terraviz node binds has a free allocation, so a free-plan account

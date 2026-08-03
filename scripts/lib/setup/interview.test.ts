@@ -152,10 +152,15 @@ describe('MANUAL_STEPS', () => {
     expect(doc('git-connect')).toContain('/pages/configuration/git-integration')
     expect(doc('r2-token')).toContain('/r2/api/tokens')
     expect(doc('workers-paid')).toContain('/workers/platform/pricing')
+    expect(doc('fork')).toContain('/working-with-forks/fork-a-repo')
     // node-key is our own script, not a Cloudflare task.
     expect(doc('node-key')).toBe('')
+    // An allowlist of hosts rather than one host: forking is a GitHub
+    // task, and the point of this check is that a link goes somewhere
+    // we trust and vouched for, not that everything is Cloudflare.
+    const DOC_HOSTS = ['https://developers.cloudflare.com/', 'https://docs.github.com/']
     for (const s of MANUAL_STEPS) {
-      if (s.docsUrl) expect(s.docsUrl).toMatch(/^https:\/\/developers\.cloudflare\.com\//)
+      if (s.docsUrl) expect(DOC_HOSTS.some(h => s.docsUrl!.startsWith(h))).toBe(true)
     }
   })
 

@@ -207,13 +207,17 @@ export interface ManualStep {
   title: string
   /** Why it matters — what breaks without it. */
   why: string
-  /** Deep link into the Cloudflare dashboard, where the work happens. */
+  /**
+   * Deep link to where the work happens — the Cloudflare dashboard for
+   * all but the fork step, which is on GitHub.
+   */
   url?: string
   /**
-   * Cloudflare's own documentation for this task, when there is a
-   * canonical page for it. The dashboard link says *where*; this says
-   * *what the thing is* — which is what someone new to Cloudflare
-   * actually needs. Every URL here was checked to resolve.
+   * The vendor's own documentation for this task, when there is a
+   * canonical page for it — Cloudflare's, or GitHub's for the fork
+   * step. The dashboard link says *where*; this says *what the thing
+   * is*, which is what someone new to the platform actually needs.
+   * Every URL here was checked to resolve.
    */
   docsUrl?: string
   steps: string[]
@@ -228,6 +232,28 @@ export interface ManualStep {
 }
 
 export const MANUAL_STEPS: ManualStep[] = [
+  {
+    id: 'fork',
+    title: 'Fork the repository',
+    why:
+      'Everything here assumes your own copy. Phase 3 rewrites ' +
+      'wrangler.toml with your resource IDs, Phase 5 points Pages at ' +
+      'your remote, and the transcode workflow runs in your repo — none ' +
+      'of which works against a repo you cannot push to. Cloning ' +
+      'upstream directly fails late rather than early: it clones, it ' +
+      'runs locally, and nothing complains until you have IDs to push ' +
+      'and nowhere to push them.',
+    url: 'https://github.com/zyra-project/terraviz/fork',
+    docsUrl:
+      'https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/working-with-forks/fork-a-repo',
+    steps: [
+      'Fork zyra-project/terraviz, keeping the default settings.',
+      'A fork lands with Actions DISABLED — enable them in the',
+      '  Actions tab, or the transcode and deploy workflows never run.',
+      'Record it as owner/repo; that is the W3 the interview asks for.',
+    ],
+    verification: 'self',
+  },
   {
     id: 'workers-paid',
     title: 'Enable Workers Paid ($5/month)',
@@ -364,8 +390,12 @@ export function renderManualStep(step: ManualStep, index?: number): string {
   lines.push(`   Why: ${why[0] ?? ''}`)
   for (const line of why.slice(1)) lines.push(`        ${line}`)
   lines.push('')
-  if (step.url) lines.push(`   Dashboard: ${step.url}`)
-  if (step.docsUrl) lines.push(`   Docs:      ${step.docsUrl}`)
+  // "Where" rather than "Dashboard": six of these land in Cloudflare's
+  // dashboard, but forking happens on GitHub, and a label that names
+  // the wrong product is a small lie in the one place someone new is
+  // trusting the output.
+  if (step.url) lines.push(`   Where: ${step.url}`)
+  if (step.docsUrl) lines.push(`   Docs:  ${step.docsUrl}`)
   if (step.url || step.docsUrl) lines.push('')
   for (const s of step.steps) lines.push(`   ${s}`)
   lines.push('')
