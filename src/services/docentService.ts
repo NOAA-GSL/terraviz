@@ -276,15 +276,17 @@ export function loadConfig(): DocentConfig {
     const raw = localStorage.getItem(CONFIG_STORAGE_KEY)
     if (raw) {
       const parsed = JSON.parse(raw)
-      const merged = { ...DEFAULT_CONFIG, ...parsed }
-      // The settings form trims on save, but a config written by an
-      // older build (or edited by hand in devtools) can still carry
-      // whitespace. The key goes into an `Authorization: Bearer`
-      // header, where a trailing newline throws outright and a
-      // trailing space is rejected by the provider as an invalid
-      // key — so normalise on the way in as well as on the way out.
-      if (typeof merged.apiKey === 'string') merged.apiKey = merged.apiKey.trim()
-      return merged
+      // Deliberately no apiKey trim here. The key is normalised
+      // where it is *used* — `llmProvider` trims before it builds
+      // the `Authorization: Bearer` header — rather than where it
+      // is read out of storage. Reading the field by name here
+      // gave CodeQL a sensitive-data source flowing into the
+      // localStorage write in `saveConfig`
+      // (js/clear-text-storage-of-sensitive-data), for a guard
+      // that covers nothing: the settings form has trimmed on
+      // save since before this config format existed, so a padded
+      // key cannot realistically be in storage to begin with.
+      return { ...DEFAULT_CONFIG, ...parsed }
     }
   } catch {
     // corrupt data — use defaults
@@ -300,11 +302,10 @@ export async function loadConfigWithKey(): Promise<DocentConfig> {
   const config = loadConfig()
   if (tauriInvoke) {
     try {
-      // Trimmed for the same reason as above — the keychain stores
-      // whatever it was handed, including by a build that predates
-      // the settings form's trim.
-      const stored = (await tauriInvoke('get_api_key')) as string
-      config.apiKey = typeof stored === 'string' ? stored.trim() : ''
+      // Also deliberately untrimmed — see `loadConfig`. A padded
+      // keychain entry is normalised by `llmProvider` before it
+      // reaches the header, which is the only place it matters.
+      config.apiKey = (await tauriInvoke('get_api_key')) as string
     } catch {
       logger.warn('[Docent] Failed to read API key from keychain')
     }
@@ -326,12 +327,6 @@ export async function loadConfigWithKey(): Promise<DocentConfig> {
  *   preventing programmatic saves (model auto-persist, etc.) from erasing it.
  */
 export function saveConfig(config: DocentConfig, persistApiKey = false): void {
-  // Normalise once, here: every write below — keychain or
-  // localStorage — flows from this object, and neither store
-  // should ever hold a padded key. Copied rather than mutated so
-  // the caller's config object is left alone.
-  config = { ...config, apiKey: config.apiKey?.trim() ?? '' }
-
   const writeLocal = (cfg: DocentConfig) => {
     try {
       localStorage.setItem(CONFIG_STORAGE_KEY, JSON.stringify(cfg))

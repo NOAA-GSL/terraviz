@@ -124,6 +124,28 @@ const REQUEST_TIMEOUT_MS = 30000
 const STREAM_LINE_PREFIX = 'data:'
 
 /**
+ * The `Authorization` header for a configured key, or nothing.
+ *
+ * This is where the API key is normalised, rather than where it is
+ * read out of localStorage or the OS keychain. A key is only ever
+ * wrong because of whitespace at the moment it becomes a header
+ * value: a trailing newline makes `fetch` reject the header
+ * outright, and a trailing space reaches the provider as a key it
+ * does not recognise. Trimming here covers every path into a
+ * request — web config, desktop keychain, a value hand-edited in
+ * devtools — from one place.
+ *
+ * Returning `{}` for a blank key preserves the no-auth case that
+ * local providers (Ollama, LM Studio) rely on, and means a
+ * whitespace-only key is treated as no key rather than as a
+ * `Bearer ` header with nothing after it.
+ */
+function authHeader(config: DocentConfig): Record<string, string> {
+  const key = config.apiKey?.trim()
+  return key ? { Authorization: `Bearer ${key}` } : {}
+}
+
+/**
  * Stream a chat completion from an OpenAI-compatible API.
  * Yields text deltas and tool calls as they arrive.
  */
@@ -137,9 +159,7 @@ export async function* streamChat(
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
-  }
-  if (config.apiKey) {
-    headers['Authorization'] = `Bearer ${config.apiKey}`
+    ...authHeader(config),
   }
 
   const body: Record<string, unknown> = {
@@ -358,10 +378,7 @@ export interface AvailabilityResult {
 
 export async function checkAvailability(config: DocentConfig): Promise<AvailabilityResult> {
   const url = `${config.apiUrl.replace(/\/+$/, '')}/models`
-  const headers: Record<string, string> = {}
-  if (config.apiKey) {
-    headers['Authorization'] = `Bearer ${config.apiKey}`
-  }
+  const headers: Record<string, string> = authHeader(config)
   const controller = new AbortController()
   const timeoutId = setTimeout(() => controller.abort(), 5000)
   try {
@@ -407,8 +424,7 @@ export async function checkAvailability(config: DocentConfig): Promise<Availabil
  */
 export async function fetchModels(config: DocentConfig): Promise<string[]> {
   const url = `${config.apiUrl.replace(/\/+$/, '')}/models`
-  const headers: Record<string, string> = {}
-  if (config.apiKey) headers['Authorization'] = `Bearer ${config.apiKey}`
+  const headers: Record<string, string> = authHeader(config)
   const controller = new AbortController()
   const timeoutId = setTimeout(() => controller.abort(), 5000)
   try {
