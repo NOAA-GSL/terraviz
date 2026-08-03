@@ -596,7 +596,10 @@ code{overflow-wrap:anywhere}
       <div style="font-size:13px;line-height:1.5;color:var(--tv-text-muted);text-wrap:pretty">Everything here assumes your own copy. Phase 3 rewrites wrangler.toml with your resource IDs, Phase 5 points Pages at your remote, and the transcode workflow runs in your repo — none of which works against a repo you cannot push to. Cloning upstream directly fails late rather than early: it clones, it runs locally, and nothing complains until you have IDs to push and nowhere to push them.</div>
       <details style="margin:5px 0 0">
       <summary style="cursor:pointer;font:500 12px/1.4 var(--tv-font-sans);color:var(--tv-accent);list-style:none">How to do this ▸</summary>
-      <div style="white-space:pre-wrap;margin:8px 0 0;padding:10px 12px;background:var(--tv-surface-code);border:1px solid var(--tv-border);border-radius:5px;font:400 11.5px/1.65 var(--tv-font-mono);color:var(--tv-text-muted);overflow-x:auto">Fork zyra-project/terraviz, keeping the default settings.
+      <div style="white-space:pre-wrap;margin:8px 0 0;padding:10px 12px;background:var(--tv-surface-code);border:1px solid var(--tv-border);border-radius:5px;font:400 11.5px/1.65 var(--tv-font-mono);color:var(--tv-text-muted);overflow-x:auto">Press Create fork. Nothing on that page needs changing —
+  the owner is you, the name stays terraviz, and &quot;Copy the
+  main branch only&quot; stays ticked. main is the only branch
+  a node needs.
 A fork lands with Actions DISABLED — enable them in the
   Actions tab, or the transcode and deploy workflows never run.
 Record it as owner/repo; that is the W3 the interview asks for.</div>

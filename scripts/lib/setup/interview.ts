@@ -247,7 +247,10 @@ export const MANUAL_STEPS: ManualStep[] = [
     docsUrl:
       'https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/working-with-forks/fork-a-repo',
     steps: [
-      'Fork zyra-project/terraviz, keeping the default settings.',
+      'Press Create fork. Nothing on that page needs changing —',
+      '  the owner is you, the name stays terraviz, and "Copy the',
+      '  main branch only" stays ticked. main is the only branch',
+      '  a node needs.',
       'A fork lands with Actions DISABLED — enable them in the',
       '  Actions tab, or the transcode and deploy workflows never run.',
       'Record it as owner/repo; that is the W3 the interview asks for.',

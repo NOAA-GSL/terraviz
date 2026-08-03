@@ -314,9 +314,13 @@ redoing Phase 5.
 
 **Take the Fork button** unless you have a reason not to. Staying
 linked to upstream is how you get later fixes, and the disabled
-Actions are one click to turn on. Go to
-[the repository](https://github.com/zyra-project/terraviz), press
-**Fork**, and keep the default settings.
+Actions are one click to turn on.
+
+Go to [the fork page](https://github.com/zyra-project/terraviz/fork)
+and press **Create fork**. Nothing on that page needs changing. The
+owner is you, the repository name stays `terraviz`, the description
+carries over, and **Copy the `main` branch only** stays ticked —
+`main` is the only branch a node needs.
 
 **Take a separate repository** if your node is a hard divergence you
 never intend to sync, or if your organisation forbids forks of
