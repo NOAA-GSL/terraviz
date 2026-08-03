@@ -507,8 +507,8 @@ code{overflow-wrap:anywhere}
         <p style="margin:0;font-size:13px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">Visits and dataset views record properly, the in-app dashboards fill in, and Orbit answers all day without throttling.</p>
       </div>
       <div style="margin:0 0 0">
-        <div style="font:600 13.5px/1.4 var(--tv-font-sans);color:var(--tv-text);margin:0 0 5px">Storage is billed on top</div>
-        <p style="margin:0;font-size:13px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">Only if you publish your own video: an R2 4K ladder runs about 250 MB per minute of source, billed until you delete it. Metadata, images and tours are negligible.</p>
+        <div style="font:600 13.5px/1.4 var(--tv-font-sans);color:var(--tv-text);margin:0 0 5px">Nothing else changes</div>
+        <p style="margin:0;font-size:13px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">Same install, same features, same catalog. Storage is billed the same way on both plans — see below.</p>
       </div>
     </button>
   </div>
@@ -534,6 +534,40 @@ code{overflow-wrap:anywhere}
     <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-warn);margin:0 0 8px">Free plan · what changed on this page</div>
     <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">The Analytics Engine dataset and its binding have gone from the worksheet, the dependency map and Phase 8 — there is nothing for you to create. The long-term analytics add-on is hidden too. Everything else is unchanged: you are installing the same node.</p>
   </div>
+  <div style="background:var(--tv-surface-2);border:1px solid var(--tv-border);border-radius:8px;padding:22px 24px;margin:0 0 22px">
+  <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim);margin:0 0 10px">Storage · the same on both plans</div>
+  <p style="margin:0 0 16px;max-width:66ch;font-size:13.5px;line-height:1.6;color:var(--tv-text-muted);text-wrap:pretty">This is the part that is easy to miss: R2 and D1 bill identically whether or not you pay the $5. Both have a free allowance, and for most nodes that allowance is the whole story — a catalog of metadata, images and tours does not come close to it. Publishing your own <em>video</em> is the only thing that moves it, and dataset clips are short — the free 10 GB holds roughly <strong>54 of them</strong> at 45 seconds each (about 41 minutes of video in total). Past that it stays small: the numbers below are cents, not budget lines.</p>
+
+  <div style="display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr) minmax(0,1.2fr);gap:0 20px;margin:0 0 18px">
+    <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim);font-size:9px;padding-bottom:7px">What</div>
+    <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim);font-size:9px;padding-bottom:7px">Free every month</div>
+    <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim);font-size:9px;padding-bottom:7px">Past that</div>
+    <div style="display:contents"><div style="padding:9px 0;border-top:1px solid var(--tv-border);font:500 13px/1.4 var(--tv-font-sans);color:var(--tv-text)">R2 — video, images, tours</div><div style="padding:9px 0;border-top:1px solid var(--tv-border);font-size:12.5px;color:var(--tv-text-muted)">10 GB stored</div><div style="padding:9px 0;border-top:1px solid var(--tv-border);font-size:12.5px;color:var(--tv-text-muted)">$0.015/GB per month</div></div>
+    <div style="display:contents"><div style="padding:9px 0;border-top:1px solid var(--tv-border);font:500 13px/1.4 var(--tv-font-sans);color:var(--tv-text)">R2 — serving it to visitors</div><div style="padding:9px 0;border-top:1px solid var(--tv-border);font-size:12.5px;color:var(--tv-text-muted)">unmetered</div><div style="padding:9px 0;border-top:1px solid var(--tv-border);font-size:12.5px;color:var(--tv-text-muted)"><b style="font-weight:600;color:var(--tv-text)">egress is free</b> — no per-GB charge, ever</div></div>
+    <div style="display:contents"><div style="padding:9px 0;border-top:1px solid var(--tv-border);font:500 13px/1.4 var(--tv-font-sans);color:var(--tv-text)">R2 — requests</div><div style="padding:9px 0;border-top:1px solid var(--tv-border);font-size:12.5px;color:var(--tv-text-muted)">10M reads, 1M writes</div><div style="padding:9px 0;border-top:1px solid var(--tv-border);font-size:12.5px;color:var(--tv-text-muted)">$0.36/M reads</div></div>
+    <div style="display:contents"><div style="padding:9px 0;border-top:1px solid var(--tv-border);font:500 13px/1.4 var(--tv-font-sans);color:var(--tv-text)">D1 — catalog metadata</div><div style="padding:9px 0;border-top:1px solid var(--tv-border);font-size:12.5px;color:var(--tv-text-muted)">5 GB</div><div style="padding:9px 0;border-top:1px solid var(--tv-border);font-size:12.5px;color:var(--tv-text-muted)">$0.75/GB per month (paid plan only)</div></div>
+  </div>
+
+  <div style="background:var(--tv-surface-code);border:1px solid var(--tv-border);border-radius:6px;padding:16px 18px">
+    <label for="cost-count" style="display:block;font:500 13px/1.4 var(--tv-font-sans);color:var(--tv-text);margin:0 0 10px">How big do you expect your catalog to get?</label>
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:0 0 10px">
+      <input id="cost-count" data-cost-count type="range" min="0" max="1000" step="10" value="200" style="flex:1 1 200px;accent-color:var(--tv-accent)"/>
+      <label style="font:400 12px/1.4 var(--tv-font-sans);color:var(--tv-text-muted)">each about
+        <select data-cost-secs style="background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:4px;padding:3px 6px;font:400 12px/1.4 var(--tv-font-sans);color:var(--tv-text)">
+          <option value="15">15 s</option>
+          <option value="30">30 s</option>
+          <option value="45" selected>45 s</option>
+          <option value="60">1 min</option>
+          <option value="120">2 min</option>
+        </select>
+      </label>
+    </div>
+    <output data-cost-out style="display:block;font:600 14px/1.5 var(--tv-font-mono);color:var(--tv-accent)"></output>
+    <p data-cost-note style="margin:8px 0 0;font-size:12.5px;line-height:1.55;color:var(--tv-text-dim);text-wrap:pretty"></p>
+    <p style="margin:10px 0 0;font-size:11.5px;line-height:1.5;color:var(--tv-text-dim)">Storage only, and an order of magnitude rather than a quote — real transcode output swings with resolution and motion. Requests are left out because a catalog node sits far inside the free 10M reads. Rates read from Cloudflare on 2026-08-02: <a href="https://developers.cloudflare.com/r2/pricing/">R2</a> · <a href="https://developers.cloudflare.com/d1/platform/pricing/">D1</a>. They change; those pages are authoritative, this one is a copy.</p>
+  </div>
+</div>
+
   <p style="margin:0;max-width:64ch;font-size:13.5px;color:var(--tv-text-dim);text-wrap:pretty">For a gallery kiosk, a pilot, or a node you are still making your mind up about, free is a perfectly respectable place to run. Pay the $5 when you need to report on reach, or when Orbit is going to carry a busy public floor.</p>
 </section>
 <section id="preflight" data-sheet="1" style="background:var(--tv-surface-2);border:1px solid var(--tv-border);border-radius:8px;padding:28px 30px;margin:0 0 44px;scroll-margin-top:20px">
@@ -2327,6 +2361,41 @@ repaint();
     var t = e.target;
     if (t && t.getAttribute && t.getAttribute('data-field') === 'W3') paint();
   });
+  paint();
+})();
+</script>
+<script>
+(function () {
+  var MB_PER_MIN = 250;
+  var FREE_GB = 10;
+  var PER_GB = 0.015;
+  var count = document.querySelector('[data-cost-count]');
+  var secs = document.querySelector('[data-cost-secs]');
+  var out = document.querySelector('[data-cost-out]');
+  var note = document.querySelector('[data-cost-note]');
+  if (!count || !out || !note) return;
+  function money(n) {
+    if (n === 0) return '$0';
+    if (n < 1) return '~' + Math.round(n * 100) + ' cents';
+    return '~$' + (n < 10 ? n.toFixed(2) : Math.round(n));
+  }
+  function paint() {
+    var n = Number(count.value) || 0;
+    var each = Number(secs && secs.value) || 45;
+    var gb = (n * (each / 60) * MB_PER_MIN) / 1024;
+    var billable = Math.max(0, gb - FREE_GB);
+    var usd = billable * PER_GB;
+    out.textContent = n + ' datasets  ·  ' + gb.toFixed(1) + ' GB  ·  ' + money(usd) + ' / month';
+    var freeN = Math.floor((FREE_GB * 1024) / ((each / 60) * MB_PER_MIN));
+    note.textContent = n === 0
+      ? 'Drag to size your catalog. Metadata, images and tours alone stay far inside the free allowance.'
+      : billable === 0
+        ? 'Free. About ' + freeN + ' clips of this length fit inside R2\u2019s ' + FREE_GB + ' GB, on either plan.'
+        : 'The first ' + freeN + ' or so are free; past that it is ' + billable.toFixed(0) +
+          ' GB billed at $' + PER_GB + '/GB. Serving them to visitors adds nothing \u2014 R2 egress is free.';
+  }
+  count.addEventListener('input', paint);
+  if (secs) secs.addEventListener('change', paint);
   paint();
 })();
 </script>

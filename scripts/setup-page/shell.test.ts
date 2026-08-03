@@ -20,6 +20,7 @@ import {
   applyShell,
   docLinkRuntime,
   docLinkScript,
+  costRuntime,
   resolveDocsUrl,
   assertSelfContained,
   assertValidatorsImplemented,
@@ -30,6 +31,7 @@ import {
   TOKEN_ALIASES,
 } from './shell'
 import { MARKDOWN_URL, WORKSHEET } from './content'
+import { estimateStorage, TYPICAL_SECONDS } from './pricing'
 
 const PAGE = resolve(__dirname, '../../public/setup.html')
 const html = (): string => readFileSync(PAGE, 'utf8')
@@ -177,6 +179,40 @@ describe('fork-friendly doc links', () => {
     )
     expect(withLinks.docLinks).toBe(1)
     expect(withLinks.html).toContain('terraviz-setup-console-v1')
+  })
+})
+
+describe('the cost estimate runtime', () => {
+  // `String.replace` reads `$'` in a *replacement string* as
+  // "everything after the match". Both injected scripts format money
+  // with `'~$' + …`, so a string replacement spliced the tail of the
+  // document into the middle of a string literal and broke the page
+  // with "Invalid or unexpected token". Nothing but parsing the output
+  // catches that.
+  it('survives injection without the $-pattern eating the document', () => {
+    const page = applyShell(
+      '<html><head><title>t</title></head><body><input data-cost-count/><select data-cost-secs></select><output data-cost-out></output><p data-cost-note></p></body>\n</html>',
+    ).html
+    expect(page).toContain('data-cost-count')
+    expect(page).not.toMatch(/'~\n/)
+    expect(() => new Function(costRuntime())).not.toThrow()
+  })
+
+  it('is injected only when the panel is on the page', () => {
+    const without = applyShell('<html><head><title>t</title></head><body></body></html>').html
+    expect(without).not.toContain('data-cost-out')
+  })
+
+  // The browser copy and the tested pure function must not drift.
+  it('matches estimateStorage() at the same inputs', () => {
+    document.body.innerHTML =
+      `<input data-cost-count value="1000"/><select data-cost-secs><option value="${TYPICAL_SECONDS}" selected></option></select>` +
+      '<output data-cost-out></output><p data-cost-note></p>'
+    new Function(costRuntime())()
+    const shown = document.querySelector('[data-cost-out]')!.textContent!
+    const e = estimateStorage(1000, TYPICAL_SECONDS)
+    expect(shown).toContain(e.storageGb.toFixed(1))
+    expect(shown).toContain('1000 datasets')
   })
 })
 

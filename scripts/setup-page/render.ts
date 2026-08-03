@@ -29,6 +29,7 @@ import { QUESTIONS, MANUAL_STEPS, type ManualStep } from '../lib/setup/interview
 import { DEFAULT_NAMES } from '../lib/setup/state'
 import { PUBLISHER_PATHS, STAFF_POLICY_NAME, AUTOMATION_POLICY_NAME } from '../lib/setup/access'
 import { UPSTREAM_PINNED_IDS } from '../lib/setup/wrangler-toml'
+import { CHECKED_ON, D1_PRICING, freeDatasets, freeMinutes, R2_PRICING, TYPICAL_SECONDS } from './pricing'
 import {
   PHASES,
   WORKSHEET,
@@ -300,6 +301,55 @@ const EYEBROW =
  * be more friction than a day of staff time, so the free path is named
  * here rather than left implicit.
  */
+/**
+ * Storage, which both plans are billed for identically.
+ *
+ * The cost panel used to file "storage is billed on top" under Workers
+ * Paid, which left the free column reading as an unqualified $0. R2 is
+ * charged the same either way, so a free-plan operator publishing a
+ * few hundred hours of video had no idea a bill was coming. Its own
+ * section, outside the two columns, is the only honest place for it.
+ */
+function storagePanel(): string {
+  const usd = (n: number): string => (n < 10 ? n.toFixed(2) : Math.round(n).toString())
+  const row = (label: string, free: string, beyond: string): string =>
+    `<div style="display:contents"><div style="padding:9px 0;border-top:1px solid var(--tv-border);font:500 13px/1.4 var(--tv-font-sans);color:var(--tv-text)">${label}</div><div style="padding:9px 0;border-top:1px solid var(--tv-border);font-size:12.5px;color:var(--tv-text-muted)">${inline(free)}</div><div style="padding:9px 0;border-top:1px solid var(--tv-border);font-size:12.5px;color:var(--tv-text-muted)">${inline(beyond)}</div></div>`
+
+  return `<div style="background:var(--tv-surface-2);border:1px solid var(--tv-border);border-radius:8px;padding:22px 24px;margin:0 0 22px">
+  <div style="${EYEBROW};margin:0 0 10px">Storage · the same on both plans</div>
+  <p style="margin:0 0 16px;max-width:66ch;font-size:13.5px;line-height:1.6;color:var(--tv-text-muted);text-wrap:pretty">This is the part that is easy to miss: R2 and D1 bill identically whether or not you pay the $5. Both have a free allowance, and for most nodes that allowance is the whole story — a catalog of metadata, images and tours does not come close to it. Publishing your own <em>video</em> is the only thing that moves it, and dataset clips are short — the free ${R2_PRICING.freeStorageGb} GB holds roughly <strong>${freeDatasets(TYPICAL_SECONDS)} of them</strong> at ${TYPICAL_SECONDS} seconds each (about ${Math.round(freeMinutes())} minutes of video in total). Past that it stays small: the numbers below are cents, not budget lines.</p>
+
+  <div style="display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr) minmax(0,1.2fr);gap:0 20px;margin:0 0 18px">
+    <div style="${EYEBROW};font-size:9px;padding-bottom:7px">What</div>
+    <div style="${EYEBROW};font-size:9px;padding-bottom:7px">Free every month</div>
+    <div style="${EYEBROW};font-size:9px;padding-bottom:7px">Past that</div>
+    ${row('R2 — video, images, tours', `${R2_PRICING.freeStorageGb} GB stored`, `$${R2_PRICING.storagePerGbMonth}/GB per month`)}
+    ${row('R2 — serving it to visitors', 'unmetered', '**egress is free** — no per-GB charge, ever')}
+    ${row('R2 — requests', `${R2_PRICING.freeClassB / 1_000_000}M reads, ${R2_PRICING.freeClassA / 1_000_000}M writes`, `$${R2_PRICING.classBPerMillion}/M reads`)}
+    ${row('D1 — catalog metadata', `${D1_PRICING.freePlanStorageGb} GB`, `$${D1_PRICING.paidStoragePerGbMonth}/GB per month (paid plan only)`)}
+  </div>
+
+  <div style="background:var(--tv-surface-code);border:1px solid var(--tv-border);border-radius:6px;padding:16px 18px">
+    <label for="cost-count" style="display:block;font:500 13px/1.4 var(--tv-font-sans);color:var(--tv-text);margin:0 0 10px">How big do you expect your catalog to get?</label>
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:0 0 10px">
+      <input id="cost-count" data-cost-count type="range" min="0" max="1000" step="10" value="200" style="flex:1 1 200px;accent-color:var(--tv-accent)"/>
+      <label style="font:400 12px/1.4 var(--tv-font-sans);color:var(--tv-text-muted)">each about
+        <select data-cost-secs style="background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:4px;padding:3px 6px;font:400 12px/1.4 var(--tv-font-sans);color:var(--tv-text)">
+          <option value="15">15 s</option>
+          <option value="30">30 s</option>
+          <option value="45" selected>45 s</option>
+          <option value="60">1 min</option>
+          <option value="120">2 min</option>
+        </select>
+      </label>
+    </div>
+    <output data-cost-out style="display:block;font:600 14px/1.5 var(--tv-font-mono);color:var(--tv-accent)"></output>
+    <p data-cost-note style="margin:8px 0 0;font-size:12.5px;line-height:1.55;color:var(--tv-text-dim);text-wrap:pretty"></p>
+    <p style="margin:10px 0 0;font-size:11.5px;line-height:1.5;color:var(--tv-text-dim)">Storage only, and an order of magnitude rather than a quote — real transcode output swings with resolution and motion. Requests are left out because a catalog node sits far inside the free ${R2_PRICING.freeClassB / 1_000_000}M reads. Rates read from Cloudflare on ${esc(CHECKED_ON)}: <a href="https://developers.cloudflare.com/r2/pricing/">R2</a> · <a href="https://developers.cloudflare.com/d1/platform/pricing/">D1</a>. They change; those pages are authoritative, this one is a copy.</p>
+  </div>
+</div>`
+}
+
 function costPanel(): string {
   const col = (
     plan: 'free' | 'paid',
@@ -355,8 +405,8 @@ function costPanel(): string {
         'Visits and dataset views record properly, the in-app dashboards fill in, and Orbit answers all day without throttling.',
       ],
       [
-        'Storage is billed on top',
-        'Only if you publish your own video: an R2 4K ladder runs about 250 MB per minute of source, billed until you delete it. Metadata, images and tours are negligible.',
+        'Nothing else changes',
+        'Same install, same features, same catalog. Storage is billed the same way on both plans — see below.',
       ],
     ])}
   </div>
@@ -376,6 +426,8 @@ function costPanel(): string {
     <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-warn);margin:0 0 8px">Free plan · what changed on this page</div>
     <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">The Analytics Engine dataset and its binding have gone from the worksheet, the dependency map and Phase 8 — there is nothing for you to create. The long-term analytics add-on is hidden too. Everything else is unchanged: you are installing the same node.</p>
   </div>
+  ${storagePanel()}
+
   <p style="margin:0;max-width:64ch;font-size:13.5px;color:var(--tv-text-dim);text-wrap:pretty">For a gallery kiosk, a pilot, or a node you are still making your mind up about, free is a perfectly respectable place to run. Pay the $5 when you need to report on reach, or when Orbit is going to carry a busy public floor.</p>
 </section>`
 }

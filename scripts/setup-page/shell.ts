@@ -43,6 +43,7 @@
  */
 
 import { MARKDOWN_URL, type WorksheetField } from './content'
+import { freeDatasets, R2_PRICING, TYPICAL_SECONDS, VIDEO_MB_PER_SOURCE_MINUTE } from './pricing'
 
 // ── Fork-friendly documentation links ─────────────────────────────
 
@@ -183,6 +184,56 @@ export function docLinkScript(fallback: string): string {
  */
 export function docLinkRuntime(fallback: string): string {
   return `<script>\n${docLinkScript(fallback)}</script>\n`
+}
+
+/**
+ * The storage estimate's runtime.
+ *
+ * Rates are interpolated from `pricing.ts` rather than written into
+ * the script, so the constants block stays the single place a price
+ * lives. Same arithmetic as `estimateStorage()`, which is unit-tested;
+ * this is the browser copy of it and the two are pinned together by a
+ * test that runs this script and compares.
+ *
+ * Lives here rather than in `render.ts` for the usual reason — the
+ * design export replaces that file wholesale.
+ */
+export function costRuntime(): string {
+  return `
+(function () {
+  var MB_PER_MIN = ${VIDEO_MB_PER_SOURCE_MINUTE};
+  var FREE_GB = ${R2_PRICING.freeStorageGb};
+  var PER_GB = ${R2_PRICING.storagePerGbMonth};
+  var count = document.querySelector('[data-cost-count]');
+  var secs = document.querySelector('[data-cost-secs]');
+  var out = document.querySelector('[data-cost-out]');
+  var note = document.querySelector('[data-cost-note]');
+  if (!count || !out || !note) return;
+  function money(n) {
+    if (n === 0) return '$0';
+    if (n < 1) return '~' + Math.round(n * 100) + ' cents';
+    return '~$' + (n < 10 ? n.toFixed(2) : Math.round(n));
+  }
+  function paint() {
+    var n = Number(count.value) || 0;
+    var each = Number(secs && secs.value) || ${TYPICAL_SECONDS};
+    var gb = (n * (each / 60) * MB_PER_MIN) / 1024;
+    var billable = Math.max(0, gb - FREE_GB);
+    var usd = billable * PER_GB;
+    out.textContent = n + ' datasets  ·  ' + gb.toFixed(1) + ' GB  ·  ' + money(usd) + ' / month';
+    var freeN = Math.floor((FREE_GB * 1024) / ((each / 60) * MB_PER_MIN));
+    note.textContent = n === 0
+      ? 'Drag to size your catalog. Metadata, images and tours alone stay far inside the free allowance.'
+      : billable === 0
+        ? 'Free. About ' + freeN + ' clips of this length fit inside R2\\u2019s ' + FREE_GB + ' GB, on either plan.'
+        : 'The first ' + freeN + ' or so are free; past that it is ' + billable.toFixed(0) +
+          ' GB billed at $' + PER_GB + '/GB. Serving them to visitors adds nothing \\u2014 R2 egress is free.';
+  }
+  count.addEventListener('input', paint);
+  if (secs) secs.addEventListener('change', paint);
+  paint();
+})();
+`
 }
 
 // ── Design tokens ─────────────────────────────────────────────────
@@ -349,8 +400,18 @@ export function applyShell(
   const docsUrl = opts.docsUrl ?? MARKDOWN_URL
   const linked = applyDocLinks(out, docsUrl)
   out = linked.html
-  if (linked.count > 0) {
-    out = out.replace('</body>', `${docLinkRuntime(docsUrl)}</body>`)
+  // Replacer *functions*, never replacement strings. `String.replace`
+  // reads `$'` in a replacement as "everything after the match", and
+  // both scripts below contain `'~$' + …` money formatting — which
+  // silently spliced the tail of the document into the middle of a
+  // string literal and broke the page. A function replacement is
+  // taken literally.
+  const before = (html: string, injected: string): string =>
+    html.replace('</body>', () => `${injected}</body>`)
+
+  if (linked.count > 0) out = before(out, docLinkRuntime(docsUrl))
+  if (out.includes('data-cost-count')) {
+    out = before(out, `<script>${costRuntime()}</script>\n`)
   }
 
   return { html: out, repairs, docLinks: linked.count }
