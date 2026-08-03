@@ -422,6 +422,16 @@ describe('the committed public/setup.html', () => {
     expect(actionLabel('not a url')).toBe('Open this page')
   })
 
+  // Four values in this install are shown exactly once. The sheet
+  // already said so at each field; what it did not do was say it
+  // before the reader started, which is the only point at which
+  // "have somewhere to put this" is actionable.
+  it('warns about one-time secrets before the first step', () => {
+    const page = html()
+    const sheet = page.slice(page.indexOf('only you can do these'))
+    expect(sheet.slice(0, 2000)).toMatch(/password manager/i)
+  })
+
   it('carries the CSP and the real favicon', () => {
     expect(html()).toContain(CSP_META)
     expect(html()).toContain(FAVICON_LINK)

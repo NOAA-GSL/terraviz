@@ -55,9 +55,23 @@ here. Every phase that *consumes* one refers to it by line number.
 **If you use `npm run setup`, most of this is kept for you** in
 `.terraviz-setup.json` — the resource IDs, the Access AUD, the team
 domain. What it cannot keep is anything marked 🔒: secrets are never
-written to that file, and the service-token secret (`W15`) is shown
-by Cloudflare exactly once. Capture those yourself, in a password
-manager. The worksheet below is still the reference for a by-hand
+written to that file. Capture those yourself, in a password manager.
+
+Four of them are shown **exactly once** and cannot be read back
+afterwards — by three different vendors, at four different points in
+the install:
+
+| | What | Shown once by |
+|---|---|---|
+| `W11` | `CLOUDFLARE_API_TOKEN` | Cloudflare, at mint time (Phase 5) |
+| `W15` | `CF_ACCESS_CLIENT_SECRET` | Cloudflare, in the service-token dialog (Phase 6) |
+| `W20b` | `R2_SECRET_ACCESS_KEY` | Cloudflare, with `W20` (Phase 13.1) |
+| `W22` | `GITHUB_DISPATCH_TOKEN` | GitHub, at mint time (Phase 13.2) |
+
+Losing one is recoverable but tedious: revoke it, mint a new one, and
+repoint everything already using it. `W16` and `W18` are different —
+they are generated locally into `.dev.vars` and can be read back from
+there. The worksheet below is still the reference for a by-hand
 install, and for knowing what you should have when the tool is done.
 
 ```
@@ -274,6 +288,7 @@ error`.
 | **Workers Paid ($5/mo)** | Workers AI is capped at 10,000 Neurons/day on the free plan — roughly 200 Orbit turns — and you cannot exceed that without upgrading. Orbit then degrades to its local keyword engine mid-demo. | No — billing UI |
 | A domain on **Cloudflare DNS** | For `W2`. Moving DNS to Cloudflare is free; you change nameservers at your registrar. Registering a new domain through Cloudflare also works. | No — registrar action |
 | GitHub or GitLab account | Pages builds from a Git remote (or you deploy by Direct Upload from CI). | No |
+| **Somewhere to keep secrets** | Four values in this guide are shown **exactly once** and cannot be read back: `W11`, `W15`, `W20b`, `W22`. A password manager is enough; a text file you will lose is not. | No — before you start |
 | Node.js 20+ and npm | Build, test, migrate. | — |
 
 Write your account ID (`W1`), your intended hostname (`W2`), and

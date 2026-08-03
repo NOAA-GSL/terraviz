@@ -415,6 +415,11 @@ export function renderManualSteps(features: Set<'r2' | 'transcode'> = new Set())
   const out = [
     'Manual prerequisites — the parts no API can do for you.',
     '',
+    'Before you start: have somewhere to put secrets. Four of the',
+    'values below are shown exactly once, by three different vendors,',
+    'and none can be read back — the only recovery is to revoke and',
+    'mint again. A password manager is enough.',
+    '',
   ]
   steps.forEach((step, i) => {
     out.push(renderManualStep(step, i + 1))

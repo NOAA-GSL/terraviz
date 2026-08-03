@@ -606,7 +606,7 @@ function preflight(): string {
       ${sectionHead(
         'Before you start · only you can do these',
         `${MANUAL_STEPS.length} things, about 20 minutes`,
-        'An account, a domain, a login — the things no script can do on your behalf. Most the setup tool will notice if you skip; the ones marked *on you* it cannot, so those are the ones to be sure about. The first is a choice rather than a task — see [what it costs](#cost).',
+        'An account, a domain, a login — the things no script can do on your behalf. Most the setup tool will notice if you skip; the ones marked *on you* it cannot, so those are the ones to be sure about. **Have a password manager open before you start**: four of these produce a secret shown exactly once. Workers Paid is a choice rather than a task — see [what it costs](#cost).',
       )}
       <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:13px 28px">${MANUAL_STEPS.map(stepCell).join('\n  ')}</div>
     </div>
