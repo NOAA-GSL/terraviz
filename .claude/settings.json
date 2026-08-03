@@ -20,6 +20,15 @@
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/check-doc-coverage.mjs\""
           }
         ]
+      },
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/check-rust-fmt.mjs\""
+          }
+        ]
       }
     ],
     "SessionStart": [
