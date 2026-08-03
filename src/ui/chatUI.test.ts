@@ -77,6 +77,13 @@ function makeCallbacks(): MockCallbacks {
     announce: vi.fn(),
     onOpenBrowse: vi.fn(),
     onVoiceAudioFocus: vi.fn(),
+    onShowAnalysis: vi.fn(),
+    // Globe-control seams. Absent here, every assertion about whether
+    // the camera moved silently passes on `undefined` — which is how a
+    // measurement's fly-to reached production without a test noticing
+    // it was being queued and never run.
+    onFlyTo: vi.fn(),
+    onAddMarker: vi.fn(),
   } as MockCallbacks
 }
 
@@ -426,6 +433,174 @@ describe('handleSend streaming', () => {
     await vi.waitFor(() => {
       expect(cb.onLoadDataset).toHaveBeenCalledWith('DS_001')
     })
+  })
+
+  it('renders a unit exponent however the model wrote it', async () => {
+    // §A6 answers quote units from the dataset's own sidecar as plain
+    // text ("kg m-2"). Live, the model re-set them in LaTeX — "at least
+    // 427 mg m$^{-2}$" — and this chat has no math renderer, so the
+    // markup reached the reader raw. Fixed in the renderer rather than
+    // with another prompt rule: after ten failed instructions about how
+    // to write a value, notation is a rendering concern.
+    const { processMessage } = await import('../services/docentService')
+    const mockedProcessMessage = vi.mocked(processMessage)
+
+    mockedProcessMessage.mockImplementation(async function* () {
+      // Every notation seen or plausible, plus a price that must survive:
+      // the conversion is all-or-nothing per exponent and only fires on
+      // something shaped like one.
+      yield { type: 'delta' as const, text: 'At least 427 mg m$^{-2}$, or 2 kg m^{-3}, or 5 m^2, costing $30.' }
+      yield { type: 'done' as const, fallback: false }
+    })
+
+    const cb = makeCallbacks()
+    cb.getDatasets.mockReturnValue([])
+    cb.getCurrentDataset.mockReturnValue(null)
+    initChatUI(cb)
+    openChat()
+
+    const input = document.getElementById('chat-input') as HTMLTextAreaElement
+    input.value = 'how bad is it'
+    ;(document.getElementById('chat-send') as HTMLButtonElement).click()
+
+    await vi.waitFor(() => {
+      const rendered = document.querySelector('#chat-messages')?.textContent ?? ''
+      expect(rendered).toContain('427 mg m\u207b\u00b2')
+      expect(rendered).toContain('2 kg m\u207b\u00b3')
+      expect(rendered).toContain('5 m\u00b2')
+      // The exponents are gone; the price is not.
+      expect(rendered).not.toContain('^')
+      expect(rendered).toContain('$30')
+    })
+  })
+
+  it('renders a measurement card for a measurement action', async () => {
+    // Reported live: no card visible on a build that has this code.
+    // The render path had never been asserted end-to-end — only that
+    // docentService emits the chunk — so this pins the other half.
+    const { processMessage } = await import('../services/docentService')
+    const mockedProcessMessage = vi.mocked(processMessage)
+
+    mockedProcessMessage.mockImplementation(async function* () {
+      yield { type: 'delta' as const, text: 'The smoke is worst over Canada.' }
+      yield {
+        type: 'action' as const,
+        action: {
+          type: 'measurement' as const,
+          valueText: '0.000427 kg m-2, the highest anywhere in Canada',
+          lat: 54.2,
+          lon: -101.4,
+          frameTime: 'Jul 31, 2026, 07:00 AM',
+          dataset: 'Wildfire Smoke Overhead',
+        },
+      }
+      yield { type: 'done' as const, fallback: false }
+    })
+
+    const cb = makeCallbacks()
+    cb.getDatasets.mockReturnValue([])
+    cb.getCurrentDataset.mockReturnValue(null)
+    initChatUI(cb)
+    openChat()
+
+    const input = document.getElementById('chat-input') as HTMLTextAreaElement
+    input.value = 'where is it worst'
+    ;(document.getElementById('chat-send') as HTMLButtonElement).click()
+
+    await vi.waitFor(() => {
+      const card = document.querySelector('.chat-measurement')
+      expect(card).not.toBeNull()
+      const shown = card!.textContent ?? ''
+      expect(shown).toContain('0.000427 kg m-2')
+      expect(shown).toContain('Canada')
+      // Signed floats become compass letters only at render time.
+      expect(shown).toContain('54.20°N')
+      expect(shown).toContain('101.40°W')
+      expect(shown).toContain('Wildfire Smoke Overhead')
+    })
+  })
+
+  it('moves the globe for a measurement even when the reply offers a dataset to load', async () => {
+    // Reported live: the reading was right, the card rendered, and the
+    // globe never moved. The same reply recommended a different dataset,
+    // and globe actions are held until a pending Load is tapped — which
+    // is correct for an event card (Load, then fly to where it happened)
+    // and wrong for a measurement, which describes the frame already on
+    // the globe.
+    const { processMessage } = await import('../services/docentService')
+    const mockedProcessMessage = vi.mocked(processMessage)
+
+    mockedProcessMessage.mockImplementation(async function* () {
+      yield { type: 'delta' as const, text: 'The smoke is worst in northern Canada.' }
+      yield {
+        type: 'action' as const,
+        action: {
+          type: 'measurement' as const,
+          valueText: 'at least 0.0005 kg m-2, the highest anywhere in the whole dataset',
+          lat: 65.879,
+          lon: -121.851,
+        },
+      }
+      yield { type: 'action' as const, action: { type: 'fly-to' as const, lat: 65.879, lon: -121.851, fromMeasurement: true as const } }
+      yield {
+        type: 'action' as const,
+        action: { type: 'add-marker' as const, lat: 65.879, lng: -121.851, label: '0.0005 kg m-2', fromMeasurement: true as const },
+      }
+      // The recommendation that used to hold the camera hostage.
+      yield {
+        type: 'action' as const,
+        action: { type: 'load-dataset' as const, datasetId: 'DS_OTHER', datasetTitle: 'Wildfire Smoke Forecast' },
+      }
+      yield { type: 'done' as const, fallback: false }
+    })
+
+    const cb = makeCallbacks()
+    cb.getDatasets.mockReturnValue([])
+    cb.getCurrentDataset.mockReturnValue(null)
+    initChatUI(cb)
+    openChat()
+
+    const input = document.getElementById('chat-input') as HTMLTextAreaElement
+    input.value = 'where is the smoke worst'
+    ;(document.getElementById('chat-send') as HTMLButtonElement).click()
+
+    await vi.waitFor(() => {
+      expect(cb.onFlyTo).toHaveBeenCalledWith(65.879, -121.851, undefined)
+      expect(cb.onAddMarker).toHaveBeenCalledWith(65.879, -121.851, '0.0005 kg m-2')
+    })
+    // And the unrelated dataset was not loaded as a side effect.
+    expect(cb.onLoadDataset).not.toHaveBeenCalled()
+  })
+
+  it('still holds an untagged fly-to behind a pending Load', async () => {
+    // The event-card ordering this deferral exists for must survive.
+    const { processMessage } = await import('../services/docentService')
+    const mockedProcessMessage = vi.mocked(processMessage)
+
+    mockedProcessMessage.mockImplementation(async function* () {
+      yield { type: 'delta' as const, text: 'There is an outbreak.' }
+      yield { type: 'action' as const, action: { type: 'fly-to' as const, lat: 10, lon: 20 } }
+      yield {
+        type: 'action' as const,
+        action: { type: 'load-dataset' as const, datasetId: 'DS_OTHER', datasetTitle: 'Some Dataset' },
+      }
+      yield { type: 'done' as const, fallback: false }
+    })
+
+    const cb = makeCallbacks()
+    cb.getDatasets.mockReturnValue([])
+    cb.getCurrentDataset.mockReturnValue(null)
+    initChatUI(cb)
+    openChat()
+
+    const input = document.getElementById('chat-input') as HTMLTextAreaElement
+    input.value = 'what is happening'
+    ;(document.getElementById('chat-send') as HTMLButtonElement).click()
+
+    await vi.waitFor(() => {
+      expect(getMessages()).toHaveLength(2)
+    })
+    expect(cb.onFlyTo).not.toHaveBeenCalled()
   })
 
   it('renders a cited event card for an event-citation action', async () => {
@@ -1085,5 +1260,69 @@ describe('feedback mechanism', () => {
     })
 
     fetchSpy.mockRestore()
+  })
+})
+
+describe('§A6 — the Analyze chip', () => {
+  /** Stream one show-analysis action and return the rendered chip. */
+  async function renderChip(
+    action: Record<string, unknown>,
+    cb = makeCallbacks(),
+  ): Promise<HTMLButtonElement | null> {
+    const { processMessage } = await import('../services/docentService')
+    vi.mocked(processMessage).mockImplementation(async function* () {
+      yield { type: 'delta' as const, text: 'The mean is 200 mg m-2.' }
+      yield { type: 'action' as const, action: action as never }
+      yield { type: 'done' as const, fallback: false }
+    })
+    initChatUI(cb)
+    openChat()
+    ;(document.getElementById('chat-input') as HTMLTextAreaElement).value = 'how bad is it?'
+    ;(document.getElementById('chat-send') as HTMLButtonElement).click()
+    await vi.waitFor(() => expect(getMessages()).toHaveLength(2))
+    await flush()
+    return document.querySelector<HTMLButtonElement>('.chat-action-analyze')
+  }
+
+  it('names the region it will open', async () => {
+    const chip = await renderChip({ type: 'show-analysis', scope: 'named', regionName: 'Colorado' })
+    expect(chip).not.toBeNull()
+    expect(chip!.textContent).toContain('Colorado')
+  })
+
+  it('opens Analyze on that region when clicked', async () => {
+    const cb = makeCallbacks()
+    const chip = await renderChip(
+      { type: 'show-analysis', scope: 'named', regionName: 'Colorado' },
+      cb,
+    )
+    chip!.click()
+    expect(cb.onShowAnalysis).toHaveBeenCalledWith('named', 'Colorado')
+  })
+
+  it('never falls through to loading a dataset', async () => {
+    // The chip carries no dataset id, so without its own exclusive
+    // branch it would reach the load-dataset path with `undefined` —
+    // the same footgun the frame-load branch guards against.
+    const cb = makeCallbacks()
+    const chip = await renderChip({ type: 'show-analysis', scope: 'dataset' }, cb)
+    chip!.click()
+    expect(cb.onLoadDataset).not.toHaveBeenCalled()
+  })
+
+  it('is not rendered by a host that cannot open the panel', async () => {
+    // A chip that opens nothing is worse than no chip.
+    const cb = makeCallbacks()
+    delete (cb as Record<string, unknown>).onShowAnalysis
+    const chip = await renderChip({ type: 'show-analysis', scope: 'named', regionName: 'Colorado' }, cb)
+    expect(chip).toBeNull()
+  })
+
+  it('labels the whole-dataset and view scopes differently', async () => {
+    const whole = await renderChip({ type: 'show-analysis', scope: 'dataset' })
+    expect(whole!.textContent).not.toContain('undefined')
+    clearChat()
+    const view = await renderChip({ type: 'show-analysis', scope: 'view' })
+    expect(view!.textContent).not.toBe(whole!.textContent)
   })
 })

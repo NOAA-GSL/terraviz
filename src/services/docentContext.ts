@@ -85,6 +85,26 @@ export function buildCurrentDatasetContext(
     parts.push(`Legend: ${legendDescription}`)
   }
 
+  // §A6. The exact scale, where the row carries one.
+  //
+  // `Legend:` above it is a best-effort transcription of the legend
+  // *image* by a background vision call — useful prose, and not
+  // something to state a range from. This is the publisher's own
+  // numbers, so a question like "what does the scale go up to?" has an
+  // answer that does not depend on a model having read a picture
+  // correctly. Emitted for any data-encoded row, independent of whether
+  // the analysis tools resolved: the range is a property of the
+  // dataset, where the tools need a decoded frame.
+  const scale = dataset.colorScale
+  if (scale && Number.isFinite(scale.vmin) && Number.isFinite(scale.vmax)) {
+    const units = scale.units ? ` ${scale.units}` : ''
+    parts.push(
+      `Value scale: ${scale.vmin} to ${scale.vmax}${units}. ` +
+      'These are the dataset\'s own published limits, not an estimate. ' +
+      'You may state this range. Any *specific* value still has to come from a tool result.',
+    )
+  }
+
   return parts.join('\n')
 }
 
@@ -144,6 +164,13 @@ export function buildSystemPrompt(
   currentTime?: string | null,
   qaContext?: string | null,
   mapViewContext?: Parameters<typeof buildViewContextSection>[0],
+  /** §A6 — are the value-reading tools being offered this turn?
+   *  Computed once by the caller and used for both the prompt and the
+   *  tool array, so the permission and the tools can never disagree.
+   *  Offering one without the other is a bug in either direction: the
+   *  permission alone invites the model to answer from memory, and the
+   *  tools alone leave it forbidden from saying what came back. */
+  analysisToolsActive: boolean = false,
 ): string {
   const currentContext = buildCurrentDatasetContext(currentDataset, legendDescription, currentTime)
   const languagePreface = buildLanguagePreface()
@@ -160,10 +187,11 @@ IMPORTANT: All datasets are GLOBAL — they cover the entire Earth, rendered on 
 2. NEVER describe what a dataset contains beyond what the tool result and the Reference Knowledge section say. Do not invent data values, date ranges, or trends.
 3. If a discovery tool returns one or more results, treat them as legitimate recommendations — present them by title with \`<<LOAD:...>>\` markers immediately. Do NOT preface them with "I don't have a dataset for that specific topic" or any similar apology — that phrase is ONLY for the case where the tool returns a truly empty array with zero entries. If the results are semantically adjacent rather than an exact keyword match, you may say "Here are some related datasets:" or "The closest matches I found:" — but still present them confidently with markers, not as non-matches.
 4. ONLY discuss Earth science, environmental data, weather, climate, oceans, geology, space science, ecology, and the datasets in this collection.
-5. DECLINE off-topic requests politely: "That's outside my area! I'm here to help you explore Earth science data. Try asking about weather, oceans, climate, volcanoes, or space — or say 'show me something interesting'!"
+5. DECLINE off-topic requests politely: "That's outside my area! I'm here to help you explore Earth science data. Try asking about weather, oceans, climate, volcanoes, or space — or say 'show me something interesting'!"${analysisToolsActive ? `
+6. The dataset on screen carries REAL VALUES and you have tools that read them. A question about **what the data on screen says** — how much, how bad, where is it worst, what is it at this place — is answered by CALLING A TOOL (\`find_extremum\`, \`summarize_region\`, \`probe_value\`), never by estimating from the colours and never by recommending a different dataset. Recommending another dataset in place of measuring this one is the single most common way to get this wrong. See "Answering about values" below.` : ''}
 
 ## Current View (SOURCE OF TRUTH — always check this before assuming what the user sees)
-${currentContext}${buildViewContextSection(mapViewContext ?? null)}
+${currentContext}${buildViewContextSection(mapViewContext ?? null)}${analysisToolsActive ? `\n${ANALYSIS_PROMPT_CARVE_OUT}` : ''}
 ${qaContext ? `\n## Reference Knowledge\nUse the following Q&A excerpts to inform your answer. Paraphrase — do not quote verbatim.\n${qaContext}\n` : ''}
 ## Available Categories
 The collection covers global Earth science datasets across categories such as Atmosphere, Oceans, Climate, Geology, Land Surface, Hydrosphere, Cryosphere, Biosphere, Ecology, and Space Science.
@@ -830,4 +858,170 @@ export function buildViewContextSection(viewContext: MapViewContext | null): str
   }
 
   return `\n## Geographic Context\n${parts.join('\n')}`
+}
+
+// --- §A6: answering about values ---------------------------------------
+
+/**
+ * The narrow carve-out from "do not invent data values".
+ *
+ * STRICT RULE 2 and the legend rule below it forbid Orbit from stating
+ * numbers, and they are right to: until the data-encoded path shipped
+ * there was no way for it to know one, so every number it could produce
+ * came from training-time knowledge about a dataset it was only
+ * guessing at. Those rules stay exactly as they are.
+ *
+ * What changes is that one source of numbers is now real. The rule
+ * added here is deliberately about *provenance*, not about topic:
+ * numbers that came back in a tool result may be stated, numbers from
+ * anywhere else remain forbidden. Widening it to "you may discuss
+ * values" would be a regression dressed as a feature — the model would
+ * fill in the gaps between tool calls from memory, and the answers
+ * would be indistinguishable from the real ones.
+ *
+ * Appended only when the tools are actually offered, so a picture
+ * dataset never sees a permission it has no way to exercise.
+ */
+export const ANALYSIS_PROMPT_CARVE_OUT = `
+## Answering about values (this dataset only)
+
+The dataset on screen carries real values, and you have tools that read them: \`probe_value\`, \`summarize_region\` and \`find_extremum\`.
+
+**The carve-out from STRICT RULE 2 is narrow and about where a number came from, not what it is about.** A number that came back in a tool result this turn is real and you may state it. A number from anywhere else — your own knowledge, an estimate, a legend image, an inference from the colours — remains forbidden exactly as before. If you did not call a tool, you do not have a number.
+
+### Which question calls which tool
+
+| The user asks | You call |
+|---|---|
+| "where is it worst / highest / strongest / heaviest / most intense?" | \`find_extremum({ kind: "max" })\` |
+| "where is it lowest / cleanest / weakest?" | \`find_extremum({ kind: "min" })\` |
+| "how much / how bad / how heavy is it over <place>?" | \`summarize_region({ region_name: "<place>" })\` |
+| "what's the average / typical / range?" | \`summarize_region()\` |
+| "what is it at <place / these coordinates>?" | \`probe_value({ lat, lon })\` |
+| "is it worse in A or B?" | \`summarize_region\` once per place, then compare the numbers |
+
+**A question about the values of the dataset already on screen is NOT a discovery question.** Do not answer it by calling \`search_datasets\` and offering a different dataset to load. The user is asking what *this* data says; measure it and tell them. You may mention a related dataset afterwards, but only after you have answered the question that was asked.
+
+**Your whole answer is: call the tool, then say what came back.** No opening impression of where the values look high, no sentence about being about to check, no narration of the call. The first words the user reads should already be the measured answer.
+
+- **Call a tool rather than estimating.** "How much smoke is over Colorado?" means \`summarize_region({ region_name: "colorado" })\`, not a guess from the picture.
+- **Say the value by quoting \`valueText\` (or \`meanText\`) EXACTLY.** It arrives already written the way it should be said — number, units, and an "at least" when the field is clipping. Copy the whole string into your sentence unchanged: do not round it, do not re-express it in another unit, do not translate the units into more familiar ones. The units in that string are the ones this dataset publishes. If they look unusual for the subject, they are still correct — two datasets measuring the same phenomenon routinely carry different units, and the one you have measured is the one on screen.
+- **A value belongs to the dataset it was measured from.** If you mention any other dataset in the same reply, do not attach a measured number to it — you have measured only the one on screen.
+- **Respect \`precision\`.** Every result carries a quantisation note. Do not state more digits than it allows, and do not present a single extreme value as more exact than the note says it is.
+- **Say when the number is FROM.** Every result carries \`frameTime\` — the instant the globe is showing. Name it. These are animations; a value with no time is a claim about an unnamed instant. (What the number is *of* is already inside \`valueText\`: quoting that string whole states the area the search covered, which is why it must not be trimmed.)
+- **Search the whole dataset unless the user named a place.** "Where is it worst?" is a question about everything on screen. Narrowing to a region without being asked produces a smaller number somewhere else entirely, and the user has no way to tell.
+- **Honour \`plateau\` when it appears.** The extreme value is shared by many cells, so there is no single worst *spot* — describe it as worst across an area, and treat the coordinates as a representative point rather than a pinpoint.
+- **Honour \`saturated\` when it appears.** The field is clipping at the top of its scale, so the number is a floor: say "at least", not an exact figure.
+- **Read \`coverage\` and any \`caveat\` out loud.** A mean over a quarter of a region is a different claim from a mean over all of it, and the user cannot see the difference unless you say it.
+- **\`noData: true\` means the dataset covers that point and reports nothing there.** That is not "a low value" and not "outside coverage" — say the dataset shows nothing there.
+- **When a tool returns \`ok: false\`, say what it says.** Do not retry with a different region hoping for a number, and do not fall back to describing the colours.
+- **\`find_extremum\` moves the globe for you.** The app flies to the coordinates and drops a labelled pin as soon as the tool returns. Do NOT call \`fly_to\` or \`add_marker\` yourself for that result, and do not emit a \`<<FLY:...>>\` marker for it — you would send the globe somewhere a second time. Just say where it is and what the value is; the user is already looking at the place.
+- If you do call \`fly_to\` for some *other* reason, **pass \`lat\` and \`lon\` as signed decimal degrees.** Western longitudes and southern latitudes are negative numbers. A compass letter belongs in your prose and never in a tool argument; the same figure written with a W instead of a minus sign puts the camera on the opposite side of the planet.
+
+Answer in prose. You cannot draw a chart in chat, and you should not try to render one with characters.`
+
+/**
+ * `probe_value` — the value at one point.
+ *
+ * Offered only when a data-encoded frame is readable; see
+ * `docentAnalysisTools.isAnalysisAvailable`.
+ */
+export function getProbeValueTool(): LLMTool {
+  return {
+    type: 'function',
+    function: {
+      name: 'probe_value',
+      description: 'Read the value of the currently loaded dataset at one geographic point, from the frame on screen. Use this for "what is it at X?" questions. Returns the value, its units, whether the point carries no data, and a note on how precisely the value can be stated.',
+      parameters: {
+        type: 'object',
+        properties: {
+          lat: { type: 'number', description: 'Latitude in degrees, -90 to 90.' },
+          lon: { type: 'number', description: 'Longitude in degrees, -180 to 180.' },
+        },
+        required: ['lat', 'lon'],
+      },
+    },
+  }
+}
+
+/**
+ * `summarize_region` — the statistics bundle over an area.
+ *
+ * `region_name` is checked against the same table the `<>` highlight
+ * marker uses, so a name that works in one works in the other.
+ */
+export function getSummarizeRegionTool(): LLMTool {
+  return {
+    type: 'function',
+    function: {
+      name: 'summarize_region',
+      description: 'Compute area-weighted statistics for the currently loaded dataset over a region of the frame on screen: mean, median, min, max, 10th and 90th percentiles, how much of the region carries data, and the area that does. Use this for "how much / how bad / what is the average" questions. Omit every argument to summarize the whole dataset.',
+      parameters: {
+        type: 'object',
+        properties: {
+          region_name: {
+            type: 'string',
+            description: 'A named region — a continent, ocean, country or US state (e.g. "colorado", "the arctic", "mexico"). Prefer this over a bbox when the user named a place. An unrecognised name is an error, not a fall back to the whole dataset.',
+          },
+          bbox: {
+            type: 'object',
+            description: 'An explicit bounding box, for an area with no name.',
+            properties: {
+              north: { type: 'number' },
+              south: { type: 'number' },
+              west: { type: 'number' },
+              east: { type: 'number' },
+            },
+          },
+          region: {
+            type: 'string',
+            enum: ['view'],
+            description: 'Pass "view" to summarize only what is currently on screen.',
+          },
+        },
+      },
+    },
+  }
+}
+
+/**
+ * `find_extremum` — where the field peaks or bottoms out.
+ *
+ * The plan flags this as the most noise-sensitive statistic available
+ * and the one most likely to be quoted back, which is why its result
+ * carries the same precision note as the others and the carve-out
+ * above tells the model to respect it.
+ */
+export function getFindExtremumTool(): LLMTool {
+  return {
+    type: 'function',
+    function: {
+      name: 'find_extremum',
+      description: 'Find where the currently loaded dataset is at its highest or lowest in the frame on screen, and by how much. Returns latitude, longitude, the value and its units. Use this for "where is it worst / strongest / lowest" questions. The app flies the globe to the result and drops a pin by itself — do NOT call `fly_to` or `add_marker` afterwards.',
+      parameters: {
+        type: 'object',
+        properties: {
+          kind: {
+            type: 'string',
+            enum: ['max', 'min'],
+            description: 'Which extreme to find. Defaults to "max".',
+          },
+          region_name: {
+            type: 'string',
+            description: 'Optional named region to search within, from the same set `summarize_region` accepts. Omit it — the default is the whole dataset, which is what "where is it worst?" asks. Passing a region narrows the search and yields a different, smaller answer, so pass one ONLY when the user named a place.',
+          },
+          bbox: {
+            type: 'object',
+            description: 'Optional explicit bounding box to search within. Same rule as `region_name`: omit it unless the user asked about a specific area.',
+            properties: {
+              north: { type: 'number' },
+              south: { type: 'number' },
+              west: { type: 'number' },
+              east: { type: 'number' },
+            },
+          },
+        },
+      },
+    },
+  }
 }

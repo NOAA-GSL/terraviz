@@ -39,6 +39,7 @@
 import type { ViewportManager, ViewLayout } from '../services/viewportManager'
 import { updateMapControlsPosition } from './mapControlsUI'
 import { openPrivacyUI } from './privacyUI'
+import { openAnalyzeUI } from './analyzeUI'
 import { openPlaylistManager } from './playlistUI'
 import { emit } from '../analytics'
 import { setBordersVisible } from '../utils/viewPreferences'
@@ -348,6 +349,10 @@ export function initToolsMenu(
           <span class="tools-menu-item-check" aria-hidden="true"></span>
           <span class="tools-menu-item-label">${tHtml('tools.actions.credits')}</span>
         </button>` : ''}
+        <button type="button" class="tools-menu-item" id="tools-menu-analyze">
+          <span class="tools-menu-item-check" aria-hidden="true"></span>
+          <span class="tools-menu-item-label">${tHtml('tools.actions.analyze')}</span>
+        </button>
         <button type="button" class="tools-menu-item" id="tools-menu-privacy">
           <span class="tools-menu-item-check" aria-hidden="true"></span>
           <span class="tools-menu-item-label">${tHtml('tools.actions.privacy')}</span>
@@ -624,6 +629,13 @@ export function initToolsMenu(
       announce?.(t('tools.announce.creditsOpened'))
     })
   }
+
+  const analyzeBtn = document.getElementById('tools-menu-analyze') as HTMLButtonElement | null
+  analyzeBtn?.addEventListener('click', () => {
+    closePopover()
+    openAnalyzeUI(analyzeBtn)
+    announce?.(t('tools.announce.analyzeOpened'))
+  })
 
   const privacyBtn = document.getElementById('tools-menu-privacy') as HTMLButtonElement | null
   privacyBtn?.addEventListener('click', () => {

@@ -827,3 +827,39 @@
         padding-bottom: env(safe-area-inset-bottom);
     }
 }
+
+/* The reading a value tool returned, stated by the app rather than
+   recounted by the model (§A6). Mirrors the event-citation card's
+   geometry deliberately: both are the same kind of thing — a fact
+   rendered from structured data, sitting inside a bubble that is
+   otherwise prose — so they should read as siblings. Accent rather
+   than warning on the inline edge, because this is the answer, not a
+   caveat about it. The value is tabular-figured: these are long
+   decimals and a proportional font makes two of them hard to compare
+   at a glance. */
+.chat-measurement {
+    background: var(--color-surface-alt);
+    border: 1px solid var(--white-o08);
+    border-inline-start: 3px solid var(--color-accent);
+    border-radius: var(--component-chat-action-btn-radius);
+    padding: calc(0.4rem * var(--ui-scale)) calc(0.55rem * var(--ui-scale));
+}
+.chat-measurement-eyebrow {
+    display: block;
+    font-size: calc(0.58rem * var(--ui-scale));
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--color-accent);
+}
+.chat-measurement-value {
+    margin: calc(0.15rem * var(--ui-scale)) 0 calc(0.2rem * var(--ui-scale));
+    font-size: calc(0.78rem * var(--ui-scale));
+    font-variant-numeric: tabular-nums;
+    line-height: 1.3;
+    color: var(--color-text);
+}
+.chat-measurement-meta {
+    margin: 0;
+    font-size: calc(0.64rem * var(--ui-scale));
+    color: var(--color-text-muted);
+}

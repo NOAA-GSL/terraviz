@@ -174,6 +174,26 @@ async function openGlobe(page: Page): Promise<void> {
   await page.locator('#tools-menu-toggle').waitFor({ state: 'visible' })
 }
 
+/**
+ * Load the data-encoded fixture dataset onto the globe from the browse
+ * overlay, and wait for its colorbar to mount.
+ *
+ * Goes through the real browse card rather than a deep link so the
+ * scene exercises the path a viewer actually takes — and so a
+ * regression in `refreshPanelLegends` (which decides colorbar vs.
+ * legend image) is what fails, rather than being bypassed.
+ */
+async function openDataEncodedDataset(page: Page): Promise<void> {
+  await page.locator('#browse-search').fill('smoke')
+  const card = page.locator('.browse-card').first()
+  await card.waitFor({ state: 'visible' })
+  // The card's own Load button, not the card: clicking the card body
+  // opens its detail rather than loading the dataset, which leaves the
+  // browse overlay up and no globe behind it.
+  await card.locator('.browse-card-load').click()
+  await page.locator('.panel-colorbar').first().waitFor({ state: 'visible' })
+}
+
 export const scenes: Scene[] = [
   {
     name: 'catalog-landing',
@@ -341,6 +361,73 @@ export const scenes: Scene[] = [
       // Assert the app-shell chrome stays suppressed, so a regression that
       // re-introduces it fails the capture loudly rather than silently.
       await page.locator('#map-controls').waitFor({ state: 'hidden' })
+    },
+  },
+
+  {
+    name: 'colorbar-controls',
+    description:
+      'Colour & range controls for a data-encoded dataset — palette swatches, contrast stretch, and the value threshold, opened from the floating colorbar',
+    fixtures: catalogReportFixtures(),
+    // Loads a dataset onto the WebGL globe, so it carries the same GPU
+    // pressure as the other globe scenes; and the controls are captured
+    // as a crop, which the Weblate capturer ignores anyway.
+    skipWeblate: true,
+    crop: '.colorbar-controls',
+    async setup(page) {
+      await openCatalog(page)
+      await openDataEncodedDataset(page)
+      // The colorbar replaces the uploaded legend image for a
+      // data-encoded row; asserting on it here means a regression that
+      // silently falls back to the image legend fails the capture.
+      await page.locator('.panel-colorbar').first().click()
+      await page.locator('.colorbar-controls').waitFor({ state: 'visible' })
+    },
+  },
+
+  {
+    name: 'analyze-panel',
+    description:
+      'Analyze panel for a data-encoded dataset — region picker, palette-coloured histogram, area-weighted statistics, coverage, the quantisation caveat, and a drawn transect with its value profile',
+    fixtures: catalogReportFixtures(),
+    // Loads a dataset onto the WebGL globe; the panel is captured as a
+    // crop, which the Weblate capturer ignores anyway.
+    skipWeblate: true,
+    // The panel now scrolls — statistics *and* a transect no longer fit
+    // in one screenful at either viewport. The full shot catches the top
+    // (histogram, tiles, coverage) and this crop catches the transect,
+    // which `Locator.screenshot` scrolls into view for us. Taken after
+    // the full shot, so that scroll cannot disturb it.
+    crop: '.analyze-transect-section',
+    async setup(page) {
+      await openCatalog(page)
+      await openDataEncodedDataset(page)
+      await page.locator('#tools-menu-toggle').click()
+      await page.locator('#tools-menu-popover:not(.hidden)').waitFor()
+      await page.locator('#tools-menu-analyze').click()
+      await page.locator('.analyze-panel').waitFor({ state: 'visible' })
+      // The statistics, not just the shell: a panel that mounted but
+      // computed nothing would otherwise capture as a plausible-looking
+      // empty state.
+      await page.locator('.analyze-stat').first().waitFor({ state: 'visible' })
+
+      // The transect is drawn into *this* scene rather than given one of
+      // its own. A separate scene meant one more page that loads the
+      // globe and takes a WebGL2 context, and the run is already close
+      // enough to the limit that adding it made three later scenes —
+      // including this one at the mobile viewport — fail to get a
+      // sampler and render the empty state instead. One scene, both
+      // surfaces: the transect section renders below the statistics, so
+      // the crop is a superset of what this captured before.
+      await page.locator('.analyze-transect-section button').first().click()
+      // Clicks in canvas space rather than by lat/lon, because reading
+      // the pointer's map coordinates is the path being exercised.
+      const globe = page.locator('.map-viewport canvas').first()
+      const box = await globe.boundingBox()
+      if (!box) throw new Error('analyze-panel: no globe canvas to click')
+      await page.mouse.click(box.x + box.width * 0.4, box.y + box.height * 0.38)
+      await page.mouse.click(box.x + box.width * 0.6, box.y + box.height * 0.56)
+      await page.locator('.analyze-transect').waitFor({ state: 'visible' })
     },
   },
 

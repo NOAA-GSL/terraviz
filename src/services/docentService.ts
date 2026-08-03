@@ -8,7 +8,17 @@
 import type { Dataset, ChatMessage, ChatAction, DocentConfig, LegendCache, MapViewContext, LLMContextSnapshot, ReadingLevel } from '../types'
 import { streamChat, checkAvailability, type AvailabilityResult, type LLMMessage, type LLMContentPart, type LLMToolCall } from './llmProvider'
 import { isAvailable as isAppleIntelligenceAvailable, streamChatLocal } from './appleIntelligenceProvider'
-import { buildSystemPrompt, buildCompressedHistory, buildLanguageReminderMessage, getSearchCatalogTool, getSearchDatasetsTool, getListFeaturedDatasetsTool, getSearchEventsTool, getLoadDatasetTool, getLoadFrameTool, getFlyToTool, getSetTimeTool, getFitBoundsTool, getAddMarkerTool, getToggleLabelsTool, getHighlightRegionTool } from './docentContext'
+import { buildSystemPrompt, buildCompressedHistory, buildLanguageReminderMessage, getSearchCatalogTool, getSearchDatasetsTool, getListFeaturedDatasetsTool, getSearchEventsTool, getLoadDatasetTool, getLoadFrameTool, getFlyToTool, getSetTimeTool, getFitBoundsTool, getAddMarkerTool, getToggleLabelsTool, getHighlightRegionTool, getProbeValueTool, getSummarizeRegionTool, getFindExtremumTool } from './docentContext'
+import {
+  executeFindExtremum,
+  executeProbeValue,
+  executeSummarizeRegion,
+  analysisAvailability,
+  valuesQuestionKind,
+  type FindExtremumResult,
+  type SummarizeRegionResult,
+  type ResolvedScope,
+} from './docentAnalysisTools'
 import { fetchApprovedEvents, type PublicEvent } from './eventsService'
 import { parseIntent, generateResponse, searchDatasets, evaluateAutoLoad } from './docentEngine'
 import { clearDegraded as clearDegradedState, markDegraded as markDegradedState } from './docentDegradedState'
@@ -1321,10 +1331,12 @@ async function* yieldActionsForValidIds(
   validIds: Set<string>,
   datasets: Dataset[],
   yieldedIds: Set<string>,
+  /** Gate for the measured-answer suggestion cap; defaults to open. */
+  allowSuggestion: () => boolean = () => true,
 ): AsyncGenerator<DocentStreamChunk> {
   for (const idStr of validIds) {
     const dataset = datasets.find(d => d.id === idStr)
-    if (dataset && !yieldedIds.has(dataset.id)) {
+    if (dataset && !yieldedIds.has(dataset.id) && allowSuggestion()) {
       yieldedIds.add(dataset.id)
       yield {
         type: 'action',
@@ -1348,6 +1360,7 @@ async function* emitValidatedActions(
   datasets: Dataset[],
   yieldedIds: Set<string>,
   events: readonly PublicEvent[] = [],
+  allowSuggestion: () => boolean = () => true,
 ): AsyncGenerator<DocentStreamChunk> {
   const { cleanedText, validIds, invalidIds, globeActions } = validateAndCleanText(accumulatedText, datasets, events)
   // Rewrite whenever the text was modified — covers stripped markers, hallucinated IDs,
@@ -1359,7 +1372,7 @@ async function* emitValidatedActions(
   if (needsRewrite) {
     yield { type: 'rewrite', text: cleanedText }
   }
-  yield* yieldActionsForValidIds(validIds, datasets, yieldedIds)
+  yield* yieldActionsForValidIds(validIds, datasets, yieldedIds, allowSuggestion)
 
   // Yield globe-control actions extracted from inline markers
   for (const ga of globeActions) {
@@ -1481,12 +1494,31 @@ export async function* processMessage(
     // `turnIndex` is still computed above for `getRelevantQA` (which tunes
     // its output based on conversation depth), but is NOT passed to the
     // prompt builder anymore.
+    // §A6. One decision, read twice: it gates both the prompt's
+    // carve-out and the tool array below. Computing it separately in
+    // each place would let them drift, and either direction is a bug —
+    // the permission without the tools invites answering from memory,
+    // the tools without the permission leaves the model forbidden from
+    // stating what came back.
+    const analysisAvail = analysisAvailability()
+    const analysisToolsActive = analysisAvail.available
+    // Say which way the gate went, every turn.
+    //
+    // When it closes, Orbit answers about values anyway — from the
+    // picture, or from a sibling dataset's metadata — and the reply is
+    // indistinguishable from a measured one. Reported live as "no
+    // measurement card" on a build that renders them, which took a
+    // round to trace back to the tools never having been offered. The
+    // gate closing is correct behaviour; closing silently is not.
+    logger.info(`[Docent] value tools: ${analysisToolsActive ? 'offered' : `absent (${analysisAvail.reason})`}`)
+
     const systemPrompt = buildSystemPrompt(
       datasets, currentDataset, cfg.readingLevel, visionActive,
       !visionActive ? legendDescription : null,
       !visionActive ? currentTime : null,
       qaContext || null,
       mapViewContext,
+      analysisToolsActive,
     )
 
     if (cfg.debugPrompt) {
@@ -1681,12 +1713,118 @@ export async function* processMessage(
         `[CURRENT EVENTS — reputable, curator-approved current events relevant to this node's data. This is INTERNAL context: never name this block or write any id in your reply — refer to an event by its headline. Surface one with an <<EVENT:ID>> marker on its own line: it shows a cited card AND loads the dataset that explains it, flying the globe to where and when it happened. Only the ids below are valid; never invent an event, headline, or source:\n${eventLines.join('\n')}]\n`
     }
 
+    // §A6 — measure before the model answers, rather than hoping it
+    // calls the tool.
+    //
+    // Exactly the pattern `[RELEVANT DATASETS]` above uses for
+    // discovery: the app runs the search itself and injects the result,
+    // because a tool the model *may* call is a tool it sometimes does
+    // not. Live, asked "Where is the smoke worst?" with the tools
+    // offered, Orbit called nothing and wrote the answer anyway —
+    // "worst across an area", "at least 500 mg m-2", a coordinate, a
+    // time. Every one of those phrases is how the carve-out describes a
+    // *correct* answer, so the prompt had handed it the shape of the
+    // thing the prompt was trying to compel. No card, no camera move,
+    // no marker: three app-emitted artifacts absent at once, and
+    // nothing in the reply to say so.
+    //
+    // Now the superlative case cannot miss. The number exists before
+    // the first token, the card and the camera move come from it, and
+    // the model's job shrinks to narrating a measurement it has been
+    // handed. It may still call the tools for anything else.
+    // Turn-level rather than per-attempt: the pre-measurement happens
+    // once, before the retry loop exists, and a retry must not fly the
+    // globe a second time or stack a duplicate card under the answer.
+    const measuredTextsThisTurn = new Set<string>()
+    let flewThisTurn = false
+    let preMeasuredText: string | null = null
+
+    /** The app's own account of a reading: the card, and for an
+     *  extremum the camera move and the pin. One place, so the
+     *  pre-measured path and the tool-call path cannot drift. */
+    function* emitMeasurement(r: FindExtremumResult | SummarizeRegionResult): Generator<DocentStreamChunk> {
+      const text = (r as FindExtremumResult).valueText ?? (r as SummarizeRegionResult).meanText
+      if (text && !measuredTextsThisTurn.has(text)) {
+        measuredTextsThisTurn.add(text)
+        const at = r as FindExtremumResult
+        yield {
+          type: 'action',
+          action: {
+            type: 'measurement',
+            valueText: text,
+            ...(Number.isFinite(at.lat) ? { lat: at.lat } : {}),
+            ...(Number.isFinite(at.lon) ? { lon: at.lon } : {}),
+            ...(r.frameTime ? { frameTime: r.frameTime } : {}),
+            ...(r.dataset ? { dataset: r.dataset } : {}),
+          },
+        }
+      }
+      const ext = r as FindExtremumResult
+      if (ext.kind && Number.isFinite(ext.lat) && Number.isFinite(ext.lon) && !flewThisTurn) {
+        flewThisTurn = true
+        // `fromMeasurement` so the chat does not hold these behind a
+        // Load button for some *other* dataset the same reply happens
+        // to recommend — this camera move belongs to the frame already
+        // on the globe.
+        yield { type: 'action', action: { type: 'fly-to', lat: ext.lat!, lon: ext.lon!, fromMeasurement: true } }
+        const label = ext.pinLabel ?? `${ext.value ?? ''} ${ext.units ?? ''}`.trim()
+        yield {
+          type: 'action',
+          action: { type: 'add-marker', lat: ext.lat!, lng: ext.lon!, fromMeasurement: true, ...(label ? { label } : {}) },
+        }
+      }
+    }
+
+    /**
+     * A measured answer gets at most one dataset suggestion.
+     *
+     * "Where is the smoke worst?" came back as two sentences of answer
+     * followed by three datasets with paragraph-length descriptions.
+     * The prompt permits a related dataset *afterwards* and the answer
+     * did come first, so no rule was broken — the ratio was simply
+     * wrong, and it is the mild form of the failure `e5ff06d` fixed:
+     * discovery crowding out the question that was asked.
+     *
+     * Capped here rather than asked for in the prose, on this phase's
+     * evidence. Only applies when we actually measured something; an
+     * ordinary discovery turn is untouched.
+     */
+    const MEASURED_ANSWER_SUGGESTION_CAP = 1
+    let suggestionsThisTurn = 0
+    const suggestionAllowed = (): boolean => {
+      if (measuredTextsThisTurn.size === 0) return true
+      if (suggestionsThisTurn >= MEASURED_ANSWER_SUGGESTION_CAP) return false
+      suggestionsThisTurn++
+      return true
+    }
+
+    let measuredContext = ''
+    if (analysisToolsActive) {
+      const kind = valuesQuestionKind(input)
+      if (kind) {
+        const measured = executeFindExtremum({ kind }, currentTime)
+        logger.info(`[Docent] pre-measured ${kind}: ${measured.ok ? measured.valueText : `refused: ${measured.error}`}`)
+        if (measured.ok && measured.valueText) {
+          preMeasuredText = measured.valueText
+          measuredContext =
+            `[MEASURED — this is a real reading taken from the frame on screen, not an estimate. `
+            + `State it using this exact wording and do not recompute, convert or re-round it: `
+            + `"${measured.valueText}"`
+            + (Number.isFinite(measured.lat) ? `, at ${measured.lat}, ${measured.lon} (signed degrees)` : '')
+            + (measured.frameTime ? `, ${measured.frameTime}` : '')
+            + `. ${measured.precision ?? ''} ${measured.plateau ?? ''} ${measured.saturated ?? ''}`.trimEnd()
+            + ` The app has already shown this reading and moved the globe to it — do not call another value tool for the same question.]\n`
+          yield* emitMeasurement(measured)
+        }
+      }
+    }
+
     const userMessage: LLMMessage = visionActive
       ? { role: 'user', content: [
           { type: 'image_url' as const, image_url: { url: screenshotDataUrl! } },
-          { type: 'text' as const, text: statePrefix + preSearchContext + visionText },
+          { type: 'text' as const, text: statePrefix + preSearchContext + measuredContext + visionText },
         ] as LLMContentPart[] }
-      : { role: 'user', content: statePrefix + preSearchContext + input }
+      : { role: 'user', content: statePrefix + preSearchContext + measuredContext + input }
 
     // Anchor a fresh language-reminder system message right before
     // the user's turn — the system prompt's respond-in-{language}
@@ -1729,6 +1867,12 @@ export async function* processMessage(
       getAddMarkerTool(),
       getToggleLabelsTool(),
       getHighlightRegionTool(),
+      // Absent unless a data-encoded frame is readable. Not disabled,
+      // not stubbed — absent, so a picture dataset leaves Orbit exactly
+      // as it behaves today (CONTRIBUTING §LLM Integrations rule 2).
+      ...(analysisToolsActive
+        ? [getProbeValueTool(), getSummarizeRegionTool(), getFindExtremumTool()]
+        : []),
     ]
 
     // Auto-switch to vision model when using the default CF proxy
@@ -1757,6 +1901,11 @@ export async function* processMessage(
     for (let attempt = 1; attempt <= MAX_LLM_ATTEMPTS; attempt++) {
       let llmProducedText = false
       let accumulatedText = ''
+      // §A6 — one Analyze chip per distinct region per attempt.
+      // (The card and the camera move are deduped per *turn* instead —
+      // see `measuredTextsThisTurn` — because the pre-measurement
+      // happens before this loop and a retry must not repeat it.)
+      const analysisChipsThisAttempt = new Set<string>()
       // Phase 3: each attempt maintains its own conversation state that may
       // grow across multiple streamChat rounds as the LLM calls search_catalog
       // and we feed the results back.
@@ -1819,7 +1968,10 @@ export async function* processMessage(
                   chunk.call.name === 'search_catalog' ||
                   chunk.call.name === 'search_datasets' ||
                   chunk.call.name === 'list_featured_datasets' ||
-                  chunk.call.name === 'search_events'
+                  chunk.call.name === 'search_events' ||
+                  chunk.call.name === 'probe_value' ||
+                  chunk.call.name === 'summarize_region' ||
+                  chunk.call.name === 'find_extremum'
                 ) {
                   // All discovery tools need a tool-result message sent back
                   // to the LLM — queue for the end-of-round dispatch below.
@@ -1850,7 +2002,7 @@ export async function* processMessage(
                     }
                   }
 
-                  if (resolvedId && !yieldedIds.has(resolvedId)) {
+                  if (resolvedId && !yieldedIds.has(resolvedId) && suggestionAllowed()) {
                     yieldedIds.add(resolvedId)
                     yield {
                       type: 'action',
@@ -2052,6 +2204,85 @@ export async function* processMessage(
                 tool_call_id: call.id,
                 content: JSON.stringify(result),
               })
+            } else if (
+              call.name === 'probe_value' ||
+              call.name === 'summarize_region' ||
+              call.name === 'find_extremum'
+            ) {
+              // §A6. Local and synchronous — the whole frame is already
+              // in memory, so this is arithmetic, not a fetch.
+              // `currentTime` is the label the globe is showing, so the
+              // answer and the screen name the same instant.
+              const result =
+                call.name === 'probe_value' ? executeProbeValue(call.arguments, currentTime)
+                : call.name === 'summarize_region' ? executeSummarizeRegion(call.arguments, currentTime)
+                : executeFindExtremum(call.arguments, currentTime)
+              // Args as well as outcome: when an answer looks wrong the
+              // first question is always what it was asked, and a
+              // region the model narrowed to without saying so is
+              // invisible in the reply itself.
+              logger.info(
+                `[Docent] ${call.name}(${JSON.stringify(call.arguments)}) → `
+                + (result.ok ? `ok: ${(result as { valueText?: string }).valueText ?? 'ok'}` : `refused: ${result.error}`),
+              )
+              // `scope` is for us, not the model — strip it before the
+              // result goes into the prompt so it cannot be mistaken
+              // for something to quote.
+              //
+              // The raw parts go with it. Every unit-bearing number
+              // already has a written form beside it (`valueText`,
+              // `meanText`, `distributionText`), and a rule asking the
+              // model to prefer the written one over `value` + `units`
+              // has now failed twice against a unit it finds more
+              // plausible for the subject. A rule it can decline is a
+              // rule; a field that isn't there is a constraint. What
+              // stays is what has no unit to get wrong: coordinates,
+              // coverage, an area named in its own key, and the prose
+              // caveats.
+              const {
+                scope: resultScope,
+                value: _value, units: _units, pinLabel: _pinLabel,
+                mean: _mean, median: _median, min: _min, max: _max, p10: _p10, p90: _p90,
+                ...forModel
+              } = result as typeof result & {
+                scope?: ResolvedScope
+                value?: number; units?: string; pinLabel?: string
+                mean?: number; median?: number; min?: number; max?: number; p10?: number; p90?: number
+              }
+              conversationMessages.push({
+                role: 'tool',
+                tool_call_id: call.id,
+                content: JSON.stringify(forModel),
+              })
+              // §A6 — offer to open Analyze on the region just measured.
+              // Chat cannot draw a chart, so the chip hands the same
+              // selection to the surface that can, rather than leaving
+              // the user to rebuild it by hand.
+              //
+              // Only for scopes the panel's picker can represent: a
+              // bbox answer gets no chip rather than one that opens a
+              // picker showing a region it cannot select. Deduped per
+              // turn, because a model comparing three regions would
+              // otherwise stack three chips on one message.
+              // §A6 — the app's account of the reading: card, camera,
+              // pin. Same helper the pre-measured path uses, so a
+              // number the model asked for and a number we took
+              // unprompted are presented identically.
+              if (result.ok) yield* emitMeasurement(result as FindExtremumResult | SummarizeRegionResult)
+              if (result.ok && resultScope && resultScope.kind !== 'bbox') {
+                const key = `${resultScope.kind}:${resultScope.name ?? ''}`
+                if (!analysisChipsThisAttempt.has(key)) {
+                  analysisChipsThisAttempt.add(key)
+                  yield {
+                    type: 'action',
+                    action: {
+                      type: 'show-analysis',
+                      scope: resultScope.kind,
+                      ...(resultScope.name ? { regionName: resultScope.name } : {}),
+                    },
+                  }
+                }
+              }
             } else if (call.name === 'search_events') {
               // In-memory filter over the approved events already fetched
               // for this turn — no network, works on any deploy.
@@ -2086,7 +2317,7 @@ export async function* processMessage(
           // Self-heal the degraded badge so the user knows
           // functionality is restored without a manual reload.
           clearDegradedState()
-          yield* emitValidatedActions(accumulatedText, datasets, yieldedIds, approvedEvents)
+          yield* emitValidatedActions(accumulatedText, datasets, yieldedIds, approvedEvents, suggestionAllowed)
 
           // Safety net: if the LLM mentioned dataset titles from search_catalog
           // results in its prose but didn't emit <<LOAD:...>> markers for them,
@@ -2110,6 +2341,7 @@ export async function* processMessage(
                 lowerText.includes(titleLower) ||
                 (titleShort.length >= 8 && lowerText.includes(titleShort))
               ) {
+                if (!suggestionAllowed()) continue
                 yieldedIds.add(sr.id)
                 logger.info(`[Docent] Auto-injecting Load button for "${sr.title}" (${sr.id}) — title found in prose but no marker emitted`)
                 yield {

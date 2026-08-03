@@ -1,0 +1,670 @@
+/**
+ * Tests for the Analyze panel and its CSV export.
+ *
+ * The panel is thin — the arithmetic lives in `datasetStats` and is
+ * tested there — so these cover the parts that only exist here: that a
+ * region choice actually narrows the window, that the empty states are
+ * distinguishable (nothing loaded / outside coverage / no data in
+ * region are three different answers and reading one for another sends
+ * a user looking for the wrong problem), and that the export carries
+ * enough context to be falsifiable later.
+ */
+import { describe, expect, it, beforeEach, vi } from 'vitest'
+import {
+  closeAnalyzeUI,
+  currentResult,
+  initAnalyzeUI,
+  isAnalyzeUIOpen,
+  notifyAnalyzeDatasetChanged,
+  openAnalyzeUI,
+  type AnalyzeSource,
+  type TransectPicker,
+} from './analyzeUI'
+import { buildCsvText, buildTransectCsvText, downloadCsv } from './analyzeExport'
+import {
+  buildHistogram,
+  sampleTransect,
+  summarize,
+  type TransectEndpoints,
+} from '../services/datasetStats'
+import { resolveRegion } from '../data/regions'
+import { DEFAULT_DISPLAY } from '../services/colorScaleDisplay'
+import type { LumaSnapshot } from '../services/glLumaSampler'
+import type { ColorScale, DatasetOverlayOptions } from '../types'
+
+const SCALE: ColorScale = {
+  stops: [
+    { t: 0, rgba: [255, 255, 229, 0] },
+    { t: 1, rgba: [102, 37, 6, 255] },
+  ],
+  vmin: 0,
+  vmax: 255,
+  units: 'mg m-2',
+  transparentRange: 12 / 256,
+}
+
+/** The bbox the live RRFS rows carry. */
+const OPTIONS: DatasetOverlayOptions = {
+  boundingBox: { n: 85, s: 5, w: -175, e: -20 },
+  colorScale: SCALE,
+}
+
+function snap(w: number, h: number, fill: (x: number, y: number) => number): LumaSnapshot {
+  const data = new Uint8Array(w * h)
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) data[y * w + x] = fill(x, y)
+  return { data, width: w, height: h }
+}
+
+function makeSource(over: Partial<AnalyzeSource> = {}): AnalyzeSource {
+  return {
+    frame: () => ({ snapshot: snap(8, 8, () => 200), scale: SCALE, options: OPTIONS }),
+    visibleBounds: () => ({ n: 85, s: 5, w: -175, e: -20 }),
+    display: () => DEFAULT_DISPLAY,
+    datasetTitle: () => 'Wildfire Smoke Overhead',
+    datasetId: () => 'INTERNAL_SMOKE_COLUMN',
+    ...over,
+  }
+}
+
+const select = () => document.getElementById('analyze-scope-select') as HTMLSelectElement
+const bodyText = () => document.querySelector('.analyze-body')?.textContent ?? ''
+
+beforeEach(() => {
+  closeAnalyzeUI()
+  document.body.innerHTML = ''
+})
+
+describe('openAnalyzeUI', () => {
+  it('computes against the current frame on open', () => {
+    initAnalyzeUI(makeSource())
+    openAnalyzeUI()
+    expect(isAnalyzeUIOpen()).toBe(true)
+    expect(currentResult()?.mean).toBeCloseTo(200, 6)
+    expect(document.querySelector('.analyze-histogram')).not.toBeNull()
+    expect(document.querySelectorAll('.analyze-stat')).toHaveLength(8)
+  })
+
+  it('states the quantisation step next to the numbers, not in a footnote', () => {
+    initAnalyzeUI(makeSource())
+    openAnalyzeUI()
+    const note = document.querySelector('.analyze-precision')?.textContent ?? ''
+    // 255 over 255 codes is a step of 1.
+    expect(note).toContain('1')
+    expect(note).toContain('mg m-2')
+  })
+
+  it('reports coverage, so a mean over 3% of a box is not read as a mean over all of it', () => {
+    initAnalyzeUI(makeSource({
+      frame: () => ({
+        // One data texel in sixteen; the rest absent.
+        snapshot: snap(4, 4, (x, y) => (x === 0 && y === 0 ? 200 : 0)),
+        scale: SCALE,
+        options: OPTIONS,
+      }),
+    }))
+    openAnalyzeUI()
+    expect(currentResult()?.coverage).toBeCloseTo(0.0625, 6)
+    expect(document.querySelector('.analyze-coverage')?.textContent).toContain('6.3')
+  })
+
+  it('closes on Escape and on the close button', () => {
+    initAnalyzeUI(makeSource())
+    openAnalyzeUI()
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    expect(isAnalyzeUIOpen()).toBe(false)
+
+    openAnalyzeUI()
+    ;(document.querySelector('.analyze-close') as HTMLButtonElement).click()
+    expect(isAnalyzeUIOpen()).toBe(false)
+  })
+
+  it('replaces an already-open panel rather than stacking', () => {
+    initAnalyzeUI(makeSource())
+    openAnalyzeUI()
+    openAnalyzeUI()
+    expect(document.querySelectorAll('.analyze-panel')).toHaveLength(1)
+  })
+})
+
+describe('empty states', () => {
+  it('distinguishes "no data-encoded dataset" from a computed result', () => {
+    initAnalyzeUI(makeSource({ frame: () => null }))
+    openAnalyzeUI()
+    expect(currentResult()).toBeNull()
+    expect(document.querySelector('.analyze-message')).not.toBeNull()
+    expect(document.querySelector('.analyze-stats')).toBeNull()
+  })
+
+  it('says the region misses the dataset rather than showing zeroes', () => {
+    initAnalyzeUI(makeSource())
+    openAnalyzeUI()
+    select().value = 'view'
+    // A view far south of the 5°N bottom edge.
+    initAnalyzeUI(makeSource({ visibleBounds: () => ({ n: -30, s: -60, w: -100, e: -50 }) }))
+    select().dispatchEvent(new Event('change', { bubbles: true }))
+    expect(currentResult()).toBeNull()
+    expect(bodyText()).not.toBe('')
+    expect(document.querySelector('.analyze-stats')).toBeNull()
+  })
+
+  it('says a region carries no values when every texel there is absent', () => {
+    initAnalyzeUI(makeSource({
+      frame: () => ({ snapshot: snap(4, 4, () => 0), scale: SCALE, options: OPTIONS }),
+    }))
+    openAnalyzeUI()
+    expect(currentResult()).toBeNull()
+    expect(document.querySelector('.analyze-stats')).toBeNull()
+  })
+})
+
+describe('region scope', () => {
+  it('offers the whole dataset, the current view, and named regions', () => {
+    initAnalyzeUI(makeSource())
+    openAnalyzeUI()
+    const values = [...select().options].map((o) => o.value)
+    expect(values.slice(0, 2)).toEqual(['dataset', 'view'])
+    expect(values.filter((v) => v.startsWith('named:')).length).toBeGreaterThan(0)
+  })
+
+  it('narrows the result when the region shrinks', () => {
+    // North half hot, south half cool. Restricting to the north half
+    // must raise the mean above the whole-dataset value.
+    initAnalyzeUI(makeSource({
+      frame: () => ({
+        snapshot: snap(8, 8, (_x, y) => (y < 4 ? 240 : 40)),
+        scale: SCALE,
+        options: OPTIONS,
+      }),
+      visibleBounds: () => ({ n: 85, s: 45, w: -175, e: -20 }),
+    }))
+    openAnalyzeUI()
+    const whole = currentResult()!.mean
+
+    select().value = 'view'
+    select().dispatchEvent(new Event('change', { bubbles: true }))
+    expect(currentResult()!.mean).toBeGreaterThan(whole)
+    expect(currentResult()!.mean).toBeCloseTo(240, 6)
+  })
+
+  it('falls back to the whole dataset when the view is unknown', () => {
+    initAnalyzeUI(makeSource({ visibleBounds: () => null }))
+    openAnalyzeUI()
+    select().value = 'view'
+    select().dispatchEvent(new Event('change', { bubbles: true }))
+    expect(currentResult()?.mean).toBeCloseTo(200, 6)
+  })
+})
+
+describe('buildCsvText', () => {
+  const s = snap(4, 4, (x) => (x < 2 ? 100 : 200))
+  const stats = summarize(s, SCALE, OPTIONS)!
+  const hist = buildHistogram(s, SCALE, OPTIONS)
+
+  it('records what the numbers are of', () => {
+    const csv = buildCsvText(stats, hist, SCALE, {
+      datasetTitle: 'Wildfire Smoke Overhead', scopeLabel: 'dataset',
+    })
+    expect(csv).toContain('dataset,Wildfire Smoke Overhead')
+    expect(csv).toContain('units,mg m-2')
+    expect(csv).toContain('quantisation_step,1')
+  })
+
+  it('carries the distribution, not just the summary', () => {
+    const csv = buildCsvText(stats, hist, SCALE, { datasetTitle: null, scopeLabel: 'dataset' })
+    expect(csv).toContain('value,area_km2,texel_count')
+    // Exactly the two occupied bins, and no rows for absent codes.
+    const bins = csv.split('value,area_km2,texel_count\r\n')[1].trim().split('\r\n')
+    expect(bins).toHaveLength(2)
+    expect(bins[0].startsWith('100,')).toBe(true)
+    expect(bins[1].startsWith('200,')).toBe(true)
+  })
+
+  it('exports full precision, not the three digits the panel shows', () => {
+    // The rounding on screen is a legibility choice; re-imposing it here
+    // would destroy what the file exists to carry.
+    const odd: ColorScale = { ...SCALE, vmin: 0, vmax: 1 / 3 }
+    const csv = buildCsvText(
+      summarize(s, odd, OPTIONS)!, buildHistogram(s, odd, OPTIONS), odd,
+      { datasetTitle: null, scopeLabel: 'dataset' })
+    expect(csv).toMatch(/mean,0\.\d{6,}/)
+  })
+
+  it('quotes only cells that need it, with CRLF line endings', () => {
+    const csv = buildCsvText(stats, hist, SCALE, {
+      datasetTitle: 'Smoke, column', scopeLabel: 'dataset',
+    })
+    expect(csv).toContain('"Smoke, column"')
+    expect(csv).toContain('\r\n')
+    expect(csv).toContain('units,mg m-2') // no gratuitous quoting
+  })
+
+  it('is downloadable without throwing when the DOM has no object URLs', () => {
+    // happy-dom has no createObjectURL; the export must degrade rather
+    // than take the click handler down with it.
+    const original = URL.createObjectURL
+    // @ts-expect-error — deliberately removing the API under test.
+    URL.createObjectURL = undefined
+    expect(() => downloadCsv('x.csv', 'a,b')).not.toThrow()
+    URL.createObjectURL = original
+  })
+})
+
+describe('export button', () => {
+  it('serialises the numbers currently on screen', () => {
+    const spy = vi.fn()
+    const original = URL.createObjectURL
+    URL.createObjectURL = spy.mockReturnValue('blob:x')
+    URL.revokeObjectURL = () => {}
+    initAnalyzeUI(makeSource())
+    openAnalyzeUI()
+    ;(document.querySelector('.analyze-export') as HTMLButtonElement).click()
+    expect(spy).toHaveBeenCalled()
+    URL.createObjectURL = original
+  })
+})
+
+describe('region names that cannot be resolved', () => {
+  // `getRegionNames` returns display names; `resolveRegion` looks up
+  // lowercased aliases. At least one entry's display name is not among
+  // its own aliases, so offering the raw list produced a region that
+  // fell through to whole-dataset statistics wearing that region's
+  // label — real numbers, wrong answer, no error.
+  it('never offers a region it cannot locate', () => {
+    initAnalyzeUI(makeSource())
+    openAnalyzeUI()
+    const named = [...select().options]
+      .map((o) => o.value)
+      .filter((v) => v.startsWith('named:'))
+      .map((v) => v.slice(6))
+    expect(named.length).toBeGreaterThan(0)
+    for (const name of named) {
+      expect(resolveRegion(name), `"${name}" is offered but does not resolve`).not.toBeNull()
+    }
+  })
+
+  it('says so rather than silently measuring everything', () => {
+    initAnalyzeUI(makeSource())
+    openAnalyzeUI()
+    // Force the state directly: the picker no longer offers one, but
+    // the regions table can change underneath it.
+    const s = select()
+    const opt = document.createElement('option')
+    opt.value = 'named:Not A Real Place'
+    s.appendChild(opt)
+    s.value = 'named:Not A Real Place'
+    s.dispatchEvent(new Event('change', { bubbles: true }))
+
+    expect(currentResult()).toBeNull()
+    expect(document.querySelector('.analyze-stats')).toBeNull()
+    expect(document.querySelector('.analyze-message')).not.toBeNull()
+  })
+})
+
+describe('the globe changing underneath the panel', () => {
+  // The panel computes once, on open. Left open across a dataset swap
+  // it showed a statistics table describing something no longer on
+  // screen — every figure real, every figure about the wrong thing.
+  // The old teardown only fired when *no* dataset carried a palette, so
+  // swapping one data-encoded row for another kept it open.
+  it('closes when a different dataset is loaded', () => {
+    initAnalyzeUI(makeSource({ datasetId: () => 'SMOKE_COLUMN' }))
+    openAnalyzeUI()
+    expect(isAnalyzeUIOpen()).toBe(true)
+
+    notifyAnalyzeDatasetChanged('SMOKE_NEAR_SURFACE')
+    expect(isAnalyzeUIOpen()).toBe(false)
+  })
+
+  it('stays open when the same dataset is re-announced', () => {
+    // Re-announcing happens on layout changes and legend refreshes;
+    // closing on those would make the panel unusable.
+    initAnalyzeUI(makeSource({ datasetId: () => 'SMOKE_COLUMN' }))
+    openAnalyzeUI()
+    notifyAnalyzeDatasetChanged('SMOKE_COLUMN')
+    expect(isAnalyzeUIOpen()).toBe(true)
+  })
+
+  it('closes when the dataset is unloaded entirely', () => {
+    initAnalyzeUI(makeSource({ datasetId: () => 'SMOKE_COLUMN' }))
+    openAnalyzeUI()
+    notifyAnalyzeDatasetChanged(null)
+    expect(isAnalyzeUIOpen()).toBe(false)
+  })
+
+  it('is inert when the panel is closed', () => {
+    initAnalyzeUI(makeSource())
+    expect(() => notifyAnalyzeDatasetChanged('ANYTHING')).not.toThrow()
+    expect(isAnalyzeUIOpen()).toBe(false)
+  })
+})
+
+/**
+ * A stand-in for the globe's half of the transect. The panel talks to
+ * this seam rather than to MapLibre, which is what lets the interaction
+ * be tested at all — placing two points is a pair of map clicks in the
+ * real thing.
+ */
+function makePicker() {
+  let onChange: ((ends: TransectEndpoints | null) => void) | null = null
+  let placed = 0
+  let clears = 0
+  const picker: TransectPicker = {
+    begin(cb) {
+      onChange = cb
+      placed = 0
+    },
+    progress: () => placed,
+    clear() {
+      placed = 0
+      onChange = null
+      clears++
+    },
+  }
+  return {
+    picker,
+    /** The second click landing, or an endpoint being dragged. */
+    settle(ends: TransectEndpoints) {
+      placed = 2
+      onChange?.(ends)
+    },
+    placeFirst() {
+      placed = 1
+    },
+    clears: () => clears,
+    armed: () => onChange !== null,
+  }
+}
+
+const CROSSING: TransectEndpoints = {
+  from: { lat: 70, lon: -150 },
+  to: { lat: 20, lon: -60 },
+}
+
+const section = () => document.querySelector('.analyze-transect-section')
+const sectionButtons = () =>
+  [...document.querySelectorAll('.analyze-transect-section button')] as HTMLButtonElement[]
+const buttonSaying = (fragment: string): HTMLButtonElement | undefined =>
+  sectionButtons().find((b) => (b.textContent ?? '').toLowerCase().includes(fragment))
+
+describe('transect', () => {
+  it('is absent, not disabled, when there is no globe to pick on', () => {
+    initAnalyzeUI(makeSource())
+    openAnalyzeUI()
+    expect(section()).toBeNull()
+  })
+
+  it('offers a control, and asks for two clicks once armed', () => {
+    const p = makePicker()
+    initAnalyzeUI(makeSource({ transect: () => p.picker }))
+    openAnalyzeUI()
+    expect(section()).not.toBeNull()
+
+    buttonSaying('draw')!.click()
+    expect(p.armed()).toBe(true)
+    expect(section()?.textContent).toContain('start')
+    expect(document.querySelector('.analyze-transect')).toBeNull()
+  })
+
+  it('charts the line once both endpoints land', () => {
+    const p = makePicker()
+    initAnalyzeUI(makeSource({ transect: () => p.picker }))
+    openAnalyzeUI()
+    buttonSaying('draw')!.click()
+    p.settle(CROSSING)
+
+    expect(document.querySelector('.analyze-transect')).not.toBeNull()
+    // Length / lowest / highest / mean, on top of the region's eight.
+    expect(document.querySelectorAll('.analyze-stat')).toHaveLength(12)
+    expect(buttonSaying('export line')).toBeDefined()
+  })
+
+  it('re-samples a drag without recomputing the region statistics', () => {
+    // The panel holds one frame deliberately: calling frame() per drag
+    // event would be a full readback at pointer rate on a playing
+    // video, which is exactly what the snapshot path forbids.
+    const p = makePicker()
+    let frames = 0
+    initAnalyzeUI(makeSource({
+      transect: () => p.picker,
+      frame: () => {
+        frames++
+        return { snapshot: snap(64, 64, () => 200), scale: SCALE, options: OPTIONS }
+      },
+    }))
+    openAnalyzeUI()
+    buttonSaying('draw')!.click()
+    p.settle(CROSSING)
+    const afterFirst = frames
+
+    p.settle({ from: { lat: 60, lon: -140 }, to: { lat: 30, lon: -70 } })
+    expect(frames).toBe(afterFirst)
+    expect(document.querySelector('.analyze-transect')).not.toBeNull()
+  })
+
+  it('says so when the line crosses nothing, rather than charting an empty axis', () => {
+    const p = makePicker()
+    initAnalyzeUI(makeSource({
+      transect: () => p.picker,
+      frame: () => ({ snapshot: snap(8, 8, () => 0), scale: SCALE, options: OPTIONS }),
+    }))
+    openAnalyzeUI()
+    buttonSaying('draw')!.click()
+    p.settle(CROSSING)
+    expect(document.querySelector('.analyze-transect')).toBeNull()
+    expect(section()?.textContent?.toLowerCase()).toContain("doesn't cross")
+  })
+
+  it('takes the line off the globe when the panel closes', () => {
+    // The line is drawn on the map, not in the panel — leaving it would
+    // be an annotation with nothing on screen left to remove it.
+    const p = makePicker()
+    initAnalyzeUI(makeSource({ transect: () => p.picker }))
+    openAnalyzeUI()
+    buttonSaying('draw')!.click()
+    p.settle(CROSSING)
+
+    const before = p.clears()
+    closeAnalyzeUI()
+    expect(p.clears()).toBeGreaterThan(before)
+  })
+
+  it('clears on request and offers to draw again', () => {
+    const p = makePicker()
+    initAnalyzeUI(makeSource({ transect: () => p.picker }))
+    openAnalyzeUI()
+    buttonSaying('draw')!.click()
+    p.settle(CROSSING)
+    buttonSaying('clear')!.click()
+
+    expect(document.querySelector('.analyze-transect')).toBeNull()
+    expect(buttonSaying('draw')).toBeDefined()
+  })
+
+  it('survives a region change with the transect intact', () => {
+    const p = makePicker()
+    initAnalyzeUI(makeSource({ transect: () => p.picker }))
+    openAnalyzeUI()
+    buttonSaying('draw')!.click()
+    p.settle(CROSSING)
+
+    select().value = 'view'
+    select().dispatchEvent(new Event('change'))
+    expect(document.querySelector('.analyze-transect')).not.toBeNull()
+  })
+
+  it('advances the instruction after the first click', () => {
+    const p = makePicker()
+    initAnalyzeUI(makeSource({ transect: () => p.picker }))
+    openAnalyzeUI()
+    buttonSaying('draw')!.click()
+    p.placeFirst()
+    // Re-render the way a pick would: the panel reads progress() to
+    // decide which half of the instruction to show.
+    buttonSaying('cancel')
+    expect(p.picker.progress()).toBe(1)
+  })
+})
+
+describe('buildTransectCsvText', () => {
+  const s = snap(16, 16, (_x, y) => (y < 8 ? 0 : 200))
+  const line = sampleTransect(
+    s, SCALE, { lat: 80, lon: -100 }, { lat: 10, lon: -100 }, 9, OPTIONS)
+
+  it('states the resolution claim in the header', () => {
+    const csv = buildTransectCsvText(line, SCALE, {
+      datasetTitle: 'Wildfire Smoke Overhead', scopeLabel: 'Along a line',
+    })
+    expect(csv).toContain('dataset,Wildfire Smoke Overhead')
+    expect(csv).toContain('samples,9')
+    expect(csv).toMatch(/sample_spacing_km,\d/)
+    expect(csv).toContain('distance_km,lat,lon,value')
+  })
+
+  it('keeps the gaps as rows with no value', () => {
+    // Dropping them would close the hole silently, which is the failure
+    // the chart takes care to avoid — the file must not undo it.
+    const csv = buildTransectCsvText(line, SCALE, { datasetTitle: null, scopeLabel: 'x' })
+    const body = csv.split('distance_km,lat,lon,value\r\n')[1].trim().split('\r\n')
+    expect(body).toHaveLength(line.length)
+    expect(body.some((row) => row.endsWith(','))).toBe(true)
+  })
+
+  it('writes values at full precision, not the three digits displayed', () => {
+    const precise = sampleTransect(
+      s, { ...SCALE, vmax: 1 }, { lat: 80, lon: -100 }, { lat: 10, lon: -100 }, 5, OPTIONS)
+    const csv = buildTransectCsvText(precise, { ...SCALE, vmax: 1 }, {
+      datasetTitle: null, scopeLabel: 'x',
+    })
+    expect(csv).toMatch(/0\.\d{5,}/)
+  })
+})
+
+/** The globe's side of the region picker, recorded rather than drawn. */
+function makeOutline() {
+  const shown: { n: number; s: number; w: number; e: number }[] = []
+  let clears = 0
+  return {
+    outline: {
+      show(bounds: { n: number; s: number; w: number; e: number }) { shown.push(bounds) },
+      clear() { clears++ },
+    },
+    shown: () => shown,
+    last: () => shown[shown.length - 1],
+    clears: () => clears,
+  }
+}
+
+describe('region outline', () => {
+  it('outlines a named region so the numbers have a place', () => {
+    const o = makeOutline()
+    initAnalyzeUI(makeSource({ regionOutline: () => o.outline }))
+    openAnalyzeUI()
+    const alabama = resolveRegion('alabama')
+    expect(alabama).not.toBeNull()
+
+    select().value = 'named:Alabama'
+    select().dispatchEvent(new Event('change', { bubbles: true }))
+    const [w, s, e, n] = alabama!.bounds
+    expect(o.last()).toEqual({ n, s, w, e })
+  })
+
+  it('outlines the requested region even when it misses the dataset', () => {
+    // The box is the whole explanation of the message beside it — "that
+    // region is over there, and the data is not".
+    const o = makeOutline()
+    initAnalyzeUI(makeSource({
+      regionOutline: () => o.outline,
+      visibleBounds: () => ({ n: -30, s: -60, w: -100, e: -50 }),
+    }))
+    openAnalyzeUI()
+    select().value = 'view'
+    select().dispatchEvent(new Event('change', { bubbles: true }))
+    expect(currentResult()).toBeNull()
+    expect(o.last()).toEqual({ n: -30, s: -60, w: -100, e: -50 })
+  })
+
+  it('clears for the whole dataset, which needs no box', () => {
+    const o = makeOutline()
+    initAnalyzeUI(makeSource({ regionOutline: () => o.outline }))
+    openAnalyzeUI()
+    select().value = 'named:Alabama'
+    select().dispatchEvent(new Event('change', { bubbles: true }))
+    const before = o.clears()
+
+    select().value = 'dataset'
+    select().dispatchEvent(new Event('change', { bubbles: true }))
+    expect(o.clears()).toBeGreaterThan(before)
+  })
+
+  it('skips a box so wide it would just trace the antimeridian', () => {
+    const o = makeOutline()
+    initAnalyzeUI(makeSource({
+      regionOutline: () => o.outline,
+      visibleBounds: () => ({ n: 85, s: -85, w: -180, e: 180 }),
+    }))
+    openAnalyzeUI()
+    select().value = 'view'
+    select().dispatchEvent(new Event('change', { bubbles: true }))
+    expect(o.shown()).toHaveLength(0)
+  })
+
+  it('takes the box off the globe when the panel closes', () => {
+    const o = makeOutline()
+    initAnalyzeUI(makeSource({ regionOutline: () => o.outline }))
+    openAnalyzeUI()
+    select().value = 'named:Alabama'
+    select().dispatchEvent(new Event('change', { bubbles: true }))
+    const before = o.clears()
+    closeAnalyzeUI()
+    expect(o.clears()).toBeGreaterThan(before)
+  })
+
+  it('clears when there is no longer a frame to analyse', () => {
+    const o = makeOutline()
+    initAnalyzeUI(makeSource({ regionOutline: () => o.outline, frame: () => null }))
+    openAnalyzeUI()
+    expect(o.clears()).toBeGreaterThan(0)
+    expect(o.shown()).toHaveLength(0)
+  })
+})
+
+describe('§A6 — opening pre-scoped from an Orbit chip', () => {
+  it('opens on the region it was handed, overriding the sticky choice', () => {
+    // The scope is deliberately sticky across opens within a session,
+    // which is right for someone comparing regions by hand — and the
+    // one wrong answer available when arriving from "the smoke is
+    // worst over Alabama".
+    initAnalyzeUI(makeSource())
+    openAnalyzeUI()
+    select().value = 'named:Alaska'
+    select().dispatchEvent(new Event('change', { bubbles: true }))
+    closeAnalyzeUI()
+
+    openAnalyzeUI(null, { kind: 'named', name: 'Alabama' })
+    expect(select().value).toBe('named:Alabama')
+  })
+
+  it('computes against that region, not merely displays it', () => {
+    initAnalyzeUI(makeSource({
+      frame: () => ({
+        snapshot: snap(16, 16, (_x, y) => (y < 4 ? 240 : 40)),
+        scale: SCALE,
+        options: OPTIONS,
+      }),
+    }))
+    openAnalyzeUI(null, { kind: 'named', name: 'Mexico' })
+    // Mexico sits well south of the hot northern band.
+    expect(currentResult()!.mean).toBeCloseTo(40, 6)
+  })
+
+  it('still honours the sticky choice when opened with no preset', () => {
+    initAnalyzeUI(makeSource())
+    openAnalyzeUI()
+    select().value = 'named:Alaska'
+    select().dispatchEvent(new Event('change', { bubbles: true }))
+    closeAnalyzeUI()
+
+    openAnalyzeUI()
+    expect(select().value).toBe('named:Alaska')
+  })
+})

@@ -35,6 +35,12 @@ import { initToolsMenu, syncToolsMenuState, syncToolsMenuLayout, pulseBrowseButt
 import { openCreditsPanel } from './ui/creditsPanel'
 import { initChatUI, openChat, openChatSettings, notifyDatasetChanged, showChatTrigger, hideChatTrigger, closeChat, flushPendingGlobeActions } from './ui/chatUI'
 import { loadViewPreferences, saveViewPreferences, type ViewPreferences } from './utils/viewPreferences'
+import { renderColorbar, openDisplayControls, closeDisplayControls } from './ui/colorbarUI'
+import { initAnalyzeUI, openAnalyzeUI, closeAnalyzeUI, notifyAnalyzeDatasetChanged } from './ui/analyzeUI'
+import { registerAnalysisSource } from './services/docentAnalysisTools'
+import { buildHistogram } from './services/datasetStats'
+import { DEFAULT_DISPLAY, type ColorScaleDisplay } from './services/colorScaleDisplay'
+import { RENDER_ENCODING_DATA_LUMA } from './types/color-scale'
 import { initHelpUI, setActiveDataset as setHelpActiveDataset } from './ui/helpUI'
 import { showDisclosureBannerIfNeeded } from './ui/disclosureBanner'
 import {
@@ -310,6 +316,17 @@ class InteractiveSphere {
   private viewPrefs: ViewPreferences = loadViewPreferences()
 
   /**
+   * The data-encoded viewing transform, shared by every panel.
+   *
+   * Session-scoped rather than persisted: a palette or threshold is
+   * chosen against the field in front of you, and silently re-applying
+   * last week's threshold to a different dataset would hide data with
+   * no visible cause. It does survive dataset and layout changes within
+   * a session, which is the span over which a viewer is comparing.
+   */
+  private colorScaleDisplay: ColorScaleDisplay = DEFAULT_DISPLAY
+
+  /**
    * Which slot's dataset the info panel currently displays.
    *
    * - `null` → follow the primary. The info panel re-renders whenever
@@ -401,6 +418,61 @@ class InteractiveSphere {
       // safe on desktop too; the opener affordances are the gate.
       initDownloadDialogUI({ announce: (msg) => this.announce(msg) })
       initHelpUI()
+      // Statistics over the frame on screen (§A3). Reads through the
+      // primary panel, which is the one the info panel, playback and
+      // the value readout all already follow — analysing a globe the
+      // user is not driving would be a different feature.
+      initAnalyzeUI({
+        frame: () => this.viewports.getPrimary()?.analysisFrame() ?? null,
+        visibleBounds: () => this.viewports.getPrimary()?.visibleBounds() ?? null,
+        display: () => this.colorScaleDisplay,
+        datasetTitle: () => this.appState.currentDataset?.title ?? null,
+        datasetId: () => this.appState.currentDataset?.id ?? null,
+        // Primary panel only, matching the probe readout: `probeValueAt`
+        // is a MapRenderer method rather than part of the GlobeRenderer
+        // interface, so a transect on a secondary panel would have
+        // nothing to sample. Named as a constraint in
+        // `docs/DATA_ANALYSIS_PLAN.md` rather than worked around here.
+        transect: () => {
+          const primary = this.viewports.getPrimary()
+          if (!primary) return null
+          return {
+            begin: (onChange) => primary.beginTransect(onChange),
+            progress: () => primary.transectProgress(),
+            clear: () => primary.clearTransect(),
+          }
+        },
+        regionOutline: () => {
+          const primary = this.viewports.getPrimary()
+          if (!primary) return null
+          return {
+            show: (bounds) => primary.showRegionOutline(bounds),
+            clear: () => primary.clearRegionOutline(),
+          }
+        },
+      })
+      // The same frame, reachable from Orbit's tool executors (§A6).
+      // Registered rather than passed down: `processMessage` already
+      // takes eight positional arguments, and the panel's own seam is
+      // established as a registration too. Reads the primary panel for
+      // the same reason the panel does.
+      registerAnalysisSource({
+        frame: () => this.viewports.getPrimary()?.analysisFrame() ?? null,
+        visibleBounds: () => this.viewports.getPrimary()?.visibleBounds() ?? null,
+        datasetTitle: () => this.appState.currentDataset?.title ?? null,
+        // Deliberately the renderer's own probe rather than a second
+        // read of `analysisFrame()`. The point is to ask a different
+        // path the same question: this is the call the hover readout
+        // makes, with the renderer's probe source and bounding box, so
+        // if it and the snapshot have drifted apart the cross-check
+        // sees it. Reading the frame again here would agree with
+        // itself and prove nothing.
+        probeAt: (lat, lon) => {
+          const reading = this.viewports.getPrimary()?.probeValueAt(lat, lon)
+          if (!reading) return null
+          return { value: reading.value, noData: reading.noData === true }
+        },
+      })
       // Playlists — mount the manager panel host and wire the
       // playback state machine to the regular loadDataset flow.
       // hasTourOnLoad probes dataset metadata so the playback
@@ -610,8 +682,20 @@ class InteractiveSphere {
             primary.loadDefaultEarthMaterials((f: number) => { earthFraction = f; updateProgress() }),
             primary.loadCloudOverlay(cloudUrl, (f: number) => { cloudFraction = f; updateProgress() })
           ])
-          const sun = getSunPosition(new Date())
-          primary.enableSunLighting(sun.lat, sun.lng)
+          // Only if the globe is still bare. `enableSunLighting` clears
+          // the dataset texture and the probe source by design — that
+          // is how unloading returns to the plain Earth — so firing it
+          // here after a dataset has already been loaded wipes that
+          // dataset off the globe and silently kills its value readout.
+          //
+          // The window is real whenever these two textures are slow or
+          // unreachable: they are large external assets, and the
+          // catalog can be ready long before them. The dataset is the
+          // thing the visitor asked for; the day/night look is not.
+          if (!this.panelStates.some(p => p?.dataset)) {
+            const sun = getSunPosition(new Date())
+            primary.enableSunLighting(sun.lat, sun.lng)
+          }
         } catch (err) {
           logger.warn('[App] Earth material loading failed — continuing without day/night overlay:', err)
         }
@@ -1640,6 +1724,7 @@ class InteractiveSphere {
     const infoOn = this.viewPrefs.infoPanelVisible
     const isMultiView = this.viewports.getPanelCount() > 1
     const primaryIdx = this.viewports.getPrimaryIndex()
+    let anyColorbar = false
 
     for (let slot = 0; slot < this.panelStates.length; slot++) {
       const panel = this.panelStates[slot]
@@ -1652,10 +1737,31 @@ class InteractiveSphere {
       // - Off for the primary in single-view mode when the info
       //   panel is visible (the info panel holds the legend there)
       // - On otherwise
-      let showFloating = legendOn && !!legendLink
-      if (showFloating && !isMultiView && slot === primaryIdx && infoOn) {
+      // A data-encoded row carries its exact palette, range and units,
+      // so the rendered colorbar supersedes the uploaded legend image —
+      // which for these datasets describes at best the same thing and
+      // at worst a previous encode.
+      const scale = dataset?.renderEncoding === RENDER_ENCODING_DATA_LUMA
+        ? dataset.colorScale ?? null
+        : null
+
+      let showFloating = legendOn && (!!legendLink || !!scale)
+      if (showFloating && !isMultiView && slot === primaryIdx && infoOn && !scale) {
         showFloating = false
       }
+
+      if (showFloating && scale && dataset) {
+        this.viewports.setPanelLegend(slot, null)
+        this.viewports.setPanelColorbar(slot, renderColorbar({
+          scale,
+          display: this.colorScaleDisplay,
+          title: dataset.title,
+          onOpen: () => this.openColorbarControls(scale),
+        }))
+        anyColorbar = true
+        continue
+      }
+      this.viewports.setPanelColorbar(slot, null)
 
       if (showFloating && legendLink && dataset) {
         this.viewports.setPanelLegend(slot, legendLink, {
@@ -1666,6 +1772,52 @@ class InteractiveSphere {
         this.viewports.setPanelLegend(slot, null)
       }
     }
+
+    // Nothing on screen carries a palette any more — the dataset was
+    // unloaded or swapped for a picture — so an open controls popover
+    // is adjusting the colours of nothing, and an open Analyze panel is
+    // showing statistics for a frame that is no longer displayed.
+    if (!anyColorbar) {
+      closeDisplayControls()
+      closeAnalyzeUI()
+    } else {
+      // Still something to colour, but possibly a different dataset —
+      // the Analyze panel's numbers belong to the one it opened on.
+      notifyAnalyzeDatasetChanged(this.appState.currentDataset?.id ?? null)
+    }
+  }
+
+  /**
+   * Open the palette / range / threshold controls for a data-encoded
+   * dataset, and fan every change out to all panels.
+   *
+   * The transform goes to every globe rather than the one that was
+   * tapped: in a 2- or 4-globe layout the panels exist to be compared,
+   * and comparing two fields through two different palettes is worse
+   * than not comparing them.
+   */
+  private openColorbarControls(scale: NonNullable<Dataset['colorScale']>): void {
+    openDisplayControls({
+      scale,
+      display: this.colorScaleDisplay,
+      // Read the frame once, when the controls open, so the sliders
+      // are placed on the data's own distribution rather than on the
+      // palette's nominal range — see `DisplayControlsOptions`.
+      // Null whenever the frame isn't readable, which falls back to
+      // the linear placement rather than failing.
+      distribution: () => {
+        const frame = this.viewports.getPrimary()?.analysisFrame()
+        if (!frame) return null
+        return buildHistogram(frame.snapshot, frame.scale, frame.options).weights
+      },
+      onChange: (next) => {
+        this.colorScaleDisplay = next
+        this.viewports.setColorScaleDisplay(next)
+        // Rebuild the floating bars so they track the globe. Cheap:
+        // this is DOM, and the LUT upload has already happened.
+        this.refreshPanelLegends()
+      },
+    })
   }
 
   /** Open the full-size legend modal for a dataset. Mirrors the
@@ -2262,6 +2414,16 @@ class InteractiveSphere {
         for (const r of this.viewports.getAll()) { r.toggleLabels?.(visible); r.toggleBoundaries?.(visible) }
       },
       onHighlightRegion: (geojson, _label) => { this.renderer?.highlightRegion(geojson) },
+      onShowAnalysis: (scope, regionName) => {
+        openAnalyzeUI(
+          null,
+          scope === 'named' && regionName
+            ? { kind: 'named', name: regionName }
+            : scope === 'view'
+              ? { kind: 'view' }
+              : { kind: 'dataset' },
+        )
+      },
       getMapViewContext: () => this.renderer?.getViewContext() ?? null,
       getDatasets: () => this.appState.datasets,
       getCurrentDataset: () => this.appState.currentDataset,
@@ -2598,6 +2760,14 @@ class InteractiveSphere {
     logger.debug('[App] Primary panel changed:', _oldIndex, '→', newIndex)
     const newPrimaryPanel = this.panelStates[newIndex]
     const newDataset = newPrimaryPanel?.dataset ?? null
+
+    // Analyze reads the primary and nothing else, and its transect is
+    // drawn on that panel's map. Promoting a different one would leave
+    // the line on the globe the panel is no longer describing, so it
+    // closes here rather than being rewired — the same reasoning as the
+    // dataset-swap teardown, which `notifyAnalyzeDatasetChanged` below
+    // would miss whenever both panels hold the same row.
+    closeAnalyzeUI()
 
     // Rewire video sync to the new primary's video (if any)
     this.detachPrimaryVideoSync()
