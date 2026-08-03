@@ -41,6 +41,14 @@ the other is a click. It is generated from the same modules
 `npm run setup` uses, which is what keeps its binding list and
 prerequisites honest.
 
+**Both start with a fork.** Every step after the pre-flight sheet
+assumes your own copy of this repo: Phase 3 rewrites `wrangler.toml`
+with your resource IDs, and Cloudflare Pages builds from your remote.
+Cloning upstream directly fails late rather than early — nothing
+complains until you have IDs to push and nowhere to push them.
+[§0.2 of the install guide](docs/SELF_HOSTING.md#02-fork-the-repository)
+covers the two ways to get one and what differs between them.
+
 > On a fork, the console link above serves **upstream’s** revision.
 > Your checkout’s `docs/SELF_HOSTING.md` is the one that matches
 > your code — and once you finish Phase 5, your own node serves its
@@ -133,6 +141,12 @@ If you prefer to run locally:
 - Git
 
 ```bash
+# Get the code. Running your own node? Fork first — see
+# "Run your own node" above. Contributing upstream? Clone this repo
+# directly, or your own fork if you plan to raise a pull request.
+git clone https://github.com/zyra-project/terraviz.git
+cd terraviz
+
 # Install dependencies
 npm install
 # or
