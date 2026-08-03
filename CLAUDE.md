@@ -352,7 +352,15 @@ as `i18n-exempt:`.
   recursively; all of `functions/` and `cli/` against
   [`docs/BACKEND_MODULES.md`](docs/BACKEND_MODULES.md) (the backend
   map — helper-dense and route-shaped, kept out of CLAUDE.md and
-  next to the `docs/CATALOG_*` plan docs).
+  next to the `docs/CATALOG_*` plan docs); `scripts/lib/` against
+  [`docs/SCRIPTS_MODULES.md`](docs/SCRIPTS_MODULES.md) (the shared
+  library behind the build, provisioning and audit scripts).
+- **Uncovered by design:** the one-shot CLI entry points at the top of
+  `scripts/` — their filenames are the documentation — and
+  `scripts/screenshots/`, which _Visual testing & reporting_ above
+  already documents in prose. Every covered root points at a
+  documentation home that exists; that is the rule the manifest
+  encodes, and it is why a directory with no map is not simply added.
 - **Excluded:** generated code (`messages*.ts` i18n codegen),
   `*.d.ts`, `*.test.ts`, and `test-setup.ts`.
 - Matching is on the **full repo-relative path**, because the

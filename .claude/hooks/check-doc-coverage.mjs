@@ -43,6 +43,10 @@ const COVERED_ROOTS = [
   { prefix: 'src-tauri/src/', ext: /\.rs$/ },
   { prefix: 'functions/', ext: /\.ts$/ },
   { prefix: 'cli/', ext: /\.ts$/ },
+  // `scripts/lib/` only, not `scripts/` — matches COVERAGE_ROOTS, so a
+  // new one-shot CLI at the top of scripts/ still skips without paying
+  // for a scan.
+  { prefix: 'scripts/lib/', ext: /\.ts$/ },
 ]
 
 // Mirrors EXCLUDE_BASENAME in scripts/check-doc-coverage.ts. Prefilter
