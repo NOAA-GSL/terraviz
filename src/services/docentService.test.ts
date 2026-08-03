@@ -2684,3 +2684,460 @@ describe('processMessage — backend tool round-trip', () => {
     expect(toolMsg.content).toContain('Climate Reanalysis 2024')
   })
 })
+
+describe('processMessage — §A6 value tools', () => {
+  const SCALE = {
+    stops: [{ t: 0, rgba: [0, 0, 0, 0] }, { t: 1, rgba: [255, 255, 255, 255] }],
+    vmin: 0, vmax: 255, units: 'mg m-2', transparentRange: 12 / 256,
+  } as any
+  const OPTIONS = { boundingBox: { n: 85, s: 5, w: -175, e: -20 }, colorScale: SCALE } as any
+
+  function frameSource(over: Record<string, unknown> = {}) {
+    const data = new Uint8Array(64).fill(200)
+    return {
+      frame: () => ({ snapshot: { data, width: 8, height: 8 }, scale: SCALE, options: OPTIONS }),
+      datasetTitle: () => 'Wildfire Smoke Overhead',
+      visibleBounds: () => ({ n: 85, s: 5, w: -175, e: -20 }),
+      ...over,
+    } as any
+  }
+
+  /** Drive one tool call through the round trip and collect everything. */
+  async function runToolCall(name: string, args: Record<string, unknown>) {
+    const { streamChat } = await import('./llmProvider')
+    const mocked = vi.mocked(streamChat)
+    let round2: any[] | null = null as any[] | null
+    let round1Tools: any = null
+    // streamChat(messages, tools, config) — tools is the second arg.
+    mocked.mockImplementation(async function* (msgs, tools: any) {
+      if (round1Tools === null) {
+        round1Tools = tools ?? []
+        yield { type: 'tool_call' as const, call: { id: 'c1', name, arguments: args } }
+        yield { type: 'done' as const }
+      } else {
+        round2 = [...msgs]
+        yield { type: 'delta' as const, text: 'The mean is 200.' }
+        yield { type: 'done' as const }
+      }
+    })
+    const chunks: DocentStreamChunk[] = []
+    for await (const c of processMessage('how bad is it?', [], datasets, null, baseConfig)) chunks.push(c)
+    return { chunks, round2, round1Tools }
+  }
+
+  afterEach(async () => {
+    const { registerAnalysisSource } = await import('./docentAnalysisTools')
+    registerAnalysisSource(null)
+  })
+
+  it('does not offer the tools when nothing analysable is loaded', async () => {
+    // The availability gate, from the outside: with no source the tool
+    // array must be exactly what it was before this phase, so a picture
+    // dataset leaves Orbit's behaviour untouched.
+    const { registerAnalysisSource } = await import('./docentAnalysisTools')
+    registerAnalysisSource(null)
+    const { round1Tools } = await runToolCall('search_datasets', { query: 'x' })
+    const names = (round1Tools as any[]).map(t => t.function.name)
+    expect(names).not.toContain('probe_value')
+    expect(names).not.toContain('summarize_region')
+    expect(names).not.toContain('find_extremum')
+  })
+
+  it('offers them once a data-encoded frame is readable', async () => {
+    const { registerAnalysisSource } = await import('./docentAnalysisTools')
+    registerAnalysisSource(frameSource())
+    const { round1Tools } = await runToolCall('search_datasets', { query: 'x' })
+    const names = (round1Tools as any[]).map(t => t.function.name)
+    expect(names).toEqual(expect.arrayContaining(['probe_value', 'summarize_region', 'find_extremum']))
+  })
+
+  it('feeds real statistics back to the model, already written out', async () => {
+    const { registerAnalysisSource } = await import('./docentAnalysisTools')
+    registerAnalysisSource(frameSource())
+    const { round2 } = await runToolCall('summarize_region', { region_name: 'alaska' })
+    const toolMsg = round2!.find((m: any) => m.role === 'tool')
+    expect(toolMsg.tool_call_id).toBe('c1')
+    const payload = JSON.parse(toolMsg.content)
+    expect(payload.ok).toBe(true)
+    expect(payload.meanText).toBe('200 mg m-2')
+    expect(payload.distributionText).toContain('mg m-2')
+    expect(payload.precision).toMatch(/quantised/i)
+  })
+
+  it('sends no unit-bearing number the model could reassemble wrongly', async () => {
+    // A rule asking it to prefer `meanText` over `mean` + `units` lost
+    // twice to a unit it found more plausible for the subject. The
+    // fields are gone rather than deprecated: what is not in the
+    // payload cannot be recombined, and every number that needs units
+    // already arrives carrying them.
+    const { registerAnalysisSource } = await import('./docentAnalysisTools')
+    registerAnalysisSource(frameSource())
+    const { round2 } = await runToolCall('summarize_region', { region_name: 'alaska' })
+    const payload = JSON.parse(round2!.find((m: any) => m.role === 'tool').content)
+    for (const bare of ['units', 'mean', 'median', 'min', 'max', 'p10', 'p90']) {
+      expect(payload[bare]).toBeUndefined()
+    }
+    // Unit-free facts stay — they have nothing to get wrong.
+    expect(payload.coverage).toBeDefined()
+    expect(payload.region).toBe('Alaska')
+  })
+
+  it('sends an extremum as a place and a written value, nothing looser', async () => {
+    const { registerAnalysisSource } = await import('./docentAnalysisTools')
+    registerAnalysisSource(frameSource())
+    const { round2 } = await runToolCall('find_extremum', { kind: 'max' })
+    const payload = JSON.parse(round2!.find((m: any) => m.role === 'tool').content)
+    expect(payload.valueText).toContain('mg m-2')
+    expect(payload.value).toBeUndefined()
+    expect(payload.units).toBeUndefined()
+    // The coordinates stay: they carry no unit to substitute, and the
+    // model needs them for the sentence.
+    expect(typeof payload.lat).toBe('number')
+    expect(typeof payload.lon).toBe('number')
+  })
+
+  it('keeps the internal scope out of the model’s copy', async () => {
+    // `scope` exists so the chip can be offered. Leaving it in the tool
+    // result would put a field in the prompt that reads like something
+    // to quote.
+    const { registerAnalysisSource } = await import('./docentAnalysisTools')
+    registerAnalysisSource(frameSource())
+    const { round2 } = await runToolCall('summarize_region', { region_name: 'alaska' })
+    const payload = JSON.parse(round2!.find((m: any) => m.role === 'tool').content)
+    expect(payload.scope).toBeUndefined()
+    expect(payload.region).toBe('Alaska')
+  })
+
+  it('offers an Analyze chip for the region it measured', async () => {
+    const { registerAnalysisSource } = await import('./docentAnalysisTools')
+    registerAnalysisSource(frameSource())
+    const { chunks } = await runToolCall('summarize_region', { region_name: 'alaska' })
+    const chip = chunks.find(c => c.type === 'action' && (c as any).action.type === 'show-analysis') as any
+    expect(chip).toBeDefined()
+    expect(chip.action.scope).toBe('named')
+    expect(chip.action.regionName).toBe('Alaska')
+  })
+
+  it('offers no chip for a bbox the panel could not select', async () => {
+    const { registerAnalysisSource } = await import('./docentAnalysisTools')
+    registerAnalysisSource(frameSource())
+    const { chunks } = await runToolCall('summarize_region', {
+      bbox: { north: 60, south: 40, west: -120, east: -90 },
+    })
+    expect(chunks.some(c => c.type === 'action' && (c as any).action.type === 'show-analysis')).toBe(false)
+  })
+
+  it('offers no chip when the tool refused', async () => {
+    const { registerAnalysisSource } = await import('./docentAnalysisTools')
+    registerAnalysisSource(frameSource())
+    const { chunks, round2 } = await runToolCall('summarize_region', { region_name: 'Mordor' })
+    expect(JSON.parse(round2!.find((m: any) => m.role === 'tool').content).ok).toBe(false)
+    expect(chunks.some(c => c.type === 'action' && (c as any).action.type === 'show-analysis')).toBe(false)
+  })
+
+  // Ten live failures in, the model had mis-reported a measured value
+  // in every way the shape allows: wrong units, a unit belonging to a
+  // dataset it recommended in the same reply, a number lifted from a
+  // neighbouring row's metadata, a silently narrowed region, a dropped
+  // minus sign, and finally no location at all. The prompt asks for
+  // `valueText` verbatim and the payload no longer carries the parts to
+  // rebuild it from; both were necessary, neither was sufficient.
+  //
+  // So the reading is rendered from the executor's result. The prose can
+  // still be wrong — but now it is wrong *next to* the right answer.
+  it('emits the tool’s own value, place and time', async () => {
+    const { registerAnalysisSource } = await import('./docentAnalysisTools')
+    registerAnalysisSource(frameSource())
+    const { chunks } = await runToolCall('find_extremum', { kind: 'max' })
+    const card = chunks.find(c =>
+      c.type === 'action' && (c as any).action.type === 'measurement') as any
+    expect(card).toBeDefined()
+    // The units are the frame's, and they are not negotiable.
+    expect(card.action.valueText).toContain('mg m-2')
+    expect(typeof card.action.lat).toBe('number')
+    expect(typeof card.action.lon).toBe('number')
+  })
+
+  it('carries a mean for a region summary, with no coordinates', async () => {
+    // A region has no single point, and inventing one would be the same
+    // class of error the card exists to prevent.
+    const { registerAnalysisSource } = await import('./docentAnalysisTools')
+    registerAnalysisSource(frameSource())
+    const { chunks } = await runToolCall('summarize_region', { region_name: 'alaska' })
+    const card = chunks.find(c =>
+      c.type === 'action' && (c as any).action.type === 'measurement') as any
+    expect(card).toBeDefined()
+    expect(card.action.valueText).toContain('mg m-2')
+    expect(card.action.lat).toBeUndefined()
+    expect(card.action.lon).toBeUndefined()
+  })
+
+  it('emits no card when the tool refused', async () => {
+    const { registerAnalysisSource } = await import('./docentAnalysisTools')
+    registerAnalysisSource(frameSource())
+    const { chunks } = await runToolCall('summarize_region', { region_name: 'Mordor' })
+    expect(chunks.some(c =>
+      c.type === 'action' && (c as any).action.type === 'measurement')).toBe(false)
+  })
+
+  it('emits none at all when the tools are unavailable', async () => {
+    const { registerAnalysisSource } = await import('./docentAnalysisTools')
+    registerAnalysisSource(null)
+    const { chunks } = await runToolCall('search_datasets', { query: 'smoke' })
+    expect(chunks.some(c =>
+      c.type === 'action' && (c as any).action.type === 'measurement')).toBe(false)
+  })
+})
+
+describe('processMessage — §A6 find_extremum moves the globe itself', () => {
+  const SCALE2 = {
+    stops: [{ t: 0, rgba: [0, 0, 0, 0] }, { t: 1, rgba: [255, 255, 255, 255] }],
+    vmin: 0, vmax: 255, units: 'mg m-2', transparentRange: 12 / 256,
+  } as any
+  const OPTIONS2 = { boundingBox: { n: 85, s: 5, w: -175, e: -20 }, colorScale: SCALE2 } as any
+
+  /** Three loadable rows, so the suggestion cap has something to cap. */
+  const THREE = [
+    makeDataset({ id: 'DS_A', title: 'Smoke A' }),
+    makeDataset({ id: 'DS_B', title: 'Smoke B' }),
+    makeDataset({ id: 'DS_C', title: 'Smoke C' }),
+  ]
+  const THREE_MARKERS = THREE.map(d => `<<LOAD:${d.id}>>`).join('\n')
+
+  function peakSource() {
+    // One hot texel in the western half, so the extremum lands at a
+    // negative longitude — the sign is the whole point of this.
+    const w = 32, h = 32
+    const data = new Uint8Array(w * h)
+    data.fill(80)
+    data[8 * w + 4] = 250
+    return {
+      frame: () => ({ snapshot: { data, width: w, height: h }, scale: SCALE2, options: OPTIONS2 }),
+      datasetTitle: () => 'Wildfire Smoke Overhead',
+      visibleBounds: () => ({ n: 85, s: 5, w: -175, e: -20 }),
+    } as any
+  }
+
+  // `ask` matters now: a superlative question is measured up front,
+  // before the model gets a turn, so a test aimed at the tool-call path
+  // has to ask something that does not trigger that.
+  async function run(
+    calls: { id: string; name: string; arguments: Record<string, unknown> }[],
+    ask = 'where is it worst?',
+    reply = 'The peak is over the west.',
+    ds = datasets,
+  ) {
+    const { streamChat } = await import('./llmProvider')
+    const mocked = vi.mocked(streamChat)
+    let first = true
+    mocked.mockImplementation(async function* () {
+      if (first) {
+        first = false
+        for (const c of calls) yield { type: 'tool_call' as const, call: c }
+        yield { type: 'done' as const }
+      } else {
+        yield { type: 'delta' as const, text: reply }
+        yield { type: 'done' as const }
+      }
+    })
+    const chunks: DocentStreamChunk[] = []
+    for await (const c of processMessage(ask, [], ds, null, baseConfig)) chunks.push(c)
+    return chunks
+  }
+
+  const actions = (chunks: DocentStreamChunk[], type: string) =>
+    chunks.filter(c => c.type === 'action' && (c as any).action.type === type).map(c => (c as any).action)
+
+  afterEach(async () => {
+    const { registerAnalysisSource } = await import('./docentAnalysisTools')
+    registerAnalysisSource(null)
+  })
+
+  it('flies to the extremum without the model transcribing anything', async () => {
+    const { registerAnalysisSource } = await import('./docentAnalysisTools')
+    registerAnalysisSource(peakSource())
+    const chunks = await run([{ id: 'c1', name: 'find_extremum', arguments: { kind: 'max' } }])
+    const fly = actions(chunks, 'fly-to')
+    expect(fly).toHaveLength(1)
+    // Western hemisphere: the sign survives because nothing rewrote it.
+    expect(fly[0].lon).toBeLessThan(0)
+    expect(fly[0].lat).toBeGreaterThan(5)
+    expect(fly[0].lat).toBeLessThan(85)
+  })
+
+  it('drops a pin labelled with the value', async () => {
+    const { registerAnalysisSource } = await import('./docentAnalysisTools')
+    registerAnalysisSource(peakSource())
+    const chunks = await run([{ id: 'c1', name: 'find_extremum', arguments: { kind: 'max' } }])
+    const marker = actions(chunks, 'add-marker')
+    expect(marker).toHaveLength(1)
+    expect(marker[0].label).toContain('mg m-2')
+    // add-marker names the longitude `lng`; a mismatch here would pin
+    // the marker somewhere the camera did not go.
+    expect(marker[0].lng).toBeCloseTo(actions(chunks, 'fly-to')[0].lon, 9)
+    expect(marker[0].lat).toBeCloseTo(actions(chunks, 'fly-to')[0].lat, 9)
+  })
+
+  it('moves once per turn, not once per call', async () => {
+    // A model comparing two regions calls the tool twice; dragging the
+    // globe on each would haul the view around mid-explanation.
+    const { registerAnalysisSource } = await import('./docentAnalysisTools')
+    registerAnalysisSource(peakSource())
+    const chunks = await run([
+      { id: 'c1', name: 'find_extremum', arguments: { kind: 'max' } },
+      { id: 'c2', name: 'find_extremum', arguments: { kind: 'min' } },
+    ])
+    expect(actions(chunks, 'fly-to')).toHaveLength(1)
+    expect(actions(chunks, 'add-marker')).toHaveLength(1)
+  })
+
+  it('does not move the globe when the tool refused', async () => {
+    const { registerAnalysisSource } = await import('./docentAnalysisTools')
+    registerAnalysisSource(peakSource())
+    const chunks = await run(
+      [{ id: 'c1', name: 'find_extremum', arguments: { region_name: 'Mordor' } }],
+      'tell me about this dataset',
+    )
+    expect(actions(chunks, 'fly-to')).toHaveLength(0)
+    expect(actions(chunks, 'add-marker')).toHaveLength(0)
+  })
+
+  it('keeps the saturation caveat on the pin, not just in the sentence', async () => {
+    // The pin outlives the sentence: the chat scrolls, the marker stays
+    // on the globe. Built as `value + units` it was the one artifact
+    // that dropped "at least" — reassembled from parts, which is the
+    // exact failure `valueText` exists to prevent, reintroduced in the
+    // one place the caveat matters longest.
+    const { registerAnalysisSource } = await import('./docentAnalysisTools')
+    registerAnalysisSource(peakSource())
+    // A field that clips at the top of its scale — the common case for
+    // these rows, and the one where a bare number overstates.
+    const w = 32, h = 32
+    const data = new Uint8Array(w * h)
+    data.fill(80)
+    data[8 * w + 4] = 255
+    registerAnalysisSource({
+      frame: () => ({ snapshot: { data, width: w, height: h }, scale: SCALE2, options: OPTIONS2 }),
+      datasetTitle: () => 'Wildfire Smoke Overhead',
+      visibleBounds: () => ({ n: 85, s: 5, w: -175, e: -20 }),
+    } as any)
+    const chunks = await run([], 'Where is the smoke worst?')
+    const marker = actions(chunks, 'add-marker')
+    expect(marker).toHaveLength(1)
+    expect(marker[0].label).toMatch(/^at least /)
+    expect(marker[0].label).toContain('mg m-2')
+    // And the pin stays short — the scope clause belongs in the card.
+    expect(marker[0].label).not.toContain('anywhere in')
+  })
+
+  it('says how many places tie when the pin marks one of several', async () => {
+    // Live: the maximum was shared by 109 cells in 36 separate patches
+    // and one pin marked one of them. True, and read as *the* spot.
+    const w = 32, h = 32
+    const data = new Uint8Array(w * h)
+    data.fill(80)
+    // Three separate peaks, none adjacent.
+    data[4 * w + 4] = 255
+    data[12 * w + 20] = 255
+    data[24 * w + 8] = 255
+    const { registerAnalysisSource } = await import('./docentAnalysisTools')
+    registerAnalysisSource({
+      frame: () => ({ snapshot: { data, width: w, height: h }, scale: SCALE2, options: OPTIONS2 }),
+      datasetTitle: () => 'Wildfire Smoke Overhead',
+      visibleBounds: () => ({ n: 85, s: 5, w: -175, e: -20 }),
+    } as any)
+    const chunks = await run([], 'Where is the smoke worst?')
+    expect(actions(chunks, 'add-marker')[0].label).toContain('1 of 3 tied areas')
+  })
+
+  it('caps dataset suggestions on a measured answer', async () => {
+    // "Where is the smoke worst?" answered in two sentences, then three
+    // datasets with paragraph-length descriptions. No rule was broken —
+    // the answer did come first — but discovery crowded out the
+    // question that was asked.
+    const { registerAnalysisSource } = await import('./docentAnalysisTools')
+    registerAnalysisSource(peakSource())
+    const chunks = await run([], 'Where is the smoke worst?', `The peak is over the west.\n${THREE_MARKERS}`, THREE)
+    expect(actions(chunks, 'measurement')).toHaveLength(1)
+    expect(actions(chunks, 'load-dataset')).toHaveLength(1)
+  })
+
+  it('leaves an ordinary discovery turn uncapped', async () => {
+    // The cap is about a measured answer, not about suggestions.
+    const { registerAnalysisSource } = await import('./docentAnalysisTools')
+    registerAnalysisSource(peakSource())
+    const chunks = await run([], 'what datasets show smoke?', `Here are some.\n${THREE_MARKERS}`, THREE)
+    expect(actions(chunks, 'measurement')).toHaveLength(0)
+    expect(actions(chunks, 'load-dataset')).toHaveLength(3)
+  })
+
+  it('leaves the pin a bare value when the field is not clipping', async () => {
+    const { registerAnalysisSource } = await import('./docentAnalysisTools')
+    registerAnalysisSource(peakSource())
+    const chunks = await run([], 'Where is the smoke worst?')
+    expect(actions(chunks, 'add-marker')[0].label).toBe('250 mg m-2')
+  })
+
+  it('measures a superlative question before the model gets a turn', async () => {
+    // The failure this exists for: asked "Where is the smoke worst?"
+    // with the tools offered, the model called nothing and wrote the
+    // answer anyway — plateau wording, "at least", a coordinate, a
+    // time, all of it borrowed from the carve-out's description of a
+    // correct answer. No card, no camera move, no marker.
+    const { registerAnalysisSource } = await import('./docentAnalysisTools')
+    registerAnalysisSource(peakSource())
+    // No tool calls at all: the model does what it did live.
+    const chunks = await run([], 'Where is the smoke worst?')
+    const card = actions(chunks, 'measurement')
+    expect(card).toHaveLength(1)
+    expect(card[0].valueText).toContain('mg m-2')
+    expect(actions(chunks, 'fly-to')).toHaveLength(1)
+    expect(actions(chunks, 'add-marker')).toHaveLength(1)
+  })
+
+  it('leaves an ordinary question alone', async () => {
+    // Biased toward missing a question rather than answering the wrong
+    // one: anything that is not an explicit superlative still goes
+    // through the model, which has the tools and is told to use them.
+    const { registerAnalysisSource } = await import('./docentAnalysisTools')
+    registerAnalysisSource(peakSource())
+    const chunks = await run([], 'what does this dataset show?')
+    expect(actions(chunks, 'measurement')).toHaveLength(0)
+    expect(actions(chunks, 'fly-to')).toHaveLength(0)
+  })
+
+  it('does not measure twice when the model also calls the tool', async () => {
+    // The pre-measurement and the tool-call path share one emitter, so
+    // the same reading cannot produce two cards or two camera moves.
+    const { registerAnalysisSource } = await import('./docentAnalysisTools')
+    registerAnalysisSource(peakSource())
+    const chunks = await run(
+      [{ id: 'c1', name: 'find_extremum', arguments: { kind: 'max' } }],
+      'Where is the smoke worst?',
+    )
+    expect(actions(chunks, 'measurement')).toHaveLength(1)
+    expect(actions(chunks, 'fly-to')).toHaveLength(1)
+    expect(actions(chunks, 'add-marker')).toHaveLength(1)
+  })
+
+  it('stays out of the way when the tools are unavailable', async () => {
+    const { registerAnalysisSource } = await import('./docentAnalysisTools')
+    registerAnalysisSource(null)
+    const chunks = await run([], 'Where is the smoke worst?')
+    expect(actions(chunks, 'measurement')).toHaveLength(0)
+    expect(actions(chunks, 'fly-to')).toHaveLength(0)
+  })
+
+  it('does not move the globe for the other two tools', async () => {
+    const { registerAnalysisSource } = await import('./docentAnalysisTools')
+    registerAnalysisSource(peakSource())
+    const chunks = await run(
+      [
+        { id: 'c1', name: 'summarize_region', arguments: {} },
+        { id: 'c2', name: 'probe_value', arguments: { lat: 45, lon: -100 } },
+      ],
+      'what is the average here',
+    )
+    expect(actions(chunks, 'fly-to')).toHaveLength(0)
+  })
+})

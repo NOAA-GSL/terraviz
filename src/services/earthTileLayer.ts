@@ -31,7 +31,12 @@ import { logger } from '../utils/logger'
 import { getCloudTextureUrl, isMobile } from '../utils/deviceCapability'
 import { reportError } from '../analytics'
 import type { DatasetOverlayOptions } from '../types'
-import { buildColorScaleLut, COLOR_SCALE_LUT_SIZE } from '../types/color-scale'
+import { COLOR_SCALE_LUT_SIZE } from '../types/color-scale'
+import {
+  DEFAULT_DISPLAY,
+  buildDisplayLut,
+  type ColorScaleDisplay,
+} from './colorScaleDisplay'
 import {
   ATMOSPHERE_GLSL_CONSTANTS,
   ATMOSPHERE_GLSL_DENSITY,
@@ -1125,6 +1130,7 @@ function syncColorLut(
   gl: WebGL2RenderingContext,
   existing: WebGLTexture | null,
   options?: DatasetOverlayOptions,
+  display: ColorScaleDisplay = DEFAULT_DISPLAY,
 ): WebGLTexture | null {
   const scale = options?.colorScale
   if (!scale) {
@@ -1136,7 +1142,7 @@ function syncColorLut(
   gl.bindTexture(gl.TEXTURE_2D, lut)
   gl.texImage2D(
     gl.TEXTURE_2D, 0, gl.RGBA, COLOR_SCALE_LUT_SIZE, 1, 0,
-    gl.RGBA, gl.UNSIGNED_BYTE, buildColorScaleLut(scale),
+    gl.RGBA, gl.UNSIGNED_BYTE, buildDisplayLut(scale, display),
   )
   // LINEAR across the ramp is correct and wanted: the palette is a
   // continuous colour ramp, unlike the data it is applied to.
@@ -1288,6 +1294,11 @@ export interface EarthTileLayerControl {
   setDatasetVideo(video: HTMLVideoElement, options?: DatasetOverlayOptions): void
   /** Force a one-shot video texture re-upload (e.g. after scrubbing while paused). */
   requestVideoUpdate(): void
+  /** Apply a palette / stretch / threshold transform to the current
+   *  data-encoded dataset. Rebuilds the 256x1 LUT only — the dataset
+   *  texture is untouched, so this is one upload and costs nothing per
+   *  frame. A no-op for picture datasets, which have no LUT. */
+  setColorScaleDisplay(display: ColorScaleDisplay): void
   /** Remove the current dataset overlay (image or video). */
   clearDatasetTexture(): void
 }
@@ -1335,6 +1346,12 @@ export function createEarthTileLayer(): EarthTileLayerControl {
   /** 256x1 RGBA palette for a data-encoded dataset, or null when the
    *  texture is an ordinary picture. Doubles as the mode flag. */
   let datasetColorLut: WebGLTexture | null = null
+  /** Viewing state, not dataset state: the palette / stretch / threshold
+   *  the user has chosen. Deliberately NOT reset when the dataset
+   *  changes — a viewer who picked a colourblind-safe ramp expects it to
+   *  survive the next dataset, the way the labels and borders toggles
+   *  do. `docs/DATA_ANALYSIS_PLAN.md` §A1. */
+  let datasetDisplay: ColorScaleDisplay = DEFAULT_DISPLAY
   let forceVideoUpdate = false
   let transmittanceLutTex: WebGLTexture | null = null
   let skyboxProg: WebGLProgram | null = null
@@ -2341,7 +2358,7 @@ export function createEarthTileLayer(): EarthTileLayerControl {
       glRef.bindTexture(glRef.TEXTURE_2D, datasetTex)
       const source = fitImageToMaxTextureSize(glRef, image)
       glRef.texImage2D(glRef.TEXTURE_2D, 0, glRef.RGBA, glRef.RGBA, glRef.UNSIGNED_BYTE, source)
-      datasetColorLut = syncColorLut(glRef, datasetColorLut, options)
+      datasetColorLut = syncColorLut(glRef, datasetColorLut, options, datasetDisplay)
       if (datasetColorLut) {
         applyDataEncodedFiltering(glRef)
       } else {
@@ -2369,7 +2386,7 @@ export function createEarthTileLayer(): EarthTileLayerControl {
       // Initialize with a single frame — render loop will update per-frame
       glRef.bindTexture(glRef.TEXTURE_2D, datasetTex)
       glRef.texImage2D(glRef.TEXTURE_2D, 0, glRef.RGBA, glRef.RGBA, glRef.UNSIGNED_BYTE, video)
-      datasetColorLut = syncColorLut(glRef, datasetColorLut, options)
+      datasetColorLut = syncColorLut(glRef, datasetColorLut, options, datasetDisplay)
       if (datasetColorLut) {
         applyDataEncodedFiltering(glRef)
       } else {
@@ -2388,6 +2405,15 @@ export function createEarthTileLayer(): EarthTileLayerControl {
         forceVideoUpdate = true
         mapRef?.triggerRepaint()
       }
+    },
+    setColorScaleDisplay(display: ColorScaleDisplay) {
+      datasetDisplay = display
+      // Only the LUT is rebuilt. The dataset texture is not re-uploaded
+      // and no pixels are read back, which is what makes this usable on
+      // a slider while a video is playing.
+      if (!glRef || !datasetColorLut) return
+      datasetColorLut = syncColorLut(glRef, datasetColorLut, datasetOptions ?? undefined, display)
+      mapRef?.triggerRepaint()
     },
     clearDatasetTexture() {
       datasetActive = false

@@ -9,8 +9,11 @@
  */
 import { describe, expect, it } from 'vitest'
 import {
+  formatProbeReading,
   latLonToTexelUv,
+  lonSpanDegrees,
   sphereUvToLatLon,
+  texelUvToLatLon,
   probeDatasetValue,
   uvToTexel,
   type LumaSampler,
@@ -230,5 +233,153 @@ describe('sphereUvToLatLon — the VR globe', () => {
     const east = sphereUvToLatLon({ x: 1, y: 0.5 })
     expect(east.lon).toBeCloseTo(180, 6)
     expect(latLonToTexelUv(east.lat, east.lon)?.u).toBeCloseTo(0, 6)
+  })
+})
+
+describe('texelUvToLatLon — the inverse', () => {
+  // An inverted inverse is the same bug as an inverted forward map
+  // wearing a different hat: it places every computed statistic in the
+  // wrong hemisphere while leaving the globe looking correct. So the
+  // poles are pinned explicitly, in both directions, before anything
+  // round-trips.
+  it('puts the image top at the north pole on a full globe', () => {
+    expect(texelUvToLatLon({ u: 0.5, v: 0 }).lat).toBeCloseTo(90, 6)
+    expect(texelUvToLatLon({ u: 0.5, v: 1 }).lat).toBeCloseTo(-90, 6)
+    expect(texelUvToLatLon({ u: 0.5, v: 0.5 }).lat).toBeCloseTo(0, 6)
+  })
+
+  it('puts the image top at the box north edge on a regional dataset', () => {
+    const opts: DatasetOverlayOptions = { boundingBox: { n: 85, s: 5, w: -175, e: -20 } }
+    expect(texelUvToLatLon({ u: 0, v: 0 }, opts).lat).toBeCloseTo(85, 6)
+    expect(texelUvToLatLon({ u: 0, v: 1 }, opts).lat).toBeCloseTo(5, 6)
+    expect(texelUvToLatLon({ u: 0, v: 0 }, opts).lon).toBeCloseTo(-175, 6)
+    expect(texelUvToLatLon({ u: 1, v: 0 }, opts).lon).toBeCloseTo(-20, 6)
+  })
+
+  it('honours the Y flip, mirroring latitude about the box centre', () => {
+    const opts: DatasetOverlayOptions = {
+      boundingBox: { n: 85, s: 5, w: -175, e: -20 },
+      isFlippedInY: true,
+    }
+    expect(texelUvToLatLon({ u: 0, v: 0 }, opts).lat).toBeCloseTo(5, 6)
+    expect(texelUvToLatLon({ u: 0, v: 1 }, opts).lat).toBeCloseTo(85, 6)
+  })
+
+  it('round-trips against latLonToTexelUv on a full globe', () => {
+    for (const [lat, lon] of [
+      [0, 0], [45, 90], [-45, -90], [80, 179], [-80, -179], [10, -1], [-10, 1],
+    ] as const) {
+      const uv = latLonToTexelUv(lat, lon)!
+      const back = texelUvToLatLon(uv)
+      expect(back.lat).toBeCloseTo(lat, 9)
+      expect(back.lon).toBeCloseTo(lon, 9)
+    }
+  })
+
+  it('round-trips on a regional dataset, flipped and not', () => {
+    const box = { n: 85, s: 5, w: -175, e: -20 }
+    for (const isFlippedInY of [false, true]) {
+      const opts: DatasetOverlayOptions = { boundingBox: box, isFlippedInY }
+      for (const [lat, lon] of [[85, -175], [5, -20], [45, -100], [70, -30]] as const) {
+        const uv = latLonToTexelUv(lat, lon, opts)!
+        const back = texelUvToLatLon(uv, opts)
+        expect(back.lat).toBeCloseTo(lat, 9)
+        expect(back.lon).toBeCloseTo(lon, 9)
+      }
+    }
+  })
+
+  it('round-trips across an antimeridian-crossing box', () => {
+    // w > e: the box runs east from 150 through 180 to -150.
+    const opts: DatasetOverlayOptions = { boundingBox: { n: 60, s: -60, w: 150, e: -150 } }
+    for (const [lat, lon] of [[0, 150], [0, 179], [0, -179], [0, -150], [30, 170]] as const) {
+      const uv = latLonToTexelUv(lat, lon, opts)!
+      const back = texelUvToLatLon(uv, opts)
+      expect(back.lat).toBeCloseTo(lat, 9)
+      expect(back.lon).toBeCloseTo(lon, 9)
+    }
+  })
+
+  it('round-trips a shifted lonOrigin', () => {
+    const opts: DatasetOverlayOptions = { lonOrigin: 180 }
+    for (const [lat, lon] of [[0, 180], [0, 0], [0, -90], [0, 90], [45, 120]] as const) {
+      const uv = latLonToTexelUv(lat, lon, opts)!
+      const back = texelUvToLatLon(uv, opts)
+      expect(back.lat).toBeCloseTo(lat, 9)
+      // lon 180 and -180 are the same meridian; the inverse normalises
+      // to the -180 end of the range.
+      const delta = Math.abs(((back.lon - lon + 540) % 360) - 180)
+      expect(delta).toBeCloseTo(0, 9)
+    }
+  })
+
+  it('normalises longitude into [-180, 180)', () => {
+    // A dateline-centred dataset's right edge is lon 360 before wrapping.
+    const opts: DatasetOverlayOptions = { lonOrigin: 180 }
+    const lon = texelUvToLatLon({ u: 1, v: 0.5 }, opts).lon
+    expect(lon).toBeGreaterThanOrEqual(-180)
+    expect(lon).toBeLessThan(180)
+  })
+})
+
+describe('lonSpanDegrees', () => {
+  it('is a full turn for a global dataset, with or without a defaulted box', () => {
+    expect(lonSpanDegrees()).toBe(360)
+    expect(lonSpanDegrees({ boundingBox: { n: 90, s: -90, w: -180, e: 180 } })).toBe(360)
+  })
+
+  it('is the box width for a regional dataset', () => {
+    expect(lonSpanDegrees({ boundingBox: { n: 85, s: 5, w: -175, e: -20 } })).toBe(155)
+  })
+
+  it('measures eastward through the antimeridian, not the long way round', () => {
+    // w=150, e=-150 is a 60-degree box spanning the dateline, not a
+    // 300-degree one spanning everything else. Reading it the other way
+    // is exactly the bug the wrap arithmetic exists to prevent, so the
+    // name says which of the two answers is correct.
+    expect(lonSpanDegrees({ boundingBox: { n: 60, s: -60, w: 150, e: -150 } })).toBe(60)
+  })
+})
+
+describe('a reading does not print digits the transport cannot carry', () => {
+  // The live column-loading row spans 0 to 5e-4 over 256 codes, so one
+  // luma step is about 1.96e-6. Three significant figures on a value of
+  // 7e-5 renders "0.0000700" — resolution to 1e-7, on data quantised
+  // fifty times more coarsely. The trailing digit is an artefact of the
+  // divide, not a measurement, and it sits in the corner of the screen
+  // next to a globe that looks authoritative.
+  const STEP = 5e-4 / 255
+
+  it('drops a digit finer than one luma step', () => {
+    // 3 significant figures would render 0.0000734 — a final digit at
+    // 1e-7 on a field quantised at ~2e-6.
+    const shown = formatProbeReading({ value: 7.34e-5, units: 'kg m-2', noData: false, quantisationStep: STEP })
+    expect(shown).toContain('0.000073')
+    expect(shown).not.toContain('0.0000734')
+  })
+
+  it('keeps every digit the step does support', () => {
+    // A coarse scale: 0..255 over 256 codes is a step of 1, so integers
+    // are exactly what it can resolve.
+    const shown = formatProbeReading({ value: 137, units: 'mg m-2', noData: false, quantisationStep: 1 })
+    expect(shown).toContain('137')
+  })
+
+  it('still caps at three significant figures for a fine scale', () => {
+    // A step far below the third digit must not license a fourth.
+    const shown = formatProbeReading({ value: 1.23456, units: 'K', noData: false, quantisationStep: 1e-9 })
+    expect(shown).toContain('1.23')
+    expect(shown).not.toContain('1.2345')
+  })
+
+  it('falls back to the old behaviour when no step is known', () => {
+    // Readings built before the field existed still format, at the
+    // unbounded three significant figures.
+    const shown = formatProbeReading({ value: 7.34e-5, units: 'kg m-2', noData: false })
+    expect(shown).toContain('0.0000734')
+  })
+
+  it('says no data regardless of the step', () => {
+    expect(formatProbeReading({ value: 0, noData: true, quantisationStep: STEP })).toBeTruthy()
   })
 })

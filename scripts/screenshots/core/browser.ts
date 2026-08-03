@@ -69,9 +69,25 @@ export function assertSafeOutDir(dir: string): void {
   }
 }
 
-/** Launch a headless Chromium for a capture run. */
+/**
+ * Launch a headless Chromium for a capture run.
+ *
+ * `PLAYWRIGHT_CHROMIUM_PATH` overrides the browser binary. Playwright
+ * resolves its default against the exact build its own version pins, so
+ * a sandbox that ships a *different* Chromium build — as some
+ * pre-provisioned dev containers do — fails to launch at all and the
+ * only advertised fix is `npx playwright install`, which such an
+ * environment usually cannot run. Pointing at the local binary is the
+ * escape hatch. Unset in CI, where the pinned build is present, so the
+ * gate keeps testing what it always tested.
+ */
 export function launchBrowser(opts: { args?: string[] } = {}): Promise<Browser> {
-  return chromium.launch({ args: opts.args })
+  // Trimmed, and empty falls back to Playwright's own resolution: an
+  // env var templated to `""` or `" "` would otherwise be handed to
+  // Playwright verbatim and fail to launch, which is a worse failure
+  // than not setting it at all.
+  const executablePath = process.env.PLAYWRIGHT_CHROMIUM_PATH?.trim() || undefined
+  return chromium.launch({ args: opts.args, executablePath })
 }
 
 /**
@@ -133,6 +149,24 @@ export async function withScenePage<T>(
   const context = await browser.newContext({
     viewport: opts.viewport,
     baseURL: opts.baseURL,
+  })
+  // Opt the capture browser out of telemetry before any page script
+  // runs. A capture is not a user, so the events are junk data; more
+  // practically, the emitter's batch beacon POSTs `/api/ingest`, which
+  // no capture environment serves — it 403s against the dev server in
+  // CI and aborts as the context tears down, and every scene that
+  // lingers long enough to flush a batch was reported as a scene "with
+  // problems". Seeded here rather than route-stubbed because the beacon
+  // fires during pagehide, when the route handlers are already going
+  // away. Mirrors the `off` tier in `src/analytics/config.ts`; an
+  // unparseable or unknown value there falls back to `essential`, so
+  // the shape has to match.
+  await context.addInitScript(() => {
+    try {
+      localStorage.setItem('sos-telemetry-config', JSON.stringify({ tier: 'off' }))
+    } catch {
+      // Storage unavailable — nothing to opt out of.
+    }
   })
   const headers = opts.extraHTTPHeaders
   if (headers && Object.keys(headers).length > 0) {

@@ -1,0 +1,25 @@
+// Type-checks the `/setup` page generator.
+//
+// Nothing else type-checks it: the root `tsconfig.json` includes only
+// `src`, and `functions/tsconfig.json` reaches `scripts/lib/` but not
+// `scripts/setup-page/`. Without this, the two files that generate a
+// 260 KB operator-facing page would be checked by nothing but `tsx`,
+// which strips types rather than verifying them.
+//
+// Deliberately scoped to the generator. Widening `include` to all of
+// `scripts/` is a separate piece of work — the rest of the directory
+// has never been type-checked and would surface unrelated errors.
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022", "DOM"],
+    "types": ["node"],
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true
+  },
+  "include": ["build-setup-page.ts", "setup-page/**/*.ts"]
+}

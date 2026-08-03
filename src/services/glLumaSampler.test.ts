@@ -26,6 +26,16 @@ interface Recorded {
   readPixelsCalls: number
   uploads: number
   throwOnNextUpload: boolean
+  /** Every `readPixels` format, so the R8-preferred / RGBA-fallback
+   *  choice can be asserted rather than assumed. */
+  readFormats: number[]
+  /** Framebuffer bindings in order; `null` is the default target. */
+  fbBindings: (object | null)[]
+  /** Viewport sizes in order, so a snapshot leaving the full-frame
+   *  viewport behind is visible to a test. */
+  viewports: [number, number][]
+  /** Colour-attachment internal formats requested, in order. */
+  attachments: number[]
 }
 
 const K = {
@@ -41,10 +51,14 @@ const K = {
   TEXTURE_WRAP_T: 10243,
 }
 
-function stubGl(luma = 200) {
+/** `readable` controls what the fake driver claims `readPixels` will
+ *  accept, so both the single-channel path and the RGBA fallback can be
+ *  exercised. */
+function stubGl(luma = 200, readable: 'red' | 'rgba' = 'red') {
   const rec: Recorded = {
     pixelStorei: [], texParameteri: [], uniforms: [], readPixelsCalls: 0, uploads: 0,
     throwOnNextUpload: false,
+    readFormats: [], fbBindings: [], viewports: [], attachments: [],
   }
   const gl = {
     ...K,
@@ -52,6 +66,9 @@ function stubGl(luma = 200) {
     STATIC_DRAW: 35044, FLOAT: 5126, TRIANGLES: 4,
     VERTEX_SHADER: 35633, FRAGMENT_SHADER: 35632,
     COMPILE_STATUS: 35713, LINK_STATUS: 35714,
+    FRAMEBUFFER: 36160, COLOR_ATTACHMENT0: 36064, FRAMEBUFFER_COMPLETE: 36053,
+    R8: 33321, RED: 6403, RGBA8: 32856, PACK_ALIGNMENT: 3333,
+    IMPLEMENTATION_COLOR_READ_FORMAT: 35738, IMPLEMENTATION_COLOR_READ_TYPE: 35739,
     createShader: () => ({}), shaderSource: () => {}, compileShader: () => {},
     getShaderParameter: () => true, getShaderInfoLog: () => '', deleteShader: () => {},
     createProgram: () => ({}), attachShader: () => {}, linkProgram: () => {},
@@ -67,15 +84,46 @@ function stubGl(luma = 200) {
       rec.uploads++
     },
     uniform2f: (_l: unknown, u: number, v: number) => rec.uniforms.push([u, v]),
-    viewport: () => {}, drawArrays: () => {},
-    readPixels: (_x: number, _y: number, _w: number, _h: number, _f: number, _t: number, out: Uint8Array) => {
+    viewport: (_x: number, _y: number, w: number, h: number) => rec.viewports.push([w, h]),
+    drawArrays: () => {},
+    readPixels: (_x: number, _y: number, w: number, h: number, f: number, _t: number, out: Uint8Array) => {
       rec.readPixelsCalls++
-      out[0] = luma; out[1] = luma; out[2] = luma; out[3] = 255
+      rec.readFormats.push(f)
+      // Fill as the real driver would for the format asked for, so a
+      // channel-stride mistake in the RGBA fallback shows up as wrong
+      // values rather than as zeros nobody checks.
+      if (f === 6403) for (let i = 0; i < w * h; i++) out[i] = luma
+      else for (let i = 0; i < w * h; i++) { out[i * 4] = luma; out[i * 4 + 3] = 255 }
     },
+    createFramebuffer: () => ({}),
+    bindFramebuffer: (_t: number, fb: object | null) => rec.fbBindings.push(fb),
+    framebufferTexture2D: () => {},
+    checkFramebufferStatus: () => 36053,
+    getParameter: (p: number) => {
+      if (p === 35738) return readable === 'red' ? 6403 : 6408
+      if (p === 35739) return 5121
+      return 0
+    },
+    texStorage2D: () => {},
     deleteTexture: () => {}, deleteBuffer: () => {}, deleteProgram: () => {},
+    deleteFramebuffer: () => {},
   }
+  // texImage2D doubles as the render-target allocator; record the
+  // internal format when it is called with dimensions rather than a
+  // source element.
+  const rawTexImage2D = gl.texImage2D
+  gl.texImage2D = ((...args: unknown[]) => {
+    if (args.length > 6) { rec.attachments.push(args[2] as number); return }
+    return (rawTexImage2D as () => void)()
+  }) as typeof gl.texImage2D
+  // The real factory is captured *before* the spy replaces it. Calling
+  // `document.createElement` from inside the mock would re-enter the
+  // spy and recurse until the stack gives out — latent here only
+  // because these tests happen to ask for canvases, and a trap for the
+  // next test that asks for anything else.
+  const realCreateElement = document.createElement.bind(document)
   vi.spyOn(document, 'createElement').mockImplementation(((tag: string) => {
-    if (tag !== 'canvas') return document.createElement(tag)
+    if (tag !== 'canvas') return realCreateElement(tag)
     return { width: 0, height: 0, getContext: () => gl } as unknown as HTMLCanvasElement
   }) as typeof document.createElement)
   return rec
@@ -204,8 +252,9 @@ describe('createGlLumaSampler', () => {
   })
 
   it('returns null when WebGL2 is unavailable, rather than falling back to 2D', () => {
+    const realCreateElement = document.createElement.bind(document)
     vi.spyOn(document, 'createElement').mockImplementation(((tag: string) => {
-      if (tag !== 'canvas') return document.createElement(tag)
+      if (tag !== 'canvas') return realCreateElement(tag)
       return { width: 0, height: 0, getContext: () => null } as unknown as HTMLCanvasElement
     }) as typeof document.createElement)
     // A 2D fallback is the path this module replaces; reintroducing one
@@ -248,6 +297,106 @@ describe('getSharedLumaSampler', () => {
     const s = getSharedLumaSampler()!
     expect(s.sample(video(), { u: 0.5, v: 0.5 })).toBe(88)
     disposeSharedLumaSampler()
+    vi.restoreAllMocks()
+  })
+})
+
+describe('snapshot', () => {
+  it('reads the whole frame into one byte per texel', () => {
+    const rec = stubGl(191)
+    const s = createGlLumaSampler()!
+    const snap = s.snapshot(video(8, 4))!
+    expect(snap.width).toBe(8)
+    expect(snap.height).toBe(4)
+    expect(snap.data).toHaveLength(32)
+    expect([...snap.data].every((v) => v === 191)).toBe(true)
+    expect(rec.readFormats.at(-1)).toBe(6403) // RED, the single-channel path
+    vi.restoreAllMocks()
+  })
+
+  it('prefers an R8 attachment when the driver will read it back', () => {
+    const rec = stubGl(100, 'red')
+    createGlLumaSampler()!.snapshot(video(4, 2))
+    expect(rec.attachments).toContain(33321) // R8
+    expect(rec.attachments).not.toContain(32856) // never fell back
+    vi.restoreAllMocks()
+  })
+
+  it('falls back to RGBA when the driver will not read RED back', () => {
+    // The fallback has to be real: guessing R8 and being wrong is an
+    // INVALID_OPERATION on every snapshot, not a slow path.
+    const rec = stubGl(77, 'rgba')
+    const s = createGlLumaSampler()!
+    const snap = s.snapshot(video(4, 2))!
+    expect(rec.attachments).toContain(32856) // RGBA8
+    expect(rec.readFormats.at(-1)).toBe(6408)
+    // The compaction must take the red channel, not every fourth byte
+    // starting somewhere else.
+    expect([...snap.data]).toEqual(Array(8).fill(77))
+    vi.restoreAllMocks()
+  })
+
+  it('caches within a frame and re-reads when the playhead moves', () => {
+    const rec = stubGl()
+    const s = createGlLumaSampler()!
+    const v = video(4, 2)
+    const first = s.snapshot(v)
+    const second = s.snapshot(v)
+    expect(second).toBe(first) // same object, no second readback
+    expect(rec.readPixelsCalls).toBe(1)
+
+    v.currentTime = 2.5
+    const third = s.snapshot(v)
+    expect(third).not.toBe(first)
+    expect(rec.readPixelsCalls).toBe(2)
+    vi.restoreAllMocks()
+  })
+
+  it('restores the default framebuffer and the 1x1 viewport', () => {
+    // Otherwise the next pointer read lands in the snapshot target and
+    // silently reports the analysed frame instead of the playing one.
+    const rec = stubGl()
+    const s = createGlLumaSampler()!
+    s.snapshot(video(4, 2))
+    expect(rec.fbBindings.at(-1)).toBeNull()
+    expect(rec.viewports.at(-1)).toEqual([1, 1])
+    vi.restoreAllMocks()
+  })
+
+  it('leaves the pointer read correct after a snapshot', () => {
+    const rec = stubGl(64)
+    const s = createGlLumaSampler()!
+    const v = video(4, 2)
+    s.snapshot(v)
+    expect(s.sample(v, { u: 0.5, v: 0.5 })).toBe(64)
+    expect(rec.viewports.at(-1)).toEqual([1, 1])
+    vi.restoreAllMocks()
+  })
+
+  it('returns null before a frame has decoded', () => {
+    stubGl()
+    const s = createGlLumaSampler()!
+    expect(s.snapshot(video(0, 0))).toBeNull()
+    vi.restoreAllMocks()
+  })
+
+  it('returns null after dispose rather than touching a freed context', () => {
+    stubGl()
+    const s = createGlLumaSampler()!
+    s.dispose()
+    expect(s.snapshot(video(4, 2))).toBeNull()
+    vi.restoreAllMocks()
+  })
+
+  it('does not build a render target until it is asked for one', () => {
+    // A page that never opens an analysis surface should not pay for a
+    // second program or an 8 MB target.
+    const rec = stubGl()
+    const s = createGlLumaSampler()!
+    s.sample(video(4, 2), { u: 0.5, v: 0.5 })
+    expect(rec.attachments).toHaveLength(0)
+    s.snapshot(video(4, 2))
+    expect(rec.attachments.length).toBeGreaterThan(0)
     vi.restoreAllMocks()
   })
 })

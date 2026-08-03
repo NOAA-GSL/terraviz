@@ -38,11 +38,12 @@ coverage/
 _work/
 # Personal Claude Code config is ignored, but specific *vendored*
 # project files are tracked (the graphify skill + its SessionStart
-# hook + shared project settings). `.claude/*` ignores direct
-# children (e.g. settings.local.json — per-developer permissions),
-# then the negations re-include the committed surface.
+# hook + shared project settings + shared subagents). `.claude/*`
+# ignores direct children (e.g. settings.local.json — per-developer
+# permissions), then the negations re-include the committed surface.
 .claude/*
 !.claude/settings.json
+!.claude/agents/
 !.claude/hooks/
 !.claude/skills/
 
@@ -78,6 +79,11 @@ yarn-error.log*
 # also persisted in node_identity.public_key, so this file is just
 # a convenience for paste-into-portal flows.
 node-public-key.txt
+
+# `npm run setup` resumable state — per-operator Cloudflare resource
+# IDs for this node. Holds no secret values (see scripts/lib/setup/
+# state.ts), but the IDs are deployment-specific and never shared.
+.terraviz-setup.json
 
 # Test / coverage artifacts
 coverage/

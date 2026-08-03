@@ -17,6 +17,7 @@ import {
   getAddMarkerTool,
   getToggleLabelsTool,
   getHighlightRegionTool,
+  getFindExtremumTool,
   buildViewContextSection,
 } from './docentContext'
 
@@ -806,5 +807,184 @@ describe('buildSystemPrompt — Phase 5 markers', () => {
   it('omits geographic context when mapViewContext is not provided', () => {
     const prompt = buildSystemPrompt(datasets, null)
     expect(prompt).not.toContain('Geographic Context')
+  })
+})
+
+describe('§A6 — the value carve-out', () => {
+  it('is absent by default, so the existing prompt is unchanged', () => {
+    const prompt = buildSystemPrompt([], null)
+    expect(prompt).not.toContain('Answering about values')
+    // The rules it carves out of must still be there, unweakened.
+    expect(prompt).toContain('Do not invent data values')
+    expect(prompt).toContain('never invent or estimate color scales')
+  })
+
+  it('appears only when the tools are actually offered', () => {
+    const prompt = buildSystemPrompt([], null, 'general', false, null, null, null, undefined, true)
+    expect(prompt).toContain('Answering about values')
+    expect(prompt).toContain('probe_value')
+  })
+
+  it('keeps the original prohibitions intact alongside it', () => {
+    // The carve-out is about provenance, not topic. If it ever reads as
+    // "you may discuss values", the model fills the gaps between tool
+    // calls from memory and the answers become indistinguishable from
+    // the real ones.
+    const prompt = buildSystemPrompt([], null, 'general', false, null, null, null, undefined, true)
+    expect(prompt).toContain('Do not invent data values')
+    expect(prompt).toContain('never invent or estimate color scales')
+    expect(prompt).toMatch(/came back in a tool result.*is real/is)
+    expect(prompt).toMatch(/from anywhere else.*remains forbidden/is)
+  })
+
+  it('carries the same weight as the rules it competes with', () => {
+    // The first revision appended this at the very end, after the
+    // vision block. It lost: asked "where is the smoke worst?" with a
+    // data-encoded dataset loaded, the model estimated from the colours
+    // and then recommended a different dataset — the behaviour STRICT
+    // RULES 1 and 3 push toward, stated five times and earlier.
+    const prompt = buildSystemPrompt([], null, 'general', false, null, null, null, undefined, true)
+    const ruleSix = prompt.indexOf('6. The dataset on screen carries REAL VALUES')
+    const strictRules = prompt.indexOf('## STRICT RULES')
+    const carveOut = prompt.indexOf('## Answering about values')
+    // The specific instruction that beat it: the related-dataset
+    // reflex. Anchoring on the first mention of `search_datasets`
+    // would be meaningless — STRICT RULE 1 names it too.
+    const relatedReflex = prompt.indexOf('Suggest related datasets when relevant')
+    expect(ruleSix).toBeGreaterThan(strictRules)
+    expect(relatedReflex).toBeGreaterThan(-1)
+    expect(ruleSix).toBeLessThan(relatedReflex)
+    expect(carveOut).toBeGreaterThan(-1)
+    expect(carveOut).toBeLessThan(relatedReflex)
+  })
+
+  it('maps the phrasings a user actually types to a tool', () => {
+    // "where is it worst" was the exact question that failed, and the
+    // exact one with no worked example in the first revision.
+    const prompt = buildSystemPrompt([], null, 'general', false, null, null, null, undefined, true)
+    expect(prompt).toMatch(/where is it worst[^|]*\|[^|]*find_extremum/i)
+    expect(prompt).toMatch(/lowest[^|]*\|[^|]*find_extremum/i)
+    expect(prompt).toMatch(/how much[^|]*\|[^|]*summarize_region/i)
+    expect(prompt).toMatch(/what is it at[^|]*\|[^|]*probe_value/i)
+  })
+
+  it('tells the model the globe already moved, so it does not fly twice', () => {
+    // The app emits fly_to/add_marker for find_extremum now. If the
+    // model also calls them, the globe moves twice — and the second
+    // move is the one that can carry a mangled sign.
+    const prompt = buildSystemPrompt([], null, 'general', false, null, null, null, undefined, true)
+    expect(prompt).toMatch(/find_extremum` moves the globe for you/i)
+    expect(prompt).toMatch(/do not call `fly_to` or `add_marker` yourself/i)
+    // The signed-degrees rule survives for any other fly_to call —
+    // stated as a rule now, with no example coordinate to copy.
+    expect(prompt).toMatch(/signed decimal degrees/i)
+    expect(prompt).toMatch(/opposite side of the planet/i)
+  })
+
+  it('asks for the pre-joined value string, not a rebuild from parts', () => {
+    // Live failure: a column loading in kg m-2 restated in a
+    // concentration unit belonging to a different dataset. Quoting a
+    // finished string removes the step where that substitution
+    // happened — and the rule now says so without naming the unit,
+    // which the model was reading as a suggestion.
+    const prompt = buildSystemPrompt([], null, 'general', false, null, null, null, undefined, true)
+    expect(prompt).toMatch(/`valueText`/)
+    expect(prompt).toMatch(/do not translate the units into more familiar ones/i)
+    expect(prompt).toMatch(/they are still correct/i)
+    expect(prompt).toMatch(/do not attach a measured number to it/i)
+  })
+
+  it('forbids answering a values question by recommending another dataset', () => {
+    // The specific wrong turn observed live: the related-dataset reflex
+    // firing on a question that was never about discovery.
+    const prompt = buildSystemPrompt([], null, 'general', false, null, null, null, undefined, true)
+    expect(prompt).toMatch(/NOT a discovery question/i)
+    expect(prompt).toMatch(/do not answer it by calling `search_datasets`/i)
+  })
+
+  it('tells the model to repeat coverage, precision and no-data rather than smooth them over', () => {
+    const prompt = buildSystemPrompt([], null, 'general', false, null, null, null, undefined, true)
+    expect(prompt).toContain('precision')
+    expect(prompt).toContain('coverage')
+    expect(prompt).toContain('noData')
+  })
+
+  it('never quotes a wrong answer it is trying to prevent', () => {
+    // The most expensive lesson of this phase. Three rules were
+    // written as "here is the bad output, do not produce it", and the
+    // model produced all three — the estimate-from-the-picture opener
+    // almost word for word, the concentration unit that belongs to a
+    // different dataset, and the coordinate pair used to illustrate a
+    // dropped minus sign. A wrong answer in the prompt is a wrong
+    // answer the model has read; salience does not carry the "not".
+    // Rules here state what to do. Failures are described, never
+    // transcribed.
+    const prompt = buildSystemPrompt([], null, 'general', false, null, null, null, undefined, true)
+    // The three that actually came back, verbatim.
+    expect(prompt).not.toMatch(/smoke levels are highest over/i)
+    expect(prompt).not.toMatch(/micrograms per cubic met/i)
+    expect(prompt).not.toMatch(/47\.5/)
+    expect(prompt).not.toMatch(/119\.5/)
+    // And the shape of the mistake, so a future rule cannot reintroduce
+    // one by quoting a transcript.
+    expect(prompt).not.toMatch(/verbatim from a real session/i)
+    expect(prompt).not.toMatch(/the answer began "/i)
+  })
+
+  it('asks for the measured answer first, with no preamble to call a tool', () => {
+    // Observed: two narration sentences before the number, one of them
+    // announcing the tool call. The global CALL TOOLS SILENTLY rule is
+    // hundreds of lines earlier and lost.
+    const prompt = buildSystemPrompt([], null, 'general', false, null, null, null, undefined, true)
+    expect(prompt).toMatch(/no sentence about being about to check/i)
+    expect(prompt).toMatch(/first words the user reads should already be the measured answer/i)
+  })
+
+  it('does not contradict itself about who flies the globe', () => {
+    // The carve-out says the app flies; the tool description used to
+    // say "you may call fly_to and add_marker afterwards". A model
+    // handed both follows one of them, and the one it followed was the
+    // one that sent the globe to China.
+    const desc = getFindExtremumTool().function.description ?? ''
+    expect(desc).toMatch(/do NOT call `fly_to` or `add_marker`/i)
+    expect(desc).not.toMatch(/you may call `fly_to`/i)
+  })
+
+  it('says the search defaults to everything, in the prompt and on the argument', () => {
+    // Live failure: "the worst smoke is at 47.5N 119.5W, 0.00023 kg m-2"
+    // for a frame whose maximum was more than twice that. The tool was
+    // never told that passing a region changes the answer, and the
+    // reply gave no sign one had been passed.
+    const prompt = buildSystemPrompt([], null, 'general', false, null, null, null, undefined, true)
+    expect(prompt).toMatch(/search the whole dataset unless the user named a place/i)
+    const props = getFindExtremumTool().function.parameters?.properties as
+      Record<string, { description?: string }> | undefined
+    expect(props?.region_name?.description).toMatch(/the default is the whole dataset/i)
+  })
+})
+
+describe('§A6 — the published scale in the dataset context', () => {
+  const withScale = {
+    id: 'INTERNAL_SMOKE',
+    title: 'Wildfire Smoke Overhead',
+    colorScale: { stops: [], vmin: 0, vmax: 5e-4, units: 'kg m-2' },
+  } as unknown as Dataset
+
+  it('states the publisher’s own range, marked as not an estimate', () => {
+    const ctx = buildCurrentDatasetContext(withScale)
+    expect(ctx).toContain('Value scale: 0 to 0.0005 kg m-2')
+    expect(ctx).toMatch(/not an estimate/i)
+  })
+
+  it('still routes specific values through a tool', () => {
+    // Stating the range is safe — it is published metadata. Stating a
+    // value at a place is not, and the two are easy to conflate.
+    const ctx = buildCurrentDatasetContext(withScale)
+    expect(ctx).toMatch(/specific.*value.*tool result/is)
+  })
+
+  it('says nothing for a dataset that carries no scale', () => {
+    const ctx = buildCurrentDatasetContext({ id: 'X', title: 'Old Picture' } as unknown as Dataset)
+    expect(ctx).not.toContain('Value scale')
   })
 })

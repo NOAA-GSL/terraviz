@@ -1,0 +1,225 @@
+# Data-encoded model-cycle video — canonical template (GEFS-Aerosols column field).
+#
+# ADAPT for a new dataset:
+#   * stage 1 `pattern`  -> the GRIB2 .idx record you want (see references/data-sources.md).
+#                           Confirm it matches ONE record with scripts/sample_grib_range.py.
+#   * heatmap `vmax`     -> ~p99.9 of the field (sample_grib_range.py prints it).
+#   * heatmap `cmap_inline.base` + `units`  -> the palette colormap + physical units.
+#   * frame count / cadence -> add/remove inputs+output_names+heatmap inputs together.
+#
+# Self-updating: date-pathed S3 URLs template with {{cycle_date}}/{{cycle_hour}}.
+# 6-hourly cycles, ~9h lag; 3-hourly frames f000..f120 (41 frames, 5-day outlook).
+#
+# DATA-ENCODED CONTRACT (see references/data-encoded-contract.md):
+#   heatmap has data_encoded:true + color_scale_file + a cmap_inline/cmap_file
+#   palette (a named --cmap is IGNORED), and NO width/height/basemap. 4K comes
+#   from reproject regridding the DATA, not from resizing luma. compose-video
+#   has NO preset:sos (it would rescale/average the luma).
+stages:
+  - stage: process
+    command: convert-format
+    args:
+      format: geotiff
+      pattern: 'COLMD:entire atmosphere:.*Particulate organic matter dry'   # ADAPT: the field
+      output_dir: /work/tif
+      inputs:
+        - https://noaa-gefs-pds.s3.amazonaws.com/gefs.{{cycle_date:PT6H:PT9H}}/{{cycle_hour:PT6H:PT9H}}/chem/pgrb2ap25/gefs.chem.t{{cycle_hour:PT6H:PT9H}}z.a2d_0p25.f000.grib2
+        - https://noaa-gefs-pds.s3.amazonaws.com/gefs.{{cycle_date:PT6H:PT9H}}/{{cycle_hour:PT6H:PT9H}}/chem/pgrb2ap25/gefs.chem.t{{cycle_hour:PT6H:PT9H}}z.a2d_0p25.f003.grib2
+        - https://noaa-gefs-pds.s3.amazonaws.com/gefs.{{cycle_date:PT6H:PT9H}}/{{cycle_hour:PT6H:PT9H}}/chem/pgrb2ap25/gefs.chem.t{{cycle_hour:PT6H:PT9H}}z.a2d_0p25.f006.grib2
+        - https://noaa-gefs-pds.s3.amazonaws.com/gefs.{{cycle_date:PT6H:PT9H}}/{{cycle_hour:PT6H:PT9H}}/chem/pgrb2ap25/gefs.chem.t{{cycle_hour:PT6H:PT9H}}z.a2d_0p25.f009.grib2
+        - https://noaa-gefs-pds.s3.amazonaws.com/gefs.{{cycle_date:PT6H:PT9H}}/{{cycle_hour:PT6H:PT9H}}/chem/pgrb2ap25/gefs.chem.t{{cycle_hour:PT6H:PT9H}}z.a2d_0p25.f012.grib2
+        - https://noaa-gefs-pds.s3.amazonaws.com/gefs.{{cycle_date:PT6H:PT9H}}/{{cycle_hour:PT6H:PT9H}}/chem/pgrb2ap25/gefs.chem.t{{cycle_hour:PT6H:PT9H}}z.a2d_0p25.f015.grib2
+        - https://noaa-gefs-pds.s3.amazonaws.com/gefs.{{cycle_date:PT6H:PT9H}}/{{cycle_hour:PT6H:PT9H}}/chem/pgrb2ap25/gefs.chem.t{{cycle_hour:PT6H:PT9H}}z.a2d_0p25.f018.grib2
+        - https://noaa-gefs-pds.s3.amazonaws.com/gefs.{{cycle_date:PT6H:PT9H}}/{{cycle_hour:PT6H:PT9H}}/chem/pgrb2ap25/gefs.chem.t{{cycle_hour:PT6H:PT9H}}z.a2d_0p25.f021.grib2
+        - https://noaa-gefs-pds.s3.amazonaws.com/gefs.{{cycle_date:PT6H:PT9H}}/{{cycle_hour:PT6H:PT9H}}/chem/pgrb2ap25/gefs.chem.t{{cycle_hour:PT6H:PT9H}}z.a2d_0p25.f024.grib2
+        - https://noaa-gefs-pds.s3.amazonaws.com/gefs.{{cycle_date:PT6H:PT9H}}/{{cycle_hour:PT6H:PT9H}}/chem/pgrb2ap25/gefs.chem.t{{cycle_hour:PT6H:PT9H}}z.a2d_0p25.f027.grib2
+        - https://noaa-gefs-pds.s3.amazonaws.com/gefs.{{cycle_date:PT6H:PT9H}}/{{cycle_hour:PT6H:PT9H}}/chem/pgrb2ap25/gefs.chem.t{{cycle_hour:PT6H:PT9H}}z.a2d_0p25.f030.grib2
+        - https://noaa-gefs-pds.s3.amazonaws.com/gefs.{{cycle_date:PT6H:PT9H}}/{{cycle_hour:PT6H:PT9H}}/chem/pgrb2ap25/gefs.chem.t{{cycle_hour:PT6H:PT9H}}z.a2d_0p25.f033.grib2
+        - https://noaa-gefs-pds.s3.amazonaws.com/gefs.{{cycle_date:PT6H:PT9H}}/{{cycle_hour:PT6H:PT9H}}/chem/pgrb2ap25/gefs.chem.t{{cycle_hour:PT6H:PT9H}}z.a2d_0p25.f036.grib2
+        - https://noaa-gefs-pds.s3.amazonaws.com/gefs.{{cycle_date:PT6H:PT9H}}/{{cycle_hour:PT6H:PT9H}}/chem/pgrb2ap25/gefs.chem.t{{cycle_hour:PT6H:PT9H}}z.a2d_0p25.f039.grib2
+        - https://noaa-gefs-pds.s3.amazonaws.com/gefs.{{cycle_date:PT6H:PT9H}}/{{cycle_hour:PT6H:PT9H}}/chem/pgrb2ap25/gefs.chem.t{{cycle_hour:PT6H:PT9H}}z.a2d_0p25.f042.grib2
+        - https://noaa-gefs-pds.s3.amazonaws.com/gefs.{{cycle_date:PT6H:PT9H}}/{{cycle_hour:PT6H:PT9H}}/chem/pgrb2ap25/gefs.chem.t{{cycle_hour:PT6H:PT9H}}z.a2d_0p25.f045.grib2
+        - https://noaa-gefs-pds.s3.amazonaws.com/gefs.{{cycle_date:PT6H:PT9H}}/{{cycle_hour:PT6H:PT9H}}/chem/pgrb2ap25/gefs.chem.t{{cycle_hour:PT6H:PT9H}}z.a2d_0p25.f048.grib2
+        - https://noaa-gefs-pds.s3.amazonaws.com/gefs.{{cycle_date:PT6H:PT9H}}/{{cycle_hour:PT6H:PT9H}}/chem/pgrb2ap25/gefs.chem.t{{cycle_hour:PT6H:PT9H}}z.a2d_0p25.f051.grib2
+        - https://noaa-gefs-pds.s3.amazonaws.com/gefs.{{cycle_date:PT6H:PT9H}}/{{cycle_hour:PT6H:PT9H}}/chem/pgrb2ap25/gefs.chem.t{{cycle_hour:PT6H:PT9H}}z.a2d_0p25.f054.grib2
+        - https://noaa-gefs-pds.s3.amazonaws.com/gefs.{{cycle_date:PT6H:PT9H}}/{{cycle_hour:PT6H:PT9H}}/chem/pgrb2ap25/gefs.chem.t{{cycle_hour:PT6H:PT9H}}z.a2d_0p25.f057.grib2
+        - https://noaa-gefs-pds.s3.amazonaws.com/gefs.{{cycle_date:PT6H:PT9H}}/{{cycle_hour:PT6H:PT9H}}/chem/pgrb2ap25/gefs.chem.t{{cycle_hour:PT6H:PT9H}}z.a2d_0p25.f060.grib2
+        - https://noaa-gefs-pds.s3.amazonaws.com/gefs.{{cycle_date:PT6H:PT9H}}/{{cycle_hour:PT6H:PT9H}}/chem/pgrb2ap25/gefs.chem.t{{cycle_hour:PT6H:PT9H}}z.a2d_0p25.f063.grib2
+        - https://noaa-gefs-pds.s3.amazonaws.com/gefs.{{cycle_date:PT6H:PT9H}}/{{cycle_hour:PT6H:PT9H}}/chem/pgrb2ap25/gefs.chem.t{{cycle_hour:PT6H:PT9H}}z.a2d_0p25.f066.grib2
+        - https://noaa-gefs-pds.s3.amazonaws.com/gefs.{{cycle_date:PT6H:PT9H}}/{{cycle_hour:PT6H:PT9H}}/chem/pgrb2ap25/gefs.chem.t{{cycle_hour:PT6H:PT9H}}z.a2d_0p25.f069.grib2
+        - https://noaa-gefs-pds.s3.amazonaws.com/gefs.{{cycle_date:PT6H:PT9H}}/{{cycle_hour:PT6H:PT9H}}/chem/pgrb2ap25/gefs.chem.t{{cycle_hour:PT6H:PT9H}}z.a2d_0p25.f072.grib2
+        - https://noaa-gefs-pds.s3.amazonaws.com/gefs.{{cycle_date:PT6H:PT9H}}/{{cycle_hour:PT6H:PT9H}}/chem/pgrb2ap25/gefs.chem.t{{cycle_hour:PT6H:PT9H}}z.a2d_0p25.f075.grib2
+        - https://noaa-gefs-pds.s3.amazonaws.com/gefs.{{cycle_date:PT6H:PT9H}}/{{cycle_hour:PT6H:PT9H}}/chem/pgrb2ap25/gefs.chem.t{{cycle_hour:PT6H:PT9H}}z.a2d_0p25.f078.grib2
+        - https://noaa-gefs-pds.s3.amazonaws.com/gefs.{{cycle_date:PT6H:PT9H}}/{{cycle_hour:PT6H:PT9H}}/chem/pgrb2ap25/gefs.chem.t{{cycle_hour:PT6H:PT9H}}z.a2d_0p25.f081.grib2
+        - https://noaa-gefs-pds.s3.amazonaws.com/gefs.{{cycle_date:PT6H:PT9H}}/{{cycle_hour:PT6H:PT9H}}/chem/pgrb2ap25/gefs.chem.t{{cycle_hour:PT6H:PT9H}}z.a2d_0p25.f084.grib2
+        - https://noaa-gefs-pds.s3.amazonaws.com/gefs.{{cycle_date:PT6H:PT9H}}/{{cycle_hour:PT6H:PT9H}}/chem/pgrb2ap25/gefs.chem.t{{cycle_hour:PT6H:PT9H}}z.a2d_0p25.f087.grib2
+        - https://noaa-gefs-pds.s3.amazonaws.com/gefs.{{cycle_date:PT6H:PT9H}}/{{cycle_hour:PT6H:PT9H}}/chem/pgrb2ap25/gefs.chem.t{{cycle_hour:PT6H:PT9H}}z.a2d_0p25.f090.grib2
+        - https://noaa-gefs-pds.s3.amazonaws.com/gefs.{{cycle_date:PT6H:PT9H}}/{{cycle_hour:PT6H:PT9H}}/chem/pgrb2ap25/gefs.chem.t{{cycle_hour:PT6H:PT9H}}z.a2d_0p25.f093.grib2
+        - https://noaa-gefs-pds.s3.amazonaws.com/gefs.{{cycle_date:PT6H:PT9H}}/{{cycle_hour:PT6H:PT9H}}/chem/pgrb2ap25/gefs.chem.t{{cycle_hour:PT6H:PT9H}}z.a2d_0p25.f096.grib2
+        - https://noaa-gefs-pds.s3.amazonaws.com/gefs.{{cycle_date:PT6H:PT9H}}/{{cycle_hour:PT6H:PT9H}}/chem/pgrb2ap25/gefs.chem.t{{cycle_hour:PT6H:PT9H}}z.a2d_0p25.f099.grib2
+        - https://noaa-gefs-pds.s3.amazonaws.com/gefs.{{cycle_date:PT6H:PT9H}}/{{cycle_hour:PT6H:PT9H}}/chem/pgrb2ap25/gefs.chem.t{{cycle_hour:PT6H:PT9H}}z.a2d_0p25.f102.grib2
+        - https://noaa-gefs-pds.s3.amazonaws.com/gefs.{{cycle_date:PT6H:PT9H}}/{{cycle_hour:PT6H:PT9H}}/chem/pgrb2ap25/gefs.chem.t{{cycle_hour:PT6H:PT9H}}z.a2d_0p25.f105.grib2
+        - https://noaa-gefs-pds.s3.amazonaws.com/gefs.{{cycle_date:PT6H:PT9H}}/{{cycle_hour:PT6H:PT9H}}/chem/pgrb2ap25/gefs.chem.t{{cycle_hour:PT6H:PT9H}}z.a2d_0p25.f108.grib2
+        - https://noaa-gefs-pds.s3.amazonaws.com/gefs.{{cycle_date:PT6H:PT9H}}/{{cycle_hour:PT6H:PT9H}}/chem/pgrb2ap25/gefs.chem.t{{cycle_hour:PT6H:PT9H}}z.a2d_0p25.f111.grib2
+        - https://noaa-gefs-pds.s3.amazonaws.com/gefs.{{cycle_date:PT6H:PT9H}}/{{cycle_hour:PT6H:PT9H}}/chem/pgrb2ap25/gefs.chem.t{{cycle_hour:PT6H:PT9H}}z.a2d_0p25.f114.grib2
+        - https://noaa-gefs-pds.s3.amazonaws.com/gefs.{{cycle_date:PT6H:PT9H}}/{{cycle_hour:PT6H:PT9H}}/chem/pgrb2ap25/gefs.chem.t{{cycle_hour:PT6H:PT9H}}z.a2d_0p25.f117.grib2
+        - https://noaa-gefs-pds.s3.amazonaws.com/gefs.{{cycle_date:PT6H:PT9H}}/{{cycle_hour:PT6H:PT9H}}/chem/pgrb2ap25/gefs.chem.t{{cycle_hour:PT6H:PT9H}}z.a2d_0p25.f120.grib2
+      output_names:
+        - "{{valid_compact:PT6H:PT9H}}.tif"
+        - "{{valid_compact:PT6H:PT9H:PT3H}}.tif"
+        - "{{valid_compact:PT6H:PT9H:PT6H}}.tif"
+        - "{{valid_compact:PT6H:PT9H:PT9H}}.tif"
+        - "{{valid_compact:PT6H:PT9H:PT12H}}.tif"
+        - "{{valid_compact:PT6H:PT9H:PT15H}}.tif"
+        - "{{valid_compact:PT6H:PT9H:PT18H}}.tif"
+        - "{{valid_compact:PT6H:PT9H:PT21H}}.tif"
+        - "{{valid_compact:PT6H:PT9H:PT24H}}.tif"
+        - "{{valid_compact:PT6H:PT9H:PT27H}}.tif"
+        - "{{valid_compact:PT6H:PT9H:PT30H}}.tif"
+        - "{{valid_compact:PT6H:PT9H:PT33H}}.tif"
+        - "{{valid_compact:PT6H:PT9H:PT36H}}.tif"
+        - "{{valid_compact:PT6H:PT9H:PT39H}}.tif"
+        - "{{valid_compact:PT6H:PT9H:PT42H}}.tif"
+        - "{{valid_compact:PT6H:PT9H:PT45H}}.tif"
+        - "{{valid_compact:PT6H:PT9H:PT48H}}.tif"
+        - "{{valid_compact:PT6H:PT9H:PT51H}}.tif"
+        - "{{valid_compact:PT6H:PT9H:PT54H}}.tif"
+        - "{{valid_compact:PT6H:PT9H:PT57H}}.tif"
+        - "{{valid_compact:PT6H:PT9H:PT60H}}.tif"
+        - "{{valid_compact:PT6H:PT9H:PT63H}}.tif"
+        - "{{valid_compact:PT6H:PT9H:PT66H}}.tif"
+        - "{{valid_compact:PT6H:PT9H:PT69H}}.tif"
+        - "{{valid_compact:PT6H:PT9H:PT72H}}.tif"
+        - "{{valid_compact:PT6H:PT9H:PT75H}}.tif"
+        - "{{valid_compact:PT6H:PT9H:PT78H}}.tif"
+        - "{{valid_compact:PT6H:PT9H:PT81H}}.tif"
+        - "{{valid_compact:PT6H:PT9H:PT84H}}.tif"
+        - "{{valid_compact:PT6H:PT9H:PT87H}}.tif"
+        - "{{valid_compact:PT6H:PT9H:PT90H}}.tif"
+        - "{{valid_compact:PT6H:PT9H:PT93H}}.tif"
+        - "{{valid_compact:PT6H:PT9H:PT96H}}.tif"
+        - "{{valid_compact:PT6H:PT9H:PT99H}}.tif"
+        - "{{valid_compact:PT6H:PT9H:PT102H}}.tif"
+        - "{{valid_compact:PT6H:PT9H:PT105H}}.tif"
+        - "{{valid_compact:PT6H:PT9H:PT108H}}.tif"
+        - "{{valid_compact:PT6H:PT9H:PT111H}}.tif"
+        - "{{valid_compact:PT6H:PT9H:PT114H}}.tif"
+        - "{{valid_compact:PT6H:PT9H:PT117H}}.tif"
+        - "{{valid_compact:PT6H:PT9H:PT120H}}.tif"
+  - stage: process
+    command: reproject
+    args:
+      inputs:
+        - /work/tif/{{valid_compact:PT6H:PT9H}}.tif
+        - /work/tif/{{valid_compact:PT6H:PT9H:PT3H}}.tif
+        - /work/tif/{{valid_compact:PT6H:PT9H:PT6H}}.tif
+        - /work/tif/{{valid_compact:PT6H:PT9H:PT9H}}.tif
+        - /work/tif/{{valid_compact:PT6H:PT9H:PT12H}}.tif
+        - /work/tif/{{valid_compact:PT6H:PT9H:PT15H}}.tif
+        - /work/tif/{{valid_compact:PT6H:PT9H:PT18H}}.tif
+        - /work/tif/{{valid_compact:PT6H:PT9H:PT21H}}.tif
+        - /work/tif/{{valid_compact:PT6H:PT9H:PT24H}}.tif
+        - /work/tif/{{valid_compact:PT6H:PT9H:PT27H}}.tif
+        - /work/tif/{{valid_compact:PT6H:PT9H:PT30H}}.tif
+        - /work/tif/{{valid_compact:PT6H:PT9H:PT33H}}.tif
+        - /work/tif/{{valid_compact:PT6H:PT9H:PT36H}}.tif
+        - /work/tif/{{valid_compact:PT6H:PT9H:PT39H}}.tif
+        - /work/tif/{{valid_compact:PT6H:PT9H:PT42H}}.tif
+        - /work/tif/{{valid_compact:PT6H:PT9H:PT45H}}.tif
+        - /work/tif/{{valid_compact:PT6H:PT9H:PT48H}}.tif
+        - /work/tif/{{valid_compact:PT6H:PT9H:PT51H}}.tif
+        - /work/tif/{{valid_compact:PT6H:PT9H:PT54H}}.tif
+        - /work/tif/{{valid_compact:PT6H:PT9H:PT57H}}.tif
+        - /work/tif/{{valid_compact:PT6H:PT9H:PT60H}}.tif
+        - /work/tif/{{valid_compact:PT6H:PT9H:PT63H}}.tif
+        - /work/tif/{{valid_compact:PT6H:PT9H:PT66H}}.tif
+        - /work/tif/{{valid_compact:PT6H:PT9H:PT69H}}.tif
+        - /work/tif/{{valid_compact:PT6H:PT9H:PT72H}}.tif
+        - /work/tif/{{valid_compact:PT6H:PT9H:PT75H}}.tif
+        - /work/tif/{{valid_compact:PT6H:PT9H:PT78H}}.tif
+        - /work/tif/{{valid_compact:PT6H:PT9H:PT81H}}.tif
+        - /work/tif/{{valid_compact:PT6H:PT9H:PT84H}}.tif
+        - /work/tif/{{valid_compact:PT6H:PT9H:PT87H}}.tif
+        - /work/tif/{{valid_compact:PT6H:PT9H:PT90H}}.tif
+        - /work/tif/{{valid_compact:PT6H:PT9H:PT93H}}.tif
+        - /work/tif/{{valid_compact:PT6H:PT9H:PT96H}}.tif
+        - /work/tif/{{valid_compact:PT6H:PT9H:PT99H}}.tif
+        - /work/tif/{{valid_compact:PT6H:PT9H:PT102H}}.tif
+        - /work/tif/{{valid_compact:PT6H:PT9H:PT105H}}.tif
+        - /work/tif/{{valid_compact:PT6H:PT9H:PT108H}}.tif
+        - /work/tif/{{valid_compact:PT6H:PT9H:PT111H}}.tif
+        - /work/tif/{{valid_compact:PT6H:PT9H:PT114H}}.tif
+        - /work/tif/{{valid_compact:PT6H:PT9H:PT117H}}.tif
+        - /work/tif/{{valid_compact:PT6H:PT9H:PT120H}}.tif
+      output_dir: /work/wrapped
+      dst_bounds: [-180, -90, 180, 90]
+      width: 4096      # regrid the DATA here (legit); NOT on the heatmap stage
+      height: 2048
+  - stage: visualize
+    command: heatmap
+    args:
+      inputs:
+        - /work/wrapped/{{valid_compact:PT6H:PT9H}}.tif
+        - /work/wrapped/{{valid_compact:PT6H:PT9H:PT3H}}.tif
+        - /work/wrapped/{{valid_compact:PT6H:PT9H:PT6H}}.tif
+        - /work/wrapped/{{valid_compact:PT6H:PT9H:PT9H}}.tif
+        - /work/wrapped/{{valid_compact:PT6H:PT9H:PT12H}}.tif
+        - /work/wrapped/{{valid_compact:PT6H:PT9H:PT15H}}.tif
+        - /work/wrapped/{{valid_compact:PT6H:PT9H:PT18H}}.tif
+        - /work/wrapped/{{valid_compact:PT6H:PT9H:PT21H}}.tif
+        - /work/wrapped/{{valid_compact:PT6H:PT9H:PT24H}}.tif
+        - /work/wrapped/{{valid_compact:PT6H:PT9H:PT27H}}.tif
+        - /work/wrapped/{{valid_compact:PT6H:PT9H:PT30H}}.tif
+        - /work/wrapped/{{valid_compact:PT6H:PT9H:PT33H}}.tif
+        - /work/wrapped/{{valid_compact:PT6H:PT9H:PT36H}}.tif
+        - /work/wrapped/{{valid_compact:PT6H:PT9H:PT39H}}.tif
+        - /work/wrapped/{{valid_compact:PT6H:PT9H:PT42H}}.tif
+        - /work/wrapped/{{valid_compact:PT6H:PT9H:PT45H}}.tif
+        - /work/wrapped/{{valid_compact:PT6H:PT9H:PT48H}}.tif
+        - /work/wrapped/{{valid_compact:PT6H:PT9H:PT51H}}.tif
+        - /work/wrapped/{{valid_compact:PT6H:PT9H:PT54H}}.tif
+        - /work/wrapped/{{valid_compact:PT6H:PT9H:PT57H}}.tif
+        - /work/wrapped/{{valid_compact:PT6H:PT9H:PT60H}}.tif
+        - /work/wrapped/{{valid_compact:PT6H:PT9H:PT63H}}.tif
+        - /work/wrapped/{{valid_compact:PT6H:PT9H:PT66H}}.tif
+        - /work/wrapped/{{valid_compact:PT6H:PT9H:PT69H}}.tif
+        - /work/wrapped/{{valid_compact:PT6H:PT9H:PT72H}}.tif
+        - /work/wrapped/{{valid_compact:PT6H:PT9H:PT75H}}.tif
+        - /work/wrapped/{{valid_compact:PT6H:PT9H:PT78H}}.tif
+        - /work/wrapped/{{valid_compact:PT6H:PT9H:PT81H}}.tif
+        - /work/wrapped/{{valid_compact:PT6H:PT9H:PT84H}}.tif
+        - /work/wrapped/{{valid_compact:PT6H:PT9H:PT87H}}.tif
+        - /work/wrapped/{{valid_compact:PT6H:PT9H:PT90H}}.tif
+        - /work/wrapped/{{valid_compact:PT6H:PT9H:PT93H}}.tif
+        - /work/wrapped/{{valid_compact:PT6H:PT9H:PT96H}}.tif
+        - /work/wrapped/{{valid_compact:PT6H:PT9H:PT99H}}.tif
+        - /work/wrapped/{{valid_compact:PT6H:PT9H:PT102H}}.tif
+        - /work/wrapped/{{valid_compact:PT6H:PT9H:PT105H}}.tif
+        - /work/wrapped/{{valid_compact:PT6H:PT9H:PT108H}}.tif
+        - /work/wrapped/{{valid_compact:PT6H:PT9H:PT111H}}.tif
+        - /work/wrapped/{{valid_compact:PT6H:PT9H:PT114H}}.tif
+        - /work/wrapped/{{valid_compact:PT6H:PT9H:PT117H}}.tif
+        - /work/wrapped/{{valid_compact:PT6H:PT9H:PT120H}}.tif
+      output_dir: /work/images/frames
+      data_encoded: true
+      color_scale_file: /work/color-scale.json      # OUTPUT: heatmap writes the sidecar
+      units: "kg m-2"                                # ADAPT
+      cmap_inline: '{"type":"continuous","base":"YlOrBr","transparent_range":12,"blend_range":48,"overall_alpha":0.95}'   # ADAPT base
+      vmin: 0
+      vmax: 0.0005                                   # ADAPT: ~p99.9 of the field
+      # NO width/height (forbidden with --data-encoded), NO basemap.
+  - stage: process
+    command: scan-frames
+    args:
+      frames_dir: /work/images/frames
+      datetime_format: "%Y%m%dT%H%M%S"
+      period_seconds: 10800
+      output: /work/frames-meta.json
+  - stage: visualize
+    command: compose-video
+    args:
+      frames: /work/images/frames
+      glob: "[0-9]*.png"
+      output: /work/output/dataset.mp4
+      fps: 4
+      # NO preset:sos (it rescales -> averages luma). size only if it matches frames.

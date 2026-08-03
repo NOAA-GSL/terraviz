@@ -1,0 +1,231 @@
+/**
+ * The Analyze panel.
+ *
+ * Shares the glass-surface language of the other Tools panels
+ * (Privacy, Credits) and sits in the same bottom-end corner as the
+ * colorbar controls it complements — the two are never open together in
+ * practice, and both are dismissible with Escape.
+ *
+ * Logical inline-axis properties throughout, per
+ * `docs/CSS_ARCHITECTURE_PLAN.md` §RTL safety.
+ */
+
+.analyze-panel {
+  position: fixed;
+  inset-block-end: max(var(--space-4, 1rem), env(safe-area-inset-bottom));
+  inset-inline-end: var(--space-4, 1rem);
+  z-index: 60;
+
+  inline-size: min(22rem, calc(100vw - 2rem));
+  max-block-size: min(34rem, calc(100vh - 2rem));
+  overflow-y: auto;
+  padding: var(--space-4, 1rem);
+
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3, 0.75rem);
+
+  border: 1px solid var(--color-border, rgba(255, 255, 255, 0.18));
+  border-radius: var(--radius-lg, 0.75rem);
+  background: var(--color-surface-glass, rgba(20, 24, 32, 0.86));
+  backdrop-filter: blur(16px);
+  color: var(--color-text, #f2f5f9);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+}
+
+.analyze-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2, 0.5rem);
+}
+
+.analyze-header h2 {
+  margin: 0;
+  font-size: 0.9375rem;
+  font-weight: 600;
+}
+
+.analyze-close {
+  border: 0;
+  background: none;
+  color: inherit;
+  font-size: 1.25rem;
+  line-height: 1;
+  padding: 0.125rem 0.375rem;
+  cursor: pointer;
+  border-radius: var(--radius-sm, 0.25rem);
+}
+
+.analyze-close:hover,
+.analyze-close:focus-visible {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.analyze-scope {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.analyze-scope-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  opacity: 0.85;
+}
+
+.analyze-scope-select {
+  inline-size: 100%;
+  padding: 0.375rem 0.5rem;
+  border: 1px solid var(--color-border, rgba(255, 255, 255, 0.18));
+  border-radius: var(--radius-sm, 0.25rem);
+  background: rgba(0, 0, 0, 0.3);
+  color: inherit;
+  font-size: 0.8125rem;
+}
+
+.analyze-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3, 0.75rem);
+}
+
+/* Bars abut with no gaps, so the chart must not be smoothed — an
+   interpolated distribution reads as a blurred ramp rather than as a
+   shape. */
+.analyze-histogram {
+  inline-size: 100%;
+  block-size: 4.5rem;
+  display: block;
+  border-radius: var(--radius-sm, 0.25rem);
+  background: rgba(0, 0, 0, 0.35);
+  image-rendering: pixelated;
+}
+
+.analyze-stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.375rem;
+}
+
+.analyze-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  padding: 0.375rem 0.5rem;
+  border: 1px solid var(--color-border, rgba(255, 255, 255, 0.12));
+  border-radius: var(--radius-sm, 0.25rem);
+  background: rgba(255, 255, 255, 0.03);
+  min-inline-size: 0;
+}
+
+.analyze-stat-label {
+  font-size: 0.625rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  opacity: 0.65;
+}
+
+.analyze-stat-value {
+  font-size: 0.875rem;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.analyze-caption,
+.analyze-coverage,
+.analyze-precision,
+.analyze-message {
+  margin: 0;
+  font-size: 0.75rem;
+  line-height: 1.45;
+  opacity: 0.78;
+}
+
+/* The uncertainty sits with the numbers rather than in a footnote, so
+   it is styled to be read, not skipped. */
+.analyze-precision {
+  padding-inline-start: 0.5rem;
+  border-inline-start: 2px solid var(--color-accent, #4da3ff);
+  opacity: 0.9;
+}
+
+/* Belongs to the chart above it, so it is pulled up out of the body's
+   gap and set quieter than the prose it sits among. */
+.analyze-caption {
+  margin-block-start: calc(var(--space-3, 0.75rem) * -0.6);
+  text-align: end;
+  opacity: 0.6;
+}
+
+/* The transect block. Separated by a rule rather than by spacing
+   alone: it answers a different question from the statistics above it,
+   and on a phone the two run together without one. */
+.analyze-transect-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3, 0.75rem);
+  padding-block-start: var(--space-3, 0.75rem);
+  border-block-start: 1px solid var(--color-border, rgba(255, 255, 255, 0.18));
+}
+
+.analyze-transect-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2, 0.5rem);
+}
+
+.analyze-transect-head h3 {
+  margin: 0;
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+/* Taller than the histogram: this one carries a shape worth reading,
+   where the histogram carries a silhouette. */
+.analyze-transect {
+  inline-size: 100%;
+  block-size: 5.5rem;
+  display: block;
+  border-radius: var(--radius-sm, 0.25rem);
+  background: rgba(0, 0, 0, 0.35);
+}
+
+.analyze-action {
+  padding: 0.25rem 0.5rem;
+  border: 1px solid var(--color-border, rgba(255, 255, 255, 0.18));
+  border-radius: var(--radius-sm, 0.25rem);
+  background: rgba(255, 255, 255, 0.06);
+  color: inherit;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.analyze-action:hover,
+.analyze-action:focus-visible {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.analyze-export {
+  padding: 0.4375rem;
+  border: 1px solid var(--color-border, rgba(255, 255, 255, 0.18));
+  border-radius: var(--radius-sm, 0.25rem);
+  background: transparent;
+  color: inherit;
+  font-size: 0.8125rem;
+  cursor: pointer;
+}
+
+.analyze-export:hover,
+.analyze-export:focus-visible {
+  border-color: var(--color-accent, #4da3ff);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+@media (max-width: 600px) {
+  .analyze-panel {
+    inset-inline: var(--space-3, 0.75rem);
+    inline-size: auto;
+  }
+}

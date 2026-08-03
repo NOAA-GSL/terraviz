@@ -32,6 +32,7 @@
  */
 
 import { MapRenderer, setActiveMapRenderer } from './mapRenderer'
+import type { ColorScaleDisplay } from './colorScaleDisplay'
 import { logger } from '../utils/logger'
 import { emit } from '../analytics'
 
@@ -101,6 +102,10 @@ interface Viewport {
   /** Floating per-panel legend element — lazily created the first
    *  time the panel needs one, and toggled via classList thereafter. */
   legend: HTMLButtonElement | null
+  /** Floating per-panel colorbar for data-encoded datasets. Replaced
+   *  wholesale rather than mutated, because a display change alters the
+   *  gradient, the ticks and the accessible name together. */
+  colorbar: HTMLElement | null
   onMove: () => void
 }
 
@@ -207,6 +212,18 @@ export class ViewportManager {
   /** Get all current renderers in panel order. */
   getAll(): MapRenderer[] {
     return this.viewports.map(v => v.renderer)
+  }
+
+  /**
+   * Apply a data-encoded viewing transform to every panel.
+   *
+   * Fanned out rather than applied to the primary alone: in a 2- or
+   * 4-globe layout the panels are meant to be compared, and comparing
+   * two fields through two different palettes is worse than useless.
+   * Panels showing picture datasets ignore it.
+   */
+  setColorScaleDisplay(display: ColorScaleDisplay): void {
+    for (const vp of this.viewports) vp.renderer.setColorScaleDisplay(display)
   }
 
   /** Current layout. */
@@ -324,6 +341,29 @@ export class ViewportManager {
     // stable click listener above can dispatch to the latest one.
     ;(vp.legend as HTMLButtonElement & { _onClick?: () => void })._onClick = options.onClick
     vp.legend.classList.remove('hidden')
+  }
+
+  /**
+   * Mount (or clear) a rendered colorbar on a panel.
+   *
+   * A sibling of `setPanelLegend` rather than a mode inside it. The
+   * legend path takes a URL and owns an `<img>`; a colorbar is built
+   * from the row's `ColorScale` and rebuilt whenever the display
+   * transform changes, so folding the two together would mean one
+   * method with two disjoint halves. Callers show at most one — see
+   * `refreshPanelLegends` in `main.ts`, which prefers the colorbar
+   * whenever the dataset carries a scale, because for a data-encoded
+   * row the uploaded legend image describes at best the same thing and
+   * at worst an older encode.
+   */
+  setPanelColorbar(slot: number, element: HTMLElement | null): void {
+    const vp = this.viewports[slot]
+    if (!vp) return
+    vp.colorbar?.remove()
+    vp.colorbar = null
+    if (!element) return
+    vp.container.appendChild(element)
+    vp.colorbar = element
   }
 
   /**
@@ -449,7 +489,7 @@ export class ViewportManager {
     const onMove = () => this.syncCameras(index)
     renderer.getMap()?.on('move', onMove)
 
-    this.viewports.push({ index, container, renderer, indicator, legend: null, onMove })
+    this.viewports.push({ index, container, renderer, indicator, legend: null, colorbar: null, onMove })
   }
 
   private destroyViewport(vp: Viewport): void {

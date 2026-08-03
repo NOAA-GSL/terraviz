@@ -10,8 +10,24 @@ on:
   # deploys hit the same project + commit-hash simultaneously).
   push:
     branches: [main]
+  # `claude/**` alongside main so a *stacked* PR is verified too. A
+  # branch too large to review in one piece gets frozen and the next
+  # phase branched off it, with the follow-up PR targeting that branch
+  # rather than main — which kept the diff reviewable but, with a
+  # `[main]`-only filter here, silently meant no type-check, no unit
+  # tests and no build ran on it at all. The gap was invisible from the
+  # PR page: the checks were not red, they were absent, and the only
+  # tell was a stacked PR reporting four checks where a main-targeted
+  # one reports eighteen.
+  #
+  # Consequence worth knowing: the `deploy` job below is gated on event
+  # and fork, not on base branch, so stacked PRs now get a preview
+  # deploy as well. That is the same treatment every other PR gets and
+  # is useful for reviewing stacked UI work; gating it by base instead
+  # would add a conditional with more ways to be subtly wrong than the
+  # extra deploy is worth.
   pull_request:
-    branches: [main]
+    branches: [main, 'claude/**']
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -83,6 +99,16 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run type-check
+      # Both pages are generated and committed. `npm run build`
+      # regenerates them via `prebuild`, so a stale copy in the tree is
+      # invisible there — it only shows up as a diff after someone
+      # else builds. These are the checks that catch it.
+      - run: npm run check:privacy-page
+      - run: npm run check:setup-page
+      # The install guide is read by people standing up a node for a
+      # museum or a lab, often mid-incident. Long sentences are where
+      # that reader is lost, so long sentences fail the build.
+      - run: npm run check:plain-language
 
   unit-tests:
     name: Unit Tests
@@ -178,7 +204,7 @@ jobs:
       # bindings point at the same physical D1, so the catalog
       # migrations are all the catalog backend / hero feature needs.
       # Feedback-DB schema changes are rare and applied by hand
-      # (docs/SELF_HOSTING.md Step 5).
+      # (docs/SELF_HOSTING.md Phase 8).
       #
       # Gated to `main` only: preview and production point at the SAME
       # physical D1 instance (one database_id in wrangler.toml), so

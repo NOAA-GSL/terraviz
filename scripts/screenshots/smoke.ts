@@ -211,7 +211,16 @@ const checks: Check[] = [
       await page.locator('#publisher-root .publisher-sidebar').waitFor({ state: 'visible' })
       // Direction A master–detail: the queue (left) lists events; the
       // first auto-selects into the detail (right).
-      await page.locator('.publisher-events-queue-list').first().waitFor({ timeout: 15_000 })
+      //
+      // 30s rather than the 15s its siblings use, matching the timeline
+      // legend check above. This is the slowest publisher surface to
+      // first paint: the queue appears only after the lazy portal chunk
+      // loads and then three *serialized* round trips complete
+      // (`fetchFeatures` → `me` → the events read), where the datasets
+      // check next to it needs one. It timed out once in CI at 15s and
+      // passed the re-run in 5.2s, so the render is fine and the budget
+      // was simply the same one given to a much shorter chain.
+      await page.locator('.publisher-events-queue-list').first().waitFor({ timeout: 30_000 })
       await page
         .locator('.publisher-events-detail-title', { hasText: 'Hurricane Lena makes landfall' })
         .first()
