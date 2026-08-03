@@ -47,6 +47,22 @@ const RAW_EXPORT_HEAD = [
   '</body>',
 ].join('\n')
 
+/**
+ * Carries both injection triggers: an upstream doc link (which is what
+ * applyDocLinks matches on) and the cost widget.
+ */
+const RAW_EXPORT_WITH_RUNTIMES = [
+  '<head>',
+  '<meta charset="utf-8"/>',
+  '<title>Terraviz — install console</title>',
+  '<meta name="robots" content="noindex"/>',
+  '</head><body>',
+  `<a href="${MARKDOWN_URL}#phase-2--create-the-cloudflare-resources">Phase 2</a>`,
+  '<input data-cost-count value="120"/><span data-cost-out></span>',
+  '<span data-cost-note></span>',
+  '</body>',
+].join('\n')
+
 describe('applyShell', () => {
   it('repairs everything a raw export drops', () => {
     const { html: out, repairs } = applyShell(RAW_EXPORT_HEAD)
@@ -66,6 +82,25 @@ describe('applyShell', () => {
     const { html: twice, repairs } = applyShell(once)
     expect(twice).toBe(once)
     expect(repairSummary(repairs)).toEqual([])
+  })
+
+  // The test above passes vacuously for the injected runtimes:
+  // RAW_EXPORT_HEAD has neither a doc link nor a cost widget, so
+  // neither injection fires and re-running cannot duplicate them.
+  //
+  // The cost runtime guarded on `data-cost-count` — the markup that
+  // *triggers* the injection, still present on a second pass — so it
+  // was injected twice, giving the page duplicate input listeners and
+  // repaint calls. This fixture carries both triggers so the guards
+  // are actually exercised.
+  it('does not re-inject its runtimes on a second pass', () => {
+    const once = applyShell(RAW_EXPORT_WITH_RUNTIMES).html
+    const twice = applyShell(once).html
+    expect(twice).toBe(once)
+    const scripts = (id: string): number =>
+      (once.match(new RegExp(`data-tv-injected="${id}"`, 'g')) ?? []).length
+    expect(scripts('doc-links')).toBe(1)
+    expect(scripts('cost')).toBe(1)
   })
 
   it('refuses to guess where the CSP goes if the head is restructured', () => {

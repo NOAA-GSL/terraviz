@@ -183,8 +183,31 @@ export function docLinkScript(fallback: string): string {
  * worth not having at all.
  */
 export function docLinkRuntime(fallback: string): string {
-  return `<script>\n${docLinkScript(fallback)}</script>\n`
+  return `<script ${INJECTED_MARK}="doc-links">\n${docLinkScript(fallback)}</script>\n`
 }
+
+/**
+ * Marks a script `applyShell` injected, so a second pass can tell it
+ * apart from the page's own markup and skip it.
+ *
+ * The cost runtime guarded on `data-cost-count`, which `render.ts`
+ * emits. That is the trigger for the injection, not evidence of it:
+ * it is still on the page afterwards, so a second `applyShell` added
+ * the script again — duplicate `input` listeners and repaint calls,
+ * contradicting this module's own idempotency contract.
+ *
+ * The doc-link runtime did not have the bug, because `applyDocLinks`
+ * rewrites `<a href="…">` to `<a data-doc="…" href="…">` and its
+ * regex no longer matches, so `count` is 0 on a second pass. That is
+ * emergent rather than stated, and it would quietly stop holding if
+ * the rewrite's output shape changed. Both injections are marked, so
+ * idempotency is a property of this function rather than of another
+ * one's output.
+ *
+ * The existing idempotency test missed all of this: its fixture has
+ * neither a doc link nor a cost widget, so neither injection fired.
+ */
+const INJECTED_MARK = 'data-tv-injected'
 
 /**
  * The storage estimate's runtime.
@@ -406,9 +429,16 @@ export function applyShell(
   const before = (html: string, injected: string): string =>
     html.replace('</body>', () => `${injected}</body>`)
 
-  if (linked.count > 0) out = before(out, docLinkRuntime(docsUrl))
-  if (out.includes('data-cost-count')) {
-    out = before(out, `<script>${costRuntime()}</script>\n`)
+  // Guard on the injection marker, not on the page markup that
+  // triggers it — see INJECTED_MARK.
+  const alreadyInjected = (id: string): boolean =>
+    out.includes(`${INJECTED_MARK}="${id}"`)
+
+  if (linked.count > 0 && !alreadyInjected('doc-links')) {
+    out = before(out, docLinkRuntime(docsUrl))
+  }
+  if (out.includes('data-cost-count') && !alreadyInjected('cost')) {
+    out = before(out, `<script ${INJECTED_MARK}="cost">${costRuntime()}</script>\n`)
   }
 
   return { html: out, repairs, docLinks: linked.count }
