@@ -4,10 +4,7 @@ use sha2::{Digest, Sha256};
 
 const GIBS_BASE: &str = "https://gibs.earthdata.nasa.gov/wmts/epsg3857/best";
 
-const ALLOWED_PREFIXES: &[&str] = &[
-    "BlueMarble_NextGeneration/",
-    "VIIRS_Black_Marble/",
-];
+const ALLOWED_PREFIXES: &[&str] = &["BlueMarble_NextGeneration/", "VIIRS_Black_Marble/"];
 
 #[derive(Debug)]
 pub enum TileError {
@@ -134,24 +131,36 @@ mod tests {
     #[test]
     fn cache_path_is_deterministic() {
         let cache = test_cache("/tmp/tiles");
-        let path1 = cache.cache_path("BlueMarble_NextGeneration/default/2004-08/GoogleMapsCompatible_Level8/0/0/0.jpg");
-        let path2 = cache.cache_path("BlueMarble_NextGeneration/default/2004-08/GoogleMapsCompatible_Level8/0/0/0.jpg");
+        let path1 = cache.cache_path(
+            "BlueMarble_NextGeneration/default/2004-08/GoogleMapsCompatible_Level8/0/0/0.jpg",
+        );
+        let path2 = cache.cache_path(
+            "BlueMarble_NextGeneration/default/2004-08/GoogleMapsCompatible_Level8/0/0/0.jpg",
+        );
         assert_eq!(path1, path2);
     }
 
     #[test]
     fn cache_path_differs_for_different_tiles() {
         let cache = test_cache("/tmp/tiles");
-        let path1 = cache.cache_path("BlueMarble_NextGeneration/default/2004-08/GoogleMapsCompatible_Level8/0/0/0.jpg");
-        let path2 = cache.cache_path("BlueMarble_NextGeneration/default/2004-08/GoogleMapsCompatible_Level8/1/0/0.jpg");
+        let path1 = cache.cache_path(
+            "BlueMarble_NextGeneration/default/2004-08/GoogleMapsCompatible_Level8/0/0/0.jpg",
+        );
+        let path2 = cache.cache_path(
+            "BlueMarble_NextGeneration/default/2004-08/GoogleMapsCompatible_Level8/1/0/0.jpg",
+        );
         assert_ne!(path1, path2);
     }
 
     #[test]
     fn cache_path_preserves_extension() {
         let cache = test_cache("/tmp/tiles");
-        let jpg = cache.cache_path("BlueMarble_NextGeneration/default/2004-08/GoogleMapsCompatible_Level8/0/0/0.jpg");
-        let png = cache.cache_path("VIIRS_Black_Marble/default/2016-01-01/GoogleMapsCompatible_Level8/0/0/0.png");
+        let jpg = cache.cache_path(
+            "BlueMarble_NextGeneration/default/2004-08/GoogleMapsCompatible_Level8/0/0/0.jpg",
+        );
+        let png = cache.cache_path(
+            "VIIRS_Black_Marble/default/2016-01-01/GoogleMapsCompatible_Level8/0/0/0.png",
+        );
         assert!(jpg.to_str().unwrap().ends_with(".jpg"));
         assert!(png.to_str().unwrap().ends_with(".png"));
     }
@@ -160,14 +169,16 @@ mod tests {
     fn validate_allows_blue_marble() {
         assert!(TileCache::validate(
             "BlueMarble_NextGeneration/default/2004-08/GoogleMapsCompatible_Level8/2/1/3.jpg"
-        ).is_ok());
+        )
+        .is_ok());
     }
 
     #[test]
     fn validate_allows_black_marble() {
         assert!(TileCache::validate(
             "VIIRS_Black_Marble/default/2016-01-01/GoogleMapsCompatible_Level8/0/0/0.png"
-        ).is_ok());
+        )
+        .is_ok());
     }
 
     #[test]
