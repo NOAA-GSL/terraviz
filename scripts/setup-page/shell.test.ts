@@ -286,9 +286,31 @@ describe('the committed public/setup.html', () => {
   it('offers a free-plan variant of the Workers Paid prerequisite', () => {
     const page = html()
     expect(page).toContain('data-when="paid"')
-    expect(page).toMatch(/not on the free plan/)
+    expect(page).toContain('data-when="free"')
     // Both variants present means the row count is stable across plans.
     expect((page.match(/Workers Paid/g) ?? []).length).toBeGreaterThanOrEqual(2)
+  })
+
+  // The page used to drop the Analytics Engine dataset (W9) and the
+  // ANALYTICS binding whenever the reader chose Free, believing
+  // Analytics Engine to be paid-only. It is not — Workers Free
+  // includes 100,000 data points a day, and every other product this
+  // node binds has a free allocation too.
+  //
+  // An operator who skips a resource on that advice gets a node that
+  // provisions clean and then fails at Phase 8 with a binding pointing
+  // at nothing. Plan may change wording, which is what data-when is
+  // for; it must never change which resources exist.
+  it('hides nothing by plan', () => {
+    expect(html()).not.toContain('data-paid-only')
+  })
+
+  // The specific wrong claim, in the words it shipped in.
+  it('does not claim Analytics Engine is unavailable on the free plan', () => {
+    const page = html()
+    expect(page).not.toMatch(/Analytics Engine is not on the free plan/i)
+    expect(page).not.toMatch(/no Analytics Engine (dataset )?to (point|write)/i)
+    expect(page).not.toMatch(/give up Analytics Engine/i)
   })
 
   // A reader totting up Cloudflare line items concludes the node is

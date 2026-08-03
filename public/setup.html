@@ -475,7 +475,7 @@ code{overflow-wrap:anywhere}
 <section id="cost" data-noprint="1" style="background:var(--tv-surface-2);border:1px solid var(--tv-border);border-radius:8px;padding:28px 30px;margin:0 0 44px;scroll-margin-top:20px">
   <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim);margin:0 0 12px">What it costs</div>
   <h2 style="font:700 27px/1.2 var(--tv-font-sans);letter-spacing:-.01em;color:var(--tv-text);margin:0 0 12px">You can run this on the free plan</h2>
-  <p style="margin:0 0 22px;max-width:64ch;color:var(--tv-text-muted);text-wrap:pretty">Nothing in the install requires a paid Cloudflare account. Two features lose something without one, and both were built to degrade quietly rather than break. Pick the plan you are on and the rest of the page adjusts to it.</p>
+  <p style="margin:0 0 22px;max-width:64ch;color:var(--tv-text-muted);text-wrap:pretty">Nothing in the install requires a paid Cloudflare account, and nothing is switched off without one. What you get on the free plan is a smaller daily allowance of each thing. Orbit is the one that runs out first. Pick the plan you are on and the rest of the page adjusts to it.</p>
   <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px;margin:0 0 16px">
     <button data-plan="free" style="text-align:left;cursor:pointer;border-radius:6px;padding:20px 22px;font-family:var(--tv-font-sans)">
       <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin:0 0 16px">
@@ -486,12 +486,12 @@ code{overflow-wrap:anywhere}
         <span style="font:500 12px/1 var(--tv-font-mono);color:var(--tv-text-dim)">$0</span>
       </div>
       <div style="margin:0 0 14px">
-        <div style="font:600 13.5px/1.4 var(--tv-font-sans);color:var(--tv-text);margin:0 0 5px">Usage analytics stop recording</div>
-        <p style="margin:0;font-size:13px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">Analytics Engine is not on the free plan. Telemetry requests still answer 204 — the writes are simply dropped. No analytics tab, no Grafana. The emergency kill switch still works.</p>
+        <div style="font:600 13.5px/1.4 var(--tv-font-sans);color:var(--tv-text);margin:0 0 5px">Orbit throttles after ~200 conversations a day</div>
+        <p style="margin:0;font-size:13px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">Workers AI gives you 10,000 Neurons daily and a docent turn costs about 50. Past that the chat panel shows a &quot;Reduced functionality&quot; badge and the quota resets overnight. This is the one ceiling you cannot buy past without upgrading.</p>
       </div>
       <div style="margin:0 0 0">
-        <div style="font:600 13.5px/1.4 var(--tv-font-sans);color:var(--tv-text);margin:0 0 5px">Orbit throttles after ~200 conversations a day</div>
-        <p style="margin:0;font-size:13px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">Workers AI gives you roughly 10,000 neurons daily and a docent turn costs about 50. Past that the chat panel shows a &quot;Reduced functionality&quot; badge and the quota resets overnight.</p>
+        <div style="font:600 13.5px/1.4 var(--tv-font-sans);color:var(--tv-text);margin:0 0 5px">Telemetry and search have room, but a lower ceiling</div>
+        <p style="margin:0;font-size:13px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">Analytics Engine allows 100,000 data points a day, Vectorize 5 million stored vector dimensions — roughly 6,500 datasets. Both are generous at node scale. D1 stops at 5 GB, and on the free plan that is a hard cap rather than an overage.</p>
       </div>
     </button>
     <button data-plan="paid" style="text-align:left;cursor:pointer;border-radius:6px;padding:20px 22px;font-family:var(--tv-font-sans)">
@@ -503,8 +503,8 @@ code{overflow-wrap:anywhere}
         <span style="font:500 12px/1 var(--tv-font-mono);color:var(--tv-text-dim)">$5/mo</span>
       </div>
       <div style="margin:0 0 14px">
-        <div style="font:600 13.5px/1.4 var(--tv-font-sans);color:var(--tv-text);margin:0 0 5px">Both of those go away</div>
-        <p style="margin:0;font-size:13px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">Visits and dataset views record properly, the in-app dashboards fill in, and Orbit answers all day without throttling.</p>
+        <div style="font:600 13.5px/1.4 var(--tv-font-sans);color:var(--tv-text);margin:0 0 5px">Orbit answers all day</div>
+        <p style="margin:0;font-size:13px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">The Neuron allocation stops being a ceiling and becomes an allowance you pay past, at $0.011 per 1,000. The daily throttle goes away.</p>
       </div>
       <div style="margin:0 0 0">
         <div style="font:600 13.5px/1.4 var(--tv-font-sans);color:var(--tv-text);margin:0 0 5px">Nothing else changes</div>
@@ -532,7 +532,7 @@ code{overflow-wrap:anywhere}
 
   <div data-when="free" style="background:var(--tv-warn-bg);border:1px solid var(--tv-warn-border);border-left:3px solid var(--tv-warn);border-radius:6px;padding:16px 18px;margin:0 0 18px">
     <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-warn);margin:0 0 8px">Free plan · what changed on this page</div>
-    <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">The Analytics Engine dataset and its binding have gone from the worksheet, the dependency map and Phase 8 — there is nothing for you to create. The long-term analytics add-on is hidden too. Everything else is unchanged: you are installing the same node.</p>
+    <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">Nothing has been removed. Every product this node binds has a free allocation, so you install the same node and create the same resources — you just have less headroom on each. The one that runs out first is Orbit.</p>
   </div>
   <div style="background:var(--tv-surface-2);border:1px solid var(--tv-border);border-radius:8px;padding:22px 24px;margin:0 0 22px">
   <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim);margin:0 0 10px">Storage · the same on both plans</div>
@@ -593,7 +593,7 @@ code{overflow-wrap:anywhere}
         <span style="font:600 13.5px/1.4 var(--tv-font-sans);color:var(--tv-text)">1. Enable Workers Paid ($5/month)</span>
         <span title="Nothing will warn you if you skip this one." style="flex:none;background:var(--tv-warn-bg);color:var(--tv-warn);border:1px solid var(--tv-warn-border);border-radius:999px;padding:2px 8px;font:600 9px/1.5 var(--tv-font-sans);letter-spacing:.07em;text-transform:uppercase">on you</span>
       </div>
-      <div style="font-size:13px;line-height:1.5;color:var(--tv-text-muted);text-wrap:pretty">Analytics Engine is not on the free plan, and Workers AI free-tier neurons run out after roughly 200 Orbit turns. Both fail soft, which is worse than failing loudly: telemetry silently stops recording and Orbit quietly degrades mid-demo.</div>
+      <div style="font-size:13px;line-height:1.5;color:var(--tv-text-muted);text-wrap:pretty">Optional — every product this node binds has a Workers Free allocation, so a free-plan account installs and runs. What you buy is headroom. Workers AI stops at 10,000 Neurons a day, roughly 200 Orbit turns, and that ceiling cannot be raised without upgrading. It fails soft, which is worse than failing loudly: Orbit quietly degrades to its keyword engine mid-demo.</div>
       <details style="margin:5px 0 0">
       <summary style="cursor:pointer;font:500 12px/1.4 var(--tv-font-sans);color:var(--tv-accent);list-style:none">How to do this ▸</summary>
       <div style="white-space:pre-wrap;margin:8px 0 0;padding:10px 12px;background:var(--tv-surface-code);border:1px solid var(--tv-border);border-radius:5px;font:400 11.5px/1.65 var(--tv-font-mono);color:var(--tv-text-muted);overflow-x:auto">Workers &amp; Pages → Plans → Workers Paid → Subscribe.
@@ -606,10 +606,10 @@ Billing is per account, not per project.</div>
     <span aria-hidden="true" style="flex:none;margin-top:2px;width:15px;height:15px;display:inline-flex;align-items:center;justify-content:center;border:1px dashed var(--tv-border-strong);border-radius:4px;color:var(--tv-text-dim);font:600 10px/1 var(--tv-font-sans)">—</span>
     <div style="min-width:0">
       <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:0 0 3px">
-        <span style="font:600 13.5px/1.4 var(--tv-font-sans);color:var(--tv-text-dim)">1. Workers Paid ($5/month) — not on the free plan</span>
+        <span style="font:600 13.5px/1.4 var(--tv-font-sans);color:var(--tv-text-dim)">1. Workers Paid ($5/month) — you chose the free plan</span>
         <span style="flex:none;background:var(--tv-surface-3);color:var(--tv-text-dim);border:1px solid var(--tv-border);border-radius:999px;padding:2px 8px;font:600 9px/1.5 var(--tv-font-sans);letter-spacing:.07em;text-transform:uppercase">your choice</span>
       </div>
-      <div style="font-size:13px;line-height:1.5;color:var(--tv-text-dim);text-wrap:pretty">Nothing to do — you chose the free plan. You give up Analytics Engine entirely, and Orbit throttles after roughly 200 conversations a day. <a href="#cost">Change plan</a></div>
+      <div style="font-size:13px;line-height:1.5;color:var(--tv-text-dim);text-wrap:pretty">Nothing to do. Every resource in this install still gets created — you just have a smaller daily allowance of each. Orbit throttles after roughly 200 conversations a day, and that is the ceiling you cannot buy past. <a href="#cost">Change plan</a></div>
     </div>
   </div></div>
   <div style="display:flex;gap:10px;align-items:flex-start">
@@ -882,7 +882,7 @@ Then re-run setup; the bindings step picks them up from the shell.</div>
       <span style="font-size:11.5px;color:var(--tv-text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">Vectorize index</span>
     </div><div data-cell="0" style="height:27px;display:flex;align-items:center;justify-content:center"><span data-mark="1"></span></div><div data-cell="1" style="height:27px;display:flex;align-items:center;justify-content:center"><span data-mark="1"></span></div><div data-cell="2" style="height:27px;display:flex;align-items:center;justify-content:center"><span data-mark="1"></span></div><div data-cell="3" style="height:27px;display:flex;align-items:center;justify-content:center"><span data-mark="1"></span></div><div data-cell="4" style="height:27px;display:flex;align-items:center;justify-content:center"><span data-mark="1"></span></div><div data-cell="5" style="height:27px;display:flex;align-items:center;justify-content:center"><span data-mark="1"></span></div><div data-cell="6" style="height:27px;display:flex;align-items:center;justify-content:center"><span data-mark="1"></span></div><div data-cell="7" style="height:27px;display:flex;align-items:center;justify-content:center"><span data-mark="1"></span></div><div data-cell="8" style="height:27px;display:flex;align-items:center;justify-content:center"><span data-mark="1"></span></div><div data-cell="9" style="height:27px;display:flex;align-items:center;justify-content:center"><span data-mark="1"></span></div><div data-cell="10" style="height:27px;display:flex;align-items:center;justify-content:center"><span data-mark="1"></span></div><div data-cell="11" style="height:27px;display:flex;align-items:center;justify-content:center"><span data-mark="1"></span></div><div data-cell="12" style="height:27px;display:flex;align-items:center;justify-content:center"><span data-mark="1"></span></div><div data-cell="13" style="height:27px;display:flex;align-items:center;justify-content:center"><span data-mark="1"></span></div><div data-cell="14" style="height:27px;display:flex;align-items:center;justify-content:center"><span data-mark="1"></span></div>
   </div>
-  <div data-map-row="W9" data-w="W9" data-produced="2" data-consumed="8,13" data-tier="1" data-paid-only="1" style="display:grid;grid-template-columns:224px repeat(15,minmax(0,1fr));align-items:center;cursor:pointer;border-radius:4px">
+  <div data-map-row="W9" data-w="W9" data-produced="2" data-consumed="8,13" data-tier="1" style="display:grid;grid-template-columns:224px repeat(15,minmax(0,1fr));align-items:center;cursor:pointer;border-radius:4px">
     <div style="display:flex;align-items:baseline;gap:7px;padding:0 6px 0 4px;min-width:0">
       <span data-map-id="1" style="flex:none;font:500 10.5px/1 var(--tv-font-mono)">W9</span>
       <span style="font-size:11.5px;color:var(--tv-text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">Analytics Engine dataset</span>
@@ -1137,7 +1137,7 @@ npm run dev:functions<span style="color:var(--tv-text-dim)">      # http://local
   <p style="margin:0 0 16px;max-width:64ch;font-size:13.5px;color:var(--tv-text-muted);text-wrap:pretty">Creates or adopts the D1 database, both KV namespaces, the R2 bucket, and the Vectorize index with its three metadata indexes — and records every ID for you. Re-running adopts what already exists rather than making a second one.</p>
   <div style="background:var(--tv-accent-bg);border:1px solid var(--tv-accent-border);border-left:3px solid var(--tv-accent);border-radius:6px;padding:14px 16px;margin:0 0 14px">
     <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-accent);margin:0 0 7px">Gate</div>
-    <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">W4 through W9 are all filled in.</p>
+    <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">W4 through W8 hold the IDs Cloudflare just printed, and W9 holds the dataset name you intend to use. Nothing creates W9 — an Analytics Engine dataset appears on first write.</p>
   </div>
   <p style="margin:0;font-size:12.5px;color:var(--tv-text-dim)"><a data-doc="#phase-2--create-the-cloudflare-resources" href="https://github.com/zyra-project/terraviz/blob/main/docs/SELF_HOSTING.md#phase-2--create-the-cloudflare-resources">Full detail in SELF_HOSTING.md ↗</a></p>
 </section>
@@ -1397,7 +1397,7 @@ openssl rand -base64 32<span style="color:var(--tv-text-dim)">    # W18</span></
     <div style="background:var(--tv-surface-2);padding:10px 12px;color:var(--tv-text-dim)">both</div>
     <div style="background:var(--tv-surface-2);padding:10px 12px;color:var(--tv-text-muted)">Sphere feedback D1 — same physical database as CATALOG_DB on the reference deploy, separate binding for migration scoping.</div>
   </div>
-  <div data-binding-row="1" data-tier="1" data-paid-only="1" style="display:contents">
+  <div data-binding-row="1" data-tier="1" style="display:contents">
     <div style="background:var(--tv-surface-2);padding:10px 12px;font-family:var(--tv-font-mono);overflow-wrap:anywhere">ANALYTICS</div>
     <div style="background:var(--tv-surface-2);padding:10px 12px;color:var(--tv-text-dim)">analytics_engine</div>
     <div style="background:var(--tv-surface-2);padding:10px 12px;color:var(--tv-text-dim)">both</div>
@@ -1452,7 +1452,6 @@ openssl rand -base64 32<span style="color:var(--tv-text-dim)">    # W18</span></
     <div style="background:var(--tv-surface-2);padding:10px 12px;color:var(--tv-text-muted)">GitHub fine-grained PAT (Contents: write on the workflow repo) or classic PAT with <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">repo</code> scope. Used by /asset/.../complete to fire the transcode-hls repository_dispatch on a video upload.</div>
   </div>
 </div>
-  <p data-when="free" style="margin:0 0 18px;max-width:64ch;font-size:13.5px;color:var(--tv-text-dim);text-wrap:pretty">The <code style="font-family:var(--tv-font-mono);font-size:.92em">ANALYTICS</code> binding is not listed because you chose the free plan — there is no Analytics Engine dataset to point it at. The audit will report it as MISSING; that is correct and you can leave it. <a href="#cost">Change plan</a></p>
   <div data-when="local">
   <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim);margin:0 0 10px">Your own model — three more variables</div>
   <p style="margin:0 0 14px;max-width:64ch;font-size:13.5px;color:var(--tv-text-muted);text-wrap:pretty">Set these alongside the bindings above, on both environments. Keep the <code style="font-family:var(--tv-font-mono);font-size:.92em">AI</code> binding wired even so — Orbit’s chat will use your model, but dataset embeddings still run through Workers AI.</p>
@@ -1621,7 +1620,7 @@ npm run terraviz -- import-snapshot \
         <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">Video uploads hand off to a GitHub Actions workflow running the ffmpeg spherical HLS ladder. Both halves — Pages bindings and GitHub secrets — are required and fail closed. Free-tier Actions covers roughly 50 uploads a month; R2 storage is what actually costs, at ~250 MB per minute of 4K source.</p>
         <p style="margin:8px 0 0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty"><b style="font-weight:600;color:var(--tv-text)">There is a WAF trap here.</b> Access service tokens bypass Access but not Bot Fight Mode. The runner’s final callback gets an interstitial, ffmpeg finishes, the bundle lands, and the job still exits non-zero. You need a WAF skip rule on that path — and on the Free plan, plain Bot Fight Mode has no per-path override, so disabling it zone-wide is the recommended option.</p>
       </div>
-    <div data-paid-only="1" style="border:1px solid var(--tv-border);border-radius:6px;padding:15px 17px">
+    <div style="border:1px solid var(--tv-border);border-radius:6px;padding:15px 17px">
         <div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin:0 0 6px">
           <div style="font:500 15px/1.3 var(--tv-font-sans);color:var(--tv-text)">13.4 · Analytics long-term export</div>
           <span style="flex:none;font:500 11px/1 var(--tv-font-mono);color:var(--tv-accent)">recommended</span>
@@ -1668,52 +1667,42 @@ npm run terraviz -- import-snapshot \
   <div style="display:flex;flex-direction:column;gap:2px">
     <div style="background:var(--tv-surface-2);border:1px solid var(--tv-border);border-radius:8px;padding:16px 18px">
       <div style="font:500 14px/1.4 var(--tv-font-mono);color:var(--tv-error);margin:0 0 6px">503 access_unconfigured on the publisher API</div>
-      
       <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">The team domain or the AUD is missing — most often set on Production but not Preview. Confirm with the bindings audit rather than by eye.</p>
     </div>
     <div style="background:var(--tv-surface-2);border:1px solid var(--tv-border);border-radius:8px;padding:16px 18px">
       <div style="font:500 14px/1.4 var(--tv-font-mono);color:var(--tv-error);margin:0 0 6px">401 &quot;Invalid or expired Access assertion&quot;</div>
-      
       <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">Your AUD does not match the application that issued the JWT. Re-copy it from the application's Overview tab. A token minted for a different application in the same team is rejected by design.</p>
     </div>
     <div style="background:var(--tv-surface-2);border:1px solid var(--tv-border);border-radius:8px;padding:16px 18px">
       <div style="font:500 14px/1.4 var(--tv-font-mono);color:var(--tv-error);margin:0 0 6px">Access blocks your own staff account</div>
-      
       <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">The policy uses <b style="font-weight:600;color:var(--tv-text)">Emails</b> (exact match against one address) instead of <b style="font-weight:600;color:var(--tv-text)">Emails ending in</b> (suffix match). See Phase 6.</p>
     </div>
     <div style="background:var(--tv-surface-2);border:1px solid var(--tv-border);border-radius:8px;padding:16px 18px">
       <div style="font:500 14px/1.4 var(--tv-font-mono);color:var(--tv-error);margin:0 0 6px">Save draft 500s: &quot;table datasets has no column named bbox_n&quot;</div>
-      
       <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">The catalog migrations were not applied — usually because <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">migrations apply</code> was given the database <i>name</i> instead of the binding name. Confirm with <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">migrations list CATALOG_DB --remote</code>.</p>
     </div>
     <div style="background:var(--tv-surface-2);border:1px solid var(--tv-border);border-radius:8px;padding:16px 18px">
       <div style="font:500 14px/1.4 var(--tv-font-mono);color:var(--tv-error);margin:0 0 6px">well-known 503s, or publishing fails on origin_node</div>
-      
       <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">Remote node identity is empty — Phase 9 was not run. The local seed and key-gen paths do <b style="font-weight:600;color:var(--tv-text)">not</b> write remote D1. The 503's own error text tells you to run <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">gen:node-key</code>; that hint is wrong. Use <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">init-node</code>.</p>
     </div>
     <div style="background:var(--tv-surface-2);border:1px solid var(--tv-border);border-radius:8px;padding:16px 18px">
       <div style="font:500 14px/1.4 var(--tv-font-mono);color:var(--tv-error);margin:0 0 6px">Ingest returns 204 but nothing lands in Analytics Engine</div>
-      <p data-when="free" style="margin:0 0 8px;font-size:13.5px;line-height:1.55;color:var(--tv-warn);text-wrap:pretty">On the free plan this is expected, not a fault — there is no Analytics Engine to write to. Nothing to fix.</p>
       <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">The binding is missing in the environment serving traffic — check <i>both</i> Production and Preview. The function silently skips the write when it is undefined. (A 403 instead means the CORS gate rejected it: curl does not send an Origin header unless you pass one.)</p>
     </div>
     <div style="background:var(--tv-surface-2);border:1px solid var(--tv-border);border-radius:8px;padding:16px 18px">
       <div style="font:500 14px/1.4 var(--tv-font-mono);color:var(--tv-error);margin:0 0 6px">Portal shows &quot;Your session has expired&quot;</div>
-      
       <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">Expected before your Access application covers the publish paths. Cloudflare answers with a cross-origin redirect the portal can detect but cannot follow. The Refresh button is the escape hatch — refreshing triggers Access at top-level navigation, you sign in, and the next fetch succeeds.</p>
     </div>
     <div style="background:var(--tv-surface-2);border:1px solid var(--tv-border);border-radius:8px;padding:16px 18px">
       <div style="font:500 14px/1.4 var(--tv-font-mono);color:var(--tv-error);margin:0 0 6px">Zip download shows &quot;size unknown&quot;</div>
-      
       <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">R2 CORS. No console error means the request succeeded but the length headers were not exposed — add both to ExposeHeaders. An allow-origin error means it was blocked outright, usually because HEAD is not in AllowedMethods. R2 treats HEAD and GET as distinct even though Fetch does not.</p>
     </div>
     <div style="background:var(--tv-surface-2);border:1px solid var(--tv-border);border-radius:8px;padding:16px 18px">
       <div style="font:500 14px/1.4 var(--tv-font-mono);color:var(--tv-error);margin:0 0 6px">Orbit stops showing dataset chips after working briefly</div>
-      
       <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">Free-tier neuron exhaustion, not a fault. The chat panel shows a reduced-functionality badge and quota resets daily. A docent turn burns roughly 50 neurons, so about 200 turns a day exhausts the free ceiling — sustained use needs Workers Paid.</p>
     </div>
     <div style="background:var(--tv-surface-2);border:1px solid var(--tv-border);border-radius:8px;padding:16px 18px">
       <div style="font:500 14px/1.4 var(--tv-font-mono);color:var(--tv-error);margin:0 0 6px">verify-deploy SKIPs the publisher checks</div>
-      
       <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">No service token configured. Re-run with the token env vars, and confirm the token is attached to a Service Auth policy on the publisher app.</p>
     </div>
   </div>
@@ -1885,7 +1874,7 @@ npm run terraviz -- import-snapshot \
     <div data-error="W8" style="display:none;font:400 11.5px/1.5 var(--tv-font-sans);color:var(--tv-error);margin-top:4px"></div>
     
   </div>
-      <div data-field-row="W9" data-tier="1" data-paid-only="1" style="margin:0 0 14px">
+      <div data-field-row="W9" data-tier="1" style="margin:0 0 14px">
     <div style="display:flex;align-items:center;gap:7px;margin:0 0 5px;flex-wrap:wrap">
       <label style="font:500 11.5px/1.3 var(--tv-font-mono);color:var(--tv-text-muted)">W9</label>
       <span style="font:400 12.5px/1.3 var(--tv-font-sans);color:var(--tv-text)">Analytics Engine dataset</span>
@@ -2056,7 +2045,7 @@ npm run terraviz -- import-snapshot \
 </div>
 <script>
 const KEY = 'terraviz-setup-console-v1';
-const FIELDS = [{"id":"ORG","token":"your-org.org","secret":false,"tier":2,"paidOnly":false,"validator":"emailDomain"},{"id":"W1","token":"‹account-id›","secret":false,"tier":1,"paidOnly":false,"validator":"accountId"},{"id":"W2","token":"‹your-hostname›","secret":false,"tier":1,"paidOnly":false,"validator":"hostname"},{"id":"W3","token":"‹owner/repo›","secret":false,"tier":1,"paidOnly":false,"validator":"repoSlug"},{"id":"TRUST","token":"‹trusted-domains›","secret":false,"tier":2,"paidOnly":false,"validator":"emailDomainList"},{"id":"W4","token":"‹d1-id›","secret":false,"tier":1,"paidOnly":false,"validator":null},{"id":"W5","token":"‹kv-killswitch-id›","secret":false,"tier":1,"paidOnly":false,"validator":null},{"id":"W6","token":"‹catalog-kv-id›","secret":false,"tier":2,"paidOnly":false,"validator":null},{"id":"W7","token":"terraviz-assets","secret":false,"tier":2,"paidOnly":false,"validator":null},{"id":"W8","token":"terraviz-datasets","secret":false,"tier":2,"paidOnly":false,"validator":null},{"id":"W9","token":"terraviz_events","secret":false,"tier":1,"paidOnly":true,"validator":null},{"id":"W10","token":"‹pages-project›","secret":false,"tier":1,"paidOnly":false,"validator":"projectName"},{"id":"W11","token":"‹api-token›","secret":true,"tier":1,"paidOnly":false,"validator":null},{"id":"W12","token":"‹team›.cloudflareaccess.com","secret":false,"tier":2,"paidOnly":false,"validator":null},{"id":"W13","token":"‹access-aud›","secret":false,"tier":2,"paidOnly":false,"validator":"aud"},{"id":"W14","token":"‹client-id›","secret":true,"tier":2,"paidOnly":false,"validator":null},{"id":"W15","token":"‹client-secret›","secret":true,"tier":2,"paidOnly":false,"validator":null},{"id":"W16","token":"‹node-private-key›","secret":true,"tier":2,"paidOnly":false,"validator":null},{"id":"W17","token":"ed25519:‹public-key›","secret":false,"tier":2,"paidOnly":false,"validator":null},{"id":"W18","token":"‹preview-signing-key›","secret":true,"tier":2,"paidOnly":false,"validator":null},{"id":"W19","token":"assets.‹your-hostname›","secret":false,"tier":2,"paidOnly":false,"validator":"url"},{"id":"W20","token":"‹r2-access-key›","secret":true,"tier":2,"paidOnly":false,"validator":null},{"id":"W20b","token":"‹r2-secret-key›","secret":true,"tier":2,"paidOnly":false,"validator":null},{"id":"W21","token":"‹r2-s3-endpoint›","secret":false,"tier":2,"paidOnly":false,"validator":null},{"id":"W22","token":"‹github-dispatch-token›","secret":true,"tier":2,"paidOnly":false,"validator":null}];
+const FIELDS = [{"id":"ORG","token":"your-org.org","secret":false,"tier":2,"validator":"emailDomain"},{"id":"W1","token":"‹account-id›","secret":false,"tier":1,"validator":"accountId"},{"id":"W2","token":"‹your-hostname›","secret":false,"tier":1,"validator":"hostname"},{"id":"W3","token":"‹owner/repo›","secret":false,"tier":1,"validator":"repoSlug"},{"id":"TRUST","token":"‹trusted-domains›","secret":false,"tier":2,"validator":"emailDomainList"},{"id":"W4","token":"‹d1-id›","secret":false,"tier":1,"validator":null},{"id":"W5","token":"‹kv-killswitch-id›","secret":false,"tier":1,"validator":null},{"id":"W6","token":"‹catalog-kv-id›","secret":false,"tier":2,"validator":null},{"id":"W7","token":"terraviz-assets","secret":false,"tier":2,"validator":null},{"id":"W8","token":"terraviz-datasets","secret":false,"tier":2,"validator":null},{"id":"W9","token":"terraviz_events","secret":false,"tier":1,"validator":null},{"id":"W10","token":"‹pages-project›","secret":false,"tier":1,"validator":"projectName"},{"id":"W11","token":"‹api-token›","secret":true,"tier":1,"validator":null},{"id":"W12","token":"‹team›.cloudflareaccess.com","secret":false,"tier":2,"validator":null},{"id":"W13","token":"‹access-aud›","secret":false,"tier":2,"validator":"aud"},{"id":"W14","token":"‹client-id›","secret":true,"tier":2,"validator":null},{"id":"W15","token":"‹client-secret›","secret":true,"tier":2,"validator":null},{"id":"W16","token":"‹node-private-key›","secret":true,"tier":2,"validator":null},{"id":"W17","token":"ed25519:‹public-key›","secret":false,"tier":2,"validator":null},{"id":"W18","token":"‹preview-signing-key›","secret":true,"tier":2,"validator":null},{"id":"W19","token":"assets.‹your-hostname›","secret":false,"tier":2,"validator":"url"},{"id":"W20","token":"‹r2-access-key›","secret":true,"tier":2,"validator":null},{"id":"W20b","token":"‹r2-secret-key›","secret":true,"tier":2,"validator":null},{"id":"W21","token":"‹r2-s3-endpoint›","secret":false,"tier":2,"validator":null},{"id":"W22","token":"‹github-dispatch-token›","secret":true,"tier":2,"validator":null}];
 const PHASE_COUNT = 15;
 const V = {
   accountId: v => /^[0-9a-f]{32}$/i.test(v) ? null : 'expected 32 hex characters',
@@ -2135,20 +2124,18 @@ function paintTier() {
   q('[data-phase-row]').forEach(el => {
     el.style.display = visiblePhase(Number(el.getAttribute('data-phase-row'))) ? 'flex' : 'none';
   });
+  // Nothing is hidden by plan. Every product this node binds has a
+  // free allocation, so the free-plan operator creates exactly the
+  // same resources — the plan only changes wording, via data-when.
   const free = state.plan === 'free';
-  const okPlan = el => !(free && el.hasAttribute('data-paid-only'));
   q('[data-field-row]').forEach(el => {
-    el.style.display = (Number(el.getAttribute('data-tier')) <= state.tier && okPlan(el)) ? '' : 'none';
+    el.style.display = Number(el.getAttribute('data-tier')) <= state.tier ? '' : 'none';
   });
   q('[data-binding-row]').forEach(el => {
-    el.style.display = (Number(el.getAttribute('data-tier')) <= state.tier && okPlan(el)) ? 'contents' : 'none';
+    el.style.display = Number(el.getAttribute('data-tier')) <= state.tier ? 'contents' : 'none';
   });
   q('[data-map-row]').forEach(el => {
-    el.style.display = (Number(el.getAttribute('data-tier')) <= state.tier && okPlan(el)) ? 'grid' : 'none';
-  });
-  q('[data-paid-only]').forEach(el => {
-    if (el.hasAttribute('data-field-row') || el.hasAttribute('data-binding-row') || el.hasAttribute('data-map-row')) return;
-    el.style.display = free ? 'none' : '';
+    el.style.display = Number(el.getAttribute('data-tier')) <= state.tier ? 'grid' : 'none';
   });
   q('[data-when]').forEach(el => {
     const w = el.getAttribute('data-when');
@@ -2203,7 +2190,7 @@ function paintProgress() {
     d.style.color = on ? 'var(--tv-bg)' : 'transparent';
     d.textContent = on ? '✓' : '';
   });
-  const relevant = FIELDS.filter(f => f.tier <= state.tier && !(state.plan === 'free' && f.paidOnly));
+  const relevant = FIELDS.filter(f => f.tier <= state.tier);
   const filled = relevant.filter(f => (state.vals[f.id] || '').trim()).length;
   const fc = document.querySelector('[data-fill-count]');
   if (fc) fc.textContent = filled + ' / ' + relevant.length;

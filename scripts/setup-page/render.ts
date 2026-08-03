@@ -169,26 +169,7 @@ export function crossCheck(): void {
     )
   }
 
-  // 7. The free-plan filter hides the Analytics Engine binding by name.
-  //    If that binding is ever renamed, the filter would silently stop
-  //    matching and the page would tell free-plan operators to wire a
-  //    binding they cannot create.
-  if (!EXPECTED_BINDINGS.some(b => b.name === 'ANALYTICS')) {
-    problems.push(
-      'no binding named ANALYTICS — the free-plan filter in render.ts matches on ' +
-        'that name and needs updating',
-    )
-  }
-  const paidFields = WORKSHEET.filter(w => w.paidOnly)
-  if (paidFields.length !== 1 || paidFields[0].id !== 'W9') {
-    problems.push(
-      'expected exactly one paidOnly worksheet field (W9, the Analytics Engine ' +
-        'dataset); found: ' +
-        (paidFields.map(w => w.id).join(', ') || 'none'),
-    )
-  }
-
-  // 8. Every validator a worksheet field names must exist in the
+  // 7. Every validator a worksheet field names must exist in the
   //    page's inline script. Behaviour still cannot be compared across
   //    the module boundary, but a field pointing at a validator the
   //    browser does not have would silently accept anything — the one
@@ -432,22 +413,22 @@ function costPanel(): string {
   return `<section id="cost" data-noprint="1" style="${CARD};padding:28px 30px;margin:0 0 44px;scroll-margin-top:20px">
   <div style="${EYEBROW};margin:0 0 12px">What it costs</div>
   <h2 style="font:700 27px/1.2 var(--tv-font-sans);letter-spacing:-.01em;color:var(--tv-text);margin:0 0 12px">You can run this on the free plan</h2>
-  <p style="margin:0 0 22px;max-width:64ch;color:var(--tv-text-muted);text-wrap:pretty">Nothing in the install requires a paid Cloudflare account. Two features lose something without one, and both were built to degrade quietly rather than break. Pick the plan you are on and the rest of the page adjusts to it.</p>
+  <p style="margin:0 0 22px;max-width:64ch;color:var(--tv-text-muted);text-wrap:pretty">Nothing in the install requires a paid Cloudflare account, and nothing is switched off without one. What you get on the free plan is a smaller daily allowance of each thing. Orbit is the one that runs out first. Pick the plan you are on and the rest of the page adjusts to it.</p>
   <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px;margin:0 0 16px">
     ${col('free', 'Free plan', '$0', 'var(--tv-warn)', [
       [
-        'Usage analytics stop recording',
-        'Analytics Engine is not on the free plan. Telemetry requests still answer 204 — the writes are simply dropped. No analytics tab, no Grafana. The emergency kill switch still works.',
+        'Orbit throttles after ~200 conversations a day',
+        'Workers AI gives you 10,000 Neurons daily and a docent turn costs about 50. Past that the chat panel shows a "Reduced functionality" badge and the quota resets overnight. This is the one ceiling you cannot buy past without upgrading.',
       ],
       [
-        'Orbit throttles after ~200 conversations a day',
-        'Workers AI gives you roughly 10,000 neurons daily and a docent turn costs about 50. Past that the chat panel shows a "Reduced functionality" badge and the quota resets overnight.',
+        'Telemetry and search have room, but a lower ceiling',
+        'Analytics Engine allows 100,000 data points a day, Vectorize 5 million stored vector dimensions — roughly 6,500 datasets. Both are generous at node scale. D1 stops at 5 GB, and on the free plan that is a hard cap rather than an overage.',
       ],
     ])}
     ${col('paid', 'Workers Paid', '$5/mo', 'var(--tv-accent)', [
       [
-        'Both of those go away',
-        'Visits and dataset views record properly, the in-app dashboards fill in, and Orbit answers all day without throttling.',
+        'Orbit answers all day',
+        'The Neuron allocation stops being a ceiling and becomes an allowance you pay past, at $0.011 per 1,000. The daily throttle goes away.',
       ],
       [
         'Nothing else changes',
@@ -472,7 +453,7 @@ function costPanel(): string {
 
   <div data-when="free" style="background:var(--tv-warn-bg);border:1px solid var(--tv-warn-border);border-left:3px solid var(--tv-warn);border-radius:6px;padding:16px 18px;margin:0 0 18px">
     <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-warn);margin:0 0 8px">Free plan · what changed on this page</div>
-    <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">The Analytics Engine dataset and its binding have gone from the worksheet, the dependency map and Phase 8 — there is nothing for you to create. The long-term analytics add-on is hidden too. Everything else is unchanged: you are installing the same node.</p>
+    <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">Nothing has been removed. Every product this node binds has a free allocation, so you install the same node and create the same resources — you just have less headroom on each. The one that runs out first is Orbit.</p>
   </div>
   ${storagePanel()}
   ${computePanel()}
@@ -586,10 +567,10 @@ function preflight(): string {
     <span aria-hidden="true" style="flex:none;margin-top:2px;width:15px;height:15px;display:inline-flex;align-items:center;justify-content:center;border:1px dashed var(--tv-border-strong);border-radius:4px;color:var(--tv-text-dim);font:600 10px/1 var(--tv-font-sans)">—</span>
     <div style="min-width:0">
       <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:0 0 3px">
-        <span style="font:600 13.5px/1.4 var(--tv-font-sans);color:var(--tv-text-dim)">${i + 1}. ${esc(s.title.replace(/^Enable /, ''))} — not on the free plan</span>
+        <span style="font:600 13.5px/1.4 var(--tv-font-sans);color:var(--tv-text-dim)">${i + 1}. ${esc(s.title.replace(/^Enable /, ''))} — you chose the free plan</span>
         <span style="flex:none;background:var(--tv-surface-3);color:var(--tv-text-dim);border:1px solid var(--tv-border);border-radius:999px;padding:2px 8px;font:600 9px/1.5 var(--tv-font-sans);letter-spacing:.07em;text-transform:uppercase">your choice</span>
       </div>
-      <div style="font-size:13px;line-height:1.5;color:var(--tv-text-dim);text-wrap:pretty">Nothing to do — you chose the free plan. You give up Analytics Engine entirely, and Orbit throttles after roughly 200 conversations a day. <a href="#cost">Change plan</a></div>
+      <div style="font-size:13px;line-height:1.5;color:var(--tv-text-dim);text-wrap:pretty">Nothing to do. Every resource in this install still gets created — you just have a smaller daily allowance of each. Orbit throttles after roughly 200 conversations a day, and that is the ceiling you cannot buy past. <a href="#cost">Change plan</a></div>
     </div>
   </div>`
 
@@ -638,7 +619,7 @@ function dependencyMap(): string {
     const cells = PHASES.map(
       p => `<div data-cell="${p.n}" style="height:27px;display:flex;align-items:center;justify-content:center"><span data-mark="1"></span></div>`,
     ).join('')
-    return `<div data-map-row="${esc(w.id)}" data-w="${esc(w.id)}" data-produced="${w.phase}" data-consumed="${w.consumedBy.join(',')}" data-tier="${w.minTier}"${w.paidOnly ? ' data-paid-only="1"' : ''} style="display:grid;grid-template-columns:224px repeat(${PHASES.length},minmax(0,1fr));align-items:center;cursor:pointer;border-radius:4px">
+    return `<div data-map-row="${esc(w.id)}" data-w="${esc(w.id)}" data-produced="${w.phase}" data-consumed="${w.consumedBy.join(',')}" data-tier="${w.minTier}" style="display:grid;grid-template-columns:224px repeat(${PHASES.length},minmax(0,1fr));align-items:center;cursor:pointer;border-radius:4px">
     <div style="display:flex;align-items:baseline;gap:7px;padding:0 6px 0 4px;min-width:0">
       <span data-map-id="1" style="flex:none;font:500 10.5px/1 var(--tv-font-mono)">${esc(w.id)}</span>
       <span style="font-size:11.5px;color:var(--tv-text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(w.label)}</span>
@@ -686,7 +667,7 @@ function bindingsTable(): string {
   const tierOf = (b: ExpectedBinding): number =>
     /^(CATALOG_(DB|KV|R2|VECTORIZE)|ACCESS_|NODE_ID|PREVIEW_SIGNING)/.test(b.name) ? 2 : 1
   const row = (b: ExpectedBinding): string =>
-    `<div data-binding-row="1" data-tier="${tierOf(b)}"${b.name === 'ANALYTICS' ? ' data-paid-only="1"' : ''} style="display:contents">
+    `<div data-binding-row="1" data-tier="${tierOf(b)}" style="display:contents">
     <div style="background:var(--tv-surface-2);padding:10px 12px;font-family:var(--tv-font-mono);overflow-wrap:anywhere">${esc(b.name)}</div>
     <div style="background:var(--tv-surface-2);padding:10px 12px;color:var(--tv-text-dim)">${esc(b.type)}</div>
     <div style="background:var(--tv-surface-2);padding:10px 12px;color:var(--tv-text-dim)">${b.environments.length === 2 ? 'both' : esc(b.environments.join(', '))}</div>
@@ -779,15 +760,12 @@ function phaseSection(p: Phase): string {
 
   if (p.n === 8) {
     parts.push(bindingsTable())
-    parts.push(
-      `<p data-when="free" style="margin:0 0 18px;max-width:64ch;font-size:13.5px;color:var(--tv-text-dim);text-wrap:pretty">The <code style="font-family:var(--tv-font-mono);font-size:.92em">ANALYTICS</code> binding is not listed because you chose the free plan \u2014 there is no Analytics Engine dataset to point it at. The audit will report it as MISSING; that is correct and you can leave it. <a href="#cost">Change plan</a></p>`,
-    )
     parts.push(localModelVars())
   }
   if (p.n === 13) {
     parts.push(
       `<div style="display:flex;flex-direction:column;gap:10px;margin:0 0 16px">${ADDONS.map(
-        a => `<div${a.paidOnly ? ' data-paid-only="1"' : ''} style="border:1px solid var(--tv-border);border-radius:6px;padding:15px 17px">
+        a => `<div style="border:1px solid var(--tv-border);border-radius:6px;padding:15px 17px">
         <div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin:0 0 6px">
           <div style="font:500 15px/1.3 var(--tv-font-sans);color:var(--tv-text)">${esc(a.id)} · ${esc(a.title)}</div>
           <span style="flex:none;font:500 11px/1 var(--tv-font-mono);color:var(--tv-accent)">${esc(a.flag)}</span>
@@ -838,7 +816,7 @@ function phaseSection(p: Phase): string {
 function worksheetDrawer(): string {
   const field = (w: WorksheetField): string => {
     const o = ORIGIN_LABELS[w.origin]
-    return `<div data-field-row="${esc(w.id)}" data-tier="${w.minTier}"${w.paidOnly ? ' data-paid-only="1"' : ''} style="margin:0 0 14px">
+    return `<div data-field-row="${esc(w.id)}" data-tier="${w.minTier}" style="margin:0 0 14px">
     <div style="display:flex;align-items:center;gap:7px;margin:0 0 5px;flex-wrap:wrap">
       <label style="font:500 11.5px/1.3 var(--tv-font-mono);color:var(--tv-text-muted)">${esc(w.id)}</label>
       <span style="font:400 12.5px/1.3 var(--tv-font-sans);color:var(--tv-text)">${esc(w.label)}</span>
@@ -887,7 +865,6 @@ function troubleshooting(): string {
     ${TROUBLESHOOTING.map(
       t => `<div style="${CARD};padding:16px 18px">
       <div style="font:500 14px/1.4 var(--tv-font-mono);color:var(--tv-error);margin:0 0 6px">${esc(t.symptom)}</div>
-      ${t.symptom.indexOf('Ingest returns 204') === 0 ? '<p data-when=\"free\" style=\"margin:0 0 8px;font-size:13.5px;line-height:1.55;color:var(--tv-warn);text-wrap:pretty\">On the free plan this is expected, not a fault \u2014 there is no Analytics Engine to write to. Nothing to fix.</p>' : ''}
       <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">${inline(t.fix)}</p>
     </div>`,
     ).join('\n    ')}
@@ -975,7 +952,6 @@ function runtime(fields: WorksheetField[]): string {
     token: f.token,
     secret: Boolean(f.secret),
     tier: f.minTier,
-    paidOnly: Boolean(f.paidOnly),
     validator: f.validator ?? null,
   }))
   return `
@@ -1059,20 +1035,18 @@ function paintTier() {
   q('[data-phase-row]').forEach(el => {
     el.style.display = visiblePhase(Number(el.getAttribute('data-phase-row'))) ? 'flex' : 'none';
   });
+  // Nothing is hidden by plan. Every product this node binds has a
+  // free allocation, so the free-plan operator creates exactly the
+  // same resources — the plan only changes wording, via data-when.
   const free = state.plan === 'free';
-  const okPlan = el => !(free && el.hasAttribute('data-paid-only'));
   q('[data-field-row]').forEach(el => {
-    el.style.display = (Number(el.getAttribute('data-tier')) <= state.tier && okPlan(el)) ? '' : 'none';
+    el.style.display = Number(el.getAttribute('data-tier')) <= state.tier ? '' : 'none';
   });
   q('[data-binding-row]').forEach(el => {
-    el.style.display = (Number(el.getAttribute('data-tier')) <= state.tier && okPlan(el)) ? 'contents' : 'none';
+    el.style.display = Number(el.getAttribute('data-tier')) <= state.tier ? 'contents' : 'none';
   });
   q('[data-map-row]').forEach(el => {
-    el.style.display = (Number(el.getAttribute('data-tier')) <= state.tier && okPlan(el)) ? 'grid' : 'none';
-  });
-  q('[data-paid-only]').forEach(el => {
-    if (el.hasAttribute('data-field-row') || el.hasAttribute('data-binding-row') || el.hasAttribute('data-map-row')) return;
-    el.style.display = free ? 'none' : '';
+    el.style.display = Number(el.getAttribute('data-tier')) <= state.tier ? 'grid' : 'none';
   });
   q('[data-when]').forEach(el => {
     const w = el.getAttribute('data-when');
@@ -1127,7 +1101,7 @@ function paintProgress() {
     d.style.color = on ? 'var(--tv-bg)' : 'transparent';
     d.textContent = on ? '✓' : '';
   });
-  const relevant = FIELDS.filter(f => f.tier <= state.tier && !(state.plan === 'free' && f.paidOnly));
+  const relevant = FIELDS.filter(f => f.tier <= state.tier);
   const filled = relevant.filter(f => (state.vals[f.id] || '').trim()).length;
   const fc = document.querySelector('[data-fill-count]');
   if (fc) fc.textContent = filled + ' / ' + relevant.length;

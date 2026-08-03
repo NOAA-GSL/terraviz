@@ -271,7 +271,7 @@ error`.
 | Requirement | Why | Automatable? |
 |---|---|---|
 | Cloudflare account | Everything runs here. | No — sign up by hand |
-| **Workers Paid ($5/mo)** | Analytics Engine is not on the free plan, and Workers AI free-tier neurons (~10k/day) are exhausted by roughly 200 Orbit turns. Without it, telemetry silently no-ops and Orbit degrades to its local engine mid-demo. | No — billing UI |
+| **Workers Paid ($5/mo)** | Workers AI is capped at 10,000 Neurons/day on the free plan — roughly 200 Orbit turns — and you cannot exceed that without upgrading. Orbit then degrades to its local keyword engine mid-demo. | No — billing UI |
 | A domain on **Cloudflare DNS** | For `W2`. Moving DNS to Cloudflare is free; you change nameservers at your registrar. Registering a new domain through Cloudflare also works. | No — registrar action |
 | GitHub or GitLab account | Pages builds from a Git remote (or you deploy by Direct Upload from CI). | No |
 | Node.js 20+ and npm | Build, test, migrate. | — |
@@ -280,10 +280,13 @@ Write your account ID (`W1`), your intended hostname (`W2`), and
 your Git remote (`W3`) on the worksheet now. The account ID is in
 the Cloudflare dashboard sidebar and in every dashboard URL.
 
-> **Can I skip Workers Paid?** For a Tier 1 kick-the-tyres deploy,
-> yes — the app runs, and the two things you lose (telemetry
-> storage, sustained Orbit) both fail soft. For anything you'd
-> show another human, no.
+> **Can I skip Workers Paid?** More than you might expect. D1, KV,
+> R2, Vectorize, Analytics Engine and Workers AI all have free
+> allocations, so a free-plan node provisions and runs. What you give
+> up is headroom, and it fails soft: Orbit falls back to its local
+> keyword engine once the day's 10,000 Neurons are gone. For a kiosk
+> that will field questions all day, pay the $5. See
+> [§0.5](#05-what-the-free-plan-actually-costs-you) for the numbers.
 
 ## 0.2 Tools
 
@@ -340,7 +343,7 @@ them:
 
 | Prerequisite | Needed by | Why it cannot be detected |
 |---|---|---|
-| **Workers Paid ($5/mo)** | Phase 8 onward | Billing state is not exposed to the token. A free-plan account provisions everything successfully and then silently drops Analytics Engine writes |
+| **Workers Paid ($5/mo)** | Phase 8 onward | Billing state is not exposed to the token. A free-plan account provisions everything successfully, then throttles Orbit once the day's Workers AI allocation is spent |
 | **Mint the R2 S3 API token** | Phase 13.1 | Automating it would need a token that can mint tokens — a credential able to grant itself more authority. It stays manual on purpose. (The secret is also shown exactly once, so capture all three values then) |
 
 That asymmetry is the whole reason the pre-flight list is short.
@@ -349,6 +352,38 @@ Confirm those two; let the tool tell you about the rest.
 > This table is generated from `MANUAL_STEPS` in
 > `scripts/lib/setup/interview.ts` on the [`/setup`](/setup) page,
 > which is where to look if it ever disagrees with this one.
+
+## 0.5 What the free plan actually costs you
+
+Less than the rest of this guide used to claim. Every product a
+Terraviz node binds has a free allocation, so a free-plan account
+provisions the whole stack and serves real traffic.
+
+| Product | Workers Free allocation | What happens at the ceiling |
+|---|---|---|
+| **Workers AI** (Orbit) | 10,000 Neurons/day | Requests fail. Orbit falls back to its local keyword engine. **You cannot buy past this without upgrading** — this is the one that bites |
+| **Analytics Engine** (telemetry) | 100,000 data points + 10,000 read queries/day | Writes rejected past the cap. Not billed at all today |
+| **Vectorize** (semantic search) | 30M queried + 5M stored vector dimensions/month | At 768 dimensions that is ~6,500 stored datasets |
+| **D1** (catalog) | 5 GB total | A hard cap on Free, not an overage — writes start failing. Paid includes the same 5 GB, then $0.75/GB-month |
+| **R2** (assets) | 10 GB-month | Billed at $0.015/GB-month past it, on either plan |
+| **KV**, **Pages** | Ample for a single node | — |
+
+The practical reading: Orbit is the reason to pay $5. Roughly 200
+conversations a day exhausts the Neuron allocation, and a kiosk in a
+museum lobby will pass that before lunch. Everything else on this
+list either has room to spare at node scale, or is billed the same
+whichever plan you are on.
+
+> **Checked against Cloudflare's published pricing on 2026-08-03.**
+> These allocations move, so re-read the
+> [Workers pricing page](https://developers.cloudflare.com/workers/platform/pricing/)
+> before you rely on them.
+>
+> One caveat on that page. Its Vectorize section still carries a
+> stale "only available on the Workers paid plan" sentence, sitting
+> directly above a table with a Workers Free column. Trust the
+> [Vectorize pricing page](https://developers.cloudflare.com/vectorize/platform/pricing/)
+> instead.
 
 ---
 

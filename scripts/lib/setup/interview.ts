@@ -232,10 +232,12 @@ export const MANUAL_STEPS: ManualStep[] = [
     id: 'workers-paid',
     title: 'Enable Workers Paid ($5/month)',
     why:
-      'Analytics Engine is not on the free plan, and Workers AI free-tier ' +
-      'neurons run out after roughly 200 Orbit turns. Both fail soft, which ' +
-      'is worse than failing loudly: telemetry silently stops recording and ' +
-      'Orbit quietly degrades mid-demo.',
+      'Optional — every product this node binds has a Workers Free ' +
+      'allocation, so a free-plan account installs and runs. What you buy ' +
+      'is headroom. Workers AI stops at 10,000 Neurons a day, roughly 200 ' +
+      'Orbit turns, and that ceiling cannot be raised without upgrading. ' +
+      'It fails soft, which is worse than failing loudly: Orbit quietly ' +
+      'degrades to its keyword engine mid-demo.',
     url: 'https://dash.cloudflare.com/?to=/:account/workers/plans',
     docsUrl: 'https://developers.cloudflare.com/workers/platform/pricing/',
     steps: [
