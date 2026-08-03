@@ -105,6 +105,10 @@ jobs:
       # else builds. These are the checks that catch it.
       - run: npm run check:privacy-page
       - run: npm run check:setup-page
+      # The install guide is read by people standing up a node for a
+      # museum or a lab, often mid-incident. Long sentences are where
+      # that reader is lost, so long sentences fail the build.
+      - run: npm run check:plain-language
 
   unit-tests:
     name: Unit Tests

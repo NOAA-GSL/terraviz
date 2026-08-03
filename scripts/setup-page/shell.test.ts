@@ -303,6 +303,18 @@ describe('the committed public/setup.html', () => {
     expect(page).toContain('any other activity unrelated to the production')
   })
 
+  // Markup passed through an escaping helper reaches the reader as
+  // literal '<span data-when="free">…' text, and never toggles,
+  // because an escaped tag is not an element. It shipped that way in
+  // the Workers AI card and only surfaced when a readability scan
+  // reported the tags as prose.
+  it('never renders escaped markup as visible text', () => {
+    const page = html()
+    for (const leaked of ['&lt;span', '&lt;div', '&lt;a ', '&lt;p&gt;']) {
+      expect(page, `${leaked} is being shown to the reader as text`).not.toContain(leaked)
+    }
+  })
+
   it('carries the CSP and the real favicon', () => {
     expect(html()).toContain(CSP_META)
     expect(html()).toContain(FAVICON_LINK)

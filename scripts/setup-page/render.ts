@@ -215,12 +215,29 @@ export function crossCheck(): void {
 const esc = (s: string): string =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 
-/** `**bold**`, `*italic*`, `` `code` `` → HTML. Inputs are ours. */
+/**
+ * `**bold**`, `*italic*`, `` `code` ``, `[text](href)` → HTML,
+ * escaped first. Inputs are ours.
+ *
+ * Links are part of the vocabulary because they have to be: without
+ * them, an author writing `<a href="#cost">` gets it escaped and the
+ * reader sees the raw tag. That shipped twice — in the Workers AI card
+ * and in the install sheet's "see what it costs" — and neither was a
+ * broken link so much as markup printed at the reader.
+ *
+ * The href allowlist is `#anchor` and `https://` only. This content is
+ * ours rather than user input, so it is belt-and-braces, but an
+ * unconstrained href built by string replacement is precisely the sink
+ * CodeQL flagged elsewhere on this page and it costs nothing to shut.
+ */
 function inline(s: string): string {
   return esc(s)
     .replace(/`([^`]+)`/g, '<code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">$1</code>')
     .replace(/\*\*([^*]+)\*\*/g, '<b style="font-weight:600;color:var(--tv-text)">$1</b>')
     .replace(/\*([^*]+)\*/g, '<i>$1</i>')
+    .replace(/\[([^\]]+)\]\((#[\w-]+|https:\/\/[^)\s"']+)\)/g, (_m, text: string, href: string) =>
+      `<a href="${href}">${text}</a>`,
+    )
 }
 
 /** Substitution tokens survive escaping and are replaced at runtime. */
@@ -390,13 +407,26 @@ function costPanel(): string {
         .join('\n      ')}
     </button>`
 
+  /**
+   * `inline()` escapes its input, so plan-conditional markup passed
+   * inside the body string was rendered to the reader as literal
+   * `<span data-when="free">…` text — and never toggled, because an
+   * escaped tag is not an element. Taking the two variants as data and
+   * building the spans here keeps the escaping honest for the prose
+   * while letting the markup be markup.
+   */
   const aiCard = (
     id: 'workers' | 'local',
     title: string,
     body: string,
+    perPlan?: { free: string; paid: string },
   ): string => `<button data-ai="${id}" style="text-align:left;cursor:pointer;border-radius:6px;padding:18px 20px;font-family:var(--tv-font-sans)">
       <div style="font:600 14px/1.3 var(--tv-font-sans);color:var(--tv-text);margin:0 0 6px">${esc(title)}</div>
-      <p style="margin:0;font-size:13px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">${inline(body)}</p>
+      <p style="margin:0;font-size:13px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">${inline(body)}${
+        perPlan
+          ? ` <span data-when="free">${inline(perPlan.free)}</span><span data-when="paid">${inline(perPlan.paid)}</span>`
+          : ''
+      }</p>
     </button>`
 
   return `<section id="cost" data-noprint="1" style="${CARD};padding:28px 30px;margin:0 0 44px;scroll-margin-top:20px">
@@ -428,7 +458,10 @@ function costPanel(): string {
 
   <div style="${EYEBROW};margin:0 0 10px">Who runs Orbit's language model</div>
   <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px;margin:0 0 16px">
-    ${aiCard('workers', 'Cloudflare Workers AI', 'Nothing to run or maintain — the \`AI\` binding is all it needs. <span data-when="free">Throttles after roughly 200 conversations a day on the free plan.</span><span data-when="paid">Included in your $5.</span>')}
+    ${aiCard('workers', 'Cloudflare Workers AI', 'Nothing to run or maintain — the \`AI\` binding is all it needs.', {
+      free: 'Throttles after roughly 200 conversations a day on the free plan.',
+      paid: 'Included in your $5.',
+    })}
     ${aiCard('local', 'A model you run yourself', 'Ollama, LM Studio, or anything OpenAI-compatible on your own network. No throttle and no per-turn cost, whichever plan you are on — and visitor questions never leave your building.')}
   </div>
 
@@ -583,7 +616,7 @@ function preflight(): string {
       ${sectionHead(
         'Before you start · only you can do these',
         `${MANUAL_STEPS.length} things, about 20 minutes`,
-        'An account, a domain, a login — the things no script can do on your behalf. Most the setup tool will notice if you skip; the ones marked *on you* it cannot, so those are the ones to be sure about. The first is a choice rather than a task — see <a href="#cost">what it costs</a>.',
+        'An account, a domain, a login — the things no script can do on your behalf. Most the setup tool will notice if you skip; the ones marked *on you* it cannot, so those are the ones to be sure about. The first is a choice rather than a task — see [what it costs](#cost).',
       )}
       <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:13px 28px">${MANUAL_STEPS.map(stepCell).join('\n  ')}</div>
     </div>
@@ -1326,7 +1359,7 @@ code{overflow-wrap:anywhere}
   const setupPanel = `<section data-noprint="1" style="background:var(--tv-accent-bg);border:1px solid var(--tv-accent-border);border-radius:8px;padding:28px 30px;margin:0 0 40px">
   <div style="${EYEBROW};color:var(--tv-accent);margin:0 0 12px">Start here</div>
   <h2 style="font:700 27px/1.2 var(--tv-font-sans);letter-spacing:-.01em;color:var(--tv-text);margin:0 0 14px">Let the tool do the mechanical parts</h2>
-  <p style="margin:0 0 18px;max-width:62ch;color:var(--tv-text-muted);text-wrap:pretty">Most of what follows is dashboard clicking that a script can do faster and without typos. <code style="font-family:var(--tv-font-mono);font-size:.92em">npm run setup</code> provisions the resources, rewrites the config, applies the migrations in the order that works, creates the Access application (<code style="font-family:var(--tv-font-mono);font-size:.92em">${esc(DEFAULT_NAMES.accessApp)}</code>) with its <code style="font-family:var(--tv-font-mono);font-size:.92em">${esc(STAFF_POLICY_NAME)}</code> and <code style="font-family:var(--tv-font-mono);font-size:.92em">${esc(AUTOMATION_POLICY_NAME)}</code> policies, and writes every binding to <i>both</i> environments.</p>
+  <p style="margin:0 0 18px;max-width:62ch;color:var(--tv-text-muted);text-wrap:pretty">Most of what follows is dashboard clicking that a script can do faster and without typos. <code style="font-family:var(--tv-font-mono);font-size:.92em">npm run setup</code> provisions the resources, rewrites the config, and applies the migrations in the order that works. It creates the Access application (<code style="font-family:var(--tv-font-mono);font-size:.92em">${esc(DEFAULT_NAMES.accessApp)}</code>) with its <code style="font-family:var(--tv-font-mono);font-size:.92em">${esc(STAFF_POLICY_NAME)}</code> and <code style="font-family:var(--tv-font-mono);font-size:.92em">${esc(AUTOMATION_POLICY_NAME)}</code> policies, then writes every binding to <i>both</i> environments.</p>
   ${code({
     code: `# what only a human can do, with click paths
 npm run setup -- --manual
