@@ -30,6 +30,7 @@ import { DEFAULT_NAMES } from '../lib/setup/state'
 import { PUBLISHER_PATHS, STAFF_POLICY_NAME, AUTOMATION_POLICY_NAME } from '../lib/setup/access'
 import { UPSTREAM_PINNED_IDS } from '../lib/setup/wrangler-toml'
 import { CHECKED_ON, D1_PRICING, freeVideoDatasets, GITHUB_ACTIONS, R2_PRICING, REFERENCE_NODE } from './pricing'
+import { actionLabel, docsLabel } from './shell'
 import {
   PHASES,
   WORKSHEET,
@@ -509,11 +510,19 @@ function preflight(): string {
     const body = s.steps.length
       ? `<div style="white-space:pre-wrap;margin:8px 0 0;padding:10px 12px;background:var(--tv-surface-code);border:1px solid var(--tv-border);border-radius:5px;font:400 11.5px/1.65 var(--tv-font-mono);color:var(--tv-text-muted);overflow-x:auto">${s.steps.map(esc).join('\n')}</div>`
       : ''
-    // Dashboard says *where*; docs say *what the thing is*. Someone new
-    // to Cloudflare needs the second before the first is any use.
+    // The action link says *where*; the docs link says *what the thing
+    // is*. Someone new to the platform needs the second before the
+    // first is any use.
+    //
+    // Both labels are derived from the host rather than written, because
+    // both used to say "Cloudflare" unconditionally — which the fork
+    // step made wrong, since it points at GitHub. Naming the wrong
+    // product is a small lie in the one place someone new is trusting
+    // this page, and hardcoding it means the next non-Cloudflare step
+    // reintroduces the bug silently.
     const links = [
-      s.url ? `<a href="${esc(s.url)}">Open in the Cloudflare dashboard ↗</a>` : '',
-      s.docsUrl ? `<a href="${esc(s.docsUrl)}">Cloudflare's docs for this ↗</a>` : '',
+      s.url ? `<a href="${esc(s.url)}">${esc(actionLabel(s.url))} ↗</a>` : '',
+      s.docsUrl ? `<a href="${esc(s.docsUrl)}">${esc(docsLabel(s.docsUrl))} ↗</a>` : '',
     ].filter(Boolean)
     const link = links.length
       ? `<div style="display:flex;flex-wrap:wrap;gap:14px;margin:8px 0 0;font:500 12px/1.4 var(--tv-font-sans)">${links.join('')}</div>`

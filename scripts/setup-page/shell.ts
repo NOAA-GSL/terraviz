@@ -221,6 +221,46 @@ const INJECTED_MARK = 'data-tv-injected'
  * Lives here rather than in `render.ts` for the usual reason — the
  * design export replaces that file wholesale.
  */
+/**
+ * Name the destination of a manual step's links from its host.
+ *
+ * Both labels on the install sheet used to say "Cloudflare"
+ * unconditionally — "Open in the Cloudflare dashboard", "Cloudflare's
+ * docs for this". That was true of every step until the fork step,
+ * which points at GitHub, and a label naming the wrong product is a
+ * small lie in the one place someone new to the platform is trusting
+ * this page.
+ *
+ * Derived rather than written, so the next non-Cloudflare step cannot
+ * reintroduce it silently. Unknown hosts get neutral wording instead
+ * of a guess.
+ *
+ * Lives here rather than in `render.ts` for the usual reason: the
+ * design export replaces that file wholesale, and this is the kind of
+ * string an export would happily rewrite back.
+ */
+function hostOf(url: string): string {
+  try {
+    return new URL(url).hostname.toLowerCase()
+  } catch {
+    return ''
+  }
+}
+
+export function actionLabel(url: string): string {
+  const h = hostOf(url)
+  if (h.endsWith('cloudflare.com')) return 'Open in the Cloudflare dashboard'
+  if (h.endsWith('github.com')) return 'Open on GitHub'
+  return 'Open this page'
+}
+
+export function docsLabel(url: string): string {
+  const h = hostOf(url)
+  if (h.endsWith('cloudflare.com')) return "Cloudflare's docs for this"
+  if (h.endsWith('github.com')) return "GitHub's docs for this"
+  return 'Documentation for this'
+}
+
 export function costRuntime(): string {
   return `
 (function () {

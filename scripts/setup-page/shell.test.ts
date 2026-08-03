@@ -372,6 +372,29 @@ describe('the committed public/setup.html', () => {
     }
   })
 
+  // The sheet's two link labels were hardcoded to "Cloudflare", which
+  // was true of every manual step until the fork step, which points at
+  // GitHub. Naming the wrong product is a small lie in the one place
+  // someone new to the platform is trusting this page.
+  it('never labels a GitHub link as Cloudflare', () => {
+    const page = html()
+    for (const m of page.matchAll(/<a href="(https:\/\/[^"]+)"[^>]*>([^<]*)<\/a>/g)) {
+      const [, href, label] = m
+      if (/^https:\/\/(www\.)?(github|docs\.github)\.com\//.test(href)) {
+        expect(label, `${href} labelled "${label}"`).not.toMatch(/cloudflare/i)
+      }
+    }
+  })
+
+  it('labels the fork step by its actual destination', () => {
+    const page = html()
+    expect(page).toContain('Open on GitHub')
+    expect(page).toContain("GitHub's docs for this")
+    // The Cloudflare steps keep their own wording.
+    expect(page).toContain('Open in the Cloudflare dashboard')
+    expect(page).toContain("Cloudflare's docs for this")
+  })
+
   it('carries the CSP and the real favicon', () => {
     expect(html()).toContain(CSP_META)
     expect(html()).toContain(FAVICON_LINK)
