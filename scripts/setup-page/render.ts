@@ -29,7 +29,7 @@ import { QUESTIONS, MANUAL_STEPS, type ManualStep } from '../lib/setup/interview
 import { DEFAULT_NAMES } from '../lib/setup/state'
 import { PUBLISHER_PATHS, STAFF_POLICY_NAME, AUTOMATION_POLICY_NAME } from '../lib/setup/access'
 import { UPSTREAM_PINNED_IDS } from '../lib/setup/wrangler-toml'
-import { CHECKED_ON, D1_PRICING, freeDatasets, freeMinutes, R2_PRICING, TYPICAL_SECONDS } from './pricing'
+import { CHECKED_ON, D1_PRICING, freeVideoDatasets, R2_PRICING, REFERENCE_NODE } from './pricing'
 import {
   PHASES,
   WORKSHEET,
@@ -317,7 +317,9 @@ function storagePanel(): string {
 
   return `<div style="background:var(--tv-surface-2);border:1px solid var(--tv-border);border-radius:8px;padding:22px 24px;margin:0 0 22px">
   <div style="${EYEBROW};margin:0 0 10px">Storage · the same on both plans</div>
-  <p style="margin:0 0 16px;max-width:66ch;font-size:13.5px;line-height:1.6;color:var(--tv-text-muted);text-wrap:pretty">This is the part that is easy to miss: R2 and D1 bill identically whether or not you pay the $5. Both have a free allowance, and for most nodes that allowance is the whole story — a catalog of metadata, images and tours does not come close to it. Publishing your own <em>video</em> is the only thing that moves it, and dataset clips are short — the free ${R2_PRICING.freeStorageGb} GB holds roughly <strong>${freeDatasets(TYPICAL_SECONDS)} of them</strong> at ${TYPICAL_SECONDS} seconds each (about ${Math.round(freeMinutes())} minutes of video in total). Past that it stays small: the numbers below are cents, not budget lines.</p>
+  <p style="margin:0 0 16px;max-width:66ch;font-size:13.5px;line-height:1.6;color:var(--tv-text-muted);text-wrap:pretty">This is the part that is easy to miss: R2 and D1 bill identically whether or not you pay the $5. Both have a free allowance, and for most nodes that allowance is the whole story — a catalog of metadata, images and tours does not come close to it. Publishing your own <em>video</em> is the only thing that moves it. The free ${R2_PRICING.freeStorageGb} GB holds roughly <strong>${freeVideoDatasets()} video datasets</strong>; past that it is still cents rather than a budget line.</p>
+
+  <p style="margin:0 0 16px;padding:12px 14px;background:var(--tv-accent-bg);border:1px solid var(--tv-accent-border);border-radius:6px;max-width:70ch;font-size:13px;line-height:1.6;color:var(--tv-text-muted);text-wrap:pretty"><strong style="color:var(--tv-text)">A real number, not a model.</strong> This project's own node publishes ${REFERENCE_NODE.datasets} datasets, ${REFERENCE_NODE.videoDatasets} of them video, and stores ${REFERENCE_NODE.storedGb} GB in R2. Its Cloudflare bill for that storage is <strong style="color:var(--tv-text)">$${REFERENCE_NODE.monthlyUsd} a month</strong> — ${REFERENCE_NODE.billedGbMonth} GB-month after the free ${R2_PRICING.freeStorageGb} GB. Every operations line on the same invoice was $0.00. The estimate below is that measurement scaled, not a formula.</p>
 
   <div style="display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr) minmax(0,1.2fr);gap:0 20px;margin:0 0 18px">
     <div style="${EYEBROW};font-size:9px;padding-bottom:7px">What</div>
@@ -330,22 +332,13 @@ function storagePanel(): string {
   </div>
 
   <div style="background:var(--tv-surface-code);border:1px solid var(--tv-border);border-radius:6px;padding:16px 18px">
-    <label for="cost-count" style="display:block;font:500 13px/1.4 var(--tv-font-sans);color:var(--tv-text);margin:0 0 10px">How big do you expect your catalog to get?</label>
+    <label for="cost-count" style="display:block;font:500 13px/1.4 var(--tv-font-sans);color:var(--tv-text);margin:0 0 10px">How many <strong>video</strong> datasets do you expect to publish?</label>
     <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:0 0 10px">
-      <input id="cost-count" data-cost-count type="range" min="0" max="1000" step="10" value="200" style="flex:1 1 200px;accent-color:var(--tv-accent)"/>
-      <label style="font:400 12px/1.4 var(--tv-font-sans);color:var(--tv-text-muted)">each about
-        <select data-cost-secs style="background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:4px;padding:3px 6px;font:400 12px/1.4 var(--tv-font-sans);color:var(--tv-text)">
-          <option value="15">15 s</option>
-          <option value="30">30 s</option>
-          <option value="45" selected>45 s</option>
-          <option value="60">1 min</option>
-          <option value="120">2 min</option>
-        </select>
-      </label>
+      <input id="cost-count" data-cost-count type="range" min="0" max="1000" step="10" value="${REFERENCE_NODE.videoDatasets}" style="flex:1 1 220px;accent-color:var(--tv-accent)"/>
     </div>
     <output data-cost-out style="display:block;font:600 14px/1.5 var(--tv-font-mono);color:var(--tv-accent)"></output>
     <p data-cost-note style="margin:8px 0 0;font-size:12.5px;line-height:1.55;color:var(--tv-text-dim);text-wrap:pretty"></p>
-    <p style="margin:10px 0 0;font-size:11.5px;line-height:1.5;color:var(--tv-text-dim)">Storage only, and an order of magnitude rather than a quote — real transcode output swings with resolution and motion. Requests are left out because a catalog node sits far inside the free ${R2_PRICING.freeClassB / 1_000_000}M reads. Rates read from Cloudflare on ${esc(CHECKED_ON)}: <a href="https://developers.cloudflare.com/r2/pricing/">R2</a> · <a href="https://developers.cloudflare.com/d1/platform/pricing/">D1</a>. They change; those pages are authoritative, this one is a copy.</p>
+    <p style="margin:10px 0 0;font-size:11.5px;line-height:1.5;color:var(--tv-text-dim)">Storage only, and an order of magnitude rather than a quote — real transcode output swings with resolution and motion. Scaled from a measured node at ${(REFERENCE_NODE.storedGb / REFERENCE_NODE.videoDatasets).toFixed(2)} GB per video dataset — yours will differ with clip length and resolution. Requests are left out because the reference node runs at 2% of the free Class A allowance and 4% of Class B. Rates read from Cloudflare on ${esc(CHECKED_ON)}: <a href="https://developers.cloudflare.com/r2/pricing/">R2</a> · <a href="https://developers.cloudflare.com/d1/platform/pricing/">D1</a>. They change; those pages are authoritative, this one is a copy.</p>
   </div>
 </div>`
 }

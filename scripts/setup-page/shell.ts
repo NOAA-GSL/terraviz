@@ -43,7 +43,7 @@
  */
 
 import { MARKDOWN_URL, type WorksheetField } from './content'
-import { freeDatasets, R2_PRICING, TYPICAL_SECONDS, VIDEO_MB_PER_SOURCE_MINUTE } from './pricing'
+import { GB_PER_VIDEO_DATASET, R2_PRICING } from './pricing'
 
 // ── Fork-friendly documentation links ─────────────────────────────
 
@@ -201,14 +201,14 @@ export function docLinkRuntime(fallback: string): string {
 export function costRuntime(): string {
   return `
 (function () {
-  var MB_PER_MIN = ${VIDEO_MB_PER_SOURCE_MINUTE};
+  var GB_EACH = ${GB_PER_VIDEO_DATASET};
   var FREE_GB = ${R2_PRICING.freeStorageGb};
   var PER_GB = ${R2_PRICING.storagePerGbMonth};
   var count = document.querySelector('[data-cost-count]');
-  var secs = document.querySelector('[data-cost-secs]');
   var out = document.querySelector('[data-cost-out]');
   var note = document.querySelector('[data-cost-note]');
   if (!count || !out || !note) return;
+  var FREE_N = Math.floor(FREE_GB / GB_EACH);
   function money(n) {
     if (n === 0) return '$0';
     if (n < 1) return '~' + Math.round(n * 100) + ' cents';
@@ -216,21 +216,18 @@ export function costRuntime(): string {
   }
   function paint() {
     var n = Number(count.value) || 0;
-    var each = Number(secs && secs.value) || ${TYPICAL_SECONDS};
-    var gb = (n * (each / 60) * MB_PER_MIN) / 1024;
+    var gb = n * GB_EACH;
     var billable = Math.max(0, gb - FREE_GB);
-    var usd = billable * PER_GB;
-    out.textContent = n + ' datasets  ·  ' + gb.toFixed(1) + ' GB  ·  ' + money(usd) + ' / month';
-    var freeN = Math.floor((FREE_GB * 1024) / ((each / 60) * MB_PER_MIN));
+    out.textContent = n + ' video datasets  ·  ' + gb.toFixed(0) + ' GB  ·  ' +
+      money(billable * PER_GB) + ' / month';
     note.textContent = n === 0
       ? 'Drag to size your catalog. Metadata, images and tours alone stay far inside the free allowance.'
       : billable === 0
-        ? 'Free. About ' + freeN + ' clips of this length fit inside R2\\u2019s ' + FREE_GB + ' GB, on either plan.'
-        : 'The first ' + freeN + ' or so are free; past that it is ' + billable.toFixed(0) +
-          ' GB billed at $' + PER_GB + '/GB. Serving them to visitors adds nothing \\u2014 R2 egress is free.';
+        ? 'Free. About ' + FREE_N + ' video datasets fit inside R2\\u2019s ' + FREE_GB + ' GB, on either plan.'
+        : 'The first ' + FREE_N + ' or so are free; past that it is ' + billable.toFixed(0) +
+          ' GB at $' + PER_GB + '/GB-month. Serving them to visitors adds nothing \\u2014 R2 egress is free.';
   }
   count.addEventListener('input', paint);
-  if (secs) secs.addEventListener('change', paint);
   paint();
 })();
 `

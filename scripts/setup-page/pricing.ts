@@ -10,17 +10,9 @@
  * changes them without telling us. `crossCheck` cannot help.
  *
  * So the mitigations are the honest ones rather than the clever ones:
- *
- *   - every rate is here, in one block, not scattered through markup
- *   - `CHECKED_ON` is rendered on the page next to the estimate
- *   - the page links Cloudflare's own pricing pages, which are
- *     authoritative in a way this file never is
- *   - the estimate is framed as an order of magnitude, because that is
- *     what it is
- *
- * When updating: re-read both pages, change the constants, move
- * `CHECKED_ON`, and run the tests — they pin the arithmetic, not the
- * rates, so they will not notice a price change on their own.
+ * every rate lives here in one block, `CHECKED_ON` is rendered on the
+ * page beside the estimate, and the page links Cloudflare's own
+ * pricing pages, which are authoritative in a way this file is not.
  *
  * Sources, fetched and read on the date below:
  *   https://developers.cloudflare.com/r2/pricing/
@@ -28,7 +20,7 @@
  */
 
 /** When a human last read the two pricing pages above. */
-export const CHECKED_ON = '2026-08-02'
+export const CHECKED_ON = '2026-08-03'
 
 export const R2_PRICING = {
   /** Free every month, Standard storage only. */
@@ -52,14 +44,38 @@ export const D1_PRICING = {
 } as const
 
 /**
- * Transcoded output for one minute of source video, in MB.
+ * A real node's actual usage, used to calibrate the estimate.
  *
- * The HLS ladder stores several renditions, so this is the sum of
- * them rather than the size of any one. It is the single biggest
- * lever on the estimate and the least precise number in it — real
- * output swings with resolution, motion and codec settings.
+ * This is measured, not modelled. It is the project's own public
+ * instance, cross-checked three ways: the R2 dashboard reports the
+ * stored bytes, the catalog API reports the dataset counts, and a
+ * Cloudflare invoice confirms what was billed — 87 GB-month after the
+ * 10 GB free allowance, at $0.015, which is $1.31.
+ *
+ * The first version of this file modelled cost as
+ * `duration × MB-per-minute`, with both terms guessed. Measuring the
+ * real bucket showed why that was a bad idea: sampled clip durations
+ * run from 4 seconds to 8½ minutes (median 60s, mean 118s), and the
+ * per-dataset footprint came out at nearly double what the duration
+ * model predicted — the HLS ladder is not the only thing stored per
+ * video. Two guessed terms multiplied together were never going to
+ * land, so the estimate now scales one measured number instead.
  */
-export const VIDEO_MB_PER_SOURCE_MINUTE = 250
+export const REFERENCE_NODE = {
+  datasets: 178,
+  videoDatasets: 126,
+  storedGb: 97.1,
+  billedGbMonth: 87,
+  monthlyUsd: 1.31,
+} as const
+
+/**
+ * Measured GB per published video dataset, averaged over a real
+ * catalog. Covers everything stored for that dataset — every rendition
+ * in the ladder, plus thumbnail, legend and tour JSON.
+ */
+export const GB_PER_VIDEO_DATASET =
+  REFERENCE_NODE.storedGb / REFERENCE_NODE.videoDatasets
 
 export interface Estimate {
   /** Total stored, GB. */
@@ -73,49 +89,31 @@ export interface Estimate {
 }
 
 /**
- * Storage cost for a catalog of dataset videos.
- *
- * Denominated in **datasets**, not hours, because that is the unit the
- * operator actually thinks in and the scale the app works at — a
- * dataset video is a short loop, typically well under a minute, not a
- * feature film. Framing this in hours (as the first draft did)
- * overstates it by two orders of magnitude and makes a $0.40/month
- * catalog look like a budget line.
+ * Storage cost for a catalog of published video datasets.
  *
  * Deliberately storage-only. Operations are the other half of an R2
- * bill, but a catalog node's read pattern sits so far inside the 10M
- * free Class B operations that including them would add noise and a
- * false sense of precision. The page says so rather than implying the
+ * bill, but the reference node's real usage sits at 2% of the free
+ * Class A allowance and 4% of Class B, so including them would add
+ * noise and a false sense of precision. Its invoice charged $0.00 for
+ * every operation line. The page says so rather than implying the
  * number is complete.
  *
- * R2's free allowance applies on both Workers plans — that is the
- * point the old copy missed by filing storage under "Workers Paid".
+ * R2's free allowance applies on both Workers plans — the point the
+ * old copy missed by filing storage under "Workers Paid".
  */
-export function estimateStorage(datasets: number, secondsEach: number): Estimate {
-  const n = Number.isFinite(datasets) && datasets > 0 ? datasets : 0
-  const secs = Number.isFinite(secondsEach) && secondsEach > 0 ? secondsEach : 0
-  const storageGb = (n * (secs / 60) * VIDEO_MB_PER_SOURCE_MINUTE) / 1024
-  const freeGb = Math.min(storageGb, R2_PRICING.freeStorageGb)
-  const billableGb = Math.max(0, storageGb - R2_PRICING.freeStorageGb)
+export function estimateStorage(videoDatasets: number): Estimate {
+  const n = Number.isFinite(videoDatasets) && videoDatasets > 0 ? videoDatasets : 0
+  const storageGb = n * GB_PER_VIDEO_DATASET
   return {
     storageGb,
-    freeGb,
-    billableGb,
-    monthlyUsd: billableGb * R2_PRICING.storagePerGbMonth,
+    freeGb: Math.min(storageGb, R2_PRICING.freeStorageGb),
+    billableGb: Math.max(0, storageGb - R2_PRICING.freeStorageGb),
+    monthlyUsd:
+      Math.max(0, storageGb - R2_PRICING.freeStorageGb) * R2_PRICING.storagePerGbMonth,
   }
 }
 
-/** How many videos of a given length fit inside the free allowance. */
-export function freeDatasets(secondsEach: number): number {
-  if (!Number.isFinite(secondsEach) || secondsEach <= 0) return 0
-  const mbEach = (secondsEach / 60) * VIDEO_MB_PER_SOURCE_MINUTE
-  return Math.floor((R2_PRICING.freeStorageGb * 1024) / mbEach)
+/** How many video datasets fit inside the free allowance. */
+export function freeVideoDatasets(): number {
+  return Math.floor(R2_PRICING.freeStorageGb / GB_PER_VIDEO_DATASET)
 }
-
-/** Minutes of video inside the free allowance, for the prose. */
-export function freeMinutes(): number {
-  return (R2_PRICING.freeStorageGb * 1024) / VIDEO_MB_PER_SOURCE_MINUTE
-}
-
-/** The default the calculator opens on — "well under a minute". */
-export const TYPICAL_SECONDS = 45

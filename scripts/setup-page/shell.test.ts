@@ -31,7 +31,7 @@ import {
   TOKEN_ALIASES,
 } from './shell'
 import { MARKDOWN_URL, WORKSHEET } from './content'
-import { estimateStorage, TYPICAL_SECONDS } from './pricing'
+import { estimateStorage, REFERENCE_NODE } from './pricing'
 
 const PAGE = resolve(__dirname, '../../public/setup.html')
 const html = (): string => readFileSync(PAGE, 'utf8')
@@ -191,7 +191,7 @@ describe('the cost estimate runtime', () => {
   // catches that.
   it('survives injection without the $-pattern eating the document', () => {
     const page = applyShell(
-      '<html><head><title>t</title></head><body><input data-cost-count/><select data-cost-secs></select><output data-cost-out></output><p data-cost-note></p></body>\n</html>',
+      '<html><head><title>t</title></head><body><input data-cost-count/><output data-cost-out></output><p data-cost-note></p></body>\n</html>',
     ).html
     expect(page).toContain('data-cost-count')
     expect(page).not.toMatch(/'~\n/)
@@ -206,13 +206,14 @@ describe('the cost estimate runtime', () => {
   // The browser copy and the tested pure function must not drift.
   it('matches estimateStorage() at the same inputs', () => {
     document.body.innerHTML =
-      `<input data-cost-count value="1000"/><select data-cost-secs><option value="${TYPICAL_SECONDS}" selected></option></select>` +
+      `<input data-cost-count value="${REFERENCE_NODE.videoDatasets}"/>` +
       '<output data-cost-out></output><p data-cost-note></p>'
     new Function(costRuntime())()
     const shown = document.querySelector('[data-cost-out]')!.textContent!
-    const e = estimateStorage(1000, TYPICAL_SECONDS)
-    expect(shown).toContain(e.storageGb.toFixed(1))
-    expect(shown).toContain('1000 datasets')
+    const e = estimateStorage(REFERENCE_NODE.videoDatasets)
+    expect(shown).toContain(e.storageGb.toFixed(0))
+    // The browser copy must land on the real invoice too.
+    expect(shown).toContain(String(REFERENCE_NODE.monthlyUsd))
   })
 })
 
