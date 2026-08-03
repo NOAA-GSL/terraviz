@@ -36,6 +36,15 @@ import { pathToFileURL } from 'node:url'
 interface Rule {
   readonly re: RegExp
   readonly fix: (m: RegExpMatchArray) => string
+  /**
+   * Set on the positional-offset rule only. `left`/`right` with a value
+   * of exactly `50%` is the classic-centering exception — the physical
+   * property is correct there, because `inset-inline-start: 50%` does
+   * not center under RTL. No other rule has a value to test: the box
+   * and border rules match only up to the colon, and `text-align`'s
+   * value is the side itself.
+   */
+  readonly centeringExempt?: boolean
 }
 
 const SIDE_TO_LOGICAL: Record<string, string> = { left: 'start', right: 'end' }
@@ -59,6 +68,7 @@ const RULES: readonly Rule[] = [
     // Bare positional left/right. `50%` is the centering exception.
     re: /(?:^|[^-\w])(left|right)\s*:\s*([^;{}]+)/gi,
     fix: (m) => `inset-inline-${SIDE_TO_LOGICAL[m[1].toLowerCase()]}`,
+    centeringExempt: true,
   },
 ]
 
@@ -107,11 +117,7 @@ export function findViolations(file: string, css: string): Violation[] {
       rule.re.lastIndex = 0
       let m: RegExpMatchArray | null
       while ((m = rule.re.exec(line)) !== null) {
-        // Centering exception: `left: 50%` / `right: 50%`.
-        if (rule.re.source.includes('inset') || m[0].includes(':')) {
-          const value = m[2]?.trim()
-          if ((m[1] === 'left' || m[1] === 'right') && value === '50%') continue
-        }
+        if (rule.centeringExempt && m[2]?.trim() === '50%') continue
         out.push({
           file,
           line: i + 1,

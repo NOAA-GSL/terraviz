@@ -57,7 +57,11 @@ function main() {
     // No toolchain in this environment is not a formatting failure.
     if (err?.code === 'ENOENT' || err?.killed) return
 
-    const out = String(err?.stdout ?? '')
+    // Both streams: `cargo fmt --check` writes its diff to stdout in the
+    // versions measured here, but reading only one stream would fail
+    // open if that ever changed — and check-doc-coverage.mjs already
+    // combines them, so this keeps the two hooks consistent.
+    const out = String(err?.stdout ?? '') + String(err?.stderr ?? '')
     if (!out.includes('Diff in')) return
 
     const files = [...new Set([...out.matchAll(/^Diff in (\S+?):/gm)].map((m) => m[1]))]

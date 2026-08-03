@@ -34,6 +34,17 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import { relative, isAbsolute, basename, join } from 'node:path'
 
+// Mirrors COVERAGE_ROOTS in scripts/check-doc-coverage.ts. Without
+// this, creating any new .ts anywhere — a script, a fixture — pays for
+// a whole-repo scan to be told it was never covered. `scripts/` alone
+// is 108 files.
+const COVERED_ROOTS = [
+  { prefix: 'src/', ext: /\.ts$/ },
+  { prefix: 'src-tauri/src/', ext: /\.rs$/ },
+  { prefix: 'functions/', ext: /\.ts$/ },
+  { prefix: 'cli/', ext: /\.ts$/ },
+]
+
 // Mirrors EXCLUDE_BASENAME in scripts/check-doc-coverage.ts. Prefilter
 // only — keeps routine test-file creation from paying for a scan.
 const EXCLUDED = [/\.test\.ts$/, /\.d\.ts$/, /^messages\.ts$/, /^messages\.[^.]+\.ts$/, /^test-setup\.ts$/]
@@ -55,8 +66,11 @@ function main() {
   const root = process.env.CLAUDE_PROJECT_DIR || payload.cwd || process.cwd()
   const rel = (isAbsolute(filePath) ? relative(root, filePath) : filePath).split('\\').join('/')
 
-  // Outside the repo, or not a language the module maps cover.
-  if (rel.startsWith('..') || !/\.(ts|rs)$/.test(rel)) return
+  // Outside the repo, or outside a root the module maps actually cover.
+  // `src-tauri/src/` is checked before `src/` would ever match it, since
+  // the prefixes are compared as written and do not overlap.
+  if (rel.startsWith('..')) return
+  if (!COVERED_ROOTS.some((r) => rel.startsWith(r.prefix) && r.ext.test(rel))) return
   if (EXCLUDED.some((re) => re.test(basename(rel)))) return
 
   // Already tracked => not a new module => coverage status unchanged.
