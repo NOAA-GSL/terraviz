@@ -408,6 +408,41 @@ function tierPicker(): string {
  * as a badge rather than flattened into a checkbox list.
  */
 function preflight(): string {
+  /**
+   * The click path, from the same `MANUAL_STEPS` entry the CLI prints.
+   *
+   * The sheet used to render `title` and `why` and drop `steps` and
+   * `url` on the floor — so "Mint a Cloudflare API token · Everything
+   * this tool does runs through it" was the whole of the guidance,
+   * with the ten-line permission table sitting unused in the data.
+   * Fine if you know Cloudflare; a dead end if you do not, and the
+   * people who need this page most are the ones who do not.
+   *
+   * Collapsed, because the sheet is meant to print on one page. A
+   * closed <details> prints as its summary line, so the checklist
+   * stays a checklist and the detail is one tap away on screen.
+   */
+  const howTo = (s: ManualStep): string => {
+    if (!s.steps.length && !s.url) return ''
+    const body = s.steps.length
+      ? `<div style="white-space:pre-wrap;margin:8px 0 0;padding:10px 12px;background:var(--tv-surface-code);border:1px solid var(--tv-border);border-radius:5px;font:400 11.5px/1.65 var(--tv-font-mono);color:var(--tv-text-muted);overflow-x:auto">${s.steps.map(esc).join('\n')}</div>`
+      : ''
+    // Dashboard says *where*; docs say *what the thing is*. Someone new
+    // to Cloudflare needs the second before the first is any use.
+    const links = [
+      s.url ? `<a href="${esc(s.url)}">Open in the Cloudflare dashboard ↗</a>` : '',
+      s.docsUrl ? `<a href="${esc(s.docsUrl)}">Cloudflare's docs for this ↗</a>` : '',
+    ].filter(Boolean)
+    const link = links.length
+      ? `<div style="display:flex;flex-wrap:wrap;gap:14px;margin:8px 0 0;font:500 12px/1.4 var(--tv-font-sans)">${links.join('')}</div>`
+      : ''
+    return `<details style="margin:5px 0 0">
+      <summary style="cursor:pointer;font:500 12px/1.4 var(--tv-font-sans);color:var(--tv-accent);list-style:none">How to do this ▸</summary>
+      ${body}
+      ${link}
+    </details>`
+  }
+
   const step = (s: ManualStep, i: number): string => {
     const detected = s.verification === 'detected'
     const badge = detected
@@ -421,6 +456,7 @@ function preflight(): string {
         ${badge}
       </div>
       <div style="font-size:13px;line-height:1.5;color:var(--tv-text-muted);text-wrap:pretty">${inline(s.why)}</div>
+      ${howTo(s)}
     </div>
   </div>`
   }

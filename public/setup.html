@@ -557,6 +557,12 @@ code{overflow-wrap:anywhere}
         <span title="Nothing will warn you if you skip this one." style="flex:none;background:var(--tv-warn-bg);color:var(--tv-warn);border:1px solid var(--tv-warn-border);border-radius:999px;padding:2px 8px;font:600 9px/1.5 var(--tv-font-sans);letter-spacing:.07em;text-transform:uppercase">on you</span>
       </div>
       <div style="font-size:13px;line-height:1.5;color:var(--tv-text-muted);text-wrap:pretty">Analytics Engine is not on the free plan, and Workers AI free-tier neurons run out after roughly 200 Orbit turns. Both fail soft, which is worse than failing loudly: telemetry silently stops recording and Orbit quietly degrades mid-demo.</div>
+      <details style="margin:5px 0 0">
+      <summary style="cursor:pointer;font:500 12px/1.4 var(--tv-font-sans);color:var(--tv-accent);list-style:none">How to do this ▸</summary>
+      <div style="white-space:pre-wrap;margin:8px 0 0;padding:10px 12px;background:var(--tv-surface-code);border:1px solid var(--tv-border);border-radius:5px;font:400 11.5px/1.65 var(--tv-font-mono);color:var(--tv-text-muted);overflow-x:auto">Workers &amp; Pages → Plans → Workers Paid → Subscribe.
+Billing is per account, not per project.</div>
+      <div style="display:flex;flex-wrap:wrap;gap:14px;margin:8px 0 0;font:500 12px/1.4 var(--tv-font-sans)"><a href="https://dash.cloudflare.com/?to=/:account/workers/plans">Open in the Cloudflare dashboard ↗</a><a href="https://developers.cloudflare.com/workers/platform/pricing/">Cloudflare's docs for this ↗</a></div>
+    </details>
     </div>
   </div></div>
   <div data-when="free"><div style="display:flex;gap:10px;align-items:flex-start">
@@ -577,6 +583,13 @@ code{overflow-wrap:anywhere}
         <span title="If you skip this, the setup tool will tell you." style="flex:none;background:var(--tv-accent-bg);color:var(--tv-accent);border:1px solid var(--tv-accent-border);border-radius:999px;padding:2px 8px;font:600 9px/1.5 var(--tv-font-sans);letter-spacing:.07em;text-transform:uppercase">setup will catch this</span>
       </div>
       <div style="font-size:13px;line-height:1.5;color:var(--tv-text-muted);text-wrap:pretty">Pages provisions the certificate and CNAME for your custom domain, and R2 can only serve a public bucket from a zone Cloudflare controls. Neither works on a domain hosted elsewhere.</div>
+      <details style="margin:5px 0 0">
+      <summary style="cursor:pointer;font:500 12px/1.4 var(--tv-font-sans);color:var(--tv-accent);list-style:none">How to do this ▸</summary>
+      <div style="white-space:pre-wrap;margin:8px 0 0;padding:10px 12px;background:var(--tv-surface-code);border:1px solid var(--tv-border);border-radius:5px;font:400 11.5px/1.65 var(--tv-font-mono);color:var(--tv-text-muted);overflow-x:auto">Add the site in Cloudflare, then change the nameservers at your registrar.
+Propagation is usually minutes, occasionally hours.
+Transferring the registration is NOT required — only DNS.</div>
+      <div style="display:flex;flex-wrap:wrap;gap:14px;margin:8px 0 0;font:500 12px/1.4 var(--tv-font-sans)"><a href="https://dash.cloudflare.com/?to=/:account/add-site">Open in the Cloudflare dashboard ↗</a><a href="https://developers.cloudflare.com/fundamentals/manage-domains/add-site/">Cloudflare's docs for this ↗</a></div>
+    </details>
     </div>
   </div>
   <div style="display:flex;gap:10px;align-items:flex-start">
@@ -587,6 +600,21 @@ code{overflow-wrap:anywhere}
         <span title="If you skip this, the setup tool will tell you." style="flex:none;background:var(--tv-accent-bg);color:var(--tv-accent);border:1px solid var(--tv-accent-border);border-radius:999px;padding:2px 8px;font:600 9px/1.5 var(--tv-font-sans);letter-spacing:.07em;text-transform:uppercase">setup will catch this</span>
       </div>
       <div style="font-size:13px;line-height:1.5;color:var(--tv-text-muted);text-wrap:pretty">Everything this tool does runs through it.</div>
+      <details style="margin:5px 0 0">
+      <summary style="cursor:pointer;font:500 12px/1.4 var(--tv-font-sans);color:var(--tv-accent);list-style:none">How to do this ▸</summary>
+      <div style="white-space:pre-wrap;margin:8px 0 0;padding:10px 12px;background:var(--tv-surface-code);border:1px solid var(--tv-border);border-radius:5px;font:400 11.5px/1.65 var(--tv-font-mono);color:var(--tv-text-muted);overflow-x:auto">My Profile → API Tokens → Create Token → Custom token.
+Permissions (grant only what you plan to run):
+  Account → Cloudflare Pages           → Edit   (Pages project + bindings)
+  Account → Access: Apps and Policies  → Edit   (the publisher application)
+  Account → Access: Service Tokens     → Edit   (the CLI credential)
+  Account → Access: Organizations      → Read   (discovers your team domain)
+  Account → Workers R2 Storage         → Edit   (only for --only=r2)
+  Zone    → Zone                       → Read   (resolves the zone)
+  Zone    → Zone WAF                   → Edit   (only for --only=waf)
+  Account → D1                         → Edit   (only for CI migrations)
+Then: export CLOUDFLARE_API_TOKEN=...</div>
+      <div style="display:flex;flex-wrap:wrap;gap:14px;margin:8px 0 0;font:500 12px/1.4 var(--tv-font-sans)"><a href="https://dash.cloudflare.com/profile/api-tokens">Open in the Cloudflare dashboard ↗</a><a href="https://developers.cloudflare.com/fundamentals/api/get-started/create-token/">Cloudflare's docs for this ↗</a></div>
+    </details>
     </div>
   </div>
   <div style="display:flex;gap:10px;align-items:flex-start">
@@ -597,6 +625,15 @@ code{overflow-wrap:anywhere}
         <span title="If you skip this, the setup tool will tell you." style="flex:none;background:var(--tv-accent-bg);color:var(--tv-accent);border:1px solid var(--tv-accent-border);border-radius:999px;padding:2px 8px;font:600 9px/1.5 var(--tv-font-sans);letter-spacing:.07em;text-transform:uppercase">setup will catch this</span>
       </div>
       <div style="font-size:13px;line-height:1.5;color:var(--tv-text-muted);text-wrap:pretty">The Access application that gates the publisher API cannot exist until the account has a Zero Trust organization and at least one identity provider. Without it every /api/v1/publish/** route 503s.</div>
+      <details style="margin:5px 0 0">
+      <summary style="cursor:pointer;font:500 12px/1.4 var(--tv-font-sans);color:var(--tv-accent);list-style:none">How to do this ▸</summary>
+      <div style="white-space:pre-wrap;margin:8px 0 0;padding:10px 12px;background:var(--tv-surface-code);border:1px solid var(--tv-border);border-radius:5px;font:400 11.5px/1.65 var(--tv-font-mono);color:var(--tv-text-muted);overflow-x:auto">Pick a team name — it becomes &lt;team&gt;.cloudflareaccess.com.
+Settings → Authentication → add a login method.
+One-time PIN over email works and needs no IdP setup;
+Google / Okta / Entra are better for a real team.
+The free Zero Trust plan covers up to 50 users.</div>
+      <div style="display:flex;flex-wrap:wrap;gap:14px;margin:8px 0 0;font:500 12px/1.4 var(--tv-font-sans)"><a href="https://one.dash.cloudflare.com/">Open in the Cloudflare dashboard ↗</a><a href="https://developers.cloudflare.com/cloudflare-one/setup/">Cloudflare's docs for this ↗</a></div>
+    </details>
     </div>
   </div>
   <div style="display:flex;gap:10px;align-items:flex-start">
@@ -607,6 +644,13 @@ code{overflow-wrap:anywhere}
         <span title="If you skip this, the setup tool will tell you." style="flex:none;background:var(--tv-accent-bg);color:var(--tv-accent);border:1px solid var(--tv-accent-border);border-radius:999px;padding:2px 8px;font:600 9px/1.5 var(--tv-font-sans);letter-spacing:.07em;text-transform:uppercase">setup will catch this</span>
       </div>
       <div style="font-size:13px;line-height:1.5;color:var(--tv-text-muted);text-wrap:pretty">Signs your node federation responses and is advertised at /.well-known/terraviz.json. The generator also writes node-public-key.txt, which <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">terraviz init-node</code> reads in Phase 9.</div>
+      <details style="margin:5px 0 0">
+      <summary style="cursor:pointer;font:500 12px/1.4 var(--tv-font-sans);color:var(--tv-accent);list-style:none">How to do this ▸</summary>
+      <div style="white-space:pre-wrap;margin:8px 0 0;padding:10px 12px;background:var(--tv-surface-code);border:1px solid var(--tv-border);border-radius:5px;font:400 11.5px/1.65 var(--tv-font-mono);color:var(--tv-text-muted);overflow-x:auto">npm run gen:node-key
+Writes NODE_ID_PRIVATE_KEY_PEM into .dev.vars at mode 0600.
+Back that file up — regenerating means re-provisioning your identity.</div>
+      
+    </details>
     </div>
   </div>
   <div style="display:flex;gap:10px;align-items:flex-start">
@@ -617,6 +661,15 @@ code{overflow-wrap:anywhere}
         <span title="If you skip this, the setup tool will tell you." style="flex:none;background:var(--tv-accent-bg);color:var(--tv-accent);border:1px solid var(--tv-accent-border);border-radius:999px;padding:2px 8px;font:600 9px/1.5 var(--tv-font-sans);letter-spacing:.07em;text-transform:uppercase">setup will catch this</span>
       </div>
       <div style="font-size:13px;line-height:1.5;color:var(--tv-text-muted);text-wrap:pretty">The Cloudflare↔GitHub handshake is an OAuth flow with no API, so this tool creates a Direct Upload project. Cloudflare will not run your build until you connect a remote, which means the VITE_* build variables have to be set wherever the build actually happens.</div>
+      <details style="margin:5px 0 0">
+      <summary style="cursor:pointer;font:500 12px/1.4 var(--tv-font-sans);color:var(--tv-accent);list-style:none">How to do this ▸</summary>
+      <div style="white-space:pre-wrap;margin:8px 0 0;padding:10px 12px;background:var(--tv-surface-code);border:1px solid var(--tv-border);border-radius:5px;font:400 11.5px/1.65 var(--tv-font-mono);color:var(--tv-text-muted);overflow-x:auto">Either: Workers &amp; Pages → your project → Settings → Builds →
+  Connect to Git, then set the VITE_* variables in the dashboard.
+Or: keep Direct Upload and deploy from CI with
+  `wrangler pages deploy dist/ --project-name &lt;your-project&gt;`,
+  setting the VITE_* variables in the CI job instead.</div>
+      <div style="display:flex;flex-wrap:wrap;gap:14px;margin:8px 0 0;font:500 12px/1.4 var(--tv-font-sans)"><a href="https://developers.cloudflare.com/pages/configuration/git-integration/">Cloudflare's docs for this ↗</a></div>
+    </details>
     </div>
   </div>
   <div style="display:flex;gap:10px;align-items:flex-start">
@@ -627,6 +680,17 @@ code{overflow-wrap:anywhere}
         <span title="Nothing will warn you if you skip this one." style="flex:none;background:var(--tv-warn-bg);color:var(--tv-warn);border:1px solid var(--tv-warn-border);border-radius:999px;padding:2px 8px;font:600 9px/1.5 var(--tv-font-sans);letter-spacing:.07em;text-transform:uppercase">on you</span>
       </div>
       <div style="font-size:13px;line-height:1.5;color:var(--tv-text-muted);text-wrap:pretty">Server-side presigned uploads and digest verification need S3-API credentials. Automating this would require a token that can create tokens — a credential that could grant itself more authority — so it stays a deliberate manual step.</div>
+      <details style="margin:5px 0 0">
+      <summary style="cursor:pointer;font:500 12px/1.4 var(--tv-font-sans);color:var(--tv-accent);list-style:none">How to do this ▸</summary>
+      <div style="white-space:pre-wrap;margin:8px 0 0;padding:10px 12px;background:var(--tv-surface-code);border:1px solid var(--tv-border);border-radius:5px;font:400 11.5px/1.65 var(--tv-font-mono);color:var(--tv-text-muted);overflow-x:auto">R2 → Manage R2 API Tokens → Create API token.
+Permission: Object Read &amp; Write, scoped to your assets bucket.
+Copy all three values — the secret is shown once:
+  export R2_S3_ENDPOINT=https://&lt;account&gt;.r2.cloudflarestorage.com
+  export R2_ACCESS_KEY_ID=...
+  export R2_SECRET_ACCESS_KEY=...
+Then re-run setup; the bindings step picks them up from the shell.</div>
+      <div style="display:flex;flex-wrap:wrap;gap:14px;margin:8px 0 0;font:500 12px/1.4 var(--tv-font-sans)"><a href="https://dash.cloudflare.com/?to=/:account/r2/api-tokens">Open in the Cloudflare dashboard ↗</a><a href="https://developers.cloudflare.com/r2/api/tokens/">Cloudflare's docs for this ↗</a></div>
+    </details>
     </div>
   </div></div>
     </div>
