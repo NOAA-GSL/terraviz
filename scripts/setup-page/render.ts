@@ -433,6 +433,34 @@ function preflight(): string {
   </div>`,
   ).join('\n  ')
 
+  /**
+   * Workers Paid is the one prerequisite the plan chooser lets an
+   * operator decline, so the sheet cannot state it unconditionally.
+   * Choosing *Free* and then being told to "Enable Workers Paid
+   * ($5/month)" as task one is a straight contradiction of the choice
+   * the page just offered.
+   *
+   * Both variants render; `data-when` shows exactly one, so the row
+   * count and the numbering stay put either way. On free it stops
+   * being a task and becomes the record of a decision — with what it
+   * costs you spelled out, and a way back.
+   */
+  const declined = (s: ManualStep, i: number): string => `<div style="display:flex;gap:10px;align-items:flex-start">
+    <span aria-hidden="true" style="flex:none;margin-top:2px;width:15px;height:15px;display:inline-flex;align-items:center;justify-content:center;border:1px dashed var(--tv-border-strong);border-radius:4px;color:var(--tv-text-dim);font:600 10px/1 var(--tv-font-sans)">—</span>
+    <div style="min-width:0">
+      <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:0 0 3px">
+        <span style="font:600 13.5px/1.4 var(--tv-font-sans);color:var(--tv-text-dim)">${i + 1}. ${esc(s.title.replace(/^Enable /, ''))} — not on the free plan</span>
+        <span style="flex:none;background:var(--tv-surface-3);color:var(--tv-text-dim);border:1px solid var(--tv-border);border-radius:999px;padding:2px 8px;font:600 9px/1.5 var(--tv-font-sans);letter-spacing:.07em;text-transform:uppercase">your choice</span>
+      </div>
+      <div style="font-size:13px;line-height:1.5;color:var(--tv-text-dim);text-wrap:pretty">Nothing to do — you chose the free plan. You give up Analytics Engine entirely, and Orbit throttles after roughly 200 conversations a day. <a href="#cost">Change plan</a></div>
+    </div>
+  </div>`
+
+  const stepCell = (s: ManualStep, i: number): string =>
+    s.id !== 'workers-paid'
+      ? step(s, i)
+      : `<div data-when="paid">${step(s, i)}</div>\n  <div data-when="free">${declined(s, i)}</div>`
+
   const sectionHead = (label: string, aside: string, blurb: string): string =>
     `<div style="display:flex;justify-content:space-between;align-items:baseline;gap:16px;margin:0 0 6px">
       <div style="${EYEBROW}">${esc(label)}</div>
@@ -451,9 +479,9 @@ function preflight(): string {
       ${sectionHead(
         'Before you start · only you can do these',
         `${MANUAL_STEPS.length} things, about 20 minutes`,
-        'An account, a domain, a login — the things no script can do on your behalf. Most the setup tool will notice if you skip; the ones marked *on you* it cannot, so those are the ones to be sure about. The first is the only one you can decline outright — see <a href="#cost">what it costs</a>.',
+        'An account, a domain, a login — the things no script can do on your behalf. Most the setup tool will notice if you skip; the ones marked *on you* it cannot, so those are the ones to be sure about. The first is a choice rather than a task — see <a href="#cost">what it costs</a>.',
       )}
-      <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:13px 28px">${MANUAL_STEPS.map(step).join('\n  ')}</div>
+      <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:13px 28px">${MANUAL_STEPS.map(stepCell).join('\n  ')}</div>
     </div>
     <div>
       ${sectionHead(

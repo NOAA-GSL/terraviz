@@ -242,6 +242,18 @@ describe('the committed public/setup.html', () => {
     expect(page).toContain('terraviz-setup-console-v1')
   })
 
+  // The plan chooser offers Free as a supported choice, so the sheet
+  // must not then list "Enable Workers Paid" as task one. Asserted on
+  // the built page because the sheet lives in render.ts, which the
+  // next design export replaces wholesale.
+  it('offers a free-plan variant of the Workers Paid prerequisite', () => {
+    const page = html()
+    expect(page).toContain('data-when="paid"')
+    expect(page).toMatch(/not on the free plan/)
+    // Both variants present means the row count is stable across plans.
+    expect((page.match(/Workers Paid/g) ?? []).length).toBeGreaterThanOrEqual(2)
+  })
+
   it('carries the CSP and the real favicon', () => {
     expect(html()).toContain(CSP_META)
     expect(html()).toContain(FAVICON_LINK)
