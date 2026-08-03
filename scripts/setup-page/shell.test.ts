@@ -29,6 +29,8 @@ import {
   GLOBE_MARK,
   repairSummary,
   TOKEN_ALIASES,
+  actionLabel,
+  docsLabel,
 } from './shell'
 import { MARKDOWN_URL, WORKSHEET } from './content'
 import { estimateStorage, REFERENCE_NODE } from './pricing'
@@ -393,6 +395,31 @@ describe('the committed public/setup.html', () => {
     // The Cloudflare steps keep their own wording.
     expect(page).toContain('Open in the Cloudflare dashboard')
     expect(page).toContain("Cloudflare's docs for this")
+  })
+
+  // CodeQL flagged the first spelling of this (endsWith) as incomplete
+  // URL substring sanitization. Not reachable — every URL here is a
+  // constant — but a predicate that answers "is this GitHub?" wrongly
+  // should not survive on the grounds that its callers happen to be
+  // safe.
+  it('matches a host by label boundary, not by suffix', () => {
+    expect(actionLabel('https://github.com/x/y')).toBe('Open on GitHub')
+    expect(actionLabel('https://docs.github.com/x')).toBe('Open on GitHub')
+    expect(docsLabel('https://developers.cloudflare.com/x')).toBe(
+      "Cloudflare's docs for this",
+    )
+    // The whole point: a lookalike host must not borrow the label.
+    for (const bad of [
+      'https://evilgithub.com/x',
+      'https://notcloudflare.com/x',
+      'https://github.com.attacker.example/x',
+      'https://cloudflare.com.attacker.example/x',
+    ]) {
+      expect(actionLabel(bad), bad).toBe('Open this page')
+      expect(docsLabel(bad), bad).toBe('Documentation for this')
+    }
+    // A value that is not a URL at all falls back rather than throwing.
+    expect(actionLabel('not a url')).toBe('Open this page')
   })
 
   it('carries the CSP and the real favicon', () => {

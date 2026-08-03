@@ -247,17 +247,33 @@ function hostOf(url: string): string {
   }
 }
 
+/**
+ * Exactly this domain, or a subdomain of it.
+ *
+ * `endsWith('github.com')` is the obvious spelling and the wrong one:
+ * it also matches `evilgithub.com`, because the suffix test has no
+ * idea where a label boundary is. CodeQL flags it as incomplete URL
+ * substring sanitization and is right to — nothing here is
+ * attacker-reachable today, since every URL is a constant in
+ * `MANUAL_STEPS`, but a predicate that answers "is this GitHub?"
+ * wrongly is worth not keeping just because its current callers are
+ * safe.
+ */
+function isHost(host: string, domain: string): boolean {
+  return host === domain || host.endsWith(`.${domain}`)
+}
+
 export function actionLabel(url: string): string {
   const h = hostOf(url)
-  if (h.endsWith('cloudflare.com')) return 'Open in the Cloudflare dashboard'
-  if (h.endsWith('github.com')) return 'Open on GitHub'
+  if (isHost(h, 'cloudflare.com')) return 'Open in the Cloudflare dashboard'
+  if (isHost(h, 'github.com')) return 'Open on GitHub'
   return 'Open this page'
 }
 
 export function docsLabel(url: string): string {
   const h = hostOf(url)
-  if (h.endsWith('cloudflare.com')) return "Cloudflare's docs for this"
-  if (h.endsWith('github.com')) return "GitHub's docs for this"
+  if (isHost(h, 'cloudflare.com')) return "Cloudflare's docs for this"
+  if (isHost(h, 'github.com')) return "GitHub's docs for this"
   return 'Documentation for this'
 }
 
