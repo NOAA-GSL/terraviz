@@ -64,6 +64,28 @@ interface VerifyOptions {
 const JWKS_TTL_SECONDS = 3600
 const JWKS_KV_PREFIX = 'access:jwks:'
 
+/**
+ * The Access settings, trimmed and blank-normalised to undefined.
+ *
+ * Both are copied out of the Cloudflare dashboard by hand, and a
+ * trailing space or newline on either is invisible in the Pages
+ * environment-variable UI. The consequences are silent and total:
+ * a padded `ACCESS_TEAM_DOMAIN` builds a JWKS URL that 404s and an
+ * `iss` that never matches, and a padded `ACCESS_AUD` fails the
+ * `aud.includes` check on every otherwise-valid assertion. Either
+ * one turns the whole publisher API into a blanket 401 that looks
+ * like an expired login rather than a stray byte in a config value.
+ */
+export function accessConfig(env: CatalogEnv): {
+  teamDomain?: string
+  aud?: string
+} {
+  return {
+    teamDomain: env.ACCESS_TEAM_DOMAIN?.trim() || undefined,
+    aud: env.ACCESS_AUD?.trim() || undefined,
+  }
+}
+
 function jwksKey(teamDomain: string): string {
   return `${JWKS_KV_PREFIX}${teamDomain}`
 }
@@ -85,7 +107,7 @@ async function fetchJwks(
   env: CatalogEnv,
   fetchImpl: typeof fetch,
 ): Promise<Jwks | null> {
-  const teamDomain = env.ACCESS_TEAM_DOMAIN
+  const { teamDomain } = accessConfig(env)
   if (!teamDomain) return null
   const cacheKey = jwksKey(teamDomain)
   if (env.CATALOG_KV) {
@@ -156,11 +178,15 @@ export async function verifyAccessJwt(
   env: CatalogEnv,
   options: VerifyOptions = {},
 ): Promise<AccessIdentity | null> {
-  if (!env.ACCESS_TEAM_DOMAIN || !env.ACCESS_AUD) return null
+  const { teamDomain, aud: expectedAud } = accessConfig(env)
+  if (!teamDomain || !expectedAud) return null
   const fetchImpl = options.fetchImpl ?? fetch
   const now = options.now ?? Math.floor(Date.now() / 1000)
 
-  const parts = token.split('.')
+  // The assertion itself is trimmed too: it arrives as a header
+  // value, and any client that appends a newline would otherwise
+  // fail base64url decoding on the signature segment.
+  const parts = token.trim().split('.')
   if (parts.length !== 3) return null
   const [headerB64, payloadB64, signatureB64] = parts
 
@@ -184,10 +210,10 @@ export async function verifyAccessJwt(
   if (!ok) return null
 
   if (typeof claims.exp !== 'number' || claims.exp <= now) return null
-  const expectedIss = `https://${env.ACCESS_TEAM_DOMAIN}`
+  const expectedIss = `https://${teamDomain}`
   if (claims.iss !== expectedIss) return null
   const aud = Array.isArray(claims.aud) ? claims.aud : claims.aud ? [claims.aud] : []
-  if (!aud.includes(env.ACCESS_AUD)) return null
+  if (!aud.includes(expectedAud)) return null
 
   // Distinguish service tokens from user logins.
   //

@@ -55,11 +55,18 @@ function jsonError(status: number, error: string, message: string): Response {
 
 export const onRequestPost: PagesFunction<CatalogEnv> = async context => {
   const env = context.env
+  // Trimmed before the presence check, so a secret that arrived
+  // with a trailing newline is normalised rather than sent to the
+  // AE SQL API (where it comes back as a 401 that reads like a
+  // revoked token), and a whitespace-only one is reported as
+  // missing — the message an operator can act on.
+  const accountId = env.CF_ACCOUNT_ID?.trim()
+  const sqlToken = env.ANALYTICS_SQL_TOKEN?.trim()
   const missing = [
     !env.CATALOG_DB && 'CATALOG_DB',
     !env.ANALYTICS_R2 && 'ANALYTICS_R2',
-    !env.CF_ACCOUNT_ID && 'CF_ACCOUNT_ID',
-    !env.ANALYTICS_SQL_TOKEN && 'ANALYTICS_SQL_TOKEN',
+    !accountId && 'CF_ACCOUNT_ID',
+    !sqlToken && 'ANALYTICS_SQL_TOKEN',
   ].filter((m): m is string => typeof m === 'string')
   if (missing.length > 0) {
     return jsonError(
@@ -71,9 +78,11 @@ export const onRequestPost: PagesFunction<CatalogEnv> = async context => {
   const db = env.CATALOG_DB!
   const r2 = env.ANALYTICS_R2!
   const sql = {
-    accountId: env.CF_ACCOUNT_ID!,
-    token: env.ANALYTICS_SQL_TOKEN!,
-    dataset: env.ANALYTICS_AE_DATASET,
+    accountId: accountId!,
+    token: sqlToken!,
+    // Blank normalises to undefined so it falls back to the
+    // default dataset name rather than failing the identifier check.
+    dataset: env.ANALYTICS_AE_DATASET?.trim() || undefined,
   }
 
   const publisher = (context.data as unknown as PublisherData).publisher
