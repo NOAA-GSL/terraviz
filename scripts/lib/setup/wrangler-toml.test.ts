@@ -43,6 +43,19 @@ binding = "CATALOG_R2"
 bucket_name = "terraviz-assets"
 `.trimStart()
 
+/**
+ * The same shape, carrying the real upstream IDs.
+ *
+ * `stillPinnedUpstream` matches on those exact values, so exercising
+ * it needs a source that contains them. Using the committed
+ * `wrangler.toml` for that couples the test to whether *this*
+ * checkout has been through `npm run setup` — which is what broke on
+ * a downstream fork. A fixture cannot drift out from under it.
+ */
+const UPSTREAM_SHAPED = FIXTURE.replace(/OLD-D1/g, UPSTREAM_PINNED_IDS.d1)
+  .replace(/OLD-TEL/g, UPSTREAM_PINNED_IDS.telemetryKv)
+  .replace(/OLD-CAT/g, UPSTREAM_PINNED_IDS.catalogKv)
+
 describe('repointWranglerToml', () => {
   it('rewrites both D1 blocks even though they share a database_name', () => {
     const { text, changes } = repointWranglerToml(FIXTURE, { d1DatabaseId: 'NEW-D1' })
@@ -118,17 +131,6 @@ describe('repointWranglerToml', () => {
 })
 
 describe('stillPinnedUpstream', () => {
-  it('flags the shipped file as pinned to upstream', () => {
-    // If this ever fails, either someone committed their own IDs or
-    // the upstream constants drifted — both worth catching.
-    expect(stillPinnedUpstream(realConfig()).sort()).toEqual([
-      'CATALOG_DB',
-      'CATALOG_KV',
-      'FEEDBACK_DB',
-      'TELEMETRY_KILL_SWITCH',
-    ])
-  })
-
   it('reports nothing once repointed', () => {
     const { text } = repointWranglerToml(realConfig(), {
       d1DatabaseId: 'mine-d1',
@@ -138,7 +140,62 @@ describe('stillPinnedUpstream', () => {
     expect(stillPinnedUpstream(text)).toEqual([])
   })
 
-  it('knows the upstream ids the repo actually ships', () => {
+  it('flags every block that still carries an upstream id', () => {
+    expect(stillPinnedUpstream(UPSTREAM_SHAPED).sort()).toEqual([
+      'CATALOG_DB',
+      'CATALOG_KV',
+      'FEEDBACK_DB',
+      'TELEMETRY_KILL_SWITCH',
+    ])
+  })
+
+  it('flags only the blocks that were not repointed', () => {
+    const { text } = repointWranglerToml(UPSTREAM_SHAPED, {
+      d1DatabaseId: 'mine-d1',
+      telemetryKvId: 'mine-tel',
+      catalogKvId: UPSTREAM_PINNED_IDS.catalogKv,
+    })
+    expect(stillPinnedUpstream(text)).toEqual(['CATALOG_KV'])
+  })
+})
+
+/**
+ * Upstream repo hygiene, not module behaviour.
+ *
+ * These assert that the committed `wrangler.toml` still aims at
+ * upstream's own resources — they catch a contributor accidentally
+ * committing their own IDs. That is worth catching, but only *here*.
+ *
+ * On a fork they are actively wrong. Phase 3 of the install guide
+ * tells an operator to run `npm run setup --apply --only=wrangler-toml`,
+ * which rewrites exactly these IDs — so a fork that follows the
+ * documented workflow, then runs `npm test`, inherits a permanently
+ * red suite for doing the right thing. That is what happened: a
+ * downstream fork reported both of these failing after a partial
+ * install.
+ *
+ * `GITHUB_REPOSITORY` is set by GitHub Actions to `owner/repo`, so
+ * upstream CI runs them and a fork's CI does not. A pull request from
+ * a fork *to* upstream runs in upstream's context and is still
+ * checked, which is the case that matters. Locally the variable is
+ * usually absent and the checks are skipped: we assert this only
+ * where we can prove which repo we are.
+ */
+const UPSTREAM_REPO = 'zyra-project/terraviz'
+const slug = process.env.GITHUB_REPOSITORY?.toLowerCase()
+const onUpstream = slug === UPSTREAM_REPO
+
+describe.runIf(onUpstream)('the committed wrangler.toml (upstream only)', () => {
+  it('is still pinned to upstream, not to anyone\'s real resources', () => {
+    expect(stillPinnedUpstream(realConfig()).sort()).toEqual([
+      'CATALOG_DB',
+      'CATALOG_KV',
+      'FEEDBACK_DB',
+      'TELEMETRY_KILL_SWITCH',
+    ])
+  })
+
+  it('ships the ids UPSTREAM_PINNED_IDS names', () => {
     const config = realConfig()
     expect(config).toContain(UPSTREAM_PINNED_IDS.d1)
     expect(config).toContain(UPSTREAM_PINNED_IDS.telemetryKv)
