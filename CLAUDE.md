@@ -72,6 +72,19 @@ stale guidance. Once the doc's "Supersedes when" condition is
 met, defer to `CATALOG_BACKEND_PLAN.md` and `ROADMAP.md` as the
 active source of truth.
 
+`npm run check:doc-freshness` reports the date half of this for
+every doc carrying a `Last reviewed:` marker — the scoping doc is
+not the only one. The colon is required: prose that merely cites
+another doc's date (`**Last reviewed 2026-05-04**`) is not a
+marker. It is **advisory** and deliberately absent from
+the `type-check` chain — a date threshold that gated CI would
+break a build with no code change, on whichever unrelated PR is
+open the day a doc ages out. `--strict` exits non-zero for anyone
+who wants it as a gate; a SessionStart hook runs it `--quiet` and
+stays silent until something crosses a threshold. A fresh date is
+necessary but not sufficient: the "Revisit when" triggers are
+prose and still need judgement.
+
 ---
 
 ## Codebase Overview
@@ -81,7 +94,10 @@ TypeScript SPA built with Vite and MapLibre GL JS. Deployed on Cloudflare Pages 
 > Forking to deploy your own instance? See
 > [`docs/SELF_HOSTING.md`](docs/SELF_HOSTING.md) for the
 > end-to-end Cloudflare setup walkthrough (Pages, D1, AE, KV,
-> Access, optional Grafana).
+> Access, optional Grafana). Most of it is automated by
+> `npm run setup` (`scripts/setup-node.ts` +
+> `scripts/lib/setup/`); start with `npm run setup -- --manual`
+> for the parts no API can do.
 
 ### Key commands
 
@@ -91,6 +107,10 @@ npm run build        # tokens + tsc + vite build
 npm run type-check   # tsc --noEmit (must pass before committing)
 npm run test         # vitest run
 npm run tokens       # regenerate src/styles/tokens.css from tokens/*.json
+npm run setup        # provision a self-hosted node (plan by default)
+npm run setup -- --interactive   # guided, with instructions + validation
+npm run setup -- --manual        # the prerequisites no API can do for you
+
 npm run dev:desktop  # Tauri dev mode (requires Rust)
 npm run build:desktop # tsc + vite build + tauri build
 
@@ -120,6 +140,7 @@ npm run screenshots:smoke   # gating interaction tests (search, Orbit, nav)
 | `src/services/docentService.ts` | Orbit orchestrator — hybrid LLM + local engine |
 | `src/services/docentContext.ts` | LLM system prompt builder, history compression, tool definition |
 | `src/services/docentEngine.ts` | Local keyword-based fallback engine |
+| `src/services/docentAnalysisTools.ts` | The executors behind Orbit's answers about values (`docs/DATA_ANALYSIS_PLAN.md` §A6) — `probe_value` / `summarize_region` / `find_extremum` over the displayed frame, via a registered `DocentAnalysisSource`. Synchronous and local: no network, no endpoint. `isAnalysisAvailable()` is the gate the tool array is built from — it asks the source for a frame, which is false for a picture dataset, a browser without WebGL2, or a dataset mid-load, so absent either the tools are never offered and Orbit is unchanged. Every result carries a quantisation note, and low coverage carries a prose caveat |
 | `src/services/llmProvider.ts` | OpenAI-compatible SSE streaming client + `/models` fetch |
 | `src/services/downloadService.ts` | Offline dataset download manager (desktop only, Tauri commands) |
 | `src/services/tilePreloader.ts` | Eagerly fetches low-zoom GIBS tiles into cache on startup |
@@ -144,8 +165,10 @@ npm run screenshots:smoke   # gating interaction tests (search, Orbit, nav)
 | `src/services/catalogEvents.ts` | Catalog **events overlay** — pure transform from public approved events + the visible dataset set to event overlays for the Map/Timeline views (`docs/CURRENT_EVENTS_PLAN.md` §6.3) |
 | `src/services/eventsService.ts` | Client for the public approved-events reads — the catalog list (`GET /api/v1/events`) and the per-dataset "In the news" list (`fetchEventsForDataset` → `GET /api/v1/datasets/:id/events`); shared fetch + sanitize (http(s) source-url guard) + 60s cache |
 | `src/services/datasetProbe.ts` | Hover value readout for data-encoded datasets — pure lat/lon → texel UV (mirrors the shader maths, image-space V), the `LumaSampler` seam, and the mapping from luma back to a physical value (`docs/DATA_ENCODED_VIDEO_PLAN.md` §Part 4) |
-| `src/services/glLumaSampler.ts` | The shipped `LumaSampler` — reads one texel through a WebGL2 context (`texImage2D` → 1×1 draw → `readPixels`), the configuration `scripts/luma-range-check` measured correct on every browser. Replaces a 1×1 `drawImage` into a 2D canvas, which Safari (macOS + iOS) colour-transforms; no 2D fallback, deliberately. One page-shared instance via `getSharedLumaSampler()` — per-renderer instances put a 4-globe layout at eight contexts |
+| `src/services/glLumaSampler.ts` | The shipped `LumaSampler` — reads one texel through a WebGL2 context (`texImage2D` → 1×1 draw → `readPixels`), the configuration `scripts/luma-range-check` measured correct on every browser. Replaces a 1×1 `drawImage` into a 2D canvas, which Safari (macOS + iOS) colour-transforms; no 2D fallback, deliberately. One page-shared instance via `getSharedLumaSampler()` — per-renderer instances put a 4-globe layout at eight contexts. Also `snapshot()` → `LumaSnapshot`, the whole frame's luma plane read once into a `Uint8Array` through a lazily-built R8 framebuffer (RGBA fallback when the driver won't read RED back), cached per frame — the user-initiated read the statistics reducers consume, never a pointer path (`docs/DATA_ANALYSIS_PLAN.md` §A2) |
+| `src/services/datasetStats.ts` | Pure statistics over a `LumaSnapshot` — area-weighted 256-bin histogram (the bins *are* the source values), region summary (min/max/mean/median/p10/p90/σ/coverage/km²), area-above-threshold, extremum location, great-circle transect sampling, zonal-mean profile, and the lat/lon-box → texel-window mapping. Weights by true spherical cell area and excludes the no-data band; no DOM, no GL, no fetch (`docs/DATA_ANALYSIS_PLAN.md` §A2) |
 | `src/services/datasetOverlayOptions.ts` | Pure helpers for the dataset-overlay rendering path (Phase 3e) |
+| `src/services/colorScaleDisplay.ts` | Pure display transforms over a data-encoded palette — palette swap (viridis / magma / turbo / grayscale), contrast stretch, value threshold — all expressed as a rebuilt 256×1 LUT via `buildDisplayLut`, plus colorbar ticks at round numbers and CSS gradient stops sampled from that same LUT. Alpha always comes from the dataset's own ramp, and **a display transform never changes a reported value** (`docs/DATA_ANALYSIS_PLAN.md` §A1) |
 | `src/services/markdownRenderer.ts` | Markdown → safe HTML renderer (Orbit messages, doc content) |
 | `src/services/docentDegradedState.ts` | Session-scoped degraded-mode state for the docent |
 | `src/services/appleIntelligenceProvider.ts` | On-device LLM Orbit backend via Apple's Foundation Models framework (macOS) |
@@ -167,8 +190,12 @@ npm run screenshots:smoke   # gating interaction tests (search, Orbit, nav)
 | `src/services/vrTimeLabel.ts` | In-VR dataset time label — billboarded floating panel above the globe |
 | `src/services/vrTourControls.ts` | In-VR tour control strip — prev / play-pause / next / stop + step counter |
 | `src/services/vrTourOverlay.ts` | In-VR tour overlay manager — CanvasTexture + VideoTexture panels replacing the 2D `tourUI` surface |
-| `src/ui/chatUI.ts` | Orbit chat panel — rendering, settings, trigger positioning |
+| `src/ui/chatUI.ts` | Orbit chat panel — rendering, settings, trigger positioning; the §A6 `show-analysis` chip that opens Analyze on a region Orbit just measured (display-only, never deferred, and absent unless the host wires `onShowAnalysis`) |
 | `src/ui/voiceHandsFree.ts` | Phase 3 hands-free wiring — `HandsFreeController` bridges `RealtimeVoiceSession` to the chat input/send path (partials→input, turn→send, suspend during think/speak), drives open-mic mute, push-to-talk press, and the **wake-word** model (an on-device wake phrase — built-in default "Hey Jarvis" — arms a single turn via `startWakeWord`; `isWakeWordConfigured()` gates it on `VITE_VOICE_WAKEWORD_MODEL_URL`); inert until opted in and a streaming engine resolves (`docs/ORBIT_VOICE_PLAN.md` §9.1, `docs/ORBIT_WAKEWORD.md`) |
+| `src/ui/analyzeUI.ts` | The Analyze panel (Tools → Analyze) — region picker (whole dataset / current view / a named region via `resolveRegion`), area-weighted statistics over one snapshot of the displayed frame, the palette-coloured histogram, coverage, the quantisation-step caveat, and CSV export (`docs/DATA_ANALYSIS_PLAN.md` §A3); plus the **transect** section (§A4) — two-point pick through the injected `TransectPicker` seam, a profile re-sampled live as an endpoint drags, and its own CSV — and the **region outline** through the injected `RegionOutline` seam, which draws the picked box on the globe (outline only, never a fill: a wash would tint the values being measured). Reads through an injected `AnalyzeSource` rather than a renderer singleton; one frame is held per refresh so a drag never triggers a second readback |
+| `src/ui/analyzeCharts.ts` | Hand-rolled SVG for the Analyze panel — the histogram painted from the same display LUT the shader samples (square-root height scale, because these fields are far too skewed for a linear one) plus the stat tile. Bars aggregate `HISTOGRAM_BUCKET` luma codes over the exact 256-bin model: the untagged limited-range round trip leaves ~1 code in 7 unreachable, so one bar per code draws the transport's lattice as a comb (`docs/DATA_ANALYSIS_PLAN.md` §The transport lattice). Also `renderTransectChart` — the value profile along a line, stroked per segment from the same LUT over a colour strip of what the line crosses, scaled to the transect's own range and deliberately **not** filled (a baseline that isn't zero makes an area that encodes nothing); gaps break both the stroke and the strip. Mirrors `publisher/analytics-charts.ts` without importing across the portal boundary |
+| `src/ui/analyzeExport.ts` | CSV serialisation for the Analyze panel — pure `buildCsvText` (header block naming dataset / region / units / quantisation step, the summary, then the full occupied distribution at full precision) and `buildTransectCsvText` (the same header plus length / sample spacing, then one row per sample — gaps kept as valueless rows so the file cannot close a hole the chart broke), plus the browser download trigger |
+| `src/ui/colorbarUI.ts` | The floating colorbar drawn from a dataset's `ColorScale` (replacing the uploaded legend image for data-encoded rows) and the palette / range / threshold controls it opens; every control writes through immediately, since the whole point is that a transform costs one LUT upload |
 | `src/ui/browseUI.ts` | Dataset browse/search overlay |
 | `src/ui/downloadUI.ts` | Download manager panel — view/delete cached datasets (desktop only) |
 | `src/ui/mapControlsUI.ts` | Map controls positioning helper — keeps the Tools bar above the playback transport |
@@ -292,6 +319,7 @@ npm run screenshots:smoke   # gating interaction tests (search, Orbit, nav)
 | `src/utils/catalogMode.ts` | Catalog mode — `?catalog=true` URL routing |
 | `src/utils/embedMode.ts` | Embed mode — `?embed=1` minimal-chrome URL routing for iframe hosting (`docs/EMBED_URL_GRAMMAR.md`) |
 | `src/utils/posterDeepLinks.ts` | Poster deep-link handlers |
+| `src/utils/datasetUrl.ts` | Dataset URL grammar — the canonical `/dataset/<slug>` path form, the slug/ULID/legacy-id reference resolution `dataService.getDatasetById` delegates to, and the builders that swap a dataset in or out of the address bar while preserving `?catalog=`/`?embed=`/`?layout=` |
 | `functions/api/ingest.ts` | Cloudflare Pages Function — receives telemetry batches, stamps `event_type` / `environment` / `country` / `internal` server-side, writes to Workers Analytics Engine |
 
 > **Note:** the table above is the **SPA** module map. It is
@@ -331,7 +359,15 @@ as `i18n-exempt:`.
   recursively; all of `functions/` and `cli/` against
   [`docs/BACKEND_MODULES.md`](docs/BACKEND_MODULES.md) (the backend
   map — helper-dense and route-shaped, kept out of CLAUDE.md and
-  next to the `docs/CATALOG_*` plan docs).
+  next to the `docs/CATALOG_*` plan docs); `scripts/lib/` against
+  [`docs/SCRIPTS_MODULES.md`](docs/SCRIPTS_MODULES.md) (the shared
+  library behind the build, provisioning and audit scripts).
+- **Uncovered by design:** the one-shot CLI entry points at the top of
+  `scripts/` — their filenames are the documentation — and
+  `scripts/screenshots/`, which _Visual testing & reporting_ above
+  already documents in prose. Every covered root points at a
+  documentation home that exists; that is the rule the manifest
+  encodes, and it is why a directory with no map is not simply added.
 - **Excluded:** generated code (`messages*.ts` i18n codegen),
   `*.d.ts`, `*.test.ts`, and `test-setup.ts`.
 - Matching is on the **full repo-relative path**, because the
@@ -627,6 +663,17 @@ with a `:root[dir="rtl"]` override that flips the sign — see
 `#browse-overlay.collapsed`). Full guide:
 [`docs/CSS_ARCHITECTURE_PLAN.md`](docs/CSS_ARCHITECTURE_PLAN.md)
 §RTL safety.
+
+`npm run check:css-logical` enforces this in the `type-check`
+chain, over `src/**/*.css`. Classic centering is exempt
+automatically (a `left`/`right` of exactly `50%`) and transforms
+are never inspected, so both intentional patterns above pass
+untouched. Anything else that genuinely must stay physical takes
+an inline `/* rtl-exempt: <reason> */` on the same line — reason
+mandatory, same convention as `i18n-exempt:` and `doc-exempt:`.
+`poster/` is out of scope: it is a separate single-language
+static site with its own deploy workflow, deliberately isolated
+from SPA CI.
 
 ### Commands
 

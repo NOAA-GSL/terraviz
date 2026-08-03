@@ -506,6 +506,14 @@ function inputField(opts: {
   /** Input type — `'text'` (default) or `'number'` for the
    *  lat/lon/radius fields. */
   type?: 'text' | 'number'
+  /** Renders the input `readonly` so the value is still visible
+   *  and copyable but can't be edited. Used by the slug field on a
+   *  published dataset — the server's `slug_locked` guard would 409
+   *  the change anyway, and showing that up front beats
+   *  submit-then-error (same reasoning as `radioGroup`'s
+   *  `disabled`). `readonly` rather than `disabled` so the field
+   *  stays focusable and screen-reader-reachable. */
+  readOnly?: boolean
   onChange: (v: string) => void
   onInput?: (v: string) => void
 }): HTMLElement {
@@ -533,6 +541,10 @@ function inputField(opts: {
   input.className = 'publisher-form-input'
   input.value = opts.value
   if (opts.placeholder) input.placeholder = opts.placeholder
+  if (opts.readOnly) {
+    input.readOnly = true
+    input.className += ' publisher-form-input-readonly'
+  }
   if (opts.error) {
     input.setAttribute('aria-invalid', 'true')
     input.setAttribute('aria-describedby', `${opts.id}-err`)
@@ -1417,6 +1429,11 @@ interface RenderContext {
    *  the affordance here gives the publisher a clearer signal
    *  than "submit-then-error". */
   isTranscoding: boolean
+  /** True once the row has a `published_at`. The slug is the
+   *  dataset's public URL (`/dataset/<slug>`) from that moment on,
+   *  so the field goes read-only — see the `slug_locked` guard in
+   *  `functions/api/v1/_lib/dataset-mutations.ts`. */
+  isPublished: boolean
   fetchFn: typeof fetch
   sleep: (ms: number) => Promise<void>
   navigate: (url: string) => void
@@ -1830,7 +1847,10 @@ function renderForm(
       value: state.slug,
       placeholder: 'sst-anomaly-2026-04',
       error: findError(state.errors, 'slug'),
-      helpKey: 'publisher.datasetForm.help.slug',
+      helpKey: ctx.isPublished
+        ? 'publisher.datasetForm.help.slugPublished'
+        : 'publisher.datasetForm.help.slug',
+      readOnly: ctx.isPublished,
       onChange: v => {
         state.slug = v
         state.slugLocked = true
@@ -2547,6 +2567,7 @@ export function renderDatasetForm(
     mode: options.mode,
     datasetId: options.initial?.id ?? null,
     isTranscoding: !!options.initial?.transcoding,
+    isPublished: options.mode === 'edit' && !!options.initial?.published_at,
     fetchFn: options.fetchFn ?? globalThis.fetch,
     sleep: options.sleep ?? (ms => new Promise(r => setTimeout(r, ms))),
     navigate:

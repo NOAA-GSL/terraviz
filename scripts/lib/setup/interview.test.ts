@@ -1,0 +1,247 @@
+import { describe, expect, it } from 'vitest'
+import {
+  applyAnswer,
+  isAnswered,
+  MANUAL_STEPS,
+  pendingQuestions,
+  QUESTIONS,
+  renderManualStep,
+  renderManualSteps,
+} from './interview'
+import { buildHandoff, renderHandoff } from './handoff'
+import { defaultState, DEFAULT_NAMES, type SetupState } from './state'
+
+describe('QUESTIONS', () => {
+  it('gives every question help text and an env-var escape hatch', () => {
+    for (const q of QUESTIONS) {
+      expect(q.help?.length, `${q.key} has no help`).toBeGreaterThan(0)
+      expect(q.envVar, `${q.key} has no env var`).toBeTruthy()
+    }
+  })
+
+  it('validates every answer it accepts', () => {
+    for (const q of QUESTIONS) expect(q.validate, `${q.key} is unvalidated`).toBeTypeOf('function')
+  })
+
+  // The old guide's single worst factual error was claiming this
+  // granted admin. The prompt has to say what the code does.
+  it('tells the truth about TRUSTED_PUBLISHER_DOMAINS being read-only', () => {
+    const q = QUESTIONS.find(x => x.key === 'trustedPublisherDomains')!
+    const help = q.help!.join(' ')
+    expect(help).toMatch(/READ-ONLY|reviewer/)
+    expect(help).toMatch(/does not make anyone/i)
+  })
+})
+
+describe('applyAnswer', () => {
+  it('splits owner/repo into two fields', () => {
+    const next = applyAnswer(defaultState(), 'githubRepo', 'me/mine')
+    expect(next.githubOwner).toBe('me')
+    expect(next.githubRepo).toBe('mine')
+  })
+
+  it('normalises a domain list, dropping @ and blanks', () => {
+    const next = applyAnswer(defaultState(), 'trustedPublisherDomains', ' @a.org , b.org ,')
+    expect(next.trustedPublisherDomains).toBe('a.org,b.org')
+  })
+
+  it('strips a trailing slash from the R2 origin', () => {
+    expect(applyAnswer(defaultState(), 'r2PublicBase', 'https://a.org/').r2PublicBase).toBe(
+      'https://a.org',
+    )
+  })
+
+  it('trims a plain answer', () => {
+    expect(applyAnswer(defaultState(), 'hostname', '  a.org ').hostname).toBe('a.org')
+  })
+
+  it('does not mutate the input state', () => {
+    const state = defaultState()
+    applyAnswer(state, 'hostname', 'a.org')
+    expect(state.hostname).toBeUndefined()
+  })
+})
+
+describe('pendingQuestions', () => {
+  it('asks everything on a fresh state', () => {
+    const pending = pendingQuestions(defaultState(), {})
+    expect(pending.map(q => q.key)).toEqual([
+      'accountId',
+      'hostname',
+      'pagesProject',
+      'staffEmailDomain',
+      'trustedPublisherDomains',
+    ])
+  })
+
+  it('skips what the environment already supplies', () => {
+    const pending = pendingQuestions(defaultState(), {
+      CLOUDFLARE_ACCOUNT_ID: 'x',
+      TERRAVIZ_HOSTNAME: 'y',
+    })
+    expect(pending.map(q => q.key)).not.toContain('accountId')
+    expect(pending.map(q => q.key)).not.toContain('hostname')
+  })
+
+  it('skips what a previous run already recorded', () => {
+    const state: SetupState = { ...defaultState(), hostname: 'a.org' }
+    expect(pendingQuestions(state, {}).map(q => q.key)).not.toContain('hostname')
+  })
+
+  // The default is always populated, so "answered" can only mean the
+  // operator chose something else.
+  it('still asks for the project name while it holds the default', () => {
+    const state: SetupState = { ...defaultState(), pagesProject: DEFAULT_NAMES.pagesProject }
+    expect(pendingQuestions(state, {}).map(q => q.key)).toContain('pagesProject')
+    const chosen: SetupState = { ...defaultState(), pagesProject: 'mine' }
+    expect(pendingQuestions(chosen, {}).map(q => q.key)).not.toContain('pagesProject')
+  })
+
+  it('hides feature-gated questions unless the feature was requested', () => {
+    expect(pendingQuestions(defaultState(), {}).map(q => q.key)).not.toContain('r2PublicBase')
+    const withR2 = pendingQuestions(defaultState(), {}, { features: new Set(['r2']) })
+    expect(withR2.map(q => q.key)).toContain('r2PublicBase')
+  })
+
+  it('asks nothing once everything is answered', () => {
+    const env = Object.fromEntries(QUESTIONS.map(q => [q.envVar, 'set']))
+    expect(pendingQuestions(defaultState(), env)).toEqual([])
+  })
+})
+
+describe('isAnswered', () => {
+  it('prefers the environment over state', () => {
+    const q = QUESTIONS.find(x => x.key === 'hostname')!
+    expect(isAnswered(q, defaultState(), { TERRAVIZ_HOSTNAME: 'x' })).toBe(true)
+  })
+
+  it('needs both halves of owner/repo', () => {
+    const q = QUESTIONS.find(x => x.key === 'githubRepo')!
+    const partial: SetupState = { ...defaultState(), githubOwner: 'me' }
+    expect(isAnswered(q, partial, {})).toBe(false)
+  })
+})
+
+describe('MANUAL_STEPS', () => {
+  it('explains what breaks, not just what to click', () => {
+    for (const step of MANUAL_STEPS) {
+      expect(step.why.length, `${step.id} has no rationale`).toBeGreaterThan(40)
+      expect(step.steps.length, `${step.id} has no instructions`).toBeGreaterThan(0)
+    }
+  })
+
+  // Asking a human to self-certify something checkable invites a
+  // wrong answer that the tool then trusts.
+  it('marks checkable prerequisites as detected rather than self-certified', () => {
+    const byId = new Map(MANUAL_STEPS.map(s => [s.id, s]))
+    expect(byId.get('zero-trust')?.verification).toBe('detected')
+    expect(byId.get('node-key')?.verification).toBe('detected')
+    expect(byId.get('dns')?.verification).toBe('detected')
+    // Billing state is genuinely invisible to us.
+    expect(byId.get('workers-paid')?.verification).toBe('self')
+  })
+
+  // A docsUrl attached to the wrong step is worse than none — it sends
+  // someone learning Cloudflare confidently to the wrong page. These
+  // pairs were checked to resolve; the mapping is what drifts.
+  it('points each docs link at its own subject', () => {
+    const doc = (id: string) => MANUAL_STEPS.find(s => s.id === id)?.docsUrl ?? ''
+    expect(doc('api-token')).toContain('/api/get-started/create-token')
+    expect(doc('dns')).toContain('/manage-domains/add-site')
+    expect(doc('zero-trust')).toContain('/cloudflare-one/')
+    expect(doc('git-connect')).toContain('/pages/configuration/git-integration')
+    expect(doc('r2-token')).toContain('/r2/api/tokens')
+    expect(doc('workers-paid')).toContain('/workers/platform/pricing')
+    // node-key is our own script, not a Cloudflare task.
+    expect(doc('node-key')).toBe('')
+    for (const s of MANUAL_STEPS) {
+      if (s.docsUrl) expect(s.docsUrl).toMatch(/^https:\/\/developers\.cloudflare\.com\//)
+    }
+  })
+
+  it('lists every permission the API token needs', () => {
+    const token = MANUAL_STEPS.find(s => s.id === 'api-token')!
+    const text = token.steps.join('\n')
+    for (const perm of [
+      'Cloudflare Pages',
+      'Access: Apps and Policies',
+      'Access: Service Tokens',
+      'Access: Organizations',
+      'Workers R2 Storage',
+      'Zone WAF',
+    ]) {
+      expect(text).toContain(perm)
+    }
+  })
+
+  it('renders a step with its heading, rationale and link', () => {
+    const text = renderManualStep(MANUAL_STEPS[0], 1)
+    expect(text).toContain('1. ')
+    expect(text).toContain('Why:')
+    expect(text).toContain('https://')
+  })
+
+  it('hides feature-gated steps unless requested', () => {
+    expect(renderManualSteps()).not.toContain('Mint the R2 S3 API token')
+    expect(renderManualSteps(new Set(['r2']))).toContain('Mint the R2 S3 API token')
+  })
+})
+
+describe('handoff report', () => {
+  const state: SetupState = {
+    ...defaultState(),
+    hostname: 'terraviz.example.org',
+    accessAud: 'AUD123',
+    d1: { name: 'db', id: 'd1id' },
+  }
+
+  it('prints the values it knows, ready to copy', () => {
+    const text = renderHandoff(buildHandoff(state))
+    expect(text).toContain('VITE_API_ORIGIN = https://terraviz.example.org')
+    expect(text).toContain('TERRAVIZ_SERVER = https://terraviz.example.org')
+  })
+
+  it('marks what is already handled', () => {
+    const text = renderHandoff(buildHandoff(state))
+    expect(text).toContain('✓ ACCESS_AUD = AUD123')
+  })
+
+  it('names a source for values it cannot know', () => {
+    const text = renderHandoff(buildHandoff(state))
+    expect(text).toContain('CF_ACCESS_CLIENT_SECRET')
+    expect(text).toContain('save it at creation')
+  })
+
+  // Sending someone to a dashboard field that has no effect is worse
+  // than saying nothing.
+  it('words the VITE_* destination differently for each build model', () => {
+    expect(renderHandoff(buildHandoff(state, { gitConnected: true }))).toContain(
+      'Cloudflare Pages → Settings',
+    )
+    expect(renderHandoff(buildHandoff(state, { gitConnected: false }))).toContain('CI job')
+    expect(renderHandoff(buildHandoff(state))).toContain('Wherever your build runs')
+  })
+
+  it('adds the R2 credential group only when the feature is wanted', () => {
+    expect(renderHandoff(buildHandoff(state))).not.toContain('r2/api-tokens')
+    expect(renderHandoff(buildHandoff(state, { features: new Set(['r2']) }))).toContain(
+      'r2/api-tokens',
+    )
+  })
+
+  it('marks an exported credential as done', () => {
+    const text = renderHandoff(
+      buildHandoff(state, {
+        features: new Set(['r2']),
+        available: new Set(['R2_ACCESS_KEY_ID']),
+      }),
+    )
+    expect(text).toContain('✓ R2_ACCESS_KEY_ID')
+    expect(text).toContain('→ R2_SECRET_ACCESS_KEY')
+  })
+
+  it('never prints a secret value', () => {
+    const text = renderHandoff(buildHandoff(state, { features: new Set(['r2', 'transcode']) }))
+    expect(text).not.toMatch(/SECRET\s*=/)
+  })
+})

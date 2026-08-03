@@ -51,6 +51,9 @@ export interface ChatCallbacks {
   onAddMarker: (lat: number, lng: number, label?: string) => void
   onToggleLabels: (visible: boolean) => void
   onHighlightRegion: (geojson: GeoJSON.GeoJSON, label?: string) => void
+  /** §A6 — open the Analyze panel on the region Orbit just measured.
+   *  Optional: a host without the panel simply renders no chip. */
+  onShowAnalysis?: (scope: 'dataset' | 'view' | 'named', regionName?: string) => void
   getMapViewContext: () => MapViewContext | null
   getDatasets: () => Dataset[]
   getCurrentDataset: () => Dataset | null
@@ -374,6 +377,26 @@ export function flushPendingGlobeActions(): void {
   for (const action of actions) {
     executeGlobeAction(action)
   }
+}
+
+/**
+ * Run just the globe actions that belong to a §A6 measurement.
+ *
+ * Everything else in the queue may legitimately be waiting on a
+ * `load-dataset` in the same message — an event card streams Load, Fly
+ * and Seek together and the fly has to follow the load. A measurement
+ * is the opposite case: it describes the dataset that is *already*
+ * loaded, so a Load button for some other dataset in the same reply
+ * must not gate it.
+ */
+function flushMeasurementGlobeActions(): void {
+  const keep: ChatAction[] = []
+  for (const action of pendingGlobeActions) {
+    const owned = (action.type === 'fly-to' || action.type === 'add-marker') && action.fromMeasurement
+    if (owned) executeGlobeAction(action)
+    else keep.push(action)
+  }
+  pendingGlobeActions = keep
 }
 
 // --- Session persistence ---
@@ -1416,7 +1439,18 @@ async function handleSend(): Promise<void> {
           // the sibling load-dataset / fly-to / set-time actions the
           // <<EVENT:ID>> marker expanded into), so it renders but is never
           // deferred for execution.
-          if (action.type !== 'load-dataset' && action.type !== 'event-citation') {
+          if (
+            action.type !== 'load-dataset'
+            && action.type !== 'event-citation'
+            // Display-only too: opening a panel is the user's click to
+            // make, not something to replay when a dataset finishes
+            // loading.
+            && action.type !== 'show-analysis'
+            // And a measurement is a statement, not an act. Deferring
+            // it would mean replaying a reading of one frame against
+            // whatever frame happened to be on screen later.
+            && action.type !== 'measurement'
+          ) {
             pendingGlobeActions.push(action)
           }
           updateStreamingMessage(docentMsg)
@@ -1479,6 +1513,12 @@ async function handleSend(): Promise<void> {
           const currentDataset = callbacks?.getCurrentDataset()
           const allAlreadyLoaded = loadActions.length > 0
             && loadActions.every(a => a.type === 'load-dataset' && a.datasetId === currentDataset?.id)
+          // A measurement's camera move is about the frame already on
+          // the globe, so it never waits on a Load button. Reported
+          // live: the reading was right, the card rendered, and the
+          // globe sat still because the same reply also recommended a
+          // different dataset and the fly-to was queued behind it.
+          flushMeasurementGlobeActions()
           if (loadActions.length === 0 || allAlreadyLoaded) {
             flushPendingGlobeActions()
           } else {
@@ -1793,6 +1833,39 @@ function renderActions(actions: ChatAction[]): string {
       // the label.
       return `<button class="chat-action-btn chat-action-frame" data-dataset-id="${escapeAttr(a.datasetId)}" data-frame-query="${escapeAttr(a.frameQuery)}" aria-label="${escapeAttr(t('chat.action.loadFrame.aria', { name: a.displayName }))}"><span class="chat-action-title">${escapeHtml(a.displayName)}</span> <span class="chat-action-load">${escapeHtml(t('chat.action.loadFrame'))}</span></button>`
     }
+    if (a.type === 'show-analysis') {
+      // Rendered only where the host wired the panel — a chip that
+      // opens nothing is worse than no chip.
+      if (!callbacks?.onShowAnalysis) return ''
+      const label = a.scope === 'named' && a.regionName
+        ? t('chat.action.analyzeRegion', { region: a.regionName })
+        : a.scope === 'view'
+          ? t('chat.action.analyzeView')
+          : t('chat.action.analyzeDataset')
+      return `<button class="chat-action-btn chat-action-analyze" data-analyze-scope="${escapeAttr(a.scope)}"${a.regionName ? ` data-analyze-region="${escapeAttr(a.regionName)}"` : ''} aria-label="${escapeAttr(t('chat.action.analyze.aria', { region: a.regionName ?? label }))}"><span class="chat-action-title">${escapeHtml(label)}</span></button>`
+    }
+    if (a.type === 'measurement') {
+      // The reading as the tool returned it, not as the sentence above
+      // retold it. Display-only and deliberately plain: this is the
+      // one element in a chat bubble that is not the model's voice, so
+      // it should not look like a control the user can press.
+      //
+      // Coordinates are formatted here from the signed floats rather
+      // than parsed out of prose — the compass letters are for reading
+      // and never round-trip back into anything.
+      const place = Number.isFinite(a.lat) && Number.isFinite(a.lon)
+        ? t('chat.measurement.at', {
+            lat: `${Math.abs(a.lat!).toFixed(2)}°${a.lat! >= 0 ? 'N' : 'S'}`,
+            lon: `${Math.abs(a.lon!).toFixed(2)}°${a.lon! >= 0 ? 'E' : 'W'}`,
+          })
+        : ''
+      const meta = [place, a.frameTime, a.dataset].filter(Boolean).join(' · ')
+      return `<div class="chat-measurement">
+        <span class="chat-measurement-eyebrow">${escapeHtml(t('chat.measurement.eyebrow'))}</span>
+        <p class="chat-measurement-value">${escapeHtml(a.valueText)}</p>
+        ${meta ? `<p class="chat-measurement-meta">${escapeHtml(meta)}</p>` : ''}
+      </div>`
+    }
     if (a.type === 'event-citation') {
       // Cited current-event card. Display-only: the sibling load-dataset /
       // fly-to / set-time actions (expanded from the same <<EVENT:ID>>
@@ -1818,6 +1891,19 @@ function wireActionButtons(container: Element): void {
   container.querySelectorAll<HTMLElement>('.chat-action-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       const id = btn.dataset.datasetId
+      // §A6 — the Analyze chip carries no dataset id, so it has to be
+      // handled before the `load-dataset` path rather than falling
+      // through it. Exclusive for the same reason the frame branch is:
+      // an unbound host callback should be a quiet no-op, not a
+      // surprise dataset load.
+      const analyzeScope = btn.dataset.analyzeScope
+      if (analyzeScope) {
+        callbacks?.onShowAnalysis?.(
+          analyzeScope as 'dataset' | 'view' | 'named',
+          btn.dataset.analyzeRegion,
+        )
+        return
+      }
       // Phase 3pg/C — frame-load buttons carry a `data-frame-query`
       // attribute and route through `onLoadFrame` instead. The
       // analytics + dataset-load bookkeeping below stays on the
@@ -1901,13 +1987,63 @@ function wireActionButtons(container: Element): void {
 /**
  * Minimal markdown: **bold**, bullet lists, and newlines.
  */
+/** Unicode superscripts, for the exponent in a unit. */
+const SUPERSCRIPT_CHARS: Record<string, string> = {
+  '0': '⁰', '1': '¹', '2': '²', '3': '³', '4': '⁴',
+  '5': '⁵', '6': '⁶', '7': '⁷', '8': '⁸', '9': '⁹',
+  '-': '⁻', '−': '⁻', '+': '⁺',
+}
+
+/** All-or-nothing: an exponent we cannot render entirely is left alone
+ *  rather than half-converted. */
+function toSuperscript(exponent: string): string | null {
+  let out = ''
+  for (const ch of exponent) {
+    const mapped = SUPERSCRIPT_CHARS[ch]
+    if (!mapped) return null
+    out += mapped
+  }
+  return out
+}
+
+/**
+ * Render a unit exponent however the model chose to write it.
+ *
+ * §A6 answers quote units from the dataset's own sidecar — `kg m-2`,
+ * plain text — and the model has taken to re-setting them in LaTeX
+ * (`m$^{-2}$`), which this chat has no math renderer for, so the markup
+ * reached the user raw.
+ *
+ * Fixed here rather than with another prompt rule, on the evidence of
+ * this phase: rules about how to write a value have failed repeatedly,
+ * and the notation is a rendering concern anyway. Whatever the model
+ * picks, the reader sees units.
+ *
+ * Deliberately narrow. Only an exponent is converted, and only when
+ * every character of it maps; `$` pairs that are not wrapping one are
+ * untouched, so prices survive.
+ */
+function renderUnitExponents(line: string): string {
+  return line
+    // kg m$^{-2}$ — LaTeX inline math around the exponent alone.
+    .replace(/\$\^\{([^}]{1,4})\}\$/g, (m, exp) => toSuperscript(exp) ?? m)
+    // $\text{kg m}^{-2}$ and friends: math delimiters wrapping a unit.
+    .replace(/\$([^$\n]{1,24}?)\^\{([^}]{1,4})\}\$/g, (m, base, exp) => {
+      const sup = toSuperscript(exp)
+      return sup ? `${base}${sup}` : m
+    })
+    // Bare TeX exponents, no delimiters.
+    .replace(/\^\{([^}]{1,4})\}/g, (m, exp) => toSuperscript(exp) ?? m)
+    .replace(/\^(-?\d{1,3})(?![\w^])/g, (m, exp) => toSuperscript(exp) ?? m)
+}
+
 function renderMarkdownLite(html: string): string {
   const lines = html.split('\n')
   const out: string[] = []
   let inList = false
 
   for (const rawLine of lines) {
-    let line = rawLine.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    let line = renderUnitExponents(rawLine).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
     // Convert markdown links [text](url) → clickable <a> (new tab)
     line = line.replace(
       /\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g,

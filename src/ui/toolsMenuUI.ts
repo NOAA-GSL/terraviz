@@ -39,6 +39,7 @@
 import type { ViewportManager, ViewLayout } from '../services/viewportManager'
 import { updateMapControlsPosition } from './mapControlsUI'
 import { openPrivacyUI } from './privacyUI'
+import { openAnalyzeUI } from './analyzeUI'
 import { openPlaylistManager } from './playlistUI'
 import { emit } from '../analytics'
 import { setBordersVisible } from '../utils/viewPreferences'
@@ -156,8 +157,10 @@ export interface ToolsMenuCallbacks {
   onOpenCredits?: (trigger: HTMLElement) => void
   /** Announce something for screen readers. */
   announce?: (message: string) => void
-  /** Get the currently loaded dataset (used by the Share action). */
-  getCurrentDataset: () => { id: string; title: string } | null
+  /** Get the currently loaded dataset (used by the Share action).
+   *  `slug` is what makes the copied link read as
+   *  `/dataset/north-america-smoke` rather than a bare ULID. */
+  getCurrentDataset: () => { id: string; title: string; slug?: string } | null
 }
 
 /** Open/close state for the popover. Tracked here because DOM tests
@@ -346,6 +349,10 @@ export function initToolsMenu(
           <span class="tools-menu-item-check" aria-hidden="true"></span>
           <span class="tools-menu-item-label">${tHtml('tools.actions.credits')}</span>
         </button>` : ''}
+        <button type="button" class="tools-menu-item" id="tools-menu-analyze">
+          <span class="tools-menu-item-check" aria-hidden="true"></span>
+          <span class="tools-menu-item-label">${tHtml('tools.actions.analyze')}</span>
+        </button>
         <button type="button" class="tools-menu-item" id="tools-menu-privacy">
           <span class="tools-menu-item-check" aria-hidden="true"></span>
           <span class="tools-menu-item-label">${tHtml('tools.actions.privacy')}</span>
@@ -590,7 +597,7 @@ export function initToolsMenu(
     const shared = await shareDataset({
       title: dataset.title,
       text: t('tools.share.text', { title: dataset.title }),
-      url: buildDatasetShareUrl(dataset.id),
+      url: buildDatasetShareUrl(dataset),
     })
     if (shared) announce?.(t('tools.announce.shared'))
   })
@@ -622,6 +629,13 @@ export function initToolsMenu(
       announce?.(t('tools.announce.creditsOpened'))
     })
   }
+
+  const analyzeBtn = document.getElementById('tools-menu-analyze') as HTMLButtonElement | null
+  analyzeBtn?.addEventListener('click', () => {
+    closePopover()
+    openAnalyzeUI(analyzeBtn)
+    announce?.(t('tools.announce.analyzeOpened'))
+  })
 
   const privacyBtn = document.getElementById('tools-menu-privacy') as HTMLButtonElement | null
   privacyBtn?.addEventListener('click', () => {

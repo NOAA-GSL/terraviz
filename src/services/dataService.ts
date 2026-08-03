@@ -19,6 +19,7 @@ import {
   type RenderEncoding,
 } from '../types/color-scale'
 import { isLiveCadence, parseISO8601Duration, safePeriodMs } from '../utils/time'
+import { resolveDatasetRef } from '../utils/datasetUrl'
 import { logger } from '../utils/logger'
 import { reportError } from '../analytics'
 import { apiFetch, getCatalogSource } from './catalogSource'
@@ -905,21 +906,22 @@ export class DataService {
   }
 
   /**
-   * Get a single dataset by ID. Primary match is `dataset.id` (the
-   * post-cutover ULID); falls back to `dataset.legacyId` (the
-   * `INTERNAL_SOS_*` id from before the SOS bulk import) so tour
-   * files and other long-lived references that hard-code legacy IDs
-   * keep resolving against the new ULID-keyed catalog. The fallback
-   * is the operator-friendly equivalent of doing a one-off rewrite
-   * of every tour file in the wild — see Phase 1d/T.
+   * Get a single dataset by any of the references a URL, tour file,
+   * or chat marker might name it with — canonical `id` first, then
+   * `legacyId` (the `INTERNAL_SOS_*` id from before the SOS bulk
+   * import), then `slug` (the human-readable name `/dataset/<slug>`
+   * links carry). The fallbacks are the operator-friendly equivalent
+   * of doing a one-off rewrite of every tour file in the wild — see
+   * Phase 1d/T.
+   *
+   * The resolution order lives in `src/utils/datasetUrl.ts` so the
+   * URL grammar and this lookup can't drift apart.
    */
   getDatasetById(id: string): Dataset | undefined {
     if (!this.cache) {
       return undefined
     }
-    const direct = this.cache.datasets.find(d => d.id === id)
-    if (direct) return direct
-    return this.cache.datasets.find(d => d.legacyId === id)
+    return resolveDatasetRef(id, this.cache.datasets)
   }
 
   /**

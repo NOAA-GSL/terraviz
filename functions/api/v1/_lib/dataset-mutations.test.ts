@@ -272,6 +272,87 @@ describe('getDatasetForPublisher', () => {
   })
 })
 
+describe('updateDataset — slug lock', () => {
+  /** Create a dataset and flip it to published. */
+  async function publishedDataset(env: ReturnType<typeof setupEnv>['env']) {
+    const created = await createDataset(env, ADMIN, {
+      title: 'Hurricane Season 2024',
+      format: 'video/mp4',
+    })
+    if (!created.ok) throw new Error('seed failed')
+    await env.CATALOG_DB!.prepare(
+      `UPDATE datasets SET data_ref='vimeo:1', license_spdx='CC-BY-4.0' WHERE id = ?`,
+    )
+      .bind(created.dataset.id)
+      .run()
+    await publishDataset(env, created.dataset.id)
+    return created.dataset
+  }
+
+  async function storedSlug(
+    env: ReturnType<typeof setupEnv>['env'],
+    id: string,
+  ): Promise<string | undefined> {
+    const row = await env
+      .CATALOG_DB!.prepare('SELECT slug FROM datasets WHERE id = ?')
+      .bind(id)
+      .first<{ slug: string }>()
+    return row?.slug
+  }
+
+  it('refuses to rename a published dataset’s slug', async () => {
+    const { env } = setupEnv()
+    const ds = await publishedDataset(env)
+
+    const result = await updateDataset(env, ADMIN, ds.id, { slug: 'something-else' })
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.status).toBe(409)
+    expect(result.errors[0].field).toBe('slug')
+    expect(result.errors[0].code).toBe('slug_locked')
+
+    // The stored slug is untouched — the public URL still resolves.
+    expect(await storedSlug(env, ds.id)).toBe(ds.slug)
+  })
+
+  it('accepts a published dataset’s unchanged slug', async () => {
+    // The dataset form re-serializes every field on save, so the
+    // current slug rides along in the body of every ordinary edit.
+    // Refusing on presence rather than on change would make a
+    // published dataset unsaveable at all.
+    const { env } = setupEnv()
+    const ds = await publishedDataset(env)
+
+    const result = await updateDataset(env, ADMIN, ds.id, {
+      slug: ds.slug,
+      abstract: 'Edited while published.',
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.dataset.abstract).toBe('Edited while published.')
+    expect(await storedSlug(env, ds.id)).toBe(ds.slug)
+  })
+
+  it('still lets a draft rename its slug freely', async () => {
+    const { env } = setupEnv()
+    const created = await createDataset(env, ADMIN, {
+      title: 'Still A Draft',
+      format: 'video/mp4',
+    })
+    expect(created.ok).toBe(true)
+    if (!created.ok) return
+
+    const result = await updateDataset(env, ADMIN, created.dataset.id, {
+      slug: 'renamed-while-draft',
+    })
+
+    expect(result.ok).toBe(true)
+    expect(await storedSlug(env, created.dataset.id)).toBe('renamed-while-draft')
+  })
+})
+
 describe('updateDataset', () => {
   it('patches only the fields supplied', async () => {
     const { env } = setupEnv()

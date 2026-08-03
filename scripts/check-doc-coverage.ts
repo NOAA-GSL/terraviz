@@ -69,6 +69,13 @@ const COVERAGE_ROOTS: readonly CoverageRoot[] = [
   // SPA map in CLAUDE.md.
   { dir: 'functions', doc: 'docs/BACKEND_MODULES.md', ext: /\.ts$/ },
   { dir: 'cli', doc: 'docs/BACKEND_MODULES.md', ext: /\.ts$/ },
+  // `scripts/lib/` only — the shared library behind the build,
+  // provisioning and audit scripts, imported from ~17 call sites. The
+  // one-shot CLI entry points at the top of `scripts/` are deliberately
+  // uncovered: their filenames are the documentation, and a row
+  // restating the filename is maintenance without a reader. See the
+  // scope note in docs/SCRIPTS_MODULES.md.
+  { dir: 'scripts/lib', doc: 'docs/SCRIPTS_MODULES.md', ext: /\.ts$/ },
 ]
 
 /** Basenames that are never module-map material (generated / infra). */

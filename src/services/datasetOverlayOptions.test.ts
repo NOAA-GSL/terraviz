@@ -94,6 +94,10 @@ describe('overlayOptionsFromDataset', () => {
       lonOrigin: undefined,
       isFlippedInY: undefined,
       celestialBody: undefined,
+      // Identity rides along with the geometry so a frame can say
+      // which dataset it is without consulting app state.
+      datasetId: 'DS_X',
+      datasetTitle: 'Test',
     })
   })
 
@@ -133,6 +137,8 @@ describe('overlayOptionsFromDataset', () => {
       lonOrigin: 180,
       isFlippedInY: true,
       celestialBody: 'Mars',
+      datasetId: 'DS_X',
+      datasetTitle: 'Test',
     })
   })
 

@@ -183,6 +183,21 @@ data-encoded datasets:
   Still unverified: Safari, iOS Safari, and Firefox. `npm run
   check:luma-range -- --serve` prints a LAN URL for testing on a real
   device.
+
+  **The untagged round trip preserves values, not occupancy.** Shipped
+  untagged, the encoder contracts to limited range and both decoders
+  expand back; the two cancel to within one luma step, which is what the
+  table above measures. What they cannot cancel is *which* codes arrive:
+  256 source levels squeeze through 219 and stretch back, leaving about
+  one code in seven unreachable. On the published `north-america-smoke`
+  frame 40 the source PNG leaves 1 code of 244 empty and the decoded
+  frame leaves 35. This is invisible to `check:luma-range`, which fits a
+  gain and checks the endpoints — both of which a contract-then-expand
+  round trip preserves exactly — and it stayed invisible until the
+  Analyze panel's histogram drew per-code occupancy for the first time.
+  Consequences for anything reading the distribution rather than a value
+  are in [`DATA_ANALYSIS_PLAN.md`](DATA_ANALYSIS_PLAN.md) §The transport
+  lattice.
 - **`scale` must be `flags=neighbor`** for this path. The filter graph is
   currently `[s${i}]scale=${width}:${r.height}[v${i}]` with default bicubic, which
   interpolates across the nodata/data boundary and invents values that were never
@@ -388,6 +403,12 @@ Steps 2 and 3 can run in parallel once step 1 clears; 4 depends on both.
   no-data. This scheme assumes they coincide; those need a reserved sentinel or
   a separate mask.
 - `dataset_renditions` and the dormant colour columns.
+- **Analysis beyond one pixel.** §Part 4 stops at the value under the cursor,
+  but the frames carry a whole gridded field. Statistics, transects, contours,
+  time series at a pinned point, and Orbit answering numeric questions from
+  tool results are surveyed in
+  [`DATA_ANALYSIS_PLAN.md`](DATA_ANALYSIS_PLAN.md), which also proposes the
+  nodata sentinel the diverging-field item above needs.
 
 ### Why the chroma planes aren't spare precision
 

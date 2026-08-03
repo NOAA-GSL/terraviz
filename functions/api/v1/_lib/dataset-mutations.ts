@@ -716,6 +716,39 @@ export async function updateDataset(
   }
 
   if (body.slug !== undefined) {
+    // A published dataset's slug IS its public URL — `/dataset/<slug>`
+    // is what share links, blog posts, and anything already pasted
+    // into a chat resolve through. Renaming it would 404 every one of
+    // those, and nothing behind this table redirects the old name, so
+    // the slug freezes at publish time. Drafts stay freely editable:
+    // nothing outside the portal can be pointing at them yet.
+    //
+    // Compared against the stored value rather than refused outright,
+    // for the same reason the format/data_ref guard above compares:
+    // the dataset form re-serializes every field on save (edit mode
+    // sets `slugLocked` unconditionally), so an *unchanged* slug
+    // rides along in the body of every ordinary edit. Refusing on
+    // presence would break saving a published dataset at all.
+    const current = await db
+      .prepare('SELECT slug, published_at FROM datasets WHERE id = ?')
+      .bind(id)
+      .first<{ slug: string; published_at: string | null }>()
+    if (current !== null && current.published_at !== null && body.slug !== current.slug) {
+      return {
+        ok: false,
+        status: 409,
+        errors: [
+          {
+            field: 'slug',
+            code: 'slug_locked',
+            message:
+              `Slug is locked once a dataset is published. "${current.slug}" is this ` +
+              'dataset\'s public URL and existing links to it would stop resolving. ' +
+              'Slugs stay editable while a dataset is a draft.',
+          },
+        ],
+      }
+    }
     const unique = await ensureUniqueSlug(db, body.slug!, id)
     if (unique !== body.slug) {
       return {

@@ -646,6 +646,16 @@
   border-color: rgba(255, 120, 120, 0.5);
 }
 
+/* Read-only field (the slug of a published dataset). Dimmed and
+   flattened so it reads as "shown, not editable", but still
+   focusable and selectable so the value can be copied. */
+.publisher-form-input-readonly {
+  background: var(--white-o02, rgba(255, 255, 255, 0.02));
+  border-style: dashed;
+  color: var(--color-text-dim, #a8adbb);
+  cursor: default;
+}
+
 .publisher-form-help {
   margin: 0;
   font-size: calc(0.75rem * var(--ui-scale));

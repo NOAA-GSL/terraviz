@@ -16,6 +16,48 @@ A WebGL-based globe that streams environmental data from the [Science On a Spher
 
 ![Terraviz interface showing the Earth globe with the dataset browse panel](initial-interface.jpg)
 
+## 🌍 Run your own node
+
+Terraviz is built to be self-hosted. A museum, a lab or a school can
+run its own instance, publish its own datasets, and federate with
+others — the public site is one node, not the product.
+
+Two ways in. They cover the same install — pick by where you are:
+
+- **[The install console](https://terraviz.zyra-project.org/setup)**
+  — a guided, resumable checklist in the browser. Filters itself to
+  the kind of node you want, substitutes your values into every
+  command, and prints a pre-flight sheet. **Use this first**, before
+  you have cloned anything, to size the job up and collect the
+  values you will need.
+- **[docs/SELF_HOSTING.md](docs/SELF_HOSTING.md)** — the canonical
+  reference, and the one to work from once you have a checkout. It
+  is the long form: every click path, every caveat, the
+  troubleshooting table. **Use this while you install.** It travels
+  with the repo, so it always matches the revision you are on.
+
+The console links into the Markdown per phase, so moving from one to
+the other is a click. It is generated from the same modules
+`npm run setup` uses, which is what keeps its binding list and
+prerequisites honest.
+
+> On a fork, the console link above serves **upstream’s** revision.
+> Your checkout’s `docs/SELF_HOSTING.md` is the one that matches
+> your code — and once you finish Phase 5, your own node serves its
+> own `/setup`, generated from your checkout.
+
+| Tier | | |
+|---|---|---|
+| **Viewer node** | ~30 min | Globe, upstream catalog, Orbit, telemetry. No publishing. |
+| **Publisher node** | 2–3 h | Your own datasets and tours, the publisher portal, semantic search, events, blog. The usual choice. |
+| **Publisher + desktop** | +1 h | The above, plus branded desktop builds with your own update feed. |
+
+```bash
+npm run setup -- --manual        # the prerequisites only a human can do
+npm run setup -- --interactive   # guided, validated, resumable
+```
+
+
 ## ✨ Features
 
 - Searchable, filterable dataset browser with category and sub-category navigation, expandable cards, and thumbnails
@@ -140,11 +182,16 @@ that want to operate their own dataset catalog. Self-contained — no
 extra services required for local development.
 
 ```bash
-# 1. Generate the node identity keypair (one-time per clone).
-npm run gen:node-key
-
-# 2. Reset the local D1 (apply migrations + seed ~20 SOS rows).
+# 1. Reset the local D1 (apply migrations + seed ~20 SOS rows).
+#    This seeds node_identity with a PLACEHOLDER public key.
 npm run db:reset
+
+# 2. Generate the keypair and stamp its public half onto the row
+#    step 1 just seeded. This order matters: run gen:node-key first
+#    and it finds no row, warns, and exits 0 — then db:reset re-seeds
+#    the placeholder, which your node goes on to serve from
+#    /.well-known/terraviz.json.
+npm run gen:node-key
 
 # 3. Configure the publisher-API dev bypass.
 cp .dev.vars.example .dev.vars
@@ -166,6 +213,18 @@ npm run dev    # in pane 2
 curl http://localhost:8788/api/v1/catalog | jq '.datasets | length'
 # → 20
 ```
+
+> **Step 4 fails on a fresh clone.** `wrangler pages dev` opens an
+> authenticated remote proxy session before it serves anything,
+> because `wrangler.toml` declares an `[ai]` binding — and it does
+> that regardless of `MOCK_AI=true`. You get `Could not start remote
+> dev session. No credentials found.`
+>
+> Two ways past it: run `wrangler login` once (everything else still
+> runs locally), or comment out the `[ai]` block while you work,
+> which is the only genuinely offline loop today. Nothing in the
+> deploy reads that block — Pages takes its bindings from the
+> dashboard — but do not commit the change.
 
 The full developer walkthrough — bindings, data model, and the
 publishing CLI — lives in
@@ -362,7 +421,7 @@ See **[ROADMAP.md](ROADMAP.md)** for the web app roadmap and **[docs/DESKTOP_APP
 ## 📚 Key Files to Review
 
 - **[ROADMAP.md](ROADMAP.md)** - Prioritized web app roadmap
-- **[docs/SELF_HOSTING.md](docs/SELF_HOSTING.md)** - Deploy your own Terraviz instance on Cloudflare Pages (Pages, D1, AE, KV, Access, Grafana)
+- **[docs/SELF_HOSTING.md](docs/SELF_HOSTING.md)** - Deploy your own Terraviz instance on Cloudflare Pages (Pages, D1, AE, KV, Access, Grafana). Most of the install is automated — `npm run setup -- --manual` lists the prerequisites only a human can do, `npm run setup -- --interactive` walks you through the rest.
 - **[docs/ANALYTICS.md](docs/ANALYTICS.md)** - Analytics pipeline reference (schema, privacy posture, how to add events)
 - **[docs/ANALYTICS_CONTRIBUTING.md](docs/ANALYTICS_CONTRIBUTING.md)** - Contributor + reviewer guide for analytics changes (privacy invariants, review checklist)
 - **[docs/PRIVACY.md](docs/PRIVACY.md)** - User-facing privacy policy

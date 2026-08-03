@@ -360,6 +360,17 @@ export interface DatasetOverlayOptions {
    *  This is the field that carries data-encoded mode to all four
    *  render surfaces. */
   colorScale?: ColorScale
+  /** Which dataset these options were built from.
+   *
+   *  Carried so a *frame* can say what it is, rather than a reader
+   *  having to ask app state and hope the two agree. `appState
+   *  .currentDataset` and the primary renderer's texture are separate
+   *  facts: a 2/4-globe layout, a tour switching panels, or a load
+   *  landing between them can leave one describing a dataset the other
+   *  is not showing. Anything that reports numbers has to attribute
+   *  them to the dataset they were actually measured from. */
+  datasetId?: string
+  datasetTitle?: string
 }
 
 /**
@@ -403,7 +414,21 @@ export type ChatRole = 'user' | 'docent'
  */
 export type ChatAction =
   | { type: 'load-dataset'; datasetId: string; datasetTitle: string }
-  | { type: 'fly-to'; lat: number; lon: number; altitude?: number }
+  /**
+   * `fromMeasurement` marks a camera move that belongs to the dataset
+   * **already on the globe** — a §A6 reading — rather than to a dataset
+   * this message is offering to load.
+   *
+   * The distinction is load-bearing at the chat's flush point. Globe
+   * actions are normally held until any pending `load-dataset` in the
+   * same message is tapped, which is right for an event card: Load,
+   * then fly to where it happened. It is wrong for a measurement.
+   * Reported live: Orbit measured the current frame correctly, showed
+   * the card, and the globe never moved, because the same reply also
+   * recommended a different dataset and the camera move was waiting on
+   * a Load nobody clicked.
+   */
+  | { type: 'fly-to'; lat: number; lon: number; altitude?: number; fromMeasurement?: true }
   | {
       /** Seek the loaded time-enabled dataset to {@link isoDate}. */
       type: 'set-time'
@@ -420,9 +445,71 @@ export type ChatAction =
       error?: string
     }
   | { type: 'fit-bounds'; bounds: [number, number, number, number]; label?: string }
-  | { type: 'add-marker'; lat: number; lng: number; label?: string }
+  | { type: 'add-marker'; lat: number; lng: number; label?: string; fromMeasurement?: true }
   | { type: 'toggle-labels'; visible: boolean }
   | { type: 'highlight-region'; geojson: GeoJSON.GeoJSON; label?: string }
+  /**
+   * Open the Analyze panel on the region Orbit just measured
+   * (`docs/DATA_ANALYSIS_PLAN.md` §A6).
+   *
+   * Chat cannot draw a chart — `renderMarkdownLite` supports bold,
+   * links and bullets, and the sanitizer's allowlist excludes tables
+   * and images deliberately. So Orbit answers in prose and this chip
+   * hands the same region to the surface that *can* draw it, rather
+   * than leaving the user to rebuild by hand the selection Orbit just
+   * described.
+   *
+   * Display-only, like `event-citation`: it is never deferred for
+   * execution, because opening a panel is the user's click to make.
+   *
+   * `scope` is limited to what the panel's picker can actually
+   * represent. A bbox-scoped answer gets no chip rather than a chip
+   * that opens a picker showing a region it cannot select.
+   */
+  | {
+      type: 'show-analysis'
+      scope: 'dataset' | 'view' | 'named'
+      /** Present when `scope === 'named'` — the display name, already
+       *  resolved against the region table, so the chip and the panel
+       *  agree on what it is called. */
+      regionName?: string
+    }
+  /**
+   * The reading a value tool actually returned, rendered by the app
+   * rather than recounted by the model.
+   *
+   * Everything else in this union is something the user can do. This
+   * one is something the app *states*, and it exists because the
+   * sentence beside it cannot be trusted to state it correctly. Across
+   * ten live failures the model mis-reported a measured value in every
+   * way available: the wrong units, a unit belonging to a dataset it
+   * recommended in the same breath, a number from a neighbouring row's
+   * metadata, a region it had narrowed to silently, coordinates with
+   * the sign dropped, and — most recently — no location at all. Each
+   * was addressed at the prompt or at the payload, and the next one
+   * arrived in a new shape.
+   *
+   * So the number stops depending on the prose. `valueText` and the
+   * place come straight from the executor's own result, and if the
+   * sentence disagrees with the card, the user can see that it does.
+   * Display-only; nothing here is clickable and nothing is deferred.
+   */
+  | {
+      type: 'measurement'
+      /** The value already written out, units attached — the same
+       *  string the model was asked to quote. */
+      valueText: string
+      /** Absent for a whole-region summary, which measures an area
+       *  rather than a point. */
+      lat?: number
+      lon?: number
+      /** The frame this was read from. These datasets are animations;
+       *  a value with no time is a claim about an unnamed instant. */
+      frameTime?: string
+      /** The dataset the frame came from, not whatever app state
+       *  believes is loaded (see `2ca7417`). */
+      dataset?: string
+    }
   /**
    * Load a single frame from a Phase 3pg image-sequence dataset.
    * `frameQuery` is the verbatim payload from the LLM's
