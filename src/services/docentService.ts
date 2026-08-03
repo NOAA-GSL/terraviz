@@ -276,7 +276,15 @@ export function loadConfig(): DocentConfig {
     const raw = localStorage.getItem(CONFIG_STORAGE_KEY)
     if (raw) {
       const parsed = JSON.parse(raw)
-      return { ...DEFAULT_CONFIG, ...parsed }
+      const merged = { ...DEFAULT_CONFIG, ...parsed }
+      // The settings form trims on save, but a config written by an
+      // older build (or edited by hand in devtools) can still carry
+      // whitespace. The key goes into an `Authorization: Bearer`
+      // header, where a trailing newline throws outright and a
+      // trailing space is rejected by the provider as an invalid
+      // key — so normalise on the way in as well as on the way out.
+      if (typeof merged.apiKey === 'string') merged.apiKey = merged.apiKey.trim()
+      return merged
     }
   } catch {
     // corrupt data — use defaults
@@ -292,7 +300,11 @@ export async function loadConfigWithKey(): Promise<DocentConfig> {
   const config = loadConfig()
   if (tauriInvoke) {
     try {
-      config.apiKey = (await tauriInvoke('get_api_key')) as string
+      // Trimmed for the same reason as above — the keychain stores
+      // whatever it was handed, including by a build that predates
+      // the settings form's trim.
+      const stored = (await tauriInvoke('get_api_key')) as string
+      config.apiKey = typeof stored === 'string' ? stored.trim() : ''
     } catch {
       logger.warn('[Docent] Failed to read API key from keychain')
     }
@@ -314,6 +326,12 @@ export async function loadConfigWithKey(): Promise<DocentConfig> {
  *   preventing programmatic saves (model auto-persist, etc.) from erasing it.
  */
 export function saveConfig(config: DocentConfig, persistApiKey = false): void {
+  // Normalise once, here: every write below — keychain or
+  // localStorage — flows from this object, and neither store
+  // should ever hold a padded key. Copied rather than mutated so
+  // the caller's config object is left alone.
+  config = { ...config, apiKey: config.apiKey?.trim() ?? '' }
+
   const writeLocal = (cfg: DocentConfig) => {
     try {
       localStorage.setItem(CONFIG_STORAGE_KEY, JSON.stringify(cfg))

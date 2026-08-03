@@ -1316,6 +1316,28 @@ describe('config management', () => {
     const loaded = loadConfig()
     expect(loaded.visionEnabled).toBe(true)
   })
+
+  it('trims whitespace off the API key on save', () => {
+    saveConfig({ ...getDefaultConfig(), apiKey: '  sk-test\n' })
+    expect(loadConfig().apiKey).toBe('sk-test')
+  })
+
+  it('trims a padded API key already in storage', () => {
+    // A config written by an older build, or edited by hand in
+    // devtools. The key goes into an `Authorization: Bearer`
+    // header, where a trailing newline throws outright.
+    localStorage.setItem(
+      'sos-docent-config',
+      JSON.stringify({ ...getDefaultConfig(), apiKey: 'sk-stored\n' }),
+    )
+    expect(loadConfig().apiKey).toBe('sk-stored')
+  })
+
+  it('leaves the caller config object untouched when saving', () => {
+    const custom = { ...getDefaultConfig(), apiKey: ' sk-test ' }
+    saveConfig(custom)
+    expect(custom.apiKey).toBe(' sk-test ')
+  })
 })
 
 describe('captureViewContext', () => {

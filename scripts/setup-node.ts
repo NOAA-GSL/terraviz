@@ -151,6 +151,21 @@ const DEFAULT_STEPS: Step[] = [
   'bindings',
 ]
 
+/**
+ * The Cloudflare API token, trimmed, with blank read as unset.
+ *
+ * The token is minted in the dashboard and pasted into a shell —
+ * `export CLOUDFLARE_API_TOKEN=$(cat token.txt)` keeps the file's
+ * newline, and so does a copy that caught a trailing space.
+ * Untrimmed it goes straight into an `Authorization: Bearer`
+ * header, and Cloudflare answers 401, which reads like a token
+ * with the wrong permissions rather than a token with an extra
+ * byte. Every read of the token in this file goes through here.
+ */
+function apiToken(env: Record<string, string | undefined>): string | undefined {
+  return env.CLOUDFLARE_API_TOKEN?.trim() || undefined
+}
+
 export interface SetupDeps {
   argv: string[]
   env: SetupEnv & Record<string, string | undefined>
@@ -435,7 +450,7 @@ export async function runSetup(deps: SetupDeps): Promise<number> {
       prompter.say(`\n  Answers saved to ${opts.statePath}.\n`)
     }
 
-    if (!deps.env.CLOUDFLARE_API_TOKEN) {
+    if (!apiToken(deps.env)) {
       prompter.say(
         '\n  ! CLOUDFLARE_API_TOKEN is not set in this shell.\n' +
           '    Everything that talks to Cloudflare needs it. See\n' +
@@ -480,7 +495,7 @@ export async function runSetup(deps: SetupDeps): Promise<number> {
             : '  ! TERRAVIZ_HOSTNAME unset — no custom domain will be attached\n\n'),
       )
     } else {
-      const token = deps.env.CLOUDFLARE_API_TOKEN
+      const token = apiToken(deps.env)
       if (!token || !state.accountId) {
         deps.stderr.write(
           '  ✘ CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID are required.\n' +
@@ -709,7 +724,7 @@ export async function runSetup(deps: SetupDeps): Promise<number> {
           `  would ensure token        ${tokenName}\n\n`,
       )
     } else {
-      const token = deps.env.CLOUDFLARE_API_TOKEN
+      const token = apiToken(deps.env)
       if (!token || !state.accountId) {
         deps.stderr.write(
           '  ✘ CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID are required.\n' +
@@ -853,7 +868,7 @@ export async function runSetup(deps: SetupDeps): Promise<number> {
     }
 
     if (opts.apply) {
-      const token = deps.env.CLOUDFLARE_API_TOKEN
+      const token = apiToken(deps.env)
       const accountId = state.accountId
       if (!token || !accountId) {
         deps.stderr.write(
@@ -916,7 +931,7 @@ export async function runSetup(deps: SetupDeps): Promise<number> {
             : '  ! R2_PUBLIC_BASE unset — no public domain will be attached\n\n'),
       )
     } else {
-      const token = deps.env.CLOUDFLARE_API_TOKEN
+      const token = apiToken(deps.env)
       if (!token || !state.accountId) {
         deps.stderr.write(
           '  ✘ CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID are required.\n' +
@@ -978,7 +993,7 @@ export async function runSetup(deps: SetupDeps): Promise<number> {
         '  Existing custom rules are preserved — new rules are appended last.\n\n',
       )
     } else {
-      const token = deps.env.CLOUDFLARE_API_TOKEN
+      const token = apiToken(deps.env)
       if (!token) {
         deps.stderr.write(
           '  ✘ CLOUDFLARE_API_TOKEN is required (Zone → Zone WAF → Edit).\n\n',
