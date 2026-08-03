@@ -13,7 +13,7 @@
  * works out of the box (a quick demo fork). To run a fully
  * independent node, set the corresponding variable at build time
  * (Cloudflare Pages → Settings → Environment variables) and host the
- * proxy / assets yourself. See `docs/SELF_HOSTING.md` Phase 1.5.
+ * proxy / assets yourself. See `docs/SELF_HOSTING.md` Reference C.
  *
  * These are read at module load; Vite inlines `import.meta.env.VITE_*`
  * as string literals at build time, so each export is effectively a

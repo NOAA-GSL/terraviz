@@ -1,5 +1,5 @@
 # Manual analytics backfill (docs/ANALYTICS_STORAGE_AND_ADMIN_PLAN.md
-# Phase A, SELF_HOSTING.md Step 17d). Run from the Actions tab after
+# Phase A, SELF_HOSTING.md Phase 13.4). Run from the Actions tab after
 # first provisioning the export pipeline: walks an inclusive UTC day
 # range oldest-first and POSTs one /api/v1/publish/analytics-export
 # ?day= call per day, using the same Access service-token secrets as

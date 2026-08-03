@@ -72,6 +72,19 @@ stale guidance. Once the doc's "Supersedes when" condition is
 met, defer to `CATALOG_BACKEND_PLAN.md` and `ROADMAP.md` as the
 active source of truth.
 
+`npm run check:doc-freshness` reports the date half of this for
+every doc carrying a `Last reviewed:` marker — the scoping doc is
+not the only one. The colon is required: prose that merely cites
+another doc's date (`**Last reviewed 2026-05-04**`) is not a
+marker. It is **advisory** and deliberately absent from
+the `type-check` chain — a date threshold that gated CI would
+break a build with no code change, on whichever unrelated PR is
+open the day a doc ages out. `--strict` exits non-zero for anyone
+who wants it as a gate; a SessionStart hook runs it `--quiet` and
+stays silent until something crosses a threshold. A fresh date is
+necessary but not sufficient: the "Revisit when" triggers are
+prose and still need judgement.
+
 ---
 
 ## Codebase Overview
@@ -81,7 +94,10 @@ TypeScript SPA built with Vite and MapLibre GL JS. Deployed on Cloudflare Pages 
 > Forking to deploy your own instance? See
 > [`docs/SELF_HOSTING.md`](docs/SELF_HOSTING.md) for the
 > end-to-end Cloudflare setup walkthrough (Pages, D1, AE, KV,
-> Access, optional Grafana).
+> Access, optional Grafana). Most of it is automated by
+> `npm run setup` (`scripts/setup-node.ts` +
+> `scripts/lib/setup/`); start with `npm run setup -- --manual`
+> for the parts no API can do.
 
 ### Key commands
 
@@ -91,6 +107,10 @@ npm run build        # tokens + tsc + vite build
 npm run type-check   # tsc --noEmit (must pass before committing)
 npm run test         # vitest run
 npm run tokens       # regenerate src/styles/tokens.css from tokens/*.json
+npm run setup        # provision a self-hosted node (plan by default)
+npm run setup -- --interactive   # guided, with instructions + validation
+npm run setup -- --manual        # the prerequisites no API can do for you
+
 npm run dev:desktop  # Tauri dev mode (requires Rust)
 npm run build:desktop # tsc + vite build + tauri build
 
@@ -340,7 +360,15 @@ as `i18n-exempt:`.
   recursively; all of `functions/` and `cli/` against
   [`docs/BACKEND_MODULES.md`](docs/BACKEND_MODULES.md) (the backend
   map — helper-dense and route-shaped, kept out of CLAUDE.md and
-  next to the `docs/CATALOG_*` plan docs).
+  next to the `docs/CATALOG_*` plan docs); `scripts/lib/` against
+  [`docs/SCRIPTS_MODULES.md`](docs/SCRIPTS_MODULES.md) (the shared
+  library behind the build, provisioning and audit scripts).
+- **Uncovered by design:** the one-shot CLI entry points at the top of
+  `scripts/` — their filenames are the documentation — and
+  `scripts/screenshots/`, which _Visual testing & reporting_ above
+  already documents in prose. Every covered root points at a
+  documentation home that exists; that is the rule the manifest
+  encodes, and it is why a directory with no map is not simply added.
 - **Excluded:** generated code (`messages*.ts` i18n codegen),
   `*.d.ts`, `*.test.ts`, and `test-setup.ts`.
 - Matching is on the **full repo-relative path**, because the
@@ -636,6 +664,17 @@ with a `:root[dir="rtl"]` override that flips the sign — see
 `#browse-overlay.collapsed`). Full guide:
 [`docs/CSS_ARCHITECTURE_PLAN.md`](docs/CSS_ARCHITECTURE_PLAN.md)
 §RTL safety.
+
+`npm run check:css-logical` enforces this in the `type-check`
+chain, over `src/**/*.css`. Classic centering is exempt
+automatically (a `left`/`right` of exactly `50%`) and transforms
+are never inspected, so both intentional patterns above pass
+untouched. Anything else that genuinely must stay physical takes
+an inline `/* rtl-exempt: <reason> */` on the same line — reason
+mandatory, same convention as `i18n-exempt:` and `doc-exempt:`.
+`poster/` is out of scope: it is a separate single-language
+static site with its own deploy workflow, deliberately isolated
+from SPA CI.
 
 ### Commands
 

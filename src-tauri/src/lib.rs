@@ -8,11 +8,11 @@ mod download_manager;
 mod keychain;
 mod tile_cache;
 
-use std::sync::Arc;
 use base64::Engine;
-use serde::Serialize;
-use tauri::{Emitter, Manager};
 use download_manager::DownloadManager;
+use serde::Serialize;
+use std::sync::Arc;
+use tauri::{Emitter, Manager};
 use tile_cache::TileCache;
 
 /// Payload emitted on the `native_panic` event when the Rust panic hook
@@ -103,17 +103,12 @@ pub fn run() {
                     .payload()
                     .downcast_ref::<&str>()
                     .map(|s| (*s).to_string())
-                    .or_else(|| {
-                        panic_info
-                            .payload()
-                            .downcast_ref::<String>()
-                            .cloned()
-                    })
+                    .or_else(|| panic_info.payload().downcast_ref::<String>().cloned())
                     .unwrap_or_else(|| "<unknown panic>".to_string());
 
-                let location = panic_info.location().map(|loc| {
-                    format!("{}:{}", loc.file(), loc.line())
-                });
+                let location = panic_info
+                    .location()
+                    .map(|loc| format!("{}:{}", loc.file(), loc.line()));
 
                 let payload = NativePanicPayload { message, location };
                 // Best-effort emit — if the JS side isn't listening
@@ -123,11 +118,12 @@ pub fn run() {
                 let _ = panic_emit_handle.emit("native_panic", &payload);
             }));
 
-            let app_data = app.path().app_data_dir()
+            let app_data = app
+                .path()
+                .app_data_dir()
                 .expect("failed to resolve app data directory");
             let cache_dir = app_data.join("tiles");
-            std::fs::create_dir_all(&cache_dir)
-                .expect("failed to create tile cache directory");
+            std::fs::create_dir_all(&cache_dir).expect("failed to create tile cache directory");
 
             let tile_cache = Arc::new(TileCache::new(cache_dir));
             app.manage(tile_cache);

@@ -524,7 +524,7 @@ export async function postTranscodeComplete(
           `Access but not Bot Fight Mode / WAF managed rules, so the request ` +
           `never reached the publisher Worker. Fix: add a WAF Skip custom rule ` +
           `for /api/v1/publish/* requests carrying the cf-access-client-id ` +
-          `header — see docs/SELF_HOSTING.md §8e "WAF skip rule for the ` +
+          `header — see docs/SELF_HOSTING.md Phase 13.2 "WAF skip rule for the ` +
           `transcode-complete callback" for the exact rule.`,
       )
     }
@@ -620,7 +620,7 @@ export async function postTranscodeFailed(
       throw new Error(
         `transcode-failed blocked by Cloudflare's WAF managed challenge (status ${res.status}). ` +
           `Access service tokens bypass Access but not Bot Fight Mode / WAF managed rules — see ` +
-          `docs/SELF_HOSTING.md §8e for the WAF skip rule.`,
+          `docs/SELF_HOSTING.md Phase 13.2 for the WAF skip rule.`,
       )
     }
     throw new Error(`transcode-failed returned ${res.status}: ${body}`)
