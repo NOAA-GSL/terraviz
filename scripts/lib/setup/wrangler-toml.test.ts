@@ -185,7 +185,13 @@ const UPSTREAM_REPO = 'zyra-project/terraviz'
 const slug = process.env.GITHUB_REPOSITORY?.toLowerCase()
 const onUpstream = slug === UPSTREAM_REPO
 
-describe.runIf(onUpstream)('the committed wrangler.toml (upstream only)', () => {
+// Plain `describe` / `describe.skip` rather than `describe.runIf`, which
+// would be this repo's only use of that helper. Same reporting either
+// way — the suite shows as skipped — and a reader does not need to know
+// a vitest-specific API to see what gates it.
+const describeUpstream = onUpstream ? describe : describe.skip
+
+describeUpstream('the committed wrangler.toml (upstream only)', () => {
   it('is still pinned to upstream, not to anyone\'s real resources', () => {
     expect(stillPinnedUpstream(realConfig()).sort()).toEqual([
       'CATALOG_DB',
