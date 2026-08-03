@@ -186,7 +186,7 @@ npm run dev:functions      # http://localhost:8788`,
     ],
     automated: { code: 'npm run setup -- --apply --only=wrangler-toml' },
     automatedNote: [
-      'It edits per binding block rather than by string replace — the two D1 blocks share a database name and the two KV blocks share a section header, so a global replace cannot tell them apart. It refuses to apply while any ID is still unknown.',
+      'It edits per binding block rather than by string replace. A global replace cannot tell the blocks apart: the two D1 blocks share a database name, and the two KV blocks share a section header. It refuses to apply while any ID is still unknown.',
     ],
     body: [
       {
@@ -260,7 +260,7 @@ wrangler d1 migrations apply FEEDBACK_DB --remote   # ends in a harmless error`,
         body: [
           "The repo ships a `deploy` job that targets the project name `terraviz`. On a fresh fork it either fails for lack of secrets or — worse, if you have set them — deploys to a project that is not yours.",
           '**Dashboard Git integration (recommended):** delete or disable the deploy job in `ci.yml` and `poster.yml`. Keep type-check, unit-tests and build — they are fork-safe and need no secrets.',
-          '**GitHub Actions (Direct Upload):** set repo secrets for your API token and account ID, change every `--project-name` to yours, set the repo variable `TERRAVIZ_SERVER`, and do *not* connect the Git integration. Note that forks land with Actions disabled and no secrets — GitHub never copies those.',
+          '**GitHub Actions (Direct Upload):** set repo secrets for your API token and account ID. Change every `--project-name` to yours, and set the repo variable `TERRAVIZ_SERVER`. Do *not* connect the Git integration. Note that forks land with Actions disabled and no secrets — GitHub never copies those.',
         ],
       },
     ],
@@ -320,7 +320,7 @@ openssl rand -base64 32    # W18`,
       },
     ],
     automatedNote: [
-      'The setup tool generates the preview signing key for you, but deliberately does *not* generate the node keypair — `gen:node-key` owns that, because it also writes the public key file Phase 9 reads and stamps your local database. Both files are gitignored.',
+      'The setup tool generates the preview signing key for you. It deliberately does *not* generate the node keypair — `gen:node-key` owns that. It has to, because it also writes the public key file Phase 9 reads, and stamps your local database. Both files are gitignored.',
     ],
     gate: '`.dev.vars` holds a single-line private key, and `node-public-key.txt` holds an `ed25519:` line.',
     gateShort: 'Your node has its own signing key, and you have backed it up.',
@@ -395,7 +395,7 @@ openssl rand -base64 32    # W18`,
     duration: '≈5 min',
     aside: 'all tiers',
     intro: [
-      'Run both. They check different layers and neither subsumes the other: one asks whether the dashboard\u2019s binding state matches what the code expects, the other asks whether the deployed node actually answers correctly.',
+      'Run both. They check different layers and neither subsumes the other. One asks whether the dashboard\u2019s binding state matches what the code expects. The other asks whether the deployed node actually answers correctly.',
     ],
     body: [
       {
@@ -518,7 +518,7 @@ export const ADDONS: Array<{
     id: '13.1',
     title: 'R2 public domain and CORS',
     flag: '--only=r2',
-    body: "Needed before publisher asset uploads or zip downloads work. R2's CORS is strict: HEAD must be listed explicitly even though Fetch treats it as simple, and Content-Range must be exposed or the download dialog cannot read a file's size. The tool builds the policy from your origins so neither can be mistyped. **Minting the S3 API token stays manual on purpose** — automating it would need a token that can create tokens.",
+    body: "Needed before publisher asset uploads or zip downloads work. R2's CORS is strict in two ways. HEAD must be listed explicitly, even though Fetch treats it as a simple method. And Content-Range must be exposed, or the download dialog cannot read a file's size. The tool builds the policy from your origins so neither can be mistyped. **Minting the S3 API token stays manual on purpose** — automating it would need a token that can create tokens.",
   },
   {
     id: '13.2',
