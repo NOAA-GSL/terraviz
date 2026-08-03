@@ -72,6 +72,17 @@ stale guidance. Once the doc's "Supersedes when" condition is
 met, defer to `CATALOG_BACKEND_PLAN.md` and `ROADMAP.md` as the
 active source of truth.
 
+`npm run check:doc-freshness` reports the date half of this for
+every doc carrying a `Last reviewed:` marker (six today, not just
+the scoping doc). It is **advisory** and deliberately absent from
+the `type-check` chain — a date threshold that gated CI would
+break a build with no code change, on whichever unrelated PR is
+open the day a doc ages out. `--strict` exits non-zero for anyone
+who wants it as a gate; a SessionStart hook runs it `--quiet` and
+stays silent until something crosses a threshold. A fresh date is
+necessary but not sufficient: the "Revisit when" triggers are
+prose and still need judgement.
+
 ---
 
 ## Codebase Overview
