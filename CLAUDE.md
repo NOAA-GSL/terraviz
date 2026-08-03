@@ -636,6 +636,17 @@ with a `:root[dir="rtl"]` override that flips the sign — see
 [`docs/CSS_ARCHITECTURE_PLAN.md`](docs/CSS_ARCHITECTURE_PLAN.md)
 §RTL safety.
 
+`npm run check:css-logical` enforces this in the `type-check`
+chain, over `src/**/*.css`. Classic centering is exempt
+automatically (a `left`/`right` of exactly `50%`) and transforms
+are never inspected, so both intentional patterns above pass
+untouched. Anything else that genuinely must stay physical takes
+an inline `/* rtl-exempt: <reason> */` on the same line — reason
+mandatory, same convention as `i18n-exempt:` and `doc-exempt:`.
+`poster/` is out of scope: it is a separate single-language
+static site with its own deploy workflow, deliberately isolated
+from SPA CI.
+
 ### Commands
 
 | Command | What it does |
