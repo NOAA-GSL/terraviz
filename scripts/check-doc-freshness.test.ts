@@ -23,8 +23,31 @@ describe('readDocAge', () => {
     expect(readDocAge('d.md', doc, TODAY)?.days).toBe(10)
   })
 
+  it('parses a marker with the colon outside the bold', () => {
+    const doc = `**Last reviewed**: ${daysAgo(7)}\n`
+    expect(readDocAge('d.md', doc, TODAY)?.days).toBe(7)
+  })
+
   it('returns null for a doc with no marker — not a finding', () => {
     expect(readDocAge('d.md', '# Just a doc\n\nNo marker here.\n', TODAY)).toBeNull()
+  })
+
+  it('ignores prose that cites another doc\'s date without a colon', () => {
+    // Real case: docs/CURRENT_EVENTS_PLAN.md describes federation-scoping's
+    // review date in passing. An optional colon read that as the citing
+    // doc's own marker, which would later send a reader to update a line
+    // that is not a marker.
+    const doc =
+      'The planning artifact is [federation-scoping](x.md),\n' +
+      '**Last reviewed 2026-05-04** — within the ~6-month window.\n'
+    expect(readDocAge('d.md', doc, TODAY)).toBeNull()
+  })
+
+  it('still reads its own marker when the file also cites another date', () => {
+    const doc =
+      `**Last reviewed:** ${daysAgo(3)}\n\n` +
+      'Elsewhere: **Last reviewed 2020-01-01** (quoting another doc).\n'
+    expect(readDocAge('d.md', doc, TODAY)?.days).toBe(3)
   })
 
   it('returns null for an unparseable date rather than throwing', () => {

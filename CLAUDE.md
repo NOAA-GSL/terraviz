@@ -73,8 +73,10 @@ met, defer to `CATALOG_BACKEND_PLAN.md` and `ROADMAP.md` as the
 active source of truth.
 
 `npm run check:doc-freshness` reports the date half of this for
-every doc carrying a `Last reviewed:` marker (six today, not just
-the scoping doc). It is **advisory** and deliberately absent from
+every doc carrying a `Last reviewed:` marker — the scoping doc is
+not the only one. The colon is required: prose that merely cites
+another doc's date (`**Last reviewed 2026-05-04**`) is not a
+marker. It is **advisory** and deliberately absent from
 the `type-check` chain — a date threshold that gated CI would
 break a build with no code change, on whichever unrelated PR is
 open the day a doc ages out. `--strict` exits non-zero for anyone

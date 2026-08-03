@@ -36,7 +36,21 @@ export const STALE_AFTER_DAYS = 183
  *  than discovered late. */
 export const AGEING_AFTER_DAYS = 137
 
-const MARKER = /Last reviewed:?\*{0,2}\s*:?\s*(\d{4}-\d{2}-\d{2})/
+/**
+ * The colon is REQUIRED, and must sit either inside or immediately after
+ * the bold markers — `**Last reviewed:** D`, `**Last reviewed**: D`, or
+ * `Last reviewed: D`.
+ *
+ * An earlier version made the colon optional, which matched prose that
+ * merely *cites* another doc's date. `docs/CURRENT_EVENTS_PLAN.md` says
+ * "**Last reviewed 2026-05-04** — within the ~6-month freshness window"
+ * about federation-scoping.md; that was read as CURRENT_EVENTS_PLAN
+ * declaring its own marker. The miscount was the harmless half. The
+ * damaging half is that when federation-scoping does age out, the report
+ * would name CURRENT_EVENTS_PLAN too and send the reader to update a
+ * line that is not a marker at all.
+ */
+const MARKER = /Last reviewed(?::\*{0,2}|\*{0,2}:)\s*(\d{4}-\d{2}-\d{2})/
 
 export type Freshness = 'current' | 'ageing' | 'stale'
 
