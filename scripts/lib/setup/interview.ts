@@ -207,7 +207,15 @@ export interface ManualStep {
   title: string
   /** Why it matters — what breaks without it. */
   why: string
+  /** Deep link into the Cloudflare dashboard, where the work happens. */
   url?: string
+  /**
+   * Cloudflare's own documentation for this task, when there is a
+   * canonical page for it. The dashboard link says *where*; this says
+   * *what the thing is* — which is what someone new to Cloudflare
+   * actually needs. Every URL here was checked to resolve.
+   */
+  docsUrl?: string
   steps: string[]
   /**
    * How completion is established. `detected` means a later step will
@@ -224,11 +232,14 @@ export const MANUAL_STEPS: ManualStep[] = [
     id: 'workers-paid',
     title: 'Enable Workers Paid ($5/month)',
     why:
-      'Analytics Engine is not on the free plan, and Workers AI free-tier ' +
-      'neurons run out after roughly 200 Orbit turns. Both fail soft, which ' +
-      'is worse than failing loudly: telemetry silently stops recording and ' +
-      'Orbit quietly degrades mid-demo.',
+      'Optional — every product this node binds has a Workers Free ' +
+      'allocation, so a free-plan account installs and runs. What you buy ' +
+      'is headroom. Workers AI stops at 10,000 Neurons a day, roughly 200 ' +
+      'Orbit turns, and that ceiling cannot be raised without upgrading. ' +
+      'It fails soft, which is worse than failing loudly: Orbit quietly ' +
+      'degrades to its keyword engine mid-demo.',
     url: 'https://dash.cloudflare.com/?to=/:account/workers/plans',
+    docsUrl: 'https://developers.cloudflare.com/workers/platform/pricing/',
     steps: [
       'Workers & Pages → Plans → Workers Paid → Subscribe.',
       'Billing is per account, not per project.',
@@ -243,6 +254,7 @@ export const MANUAL_STEPS: ManualStep[] = [
       'and R2 can only serve a public bucket from a zone Cloudflare controls. ' +
       'Neither works on a domain hosted elsewhere.',
     url: 'https://dash.cloudflare.com/?to=/:account/add-site',
+    docsUrl: 'https://developers.cloudflare.com/fundamentals/manage-domains/add-site/',
     steps: [
       'Add the site in Cloudflare, then change the nameservers at your registrar.',
       'Propagation is usually minutes, occasionally hours.',
@@ -255,6 +267,7 @@ export const MANUAL_STEPS: ManualStep[] = [
     title: 'Mint a Cloudflare API token',
     why: 'Everything this tool does runs through it.',
     url: 'https://dash.cloudflare.com/profile/api-tokens',
+    docsUrl: 'https://developers.cloudflare.com/fundamentals/api/get-started/create-token/',
     steps: [
       'My Profile → API Tokens → Create Token → Custom token.',
       'Permissions (grant only what you plan to run):',
@@ -278,6 +291,7 @@ export const MANUAL_STEPS: ManualStep[] = [
       'until the account has a Zero Trust organization and at least one ' +
       'identity provider. Without it every /api/v1/publish/** route 503s.',
     url: 'https://one.dash.cloudflare.com/',
+    docsUrl: 'https://developers.cloudflare.com/cloudflare-one/setup/',
     steps: [
       'Pick a team name — it becomes <team>.cloudflareaccess.com.',
       'Settings → Authentication → add a login method.',
@@ -309,6 +323,7 @@ export const MANUAL_STEPS: ManualStep[] = [
       'this tool creates a Direct Upload project. Cloudflare will not run ' +
       'your build until you connect a remote, which means the VITE_* build ' +
       'variables have to be set wherever the build actually happens.',
+    docsUrl: 'https://developers.cloudflare.com/pages/configuration/git-integration/',
     steps: [
       'Either: Workers & Pages → your project → Settings → Builds →',
       '  Connect to Git, then set the VITE_* variables in the dashboard.',
@@ -327,6 +342,7 @@ export const MANUAL_STEPS: ManualStep[] = [
       'tokens — a credential that could grant itself more authority — so it ' +
       'stays a deliberate manual step.',
     url: 'https://dash.cloudflare.com/?to=/:account/r2/api-tokens',
+    docsUrl: 'https://developers.cloudflare.com/r2/api/tokens/',
     steps: [
       'R2 → Manage R2 API Tokens → Create API token.',
       'Permission: Object Read & Write, scoped to your assets bucket.',
@@ -348,7 +364,9 @@ export function renderManualStep(step: ManualStep, index?: number): string {
   lines.push(`   Why: ${why[0] ?? ''}`)
   for (const line of why.slice(1)) lines.push(`        ${line}`)
   lines.push('')
-  if (step.url) lines.push(`   ${step.url}`, '')
+  if (step.url) lines.push(`   Dashboard: ${step.url}`)
+  if (step.docsUrl) lines.push(`   Docs:      ${step.docsUrl}`)
+  if (step.url || step.docsUrl) lines.push('')
   for (const s of step.steps) lines.push(`   ${s}`)
   lines.push('')
   lines.push(

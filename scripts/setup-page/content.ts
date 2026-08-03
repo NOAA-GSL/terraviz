@@ -170,7 +170,7 @@ npm run dev:functions      # http://localhost:8788`,
     automatedNote: [
       'Creates or adopts the D1 database, both KV namespaces, the R2 bucket, and the Vectorize index with its three metadata indexes — and records every ID for you. Re-running adopts what already exists rather than making a second one.',
     ],
-    gate: 'W4 through W9 are all filled in.',
+    gate: 'W4 through W8 hold the IDs Cloudflare just printed, and W9 holds the dataset name you intend to use. Nothing creates W9 — an Analytics Engine dataset appears on first write.',
     gateShort: 'You have written down the six IDs Cloudflare just gave you.',
     anchor: 'phase-2--create-the-cloudflare-resources',
   },
@@ -186,7 +186,7 @@ npm run dev:functions      # http://localhost:8788`,
     ],
     automated: { code: 'npm run setup -- --apply --only=wrangler-toml' },
     automatedNote: [
-      'It edits per binding block rather than by string replace — the two D1 blocks share a database name and the two KV blocks share a section header, so a global replace cannot tell them apart. It refuses to apply while any ID is still unknown.',
+      'It edits per binding block rather than by string replace. A global replace cannot tell the blocks apart: the two D1 blocks share a database name, and the two KV blocks share a section header. It refuses to apply while any ID is still unknown.',
     ],
     body: [
       {
@@ -260,7 +260,7 @@ wrangler d1 migrations apply FEEDBACK_DB --remote   # ends in a harmless error`,
         body: [
           "The repo ships a `deploy` job that targets the project name `terraviz`. On a fresh fork it either fails for lack of secrets or — worse, if you have set them — deploys to a project that is not yours.",
           '**Dashboard Git integration (recommended):** delete or disable the deploy job in `ci.yml` and `poster.yml`. Keep type-check, unit-tests and build — they are fork-safe and need no secrets.',
-          '**GitHub Actions (Direct Upload):** set repo secrets for your API token and account ID, change every `--project-name` to yours, set the repo variable `TERRAVIZ_SERVER`, and do *not* connect the Git integration. Note that forks land with Actions disabled and no secrets — GitHub never copies those.',
+          '**GitHub Actions (Direct Upload):** set repo secrets for your API token and account ID. Change every `--project-name` to yours, and set the repo variable `TERRAVIZ_SERVER`. Do *not* connect the Git integration. Note that forks land with Actions disabled and no secrets — GitHub never copies those.',
         ],
       },
     ],
@@ -320,7 +320,7 @@ openssl rand -base64 32    # W18`,
       },
     ],
     automatedNote: [
-      'The setup tool generates the preview signing key for you, but deliberately does *not* generate the node keypair — `gen:node-key` owns that, because it also writes the public key file Phase 9 reads and stamps your local database. Both files are gitignored.',
+      'The setup tool generates the preview signing key for you. It deliberately does *not* generate the node keypair — `gen:node-key` owns that. It has to, because it also writes the public key file Phase 9 reads, and stamps your local database. Both files are gitignored.',
     ],
     gate: '`.dev.vars` holds a single-line private key, and `node-public-key.txt` holds an `ed25519:` line.',
     gateShort: 'Your node has its own signing key, and you have backed it up.',
@@ -395,7 +395,7 @@ openssl rand -base64 32    # W18`,
     duration: '≈5 min',
     aside: 'all tiers',
     intro: [
-      'Run both. They check different layers and neither subsumes the other: one asks whether the dashboard\u2019s binding state matches what the code expects, the other asks whether the deployed node actually answers correctly.',
+      'Run both. They check different layers and neither subsumes the other. One asks whether the dashboard\u2019s binding state matches what the code expects. The other asks whether the deployed node actually answers correctly.',
     ],
     body: [
       {
@@ -511,14 +511,12 @@ export const ADDONS: Array<{
   flag: string
   body: string
   extra?: string
-  /** Hidden when the operator says they are on the free plan. */
-  paidOnly?: boolean
 }> = [
   {
     id: '13.1',
     title: 'R2 public domain and CORS',
     flag: '--only=r2',
-    body: "Needed before publisher asset uploads or zip downloads work. R2's CORS is strict: HEAD must be listed explicitly even though Fetch treats it as simple, and Content-Range must be exposed or the download dialog cannot read a file's size. The tool builds the policy from your origins so neither can be mistyped. **Minting the S3 API token stays manual on purpose** — automating it would need a token that can create tokens.",
+    body: "Needed before publisher asset uploads or zip downloads work. R2's CORS is strict in two ways. HEAD must be listed explicitly, even though Fetch treats it as a simple method. And Content-Range must be exposed, or the download dialog cannot read a file's size. The tool builds the policy from your origins so neither can be mistyped. **Minting the S3 API token stays manual on purpose** — automating it would need a token that can create tokens.",
   },
   {
     id: '13.2',
@@ -532,7 +530,6 @@ export const ADDONS: Array<{
     id: '13.4',
     title: 'Analytics long-term export',
     flag: 'recommended',
-    paidOnly: true,
     body: 'Analytics Engine retains 30–90 days. A daily job drains each completed day into an archive bucket plus rollups — that is the data behind the in-app analytics tab. Run the backfill once while AE still remembers.',
   },
   {
@@ -654,8 +651,6 @@ export interface WorksheetField {
   consumedBy: number[]
   /** Minimum tier that needs it. */
   minTier: Tier
-  /** Only exists on a paid Cloudflare plan (Analytics Engine). */
-  paidOnly?: boolean
 }
 
 export const WORKSHEET: WorksheetField[] = [
@@ -669,7 +664,7 @@ export const WORKSHEET: WorksheetField[] = [
   { id: 'W6', label: 'KV — CATALOG_KV', phase: 2, token: '‹catalog-kv-id›', placeholder: '32-char hex', origin: 'discovered', consumedBy: [3, 8], minTier: 2 },
   { id: 'W7', label: 'R2 bucket name', phase: 2, token: 'terraviz-assets', placeholder: 'terraviz-assets', note: 'Yours to rename; keep the bindings in sync if you do.', origin: 'default', consumedBy: [8, 13], minTier: 2 },
   { id: 'W8', label: 'Vectorize index', phase: 2, token: 'terraviz-datasets', placeholder: 'terraviz-datasets', origin: 'default', consumedBy: [8], minTier: 2 },
-  { id: 'W9', label: 'Analytics Engine dataset', phase: 2, token: 'terraviz_events', placeholder: 'terraviz_events', note: 'Nothing to create — it appears on first write.', origin: 'default', consumedBy: [8, 13], minTier: 1, paidOnly: true },
+  { id: 'W9', label: 'Analytics Engine dataset', phase: 2, token: 'terraviz_events', placeholder: 'terraviz_events', note: 'Nothing to create — it appears on first write.', origin: 'default', consumedBy: [8, 13], minTier: 1 },
   { id: 'W10', label: 'Pages project name', phase: 5, token: '‹pages-project›', placeholder: 'terraviz', origin: 'asked', fromTool: 'pagesProject', validator: 'projectName', consumedBy: [6, 8, 10], minTier: 1 },
   { id: 'W11', label: 'CLOUDFLARE_API_TOKEN', phase: 5, token: '‹api-token›', placeholder: 'token value', note: 'Minimum scope: Account → Cloudflare Pages → Edit.', secret: true, origin: 'generated', consumedBy: [10, 13], minTier: 1 },
   { id: 'W12', label: 'Access team domain', phase: 6, token: '‹team›.cloudflareaccess.com', placeholder: 'your-org.cloudflareaccess.com', note: 'Team domain only, no https://. The tool discovers this for you.', origin: 'discovered', consumedBy: [8], minTier: 2 },

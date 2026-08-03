@@ -141,6 +141,24 @@ describe('MANUAL_STEPS', () => {
     expect(byId.get('workers-paid')?.verification).toBe('self')
   })
 
+  // A docsUrl attached to the wrong step is worse than none — it sends
+  // someone learning Cloudflare confidently to the wrong page. These
+  // pairs were checked to resolve; the mapping is what drifts.
+  it('points each docs link at its own subject', () => {
+    const doc = (id: string) => MANUAL_STEPS.find(s => s.id === id)?.docsUrl ?? ''
+    expect(doc('api-token')).toContain('/api/get-started/create-token')
+    expect(doc('dns')).toContain('/manage-domains/add-site')
+    expect(doc('zero-trust')).toContain('/cloudflare-one/')
+    expect(doc('git-connect')).toContain('/pages/configuration/git-integration')
+    expect(doc('r2-token')).toContain('/r2/api/tokens')
+    expect(doc('workers-paid')).toContain('/workers/platform/pricing')
+    // node-key is our own script, not a Cloudflare task.
+    expect(doc('node-key')).toBe('')
+    for (const s of MANUAL_STEPS) {
+      if (s.docsUrl) expect(s.docsUrl).toMatch(/^https:\/\/developers\.cloudflare\.com\//)
+    }
+  })
+
   it('lists every permission the API token needs', () => {
     const token = MANUAL_STEPS.find(s => s.id === 'api-token')!
     const text = token.steps.join('\n')

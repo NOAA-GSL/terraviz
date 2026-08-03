@@ -43,6 +43,7 @@
  */
 
 import { MARKDOWN_URL, type WorksheetField } from './content'
+import { GB_PER_VIDEO_DATASET, R2_PRICING } from './pricing'
 
 // ── Fork-friendly documentation links ─────────────────────────────
 
@@ -182,7 +183,77 @@ export function docLinkScript(fallback: string): string {
  * worth not having at all.
  */
 export function docLinkRuntime(fallback: string): string {
-  return `<script>\n${docLinkScript(fallback)}</script>\n`
+  return `<script ${INJECTED_MARK}="doc-links">\n${docLinkScript(fallback)}</script>\n`
+}
+
+/**
+ * Marks a script `applyShell` injected, so a second pass can tell it
+ * apart from the page's own markup and skip it.
+ *
+ * The cost runtime guarded on `data-cost-count`, which `render.ts`
+ * emits. That is the trigger for the injection, not evidence of it:
+ * it is still on the page afterwards, so a second `applyShell` added
+ * the script again — duplicate `input` listeners and repaint calls,
+ * contradicting this module's own idempotency contract.
+ *
+ * The doc-link runtime did not have the bug, because `applyDocLinks`
+ * rewrites `<a href="…">` to `<a data-doc="…" href="…">` and its
+ * regex no longer matches, so `count` is 0 on a second pass. That is
+ * emergent rather than stated, and it would quietly stop holding if
+ * the rewrite's output shape changed. Both injections are marked, so
+ * idempotency is a property of this function rather than of another
+ * one's output.
+ *
+ * The existing idempotency test missed all of this: its fixture has
+ * neither a doc link nor a cost widget, so neither injection fired.
+ */
+const INJECTED_MARK = 'data-tv-injected'
+
+/**
+ * The storage estimate's runtime.
+ *
+ * Rates are interpolated from `pricing.ts` rather than written into
+ * the script, so the constants block stays the single place a price
+ * lives. Same arithmetic as `estimateStorage()`, which is unit-tested;
+ * this is the browser copy of it and the two are pinned together by a
+ * test that runs this script and compares.
+ *
+ * Lives here rather than in `render.ts` for the usual reason — the
+ * design export replaces that file wholesale.
+ */
+export function costRuntime(): string {
+  return `
+(function () {
+  var GB_EACH = ${GB_PER_VIDEO_DATASET};
+  var FREE_GB = ${R2_PRICING.freeStorageGb};
+  var PER_GB = ${R2_PRICING.storagePerGbMonth};
+  var count = document.querySelector('[data-cost-count]');
+  var out = document.querySelector('[data-cost-out]');
+  var note = document.querySelector('[data-cost-note]');
+  if (!count || !out || !note) return;
+  var FREE_N = Math.floor(FREE_GB / GB_EACH);
+  function money(n) {
+    if (n === 0) return '$0';
+    if (n < 1) return '~' + Math.round(n * 100) + ' cents';
+    return '~$' + (n < 10 ? n.toFixed(2) : Math.round(n));
+  }
+  function paint() {
+    var n = Number(count.value) || 0;
+    var gb = n * GB_EACH;
+    var billable = Math.max(0, gb - FREE_GB);
+    out.textContent = n + ' video datasets  ·  ' + gb.toFixed(0) + ' GB  ·  ' +
+      money(billable * PER_GB) + ' / month';
+    note.textContent = n === 0
+      ? 'Drag to size your catalog. Metadata, images and tours alone stay far inside the free allowance.'
+      : billable === 0
+        ? 'Free. About ' + FREE_N + ' video datasets fit inside R2\\u2019s ' + FREE_GB + ' GB, on either plan.'
+        : 'The first ' + FREE_N + ' or so are free; past that it is ' + billable.toFixed(0) +
+          ' GB at $' + PER_GB + '/GB-month. Serving them to visitors adds nothing \\u2014 R2 egress is free.';
+  }
+  count.addEventListener('input', paint);
+  paint();
+})();
+`
 }
 
 // ── Design tokens ─────────────────────────────────────────────────
@@ -349,8 +420,25 @@ export function applyShell(
   const docsUrl = opts.docsUrl ?? MARKDOWN_URL
   const linked = applyDocLinks(out, docsUrl)
   out = linked.html
-  if (linked.count > 0) {
-    out = out.replace('</body>', `${docLinkRuntime(docsUrl)}</body>`)
+  // Replacer *functions*, never replacement strings. `String.replace`
+  // reads `$'` in a replacement as "everything after the match", and
+  // both scripts below contain `'~$' + …` money formatting — which
+  // silently spliced the tail of the document into the middle of a
+  // string literal and broke the page. A function replacement is
+  // taken literally.
+  const before = (html: string, injected: string): string =>
+    html.replace('</body>', () => `${injected}</body>`)
+
+  // Guard on the injection marker, not on the page markup that
+  // triggers it — see INJECTED_MARK.
+  const alreadyInjected = (id: string): boolean =>
+    out.includes(`${INJECTED_MARK}="${id}"`)
+
+  if (linked.count > 0 && !alreadyInjected('doc-links')) {
+    out = before(out, docLinkRuntime(docsUrl))
+  }
+  if (out.includes('data-cost-count') && !alreadyInjected('cost')) {
+    out = before(out, `<script ${INJECTED_MARK}="cost">${costRuntime()}</script>\n`)
   }
 
   return { html: out, repairs, docLinks: linked.count }

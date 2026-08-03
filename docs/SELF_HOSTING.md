@@ -6,14 +6,19 @@ This guide walks you from an empty Cloudflare account to a running
 Terraviz node.
 
 **It is ordered so that no step ever asks you for a value that an
-earlier step has not already produced.** That is the single rule
-this document is built around, and it is the thing the previous
-revision got wrong: it asked for Access service tokens three phases
-before it told you how to mint one, told you to paste resource IDs
-into `wrangler.toml` before the resources existed, and never
-actually created the Access application whose audience tag it told
-you to configure. If you hit a step that references something you
-don't have yet, that's a bug in this document — please file it.
+earlier step has not already produced.** That is the single rule this
+document is built around, and the previous revision broke it three
+ways:
+
+- It asked for Access service tokens three phases before it told you
+  how to mint one.
+- It told you to paste resource IDs into `wrangler.toml` before the
+  resources existed.
+- It never created the Access application whose audience tag it told
+  you to configure.
+
+If you hit a step that references something you don't have yet,
+that's a bug in this document — please file it.
 
 Two companion reads:
 
@@ -110,9 +115,10 @@ npm run setup -- --apply         # provision + wire
 ```
 
 **If you are installing for the first time, start with those top two.**
-`--manual` prints the prerequisites no API can do for you — Workers
-Paid, DNS, Zero Trust, the API token and its exact permission list —
-each with what breaks if you skip it. `--interactive` then asks for
+`--manual` prints the prerequisites no API can do for you: Workers
+Paid, DNS, Zero Trust, and the API token with its exact permission
+list. Each one comes with what breaks if you skip it.
+`--interactive` then asks for
 the handful of values only you know, explains where each one comes
 from, and rejects a wrong answer *at the prompt* rather than three
 phases later:
@@ -134,10 +140,10 @@ environment or recorded by an earlier run is skipped, so a second run
 asks nothing. Answers are saved as you go, so an interview abandoned
 halfway does not start over.
 
-Every run — interactive or not — ends with a **handoff report**: the
-values you still have to paste into somewhere this tool cannot reach,
-each with its destination, and the value itself where it is known and
-not secret.
+Every run — interactive or not — ends with a **handoff report**. That
+is the list of values you still have to paste somewhere this tool
+cannot reach. Each one comes with its destination, and with the value
+itself where it is known and not secret.
 
 ```
 ════ Values you need to paste elsewhere ════
@@ -171,26 +177,26 @@ not secret.
 | **13.2/13.3** *(opt-in)* | Appends the two WAF skip rules, preserving your existing rules. |
 
 Two flags select different things, and it is worth keeping them
-straight: **`--only=` picks which steps run**, while **`--with=`
-declares which optional features you want**, which is what adds the
-matching questions to the interview and the matching sections to the
-handoff report. So `--with=r2 --only=r2` both asks you for the public
-asset origin and then configures it; `--with=transcode` adds no step
-at all, it just includes the transcode secrets in the handoff.
+straight. **`--only=` picks which steps run.** **`--with=` declares
+which optional features you want** — that is what adds the matching
+questions to the interview, and the matching sections to the handoff
+report. So `--with=r2 --only=r2` both asks you for the public asset
+origin and then configures it; `--with=transcode` adds no step at
+all, it just includes the transcode secrets in the handoff.
 
 `r2` and `waf` are opt-in via `--only=r2` / `--only=waf`, not part of
 a default run. The rulesets API replaces a zone's whole custom-rule
-list rather than appending to it, so rewriting your zone security
-config should be something you asked for, not something that happens
-on the way past. (The merge preserves every existing rule and is
-tested for exactly that; a failed read aborts rather than writing.)
+list rather than appending to it. Rewriting your zone security config
+should be something you asked for, not something that happens on the
+way past. (The merge preserves every existing rule and is tested for
+exactly that; a failed read aborts rather than writing.)
 
 It is **plan-by-default** — a bare `npm run setup` prints what it
 would do and exits. It is idempotent: re-running adopts what already
-exists rather than duplicating it. And it is resumable —
-resolved IDs land in `.terraviz-setup.json` (gitignored, never any
-secret values) as they are found, so a run that dies partway through
-picks up where it left off.
+exists rather than duplicating it. And it is resumable. Resolved IDs
+land in `.terraviz-setup.json` as they are found — gitignored, never
+any secret values — so a run that dies partway through picks up where
+it left off.
 
 It reads the same manifest the audit does
 ([`scripts/lib/expected-bindings.ts`](../scripts/lib/expected-bindings.ts)),
@@ -265,7 +271,7 @@ error`.
 | Requirement | Why | Automatable? |
 |---|---|---|
 | Cloudflare account | Everything runs here. | No — sign up by hand |
-| **Workers Paid ($5/mo)** | Analytics Engine is not on the free plan, and Workers AI free-tier neurons (~10k/day) are exhausted by roughly 200 Orbit turns. Without it, telemetry silently no-ops and Orbit degrades to its local engine mid-demo. | No — billing UI |
+| **Workers Paid ($5/mo)** | Workers AI is capped at 10,000 Neurons/day on the free plan — roughly 200 Orbit turns — and you cannot exceed that without upgrading. Orbit then degrades to its local keyword engine mid-demo. | No — billing UI |
 | A domain on **Cloudflare DNS** | For `W2`. Moving DNS to Cloudflare is free; you change nameservers at your registrar. Registering a new domain through Cloudflare also works. | No — registrar action |
 | GitHub or GitLab account | Pages builds from a Git remote (or you deploy by Direct Upload from CI). | No |
 | Node.js 20+ and npm | Build, test, migrate. | — |
@@ -274,10 +280,13 @@ Write your account ID (`W1`), your intended hostname (`W2`), and
 your Git remote (`W3`) on the worksheet now. The account ID is in
 the Cloudflare dashboard sidebar and in every dashboard URL.
 
-> **Can I skip Workers Paid?** For a Tier 1 kick-the-tyres deploy,
-> yes — the app runs, and the two things you lose (telemetry
-> storage, sustained Orbit) both fail soft. For anything you'd
-> show another human, no.
+> **Can I skip Workers Paid?** More than you might expect. D1, KV,
+> R2, Vectorize, Analytics Engine and Workers AI all have free
+> allocations, so a free-plan node provisions and runs. What you give
+> up is headroom, and it fails soft: Orbit falls back to its local
+> keyword engine once the day's 10,000 Neurons are gone. For a kiosk
+> that will field questions all day, pay the $5. See
+> [§0.5](#05-what-the-free-plan-actually-costs-you) for the numbers.
 
 ## 0.2 Tools
 
@@ -334,7 +343,7 @@ them:
 
 | Prerequisite | Needed by | Why it cannot be detected |
 |---|---|---|
-| **Workers Paid ($5/mo)** | Phase 8 onward | Billing state is not exposed to the token. A free-plan account provisions everything successfully and then silently drops Analytics Engine writes |
+| **Workers Paid ($5/mo)** | Phase 8 onward | Billing state is not exposed to the token. A free-plan account provisions everything successfully, then throttles Orbit once the day's Workers AI allocation is spent |
 | **Mint the R2 S3 API token** | Phase 13.1 | Automating it would need a token that can mint tokens — a credential able to grant itself more authority. It stays manual on purpose. (The secret is also shown exactly once, so capture all three values then) |
 
 That asymmetry is the whole reason the pre-flight list is short.
@@ -343,6 +352,38 @@ Confirm those two; let the tool tell you about the rest.
 > This table is generated from `MANUAL_STEPS` in
 > `scripts/lib/setup/interview.ts` on the [`/setup`](/setup) page,
 > which is where to look if it ever disagrees with this one.
+
+## 0.5 What the free plan actually costs you
+
+Less than the rest of this guide used to claim. Every product a
+Terraviz node binds has a free allocation, so a free-plan account
+provisions the whole stack and serves real traffic.
+
+| Product | Workers Free allocation | What happens at the ceiling |
+|---|---|---|
+| **Workers AI** (Orbit) | 10,000 Neurons/day | Requests fail. Orbit falls back to its local keyword engine. **You cannot buy past this without upgrading** — this is the one that bites |
+| **Analytics Engine** (telemetry) | 100,000 data points + 10,000 read queries/day | Writes rejected past the cap. Not billed at all today |
+| **Vectorize** (semantic search) | 30M queried + 5M stored vector dimensions/month | At 768 dimensions that is ~6,500 stored datasets |
+| **D1** (catalog) | 5 GB total | A hard cap on Free, not an overage — writes start failing. Paid includes the same 5 GB, then $0.75/GB-month |
+| **R2** (assets) | 10 GB-month | Billed at $0.015/GB-month past it, on either plan |
+| **KV**, **Pages** | Ample for a single node | — |
+
+The practical reading: Orbit is the reason to pay $5. Roughly 200
+conversations a day exhausts the Neuron allocation, and a kiosk in a
+museum lobby will pass that before lunch. Everything else on this
+list either has room to spare at node scale, or is billed the same
+whichever plan you are on.
+
+> **Checked against Cloudflare's published pricing on 2026-08-03.**
+> These allocations move, so re-read the
+> [Workers pricing page](https://developers.cloudflare.com/workers/platform/pricing/)
+> before you rely on them.
+>
+> One caveat on that page. Its Vectorize section still carries a
+> stale "only available on the Workers paid plan" sentence, sitting
+> directly above a table with a Workers Free column. Trust the
+> [Vectorize pricing page](https://developers.cloudflare.com/vectorize/platform/pricing/)
+> instead.
 
 ---
 
@@ -365,9 +406,9 @@ involved. Orbit falls back to its local keyword engine because
 
 ## 1.2 The backend (optional, but do it if you're going Tier 2)
 
-This runs the Pages Functions — the catalog API, the publisher
-API, the events and blog surfaces — against a local SQLite file,
-with mocks standing in for Workers AI, Vectorize, R2 and Stream.
+This runs the Pages Functions against a local SQLite file — the
+catalog API, the publisher API, and the events and blog surfaces.
+Mocks stand in for Workers AI, Vectorize, R2 and Stream.
 
 **Run these three in exactly this order.** The order matters and
 the previous guide never stated it:
@@ -409,11 +450,11 @@ npm run dev:functions   # http://localhost:8788
 > ```
 >
 > **Cause.** `wrangler.toml` declares an `[ai]` binding. Wrangler
-> runs Workers AI bindings in *remote* mode unconditionally, so
+> runs Workers AI bindings in *remote* mode unconditionally. So
 > `wrangler pages dev` opens an authenticated proxy session to
 > Cloudflare before it will serve anything — even though
-> `.dev.vars` sets `MOCK_AI=true` specifically so you don't need
-> the real service. Setting `experimental_remote = false` on the
+> `.dev.vars` sets `MOCK_AI=true` precisely so you don't need the
+> real service. Setting `experimental_remote = false` on the
 > `[ai]` block does not suppress it, and `pages dev` rejects
 > `--config`, so you can't point it at a stripped-down file.
 >
@@ -519,10 +560,10 @@ guide put *first*, which made it impossible to complete.
 
 > **Automated.** `npm run setup -- --apply --only=wrangler-toml` does
 > this from the IDs the resources step recorded. It edits per binding
-> block rather than by string replace — the two D1 blocks share a
-> `database_name` and the two KV blocks share a section header, so a
-> global replace cannot tell them apart. It refuses to apply while any
-> ID is still unknown.
+> block rather than by string replace. A global replace cannot tell
+> the blocks apart: the two D1 blocks share a `database_name`, and
+> the two KV blocks share a section header. It refuses to apply while
+> any ID is still unknown.
 
 | Block | Field | Ships as | Replace with |
 |---|---|---|---|
@@ -667,8 +708,8 @@ authorise, pick `W3`, then:
 - Root directory: *(empty)*
 
 **Build-time environment variables** — set these *before* the first
-build; `VITE_*` values are baked into the bundle at build time and
-changing one later requires a rebuild, not just a redeploy.
+build. `VITE_*` values are baked into the bundle at build time.
+Changing one later requires a rebuild, not just a redeploy.
 
 | Variable | Value | Notes |
 |---|---|---|
@@ -695,11 +736,12 @@ that isn't yours.
   disable the `deploy` job in `ci.yml` and `poster.yml`. Keep
   `type-check`, `unit-tests`, and `build` — they're fork-safe and
   need no secrets.
-- **Using GitHub Actions to deploy (Direct Upload):** set repo
-  secrets `CLOUDFLARE_API_TOKEN` (`W11`) and `CLOUDFLARE_ACCOUNT_ID`
-  (`W1`), change every `--project-name terraviz` to `W10`, set the
-  repo **Variable** `TERRAVIZ_SERVER` to `https://<W2>`, and do
-  *not* connect the Git integration.
+- **Using GitHub Actions to deploy (Direct Upload):** four things.
+  Set repo secrets `CLOUDFLARE_API_TOKEN` (`W11`) and
+  `CLOUDFLARE_ACCOUNT_ID` (`W1`). Change every
+  `--project-name terraviz` to `W10`. Set the repo **Variable**
+  `TERRAVIZ_SERVER` to `https://<W2>`. And do *not* connect the Git
+  integration.
 
 `W11` needs, at minimum, **Account → Cloudflare Pages → Edit**. Add
 **Account → D1 → Edit** only if you enable CI migrations (Phase
@@ -744,14 +786,14 @@ middleware fails closed: without `ACCESS_TEAM_DOMAIN` and
 `ACCESS_AUD`, every `/api/v1/publish/**` route returns 503
 `access_unconfigured`, and the `terraviz` CLI cannot do anything.
 
-> **Automated.** Once you have done 6.1 (Zero Trust onboarding, which
-> is a one-time dashboard flow), `npm run setup -- --apply
-> --only=access` does 6.2 and 6.3: it discovers your team domain,
-> creates the application with all six destinations, creates both
-> policies, mints the service token, and attaches it. It records the
-> AUD and prints the token pair once. The click-by-click below is the
-> reference for what it builds, and the path to take if you would
-> rather do it by hand.
+> **Automated.** 6.1 is Zero Trust onboarding, a one-time dashboard
+> flow you have to do yourself. Once it is done,
+> `npm run setup -- --apply --only=access` does 6.2 and 6.3. It
+> discovers your team domain, creates the application with all six
+> destinations, creates both policies, mints the service token, and
+> attaches it. It records the AUD and prints the token pair once. The
+> click-by-click below is the reference for what it builds, and the
+> path to take if you would rather do it by hand.
 
 ## 6.1 Set up Zero Trust
 
@@ -1225,10 +1267,10 @@ Needed before publisher asset uploads or the web zip-download work.
 ]
 ```
 
-R2's CORS is strict: `HEAD` must be listed explicitly even though
-Fetch treats it as simple, and `Content-Range` must be in
-`ExposeHeaders` (it isn't CORS-safelisted, so the zip dialog's
-Range-GET size probe can't read it otherwise). Add
+R2's CORS is strict in two ways. `HEAD` must be listed explicitly,
+even though Fetch treats it as a simple method. And `Content-Range`
+must be in `ExposeHeaders` — it isn't CORS-safelisted, so the zip
+dialog's Range-GET size probe can't read it otherwise. Add
 `http://localhost:5173` for dev; add `tauri://localhost`,
 `http://tauri.localhost` and `https://tauri.localhost` to the
 GET/HEAD rule for desktop builds.
@@ -1298,8 +1340,8 @@ the portal's polling surface. Refused on non-loopback hostnames.
 ### WAF skip rule for the transcode-complete callback
 
 Access service tokens bypass Access but **not** Bot Fight Mode, the
-Managed Ruleset, or custom WAF rules. If any of those are active —
-Bot Fight Mode is on by default from the Free plan up — the
+Managed Ruleset, or custom WAF rules. Bot Fight Mode is on by
+default from the Free plan up. If any of those are active, the
 runner's final POST to
 `/api/v1/publish/datasets/{id}/transcode-complete` gets a `Just a
 moment...` interstitial and never reaches the Worker. ffmpeg
@@ -1329,10 +1371,11 @@ Action **Skip**, ticking: all remaining custom rules, all managed
 rules, all Super Bot Fight Mode rules, Browser Integrity Check,
 and Security Level.
 
-This is safe because only requests carrying a service-token id can
-match, Access still validates the token afterwards (a forged header
-without the secret can't authenticate), and the route handler
-independently enforces `role='service'`.
+This is safe for three reasons. Only requests carrying a
+service-token id can match. Access still validates the token
+afterwards, so a forged header without the secret can't
+authenticate. And the route handler independently enforces
+`role='service'`.
 
 **Step 2 — plain Bot Fight Mode (Free/Pro).** The Skip action's
 "All Super Bot Fight Mode Rules" covers SBFM (Pro+) but not plain
@@ -1644,9 +1687,9 @@ No bindings, no new secrets, no custom domain needed — it's a
 static `index.html` plus PNGs, and it reuses `W11`/`W1`. Set
 `VISUAL_DEPLOY_URL` (a repo **Variable**) to re-capture against the
 live site with the a11y scan on. If `/publish/**` is behind Access,
-the headless capture hits the SSO wall — it already reuses
+the headless capture hits the SSO wall. It already reuses
 `CF_ACCESS_CLIENT_ID`/`CF_ACCESS_CLIENT_SECRET`, so there's nothing
-new to set as long as that token's Service Auth policy covers the
+new to set — as long as that token's Service Auth policy covers the
 publisher app. Headers go only to first-party origins, never to
 tile CDNs. The deploy step is `continue-on-error`, so skipping all
 of it breaks nothing. The regression baseline is a GitHub Actions
@@ -1675,7 +1718,7 @@ only matter for mirrored SOS rows.
 
 > `TERRAVIZ_DOCS_URL` only matters for people reading your node's
 > `/setup` without filling anything in. The console also retargets
-> those links at runtime from `W3`, your git remote — so anyone
+> those links at runtime from `W3`, your git remote. So anyone
 > actually working through the install gets your fork's guide as soon
 > as they enter it, whether or not you set the variable.
 
@@ -1727,34 +1770,43 @@ exercised.
   validation and re-prompting, defaults, optional skips, the
   missing-token warning, and the handoff report.
 
-**Modelled from documentation, not executed.** Every Cloudflare API
-call `npm run setup` makes — Access applications, policies and
-service tokens; the Pages project and its custom domain; the R2 CORS
-policy and public domain; the WAF ruleset entrypoint; the Pages
-bindings PATCH — was written against Cloudflare's documented API and,
-for Access, against what `functions/api/v1/_lib/access-auth.ts`
-proves about the resulting JWTs. **No live Cloudflare account was
-available to exercise any of them.**
+**Modelled from documentation, not executed.** `npm run setup`
+makes these Cloudflare API calls:
 
-What that risk is bounded by: every request body is built by a pure,
-unit-tested function, so the shape is pinned and reviewable in the
-diff; a shape mismatch surfaces as a Cloudflare validation error
-naming the field, not as a silent misconfiguration; the R2 step
-prints the dashboard-paste JSON if its call fails; and the WAF step
-refuses to write when its read failed. Plan mode makes no network
-calls at all.
+- Access applications, policies and service tokens.
+- The Pages project and its custom domain.
+- The R2 CORS policy and public domain.
+- The WAF ruleset entrypoint.
+- The Pages bindings PATCH.
+
+Each was written against Cloudflare's documented API. The Access
+calls were also written against what
+`functions/api/v1/_lib/access-auth.ts` proves about the resulting
+JWTs. **No live Cloudflare account was available to exercise any of
+them.**
+
+What that risk is bounded by:
+
+- Every request body is built by a pure, unit-tested function, so
+  the shape is pinned and reviewable in the diff.
+- A shape mismatch surfaces as a Cloudflare validation error naming
+  the field, not as a silent misconfiguration.
+- The R2 step prints the dashboard-paste JSON if its call fails.
+- The WAF step refuses to write when its read failed.
+- Plan mode makes no network calls at all.
 
 Run the risky steps one at a time on your first real install —
 `--only=pages`, then `--only=access`, then the rest — and check the
 dashboard between them.
 
 **Not verified — no Cloudflare account was available in this
-environment.** Every dashboard click path, the Access application
-and service-token flows, the remote migration apply, and both
-Phase 10 verification tools were reconstructed from the code that
-consumes them (`expected-bindings.ts`, `verify-checks.ts`,
-`_middleware.ts`, `access-auth.ts`, `github-dispatch.ts`) rather
-than executed. Dashboard labels drift; if one doesn't match, trust
+environment.** Four things here were reconstructed rather than
+executed: every dashboard click path, the Access application and
+service-token flows, the remote migration apply, and both Phase 10
+verification tools. Each was reconstructed from the code that
+consumes it — `expected-bindings.ts`, `verify-checks.ts`,
+`_middleware.ts`, `access-auth.ts`, `github-dispatch.ts`.
+Dashboard labels drift; if one doesn't match, trust
 the binding *name* — that's what the code reads.
 
 **Defects found and corrected from the previous revision:**
@@ -1766,9 +1818,9 @@ the binding *name* — that's what the code reads.
    `$CF_ACCESS_CLIENT_SECRET`, which nothing had created. Service
    tokens first appeared in old Step 15b, three steps later.
 3. **No step created the Access application for
-   `/api/v1/publish/**`** — yet old Step 10 told you to configure
-   its AUD, and old Step 16 opened by claiming "Step 10's Access
-   config protected the publisher API". It hadn't.
+   `/api/v1/publish/**`.** Yet old Step 10 told you to configure its
+   AUD, and old Step 16 opened by claiming "Step 10's Access config
+   protected the publisher API". It hadn't.
 4. Old Step 10 asked for `NODE_ID_PRIVATE_KEY_PEM` and
    `PREVIEW_SIGNING_KEY` before old Step 12 introduced
    `gen:node-key`.
@@ -1824,10 +1876,12 @@ traffic. Check both Production and Preview.
 silently skips the write when undefined.
 
 ### `/api/ingest` returns 403
-The CORS gate rejected it. Either the `Origin` header is missing
-(browsers always send it; curl doesn't unless you pass
-`-H "Origin: …"`), or the origin isn't in the allowlist, doesn't
-match the request URL, and doesn't end with `.pages.dev`.
+The CORS gate rejected it, for one of two reasons.
+
+1. The `Origin` header is missing. Browsers always send it; curl
+   doesn't, unless you pass `-H "Origin: …"`.
+2. The origin isn't in the allowlist, doesn't match the request URL,
+   and doesn't end with `.pages.dev`.
 
 ### Publisher API returns 503 `access_unconfigured`
 `ACCESS_TEAM_DOMAIN` or `ACCESS_AUD` is missing — most often set on
@@ -1913,13 +1967,16 @@ backed by S3, CORS lives in two places:
    JSON. `HEAD` in `<AllowedMethod>`, `Content-Length` +
    `Content-Range` in `<ExposeHeader>`.
 2. **CloudFront** — it caches by URL and strips CORS headers unless
-   told otherwise. Either attach a **Response Headers Policy**
-   (`Allow-Origin: *`, `Allow-Methods: GET, HEAD`,
-   `Expose-Headers: Content-Length, Content-Range`, Origin
-   Override: Yes) to the default cache behaviour and invalidate
-   `/*` — this wins over S3-side config — or use the AWS-managed
-   `CORS-S3Origin` cache policy, which is less invasive but
-   fragments the cache and still needs the S3 fix.
+   told otherwise. You have two options.
+
+   Attach a **Response Headers Policy** to the default cache
+   behaviour, then invalidate `/*`. Use `Allow-Origin: *`,
+   `Allow-Methods: GET, HEAD`, `Expose-Headers: Content-Length,
+   Content-Range`, and Origin Override: Yes. This wins over
+   S3-side config.
+
+   Or use the AWS-managed `CORS-S3Origin` cache policy. It is less
+   invasive, but it fragments the cache and still needs the S3 fix.
 
 The S3 fix alone suffices if the distribution already forwards
 `Origin`. Cheapest test: apply it, hard-refresh, open the

@@ -20,6 +20,7 @@ import {
   applyShell,
   docLinkRuntime,
   docLinkScript,
+  costRuntime,
   resolveDocsUrl,
   assertSelfContained,
   assertValidatorsImplemented,
@@ -30,6 +31,7 @@ import {
   TOKEN_ALIASES,
 } from './shell'
 import { MARKDOWN_URL, WORKSHEET } from './content'
+import { estimateStorage, REFERENCE_NODE } from './pricing'
 
 const PAGE = resolve(__dirname, '../../public/setup.html')
 const html = (): string => readFileSync(PAGE, 'utf8')
@@ -42,6 +44,22 @@ const RAW_EXPORT_HEAD = [
   '<link rel="icon" href="/terraviz-favicon-32.png"/>',
   '</head><body>',
   '<img src="/terraviz-globe.svg" alt="" width="26" height="26"/>',
+  '</body>',
+].join('\n')
+
+/**
+ * Carries both injection triggers: an upstream doc link (which is what
+ * applyDocLinks matches on) and the cost widget.
+ */
+const RAW_EXPORT_WITH_RUNTIMES = [
+  '<head>',
+  '<meta charset="utf-8"/>',
+  '<title>Terraviz — install console</title>',
+  '<meta name="robots" content="noindex"/>',
+  '</head><body>',
+  `<a href="${MARKDOWN_URL}#phase-2--create-the-cloudflare-resources">Phase 2</a>`,
+  '<input data-cost-count value="120"/><span data-cost-out></span>',
+  '<span data-cost-note></span>',
   '</body>',
 ].join('\n')
 
@@ -64,6 +82,25 @@ describe('applyShell', () => {
     const { html: twice, repairs } = applyShell(once)
     expect(twice).toBe(once)
     expect(repairSummary(repairs)).toEqual([])
+  })
+
+  // The test above passes vacuously for the injected runtimes:
+  // RAW_EXPORT_HEAD has neither a doc link nor a cost widget, so
+  // neither injection fires and re-running cannot duplicate them.
+  //
+  // The cost runtime guarded on `data-cost-count` — the markup that
+  // *triggers* the injection, still present on a second pass — so it
+  // was injected twice, giving the page duplicate input listeners and
+  // repaint calls. This fixture carries both triggers so the guards
+  // are actually exercised.
+  it('does not re-inject its runtimes on a second pass', () => {
+    const once = applyShell(RAW_EXPORT_WITH_RUNTIMES).html
+    const twice = applyShell(once).html
+    expect(twice).toBe(once)
+    const scripts = (id: string): number =>
+      (once.match(new RegExp(`data-tv-injected="${id}"`, 'g')) ?? []).length
+    expect(scripts('doc-links')).toBe(1)
+    expect(scripts('cost')).toBe(1)
   })
 
   it('refuses to guess where the CSP goes if the head is restructured', () => {
@@ -180,6 +217,41 @@ describe('fork-friendly doc links', () => {
   })
 })
 
+describe('the cost estimate runtime', () => {
+  // `String.replace` reads `$'` in a *replacement string* as
+  // "everything after the match". Both injected scripts format money
+  // with `'~$' + …`, so a string replacement spliced the tail of the
+  // document into the middle of a string literal and broke the page
+  // with "Invalid or unexpected token". Nothing but parsing the output
+  // catches that.
+  it('survives injection without the $-pattern eating the document', () => {
+    const page = applyShell(
+      '<html><head><title>t</title></head><body><input data-cost-count/><output data-cost-out></output><p data-cost-note></p></body>\n</html>',
+    ).html
+    expect(page).toContain('data-cost-count')
+    expect(page).not.toMatch(/'~\n/)
+    expect(() => new Function(costRuntime())).not.toThrow()
+  })
+
+  it('is injected only when the panel is on the page', () => {
+    const without = applyShell('<html><head><title>t</title></head><body></body></html>').html
+    expect(without).not.toContain('data-cost-out')
+  })
+
+  // The browser copy and the tested pure function must not drift.
+  it('matches estimateStorage() at the same inputs', () => {
+    document.body.innerHTML =
+      `<input data-cost-count value="${REFERENCE_NODE.videoDatasets}"/>` +
+      '<output data-cost-out></output><p data-cost-note></p>'
+    new Function(costRuntime())()
+    const shown = document.querySelector('[data-cost-out]')!.textContent!
+    const e = estimateStorage(REFERENCE_NODE.videoDatasets)
+    expect(shown).toContain(e.storageGb.toFixed(0))
+    // The browser copy must land on the real invoice too.
+    expect(shown).toContain(String(REFERENCE_NODE.monthlyUsd))
+  })
+})
+
 describe('assertSelfContained', () => {
   it('accepts inline and data: subresources, and the favicon', () => {
     expect(() =>
@@ -240,6 +312,64 @@ describe('the committed public/setup.html', () => {
     // 15 phases + the two standing references.
     expect((page.match(/data-doc="/g) ?? []).length).toBeGreaterThanOrEqual(17)
     expect(page).toContain('terraviz-setup-console-v1')
+  })
+
+  // The plan chooser offers Free as a supported choice, so the sheet
+  // must not then list "Enable Workers Paid" as task one. Asserted on
+  // the built page because the sheet lives in render.ts, which the
+  // next design export replaces wholesale.
+  it('offers a free-plan variant of the Workers Paid prerequisite', () => {
+    const page = html()
+    expect(page).toContain('data-when="paid"')
+    expect(page).toContain('data-when="free"')
+    // Both variants present means the row count is stable across plans.
+    expect((page.match(/Workers Paid/g) ?? []).length).toBeGreaterThanOrEqual(2)
+  })
+
+  // The page used to drop the Analytics Engine dataset (W9) and the
+  // ANALYTICS binding whenever the reader chose Free, believing
+  // Analytics Engine to be paid-only. It is not — Workers Free
+  // includes 100,000 data points a day, and every other product this
+  // node binds has a free allocation too.
+  //
+  // An operator who skips a resource on that advice gets a node that
+  // provisions clean and then fails at Phase 8 with a binding pointing
+  // at nothing. Plan may change wording, which is what data-when is
+  // for; it must never change which resources exist.
+  it('hides nothing by plan', () => {
+    expect(html()).not.toContain('data-paid-only')
+  })
+
+  // The specific wrong claim, in the words it shipped in.
+  it('does not claim Analytics Engine is unavailable on the free plan', () => {
+    const page = html()
+    expect(page).not.toMatch(/Analytics Engine is not on the free plan/i)
+    expect(page).not.toMatch(/no Analytics Engine (dataset )?to (point|write)/i)
+    expect(page).not.toMatch(/give up Analytics Engine/i)
+  })
+
+  // A reader totting up Cloudflare line items concludes the node is
+  // nearly free and is right — while missing that transcode is real
+  // CPU work on GitHub's runners, free only while the fork is public.
+  it('says where the compute happens and what it costs', () => {
+    const page = html()
+    expect(page).toContain('not on your Cloudflare bill')
+    expect(page).toContain('transcode-hls')
+    // Quoted, not paraphrased — it is someone else's policy.
+    expect(page).toContain('free for self-hosted runners and for public repositories')
+    expect(page).toContain('any other activity unrelated to the production')
+  })
+
+  // Markup passed through an escaping helper reaches the reader as
+  // literal '<span data-when="free">…' text, and never toggles,
+  // because an escaped tag is not an element. It shipped that way in
+  // the Workers AI card and only surfaced when a readability scan
+  // reported the tags as prose.
+  it('never renders escaped markup as visible text', () => {
+    const page = html()
+    for (const leaked of ['&lt;span', '&lt;div', '&lt;a ', '&lt;p&gt;']) {
+      expect(page, `${leaked} is being shown to the reader as text`).not.toContain(leaked)
+    }
   })
 
   it('carries the CSP and the real favicon', () => {

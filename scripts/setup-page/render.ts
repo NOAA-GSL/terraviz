@@ -29,6 +29,7 @@ import { QUESTIONS, MANUAL_STEPS, type ManualStep } from '../lib/setup/interview
 import { DEFAULT_NAMES } from '../lib/setup/state'
 import { PUBLISHER_PATHS, STAFF_POLICY_NAME, AUTOMATION_POLICY_NAME } from '../lib/setup/access'
 import { UPSTREAM_PINNED_IDS } from '../lib/setup/wrangler-toml'
+import { CHECKED_ON, D1_PRICING, freeVideoDatasets, GITHUB_ACTIONS, R2_PRICING, REFERENCE_NODE } from './pricing'
 import {
   PHASES,
   WORKSHEET,
@@ -168,26 +169,7 @@ export function crossCheck(): void {
     )
   }
 
-  // 7. The free-plan filter hides the Analytics Engine binding by name.
-  //    If that binding is ever renamed, the filter would silently stop
-  //    matching and the page would tell free-plan operators to wire a
-  //    binding they cannot create.
-  if (!EXPECTED_BINDINGS.some(b => b.name === 'ANALYTICS')) {
-    problems.push(
-      'no binding named ANALYTICS — the free-plan filter in render.ts matches on ' +
-        'that name and needs updating',
-    )
-  }
-  const paidFields = WORKSHEET.filter(w => w.paidOnly)
-  if (paidFields.length !== 1 || paidFields[0].id !== 'W9') {
-    problems.push(
-      'expected exactly one paidOnly worksheet field (W9, the Analytics Engine ' +
-        'dataset); found: ' +
-        (paidFields.map(w => w.id).join(', ') || 'none'),
-    )
-  }
-
-  // 8. Every validator a worksheet field names must exist in the
+  // 7. Every validator a worksheet field names must exist in the
   //    page's inline script. Behaviour still cannot be compared across
   //    the module boundary, but a field pointing at a validator the
   //    browser does not have would silently accept anything — the one
@@ -214,12 +196,29 @@ export function crossCheck(): void {
 const esc = (s: string): string =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 
-/** `**bold**`, `*italic*`, `` `code` `` → HTML. Inputs are ours. */
+/**
+ * `**bold**`, `*italic*`, `` `code` ``, `[text](href)` → HTML,
+ * escaped first. Inputs are ours.
+ *
+ * Links are part of the vocabulary because they have to be: without
+ * them, an author writing `<a href="#cost">` gets it escaped and the
+ * reader sees the raw tag. That shipped twice — in the Workers AI card
+ * and in the install sheet's "see what it costs" — and neither was a
+ * broken link so much as markup printed at the reader.
+ *
+ * The href allowlist is `#anchor` and `https://` only. This content is
+ * ours rather than user input, so it is belt-and-braces, but an
+ * unconstrained href built by string replacement is precisely the sink
+ * CodeQL flagged elsewhere on this page and it costs nothing to shut.
+ */
 function inline(s: string): string {
   return esc(s)
     .replace(/`([^`]+)`/g, '<code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">$1</code>')
     .replace(/\*\*([^*]+)\*\*/g, '<b style="font-weight:600;color:var(--tv-text)">$1</b>')
     .replace(/\*([^*]+)\*/g, '<i>$1</i>')
+    .replace(/\[([^\]]+)\]\((#[\w-]+|https:\/\/[^)\s"']+)\)/g, (_m, text: string, href: string) =>
+      `<a href="${href}">${text}</a>`,
+    )
 }
 
 /** Substitution tokens survive escaping and are replaced at runtime. */
@@ -300,6 +299,70 @@ const EYEBROW =
  * be more friction than a day of staff time, so the free path is named
  * here rather than left implicit.
  */
+/**
+ * The compute, which is not Cloudflare's at all.
+ *
+ * A reader totting up Cloudflare line items will conclude the node is
+ * nearly free and be right — while missing that transcoding video and
+ * running Zyra pipelines is real CPU work happening somewhere else
+ * entirely, on GitHub's runners. Worth naming, both because the
+ * subsidy is real and because it comes with a condition.
+ */
+function computePanel(): string {
+  return `<div style="background:var(--tv-surface-2);border:1px solid var(--tv-border);border-radius:8px;padding:22px 24px;margin:0 0 22px">
+  <div style="${EYEBROW};margin:0 0 10px">Compute · not on your Cloudflare bill</div>
+  <p style="margin:0 0 14px;max-width:68ch;font-size:13.5px;line-height:1.6;color:var(--tv-text-muted);text-wrap:pretty">Transcoding a video into its HLS ladder, and running a Zyra pipeline to build a data-encoded dataset, are the heaviest things your node does — and Cloudflare never sees them. They run as GitHub Actions in <em>your</em> repository, fired by the publisher API: <code style="font-family:var(--tv-font-mono);font-size:.92em">transcode-hls</code>, <code style="font-family:var(--tv-font-mono);font-size:.92em">zyra-run</code>, and the scheduled feed, analytics and refresh jobs.</p>
+
+  <p style="margin:0 0 14px;padding:12px 14px;background:rgba(34,197,94,.07);border:1px solid rgba(34,197,94,.24);border-left:3px solid var(--tv-success);border-radius:6px;max-width:68ch;font-size:13px;line-height:1.6;color:var(--tv-text-muted);text-wrap:pretty"><strong style="color:var(--tv-text)">Keep your fork public and that compute is free.</strong> GitHub's billing docs put it plainly: <em>"GitHub Actions usage is free for self-hosted runners and for public repositories that use standard GitHub-hosted runners."</em> An open-source node pays nothing for transcode. A <strong>private</strong> fork draws on your account's monthly Actions minutes instead, which is the one configuration where this stops being free.</p>
+
+  <p style="margin:0 0 14px;max-width:68ch;font-size:13px;line-height:1.6;color:var(--tv-text-muted);text-wrap:pretty"><strong style="color:var(--tv-text)">Within reason, though.</strong> GitHub's terms limit Actions to work connected to the repository it runs in — excluding <em>"any other activity unrelated to the production, testing, deployment, or publication of the software project associated with the repository."</em> Building and publishing your own node's datasets sits inside that. Pointing the runners at unrelated batch compute does not, and GitHub monitors for it. Jobs also stop hard at ${GITHUB_ACTIONS.jobLimitDays} days, and a free account runs at most ${GITHUB_ACTIONS.concurrentJobsFree} standard jobs at once.</p>
+
+  <p style="margin:0;font-size:11.5px;line-height:1.5;color:var(--tv-text-dim)">If your pipelines outgrow that — or you would rather not lean on it — self-hosted runners are free too, and you supply the hardware. Read on ${esc(CHECKED_ON)}: <a href="${GITHUB_ACTIONS.billingDocs}">billing</a> · <a href="${GITHUB_ACTIONS.limitsDocs}">limits</a> · <a href="${GITHUB_ACTIONS.termsDocs}">terms</a>.</p>
+</div>`
+}
+
+/**
+ * Storage, which both plans are billed for identically.
+ *
+ * The cost panel used to file "storage is billed on top" under Workers
+ * Paid, which left the free column reading as an unqualified $0. R2 is
+ * charged the same either way, so a free-plan operator publishing a
+ * few hundred hours of video had no idea a bill was coming. Its own
+ * section, outside the two columns, is the only honest place for it.
+ */
+function storagePanel(): string {
+  const usd = (n: number): string => (n < 10 ? n.toFixed(2) : Math.round(n).toString())
+  const row = (label: string, free: string, beyond: string): string =>
+    `<div style="display:contents"><div style="padding:9px 0;border-top:1px solid var(--tv-border);font:500 13px/1.4 var(--tv-font-sans);color:var(--tv-text)">${label}</div><div style="padding:9px 0;border-top:1px solid var(--tv-border);font-size:12.5px;color:var(--tv-text-muted)">${inline(free)}</div><div style="padding:9px 0;border-top:1px solid var(--tv-border);font-size:12.5px;color:var(--tv-text-muted)">${inline(beyond)}</div></div>`
+
+  return `<div style="background:var(--tv-surface-2);border:1px solid var(--tv-border);border-radius:8px;padding:22px 24px;margin:0 0 22px">
+  <div style="${EYEBROW};margin:0 0 10px">Storage · the same on both plans</div>
+  <p style="margin:0 0 16px;max-width:66ch;font-size:13.5px;line-height:1.6;color:var(--tv-text-muted);text-wrap:pretty">This is the part that is easy to miss: R2 and D1 bill identically whether or not you pay the $5. Both have a free allowance, and for most nodes that allowance is the whole story — a catalog of metadata, images and tours does not come close to it. Publishing your own <em>video</em> is the only thing that moves it. The free ${R2_PRICING.freeStorageGb} GB holds roughly <strong>${freeVideoDatasets()} video datasets</strong>; past that it is still cents rather than a budget line.</p>
+
+  <p style="margin:0 0 16px;padding:12px 14px;background:var(--tv-accent-bg);border:1px solid var(--tv-accent-border);border-radius:6px;max-width:70ch;font-size:13px;line-height:1.6;color:var(--tv-text-muted);text-wrap:pretty"><strong style="color:var(--tv-text)">A real number, not a model.</strong> This project's own node publishes ${REFERENCE_NODE.datasets} datasets, ${REFERENCE_NODE.videoDatasets} of them video, and stores ${REFERENCE_NODE.storedGb} GB in R2. Its Cloudflare bill for that storage is <strong style="color:var(--tv-text)">$${REFERENCE_NODE.monthlyUsd} a month</strong> — ${REFERENCE_NODE.billedGbMonth} GB-month after the free ${R2_PRICING.freeStorageGb} GB. Every operations line on the same invoice was $0.00. The estimate below is that measurement scaled, not a formula.</p>
+
+  <div style="display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr) minmax(0,1.2fr);gap:0 20px;margin:0 0 18px">
+    <div style="${EYEBROW};font-size:9px;padding-bottom:7px">What</div>
+    <div style="${EYEBROW};font-size:9px;padding-bottom:7px">Free every month</div>
+    <div style="${EYEBROW};font-size:9px;padding-bottom:7px">Past that</div>
+    ${row('R2 — video, images, tours', `${R2_PRICING.freeStorageGb} GB stored`, `$${R2_PRICING.storagePerGbMonth}/GB per month`)}
+    ${row('R2 — serving it to visitors', 'unmetered', '**egress is free** — no per-GB charge, ever')}
+    ${row('R2 — requests', `${R2_PRICING.freeClassB / 1_000_000}M reads, ${R2_PRICING.freeClassA / 1_000_000}M writes`, `$${R2_PRICING.classBPerMillion}/M reads`)}
+    ${row('D1 — catalog metadata', `${D1_PRICING.freePlanStorageGb} GB`, `$${D1_PRICING.paidStoragePerGbMonth}/GB per month (paid plan only)`)}
+  </div>
+
+  <div style="background:var(--tv-surface-code);border:1px solid var(--tv-border);border-radius:6px;padding:16px 18px">
+    <label for="cost-count" style="display:block;font:500 13px/1.4 var(--tv-font-sans);color:var(--tv-text);margin:0 0 10px">How many <strong>video</strong> datasets do you expect to publish?</label>
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:0 0 10px">
+      <input id="cost-count" data-cost-count type="range" min="0" max="1000" step="10" value="${REFERENCE_NODE.videoDatasets}" style="flex:1 1 220px;accent-color:var(--tv-accent)"/>
+    </div>
+    <output data-cost-out style="display:block;font:600 14px/1.5 var(--tv-font-mono);color:var(--tv-accent)"></output>
+    <p data-cost-note style="margin:8px 0 0;font-size:12.5px;line-height:1.55;color:var(--tv-text-dim);text-wrap:pretty"></p>
+    <p style="margin:10px 0 0;font-size:11.5px;line-height:1.5;color:var(--tv-text-dim)">Storage only, and an order of magnitude rather than a quote — real transcode output swings with resolution and motion. Scaled from a measured node at ${(REFERENCE_NODE.storedGb / REFERENCE_NODE.videoDatasets).toFixed(2)} GB per video dataset — yours will differ with clip length and resolution. Requests are left out because the reference node runs at 2% of the free Class A allowance and 4% of Class B. Rates read from Cloudflare on ${esc(CHECKED_ON)}: <a href="https://developers.cloudflare.com/r2/pricing/">R2</a> · <a href="https://developers.cloudflare.com/d1/platform/pricing/">D1</a>. They change; those pages are authoritative, this one is a copy.</p>
+  </div>
+</div>`
+}
+
 function costPanel(): string {
   const col = (
     plan: 'free' | 'paid',
@@ -325,45 +388,61 @@ function costPanel(): string {
         .join('\n      ')}
     </button>`
 
+  /**
+   * `inline()` escapes its input, so plan-conditional markup passed
+   * inside the body string was rendered to the reader as literal
+   * `<span data-when="free">…` text — and never toggled, because an
+   * escaped tag is not an element. Taking the two variants as data and
+   * building the spans here keeps the escaping honest for the prose
+   * while letting the markup be markup.
+   */
   const aiCard = (
     id: 'workers' | 'local',
     title: string,
     body: string,
+    perPlan?: { free: string; paid: string },
   ): string => `<button data-ai="${id}" style="text-align:left;cursor:pointer;border-radius:6px;padding:18px 20px;font-family:var(--tv-font-sans)">
       <div style="font:600 14px/1.3 var(--tv-font-sans);color:var(--tv-text);margin:0 0 6px">${esc(title)}</div>
-      <p style="margin:0;font-size:13px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">${inline(body)}</p>
+      <p style="margin:0;font-size:13px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">${inline(body)}${
+        perPlan
+          ? ` <span data-when="free">${inline(perPlan.free)}</span><span data-when="paid">${inline(perPlan.paid)}</span>`
+          : ''
+      }</p>
     </button>`
 
   return `<section id="cost" data-noprint="1" style="${CARD};padding:28px 30px;margin:0 0 44px;scroll-margin-top:20px">
   <div style="${EYEBROW};margin:0 0 12px">What it costs</div>
   <h2 style="font:700 27px/1.2 var(--tv-font-sans);letter-spacing:-.01em;color:var(--tv-text);margin:0 0 12px">You can run this on the free plan</h2>
-  <p style="margin:0 0 22px;max-width:64ch;color:var(--tv-text-muted);text-wrap:pretty">Nothing in the install requires a paid Cloudflare account. Two features lose something without one, and both were built to degrade quietly rather than break. Pick the plan you are on and the rest of the page adjusts to it.</p>
+  <p style="margin:0 0 22px;max-width:64ch;color:var(--tv-text-muted);text-wrap:pretty">Nothing in the install requires a paid Cloudflare account, and nothing is switched off without one. What you get on the free plan is a smaller daily allowance of each thing. Orbit is the one that runs out first. Pick the plan you are on and the rest of the page adjusts to it.</p>
   <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px;margin:0 0 16px">
     ${col('free', 'Free plan', '$0', 'var(--tv-warn)', [
       [
-        'Usage analytics stop recording',
-        'Analytics Engine is not on the free plan. Telemetry requests still answer 204 — the writes are simply dropped. No analytics tab, no Grafana. The emergency kill switch still works.',
+        'Orbit throttles after ~200 conversations a day',
+        'Workers AI gives you 10,000 Neurons daily and a docent turn costs about 50. Past that the chat panel shows a "Reduced functionality" badge and the quota resets overnight. This is the one ceiling you cannot buy past without upgrading.',
       ],
       [
-        'Orbit throttles after ~200 conversations a day',
-        'Workers AI gives you roughly 10,000 neurons daily and a docent turn costs about 50. Past that the chat panel shows a "Reduced functionality" badge and the quota resets overnight.',
+        'Telemetry and search have room, but a lower ceiling',
+        'Analytics Engine allows 100,000 data points a day, Vectorize 5 million stored vector dimensions — roughly 6,500 datasets. Both are generous at node scale. D1 stops at 5 GB, and on the free plan that is a hard cap rather than an overage.',
       ],
     ])}
     ${col('paid', 'Workers Paid', '$5/mo', 'var(--tv-accent)', [
       [
-        'Both of those go away',
-        'Visits and dataset views record properly, the in-app dashboards fill in, and Orbit answers all day without throttling.',
+        'Orbit answers all day',
+        'The Neuron allocation stops being a ceiling and becomes an allowance you pay past, at $0.011 per 1,000. The daily throttle goes away.',
       ],
       [
-        'Storage is billed on top',
-        'Only if you publish your own video: an R2 4K ladder runs about 250 MB per minute of source, billed until you delete it. Metadata, images and tours are negligible.',
+        'Nothing else changes',
+        'Same install, same features, same catalog. Storage is billed the same way on both plans — see below.',
       ],
     ])}
   </div>
 
   <div style="${EYEBROW};margin:0 0 10px">Who runs Orbit's language model</div>
   <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px;margin:0 0 16px">
-    ${aiCard('workers', 'Cloudflare Workers AI', 'Nothing to run or maintain — the \`AI\` binding is all it needs. <span data-when="free">Throttles after roughly 200 conversations a day on the free plan.</span><span data-when="paid">Included in your $5.</span>')}
+    ${aiCard('workers', 'Cloudflare Workers AI', 'Nothing to run or maintain — the \`AI\` binding is all it needs.', {
+      free: 'Throttles after roughly 200 conversations a day on the free plan.',
+      paid: 'Included in your $5.',
+    })}
     ${aiCard('local', 'A model you run yourself', 'Ollama, LM Studio, or anything OpenAI-compatible on your own network. No throttle and no per-turn cost, whichever plan you are on — and visitor questions never leave your building.')}
   </div>
 
@@ -374,8 +453,11 @@ function costPanel(): string {
 
   <div data-when="free" style="background:var(--tv-warn-bg);border:1px solid var(--tv-warn-border);border-left:3px solid var(--tv-warn);border-radius:6px;padding:16px 18px;margin:0 0 18px">
     <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-warn);margin:0 0 8px">Free plan · what changed on this page</div>
-    <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">The Analytics Engine dataset and its binding have gone from the worksheet, the dependency map and Phase 8 — there is nothing for you to create. The long-term analytics add-on is hidden too. Everything else is unchanged: you are installing the same node.</p>
+    <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">Nothing has been removed. Every product this node binds has a free allocation, so you install the same node and create the same resources — you just have less headroom on each. The one that runs out first is Orbit.</p>
   </div>
+  ${storagePanel()}
+  ${computePanel()}
+
   <p style="margin:0;max-width:64ch;font-size:13.5px;color:var(--tv-text-dim);text-wrap:pretty">For a gallery kiosk, a pilot, or a node you are still making your mind up about, free is a perfectly respectable place to run. Pay the $5 when you need to report on reach, or when Orbit is going to carry a busy public floor.</p>
 </section>`
 }
@@ -408,6 +490,41 @@ function tierPicker(): string {
  * as a badge rather than flattened into a checkbox list.
  */
 function preflight(): string {
+  /**
+   * The click path, from the same `MANUAL_STEPS` entry the CLI prints.
+   *
+   * The sheet used to render `title` and `why` and drop `steps` and
+   * `url` on the floor — so "Mint a Cloudflare API token · Everything
+   * this tool does runs through it" was the whole of the guidance,
+   * with the ten-line permission table sitting unused in the data.
+   * Fine if you know Cloudflare; a dead end if you do not, and the
+   * people who need this page most are the ones who do not.
+   *
+   * Collapsed, because the sheet is meant to print on one page. A
+   * closed <details> prints as its summary line, so the checklist
+   * stays a checklist and the detail is one tap away on screen.
+   */
+  const howTo = (s: ManualStep): string => {
+    if (!s.steps.length && !s.url) return ''
+    const body = s.steps.length
+      ? `<div style="white-space:pre-wrap;margin:8px 0 0;padding:10px 12px;background:var(--tv-surface-code);border:1px solid var(--tv-border);border-radius:5px;font:400 11.5px/1.65 var(--tv-font-mono);color:var(--tv-text-muted);overflow-x:auto">${s.steps.map(esc).join('\n')}</div>`
+      : ''
+    // Dashboard says *where*; docs say *what the thing is*. Someone new
+    // to Cloudflare needs the second before the first is any use.
+    const links = [
+      s.url ? `<a href="${esc(s.url)}">Open in the Cloudflare dashboard ↗</a>` : '',
+      s.docsUrl ? `<a href="${esc(s.docsUrl)}">Cloudflare's docs for this ↗</a>` : '',
+    ].filter(Boolean)
+    const link = links.length
+      ? `<div style="display:flex;flex-wrap:wrap;gap:14px;margin:8px 0 0;font:500 12px/1.4 var(--tv-font-sans)">${links.join('')}</div>`
+      : ''
+    return `<details style="margin:5px 0 0">
+      <summary style="cursor:pointer;font:500 12px/1.4 var(--tv-font-sans);color:var(--tv-accent);list-style:none">How to do this ▸</summary>
+      ${body}
+      ${link}
+    </details>`
+  }
+
   const step = (s: ManualStep, i: number): string => {
     const detected = s.verification === 'detected'
     const badge = detected
@@ -421,6 +538,7 @@ function preflight(): string {
         ${badge}
       </div>
       <div style="font-size:13px;line-height:1.5;color:var(--tv-text-muted);text-wrap:pretty">${inline(s.why)}</div>
+      ${howTo(s)}
     </div>
   </div>`
   }
@@ -432,6 +550,34 @@ function preflight(): string {
     <div style="font-size:13.5px;line-height:1.5;color:var(--tv-text-muted);text-wrap:pretty">${inline(p.gateShort)}</div>
   </div>`,
   ).join('\n  ')
+
+  /**
+   * Workers Paid is the one prerequisite the plan chooser lets an
+   * operator decline, so the sheet cannot state it unconditionally.
+   * Choosing *Free* and then being told to "Enable Workers Paid
+   * ($5/month)" as task one is a straight contradiction of the choice
+   * the page just offered.
+   *
+   * Both variants render; `data-when` shows exactly one, so the row
+   * count and the numbering stay put either way. On free it stops
+   * being a task and becomes the record of a decision — with what it
+   * costs you spelled out, and a way back.
+   */
+  const declined = (s: ManualStep, i: number): string => `<div style="display:flex;gap:10px;align-items:flex-start">
+    <span aria-hidden="true" style="flex:none;margin-top:2px;width:15px;height:15px;display:inline-flex;align-items:center;justify-content:center;border:1px dashed var(--tv-border-strong);border-radius:4px;color:var(--tv-text-dim);font:600 10px/1 var(--tv-font-sans)">—</span>
+    <div style="min-width:0">
+      <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:0 0 3px">
+        <span style="font:600 13.5px/1.4 var(--tv-font-sans);color:var(--tv-text-dim)">${i + 1}. ${esc(s.title.replace(/^Enable /, ''))} — you chose the free plan</span>
+        <span style="flex:none;background:var(--tv-surface-3);color:var(--tv-text-dim);border:1px solid var(--tv-border);border-radius:999px;padding:2px 8px;font:600 9px/1.5 var(--tv-font-sans);letter-spacing:.07em;text-transform:uppercase">your choice</span>
+      </div>
+      <div style="font-size:13px;line-height:1.5;color:var(--tv-text-dim);text-wrap:pretty">Nothing to do. Every resource in this install still gets created — you just have a smaller daily allowance of each. Orbit throttles after roughly 200 conversations a day, and that is the ceiling you cannot buy past. <a href="#cost">Change plan</a></div>
+    </div>
+  </div>`
+
+  const stepCell = (s: ManualStep, i: number): string =>
+    s.id !== 'workers-paid'
+      ? step(s, i)
+      : `<div data-when="paid">${step(s, i)}</div>\n  <div data-when="free">${declined(s, i)}</div>`
 
   const sectionHead = (label: string, aside: string, blurb: string): string =>
     `<div style="display:flex;justify-content:space-between;align-items:baseline;gap:16px;margin:0 0 6px">
@@ -451,9 +597,9 @@ function preflight(): string {
       ${sectionHead(
         'Before you start · only you can do these',
         `${MANUAL_STEPS.length} things, about 20 minutes`,
-        'An account, a domain, a login — the things no script can do on your behalf. Most the setup tool will notice if you skip; the ones marked *on you* it cannot, so those are the ones to be sure about. The first is the only one you can decline outright — see <a href="#cost">what it costs</a>.',
+        'An account, a domain, a login — the things no script can do on your behalf. Most the setup tool will notice if you skip; the ones marked *on you* it cannot, so those are the ones to be sure about. The first is a choice rather than a task — see [what it costs](#cost).',
       )}
-      <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:13px 28px">${MANUAL_STEPS.map(step).join('\n  ')}</div>
+      <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:13px 28px">${MANUAL_STEPS.map(stepCell).join('\n  ')}</div>
     </div>
     <div>
       ${sectionHead(
@@ -473,7 +619,7 @@ function dependencyMap(): string {
     const cells = PHASES.map(
       p => `<div data-cell="${p.n}" style="height:27px;display:flex;align-items:center;justify-content:center"><span data-mark="1"></span></div>`,
     ).join('')
-    return `<div data-map-row="${esc(w.id)}" data-w="${esc(w.id)}" data-produced="${w.phase}" data-consumed="${w.consumedBy.join(',')}" data-tier="${w.minTier}"${w.paidOnly ? ' data-paid-only="1"' : ''} style="display:grid;grid-template-columns:224px repeat(${PHASES.length},minmax(0,1fr));align-items:center;cursor:pointer;border-radius:4px">
+    return `<div data-map-row="${esc(w.id)}" data-w="${esc(w.id)}" data-produced="${w.phase}" data-consumed="${w.consumedBy.join(',')}" data-tier="${w.minTier}" style="display:grid;grid-template-columns:224px repeat(${PHASES.length},minmax(0,1fr));align-items:center;cursor:pointer;border-radius:4px">
     <div style="display:flex;align-items:baseline;gap:7px;padding:0 6px 0 4px;min-width:0">
       <span data-map-id="1" style="flex:none;font:500 10.5px/1 var(--tv-font-mono)">${esc(w.id)}</span>
       <span style="font-size:11.5px;color:var(--tv-text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(w.label)}</span>
@@ -521,7 +667,7 @@ function bindingsTable(): string {
   const tierOf = (b: ExpectedBinding): number =>
     /^(CATALOG_(DB|KV|R2|VECTORIZE)|ACCESS_|NODE_ID|PREVIEW_SIGNING)/.test(b.name) ? 2 : 1
   const row = (b: ExpectedBinding): string =>
-    `<div data-binding-row="1" data-tier="${tierOf(b)}"${b.name === 'ANALYTICS' ? ' data-paid-only="1"' : ''} style="display:contents">
+    `<div data-binding-row="1" data-tier="${tierOf(b)}" style="display:contents">
     <div style="background:var(--tv-surface-2);padding:10px 12px;font-family:var(--tv-font-mono);overflow-wrap:anywhere">${esc(b.name)}</div>
     <div style="background:var(--tv-surface-2);padding:10px 12px;color:var(--tv-text-dim)">${esc(b.type)}</div>
     <div style="background:var(--tv-surface-2);padding:10px 12px;color:var(--tv-text-dim)">${b.environments.length === 2 ? 'both' : esc(b.environments.join(', '))}</div>
@@ -614,15 +760,12 @@ function phaseSection(p: Phase): string {
 
   if (p.n === 8) {
     parts.push(bindingsTable())
-    parts.push(
-      `<p data-when="free" style="margin:0 0 18px;max-width:64ch;font-size:13.5px;color:var(--tv-text-dim);text-wrap:pretty">The <code style="font-family:var(--tv-font-mono);font-size:.92em">ANALYTICS</code> binding is not listed because you chose the free plan \u2014 there is no Analytics Engine dataset to point it at. The audit will report it as MISSING; that is correct and you can leave it. <a href="#cost">Change plan</a></p>`,
-    )
     parts.push(localModelVars())
   }
   if (p.n === 13) {
     parts.push(
       `<div style="display:flex;flex-direction:column;gap:10px;margin:0 0 16px">${ADDONS.map(
-        a => `<div${a.paidOnly ? ' data-paid-only="1"' : ''} style="border:1px solid var(--tv-border);border-radius:6px;padding:15px 17px">
+        a => `<div style="border:1px solid var(--tv-border);border-radius:6px;padding:15px 17px">
         <div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin:0 0 6px">
           <div style="font:500 15px/1.3 var(--tv-font-sans);color:var(--tv-text)">${esc(a.id)} · ${esc(a.title)}</div>
           <span style="flex:none;font:500 11px/1 var(--tv-font-mono);color:var(--tv-accent)">${esc(a.flag)}</span>
@@ -673,7 +816,7 @@ function phaseSection(p: Phase): string {
 function worksheetDrawer(): string {
   const field = (w: WorksheetField): string => {
     const o = ORIGIN_LABELS[w.origin]
-    return `<div data-field-row="${esc(w.id)}" data-tier="${w.minTier}"${w.paidOnly ? ' data-paid-only="1"' : ''} style="margin:0 0 14px">
+    return `<div data-field-row="${esc(w.id)}" data-tier="${w.minTier}" style="margin:0 0 14px">
     <div style="display:flex;align-items:center;gap:7px;margin:0 0 5px;flex-wrap:wrap">
       <label style="font:500 11.5px/1.3 var(--tv-font-mono);color:var(--tv-text-muted)">${esc(w.id)}</label>
       <span style="font:400 12.5px/1.3 var(--tv-font-sans);color:var(--tv-text)">${esc(w.label)}</span>
@@ -722,7 +865,6 @@ function troubleshooting(): string {
     ${TROUBLESHOOTING.map(
       t => `<div style="${CARD};padding:16px 18px">
       <div style="font:500 14px/1.4 var(--tv-font-mono);color:var(--tv-error);margin:0 0 6px">${esc(t.symptom)}</div>
-      ${t.symptom.indexOf('Ingest returns 204') === 0 ? '<p data-when=\"free\" style=\"margin:0 0 8px;font-size:13.5px;line-height:1.55;color:var(--tv-warn);text-wrap:pretty\">On the free plan this is expected, not a fault \u2014 there is no Analytics Engine to write to. Nothing to fix.</p>' : ''}
       <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">${inline(t.fix)}</p>
     </div>`,
     ).join('\n    ')}
@@ -810,7 +952,6 @@ function runtime(fields: WorksheetField[]): string {
     token: f.token,
     secret: Boolean(f.secret),
     tier: f.minTier,
-    paidOnly: Boolean(f.paidOnly),
     validator: f.validator ?? null,
   }))
   return `
@@ -894,20 +1035,18 @@ function paintTier() {
   q('[data-phase-row]').forEach(el => {
     el.style.display = visiblePhase(Number(el.getAttribute('data-phase-row'))) ? 'flex' : 'none';
   });
+  // Nothing is hidden by plan. Every product this node binds has a
+  // free allocation, so the free-plan operator creates exactly the
+  // same resources — the plan only changes wording, via data-when.
   const free = state.plan === 'free';
-  const okPlan = el => !(free && el.hasAttribute('data-paid-only'));
   q('[data-field-row]').forEach(el => {
-    el.style.display = (Number(el.getAttribute('data-tier')) <= state.tier && okPlan(el)) ? '' : 'none';
+    el.style.display = Number(el.getAttribute('data-tier')) <= state.tier ? '' : 'none';
   });
   q('[data-binding-row]').forEach(el => {
-    el.style.display = (Number(el.getAttribute('data-tier')) <= state.tier && okPlan(el)) ? 'contents' : 'none';
+    el.style.display = Number(el.getAttribute('data-tier')) <= state.tier ? 'contents' : 'none';
   });
   q('[data-map-row]').forEach(el => {
-    el.style.display = (Number(el.getAttribute('data-tier')) <= state.tier && okPlan(el)) ? 'grid' : 'none';
-  });
-  q('[data-paid-only]').forEach(el => {
-    if (el.hasAttribute('data-field-row') || el.hasAttribute('data-binding-row') || el.hasAttribute('data-map-row')) return;
-    el.style.display = free ? 'none' : '';
+    el.style.display = Number(el.getAttribute('data-tier')) <= state.tier ? 'grid' : 'none';
   });
   q('[data-when]').forEach(el => {
     const w = el.getAttribute('data-when');
@@ -962,7 +1101,7 @@ function paintProgress() {
     d.style.color = on ? 'var(--tv-bg)' : 'transparent';
     d.textContent = on ? '✓' : '';
   });
-  const relevant = FIELDS.filter(f => f.tier <= state.tier && !(state.plan === 'free' && f.paidOnly));
+  const relevant = FIELDS.filter(f => f.tier <= state.tier);
   const filled = relevant.filter(f => (state.vals[f.id] || '').trim()).length;
   const fc = document.querySelector('[data-fill-count]');
   if (fc) fc.textContent = filled + ' / ' + relevant.length;
@@ -1194,7 +1333,7 @@ code{overflow-wrap:anywhere}
   const setupPanel = `<section data-noprint="1" style="background:var(--tv-accent-bg);border:1px solid var(--tv-accent-border);border-radius:8px;padding:28px 30px;margin:0 0 40px">
   <div style="${EYEBROW};color:var(--tv-accent);margin:0 0 12px">Start here</div>
   <h2 style="font:700 27px/1.2 var(--tv-font-sans);letter-spacing:-.01em;color:var(--tv-text);margin:0 0 14px">Let the tool do the mechanical parts</h2>
-  <p style="margin:0 0 18px;max-width:62ch;color:var(--tv-text-muted);text-wrap:pretty">Most of what follows is dashboard clicking that a script can do faster and without typos. <code style="font-family:var(--tv-font-mono);font-size:.92em">npm run setup</code> provisions the resources, rewrites the config, applies the migrations in the order that works, creates the Access application (<code style="font-family:var(--tv-font-mono);font-size:.92em">${esc(DEFAULT_NAMES.accessApp)}</code>) with its <code style="font-family:var(--tv-font-mono);font-size:.92em">${esc(STAFF_POLICY_NAME)}</code> and <code style="font-family:var(--tv-font-mono);font-size:.92em">${esc(AUTOMATION_POLICY_NAME)}</code> policies, and writes every binding to <i>both</i> environments.</p>
+  <p style="margin:0 0 18px;max-width:62ch;color:var(--tv-text-muted);text-wrap:pretty">Most of what follows is dashboard clicking that a script can do faster and without typos. <code style="font-family:var(--tv-font-mono);font-size:.92em">npm run setup</code> provisions the resources, rewrites the config, and applies the migrations in the order that works. It creates the Access application (<code style="font-family:var(--tv-font-mono);font-size:.92em">${esc(DEFAULT_NAMES.accessApp)}</code>) with its <code style="font-family:var(--tv-font-mono);font-size:.92em">${esc(STAFF_POLICY_NAME)}</code> and <code style="font-family:var(--tv-font-mono);font-size:.92em">${esc(AUTOMATION_POLICY_NAME)}</code> policies, then writes every binding to <i>both</i> environments.</p>
   ${code({
     code: `# what only a human can do, with click paths
 npm run setup -- --manual
