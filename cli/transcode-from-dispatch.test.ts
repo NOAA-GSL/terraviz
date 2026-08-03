@@ -254,6 +254,29 @@ describe('loadServerEnv', () => {
       }
     }
   })
+
+  it('trims whitespace off the server URL and both token halves', () => {
+    // A GHA secret pasted with a line break is the usual source.
+    // Untrimmed, the token reaches the node as a value its Access
+    // comparison rejects — an opaque 403, not a config error.
+    const r = loadServerEnv({
+      TERRAVIZ_SERVER: '  https://terraviz.example.com/\n',
+      CF_ACCESS_CLIENT_ID: 'id.access\n',
+      CF_ACCESS_CLIENT_SECRET: '\tsecret\r\n',
+    })
+    if ('error' in r) throw new Error(r.error)
+    expect(r).toEqual({
+      server: 'https://terraviz.example.com',
+      accessClientId: 'id.access',
+      accessClientSecret: 'secret',
+    })
+  })
+
+  it('treats a whitespace-only env var as missing', () => {
+    const r = loadServerEnv({ ...FULL_ENV, CF_ACCESS_CLIENT_SECRET: '   ' })
+    expect('error' in r).toBe(true)
+    if ('error' in r) expect(r.error).toContain('CF_ACCESS_CLIENT_SECRET')
+  })
 })
 
 describe('isCloudflareChallenge', () => {
