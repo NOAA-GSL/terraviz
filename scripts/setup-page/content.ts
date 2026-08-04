@@ -448,7 +448,7 @@ npm run terraviz -- verify-deploy --server https://{{W2}}`,
     duration: '≈15 min',
     aside: 'Tier 2+ · the last required phase',
     intro: [
-      'Your node works but its catalog is empty. Publish your own from `/publish/datasets/new` — metadata-only drafts work immediately, asset uploads need Phase 13.1 first. Or mirror the upstream catalog for ~600 datasets to look at.',
+      'Your node works but its catalog is empty. Publish your own from `/publish/datasets/new` — metadata-only drafts work immediately, asset uploads need Phase 13.1 first. Or mirror the upstream catalog, which is about 200 datasets.',
     ],
     body: [
       {

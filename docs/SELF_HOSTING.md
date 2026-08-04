@@ -1334,10 +1334,10 @@ immediately.
 
 ## 12.2 Mirror the upstream SOS catalog
 
-Gives you ~600 datasets to look at. Note the tradeoff: those rows
-carry `vimeo:` data refs that resolve through **upstream's** video
-proxy, so their playback depends on upstream's uptime unless you
-also mirror the proxy (Reference C).
+Gives you about 200 datasets — everything upstream publishes. Note
+the tradeoff: those rows carry `vimeo:` data refs that resolve
+through **upstream's** video proxy, so their playback depends on
+upstream's uptime unless you also mirror the proxy (Reference C).
 
 ```bash
 npx tsx scripts/refresh-sos-snapshot.ts
