@@ -163,11 +163,18 @@ export function crossCheck(): void {
 
   // 6. Manual steps the tool can now detect should not be presented
   //    as operator self-certification.
+  //
+  //    Stated as a majority rather than a fixed count, which is what
+  //    the message always claimed. The old threshold was 3, calibrated
+  //    when there were 7 steps; at 10 it would have capped the list
+  //    rather than caught a drift in its character, and a guard that
+  //    fires on growth teaches people to bump the number.
   const selfCertified = MANUAL_STEPS.filter(s => s.verification === 'self')
-  if (selfCertified.length > 3) {
+  if (selfCertified.length * 2 >= MANUAL_STEPS.length) {
     problems.push(
-      `${selfCertified.length} manual steps are self-certified — the page's pre-flight ` +
-        'sheet assumes most are detected; re-read the copy before shipping',
+      `${selfCertified.length} of ${MANUAL_STEPS.length} manual steps are self-certified — ` +
+        "the page's pre-flight sheet assumes most are detected; re-read the copy " +
+        'before shipping',
     )
   }
 
@@ -625,7 +632,6 @@ function preflight(): string {
         `${MANUAL_STEPS.length} things, about 20 minutes`,
         'An account, a domain, a login — the things no script can do on your behalf. Most the setup tool will notice if you skip; the ones marked *on you* it cannot, so those are the ones to be sure about. **Have a password manager open before you start**: four of these produce a secret shown exactly once. Workers Paid is a choice rather than a task — see [what it costs](#cost).',
       )}
-      <p style="margin:0 0 14px;max-width:70ch;font-size:13px;line-height:1.6;color:var(--tv-text-dim);text-wrap:pretty">You will also need <code style="font-family:var(--tv-font-mono);font-size:.92em">git</code>, and a browser you can sign in to Cloudflare with. Node.js ${esc(requiredNodeLabel())} is step 1 below rather than a line here, because a reader working through a numbered list reads the numbered list.</p>
       <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:13px 28px">${MANUAL_STEPS.map(stepCell).join('\n  ')}</div>
     </div>
     <div>

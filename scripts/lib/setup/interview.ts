@@ -23,6 +23,7 @@
  * involved, and the flow control lives in the orchestrator.
  */
 
+import { requiredNodeLabel } from '../node-version'
 import { validators, wrap, type Question } from './prompt'
 import { DEFAULT_NAMES, type SetupState } from './state'
 
@@ -269,12 +270,34 @@ export const MANUAL_STEPS: ManualStep[] = [
     url: 'https://nodejs.org/en/download',
     docsUrl: 'https://github.com/zyra-project/terraviz/blob/main/docs/SELF_HOSTING.md#03-tools',
     steps: [
-      'Install the LTS build from nodejs.org. It carries npm with it.',
+      `Install the LTS build from nodejs.org — this repo needs Node.js ${requiredNodeLabel()}. It carries npm with it.`,
       'Check what you have:',
       { code: 'node --version' },
       { note: 'Anything older than the version this repo requires and setup will stop with the number it found. You do not have to get this right up front — it is checked, not trusted.' },
     ],
     verification: 'detected',
+  },
+  {
+    id: 'git',
+    title: 'Install git',
+    why:
+      'The next step clones your fork, and Cloudflare Pages builds ' +
+      'from that remote. Downloading the repo as a zip gets you the ' +
+      'code and no remote, which does not surface until Phase 5 has ' +
+      'nothing to connect to.',
+    url: 'https://git-scm.com/downloads',
+    steps: [
+      'Install git if you do not have it. macOS and most Linux ship with it.',
+      { code: 'git --version' },
+      { note: 'You will also need a browser you can sign in to Cloudflare with — most of the steps below are dashboard clicking. On a headless machine, see the wrangler login note in the guide.' },
+    ],
+    // Not `detected`, though it looks like it should be. The tool
+    // never runs git — it reads and writes files and calls wrangler —
+    // so a check here would exist only to make this label true, and
+    // would cost plan mode the property of running no commands at
+    // all. Claiming detection we do not do is the inversion this
+    // field exists to prevent, so: self.
+    verification: 'self',
   },
   {
     id: 'fork',
