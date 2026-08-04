@@ -154,12 +154,24 @@ describe('MANUAL_STEPS', () => {
     expect(doc('r2-token')).toContain('/r2/api/tokens')
     expect(doc('workers-paid')).toContain('/workers/platform/pricing')
     expect(doc('fork')).toContain('/working-with-forks/fork-a-repo')
+    // Not a vendor page: the exact section of our own guide that
+    // says which version and how to check it. It matches
+    // MARKDOWN_URL, so applyDocLinks retargets it at the reader's
+    // own fork rather than sending them upstream.
+    expect(doc('node')).toContain('SELF_HOSTING.md#03-tools')
     // node-key is our own script, not a Cloudflare task.
     expect(doc('node-key')).toBe('')
     // An allowlist of hosts rather than one host: forking is a GitHub
     // task, and the point of this check is that a link goes somewhere
     // we trust and vouched for, not that everything is Cloudflare.
-    const DOC_HOSTS = ['https://developers.cloudflare.com/', 'https://docs.github.com/']
+    const DOC_HOSTS = [
+      'https://developers.cloudflare.com/',
+      'https://docs.github.com/',
+      // Our own guide, pinned to the repo rather than to all of
+      // github.com — the point is that a link goes somewhere we
+      // vouched for, and 'any GitHub URL' vouches for nothing.
+      'https://github.com/zyra-project/terraviz/',
+    ]
     for (const s of MANUAL_STEPS) {
       if (s.docsUrl) expect(DOC_HOSTS.some(h => s.docsUrl!.startsWith(h))).toBe(true)
     }

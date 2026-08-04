@@ -258,6 +258,25 @@ export interface ManualStep {
 
 export const MANUAL_STEPS: ManualStep[] = [
   {
+    id: 'node',
+    title: 'Install Node.js and npm',
+    why:
+      'Every command in this install starts with npm run, including ' +
+      'the setup tool itself. Without Node you cannot run step one. It ' +
+      'is listed here rather than in the prose above the checklist ' +
+      'because someone working through numbered steps reads the ' +
+      'numbered steps.',
+    url: 'https://nodejs.org/en/download',
+    docsUrl: 'https://github.com/zyra-project/terraviz/blob/main/docs/SELF_HOSTING.md#03-tools',
+    steps: [
+      'Install the LTS build from nodejs.org. It carries npm with it.',
+      'Check what you have:',
+      { code: 'node --version' },
+      { note: 'Anything older than the version this repo requires and setup will stop with the number it found. You do not have to get this right up front — it is checked, not trusted.' },
+    ],
+    verification: 'detected',
+  },
+  {
     id: 'fork',
     title: 'Fork the repository',
     why:
