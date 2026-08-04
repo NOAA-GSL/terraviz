@@ -290,6 +290,7 @@ error`.
 | **A GitHub account** | This guide assumes GitHub throughout, and the automation needs it: you fork on GitHub, and video transcode fires a `repository_dispatch` at a GitHub Actions workflow in your own repo. Cloudflare Pages itself can build from any Git remote, or from Direct Upload — but nothing here is written or tested for another host. | No — sign up by hand |
 | **Somewhere to keep secrets** | Four values in this guide are shown **exactly once** and cannot be read back: `W11`, `W15`, `W20b`, `W22`. A password manager is enough; a text file you will lose is not. | No — before you start |
 | **Node.js 22+ and npm** | Build, test, migrate — and every `npm run` command in this guide. If you have no Node, install the LTS build from [nodejs.org](https://nodejs.org/en/download); it carries npm with it. `nvm` is fine if you already use it. | No — before you start |
+| **git** | §0.2 clones your fork, and Cloudflare Pages builds from that remote. Downloading the repo as a zip gets you the code and no remote. Install it from [git-scm.com](https://git-scm.com/install/); macOS and most Linux ship with it. | No — before you start |
 | `curl` | The verification steps in Phase 10. Ships with macOS, Linux and Windows 10+. | — |
 | `openssl` | One command, in Phase 7 — and only if you generate `W18` by hand rather than letting the tool do it. Absent on stock Windows without WSL or Git Bash. | — |
 

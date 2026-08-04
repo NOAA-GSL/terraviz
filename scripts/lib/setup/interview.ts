@@ -285,7 +285,7 @@ export const MANUAL_STEPS: ManualStep[] = [
       'from that remote. Downloading the repo as a zip gets you the ' +
       'code and no remote, which does not surface until Phase 5 has ' +
       'nothing to connect to.',
-    url: 'https://git-scm.com/downloads',
+    url: 'https://git-scm.com/install/',
     steps: [
       'Install git if you do not have it. macOS and most Linux ship with it.',
       { code: 'git --version' },
