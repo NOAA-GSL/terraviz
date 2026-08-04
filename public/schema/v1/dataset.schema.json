@@ -264,6 +264,9 @@
         },
         "transparentRange": {
           "type": "number"
+        },
+        "dataMinLuma": {
+          "type": "number"
         }
       },
       "required": [

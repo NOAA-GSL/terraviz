@@ -56,6 +56,24 @@ export interface ColorScale {
    * and drawing them produces a haze over the whole globe.
    */
   transparentRange?: number
+  /**
+   * Lowest luma code that carries data. Codes below it are the
+   * reserved no-data band — the frame has nothing to report there, and
+   * neither the palette nor the readout may treat them as a value.
+   *
+   * Absent means 0, which is what every dataset published before this
+   * field existed already meant. `lumaToValue` and `buildColorScaleLut`
+   * both reduce to their previous expressions when it is 0, so
+   * backwards compatibility is a property of the arithmetic rather
+   * than of a branch that could be got wrong.
+   *
+   * This differs from `transparentRange` in kind, not just in units:
+   * `transparentRange` hides a band that *is* data but is too faint to
+   * be worth drawing, while this one declares a band that is not data
+   * at all. When both are set they must agree about where data starts
+   * — `parseColorScale` refuses the sidecar otherwise.
+   */
+  dataMinLuma?: number
 }
 
 function isFiniteNumber(v: unknown): v is number {
@@ -94,7 +112,7 @@ export function parseColorScale(input: unknown): ColorScale | null {
     }
   }
   if (typeof raw !== 'object' || raw === null) return null
-  const { stops, vmin, vmax, units, transparentRange } = raw as Record<string, unknown>
+  const { stops, vmin, vmax, units, transparentRange, dataMinLuma } = raw as Record<string, unknown>
   if (!Array.isArray(stops) || stops.length < 2) return null
   if (!isFiniteNumber(vmin) || !isFiniteNumber(vmax) || vmin === vmax) return null
 
@@ -112,6 +130,34 @@ export function parseColorScale(input: unknown): ColorScale | null {
   if (typeof units === 'string' && units.trim() !== '') scale.units = units
   if (isFiniteNumber(transparentRange) && transparentRange > 0 && transparentRange < 1) {
     scale.transparentRange = transparentRange
+  }
+
+  // Rejected rather than ignored, which is the opposite of how
+  // `transparentRange` above is treated, and deliberately so: a dropped
+  // `transparentRange` costs some haze at the bottom of the ramp, while
+  // a dropped `dataMinLuma` silently shifts the value of *every* texel
+  // in the frame by the width of the band. A sidecar that meant to
+  // declare one and got it wrong must not publish numbers as if it had
+  // never tried.
+  if (dataMinLuma !== undefined && dataMinLuma !== null) {
+    if (!isFiniteNumber(dataMinLuma)) return null
+    // 254 rather than 255: at 255 the band swallows every code but one,
+    // and `lumaToValue`'s `255 - lo` denominator goes to zero. A scale
+    // with a single data code is degenerate on both counts.
+    if (!Number.isInteger(dataMinLuma) || dataMinLuma < 0 || dataMinLuma > 254) return null
+    scale.dataMinLuma = dataMinLuma
+  }
+
+  // Both present: they have to describe the same boundary.
+  // `transparentRange` hides a code when `luma / 255 < transparentRange`,
+  // so the first code it leaves visible is `ceil(transparentRange * 255)`.
+  // If that is not where the data starts, the sidecar is making two
+  // different claims about one band — either colouring texels the
+  // readout calls absent, or reporting numbers for texels the globe
+  // draws as empty. Both are the confidently-wrong failure this whole
+  // contract exists to avoid, so refuse instead of picking a winner.
+  if (scale.dataMinLuma !== undefined && scale.transparentRange !== undefined) {
+    if (Math.ceil(scale.transparentRange * 255) !== scale.dataMinLuma) return null
   }
   return scale
 }
@@ -131,9 +177,18 @@ export function buildColorScaleLut(scale: ColorScale): Uint8Array {
   // rather than trusting the palette's own low end, which frequently
   // ramps up from a small but non-zero alpha.
   const cutoff = scale.transparentRange ?? 0
+  const lo = scale.dataMinLuma ?? 0
+  const top = COLOR_SCALE_LUT_SIZE - 1
   let si = 0
   for (let i = 0; i < COLOR_SCALE_LUT_SIZE; i++) {
-    const t = i / (COLOR_SCALE_LUT_SIZE - 1)
+    // The palette spans the DATA band, not the whole code range, so a
+    // code's colour and the value `lumaToValue` reports for it come out
+    // of the same mapping. Skipping this would leave the colorbar's
+    // labels offset from its colours by the width of the band — the
+    // reserved codes would take the palette's low end while the first
+    // code carrying `vmin` took something above it. With `lo` at 0 this
+    // is `i / 255`, the expression it has always been.
+    const t = i <= lo ? 0 : (i - lo) / (top - lo)
     while (si < stops.length - 2 && stops[si + 1].t < t) si++
     const a = stops[si]
     const b = stops[si + 1] ?? a
@@ -143,7 +198,11 @@ export function buildColorScaleLut(scale: ColorScale): Uint8Array {
     for (let c = 0; c < 4; c++) {
       lut[o + c] = Math.round(a.rgba[c] + (b.rgba[c] - a.rgba[c]) * f)
     }
-    if (t < cutoff) lut[o + 3] = 0
+    // Both tests are in code space. They select the same codes whenever
+    // both fields are set, since `parseColorScale` rejects sidecars
+    // where they disagree, so each can act alone without the other
+    // needing to know.
+    if (i < lo || i / top < cutoff) lut[o + 3] = 0
   }
   return lut
 }
@@ -154,14 +213,28 @@ export function buildColorScaleLut(scale: ColorScale): Uint8Array {
  * The inverse of what zyra's writer does: it normalised against
  * `vmin`/`vmax` and never autoscaled per frame, precisely so this
  * mapping is the same for every frame in the dataset.
+ *
+ * `dataMinLuma` shifts the bottom of the mapping to the first code that
+ * carries data, so `vmin` lands there rather than at 0. Absent, it is 0
+ * and the expression reduces exactly to the one this has always been.
+ *
+ * Only meaningful for a code the frame actually measured: below
+ * `dataMinLuma` the result runs off the bottom of the range and means
+ * nothing. It is deliberately left un-clamped, because clamping would
+ * return `vmin` — a number indistinguishable from a real reading at the
+ * bottom of the scale. Ask `isTransparentLuma` first.
  */
 export function lumaToValue(luma: number, scale: ColorScale): number {
-  return scale.vmin + (luma / 255) * (scale.vmax - scale.vmin)
+  const lo = scale.dataMinLuma ?? 0
+  return scale.vmin + ((luma - lo) / (255 - lo)) * (scale.vmax - scale.vmin)
 }
 
 /** Whether a sampled luma falls in the region the palette declares to
- *  be "nothing measured here". */
+ *  be "nothing measured here". `dataMinLuma` wins when set: it is the
+ *  stronger claim of the two, and the parser has already established
+ *  that a `transparentRange` alongside it agrees. */
 export function isTransparentLuma(luma: number, scale: ColorScale): boolean {
+  if (scale.dataMinLuma !== undefined) return luma < scale.dataMinLuma
   const cutoff = scale.transparentRange ?? 0
   return luma / 255 < cutoff
 }

@@ -31,6 +31,7 @@
 import {
   COLOR_SCALE_LUT_SIZE,
   buildColorScaleLut,
+  isTransparentLuma,
   lumaToValue,
   type ColorScale,
   type ColorScaleStop,
@@ -142,8 +143,6 @@ export function buildDisplayLut(scale: ColorScale, display: ColorScaleDisplay): 
   const span = hi - lo
   const stretched = span > 1e-6
 
-  const cutoff = scale.transparentRange ?? 0
-
   const out = new Uint8Array(COLOR_SCALE_LUT_SIZE * 4)
   for (let i = 0; i < COLOR_SCALE_LUT_SIZE; i++) {
     const t = i / LAST
@@ -163,9 +162,21 @@ export function buildDisplayLut(scale: ColorScale, display: ColorScaleDisplay): 
     out[o + 3] = source[src + 3]
 
     // Absent data is a property of the data, not of the display, so
-    // this is tested against the original position under every
-    // transform.
-    if (t < cutoff) out[o + 3] = 0
+    // this is tested against the original code under every transform —
+    // the alpha copied above came from the *stretched* position and has
+    // already lost track of the band.
+    //
+    // Asking the shared contract rather than re-deriving the test is
+    // load-bearing: a sidecar may declare the band as `dataMinLuma`
+    // with no `transparentRange` (the parser only requires the two to
+    // agree when both are present), and a re-derived
+    // `transparentRange` test would then paint the reserved codes as
+    // data under any stretch anchored near the low end — which is the
+    // common case here, since these fields put most of their data
+    // there. Being the `if`, it also keeps the band away from
+    // `lumaToValue`, whose contract is that a code below the band
+    // means nothing.
+    if (isTransparentLuma(i, scale)) out[o + 3] = 0
     else if (outsideThreshold(lumaToValue(i, scale), display.threshold)) out[o + 3] = 0
   }
   return out
