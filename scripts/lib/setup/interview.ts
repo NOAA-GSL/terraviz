@@ -296,6 +296,9 @@ export const MANUAL_STEPS: ManualStep[] = [
       'Open the Actions tab of your new fork and enable workflows.',
       { note: 'GitHub creates every fork with Actions turned off. Leave them off and the transcode and deploy workflows never run.' },
       'Write the result down as owner/repo. That is the W3 the interview asks you for.',
+      'Clone your fork onto the machine you will install from. Everything after this runs inside that checkout.',
+      { code: 'git clone https://github.com/{{W3}}.git\ncd terraviz' },
+      { note: 'Clone your fork, not zyra-project/terraviz. A clone of upstream runs fine and then has nowhere to push the resource IDs Phase 3 writes.' },
     ],
     verification: 'self',
   },
@@ -456,16 +459,22 @@ export function renderManualStep(step: ManualStep, index?: number): string {
   // Each surface wraps to its own width. The data carries whole
   // thoughts, so the terminal is free to break them at 66 columns and
   // the web card at whatever the reader's viewport allows.
-  for (const line of step.steps) {
+  // `{{W3}}` is a live substitution slot on the web console. The
+  // terminal has no worksheet to read, so it falls back to the
+  // guide's own placeholder convention — `<W3>` — rather than
+  // printing braces at someone.
+  const slots = (t: string): string => t.replace(/\{\{(\w+)\}\}/g, '<$1>')
+  for (const raw of step.steps) {
+    const line = typeof raw === 'string' ? slots(raw) : raw
     if (typeof line === 'string') {
       const body = wrap(line, 62)
       lines.push(`   - ${body[0] ?? ''}`)
       for (const rest of body.slice(1)) lines.push(`     ${rest}`)
     } else if ('note' in line) {
-      for (const rest of wrap(line.note, 62)) lines.push(`     ${rest}`)
+      for (const rest of wrap(slots(line.note), 62)) lines.push(`     ${rest}`)
     } else {
       // A literal: a command, or a table whose columns carry meaning.
-      for (const rest of line.code.split('\n')) lines.push(`       ${rest}`)
+      for (const rest of slots(line.code).split('\n')) lines.push(`       ${rest}`)
     }
   }
   lines.push('')

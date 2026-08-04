@@ -193,6 +193,20 @@ describe('MANUAL_STEPS', () => {
     }
   })
 
+  // Someone installing forked, then missed the clone in Phase 0 and
+  // had nowhere to run anything. Forking and cloning are one action
+  // in a reader's head; splitting them across two documents loses the
+  // second half.
+  it('tells you to clone the fork, not just create it', () => {
+    const fork = MANUAL_STEPS.find(s => s.id === 'fork')!
+    const text = fork.steps.map(lineText).join('\n')
+    expect(text).toMatch(/git clone/)
+    expect(text).toMatch(/\{\{W3\}\}/)
+    // And which repo to clone, since a clone of upstream works right
+    // up until there is nowhere to push to.
+    expect(text).toMatch(/not zyra-project\/terraviz/)
+  })
+
   it('lists every permission the API token needs', () => {
     const token = MANUAL_STEPS.find(s => s.id === 'api-token')!
     const text = token.steps.map(lineText).join('\n')

@@ -517,12 +517,12 @@ function preflight(): string {
       ? `<div style="margin:8px 0 0">${s.steps
           .map(line => {
             if (typeof line === 'string') {
-              return `<div style="display:flex;gap:8px;margin:0 0 6px"><span aria-hidden="true" style="flex:none;color:var(--tv-accent)">→</span><span style="font:400 13px/1.55 var(--tv-font-sans);color:var(--tv-text-muted);text-wrap:pretty">${inline(line)}</span></div>`
+              return `<div style="display:flex;gap:8px;margin:0 0 6px"><span aria-hidden="true" style="flex:none;color:var(--tv-accent)">→</span><span style="font:400 13px/1.55 var(--tv-font-sans);color:var(--tv-text-muted);text-wrap:pretty">${withSlots(line)}</span></div>`
             }
             if ('note' in line) {
               return `<p style="margin:0 0 6px;padding-inline-start:20px;font:400 12.5px/1.55 var(--tv-font-sans);color:var(--tv-text-dim);text-wrap:pretty">${inline(line.note)}</p>`
             }
-            return `<div style="white-space:pre;margin:0 0 8px;margin-inline-start:20px;padding:9px 11px;background:var(--tv-surface-code);border:1px solid var(--tv-border);border-radius:5px;font:400 11.5px/1.6 var(--tv-font-mono);color:var(--tv-text-muted);overflow-x:auto">${esc(line.code)}</div>`
+            return `<div style="white-space:pre;margin:0 0 8px;margin-inline-start:20px;padding:9px 11px;background:var(--tv-surface-code);border:1px solid var(--tv-border);border-radius:5px;font:400 11.5px/1.6 var(--tv-font-mono);color:var(--tv-text-muted);overflow-x:auto">${esc(line.code).replace(/\{\{(\w+)\}\}/g, (_m, id: string) => slot(id))}</div>`
           })
           .join('')}</div>`
       : ''

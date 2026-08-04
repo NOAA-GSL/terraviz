@@ -287,7 +287,7 @@ error`.
 | Cloudflare account | Everything runs here. | No — sign up by hand |
 | **Workers Paid ($5/mo)** | Workers AI is capped at 10,000 Neurons/day on the free plan — roughly 200 Orbit turns — and you cannot exceed that without upgrading. Orbit then degrades to its local keyword engine mid-demo. | No — billing UI |
 | A domain on **Cloudflare DNS** | For `W2`. Moving DNS to Cloudflare is free; you change nameservers at your registrar. Registering a new domain through Cloudflare also works. | No — registrar action |
-| GitHub or GitLab account | Pages builds from a Git remote (or you deploy by Direct Upload from CI). | No |
+| **A GitHub account** | This guide assumes GitHub throughout, and the automation needs it: you fork on GitHub, and video transcode fires a `repository_dispatch` at a GitHub Actions workflow in your own repo. Cloudflare Pages itself can build from any Git remote, or from Direct Upload — but nothing here is written or tested for another host. | No — sign up by hand |
 | **Somewhere to keep secrets** | Four values in this guide are shown **exactly once** and cannot be read back: `W11`, `W15`, `W20b`, `W22`. A password manager is enough; a text file you will lose is not. | No — before you start |
 | **Node.js 22+ and npm** | Build, test, migrate — and every `npm run` command in this guide. If you have no Node, install the LTS build from [nodejs.org](https://nodejs.org/en/download); it carries npm with it. `nvm` is fine if you already use it. | No — before you start |
 | `curl` | The verification steps in Phase 10. Ships with macOS, Linux and Windows 10+. | — |
