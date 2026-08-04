@@ -255,18 +255,37 @@ interface ServerEnv {
   accessClientSecret: string
 }
 
+/**
+ * Read the runner's server URL + Access service token from the
+ * environment.
+ *
+ * Every value is trimmed before it is checked, so a secret that
+ * arrived with a trailing newline — the usual outcome of a
+ * GitHub Actions secret pasted with a line break, or of
+ * `CF_ACCESS_CLIENT_SECRET=$(cat token.txt)` — is normalised
+ * rather than sent. An untrimmed token reaches the downstream
+ * node as a value its Access comparison rejects, and the failure
+ * surfaces as an opaque 403 rather than as the configuration
+ * error it actually is. Trimming first also means a
+ * whitespace-only secret is reported as missing, which is the
+ * message an operator can act on.
+ */
 export function loadServerEnv(env: NodeJS.ProcessEnv = process.env): ServerEnv | { error: string } {
+  const server = env.TERRAVIZ_SERVER?.trim()
+  const accessClientId = env.CF_ACCESS_CLIENT_ID?.trim()
+  const accessClientSecret = env.CF_ACCESS_CLIENT_SECRET?.trim()
+
   const missing: string[] = []
-  if (!env.TERRAVIZ_SERVER) missing.push('TERRAVIZ_SERVER')
-  if (!env.CF_ACCESS_CLIENT_ID) missing.push('CF_ACCESS_CLIENT_ID')
-  if (!env.CF_ACCESS_CLIENT_SECRET) missing.push('CF_ACCESS_CLIENT_SECRET')
+  if (!server) missing.push('TERRAVIZ_SERVER')
+  if (!accessClientId) missing.push('CF_ACCESS_CLIENT_ID')
+  if (!accessClientSecret) missing.push('CF_ACCESS_CLIENT_SECRET')
   if (missing.length) {
     return { error: `Missing env vars: ${missing.join(', ')}` }
   }
   return {
-    server: env.TERRAVIZ_SERVER!.replace(/\/$/, ''),
-    accessClientId: env.CF_ACCESS_CLIENT_ID!,
-    accessClientSecret: env.CF_ACCESS_CLIENT_SECRET!,
+    server: server!.replace(/\/$/, ''),
+    accessClientId: accessClientId!,
+    accessClientSecret: accessClientSecret!,
   }
 }
 

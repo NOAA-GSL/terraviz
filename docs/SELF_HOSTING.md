@@ -577,6 +577,17 @@ Resource *names* (`sphere-feedback`, `terraviz-assets`,
 do, keep the dashboard bindings and the `CATALOG_R2_BUCKET` /
 `ANALYTICS_AE_DATASET` overrides in sync.
 
+> **Your `wrangler.toml` now diverges from upstream, permanently.**
+> That is the intended end state, not drift to be tidied up. Expect a
+> conflict on this file every time you merge upstream — keep your IDs
+> and take upstream's other changes.
+>
+> Two tests assert that the committed file still points at upstream's
+> own resources. They are repo hygiene for the upstream project, so
+> they skip unless `GITHUB_REPOSITORY` says the checkout is
+> `zyra-project/terraviz`. On your fork they will show as skipped,
+> which is correct.
+
 > **Why this file matters when Pages ignores it.** Pages reads its
 > live bindings from the dashboard. But every `wrangler` command
 > you run from your shell — `d1 migrations apply`, `d1 execute` —

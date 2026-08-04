@@ -62,22 +62,43 @@ function wsError(code: string): Response {
   return new Response(null, { status: 101, webSocket: client })
 }
 
+/**
+ * The gateway settings, trimmed. Every one of them ends up in a
+ * URL path or a header value, where a trailing newline is either
+ * rejected outright or silently routed somewhere that does not
+ * exist — so whitespace is stripped once, here, and every reader
+ * goes through it.
+ */
+function gatewayConfig(env: StreamEnv): {
+  accountId?: string
+  gateway?: string
+  token?: string
+} {
+  return {
+    accountId: env.CF_ACCOUNT_ID?.trim(),
+    gateway: env.CF_AI_GATEWAY?.trim(),
+    token: env.CF_AIG_TOKEN?.trim(),
+  }
+}
+
 /** True once all three gateway settings are present. Pure — tested. */
 export function streamConfigured(env: StreamEnv): boolean {
-  return !!(env.CF_ACCOUNT_ID && env.CF_AI_GATEWAY && env.CF_AIG_TOKEN)
+  const { accountId, gateway, token } = gatewayConfig(env)
+  return !!(accountId && gateway && token)
 }
 
 /** Build the AI Gateway realtime WS URL for a locale. Pure — tested. */
 export function buildGatewayUrl(env: StreamEnv, lang: string): string {
   const params = new URLSearchParams({
-    model: env.VOICE_STREAM_MODEL || '@cf/deepgram/nova-3',
+    model: env.VOICE_STREAM_MODEL?.trim() || '@cf/deepgram/nova-3',
     encoding: 'linear16',
     sample_rate: '16000',
     interim_results: 'true',
   })
   const base = baseLang(lang)
   if (base) params.set('language', base)
-  return `wss://gateway.ai.cloudflare.com/v1/${env.CF_ACCOUNT_ID}/${env.CF_AI_GATEWAY}/workers-ai?${params.toString()}`
+  const { accountId, gateway } = gatewayConfig(env)
+  return `wss://gateway.ai.cloudflare.com/v1/${accountId}/${gateway}/workers-ai?${params.toString()}`
 }
 
 export const onRequest: PagesFunction<StreamEnv> = async (context) => {
@@ -106,7 +127,7 @@ export const onRequest: PagesFunction<StreamEnv> = async (context) => {
   let upstream: WebSocket | null = null
   try {
     const resp = await fetch(buildGatewayUrl(env, lang), {
-      headers: { Upgrade: 'websocket', 'cf-aig-authorization': env.CF_AIG_TOKEN ?? '' },
+      headers: { Upgrade: 'websocket', 'cf-aig-authorization': gatewayConfig(env).token ?? '' },
     })
     upstream = resp.webSocket
   } catch {

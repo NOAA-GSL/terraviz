@@ -176,8 +176,13 @@ export const onRequestGet: PagesFunction<CatalogEnv> = async context => {
   }
 
   const query = (new URL(context.request.url).searchParams.get('q') ?? '').trim().slice(0, MAX_QUERY_CHARS)
+  // Trimmed on read — the key goes into a query string, where a
+  // trailing newline percent-encodes into the request and comes
+  // back as a 400 `keyInvalid` that looks like a bad key rather
+  // than a whitespace problem. Whitespace-only reads as unset.
+  const apiKey = context.env.YOUTUBE_API_KEY?.trim()
   // No query, or no key configured → the source is simply off.
-  if (!query || !context.env.YOUTUBE_API_KEY) {
+  if (!query || !apiKey) {
     return ok(JSON.stringify({ videos: [] }), 'MISS')
   }
 
@@ -228,7 +233,6 @@ export const onRequestGet: PagesFunction<CatalogEnv> = async context => {
   // The channels to fan out across: custom first (node-specific, most
   // relevant), then the built-in agency defaults, de-duped by id and
   // capped. One `channelId`-scoped search per channel.
-  const apiKey = context.env.YOUTUBE_API_KEY
   const searchChannelIds: string[] = []
   const seenChannel = new Set<string>()
   for (const id of [...customMap.keys(), ...Object.keys(AGENCY_YOUTUBE_CHANNELS)]) {

@@ -159,3 +159,104 @@ describe('isTransparentLuma', () => {
     expect(isTransparentLuma(0, noCutoff)).toBe(false)
   })
 })
+
+/**
+ * `dataMinLuma` — the reserved no-data band.
+ *
+ * The compatibility guarantee is meant to fall out of the arithmetic
+ * rather than out of a branch, so the first test here is the one that
+ * matters: absent and 0 must agree on every code, in both the value
+ * mapping and the LUT. If that ever fails, every dataset published
+ * before the field existed has silently changed meaning.
+ */
+describe('dataMinLuma', () => {
+  const BAND = 12
+
+  it('is byte-identical to the previous contract when absent or zero', () => {
+    const absent = parseColorScale({ ...VALID, vmin: -10, vmax: 30 }) as ColorScale
+    const zero = parseColorScale({ ...VALID, vmin: -10, vmax: 30, dataMinLuma: 0 }) as ColorScale
+
+    for (let luma = 0; luma < COLOR_SCALE_LUT_SIZE; luma++) {
+      expect(lumaToValue(luma, zero)).toBe(lumaToValue(luma, absent))
+      expect(isTransparentLuma(luma, zero)).toBe(isTransparentLuma(luma, absent))
+    }
+    expect([...buildColorScaleLut(zero)]).toEqual([...buildColorScaleLut(absent)])
+  })
+
+  it.each([
+    ['a non-integer code', 11.5],
+    ['a negative code', -1],
+    ['255, which leaves a single data code and a zero denominator', 255],
+    ['a code past the 8-bit range', 300],
+    ['a string', '12'],
+    ['NaN', Number.NaN],
+  ])('rejects the whole sidecar for %s', (_label, dataMinLuma) => {
+    expect(parseColorScale({ ...VALID, dataMinLuma })).toBeNull()
+  })
+
+  it('keeps a well-formed band', () => {
+    expect(parseColorScale({ ...VALID, dataMinLuma: BAND })?.dataMinLuma).toBe(BAND)
+  })
+
+  it('rejects a transparentRange that disagrees about where data starts', () => {
+    // 0.2 would hide codes up to 50 while the band claims data from 12:
+    // codes 12..50 would be real values drawn as nothing.
+    expect(parseColorScale({ ...VALID, dataMinLuma: BAND, transparentRange: 0.2 })).toBeNull()
+    // And the other direction — colour on screen where the readout
+    // would report "no data".
+    expect(parseColorScale({ ...VALID, dataMinLuma: 50, transparentRange: 12 / 256 })).toBeNull()
+  })
+
+  it('accepts the two fields when they describe the same boundary', () => {
+    // The published smoke pipeline's cutoff, stated both ways.
+    const scale = parseColorScale({ ...VALID, dataMinLuma: BAND, transparentRange: 12 / 256 })
+    expect(scale?.dataMinLuma).toBe(BAND)
+    expect(scale?.transparentRange).toBeCloseTo(0.0469, 4)
+  })
+
+  it('puts vmin at the first data code, not at zero', () => {
+    const scale = parseColorScale({
+      ...VALID, vmin: -10, vmax: 30, dataMinLuma: BAND,
+    }) as ColorScale
+    expect(lumaToValue(BAND, scale)).toBe(-10)
+    expect(lumaToValue(255, scale)).toBe(30)
+    // Un-clamped below the band, so a caller that skipped the
+    // `isTransparentLuma` check gets an obviously out-of-range number
+    // rather than a plausible one sitting exactly on vmin.
+    expect(lumaToValue(0, scale)).toBeLessThan(-10)
+  })
+
+  it('reports the band as no-data, and wins over transparentRange', () => {
+    const scale = parseColorScale({ ...VALID, dataMinLuma: BAND }) as ColorScale
+    expect(isTransparentLuma(0, scale)).toBe(true)
+    expect(isTransparentLuma(BAND - 1, scale)).toBe(true)
+    expect(isTransparentLuma(BAND, scale)).toBe(false)
+    expect(isTransparentLuma(255, scale)).toBe(false)
+  })
+
+  it('zeroes alpha across the band and rebases the palette onto the data', () => {
+    const scale = parseColorScale({
+      ...VALID,
+      // An opaque low end, so a surviving alpha would be the palette's
+      // rather than an accident of the ramp.
+      stops: [
+        { t: 0, rgba: [10, 10, 10, 200] },
+        { t: 1, rgba: [255, 255, 255, 255] },
+      ],
+      dataMinLuma: BAND,
+    }) as ColorScale
+    const lut = buildColorScaleLut(scale)
+
+    for (let i = 0; i < BAND; i++) expect(lut[i * 4 + 3]).toBe(0)
+    expect(lut[BAND * 4 + 3]).toBe(200)
+
+    // The palette spans [BAND, 255], not [0, 255]: the first data code
+    // takes the stop at t=0 and the last takes t=1. Without the rebase
+    // the colorbar's labels sit a band's width off its colours.
+    expect(lut[BAND * 4]).toBe(10)
+    expect(lut[255 * 4]).toBe(255)
+    const mid = BAND + Math.round((255 - BAND) / 2)
+    expect(lut[mid * 4]).toBeGreaterThan(130)
+    expect(lut[mid * 4]).toBeLessThan(136)
+  })
+})

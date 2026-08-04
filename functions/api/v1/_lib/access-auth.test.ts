@@ -125,6 +125,39 @@ describe('verifyAccessJwt', () => {
     expect(result2).toBeNull()
   })
 
+  it('returns null when ACCESS_TEAM_DOMAIN or ACCESS_AUD is whitespace-only', async () => {
+    expect(
+      await verifyAccessJwt('whatever', { ACCESS_TEAM_DOMAIN: '  ', ACCESS_AUD: AUD }),
+    ).toBeNull()
+    expect(
+      await verifyAccessJwt('whatever', { ACCESS_TEAM_DOMAIN: TEAM, ACCESS_AUD: '\n' }),
+    ).toBeNull()
+  })
+
+  it('tolerates whitespace on ACCESS_TEAM_DOMAIN, ACCESS_AUD, and the assertion', async () => {
+    // Both settings are copied out of the Cloudflare dashboard by
+    // hand. A padded team domain builds a JWKS URL that 404s and
+    // an `iss` that never matches; a padded audience fails the
+    // `aud.includes` check. Either turns the publisher API into a
+    // blanket 401 that looks like an expired login.
+    const env = makeEnv({ ACCESS_TEAM_DOMAIN: `  ${TEAM}\n`, ACCESS_AUD: `${AUD}\n` })
+    const fetchStub = makeFetchStub({ keys: [key.publicJwk] })
+    const now = Math.floor(Date.now() / 1000)
+    const token = await signJwt({
+      iss: `https://${TEAM}`,
+      aud: AUD,
+      sub: 'user-123',
+      email: 'alice@example.com',
+      iat: now,
+      exp: now + 600,
+    })
+
+    const id = await verifyAccessJwt(`${token}\n`, env, { fetchImpl: fetchStub })
+    expect(id).toEqual({ email: 'alice@example.com', sub: 'user-123', type: 'user' })
+    // The JWKS URL was built from the trimmed domain, not the padded one.
+    expect(fetchStub).toHaveBeenCalledWith(`https://${TEAM}/cdn-cgi/access/certs`)
+  })
+
   it('returns an identity for a valid user JWT and caches the JWKS', async () => {
     const env = makeEnv()
     const fetchStub = makeFetchStub({ keys: [key.publicJwk] })

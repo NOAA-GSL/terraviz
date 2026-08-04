@@ -1316,6 +1316,18 @@ describe('config management', () => {
     const loaded = loadConfig()
     expect(loaded.visionEnabled).toBe(true)
   })
+
+  it('stores the API key verbatim — normalisation happens at the point of use', () => {
+    // Deliberately not trimmed here. Reading `apiKey` by name on
+    // the way out of storage gave CodeQL a sensitive-data source
+    // flowing into the localStorage write
+    // (js/clear-text-storage-of-sensitive-data) for a guard that
+    // covers nothing — the settings form has always trimmed on
+    // save. `llmProvider.authHeader` is what normalises the key,
+    // immediately before it becomes a header value.
+    saveConfig({ ...getDefaultConfig(), apiKey: '  sk-test\n' })
+    expect(loadConfig().apiKey).toBe('  sk-test\n')
+  })
 })
 
 describe('captureViewContext', () => {
