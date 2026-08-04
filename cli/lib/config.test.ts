@@ -52,6 +52,59 @@ describe('resolveConfig', () => {
     })
     expect(config.server).toBe('https://example.com')
   })
+
+  it('trims whitespace off the service token from every layer', () => {
+    const path = tmpPath()
+    writeFileSync(
+      path,
+      JSON.stringify({ client_id: '  persisted-id\n', client_secret: '\tpersisted-secret ' }),
+    )
+    expect(resolveConfig({ configPath: path, env: {} })).toMatchObject({
+      clientId: 'persisted-id',
+      clientSecret: 'persisted-secret',
+    })
+    expect(
+      resolveConfig({
+        configPath: '/nonexistent.json',
+        env: {
+          TERRAVIZ_ACCESS_CLIENT_ID: 'env-id\n',
+          TERRAVIZ_ACCESS_CLIENT_SECRET: 'env-secret\r\n',
+        },
+      }),
+    ).toMatchObject({ clientId: 'env-id', clientSecret: 'env-secret' })
+    expect(
+      resolveConfig({
+        configPath: '/nonexistent.json',
+        env: {},
+        flagClientId: ' flag-id ',
+        flagClientSecret: ' flag-secret ',
+      }),
+    ).toMatchObject({ clientId: 'flag-id', clientSecret: 'flag-secret' })
+  })
+
+  it('trims whitespace off the server URL', () => {
+    // A trailing newline survives the `/+$` strip, so the trim has
+    // to happen first or the URL never parses.
+    expect(resolveConfig({ env: { TERRAVIZ_SERVER: 'https://env.example/\n' } }).server).toBe(
+      'https://env.example',
+    )
+  })
+
+  it('treats a whitespace-only credential as absent', () => {
+    const path = tmpPath()
+    writeFileSync(path, JSON.stringify({ client_id: 'persisted-id' }))
+    // Blank env var falls through to the persisted value rather
+    // than shadowing it with something that could never authenticate.
+    const config = resolveConfig({
+      configPath: path,
+      env: { TERRAVIZ_ACCESS_CLIENT_ID: '   ' },
+    })
+    expect(config.clientId).toBe('persisted-id')
+    expect(
+      resolveConfig({ configPath: '/nonexistent.json', env: { TERRAVIZ_ACCESS_CLIENT_ID: '  ' } })
+        .clientId,
+    ).toBeUndefined()
+  })
 })
 
 describe('authHeaders', () => {
