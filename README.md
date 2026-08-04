@@ -138,12 +138,19 @@ If you prefer to run locally:
 
 **Prerequisites:**
 - Node.js 22+ and npm/pnpm ([nodejs.org](https://nodejs.org/en/download))
-- Git
+- Git, and [Git LFS](https://git-lfs.com)
+
+> **Git LFS is not optional here.** The skybox faces and the Earth
+> specular map under `public/assets/` are stored in LFS. Clone without
+> it and you get 131-byte pointer files still named `.jpg` — and nothing
+> reports it. The build succeeds, and the globe renders with no stars.
+> Already cloned? `git lfs install && git lfs pull` fixes it in place.
 
 ```bash
 # Get the code. Running your own node? Fork first — see
 # "Run your own node" above. Contributing upstream? Clone this repo
 # directly, or your own fork if you plan to raise a pull request.
+git lfs install    # once per machine, before the clone
 git clone https://github.com/zyra-project/terraviz.git
 cd terraviz
 
