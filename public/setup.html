@@ -1022,7 +1022,6 @@ npm run setup -- --apply</pre>
     </div>
   </div>
 </section>
-<p style="margin:0 0 44px;font-size:12.5px;color:var(--tv-text-dim)">Shipped <code style="font-family:var(--tv-font-mono)">wrangler.toml</code> still pins upstream's D1 <code style="font-family:var(--tv-font-mono)">78fbe5c3…</code> until Phase 3 rewrites it. Access gates 3 paths per host.</p>
 <section id="p0" data-phase="0" data-min-tier="1" style="background:var(--tv-surface-2);border:1px solid var(--tv-border);border-radius:8px;padding:26px 30px;margin:0 0 16px;scroll-margin-top:20px">
   <div style="display:flex;align-items:flex-start;gap:15px;margin:0 0 18px">
     <button data-toggle="p0" data-check="lg" style="flex:none;margin-top:5px"></button>
@@ -1159,6 +1158,7 @@ npm run dev:functions<span style="color:var(--tv-text-dim)">      # http://local
   <p style="margin:0 0 10px;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">Pages reads its live bindings from the dashboard. But every wrangler command you run from your shell resolves its target through <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">wrangler.toml</code>. Getting this wrong means Phase 4 runs migrations against <b style="font-weight:600;color:var(--tv-text)">upstream’s database</b>, not yours.</p>
   
 </div>
+  <p style="margin:0 0 16px;max-width:64ch;font-size:13.5px;line-height:1.6;color:var(--tv-text-muted);text-wrap:pretty">To recognise an unedited file: the two <code style="font-family:var(--tv-font-mono);font-size:.92em">database_id</code> lines both read <code style="font-family:var(--tv-font-mono);font-size:.92em">78fbe5c3…</code>, which is upstream's database, not yours.</p>
   <div style="background:var(--tv-accent-bg);border:1px solid var(--tv-accent-border);border-left:3px solid var(--tv-accent);border-radius:6px;padding:14px 16px;margin:0 0 14px">
     <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-accent);margin:0 0 7px">Gate</div>
     <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty"><code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">wrangler d1 info CATALOG_DB</code> shows your database, 0 tables.</p>

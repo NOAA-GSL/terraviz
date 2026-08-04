@@ -27,7 +27,7 @@
 import { EXPECTED_BINDINGS, type ExpectedBinding } from '../lib/expected-bindings'
 import { QUESTIONS, MANUAL_STEPS, type ManualStep } from '../lib/setup/interview'
 import { DEFAULT_NAMES } from '../lib/setup/state'
-import { PUBLISHER_PATHS, STAFF_POLICY_NAME, AUTOMATION_POLICY_NAME } from '../lib/setup/access'
+import { STAFF_POLICY_NAME, AUTOMATION_POLICY_NAME } from '../lib/setup/access'
 import { UPSTREAM_PINNED_IDS } from '../lib/setup/wrangler-toml'
 import { NODE_DOWNLOAD_URL, requiredNodeLabel } from '../lib/node-version'
 import { CHECKED_ON, D1_PRICING, freeVideoDatasets, GITHUB_ACTIONS, R2_PRICING, REFERENCE_NODE } from './pricing'
@@ -784,6 +784,16 @@ function phaseSection(p: Phase): string {
     else if (isCode(item)) parts.push(code(item))
   }
 
+  if (p.n === 3) {
+    // The pinned ID, derived rather than written, beside the step that
+    // rewrites it. It used to sit in a homeless paragraph between the
+    // setup panel and the phases, stapled to an unrelated count of
+    // Access paths — a statistic rather than something a reader could
+    // act on. Here it is a thing you can check your own file against.
+    parts.push(
+      `<p style="margin:0 0 16px;max-width:64ch;font-size:13.5px;line-height:1.6;color:var(--tv-text-muted);text-wrap:pretty">To recognise an unedited file: the two <code style="font-family:var(--tv-font-mono);font-size:.92em">database_id</code> lines both read <code style="font-family:var(--tv-font-mono);font-size:.92em">${esc(UPSTREAM_PINNED_IDS.d1.slice(0, 8))}…</code>, which is upstream's database, not yours.</p>`,
+    )
+  }
   if (p.n === 8) {
     parts.push(bindingsTable())
     parts.push(localModelVars())
@@ -1390,8 +1400,6 @@ npm run setup -- --apply`,
   </div>
 </section>`
 
-  const pinned = `<p style="margin:0 0 44px;font-size:12.5px;color:var(--tv-text-dim)">Shipped <code style="font-family:var(--tv-font-mono)">wrangler.toml</code> still pins upstream's D1 <code style="font-family:var(--tv-font-mono)">${esc(UPSTREAM_PINNED_IDS.d1.slice(0, 8))}…</code> until Phase 3 rewrites it. Access gates ${PUBLISHER_PATHS.length} paths per host.</p>`
-
   return `${head}
 <div data-shell="1" style="display:grid;grid-template-columns:262px minmax(0,1fr)">
 ${sidebar()}
@@ -1402,7 +1410,6 @@ ${costPanel()}
 ${preflight()}
 ${dependencyMap()}
 ${setupPanel}
-${pinned}
 ${PHASES.map(phaseSection).join('\n')}
 ${troubleshooting()}
 ${weekOne()}
