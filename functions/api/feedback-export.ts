@@ -30,11 +30,14 @@ interface Env {
 
 function authenticate(request: Request, token?: string): boolean {
   if (isInternalRequest(request)) return true
-  if (!token) return false
+  // Both sides trimmed — see feedback-admin.ts. A secret stored
+  // with a trailing newline would otherwise 401 every caller.
+  const expected = token?.trim()
+  if (!expected) return false
   const auth = request.headers.get('Authorization')
   if (!auth) return false
-  const bearer = auth.replace(/^Bearer\s+/i, '')
-  return bearer === token
+  const bearer = auth.replace(/^Bearer\s+/i, '').trim()
+  return bearer === expected
 }
 
 export const onRequestGet: PagesFunction<Env> = async (context) => {

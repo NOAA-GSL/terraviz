@@ -37,7 +37,12 @@ function safeTeamDomain(raw: string | undefined): string | null {
   // Strip any accidental protocol prefix and trailing slashes —
   // the operator sets this in the dashboard as a bare hostname,
   // but be defensive.
-  const trimmed = raw.replace(/^https?:\/\//, '').replace(/\/+$/, '')
+  // Leading/trailing whitespace is stripped first: without it, a
+  // team domain that picked up a newline in the dashboard fails
+  // the hostname check below and logout silently bounces to `/`
+  // instead of ending the Access session. Interior whitespace is
+  // still rejected — that isn't a hostname.
+  const trimmed = raw.trim().replace(/^https?:\/\//, '').replace(/\/+$/, '')
   // Cloudflare Access team domains are `<team>.cloudflareaccess.com`
   // by default; we accept any hostname-shaped value to keep the
   // door open for custom domains operators may set up. Reject
