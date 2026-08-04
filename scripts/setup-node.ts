@@ -52,6 +52,11 @@ import { fileURLToPath } from 'node:url'
 
 import { EXPECTED_BINDINGS } from './lib/expected-bindings.ts'
 import {
+  NODE_DOWNLOAD_URL,
+  requiredNodeLabel,
+  requiredNodeMajor,
+} from './lib/node-version.ts'
+import {
   buildPatchBody,
   formatBindingsPlan,
   OPTIONAL_EXTRAS,
@@ -152,6 +157,19 @@ const DEFAULT_STEPS: Step[] = [
 ]
 
 /**
+ * Is the running Node new enough?
+ *
+ * Pure and exported so the failure path is testable — the alternative
+ * is trusting a check nobody can exercise on the one version we cannot
+ * reproduce here.
+ */
+export function checkNodeVersion(version: string): { ok: boolean; found: string } {
+  const found = version.replace(/^v/, '')
+  const major = Number(/^(\d+)/.exec(found)?.[1] ?? NaN)
+  return { ok: Number.isFinite(major) && major >= requiredNodeMajor(), found }
+}
+
+/**
  * The Cloudflare API token, trimmed, with blank read as unset.
  *
  * The token is minted in the dashboard and pasted into a shell —
@@ -183,6 +201,11 @@ export interface SetupDeps {
    * worse than a clean failure.
    */
   prompter?: Prompter
+  /**
+   * The running Node version, as `process.version`. Injectable so the
+   * check can be tested against versions this process is not on.
+   */
+  nodeVersion?: string
 }
 
 interface Options {
@@ -370,6 +393,19 @@ export async function runSetup(deps: SetupDeps): Promise<number> {
   if (opts.help) {
     deps.stdout.write(HELP)
     return 0
+  }
+
+  // Node is the one prerequisite this tool can check for certain — it
+  // is running on it. The pre-flight sheet says "setup will catch
+  // this", so it has to actually catch it rather than trust that a
+  // reader saw the prose above the checklist.
+  const node = checkNodeVersion(deps.nodeVersion ?? process.version)
+  if (!node.ok) {
+    deps.stderr.write(
+      `setup: Node ${node.found} is too old — this repo needs ${requiredNodeLabel()}.\n` +
+        `       Install the LTS build from ${NODE_DOWNLOAD_URL}, then run this again.\n`,
+    )
+    return 2
   }
 
   // ── State ───────────────────────────────────────────────────────

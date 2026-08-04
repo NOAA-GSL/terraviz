@@ -313,7 +313,7 @@ code{overflow-wrap:anywhere}
 <!--
   GENERATED FILE — do not edit.
 
-  Produced by scripts/build-setup-page.ts on 2026-08-03.
+  Produced by scripts/build-setup-page.ts on 2026-08-04.
   Prose lives in scripts/setup-page/content.ts; every binding,
   prerequisite and validator is imported from the modules the setup
   tool itself uses, so this page cannot disagree with `npm run setup`.
@@ -578,26 +578,73 @@ code{overflow-wrap:anywhere}
     <h2 style="font:700 27px/1.2 var(--tv-font-sans);letter-spacing:-.01em;color:var(--tv-text);margin:0">Your install sheet</h2>
     <button data-act="print" data-noprint="1" style="flex:none;cursor:pointer;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:6px;padding:7px 12px;font:500 12px/1 var(--tv-font-sans);color:var(--tv-text-muted)">Print this page</button>
   </div>
-  <p style="margin:0 0 28px;max-width:62ch;color:var(--tv-text-muted);text-wrap:pretty">One page to print and keep next to the keyboard. On the left, what to sort out before you start. On the right, the install itself — every step, one line each, saying what finished looks like. Tick your way down.</p>
-  <div data-sheetgrid="1">
+  <p style="margin:0 0 10px;max-width:62ch;color:var(--tv-text-muted);text-wrap:pretty">One page to print and keep next to the keyboard. Two lists, in the order you need them: first the things only you can do, then every phase of the install with what finished looks like.</p>
+  <p style="margin:0 0 28px;max-width:62ch;color:var(--tv-text-muted);text-wrap:pretty"><b style="font-weight:600;color:var(--tv-text)">This sheet is the map, not the instructions.</b> The steps themselves are below it, one section per phase, with the commands and the click paths. Work the prerequisites here, then keep scrolling — the page is already in order.</p>
+  <div>
     <div style="margin:0 0 32px">
       <div style="display:flex;justify-content:space-between;align-items:baseline;gap:16px;margin:0 0 6px">
       <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim)">Before you start · only you can do these</div>
-      <div style="font:400 12px/1.35 var(--tv-font-sans);color:var(--tv-text-dim)">7 things, about 20 minutes</div>
+      <div style="font:400 12px/1.35 var(--tv-font-sans);color:var(--tv-text-dim)">10 things, about 20 minutes</div>
     </div>
-    <p style="margin:0 0 16px;padding-bottom:14px;border-bottom:1px solid var(--tv-border);font-size:13px;color:var(--tv-text-dim);max-width:66ch;text-wrap:pretty">An account, a domain, a login — the things no script can do on your behalf. Most the setup tool will notice if you skip; the ones marked <i>on you</i> it cannot, so those are the ones to be sure about. The first is a choice rather than a task — see <a href="#cost">what it costs</a>.</p>
-      <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:13px 28px"><div data-when="paid"><div style="display:flex;gap:10px;align-items:flex-start">
+    <p style="margin:0 0 16px;padding-bottom:14px;border-bottom:1px solid var(--tv-border);font-size:13px;color:var(--tv-text-dim);max-width:66ch;text-wrap:pretty">An account, a domain, a login — the things no script can do on your behalf. Most the setup tool will notice if you skip; the ones marked <i>on you</i> it cannot, so those are the ones to be sure about. <b style="font-weight:600;color:var(--tv-text)">Have a password manager open before you start</b>: four of these produce a secret shown exactly once. Workers Paid is a choice rather than a task — see <a href="#cost">what it costs</a>.</p>
+      <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:13px 28px"><div style="display:flex;gap:10px;align-items:flex-start">
+    <button data-toggle="pf-node" data-check="1" style="flex:none;margin-top:2px"></button>
+    <div style="min-width:0">
+      <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:0 0 3px">
+        <span style="font:600 13.5px/1.4 var(--tv-font-sans);color:var(--tv-text)">1. Install Node.js and npm</span>
+        <span title="If you skip this, the setup tool will tell you." style="flex:none;background:var(--tv-accent-bg);color:var(--tv-accent);border:1px solid var(--tv-accent-border);border-radius:999px;padding:2px 8px;font:600 9px/1.5 var(--tv-font-sans);letter-spacing:.07em;text-transform:uppercase">setup will catch this</span>
+      </div>
+      <div style="font-size:13px;line-height:1.5;color:var(--tv-text-muted);text-wrap:pretty">Every command in this install starts with npm run, including the setup tool itself. Without Node you cannot run step one. It is listed here rather than in the prose above the checklist because someone working through numbered steps reads the numbered steps.</div>
+      <details style="margin:5px 0 0">
+      <summary style="cursor:pointer;font:500 12px/1.4 var(--tv-font-sans);color:var(--tv-accent);list-style:none">How to do this ▸</summary>
+      <div style="margin:8px 0 0"><div style="display:flex;gap:8px;margin:0 0 6px"><span aria-hidden="true" style="flex:none;color:var(--tv-accent)">→</span><span style="font:400 13px/1.55 var(--tv-font-sans);color:var(--tv-text-muted);text-wrap:pretty">Install the LTS build from nodejs.org — this repo needs Node.js 22+. It carries npm with it.</span></div><div style="display:flex;gap:8px;margin:0 0 6px"><span aria-hidden="true" style="flex:none;color:var(--tv-accent)">→</span><span style="font:400 13px/1.55 var(--tv-font-sans);color:var(--tv-text-muted);text-wrap:pretty">Check what you have:</span></div><div style="white-space:pre;margin:0 0 8px;margin-inline-start:20px;padding:9px 11px;background:var(--tv-surface-code);border:1px solid var(--tv-border);border-radius:5px;font:400 11.5px/1.6 var(--tv-font-mono);color:var(--tv-text-muted);overflow-x:auto">node --version</div><p style="margin:0 0 6px;padding-inline-start:20px;font:400 12.5px/1.55 var(--tv-font-sans);color:var(--tv-text-dim);text-wrap:pretty">Anything older than the version this repo requires and setup will stop with the number it found. You do not have to get this right up front — it is checked, not trusted.</p><p style="margin:0 0 6px;padding-inline-start:20px;font:400 12.5px/1.55 var(--tv-font-sans);color:var(--tv-text-dim);text-wrap:pretty">Take an LTS release — 22 or 24 both work, and the download button gives you 24. One dependency ships precompiled binaries only for the Node majors current when it was published. On anything older or newer, npm install tries to compile it and stops on a missing C++ toolchain.</p></div>
+      <div style="display:flex;flex-wrap:wrap;gap:14px;margin:8px 0 0;font:500 12px/1.4 var(--tv-font-sans)"><a href="https://nodejs.org/en/download">Open this page ↗</a><a data-doc="#03-tools" href="https://github.com/zyra-project/terraviz/blob/main/docs/SELF_HOSTING.md#03-tools">GitHub's docs for this ↗</a></div>
+    </details>
+    </div>
+  </div>
+  <div style="display:flex;gap:10px;align-items:flex-start">
+    <button data-toggle="pf-git" data-check="1" style="flex:none;margin-top:2px"></button>
+    <div style="min-width:0">
+      <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:0 0 3px">
+        <span style="font:600 13.5px/1.4 var(--tv-font-sans);color:var(--tv-text)">2. Install git and Git LFS</span>
+        <span title="Nothing will warn you if you skip this one." style="flex:none;background:var(--tv-warn-bg);color:var(--tv-warn);border:1px solid var(--tv-warn-border);border-radius:999px;padding:2px 8px;font:600 9px/1.5 var(--tv-font-sans);letter-spacing:.07em;text-transform:uppercase">on you</span>
+      </div>
+      <div style="font-size:13px;line-height:1.5;color:var(--tv-text-muted);text-wrap:pretty">The next step clones your fork, and Cloudflare Pages builds from that remote. Downloading the repo as a zip gets you the code and no remote, which does not surface until Phase 5 has nothing to connect to. LFS belongs here for the opposite reason: a clone without it fails so quietly that nothing surfaces at all.</div>
+      <details style="margin:5px 0 0">
+      <summary style="cursor:pointer;font:500 12px/1.4 var(--tv-font-sans);color:var(--tv-accent);list-style:none">How to do this ▸</summary>
+      <div style="margin:8px 0 0"><div style="display:flex;gap:8px;margin:0 0 6px"><span aria-hidden="true" style="flex:none;color:var(--tv-accent)">→</span><span style="font:400 13px/1.55 var(--tv-font-sans);color:var(--tv-text-muted);text-wrap:pretty">Install git if you do not have it. macOS and most Linux ship with it.</span></div><div style="white-space:pre;margin:0 0 8px;margin-inline-start:20px;padding:9px 11px;background:var(--tv-surface-code);border:1px solid var(--tv-border);border-radius:5px;font:400 11.5px/1.6 var(--tv-font-mono);color:var(--tv-text-muted);overflow-x:auto">git --version</div><div style="display:flex;gap:8px;margin:0 0 6px"><span aria-hidden="true" style="flex:none;color:var(--tv-accent)">→</span><span style="font:400 13px/1.55 var(--tv-font-sans);color:var(--tv-text-muted);text-wrap:pretty">Turn on Git LFS in the same sitting. Git for Windows bundles it. On macOS and Linux it is a separate package — get it from git-lfs.com, or use brew install git-lfs or apt install git-lfs.</span></div><div style="display:flex;gap:8px;margin:0 0 6px"><span aria-hidden="true" style="flex:none;color:var(--tv-accent)">→</span><span style="font:400 13px/1.55 var(--tv-font-sans);color:var(--tv-text-muted);text-wrap:pretty">Either way, run this once per machine:</span></div><div style="white-space:pre;margin:0 0 8px;margin-inline-start:20px;padding:9px 11px;background:var(--tv-surface-code);border:1px solid var(--tv-border);border-radius:5px;font:400 11.5px/1.6 var(--tv-font-mono);color:var(--tv-text-muted);overflow-x:auto">git lfs install</div><p style="margin:0 0 6px;padding-inline-start:20px;font:400 12.5px/1.55 var(--tv-font-sans);color:var(--tv-text-dim);text-wrap:pretty">Seven of the images the globe renders are stored in LFS. Clone without it and you get small text files carrying .jpg names. Nothing reports it — the build passes, the deploy passes, and the globe comes up missing its stars.</p><p style="margin:0 0 6px;padding-inline-start:20px;font:400 12.5px/1.55 var(--tv-font-sans);color:var(--tv-text-dim);text-wrap:pretty">You will also need a browser you can sign in to Cloudflare with — most of the steps below are dashboard clicking. On a headless machine, see the wrangler login note in the guide.</p></div>
+      <div style="display:flex;flex-wrap:wrap;gap:14px;margin:8px 0 0;font:500 12px/1.4 var(--tv-font-sans)"><a href="https://git-scm.com/install/">Open this page ↗</a><a data-doc="#03-tools" href="https://github.com/zyra-project/terraviz/blob/main/docs/SELF_HOSTING.md#03-tools">GitHub's docs for this ↗</a></div>
+    </details>
+    </div>
+  </div>
+  <div style="display:flex;gap:10px;align-items:flex-start">
+    <button data-toggle="pf-fork" data-check="1" style="flex:none;margin-top:2px"></button>
+    <div style="min-width:0">
+      <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:0 0 3px">
+        <span style="font:600 13.5px/1.4 var(--tv-font-sans);color:var(--tv-text)">3. Fork the repository</span>
+        <span title="Nothing will warn you if you skip this one." style="flex:none;background:var(--tv-warn-bg);color:var(--tv-warn);border:1px solid var(--tv-warn-border);border-radius:999px;padding:2px 8px;font:600 9px/1.5 var(--tv-font-sans);letter-spacing:.07em;text-transform:uppercase">on you</span>
+      </div>
+      <div style="font-size:13px;line-height:1.5;color:var(--tv-text-muted);text-wrap:pretty">Everything here assumes your own copy. Phase 3 rewrites wrangler.toml with your resource IDs, Phase 5 points Pages at your remote, and the transcode workflow runs in your repo — none of which works against a repo you cannot push to. Cloning upstream directly fails late rather than early: it clones, it runs locally, and nothing complains until you have IDs to push and nowhere to push them.</div>
+      <details style="margin:5px 0 0">
+      <summary style="cursor:pointer;font:500 12px/1.4 var(--tv-font-sans);color:var(--tv-accent);list-style:none">How to do this ▸</summary>
+      <div style="margin:8px 0 0"><div style="display:flex;gap:8px;margin:0 0 6px"><span aria-hidden="true" style="flex:none;color:var(--tv-accent)">→</span><span style="font:400 13px/1.55 var(--tv-font-sans);color:var(--tv-text-muted);text-wrap:pretty">Press Create fork. Nothing on that page needs changing: the owner is you, the repository name stays terraviz, and &quot;Copy the main branch only&quot; stays ticked.</span></div><p style="margin:0 0 6px;padding-inline-start:20px;font:400 12.5px/1.55 var(--tv-font-sans);color:var(--tv-text-dim);text-wrap:pretty">main is the only branch a node needs, so leaving that box ticked is correct.</p><div style="display:flex;gap:8px;margin:0 0 6px"><span aria-hidden="true" style="flex:none;color:var(--tv-accent)">→</span><span style="font:400 13px/1.55 var(--tv-font-sans);color:var(--tv-text-muted);text-wrap:pretty">Open the Actions tab of your new fork and enable workflows.</span></div><p style="margin:0 0 6px;padding-inline-start:20px;font:400 12.5px/1.55 var(--tv-font-sans);color:var(--tv-text-dim);text-wrap:pretty">GitHub creates every fork with Actions turned off. Leave them off and the transcode and deploy workflows never run.</p><div style="display:flex;gap:8px;margin:0 0 6px"><span aria-hidden="true" style="flex:none;color:var(--tv-accent)">→</span><span style="font:400 13px/1.55 var(--tv-font-sans);color:var(--tv-text-muted);text-wrap:pretty">Write the result down as owner/repo. That is the W3 the interview asks you for.</span></div><div style="display:flex;gap:8px;margin:0 0 6px"><span aria-hidden="true" style="flex:none;color:var(--tv-accent)">→</span><span style="font:400 13px/1.55 var(--tv-font-sans);color:var(--tv-text-muted);text-wrap:pretty">Clone your fork onto the machine you will install from. Everything after this runs inside that checkout.</span></div><div style="white-space:pre;margin:0 0 8px;margin-inline-start:20px;padding:9px 11px;background:var(--tv-surface-code);border:1px solid var(--tv-border);border-radius:5px;font:400 11.5px/1.6 var(--tv-font-mono);color:var(--tv-text-muted);overflow-x:auto">git clone https://github.com/<span data-slot="W3" data-w="W3" style="cursor:pointer;padding:1px 5px;border-radius:3px"></span>.git
+cd terraviz
+npm install</div><p style="margin:0 0 6px;padding-inline-start:20px;font:400 12.5px/1.55 var(--tv-font-sans);color:var(--tv-text-dim);text-wrap:pretty">npm install is not optional and not just for contributors — it puts the tooling every later <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">npm run</code> command needs on your path. Skip it and the first one fails with something like 'tsx' is not recognized.</p><p style="margin:0 0 6px;padding-inline-start:20px;font:400 12.5px/1.55 var(--tv-font-sans);color:var(--tv-text-dim);text-wrap:pretty">Clone your fork, not zyra-project/terraviz. A clone of upstream runs fine and then has nowhere to push the resource IDs Phase 3 writes.</p></div>
+      <div style="display:flex;flex-wrap:wrap;gap:14px;margin:8px 0 0;font:500 12px/1.4 var(--tv-font-sans)"><a href="https://github.com/zyra-project/terraviz/fork">Open on GitHub ↗</a><a href="https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/working-with-forks/fork-a-repo">GitHub's docs for this ↗</a></div>
+    </details>
+    </div>
+  </div>
+  <div data-when="paid"><div style="display:flex;gap:10px;align-items:flex-start">
     <button data-toggle="pf-workers-paid" data-check="1" style="flex:none;margin-top:2px"></button>
     <div style="min-width:0">
       <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:0 0 3px">
-        <span style="font:600 13.5px/1.4 var(--tv-font-sans);color:var(--tv-text)">1. Enable Workers Paid ($5/month)</span>
+        <span style="font:600 13.5px/1.4 var(--tv-font-sans);color:var(--tv-text)">4. Enable Workers Paid ($5/month)</span>
         <span title="Nothing will warn you if you skip this one." style="flex:none;background:var(--tv-warn-bg);color:var(--tv-warn);border:1px solid var(--tv-warn-border);border-radius:999px;padding:2px 8px;font:600 9px/1.5 var(--tv-font-sans);letter-spacing:.07em;text-transform:uppercase">on you</span>
       </div>
       <div style="font-size:13px;line-height:1.5;color:var(--tv-text-muted);text-wrap:pretty">Optional — every product this node binds has a Workers Free allocation, so a free-plan account installs and runs. What you buy is headroom. Workers AI stops at 10,000 Neurons a day, roughly 200 Orbit turns, and that ceiling cannot be raised without upgrading. It fails soft, which is worse than failing loudly: Orbit quietly degrades to its keyword engine mid-demo.</div>
       <details style="margin:5px 0 0">
       <summary style="cursor:pointer;font:500 12px/1.4 var(--tv-font-sans);color:var(--tv-accent);list-style:none">How to do this ▸</summary>
-      <div style="white-space:pre-wrap;margin:8px 0 0;padding:10px 12px;background:var(--tv-surface-code);border:1px solid var(--tv-border);border-radius:5px;font:400 11.5px/1.65 var(--tv-font-mono);color:var(--tv-text-muted);overflow-x:auto">Workers &amp; Pages → Plans → Workers Paid → Subscribe.
-Billing is per account, not per project.</div>
+      <div style="margin:8px 0 0"><div style="display:flex;gap:8px;margin:0 0 6px"><span aria-hidden="true" style="flex:none;color:var(--tv-accent)">→</span><span style="font:400 13px/1.55 var(--tv-font-sans);color:var(--tv-text-muted);text-wrap:pretty">Open Workers &amp; Pages, go to Plans, and subscribe to Workers Paid.</span></div><p style="margin:0 0 6px;padding-inline-start:20px;font:400 12.5px/1.55 var(--tv-font-sans);color:var(--tv-text-dim);text-wrap:pretty">Billing is per account, not per project. One subscription covers every node you run on this account.</p></div>
       <div style="display:flex;flex-wrap:wrap;gap:14px;margin:8px 0 0;font:500 12px/1.4 var(--tv-font-sans)"><a href="https://dash.cloudflare.com/?to=/:account/workers/plans">Open in the Cloudflare dashboard ↗</a><a href="https://developers.cloudflare.com/workers/platform/pricing/">Cloudflare's docs for this ↗</a></div>
     </details>
     </div>
@@ -606,7 +653,7 @@ Billing is per account, not per project.</div>
     <span aria-hidden="true" style="flex:none;margin-top:2px;width:15px;height:15px;display:inline-flex;align-items:center;justify-content:center;border:1px dashed var(--tv-border-strong);border-radius:4px;color:var(--tv-text-dim);font:600 10px/1 var(--tv-font-sans)">—</span>
     <div style="min-width:0">
       <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:0 0 3px">
-        <span style="font:600 13.5px/1.4 var(--tv-font-sans);color:var(--tv-text-dim)">1. Workers Paid ($5/month) — you chose the free plan</span>
+        <span style="font:600 13.5px/1.4 var(--tv-font-sans);color:var(--tv-text-dim)">4. Workers Paid ($5/month) — you chose the free plan</span>
         <span style="flex:none;background:var(--tv-surface-3);color:var(--tv-text-dim);border:1px solid var(--tv-border);border-radius:999px;padding:2px 8px;font:600 9px/1.5 var(--tv-font-sans);letter-spacing:.07em;text-transform:uppercase">your choice</span>
       </div>
       <div style="font-size:13px;line-height:1.5;color:var(--tv-text-dim);text-wrap:pretty">Nothing to do. Every resource in this install still gets created — you just have a smaller daily allowance of each. Orbit throttles after roughly 200 conversations a day, and that is the ceiling you cannot buy past. <a href="#cost">Change plan</a></div>
@@ -616,15 +663,13 @@ Billing is per account, not per project.</div>
     <button data-toggle="pf-dns" data-check="1" style="flex:none;margin-top:2px"></button>
     <div style="min-width:0">
       <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:0 0 3px">
-        <span style="font:600 13.5px/1.4 var(--tv-font-sans);color:var(--tv-text)">2. Put your domain on Cloudflare DNS</span>
+        <span style="font:600 13.5px/1.4 var(--tv-font-sans);color:var(--tv-text)">5. Put your domain on Cloudflare DNS</span>
         <span title="If you skip this, the setup tool will tell you." style="flex:none;background:var(--tv-accent-bg);color:var(--tv-accent);border:1px solid var(--tv-accent-border);border-radius:999px;padding:2px 8px;font:600 9px/1.5 var(--tv-font-sans);letter-spacing:.07em;text-transform:uppercase">setup will catch this</span>
       </div>
       <div style="font-size:13px;line-height:1.5;color:var(--tv-text-muted);text-wrap:pretty">Pages provisions the certificate and CNAME for your custom domain, and R2 can only serve a public bucket from a zone Cloudflare controls. Neither works on a domain hosted elsewhere.</div>
       <details style="margin:5px 0 0">
       <summary style="cursor:pointer;font:500 12px/1.4 var(--tv-font-sans);color:var(--tv-accent);list-style:none">How to do this ▸</summary>
-      <div style="white-space:pre-wrap;margin:8px 0 0;padding:10px 12px;background:var(--tv-surface-code);border:1px solid var(--tv-border);border-radius:5px;font:400 11.5px/1.65 var(--tv-font-mono);color:var(--tv-text-muted);overflow-x:auto">Add the site in Cloudflare, then change the nameservers at your registrar.
-Propagation is usually minutes, occasionally hours.
-Transferring the registration is NOT required — only DNS.</div>
+      <div style="margin:8px 0 0"><div style="display:flex;gap:8px;margin:0 0 6px"><span aria-hidden="true" style="flex:none;color:var(--tv-accent)">→</span><span style="font:400 13px/1.55 var(--tv-font-sans);color:var(--tv-text-muted);text-wrap:pretty">Add your domain to Cloudflare, then change its nameservers at your registrar to the two Cloudflare gives you.</span></div><p style="margin:0 0 6px;padding-inline-start:20px;font:400 12.5px/1.55 var(--tv-font-sans);color:var(--tv-text-dim);text-wrap:pretty">You do not need to transfer the registration. Cloudflare only needs to answer DNS for the domain.</p><p style="margin:0 0 6px;padding-inline-start:20px;font:400 12.5px/1.55 var(--tv-font-sans);color:var(--tv-text-dim);text-wrap:pretty">The change usually takes minutes to take effect, occasionally a few hours.</p></div>
       <div style="display:flex;flex-wrap:wrap;gap:14px;margin:8px 0 0;font:500 12px/1.4 var(--tv-font-sans)"><a href="https://dash.cloudflare.com/?to=/:account/add-site">Open in the Cloudflare dashboard ↗</a><a href="https://developers.cloudflare.com/fundamentals/manage-domains/add-site/">Cloudflare's docs for this ↗</a></div>
     </details>
     </div>
@@ -633,23 +678,20 @@ Transferring the registration is NOT required — only DNS.</div>
     <button data-toggle="pf-api-token" data-check="1" style="flex:none;margin-top:2px"></button>
     <div style="min-width:0">
       <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:0 0 3px">
-        <span style="font:600 13.5px/1.4 var(--tv-font-sans);color:var(--tv-text)">3. Mint a Cloudflare API token</span>
+        <span style="font:600 13.5px/1.4 var(--tv-font-sans);color:var(--tv-text)">6. Mint a Cloudflare API token</span>
         <span title="If you skip this, the setup tool will tell you." style="flex:none;background:var(--tv-accent-bg);color:var(--tv-accent);border:1px solid var(--tv-accent-border);border-radius:999px;padding:2px 8px;font:600 9px/1.5 var(--tv-font-sans);letter-spacing:.07em;text-transform:uppercase">setup will catch this</span>
       </div>
       <div style="font-size:13px;line-height:1.5;color:var(--tv-text-muted);text-wrap:pretty">Everything this tool does runs through it.</div>
       <details style="margin:5px 0 0">
       <summary style="cursor:pointer;font:500 12px/1.4 var(--tv-font-sans);color:var(--tv-accent);list-style:none">How to do this ▸</summary>
-      <div style="white-space:pre-wrap;margin:8px 0 0;padding:10px 12px;background:var(--tv-surface-code);border:1px solid var(--tv-border);border-radius:5px;font:400 11.5px/1.65 var(--tv-font-mono);color:var(--tv-text-muted);overflow-x:auto">My Profile → API Tokens → Create Token → Custom token.
-Permissions (grant only what you plan to run):
-  Account → Cloudflare Pages           → Edit   (Pages project + bindings)
-  Account → Access: Apps and Policies  → Edit   (the publisher application)
-  Account → Access: Service Tokens     → Edit   (the CLI credential)
-  Account → Access: Organizations      → Read   (discovers your team domain)
-  Account → Workers R2 Storage         → Edit   (only for --only=r2)
-  Zone    → Zone                       → Read   (resolves the zone)
-  Zone    → Zone WAF                   → Edit   (only for --only=waf)
-  Account → D1                         → Edit   (only for CI migrations)
-Then: export CLOUDFLARE_API_TOKEN=...</div>
+      <div style="margin:8px 0 0"><div style="display:flex;gap:8px;margin:0 0 6px"><span aria-hidden="true" style="flex:none;color:var(--tv-accent)">→</span><span style="font:400 13px/1.55 var(--tv-font-sans);color:var(--tv-text-muted);text-wrap:pretty">Go to My Profile, then API Tokens, then Create Token, and choose Custom token.</span></div><div style="display:flex;gap:8px;margin:0 0 6px"><span aria-hidden="true" style="flex:none;color:var(--tv-accent)">→</span><span style="font:400 13px/1.55 var(--tv-font-sans);color:var(--tv-text-muted);text-wrap:pretty">Add the permissions below. Grant only the ones you plan to use — the last four are for optional steps.</span></div><div style="white-space:pre;margin:0 0 8px;margin-inline-start:20px;padding:9px 11px;background:var(--tv-surface-code);border:1px solid var(--tv-border);border-radius:5px;font:400 11.5px/1.6 var(--tv-font-mono);color:var(--tv-text-muted);overflow-x:auto">Account → Cloudflare Pages           Edit   Pages project + bindings
+Account → Access: Apps and Policies  Edit   the publisher application
+Account → Access: Service Tokens     Edit   the CLI credential
+Account → Access: Organizations      Read   discovers your team domain
+Zone    → Zone                       Read   resolves the zone
+Account → Workers R2 Storage         Edit   only for --only=r2
+Zone    → Zone WAF                   Edit   only for --only=waf
+Account → D1                         Edit   only for CI migrations</div><div style="display:flex;gap:8px;margin:0 0 6px"><span aria-hidden="true" style="flex:none;color:var(--tv-accent)">→</span><span style="font:400 13px/1.55 var(--tv-font-sans);color:var(--tv-text-muted);text-wrap:pretty">Copy the token when it is shown and put it in your shell, where the setup tool will find it.</span></div><div style="white-space:pre;margin:0 0 8px;margin-inline-start:20px;padding:9px 11px;background:var(--tv-surface-code);border:1px solid var(--tv-border);border-radius:5px;font:400 11.5px/1.6 var(--tv-font-mono);color:var(--tv-text-muted);overflow-x:auto">export CLOUDFLARE_API_TOKEN=...</div><p style="margin:0 0 6px;padding-inline-start:20px;font:400 12.5px/1.55 var(--tv-font-sans);color:var(--tv-text-dim);text-wrap:pretty">Cloudflare shows the token once. If you lose it, revoke it and mint another.</p></div>
       <div style="display:flex;flex-wrap:wrap;gap:14px;margin:8px 0 0;font:500 12px/1.4 var(--tv-font-sans)"><a href="https://dash.cloudflare.com/profile/api-tokens">Open in the Cloudflare dashboard ↗</a><a href="https://developers.cloudflare.com/fundamentals/api/get-started/create-token/">Cloudflare's docs for this ↗</a></div>
     </details>
     </div>
@@ -658,17 +700,13 @@ Then: export CLOUDFLARE_API_TOKEN=...</div>
     <button data-toggle="pf-zero-trust" data-check="1" style="flex:none;margin-top:2px"></button>
     <div style="min-width:0">
       <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:0 0 3px">
-        <span style="font:600 13.5px/1.4 var(--tv-font-sans);color:var(--tv-text)">4. Complete Zero Trust onboarding</span>
+        <span style="font:600 13.5px/1.4 var(--tv-font-sans);color:var(--tv-text)">7. Complete Zero Trust onboarding</span>
         <span title="If you skip this, the setup tool will tell you." style="flex:none;background:var(--tv-accent-bg);color:var(--tv-accent);border:1px solid var(--tv-accent-border);border-radius:999px;padding:2px 8px;font:600 9px/1.5 var(--tv-font-sans);letter-spacing:.07em;text-transform:uppercase">setup will catch this</span>
       </div>
       <div style="font-size:13px;line-height:1.5;color:var(--tv-text-muted);text-wrap:pretty">The Access application that gates the publisher API cannot exist until the account has a Zero Trust organization and at least one identity provider. Without it every /api/v1/publish/** route 503s.</div>
       <details style="margin:5px 0 0">
       <summary style="cursor:pointer;font:500 12px/1.4 var(--tv-font-sans);color:var(--tv-accent);list-style:none">How to do this ▸</summary>
-      <div style="white-space:pre-wrap;margin:8px 0 0;padding:10px 12px;background:var(--tv-surface-code);border:1px solid var(--tv-border);border-radius:5px;font:400 11.5px/1.65 var(--tv-font-mono);color:var(--tv-text-muted);overflow-x:auto">Pick a team name — it becomes &lt;team&gt;.cloudflareaccess.com.
-Settings → Authentication → add a login method.
-One-time PIN over email works and needs no IdP setup;
-Google / Okta / Entra are better for a real team.
-The free Zero Trust plan covers up to 50 users.</div>
+      <div style="margin:8px 0 0"><div style="display:flex;gap:8px;margin:0 0 6px"><span aria-hidden="true" style="flex:none;color:var(--tv-accent)">→</span><span style="font:400 13px/1.55 var(--tv-font-sans);color:var(--tv-text-muted);text-wrap:pretty">Pick a team name when Cloudflare asks for one. It becomes your team domain, and you will need that later as W12.</span></div><div style="white-space:pre;margin:0 0 8px;margin-inline-start:20px;padding:9px 11px;background:var(--tv-surface-code);border:1px solid var(--tv-border);border-radius:5px;font:400 11.5px/1.6 var(--tv-font-mono);color:var(--tv-text-muted);overflow-x:auto">&lt;team&gt;.cloudflareaccess.com</div><div style="display:flex;gap:8px;margin:0 0 6px"><span aria-hidden="true" style="flex:none;color:var(--tv-accent)">→</span><span style="font:400 13px/1.55 var(--tv-font-sans);color:var(--tv-text-muted);text-wrap:pretty">Go to Settings, then Authentication, and add at least one login method.</span></div><p style="margin:0 0 6px;padding-inline-start:20px;font:400 12.5px/1.55 var(--tv-font-sans);color:var(--tv-text-dim);text-wrap:pretty">One-time PIN emails a code and needs no identity provider, so it is the quickest way to get working. Google, Okta or Entra are better once real staff are signing in.</p><p style="margin:0 0 6px;padding-inline-start:20px;font:400 12.5px/1.55 var(--tv-font-sans);color:var(--tv-text-dim);text-wrap:pretty">The free Zero Trust plan covers up to 50 users, which is more than most nodes need.</p></div>
       <div style="display:flex;flex-wrap:wrap;gap:14px;margin:8px 0 0;font:500 12px/1.4 var(--tv-font-sans)"><a href="https://one.dash.cloudflare.com/">Open in the Cloudflare dashboard ↗</a><a href="https://developers.cloudflare.com/cloudflare-one/setup/">Cloudflare's docs for this ↗</a></div>
     </details>
     </div>
@@ -677,15 +715,13 @@ The free Zero Trust plan covers up to 50 users.</div>
     <button data-toggle="pf-node-key" data-check="1" style="flex:none;margin-top:2px"></button>
     <div style="min-width:0">
       <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:0 0 3px">
-        <span style="font:600 13.5px/1.4 var(--tv-font-sans);color:var(--tv-text)">5. Generate the node keypair</span>
+        <span style="font:600 13.5px/1.4 var(--tv-font-sans);color:var(--tv-text)">8. Generate the node keypair</span>
         <span title="If you skip this, the setup tool will tell you." style="flex:none;background:var(--tv-accent-bg);color:var(--tv-accent);border:1px solid var(--tv-accent-border);border-radius:999px;padding:2px 8px;font:600 9px/1.5 var(--tv-font-sans);letter-spacing:.07em;text-transform:uppercase">setup will catch this</span>
       </div>
       <div style="font-size:13px;line-height:1.5;color:var(--tv-text-muted);text-wrap:pretty">Signs your node federation responses and is advertised at /.well-known/terraviz.json. The generator also writes node-public-key.txt, which <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">terraviz init-node</code> reads in Phase 9.</div>
       <details style="margin:5px 0 0">
       <summary style="cursor:pointer;font:500 12px/1.4 var(--tv-font-sans);color:var(--tv-accent);list-style:none">How to do this ▸</summary>
-      <div style="white-space:pre-wrap;margin:8px 0 0;padding:10px 12px;background:var(--tv-surface-code);border:1px solid var(--tv-border);border-radius:5px;font:400 11.5px/1.65 var(--tv-font-mono);color:var(--tv-text-muted);overflow-x:auto">npm run gen:node-key
-Writes NODE_ID_PRIVATE_KEY_PEM into .dev.vars at mode 0600.
-Back that file up — regenerating means re-provisioning your identity.</div>
+      <div style="margin:8px 0 0"><div style="display:flex;gap:8px;margin:0 0 6px"><span aria-hidden="true" style="flex:none;color:var(--tv-accent)">→</span><span style="font:400 13px/1.55 var(--tv-font-sans);color:var(--tv-text-muted);text-wrap:pretty">Run the generator from your checkout.</span></div><div style="white-space:pre;margin:0 0 8px;margin-inline-start:20px;padding:9px 11px;background:var(--tv-surface-code);border:1px solid var(--tv-border);border-radius:5px;font:400 11.5px/1.6 var(--tv-font-mono);color:var(--tv-text-muted);overflow-x:auto">npm run gen:node-key</div><p style="margin:0 0 6px;padding-inline-start:20px;font:400 12.5px/1.55 var(--tv-font-sans);color:var(--tv-text-dim);text-wrap:pretty">It writes NODE_ID_PRIVATE_KEY_PEM into .dev.vars, readable only by you, and node-public-key.txt beside it.</p><p style="margin:0 0 6px;padding-inline-start:20px;font:400 12.5px/1.55 var(--tv-font-sans);color:var(--tv-text-dim);text-wrap:pretty">Back that file up. Generating a second key gives your node a new identity, which means re-provisioning it everywhere.</p></div>
       
     </details>
     </div>
@@ -694,17 +730,13 @@ Back that file up — regenerating means re-provisioning your identity.</div>
     <button data-toggle="pf-git-connect" data-check="1" style="flex:none;margin-top:2px"></button>
     <div style="min-width:0">
       <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:0 0 3px">
-        <span style="font:600 13.5px/1.4 var(--tv-font-sans);color:var(--tv-text)">6. Connect the Pages project to your Git remote (or skip it)</span>
+        <span style="font:600 13.5px/1.4 var(--tv-font-sans);color:var(--tv-text)">9. Connect the Pages project to your Git remote (or skip it)</span>
         <span title="If you skip this, the setup tool will tell you." style="flex:none;background:var(--tv-accent-bg);color:var(--tv-accent);border:1px solid var(--tv-accent-border);border-radius:999px;padding:2px 8px;font:600 9px/1.5 var(--tv-font-sans);letter-spacing:.07em;text-transform:uppercase">setup will catch this</span>
       </div>
       <div style="font-size:13px;line-height:1.5;color:var(--tv-text-muted);text-wrap:pretty">The Cloudflare↔GitHub handshake is an OAuth flow with no API, so this tool creates a Direct Upload project. Cloudflare will not run your build until you connect a remote, which means the VITE_* build variables have to be set wherever the build actually happens.</div>
       <details style="margin:5px 0 0">
       <summary style="cursor:pointer;font:500 12px/1.4 var(--tv-font-sans);color:var(--tv-accent);list-style:none">How to do this ▸</summary>
-      <div style="white-space:pre-wrap;margin:8px 0 0;padding:10px 12px;background:var(--tv-surface-code);border:1px solid var(--tv-border);border-radius:5px;font:400 11.5px/1.65 var(--tv-font-mono);color:var(--tv-text-muted);overflow-x:auto">Either: Workers &amp; Pages → your project → Settings → Builds →
-  Connect to Git, then set the VITE_* variables in the dashboard.
-Or: keep Direct Upload and deploy from CI with
-  `wrangler pages deploy dist/ --project-name &lt;your-project&gt;`,
-  setting the VITE_* variables in the CI job instead.</div>
+      <div style="margin:8px 0 0"><div style="display:flex;gap:8px;margin:0 0 6px"><span aria-hidden="true" style="flex:none;color:var(--tv-accent)">→</span><span style="font:400 13px/1.55 var(--tv-font-sans);color:var(--tv-text-muted);text-wrap:pretty">Either connect the repository: Workers &amp; Pages, your project, Settings, then Builds, then Connect to Git. Set the VITE_* variables in the dashboard afterwards.</span></div><div style="display:flex;gap:8px;margin:0 0 6px"><span aria-hidden="true" style="flex:none;color:var(--tv-accent)">→</span><span style="font:400 13px/1.55 var(--tv-font-sans);color:var(--tv-text-muted);text-wrap:pretty">Or keep Direct Upload and deploy from CI instead, setting the VITE_* variables in the CI job.</span></div><div style="white-space:pre;margin:0 0 8px;margin-inline-start:20px;padding:9px 11px;background:var(--tv-surface-code);border:1px solid var(--tv-border);border-radius:5px;font:400 11.5px/1.6 var(--tv-font-mono);color:var(--tv-text-muted);overflow-x:auto">wrangler pages deploy dist/ --project-name &lt;your-project&gt;</div><p style="margin:0 0 6px;padding-inline-start:20px;font:400 12.5px/1.55 var(--tv-font-sans);color:var(--tv-text-dim);text-wrap:pretty">Pick one. Whichever you choose, the VITE_* values are read where the build runs, not where the site is served.</p></div>
       <div style="display:flex;flex-wrap:wrap;gap:14px;margin:8px 0 0;font:500 12px/1.4 var(--tv-font-sans)"><a href="https://developers.cloudflare.com/pages/configuration/git-integration/">Cloudflare's docs for this ↗</a></div>
     </details>
     </div>
@@ -713,19 +745,15 @@ Or: keep Direct Upload and deploy from CI with
     <button data-toggle="pf-r2-token" data-check="1" style="flex:none;margin-top:2px"></button>
     <div style="min-width:0">
       <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:0 0 3px">
-        <span style="font:600 13.5px/1.4 var(--tv-font-sans);color:var(--tv-text)">7. Mint the R2 S3 API token</span>
+        <span style="font:600 13.5px/1.4 var(--tv-font-sans);color:var(--tv-text)">10. Mint the R2 S3 API token</span>
         <span title="Nothing will warn you if you skip this one." style="flex:none;background:var(--tv-warn-bg);color:var(--tv-warn);border:1px solid var(--tv-warn-border);border-radius:999px;padding:2px 8px;font:600 9px/1.5 var(--tv-font-sans);letter-spacing:.07em;text-transform:uppercase">on you</span>
       </div>
       <div style="font-size:13px;line-height:1.5;color:var(--tv-text-muted);text-wrap:pretty">Server-side presigned uploads and digest verification need S3-API credentials. Automating this would require a token that can create tokens — a credential that could grant itself more authority — so it stays a deliberate manual step.</div>
       <details style="margin:5px 0 0">
       <summary style="cursor:pointer;font:500 12px/1.4 var(--tv-font-sans);color:var(--tv-accent);list-style:none">How to do this ▸</summary>
-      <div style="white-space:pre-wrap;margin:8px 0 0;padding:10px 12px;background:var(--tv-surface-code);border:1px solid var(--tv-border);border-radius:5px;font:400 11.5px/1.65 var(--tv-font-mono);color:var(--tv-text-muted);overflow-x:auto">R2 → Manage R2 API Tokens → Create API token.
-Permission: Object Read &amp; Write, scoped to your assets bucket.
-Copy all three values — the secret is shown once:
-  export R2_S3_ENDPOINT=https://&lt;account&gt;.r2.cloudflarestorage.com
-  export R2_ACCESS_KEY_ID=...
-  export R2_SECRET_ACCESS_KEY=...
-Then re-run setup; the bindings step picks them up from the shell.</div>
+      <div style="margin:8px 0 0"><div style="display:flex;gap:8px;margin:0 0 6px"><span aria-hidden="true" style="flex:none;color:var(--tv-accent)">→</span><span style="font:400 13px/1.55 var(--tv-font-sans);color:var(--tv-text-muted);text-wrap:pretty">Go to R2, then Manage R2 API Tokens, then Create API token.</span></div><div style="display:flex;gap:8px;margin:0 0 6px"><span aria-hidden="true" style="flex:none;color:var(--tv-accent)">→</span><span style="font:400 13px/1.55 var(--tv-font-sans);color:var(--tv-text-muted);text-wrap:pretty">Give it Object Read &amp; Write, scoped to your assets bucket rather than the whole account.</span></div><div style="display:flex;gap:8px;margin:0 0 6px"><span aria-hidden="true" style="flex:none;color:var(--tv-accent)">→</span><span style="font:400 13px/1.55 var(--tv-font-sans);color:var(--tv-text-muted);text-wrap:pretty">Copy all three values before you leave the page and put them in your shell.</span></div><div style="white-space:pre;margin:0 0 8px;margin-inline-start:20px;padding:9px 11px;background:var(--tv-surface-code);border:1px solid var(--tv-border);border-radius:5px;font:400 11.5px/1.6 var(--tv-font-mono);color:var(--tv-text-muted);overflow-x:auto">export R2_S3_ENDPOINT=https://&lt;account&gt;.r2.cloudflarestorage.com
+export R2_ACCESS_KEY_ID=...
+export R2_SECRET_ACCESS_KEY=...</div><p style="margin:0 0 6px;padding-inline-start:20px;font:400 12.5px/1.55 var(--tv-font-sans);color:var(--tv-text-dim);text-wrap:pretty">The secret is shown once. If you lose it, delete the token and make another.</p><div style="display:flex;gap:8px;margin:0 0 6px"><span aria-hidden="true" style="flex:none;color:var(--tv-accent)">→</span><span style="font:400 13px/1.55 var(--tv-font-sans);color:var(--tv-text-muted);text-wrap:pretty">Re-run setup. The bindings step reads all three from your shell.</span></div></div>
       <div style="display:flex;flex-wrap:wrap;gap:14px;margin:8px 0 0;font:500 12px/1.4 var(--tv-font-sans)"><a href="https://dash.cloudflare.com/?to=/:account/r2/api-tokens">Open in the Cloudflare dashboard ↗</a><a href="https://developers.cloudflare.com/r2/api/tokens/">Cloudflare's docs for this ↗</a></div>
     </details>
     </div>
@@ -812,6 +840,9 @@ Then re-run setup; the bindings step picks them up from the shell.</div>
     <div style="flex:none;width:22px;font:500 11.5px/1.5 var(--tv-font-mono);color:var(--tv-text-dim)">14</div>
     <div style="font-size:13.5px;line-height:1.5;color:var(--tv-text-muted);text-wrap:pretty">Your desktop app talks to your node, not the original one.</div>
   </div></div>
+    </div>
+    <div data-noprint="1" style="background:var(--tv-accent-bg);border:1px solid var(--tv-accent-border);border-radius:8px;padding:16px 18px;margin:4px 0 0">
+      <p style="margin:0;font-size:13.5px;line-height:1.6;color:var(--tv-text-muted);text-wrap:pretty">That is the whole install on one page — but only the summary. <a href="#p0">Start Phase 0 below</a>, which is where the actual commands are. Each phase ends by asking for whatever it produced, so the values fill themselves into every later command as you go.</p>
     </div>
   </div>
 </section>
@@ -996,20 +1027,35 @@ Then re-run setup; the bindings step picks them up from the shell.</div>
   <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim);color:var(--tv-accent);margin:0 0 12px">Start here</div>
   <h2 style="font:700 27px/1.2 var(--tv-font-sans);letter-spacing:-.01em;color:var(--tv-text);margin:0 0 14px">Let the tool do the mechanical parts</h2>
   <p style="margin:0 0 18px;max-width:62ch;color:var(--tv-text-muted);text-wrap:pretty">Most of what follows is dashboard clicking that a script can do faster and without typos. <code style="font-family:var(--tv-font-mono);font-size:.92em">npm run setup</code> provisions the resources, rewrites the config, and applies the migrations in the order that works. It creates the Access application (<code style="font-family:var(--tv-font-mono);font-size:.92em">Terraviz Publisher</code>) with its <code style="font-family:var(--tv-font-mono);font-size:.92em">Staff</code> and <code style="font-family:var(--tv-font-mono);font-size:.92em">Automation</code> policies, then writes every binding to <i>both</i> environments.</p>
-  <div style="position:relative;margin:0 0 14px">
-  <pre style="margin:0;background:var(--tv-surface-code);border:1px solid var(--tv-border);color:var(--tv-text-muted);font:400 12.5px/1.8 var(--tv-font-mono);padding:36px 16px 15px;border-radius:6px;overflow-x:auto"><span style="color:var(--tv-text-dim)"># what only a human can do, with click paths</span>
-npm run setup -- --manual
-
-<span style="color:var(--tv-text-dim)"># answer 7 questions, validated at the prompt</span>
-npm run setup -- --interactive
-
-<span style="color:var(--tv-text-dim)"># plan only — writes nothing</span>
-npm run setup
-
-<span style="color:var(--tv-text-dim)"># provision + wire</span>
-npm run setup -- --apply</pre>
+  <p style="margin:0 0 12px;max-width:62ch;color:var(--tv-text-muted);text-wrap:pretty">Four ways to run it. <b style="font-weight:600;color:var(--tv-text)">These are alternatives, not a sequence</b> — one block, one command, so whatever you copy is the whole of what you meant to run.</p>
+  <div style="margin:0 0 12px">
+    <div style="position:relative;margin:0 0 14px">
+  <pre style="margin:0;background:var(--tv-surface-code);border:1px solid var(--tv-border);color:var(--tv-text-muted);font:400 12.5px/1.8 var(--tv-font-mono);padding:36px 16px 15px;border-radius:6px;overflow-x:auto">npm run setup -- --manual</pre>
   <button data-copy="1" style="position:absolute;top:7px;right:8px;background:rgba(255,255,255,.07);color:var(--tv-text-dim);border:1px solid var(--tv-border-strong);border-radius:3px;font:500 10px/1 var(--tv-font-sans);letter-spacing:.08em;text-transform:uppercase;padding:5px 8px;cursor:pointer">Copy</button>
 </div>
+    <p style="margin:5px 0 0;font-size:12.5px;line-height:1.5;color:var(--tv-text-dim);text-wrap:pretty">What only a human can do, with click paths. Prints and exits.</p>
+  </div>
+  <div style="margin:0 0 12px">
+    <div style="position:relative;margin:0 0 14px">
+  <pre style="margin:0;background:var(--tv-surface-code);border:1px solid var(--tv-border);color:var(--tv-text-muted);font:400 12.5px/1.8 var(--tv-font-mono);padding:36px 16px 15px;border-radius:6px;overflow-x:auto">npm run setup -- --interactive</pre>
+  <button data-copy="1" style="position:absolute;top:7px;right:8px;background:rgba(255,255,255,.07);color:var(--tv-text-dim);border:1px solid var(--tv-border-strong);border-radius:3px;font:500 10px/1 var(--tv-font-sans);letter-spacing:.08em;text-transform:uppercase;padding:5px 8px;cursor:pointer">Copy</button>
+</div>
+    <p style="margin:5px 0 0;font-size:12.5px;line-height:1.5;color:var(--tv-text-dim);text-wrap:pretty">Asks the 7 questions only you can answer, validating each at the prompt.</p>
+  </div>
+  <div style="margin:0 0 12px">
+    <div style="position:relative;margin:0 0 14px">
+  <pre style="margin:0;background:var(--tv-surface-code);border:1px solid var(--tv-border);color:var(--tv-text-muted);font:400 12.5px/1.8 var(--tv-font-mono);padding:36px 16px 15px;border-radius:6px;overflow-x:auto">npm run setup</pre>
+  <button data-copy="1" style="position:absolute;top:7px;right:8px;background:rgba(255,255,255,.07);color:var(--tv-text-dim);border:1px solid var(--tv-border-strong);border-radius:3px;font:500 10px/1 var(--tv-font-sans);letter-spacing:.08em;text-transform:uppercase;padding:5px 8px;cursor:pointer">Copy</button>
+</div>
+    <p style="margin:5px 0 0;font-size:12.5px;line-height:1.5;color:var(--tv-text-dim);text-wrap:pretty">Plan. Says what it would do and writes nothing — this is the default.</p>
+  </div>
+  <div style="margin:0 0 12px">
+    <div style="position:relative;margin:0 0 14px">
+  <pre style="margin:0;background:var(--tv-surface-code);border:1px solid var(--tv-border);color:var(--tv-text-muted);font:400 12.5px/1.8 var(--tv-font-mono);padding:36px 16px 15px;border-radius:6px;overflow-x:auto">npm run setup -- --apply</pre>
+  <button data-copy="1" style="position:absolute;top:7px;right:8px;background:rgba(255,255,255,.07);color:var(--tv-text-dim);border:1px solid var(--tv-border-strong);border-radius:3px;font:500 10px/1 var(--tv-font-sans);letter-spacing:.08em;text-transform:uppercase;padding:5px 8px;cursor:pointer">Copy</button>
+</div>
+    <p style="margin:5px 0 0;font-size:12.5px;line-height:1.5;color:var(--tv-text-dim);text-wrap:pretty">Provisions the resources and wires them up. The one that changes things.</p>
+  </div>
   <p style="margin:0 0 18px;max-width:62ch;color:var(--tv-text-muted);text-wrap:pretty">Every phase below leads with the tool. Where a human is genuinely required — billing, an OAuth handshake, the first SSO sign-in — it says so and shows you the clicks. Where you would rather do it yourself anyway, open <b style="font-weight:600;color:var(--tv-text)">Do it by hand</b>.</p>
   <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px">
     <div style="background:var(--tv-surface-3);border:1px solid var(--tv-border);border-radius:6px;padding:14px 16px">
@@ -1026,7 +1072,6 @@ npm run setup -- --apply</pre>
     </div>
   </div>
 </section>
-<p style="margin:0 0 44px;font-size:12.5px;color:var(--tv-text-dim)">Shipped <code style="font-family:var(--tv-font-mono)">wrangler.toml</code> still pins upstream's D1 <code style="font-family:var(--tv-font-mono)">78fbe5c3…</code> until Phase 3 rewrites it. Access gates 3 paths per host.</p>
 <section id="p0" data-phase="0" data-min-tier="1" style="background:var(--tv-surface-2);border:1px solid var(--tv-border);border-radius:8px;padding:26px 30px;margin:0 0 16px;scroll-margin-top:20px">
   <div style="display:flex;align-items:flex-start;gap:15px;margin:0 0 18px">
     <button data-toggle="p0" data-check="lg" style="flex:none;margin-top:5px"></button>
@@ -1040,7 +1085,7 @@ npm run setup -- --apply</pre>
   </div>
   <p style="margin:0 0 16px;max-width:64ch;color:var(--tv-text-muted);text-wrap:pretty">An account, a registrar, and a login. Get these four values written down and everything after this has something to stand on.</p>
   <div style="display:flex;flex-wrap:wrap;gap:6px;margin:0 0 20px;align-items:center">
-      <span style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim);margin-right:3px">Produces</span>
+      <span style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim);margin-right:3px">Produces <span style="text-transform:none;letter-spacing:0;font-weight:400;color:var(--tv-text-dim)">— tap one to record it</span></span>
       <span data-w="ORG" style="cursor:pointer;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:3px;padding:4px 8px;font:500 11px/1.2 var(--tv-font-mono);color:var(--tv-text-muted)">ORG your org domain</span>
       <span data-w="TRUST" style="cursor:pointer;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:3px;padding:4px 8px;font:500 11px/1.2 var(--tv-font-mono);color:var(--tv-text-muted)">TRUST auto-approve domains</span>
       <span data-w="W1" style="cursor:pointer;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:3px;padding:4px 8px;font:500 11px/1.2 var(--tv-font-mono);color:var(--tv-text-muted)">W1 cloudflare account id</span>
@@ -1048,7 +1093,7 @@ npm run setup -- --apply</pre>
       <span data-w="W3" style="cursor:pointer;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:3px;padding:4px 8px;font:500 11px/1.2 var(--tv-font-mono);color:var(--tv-text-muted)">W3 git remote</span>
     </div>
   <div style="position:relative;margin:0 0 14px">
-  <pre style="margin:0;background:var(--tv-surface-code);border:1px solid var(--tv-border);color:var(--tv-text-muted);font:400 12.5px/1.8 var(--tv-font-mono);padding:36px 16px 15px;border-radius:6px;overflow-x:auto">node --version<span style="color:var(--tv-text-dim)">          # must be &gt;= 20</span>
+  <pre style="margin:0;background:var(--tv-surface-code);border:1px solid var(--tv-border);color:var(--tv-text-muted);font:400 12.5px/1.8 var(--tv-font-mono);padding:36px 16px 15px;border-radius:6px;overflow-x:auto">node --version<span style="color:var(--tv-text-dim)">          # must be &gt;= 22</span>
 npm install -g wrangler
 wrangler login<span style="color:var(--tv-text-dim)">          # opens a browser</span>
 wrangler whoami<span style="color:var(--tv-text-dim)">         # confirms the account</span>
@@ -1057,6 +1102,65 @@ git clone https://github.com/<span data-slot="W3" data-w="W3" style="cursor:poin
 cd terraviz &amp;&amp; npm install</pre>
   <button data-copy="1" style="position:absolute;top:7px;right:8px;background:rgba(255,255,255,.07);color:var(--tv-text-dim);border:1px solid var(--tv-border-strong);border-radius:3px;font:500 10px/1 var(--tv-font-sans);letter-spacing:.08em;text-transform:uppercase;padding:5px 8px;cursor:pointer">Copy</button>
 </div>
+  <div data-noprint="1" style="background:var(--tv-surface-2);border:1px solid var(--tv-border-strong);border-radius:8px;padding:18px 20px;margin:22px 0 0">
+      <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim);margin:0 0 4px">Write these down before you move on</div>
+      <p style="margin:0 0 14px;max-width:62ch;font-size:13px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">You should have these 5 values now. Typing them here fills them into every command further down the page, so what you copy is ready to run.</p>
+      <div data-field-row="ORG" data-tier="2" style="margin:0 0 14px">
+    <div style="display:flex;align-items:center;gap:7px;margin:0 0 5px;flex-wrap:wrap">
+      <label style="font:500 11.5px/1.3 var(--tv-font-mono);color:var(--tv-text-muted)">ORG</label>
+      <span style="font:400 12.5px/1.3 var(--tv-font-sans);color:var(--tv-text)">Your org domain</span>
+      <span title="The interview asks for this one and validates your answer." style="background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:999px;padding:1px 7px;font:600 9px/1.6 var(--tv-font-sans);letter-spacing:.06em;text-transform:uppercase;color:var(--tv-text-dim)">you supply</span>
+      
+    </div>
+    <input data-field="ORG" data-validate="emailDomain" placeholder="your-org.org" spellcheck="false" autocomplete="off" style="width:100%;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:6px;padding:8px 10px;font:400 13px/1.4 var(--tv-font-mono);color:var(--tv-text)"/>
+    <div data-error="ORG" style="display:none;font:400 11.5px/1.5 var(--tv-font-sans);color:var(--tv-error);margin-top:4px"></div>
+    <div style="font:400 11.5px/1.5 var(--tv-font-sans);color:var(--tv-text-dim);margin-top:4px">The Access policy matches &quot;emails ending in&quot; this. A domain, not an address.</div>
+  </div>
+      <div data-field-row="TRUST" data-tier="2" style="margin:0 0 14px">
+    <div style="display:flex;align-items:center;gap:7px;margin:0 0 5px;flex-wrap:wrap">
+      <label style="font:500 11.5px/1.3 var(--tv-font-mono);color:var(--tv-text-muted)">TRUST</label>
+      <span style="font:400 12.5px/1.3 var(--tv-font-sans);color:var(--tv-text)">Auto-approve domains</span>
+      <span title="The interview asks for this one and validates your answer." style="background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:999px;padding:1px 7px;font:600 9px/1.6 var(--tv-font-sans);letter-spacing:.06em;text-transform:uppercase;color:var(--tv-text-dim)">you supply</span>
+      
+    </div>
+    <input data-field="TRUST" data-validate="emailDomainList" placeholder="your-org.org,partner.org" spellcheck="false" autocomplete="off" style="width:100%;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:6px;padding:8px 10px;font:400 13px/1.4 var(--tv-font-mono);color:var(--tv-text)"/>
+    <div data-error="TRUST" style="display:none;font:400 11.5px/1.5 var(--tv-font-sans);color:var(--tv-error);margin-top:4px"></div>
+    <div style="font:400 11.5px/1.5 var(--tv-font-sans);color:var(--tv-text-dim);margin-top:4px">Optional. Sign-ins from these domains skip the approval queue but land READ-ONLY (role reviewer). It grants nobody admin — the first sign-in does that. Blank means you approve everyone by hand.</div>
+  </div>
+      <div data-field-row="W1" data-tier="1" style="margin:0 0 14px">
+    <div style="display:flex;align-items:center;gap:7px;margin:0 0 5px;flex-wrap:wrap">
+      <label style="font:500 11.5px/1.3 var(--tv-font-mono);color:var(--tv-text-muted)">W1</label>
+      <span style="font:400 12.5px/1.3 var(--tv-font-sans);color:var(--tv-text)">Cloudflare account ID</span>
+      <span title="The interview asks for this one and validates your answer." style="background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:999px;padding:1px 7px;font:600 9px/1.6 var(--tv-font-sans);letter-spacing:.06em;text-transform:uppercase;color:var(--tv-text-dim)">you supply</span>
+      
+    </div>
+    <input data-field="W1" data-validate="accountId" placeholder="32-char hex" spellcheck="false" autocomplete="off" style="width:100%;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:6px;padding:8px 10px;font:400 13px/1.4 var(--tv-font-mono);color:var(--tv-text)"/>
+    <div data-error="W1" style="display:none;font:400 11.5px/1.5 var(--tv-font-sans);color:var(--tv-error);margin-top:4px"></div>
+    <div style="font:400 11.5px/1.5 var(--tv-font-sans);color:var(--tv-text-dim);margin-top:4px">Dashboard sidebar, and in every dashboard URL.</div>
+  </div>
+      <div data-field-row="W2" data-tier="1" style="margin:0 0 14px">
+    <div style="display:flex;align-items:center;gap:7px;margin:0 0 5px;flex-wrap:wrap">
+      <label style="font:500 11.5px/1.3 var(--tv-font-mono);color:var(--tv-text-muted)">W2</label>
+      <span style="font:400 12.5px/1.3 var(--tv-font-sans);color:var(--tv-text)">Node hostname</span>
+      <span title="The interview asks for this one and validates your answer." style="background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:999px;padding:1px 7px;font:600 9px/1.6 var(--tv-font-sans);letter-spacing:.06em;text-transform:uppercase;color:var(--tv-text-dim)">you supply</span>
+      
+    </div>
+    <input data-field="W2" data-validate="hostname" placeholder="terraviz.your-org.org" spellcheck="false" autocomplete="off" style="width:100%;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:6px;padding:8px 10px;font:400 13px/1.4 var(--tv-font-mono);color:var(--tv-text)"/>
+    <div data-error="W2" style="display:none;font:400 11.5px/1.5 var(--tv-font-sans);color:var(--tv-error);margin-top:4px"></div>
+    <div style="font:400 11.5px/1.5 var(--tv-font-sans);color:var(--tv-text-dim);margin-top:4px">Hostname only. No https://, no trailing path.</div>
+  </div>
+      <div data-field-row="W3" data-tier="1" style="margin:0 0 14px">
+    <div style="display:flex;align-items:center;gap:7px;margin:0 0 5px;flex-wrap:wrap">
+      <label style="font:500 11.5px/1.3 var(--tv-font-mono);color:var(--tv-text-muted)">W3</label>
+      <span style="font:400 12.5px/1.3 var(--tv-font-sans);color:var(--tv-text)">Git remote</span>
+      <span title="The interview asks for this one and validates your answer." style="background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:999px;padding:1px 7px;font:600 9px/1.6 var(--tv-font-sans);letter-spacing:.06em;text-transform:uppercase;color:var(--tv-text-dim)">you supply</span>
+      
+    </div>
+    <input data-field="W3" data-validate="repoSlug" placeholder="owner/repo" spellcheck="false" autocomplete="off" style="width:100%;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:6px;padding:8px 10px;font:400 13px/1.4 var(--tv-font-mono);color:var(--tv-text)"/>
+    <div data-error="W3" style="display:none;font:400 11.5px/1.5 var(--tv-font-sans);color:var(--tv-error);margin-top:4px"></div>
+    <div style="font:400 11.5px/1.5 var(--tv-font-sans);color:var(--tv-text-dim);margin-top:4px">Where Pages watches for builds.</div>
+  </div>
+    </div>
   <div style="background:var(--tv-accent-bg);border:1px solid var(--tv-accent-border);border-left:3px solid var(--tv-accent);border-radius:6px;padding:14px 16px;margin:0 0 14px">
     <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-accent);margin:0 0 7px">Gate</div>
     <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty"><code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">wrangler whoami</code> prints the account matching <span data-slot="W1" data-w="W1" style="cursor:pointer;padding:1px 5px;border-radius:3px"></span>.</p>
@@ -1122,7 +1226,7 @@ npm run dev:functions<span style="color:var(--tv-text-dim)">      # http://local
   </div>
   <p style="margin:0 0 16px;max-width:64ch;color:var(--tv-text-muted);text-wrap:pretty">Nothing consumes these yet — and that is deliberate. This phase exists so that when Phases 3 and 8 ask for IDs, you already have them written down.</p>
   <div style="display:flex;flex-wrap:wrap;gap:6px;margin:0 0 20px;align-items:center">
-      <span style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim);margin-right:3px">Produces</span>
+      <span style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim);margin-right:3px">Produces <span style="text-transform:none;letter-spacing:0;font-weight:400;color:var(--tv-text-dim)">— tap one to record it</span></span>
       <span data-w="W4" style="cursor:pointer;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:3px;padding:4px 8px;font:500 11px/1.2 var(--tv-font-mono);color:var(--tv-text-muted)">W4 d1 database id</span>
       <span data-w="W5" style="cursor:pointer;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:3px;padding:4px 8px;font:500 11px/1.2 var(--tv-font-mono);color:var(--tv-text-muted)">W5 kv — telemetry_kill_switch</span>
       <span data-w="W6" style="cursor:pointer;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:3px;padding:4px 8px;font:500 11px/1.2 var(--tv-font-mono);color:var(--tv-text-muted)">W6 kv — catalog_kv</span>
@@ -1135,6 +1239,76 @@ npm run dev:functions<span style="color:var(--tv-text-dim)">      # http://local
   <button data-copy="1" style="position:absolute;top:7px;right:8px;background:rgba(255,255,255,.07);color:var(--tv-text-dim);border:1px solid var(--tv-border-strong);border-radius:3px;font:500 10px/1 var(--tv-font-sans);letter-spacing:.08em;text-transform:uppercase;padding:5px 8px;cursor:pointer">Copy</button>
 </div>
   <p style="margin:0 0 16px;max-width:64ch;font-size:13.5px;color:var(--tv-text-muted);text-wrap:pretty">Creates or adopts the D1 database, both KV namespaces, the R2 bucket, and the Vectorize index with its three metadata indexes — and records every ID for you. Re-running adopts what already exists rather than making a second one.</p>
+  <div data-noprint="1" style="background:var(--tv-surface-2);border:1px solid var(--tv-border-strong);border-radius:8px;padding:18px 20px;margin:22px 0 0">
+      <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim);margin:0 0 4px">Write these down before you move on</div>
+      <p style="margin:0 0 14px;max-width:62ch;font-size:13px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">You should have these 6 values now. Typing them here fills them into every command further down the page, so what you copy is ready to run.</p>
+      <div data-field-row="W4" data-tier="1" style="margin:0 0 14px">
+    <div style="display:flex;align-items:center;gap:7px;margin:0 0 5px;flex-wrap:wrap">
+      <label style="font:500 11.5px/1.3 var(--tv-font-mono);color:var(--tv-text-muted)">W4</label>
+      <span style="font:400 12.5px/1.3 var(--tv-font-sans);color:var(--tv-text)">D1 database ID</span>
+      <span title="Created or read by the tool. You never type it." style="background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:999px;padding:1px 7px;font:600 9px/1.6 var(--tv-font-sans);letter-spacing:.06em;text-transform:uppercase;color:var(--tv-text-dim)">Cloudflare assigns</span>
+      
+    </div>
+    <input data-field="W4" placeholder="from wrangler d1 create" spellcheck="false" autocomplete="off" style="width:100%;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:6px;padding:8px 10px;font:400 13px/1.4 var(--tv-font-mono);color:var(--tv-text)"/>
+    <div data-error="W4" style="display:none;font:400 11.5px/1.5 var(--tv-font-sans);color:var(--tv-error);margin-top:4px"></div>
+    <div style="font:400 11.5px/1.5 var(--tv-font-sans);color:var(--tv-text-dim);margin-top:4px">The one value you cannot recover from a later error.</div>
+  </div>
+      <div data-field-row="W5" data-tier="1" style="margin:0 0 14px">
+    <div style="display:flex;align-items:center;gap:7px;margin:0 0 5px;flex-wrap:wrap">
+      <label style="font:500 11.5px/1.3 var(--tv-font-mono);color:var(--tv-text-muted)">W5</label>
+      <span style="font:400 12.5px/1.3 var(--tv-font-sans);color:var(--tv-text)">KV — TELEMETRY_KILL_SWITCH</span>
+      <span title="Created or read by the tool. You never type it." style="background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:999px;padding:1px 7px;font:600 9px/1.6 var(--tv-font-sans);letter-spacing:.06em;text-transform:uppercase;color:var(--tv-text-dim)">Cloudflare assigns</span>
+      
+    </div>
+    <input data-field="W5" placeholder="32-char hex" spellcheck="false" autocomplete="off" style="width:100%;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:6px;padding:8px 10px;font:400 13px/1.4 var(--tv-font-mono);color:var(--tv-text)"/>
+    <div data-error="W5" style="display:none;font:400 11.5px/1.5 var(--tv-font-sans);color:var(--tv-error);margin-top:4px"></div>
+    
+  </div>
+      <div data-field-row="W6" data-tier="2" style="margin:0 0 14px">
+    <div style="display:flex;align-items:center;gap:7px;margin:0 0 5px;flex-wrap:wrap">
+      <label style="font:500 11.5px/1.3 var(--tv-font-mono);color:var(--tv-text-muted)">W6</label>
+      <span style="font:400 12.5px/1.3 var(--tv-font-sans);color:var(--tv-text)">KV — CATALOG_KV</span>
+      <span title="Created or read by the tool. You never type it." style="background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:999px;padding:1px 7px;font:600 9px/1.6 var(--tv-font-sans);letter-spacing:.06em;text-transform:uppercase;color:var(--tv-text-dim)">Cloudflare assigns</span>
+      
+    </div>
+    <input data-field="W6" placeholder="32-char hex" spellcheck="false" autocomplete="off" style="width:100%;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:6px;padding:8px 10px;font:400 13px/1.4 var(--tv-font-mono);color:var(--tv-text)"/>
+    <div data-error="W6" style="display:none;font:400 11.5px/1.5 var(--tv-font-sans);color:var(--tv-error);margin-top:4px"></div>
+    
+  </div>
+      <div data-field-row="W7" data-tier="2" style="margin:0 0 14px">
+    <div style="display:flex;align-items:center;gap:7px;margin:0 0 5px;flex-wrap:wrap">
+      <label style="font:500 11.5px/1.3 var(--tv-font-mono);color:var(--tv-text-muted)">W7</label>
+      <span style="font:400 12.5px/1.3 var(--tv-font-sans);color:var(--tv-text)">R2 bucket name</span>
+      <span title="Ships with a working value; change only if you renamed the resource." style="background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:999px;padding:1px 7px;font:600 9px/1.6 var(--tv-font-sans);letter-spacing:.06em;text-transform:uppercase;color:var(--tv-text-dim)">has a default</span>
+      
+    </div>
+    <input data-field="W7" placeholder="terraviz-assets" spellcheck="false" autocomplete="off" style="width:100%;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:6px;padding:8px 10px;font:400 13px/1.4 var(--tv-font-mono);color:var(--tv-text)"/>
+    <div data-error="W7" style="display:none;font:400 11.5px/1.5 var(--tv-font-sans);color:var(--tv-error);margin-top:4px"></div>
+    <div style="font:400 11.5px/1.5 var(--tv-font-sans);color:var(--tv-text-dim);margin-top:4px">Yours to rename; keep the bindings in sync if you do.</div>
+  </div>
+      <div data-field-row="W8" data-tier="2" style="margin:0 0 14px">
+    <div style="display:flex;align-items:center;gap:7px;margin:0 0 5px;flex-wrap:wrap">
+      <label style="font:500 11.5px/1.3 var(--tv-font-mono);color:var(--tv-text-muted)">W8</label>
+      <span style="font:400 12.5px/1.3 var(--tv-font-sans);color:var(--tv-text)">Vectorize index</span>
+      <span title="Ships with a working value; change only if you renamed the resource." style="background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:999px;padding:1px 7px;font:600 9px/1.6 var(--tv-font-sans);letter-spacing:.06em;text-transform:uppercase;color:var(--tv-text-dim)">has a default</span>
+      
+    </div>
+    <input data-field="W8" placeholder="terraviz-datasets" spellcheck="false" autocomplete="off" style="width:100%;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:6px;padding:8px 10px;font:400 13px/1.4 var(--tv-font-mono);color:var(--tv-text)"/>
+    <div data-error="W8" style="display:none;font:400 11.5px/1.5 var(--tv-font-sans);color:var(--tv-error);margin-top:4px"></div>
+    
+  </div>
+      <div data-field-row="W9" data-tier="1" style="margin:0 0 14px">
+    <div style="display:flex;align-items:center;gap:7px;margin:0 0 5px;flex-wrap:wrap">
+      <label style="font:500 11.5px/1.3 var(--tv-font-mono);color:var(--tv-text-muted)">W9</label>
+      <span style="font:400 12.5px/1.3 var(--tv-font-sans);color:var(--tv-text)">Analytics Engine dataset</span>
+      <span title="Ships with a working value; change only if you renamed the resource." style="background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:999px;padding:1px 7px;font:600 9px/1.6 var(--tv-font-sans);letter-spacing:.06em;text-transform:uppercase;color:var(--tv-text-dim)">has a default</span>
+      
+    </div>
+    <input data-field="W9" placeholder="terraviz_events" spellcheck="false" autocomplete="off" style="width:100%;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:6px;padding:8px 10px;font:400 13px/1.4 var(--tv-font-mono);color:var(--tv-text)"/>
+    <div data-error="W9" style="display:none;font:400 11.5px/1.5 var(--tv-font-sans);color:var(--tv-error);margin-top:4px"></div>
+    <div style="font:400 11.5px/1.5 var(--tv-font-sans);color:var(--tv-text-dim);margin-top:4px">Nothing to create — it appears on first write.</div>
+  </div>
+    </div>
   <div style="background:var(--tv-accent-bg);border:1px solid var(--tv-accent-border);border-left:3px solid var(--tv-accent);border-radius:6px;padding:14px 16px;margin:0 0 14px">
     <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-accent);margin:0 0 7px">Gate</div>
     <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">W4 through W8 hold the IDs Cloudflare just printed, and W9 holds the dataset name you intend to use. Nothing creates W9 — an Analytics Engine dataset appears on first write.</p>
@@ -1163,6 +1337,7 @@ npm run dev:functions<span style="color:var(--tv-text-dim)">      # http://local
   <p style="margin:0 0 10px;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">Pages reads its live bindings from the dashboard. But every wrangler command you run from your shell resolves its target through <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">wrangler.toml</code>. Getting this wrong means Phase 4 runs migrations against <b style="font-weight:600;color:var(--tv-text)">upstream’s database</b>, not yours.</p>
   
 </div>
+  <p style="margin:0 0 16px;max-width:64ch;font-size:13.5px;line-height:1.6;color:var(--tv-text-muted);text-wrap:pretty">To recognise an unedited file: the two <code style="font-family:var(--tv-font-mono);font-size:.92em">database_id</code> lines both read <code style="font-family:var(--tv-font-mono);font-size:.92em">78fbe5c3…</code>, which is upstream's database, not yours.</p>
   <div style="background:var(--tv-accent-bg);border:1px solid var(--tv-accent-border);border-left:3px solid var(--tv-accent);border-radius:6px;padding:14px 16px;margin:0 0 14px">
     <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-accent);margin:0 0 7px">Gate</div>
     <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty"><code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">wrangler d1 info CATALOG_DB</code> shows your database, 0 tables.</p>
@@ -1221,7 +1396,7 @@ wrangler d1 migrations apply FEEDBACK_DB --remote<span style="color:var(--tv-tex
   </div>
   
   <div style="display:flex;flex-wrap:wrap;gap:6px;margin:0 0 20px;align-items:center">
-      <span style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim);margin-right:3px">Produces</span>
+      <span style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim);margin-right:3px">Produces <span style="text-transform:none;letter-spacing:0;font-weight:400;color:var(--tv-text-dim)">— tap one to record it</span></span>
       <span data-w="W10" style="cursor:pointer;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:3px;padding:4px 8px;font:500 11px/1.2 var(--tv-font-mono);color:var(--tv-text-muted)">W10 pages project name</span>
       <span data-w="W11" style="cursor:pointer;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:3px;padding:4px 8px;font:500 11px/1.2 var(--tv-font-mono);color:var(--tv-text-muted)">W11 cloudflare_api_token</span>
     </div>
@@ -1237,6 +1412,32 @@ wrangler d1 migrations apply FEEDBACK_DB --remote<span style="color:var(--tv-tex
   <p style="margin:0 0 10px;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty"><b style="font-weight:600;color:var(--tv-text)">GitHub Actions (Direct Upload):</b> set repo secrets for your API token and account ID. Change every <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">--project-name</code> to yours, and set the repo variable <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">TERRAVIZ_SERVER</code>. Do <i>not</i> connect the Git integration. Note that forks land with Actions disabled and no secrets — GitHub never copies those.</p>
   
 </div>
+  <div data-noprint="1" style="background:var(--tv-surface-2);border:1px solid var(--tv-border-strong);border-radius:8px;padding:18px 20px;margin:22px 0 0">
+      <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim);margin:0 0 4px">Write these down before you move on</div>
+      <p style="margin:0 0 14px;max-width:62ch;font-size:13px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">You should have these 2 values now. Typing them here fills them into every command further down the page, so what you copy is ready to run.</p>
+      <div data-field-row="W10" data-tier="1" style="margin:0 0 14px">
+    <div style="display:flex;align-items:center;gap:7px;margin:0 0 5px;flex-wrap:wrap">
+      <label style="font:500 11.5px/1.3 var(--tv-font-mono);color:var(--tv-text-muted)">W10</label>
+      <span style="font:400 12.5px/1.3 var(--tv-font-sans);color:var(--tv-text)">Pages project name</span>
+      <span title="The interview asks for this one and validates your answer." style="background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:999px;padding:1px 7px;font:600 9px/1.6 var(--tv-font-sans);letter-spacing:.06em;text-transform:uppercase;color:var(--tv-text-dim)">you supply</span>
+      
+    </div>
+    <input data-field="W10" data-validate="projectName" placeholder="terraviz" spellcheck="false" autocomplete="off" style="width:100%;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:6px;padding:8px 10px;font:400 13px/1.4 var(--tv-font-mono);color:var(--tv-text)"/>
+    <div data-error="W10" style="display:none;font:400 11.5px/1.5 var(--tv-font-sans);color:var(--tv-error);margin-top:4px"></div>
+    
+  </div>
+      <div data-field-row="W11" data-tier="1" style="margin:0 0 14px">
+    <div style="display:flex;align-items:center;gap:7px;margin:0 0 5px;flex-wrap:wrap">
+      <label style="font:500 11.5px/1.3 var(--tv-font-mono);color:var(--tv-text-muted)">W11</label>
+      <span style="font:400 12.5px/1.3 var(--tv-font-sans);color:var(--tv-text)">CLOUDFLARE_API_TOKEN</span>
+      <span title="A local command or dashboard action produces it." style="background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:999px;padding:1px 7px;font:600 9px/1.6 var(--tv-font-sans);letter-spacing:.06em;text-transform:uppercase;color:var(--tv-text-dim)">you generate</span>
+      <span style="background:var(--tv-error-bg);color:var(--tv-error);border:1px solid var(--tv-error-border);border-radius:999px;padding:1px 7px;font:600 9px/1.6 var(--tv-font-sans);letter-spacing:.06em;text-transform:uppercase">secret</span>
+    </div>
+    <input data-field="W11" placeholder="token value" spellcheck="false" autocomplete="off" style="width:100%;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:6px;padding:8px 10px;font:400 13px/1.4 var(--tv-font-mono);color:var(--tv-text)"/>
+    <div data-error="W11" style="display:none;font:400 11.5px/1.5 var(--tv-font-sans);color:var(--tv-error);margin-top:4px"></div>
+    <div style="font:400 11.5px/1.5 var(--tv-font-sans);color:var(--tv-text-dim);margin-top:4px">Minimum scope: Account → Cloudflare Pages → Edit.</div>
+  </div>
+    </div>
   <div style="background:var(--tv-accent-bg);border:1px solid var(--tv-accent-border);border-left:3px solid var(--tv-accent);border-radius:6px;padding:14px 16px;margin:0 0 14px">
     <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-accent);margin:0 0 7px">Gate</div>
     <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">The build goes green, the site loads at <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px"><span data-slot="W10" data-w="W10" style="cursor:pointer;padding:1px 5px;border-radius:3px"></span>.pages.dev</code>, and then <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">https://<span data-slot="W2" data-w="W2" style="cursor:pointer;padding:1px 5px;border-radius:3px"></span></code> serves it over TLS. Backend features will not work yet — no bindings.</p>
@@ -1256,7 +1457,7 @@ wrangler d1 migrations apply FEEDBACK_DB --remote<span style="color:var(--tv-tex
   </div>
   <p style="margin:0 0 16px;max-width:64ch;color:var(--tv-text-muted);text-wrap:pretty">Access is not optional for a publisher node. The middleware fails closed: without a team domain and an AUD, every publish route returns 503 and the CLI can do nothing.</p>
   <div style="display:flex;flex-wrap:wrap;gap:6px;margin:0 0 20px;align-items:center">
-      <span style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim);margin-right:3px">Produces</span>
+      <span style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim);margin-right:3px">Produces <span style="text-transform:none;letter-spacing:0;font-weight:400;color:var(--tv-text-dim)">— tap one to record it</span></span>
       <span data-w="W12" style="cursor:pointer;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:3px;padding:4px 8px;font:500 11px/1.2 var(--tv-font-mono);color:var(--tv-text-muted)">W12 access team domain</span>
       <span data-w="W13" style="cursor:pointer;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:3px;padding:4px 8px;font:500 11px/1.2 var(--tv-font-mono);color:var(--tv-text-muted)">W13 access aud (publisher app)</span>
       <span data-w="W14" style="cursor:pointer;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:3px;padding:4px 8px;font:500 11px/1.2 var(--tv-font-mono);color:var(--tv-text-muted)">W14 cf_access_client_id</span>
@@ -1272,6 +1473,54 @@ wrangler d1 migrations apply FEEDBACK_DB --remote<span style="color:var(--tv-tex
   <p style="margin:0 0 10px;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">Complete <b style="font-weight:600;color:var(--tv-text)">Zero Trust onboarding</b> in the dashboard and add at least one identity provider. One-time PIN over email works and needs no IdP setup; Google, Okta or Entra are better for a real team. You will choose a team name — your team domain becomes <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px"><span data-slot="W12" data-w="W12" style="cursor:pointer;padding:1px 5px;border-radius:3px"></span></code>.</p>
   
 </div>
+  <div data-noprint="1" style="background:var(--tv-surface-2);border:1px solid var(--tv-border-strong);border-radius:8px;padding:18px 20px;margin:22px 0 0">
+      <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim);margin:0 0 4px">Write these down before you move on</div>
+      <p style="margin:0 0 14px;max-width:62ch;font-size:13px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">You should have these 4 values now. Typing them here fills them into every command further down the page, so what you copy is ready to run.</p>
+      <div data-field-row="W12" data-tier="2" style="margin:0 0 14px">
+    <div style="display:flex;align-items:center;gap:7px;margin:0 0 5px;flex-wrap:wrap">
+      <label style="font:500 11.5px/1.3 var(--tv-font-mono);color:var(--tv-text-muted)">W12</label>
+      <span style="font:400 12.5px/1.3 var(--tv-font-sans);color:var(--tv-text)">Access team domain</span>
+      <span title="Created or read by the tool. You never type it." style="background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:999px;padding:1px 7px;font:600 9px/1.6 var(--tv-font-sans);letter-spacing:.06em;text-transform:uppercase;color:var(--tv-text-dim)">Cloudflare assigns</span>
+      
+    </div>
+    <input data-field="W12" placeholder="your-org.cloudflareaccess.com" spellcheck="false" autocomplete="off" style="width:100%;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:6px;padding:8px 10px;font:400 13px/1.4 var(--tv-font-mono);color:var(--tv-text)"/>
+    <div data-error="W12" style="display:none;font:400 11.5px/1.5 var(--tv-font-sans);color:var(--tv-error);margin-top:4px"></div>
+    <div style="font:400 11.5px/1.5 var(--tv-font-sans);color:var(--tv-text-dim);margin-top:4px">Team domain only, no https://. The tool discovers this for you.</div>
+  </div>
+      <div data-field-row="W13" data-tier="2" style="margin:0 0 14px">
+    <div style="display:flex;align-items:center;gap:7px;margin:0 0 5px;flex-wrap:wrap">
+      <label style="font:500 11.5px/1.3 var(--tv-font-mono);color:var(--tv-text-muted)">W13</label>
+      <span style="font:400 12.5px/1.3 var(--tv-font-sans);color:var(--tv-text)">Access AUD (publisher app)</span>
+      <span title="Created or read by the tool. You never type it." style="background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:999px;padding:1px 7px;font:600 9px/1.6 var(--tv-font-sans);letter-spacing:.06em;text-transform:uppercase;color:var(--tv-text-dim)">Cloudflare assigns</span>
+      
+    </div>
+    <input data-field="W13" data-validate="aud" placeholder="64-char hex" spellcheck="false" autocomplete="off" style="width:100%;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:6px;padding:8px 10px;font:400 13px/1.4 var(--tv-font-mono);color:var(--tv-text)"/>
+    <div data-error="W13" style="display:none;font:400 11.5px/1.5 var(--tv-font-sans);color:var(--tv-error);margin-top:4px"></div>
+    <div style="font:400 11.5px/1.5 var(--tv-font-sans);color:var(--tv-text-dim);margin-top:4px">Application → Overview → Application Audience Tag.</div>
+  </div>
+      <div data-field-row="W14" data-tier="2" style="margin:0 0 14px">
+    <div style="display:flex;align-items:center;gap:7px;margin:0 0 5px;flex-wrap:wrap">
+      <label style="font:500 11.5px/1.3 var(--tv-font-mono);color:var(--tv-text-muted)">W14</label>
+      <span style="font:400 12.5px/1.3 var(--tv-font-sans);color:var(--tv-text)">CF_ACCESS_CLIENT_ID</span>
+      <span title="Cloudflare displays it a single time. Save it immediately." style="background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:999px;padding:1px 7px;font:600 9px/1.6 var(--tv-font-sans);letter-spacing:.06em;text-transform:uppercase;color:var(--tv-text-dim)">shown once</span>
+      <span style="background:var(--tv-error-bg);color:var(--tv-error);border:1px solid var(--tv-error-border);border-radius:999px;padding:1px 7px;font:600 9px/1.6 var(--tv-font-sans);letter-spacing:.06em;text-transform:uppercase">secret</span>
+    </div>
+    <input data-field="W14" placeholder="….access" spellcheck="false" autocomplete="off" style="width:100%;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:6px;padding:8px 10px;font:400 13px/1.4 var(--tv-font-mono);color:var(--tv-text)"/>
+    <div data-error="W14" style="display:none;font:400 11.5px/1.5 var(--tv-font-sans);color:var(--tv-error);margin-top:4px"></div>
+    
+  </div>
+      <div data-field-row="W15" data-tier="2" style="margin:0 0 14px">
+    <div style="display:flex;align-items:center;gap:7px;margin:0 0 5px;flex-wrap:wrap">
+      <label style="font:500 11.5px/1.3 var(--tv-font-mono);color:var(--tv-text-muted)">W15</label>
+      <span style="font:400 12.5px/1.3 var(--tv-font-sans);color:var(--tv-text)">CF_ACCESS_CLIENT_SECRET</span>
+      <span title="Cloudflare displays it a single time. Save it immediately." style="background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:999px;padding:1px 7px;font:600 9px/1.6 var(--tv-font-sans);letter-spacing:.06em;text-transform:uppercase;color:var(--tv-text-dim)">shown once</span>
+      <span style="background:var(--tv-error-bg);color:var(--tv-error);border:1px solid var(--tv-error-border);border-radius:999px;padding:1px 7px;font:600 9px/1.6 var(--tv-font-sans);letter-spacing:.06em;text-transform:uppercase">secret</span>
+    </div>
+    <input data-field="W15" placeholder="shown once" spellcheck="false" autocomplete="off" style="width:100%;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:6px;padding:8px 10px;font:400 13px/1.4 var(--tv-font-mono);color:var(--tv-text)"/>
+    <div data-error="W15" style="display:none;font:400 11.5px/1.5 var(--tv-font-sans);color:var(--tv-error);margin-top:4px"></div>
+    <div style="font:400 11.5px/1.5 var(--tv-font-sans);color:var(--tv-text-dim);margin-top:4px">Cloudflare shows this exactly once. Save it before closing the dialog.</div>
+  </div>
+    </div>
   <div style="background:var(--tv-accent-bg);border:1px solid var(--tv-accent-border);border-left:3px solid var(--tv-accent);border-radius:6px;padding:14px 16px;margin:0 0 14px">
     <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-accent);margin:0 0 7px">Gate</div>
     <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">The AUD is copied, the token pair is in your password manager, and the token appears in the Automation policy's include list.</p>
@@ -1291,7 +1540,7 @@ wrangler d1 migrations apply FEEDBACK_DB --remote<span style="color:var(--tv-tex
   </div>
   <p style="margin:0 0 16px;max-width:64ch;color:var(--tv-text-muted);text-wrap:pretty">Two secrets are yours to create, and neither exists until you make it.</p>
   <div style="display:flex;flex-wrap:wrap;gap:6px;margin:0 0 20px;align-items:center">
-      <span style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim);margin-right:3px">Produces</span>
+      <span style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim);margin-right:3px">Produces <span style="text-transform:none;letter-spacing:0;font-weight:400;color:var(--tv-text-dim)">— tap one to record it</span></span>
       <span data-w="W16" style="cursor:pointer;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:3px;padding:4px 8px;font:500 11px/1.2 var(--tv-font-mono);color:var(--tv-text-muted)">W16 node_id_private_key_pem</span>
       <span data-w="W17" style="cursor:pointer;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:3px;padding:4px 8px;font:500 11px/1.2 var(--tv-font-mono);color:var(--tv-text-muted)">W17 node public key</span>
       <span data-w="W18" style="cursor:pointer;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:3px;padding:4px 8px;font:500 11px/1.2 var(--tv-font-mono);color:var(--tv-text-muted)">W18 preview_signing_key</span>
@@ -1307,6 +1556,43 @@ openssl rand -base64 32<span style="color:var(--tv-text-dim)">    # W18</span></
   <p style="margin:0 0 10px;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">It signs your node's federation responses. Regenerating it means re-provisioning your identity.</p>
   
 </div>
+  <div data-noprint="1" style="background:var(--tv-surface-2);border:1px solid var(--tv-border-strong);border-radius:8px;padding:18px 20px;margin:22px 0 0">
+      <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim);margin:0 0 4px">Write these down before you move on</div>
+      <p style="margin:0 0 14px;max-width:62ch;font-size:13px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">You should have these 3 values now. Typing them here fills them into every command further down the page, so what you copy is ready to run.</p>
+      <div data-field-row="W16" data-tier="2" style="margin:0 0 14px">
+    <div style="display:flex;align-items:center;gap:7px;margin:0 0 5px;flex-wrap:wrap">
+      <label style="font:500 11.5px/1.3 var(--tv-font-mono);color:var(--tv-text-muted)">W16</label>
+      <span style="font:400 12.5px/1.3 var(--tv-font-sans);color:var(--tv-text)">NODE_ID_PRIVATE_KEY_PEM</span>
+      <span title="A local command or dashboard action produces it." style="background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:999px;padding:1px 7px;font:600 9px/1.6 var(--tv-font-sans);letter-spacing:.06em;text-transform:uppercase;color:var(--tv-text-dim)">you generate</span>
+      <span style="background:var(--tv-error-bg);color:var(--tv-error);border:1px solid var(--tv-error-border);border-radius:999px;padding:1px 7px;font:600 9px/1.6 var(--tv-font-sans);letter-spacing:.06em;text-transform:uppercase">secret</span>
+    </div>
+    <input data-field="W16" placeholder="from .dev.vars" spellcheck="false" autocomplete="off" style="width:100%;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:6px;padding:8px 10px;font:400 13px/1.4 var(--tv-font-mono);color:var(--tv-text)"/>
+    <div data-error="W16" style="display:none;font:400 11.5px/1.5 var(--tv-font-sans);color:var(--tv-error);margin-top:4px"></div>
+    <div style="font:400 11.5px/1.5 var(--tv-font-sans);color:var(--tv-text-dim);margin-top:4px">Back this up. Regenerating it means re-provisioning your identity.</div>
+  </div>
+      <div data-field-row="W17" data-tier="2" style="margin:0 0 14px">
+    <div style="display:flex;align-items:center;gap:7px;margin:0 0 5px;flex-wrap:wrap">
+      <label style="font:500 11.5px/1.3 var(--tv-font-mono);color:var(--tv-text-muted)">W17</label>
+      <span style="font:400 12.5px/1.3 var(--tv-font-sans);color:var(--tv-text)">Node public key</span>
+      <span title="A local command or dashboard action produces it." style="background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:999px;padding:1px 7px;font:600 9px/1.6 var(--tv-font-sans);letter-spacing:.06em;text-transform:uppercase;color:var(--tv-text-dim)">you generate</span>
+      
+    </div>
+    <input data-field="W17" placeholder="ed25519:…" spellcheck="false" autocomplete="off" style="width:100%;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:6px;padding:8px 10px;font:400 13px/1.4 var(--tv-font-mono);color:var(--tv-text)"/>
+    <div data-error="W17" style="display:none;font:400 11.5px/1.5 var(--tv-font-sans);color:var(--tv-error);margin-top:4px"></div>
+    <div style="font:400 11.5px/1.5 var(--tv-font-sans);color:var(--tv-text-dim);margin-top:4px">Written to node-public-key.txt by gen:node-key.</div>
+  </div>
+      <div data-field-row="W18" data-tier="2" style="margin:0 0 14px">
+    <div style="display:flex;align-items:center;gap:7px;margin:0 0 5px;flex-wrap:wrap">
+      <label style="font:500 11.5px/1.3 var(--tv-font-mono);color:var(--tv-text-muted)">W18</label>
+      <span style="font:400 12.5px/1.3 var(--tv-font-sans);color:var(--tv-text)">PREVIEW_SIGNING_KEY</span>
+      <span title="A local command or dashboard action produces it." style="background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:999px;padding:1px 7px;font:600 9px/1.6 var(--tv-font-sans);letter-spacing:.06em;text-transform:uppercase;color:var(--tv-text-dim)">you generate</span>
+      <span style="background:var(--tv-error-bg);color:var(--tv-error);border:1px solid var(--tv-error-border);border-radius:999px;padding:1px 7px;font:600 9px/1.6 var(--tv-font-sans);letter-spacing:.06em;text-transform:uppercase">secret</span>
+    </div>
+    <input data-field="W18" placeholder="openssl rand -base64 32" spellcheck="false" autocomplete="off" style="width:100%;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:6px;padding:8px 10px;font:400 13px/1.4 var(--tv-font-mono);color:var(--tv-text)"/>
+    <div data-error="W18" style="display:none;font:400 11.5px/1.5 var(--tv-font-sans);color:var(--tv-error);margin-top:4px"></div>
+    
+  </div>
+    </div>
   <div style="background:var(--tv-accent-bg);border:1px solid var(--tv-accent-border);border-left:3px solid var(--tv-accent);border-radius:6px;padding:14px 16px;margin:0 0 14px">
     <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-accent);margin:0 0 7px">Gate</div>
     <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty"><code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">.dev.vars</code> holds a single-line private key, and <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">node-public-key.txt</code> holds an <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">ed25519:</code> line.</p>
@@ -2246,9 +2532,13 @@ function paintMap() {
 }
 
 function paintInputs() {
+  // querySelectorAll, not querySelector: each value now has an input in
+  // the drawer AND one at the end of the phase that produces it, and
+  // typing in either has to show up in the other.
   FIELDS.forEach(f => {
-    const el = document.querySelector('[data-field="' + f.id + '"]');
-    if (el && el !== document.activeElement) el.value = state.vals[f.id] || '';
+    q('[data-field="' + f.id + '"]').forEach(el => {
+      if (el !== document.activeElement) el.value = state.vals[f.id] || '';
+    });
   });
 }
 
@@ -2270,7 +2560,7 @@ document.addEventListener('input', e => {
   const id = el.getAttribute('data-field');
   state.vals[id] = el.value;
   validate(id, el.value);
-  persist(); paintSlots(); paintMap(); paintProgress();
+  persist(); paintSlots(); paintMap(); paintProgress(); paintInputs();
 });
 
 document.addEventListener('click', e => {

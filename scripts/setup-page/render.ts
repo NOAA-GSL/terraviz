@@ -27,9 +27,11 @@
 import { EXPECTED_BINDINGS, type ExpectedBinding } from '../lib/expected-bindings'
 import { QUESTIONS, MANUAL_STEPS, type ManualStep } from '../lib/setup/interview'
 import { DEFAULT_NAMES } from '../lib/setup/state'
-import { PUBLISHER_PATHS, STAFF_POLICY_NAME, AUTOMATION_POLICY_NAME } from '../lib/setup/access'
+import { STAFF_POLICY_NAME, AUTOMATION_POLICY_NAME } from '../lib/setup/access'
 import { UPSTREAM_PINNED_IDS } from '../lib/setup/wrangler-toml'
+import { NODE_DOWNLOAD_URL, requiredNodeLabel } from '../lib/node-version'
 import { CHECKED_ON, D1_PRICING, freeVideoDatasets, GITHUB_ACTIONS, R2_PRICING, REFERENCE_NODE } from './pricing'
+import { actionLabel, docsLabel } from './shell'
 import {
   PHASES,
   WORKSHEET,
@@ -161,11 +163,18 @@ export function crossCheck(): void {
 
   // 6. Manual steps the tool can now detect should not be presented
   //    as operator self-certification.
+  //
+  //    Stated as a majority rather than a fixed count, which is what
+  //    the message always claimed. The old threshold was 3, calibrated
+  //    when there were 7 steps; at 10 it would have capped the list
+  //    rather than caught a drift in its character, and a guard that
+  //    fires on growth teaches people to bump the number.
   const selfCertified = MANUAL_STEPS.filter(s => s.verification === 'self')
-  if (selfCertified.length > 3) {
+  if (selfCertified.length * 2 >= MANUAL_STEPS.length) {
     problems.push(
-      `${selfCertified.length} manual steps are self-certified — the page's pre-flight ` +
-        'sheet assumes most are detected; re-read the copy before shipping',
+      `${selfCertified.length} of ${MANUAL_STEPS.length} manual steps are self-certified — ` +
+        "the page's pre-flight sheet assumes most are detected; re-read the copy " +
+        'before shipping',
     )
   }
 
@@ -506,14 +515,37 @@ function preflight(): string {
    */
   const howTo = (s: ManualStep): string => {
     if (!s.steps.length && !s.url) return ''
+    // Prose in a monospace pre-wrap box reads as terminal output, and
+    // re-wraps the author's terminal-width line breaks at whatever the
+    // card happens to be — which is how "needs no IdP / setup;" got in
+    // front of a reader. Actions are a list, notes are prose, and the
+    // monospace box is kept for what is actually literal.
     const body = s.steps.length
-      ? `<div style="white-space:pre-wrap;margin:8px 0 0;padding:10px 12px;background:var(--tv-surface-code);border:1px solid var(--tv-border);border-radius:5px;font:400 11.5px/1.65 var(--tv-font-mono);color:var(--tv-text-muted);overflow-x:auto">${s.steps.map(esc).join('\n')}</div>`
+      ? `<div style="margin:8px 0 0">${s.steps
+          .map(line => {
+            if (typeof line === 'string') {
+              return `<div style="display:flex;gap:8px;margin:0 0 6px"><span aria-hidden="true" style="flex:none;color:var(--tv-accent)">→</span><span style="font:400 13px/1.55 var(--tv-font-sans);color:var(--tv-text-muted);text-wrap:pretty">${withSlots(line)}</span></div>`
+            }
+            if ('note' in line) {
+              return `<p style="margin:0 0 6px;padding-inline-start:20px;font:400 12.5px/1.55 var(--tv-font-sans);color:var(--tv-text-dim);text-wrap:pretty">${inline(line.note)}</p>`
+            }
+            return `<div style="white-space:pre;margin:0 0 8px;margin-inline-start:20px;padding:9px 11px;background:var(--tv-surface-code);border:1px solid var(--tv-border);border-radius:5px;font:400 11.5px/1.6 var(--tv-font-mono);color:var(--tv-text-muted);overflow-x:auto">${esc(line.code).replace(/\{\{(\w+)\}\}/g, (_m, id: string) => slot(id))}</div>`
+          })
+          .join('')}</div>`
       : ''
-    // Dashboard says *where*; docs say *what the thing is*. Someone new
-    // to Cloudflare needs the second before the first is any use.
+    // The action link says *where*; the docs link says *what the thing
+    // is*. Someone new to the platform needs the second before the
+    // first is any use.
+    //
+    // Both labels are derived from the host rather than written, because
+    // both used to say "Cloudflare" unconditionally — which the fork
+    // step made wrong, since it points at GitHub. Naming the wrong
+    // product is a small lie in the one place someone new is trusting
+    // this page, and hardcoding it means the next non-Cloudflare step
+    // reintroduces the bug silently.
     const links = [
-      s.url ? `<a href="${esc(s.url)}">Open in the Cloudflare dashboard ↗</a>` : '',
-      s.docsUrl ? `<a href="${esc(s.docsUrl)}">Cloudflare's docs for this ↗</a>` : '',
+      s.url ? `<a href="${esc(s.url)}">${esc(actionLabel(s.url))} ↗</a>` : '',
+      s.docsUrl ? `<a href="${esc(s.docsUrl)}">${esc(docsLabel(s.docsUrl))} ↗</a>` : '',
     ].filter(Boolean)
     const link = links.length
       ? `<div style="display:flex;flex-wrap:wrap;gap:14px;margin:8px 0 0;font:500 12px/1.4 var(--tv-font-sans)">${links.join('')}</div>`
@@ -591,13 +623,14 @@ function preflight(): string {
     <h2 style="font:700 27px/1.2 var(--tv-font-sans);letter-spacing:-.01em;color:var(--tv-text);margin:0">Your install sheet</h2>
     <button data-act="print" data-noprint="1" style="flex:none;cursor:pointer;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:6px;padding:7px 12px;font:500 12px/1 var(--tv-font-sans);color:var(--tv-text-muted)">Print this page</button>
   </div>
-  <p style="margin:0 0 28px;max-width:62ch;color:var(--tv-text-muted);text-wrap:pretty">One page to print and keep next to the keyboard. On the left, what to sort out before you start. On the right, the install itself — every step, one line each, saying what finished looks like. Tick your way down.</p>
-  <div data-sheetgrid="1">
+  <p style="margin:0 0 10px;max-width:62ch;color:var(--tv-text-muted);text-wrap:pretty">One page to print and keep next to the keyboard. Two lists, in the order you need them: first the things only you can do, then every phase of the install with what finished looks like.</p>
+  <p style="margin:0 0 28px;max-width:62ch;color:var(--tv-text-muted);text-wrap:pretty"><b style="font-weight:600;color:var(--tv-text)">This sheet is the map, not the instructions.</b> The steps themselves are below it, one section per phase, with the commands and the click paths. Work the prerequisites here, then keep scrolling — the page is already in order.</p>
+  <div>
     <div style="margin:0 0 32px">
       ${sectionHead(
         'Before you start · only you can do these',
         `${MANUAL_STEPS.length} things, about 20 minutes`,
-        'An account, a domain, a login — the things no script can do on your behalf. Most the setup tool will notice if you skip; the ones marked *on you* it cannot, so those are the ones to be sure about. The first is a choice rather than a task — see [what it costs](#cost).',
+        'An account, a domain, a login — the things no script can do on your behalf. Most the setup tool will notice if you skip; the ones marked *on you* it cannot, so those are the ones to be sure about. **Have a password manager open before you start**: four of these produce a secret shown exactly once. Workers Paid is a choice rather than a task — see [what it costs](#cost).',
       )}
       <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:13px 28px">${MANUAL_STEPS.map(stepCell).join('\n  ')}</div>
     </div>
@@ -608,6 +641,9 @@ function preflight(): string {
         'Every step in order, with the one thing you should see once it has landed. Not extra work — it is the same check that sits at the foot of each step below, gathered here so the printed sheet stands on its own.',
       )}
       <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:9px 28px">${gates}</div>
+    </div>
+    <div data-noprint="1" style="background:var(--tv-accent-bg);border:1px solid var(--tv-accent-border);border-radius:8px;padding:16px 18px;margin:4px 0 0">
+      <p style="margin:0;font-size:13.5px;line-height:1.6;color:var(--tv-text-muted);text-wrap:pretty">That is the whole install on one page — but only the summary. <a href="#p0">Start Phase 0 below</a>, which is where the actual commands are. Each phase ends by asking for whatever it produced, so the values fill themselves into every later command as you go.</p>
     </div>
   </div>
 </section>`
@@ -733,7 +769,7 @@ function phaseSection(p: Phase): string {
   if (p.produces?.length) {
     parts.push(
       `<div style="display:flex;flex-wrap:wrap;gap:6px;margin:0 0 20px;align-items:center">
-      <span style="${EYEBROW};margin-right:3px">Produces</span>
+      <span style="${EYEBROW};margin-right:3px">Produces <span style="text-transform:none;letter-spacing:0;font-weight:400;color:var(--tv-text-dim)">— tap one to record it</span></span>
       ${p.produces
         .map(id => {
           const w = WORKSHEET.find(x => x.id === id)
@@ -758,6 +794,42 @@ function phaseSection(p: Phase): string {
     else if (isCode(item)) parts.push(code(item))
   }
 
+  // Capture, where the values actually are.
+  //
+  // The worksheet lived behind a floating button, and someone working
+  // through the install did not notice it existed — so the amber
+  // placeholders in every later command never got filled, and the
+  // Copy buttons handed out commands with `‹account-id›` still in
+  // them. The chips at the top of the phase announce what is coming;
+  // this asks for it at the point you have it on screen, without
+  // needing to find the drawer at all.
+  //
+  // The inputs are the drawer's own control, so both stay in step.
+  if (p.produces?.length) {
+    const fields = p.produces
+      .map(id => WORKSHEET.find(w => w.id === id))
+      .filter((w): w is WorksheetField => Boolean(w))
+    if (fields.length) {
+      parts.push(
+        `<div data-noprint="1" style="background:var(--tv-surface-2);border:1px solid var(--tv-border-strong);border-radius:8px;padding:18px 20px;margin:22px 0 0">
+      <div style="${EYEBROW};margin:0 0 4px">Write these down before you move on</div>
+      <p style="margin:0 0 14px;max-width:62ch;font-size:13px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">You should have ${fields.length === 1 ? 'this value' : `these ${fields.length} values`} now. Typing ${fields.length === 1 ? 'it' : 'them'} here fills ${fields.length === 1 ? 'it' : 'them'} into every command further down the page, so what you copy is ready to run.</p>
+      ${fields.map(worksheetField).join('\n      ')}
+    </div>`,
+      )
+    }
+  }
+
+  if (p.n === 3) {
+    // The pinned ID, derived rather than written, beside the step that
+    // rewrites it. It used to sit in a homeless paragraph between the
+    // setup panel and the phases, stapled to an unrelated count of
+    // Access paths — a statistic rather than something a reader could
+    // act on. Here it is a thing you can check your own file against.
+    parts.push(
+      `<p style="margin:0 0 16px;max-width:64ch;font-size:13.5px;line-height:1.6;color:var(--tv-text-muted);text-wrap:pretty">To recognise an unedited file: the two <code style="font-family:var(--tv-font-mono);font-size:.92em">database_id</code> lines both read <code style="font-family:var(--tv-font-mono);font-size:.92em">${esc(UPSTREAM_PINNED_IDS.d1.slice(0, 8))}…</code>, which is upstream's database, not yours.</p>`,
+    )
+  }
   if (p.n === 8) {
     parts.push(bindingsTable())
     parts.push(localModelVars())
@@ -813,8 +885,14 @@ function phaseSection(p: Phase): string {
 </section>`
 }
 
-function worksheetDrawer(): string {
-  const field = (w: WorksheetField): string => {
+/**
+ * One worksheet input.
+ *
+ * Shared by the drawer and by the capture block at the end of each
+ * phase, so the two are the same control rather than two spellings of
+ * it — same validator, same error slot, same note.
+ */
+function worksheetField(w: WorksheetField): string {
     const o = ORIGIN_LABELS[w.origin]
     return `<div data-field-row="${esc(w.id)}" data-tier="${w.minTier}" style="margin:0 0 14px">
     <div style="display:flex;align-items:center;gap:7px;margin:0 0 5px;flex-wrap:wrap">
@@ -827,7 +905,10 @@ function worksheetDrawer(): string {
     <div data-error="${esc(w.id)}" style="display:none;font:400 11.5px/1.5 var(--tv-font-sans);color:var(--tv-error);margin-top:4px"></div>
     ${w.note ? `<div style="font:400 11.5px/1.5 var(--tv-font-sans);color:var(--tv-text-dim);margin-top:4px">${esc(w.note)}</div>` : ''}
   </div>`
-  }
+}
+
+function worksheetDrawer(): string {
+  const field = worksheetField
 
   const askedCount = QUESTIONS.length
   return `<div data-drawer="1" data-noprint="1" style="display:none;position:fixed;inset:0;z-index:50;justify-content:flex-end">
@@ -1157,9 +1238,13 @@ function paintMap() {
 }
 
 function paintInputs() {
+  // querySelectorAll, not querySelector: each value now has an input in
+  // the drawer AND one at the end of the phase that produces it, and
+  // typing in either has to show up in the other.
   FIELDS.forEach(f => {
-    const el = document.querySelector('[data-field="' + f.id + '"]');
-    if (el && el !== document.activeElement) el.value = state.vals[f.id] || '';
+    q('[data-field="' + f.id + '"]').forEach(el => {
+      if (el !== document.activeElement) el.value = state.vals[f.id] || '';
+    });
   });
 }
 
@@ -1181,7 +1266,7 @@ document.addEventListener('input', e => {
   const id = el.getAttribute('data-field');
   state.vals[id] = el.value;
   validate(id, el.value);
-  persist(); paintSlots(); paintMap(); paintProgress();
+  persist(); paintSlots(); paintMap(); paintProgress(); paintInputs();
 });
 
 document.addEventListener('click', e => {
@@ -1334,19 +1419,23 @@ code{overflow-wrap:anywhere}
   <div style="${EYEBROW};color:var(--tv-accent);margin:0 0 12px">Start here</div>
   <h2 style="font:700 27px/1.2 var(--tv-font-sans);letter-spacing:-.01em;color:var(--tv-text);margin:0 0 14px">Let the tool do the mechanical parts</h2>
   <p style="margin:0 0 18px;max-width:62ch;color:var(--tv-text-muted);text-wrap:pretty">Most of what follows is dashboard clicking that a script can do faster and without typos. <code style="font-family:var(--tv-font-mono);font-size:.92em">npm run setup</code> provisions the resources, rewrites the config, and applies the migrations in the order that works. It creates the Access application (<code style="font-family:var(--tv-font-mono);font-size:.92em">${esc(DEFAULT_NAMES.accessApp)}</code>) with its <code style="font-family:var(--tv-font-mono);font-size:.92em">${esc(STAFF_POLICY_NAME)}</code> and <code style="font-family:var(--tv-font-mono);font-size:.92em">${esc(AUTOMATION_POLICY_NAME)}</code> policies, then writes every binding to <i>both</i> environments.</p>
-  ${code({
-    code: `# what only a human can do, with click paths
-npm run setup -- --manual
-
-# answer ${QUESTIONS.length} questions, validated at the prompt
-npm run setup -- --interactive
-
-# plan only — writes nothing
-npm run setup
-
-# provision + wire
-npm run setup -- --apply`,
-  })}
+  <p style="margin:0 0 12px;max-width:62ch;color:var(--tv-text-muted);text-wrap:pretty">Four ways to run it. <b style="font-weight:600;color:var(--tv-text)">These are alternatives, not a sequence</b> — one block, one command, so whatever you copy is the whole of what you meant to run.</p>
+  ${[
+    ['npm run setup -- --manual', 'What only a human can do, with click paths. Prints and exits.'],
+    [
+      'npm run setup -- --interactive',
+      `Asks the ${QUESTIONS.length} questions only you can answer, validating each at the prompt.`,
+    ],
+    ['npm run setup', 'Plan. Says what it would do and writes nothing — this is the default.'],
+    ['npm run setup -- --apply', 'Provisions the resources and wires them up. The one that changes things.'],
+  ]
+    .map(
+      ([cmd, why]) => `<div style="margin:0 0 12px">
+    ${code({ code: cmd })}
+    <p style="margin:5px 0 0;font-size:12.5px;line-height:1.5;color:var(--tv-text-dim);text-wrap:pretty">${esc(why)}</p>
+  </div>`,
+    )
+    .join('\n  ')}
   <p style="margin:0 0 18px;max-width:62ch;color:var(--tv-text-muted);text-wrap:pretty">Every phase below leads with the tool. Where a human is genuinely required — billing, an OAuth handshake, the first SSO sign-in — it says so and shows you the clicks. Where you would rather do it yourself anyway, open <b style="font-weight:600;color:var(--tv-text)">Do it by hand</b>.</p>
   <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px">
     ${[
@@ -1364,8 +1453,6 @@ npm run setup -- --apply`,
   </div>
 </section>`
 
-  const pinned = `<p style="margin:0 0 44px;font-size:12.5px;color:var(--tv-text-dim)">Shipped <code style="font-family:var(--tv-font-mono)">wrangler.toml</code> still pins upstream's D1 <code style="font-family:var(--tv-font-mono)">${esc(UPSTREAM_PINNED_IDS.d1.slice(0, 8))}…</code> until Phase 3 rewrites it. Access gates ${PUBLISHER_PATHS.length} paths per host.</p>`
-
   return `${head}
 <div data-shell="1" style="display:grid;grid-template-columns:262px minmax(0,1fr)">
 ${sidebar()}
@@ -1376,7 +1463,6 @@ ${costPanel()}
 ${preflight()}
 ${dependencyMap()}
 ${setupPanel}
-${pinned}
 ${PHASES.map(phaseSection).join('\n')}
 ${troubleshooting()}
 ${weekOne()}

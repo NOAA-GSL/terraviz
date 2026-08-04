@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { collectSecrets, parseDotEnv, runSetup, type SetupDeps } from './setup-node.ts'
+import {
+  checkNodeVersion,
+  collectSecrets,
+  parseDotEnv,
+  runSetup,
+  type SetupDeps,
+} from './setup-node.ts'
 import type { CommandResult } from './lib/setup/provision.ts'
 
 interface Harness {
@@ -36,6 +42,54 @@ function harness(overrides: Partial<SetupDeps> & { files?: Record<string, string
   }
   return { deps, out: () => chunks.join(''), errOut: () => errChunks.join(''), writes, calls }
 }
+
+/**
+ * The pre-flight sheet lists Node as `detected` — "setup will catch
+ * this". That claim has to be true, and the failing path is the one
+ * nobody can reach by running the suite, since the suite runs on a
+ * supported version by definition. So it is injected.
+ */
+describe('checkNodeVersion', () => {
+  it('rejects a major below what engines requires, and says what it found', () => {
+    expect(checkNodeVersion('v18.20.4')).toEqual({ ok: false, found: '18.20.4' })
+    expect(checkNodeVersion('v20.11.0').ok).toBe(false)
+  })
+
+  it('accepts the required major and anything newer', () => {
+    expect(checkNodeVersion('v22.0.0').ok).toBe(true)
+    expect(checkNodeVersion('v24.1.0').ok).toBe(true)
+  })
+
+  it('refuses a version it cannot parse rather than assuming the best', () => {
+    expect(checkNodeVersion('unknown').ok).toBe(false)
+  })
+})
+
+describe('runSetup — Node version gate', () => {
+  it('stops before doing anything, naming the version and where to get one', () => {
+    const out: string[] = []
+    const err: string[] = []
+    const code = runSetup({
+      argv: [],
+      env: {},
+      stdout: { write: s => void out.push(s) },
+      stderr: { write: s => void err.push(s) },
+      runner: () => {
+        throw new Error('must not run a command on an unsupported Node')
+      },
+      readFile: () => '',
+      writeFile: () => {},
+      exists: () => false,
+      nodeVersion: 'v18.20.4',
+    } as unknown as SetupDeps)
+    return Promise.resolve(code).then(c => {
+      expect(c).toBe(2)
+      expect(err.join('')).toContain('Node 18.20.4 is too old')
+      expect(err.join('')).toContain('nodejs.org')
+      expect(out.join('')).toBe('')
+    })
+  })
+})
 
 describe('parseDotEnv', () => {
   it('reads plain assignments and strips quotes', () => {

@@ -55,9 +55,23 @@ here. Every phase that *consumes* one refers to it by line number.
 **If you use `npm run setup`, most of this is kept for you** in
 `.terraviz-setup.json` — the resource IDs, the Access AUD, the team
 domain. What it cannot keep is anything marked 🔒: secrets are never
-written to that file, and the service-token secret (`W15`) is shown
-by Cloudflare exactly once. Capture those yourself, in a password
-manager. The worksheet below is still the reference for a by-hand
+written to that file. Capture those yourself, in a password manager.
+
+Four of them are shown **exactly once** and cannot be read back
+afterwards — by three different vendors, at four different points in
+the install:
+
+| | What | Shown once by |
+|---|---|---|
+| `W11` | `CLOUDFLARE_API_TOKEN` | Cloudflare, at mint time (Phase 5) |
+| `W15` | `CF_ACCESS_CLIENT_SECRET` | Cloudflare, in the service-token dialog (Phase 6) |
+| `W20b` | `R2_SECRET_ACCESS_KEY` | Cloudflare, with `W20` (Phase 13.1) |
+| `W22` | `GITHUB_DISPATCH_TOKEN` | GitHub, at mint time (Phase 13.2) |
+
+Losing one is recoverable but tedious: revoke it, mint a new one, and
+repoint everything already using it. `W16` and `W18` are different —
+they are generated locally into `.dev.vars` and can be read back from
+there. The worksheet below is still the reference for a by-hand
 install, and for knowing what you should have when the tool is done.
 
 ```
@@ -105,7 +119,8 @@ W22 🔒 GITHUB_DISPATCH_TOKEN         ......................
 
 ## Shortcut: `npm run setup`
 
-Most of the phases below are mechanical, and a tool does them:
+Most of the phases below are mechanical, and a tool does them.
+Four ways to run it — these are alternatives, not a sequence:
 
 ```bash
 npm run setup -- --manual        # what only a human can do, with click paths
@@ -273,8 +288,12 @@ error`.
 | Cloudflare account | Everything runs here. | No — sign up by hand |
 | **Workers Paid ($5/mo)** | Workers AI is capped at 10,000 Neurons/day on the free plan — roughly 200 Orbit turns — and you cannot exceed that without upgrading. Orbit then degrades to its local keyword engine mid-demo. | No — billing UI |
 | A domain on **Cloudflare DNS** | For `W2`. Moving DNS to Cloudflare is free; you change nameservers at your registrar. Registering a new domain through Cloudflare also works. | No — registrar action |
-| GitHub or GitLab account | Pages builds from a Git remote (or you deploy by Direct Upload from CI). | No |
-| Node.js 20+ and npm | Build, test, migrate. | — |
+| **A GitHub account** | This guide assumes GitHub throughout, and the automation needs it: you fork on GitHub, and video transcode fires a `repository_dispatch` at a GitHub Actions workflow in your own repo. Cloudflare Pages itself can build from any Git remote, or from Direct Upload — but nothing here is written or tested for another host. | No — sign up by hand |
+| **Somewhere to keep secrets** | Four values in this guide are shown **exactly once** and cannot be read back: `W11`, `W15`, `W20b`, `W22`. A password manager is enough; a text file you will lose is not. | No — before you start |
+| **Node.js 22+ and npm** | Build, test, migrate — and every `npm run` command in this guide. If you have no Node, install the LTS build from [nodejs.org](https://nodejs.org/en/download); it carries npm with it. `nvm` is fine if you already use it. | No — before you start |
+| **git** | §0.2 clones your fork, and Cloudflare Pages builds from that remote. Downloading the repo as a zip gets you the code and no remote. Install it from [git-scm.com](https://git-scm.com/install/); macOS and most Linux ship with it. | No — before you start |
+| `curl` | The verification steps in Phase 10. Ships with macOS, Linux and Windows 10+. | — |
+| `openssl` | One command, in Phase 7 — and only if you generate `W18` by hand rather than letting the tool do it. Absent on stock Windows without WSL or Git Bash. | — |
 
 Write your account ID (`W1`), your intended hostname (`W2`), and
 your Git remote (`W3`) on the worksheet now. The account ID is in
@@ -286,16 +305,73 @@ the Cloudflare dashboard sidebar and in every dashboard URL.
 > up is headroom, and it fails soft: Orbit falls back to its local
 > keyword engine once the day's 10,000 Neurons are gone. For a kiosk
 > that will field questions all day, pay the $5. See
-> [§0.5](#05-what-the-free-plan-actually-costs-you) for the numbers.
+> [§0.6](#06-what-the-free-plan-actually-costs-you) for the numbers.
 
-## 0.2 Tools
+## 0.2 Fork the repository
+
+Everything after this assumes you are working from **your own copy**
+of `zyra-project/terraviz`, not from upstream. Phase 3 rewrites
+`wrangler.toml` with your resource IDs, Phase 5 points Cloudflare
+Pages at your remote, and Phase 13.2 runs the transcode workflow in
+your repo. None of that is possible against a repo you cannot push
+to.
+
+**Record the result as `W3`** — `owner/repo`. It is the value the
+`/setup` console reads to retarget its documentation links at your
+fork, and the one Phase 5 hands to the Pages Git integration.
+
+There are two ways to get your own copy, and they behave
+differently. Pick before you clone; changing your mind later means
+redoing Phase 5.
+
+| | GitHub's **Fork** button | A separate repository |
+|---|---|---|
+| Actions | **Disabled** until you enable them in the Actions tab | On by default |
+| Pulling upstream changes | Built in — Sync fork | Add a second remote by hand |
+| Secrets on PRs raised from it | Never sent | Sent as normal |
+| Shows as a fork of upstream | Yes | No |
+
+**Take the Fork button** unless you have a reason not to. Staying
+linked to upstream is how you get later fixes, and the disabled
+Actions are one click to turn on.
+
+Go to [the fork page](https://github.com/zyra-project/terraviz/fork)
+and press **Create fork**. Nothing on that page needs changing. The
+owner is you, the repository name stays `terraviz`, the description
+carries over, and **Copy the `main` branch only** stays ticked —
+`main` is the only branch a node needs.
+
+**Take a separate repository** if your node is a hard divergence you
+never intend to sync, or if your organisation forbids forks of
+outside repos. Create an empty repo, then:
 
 ```bash
-node --version          # must be >= 20
+git clone https://github.com/zyra-project/terraviz.git
+cd terraviz
+git remote set-url origin https://github.com/<you>/terraviz.git
+git push -u origin main
+```
+
+> **Do not skip this and clone upstream directly.** The clone works,
+> the app runs locally, and nothing complains until Phase 3 has
+> rewritten `wrangler.toml` with your IDs and you have no remote of
+> your own to push them to.
+
+## 0.3 Tools
+
+```bash
+node --version          # 22 or 24 — see the LTS note below
+git lfs install         # once per machine; see the LFS note below
 npm install -g wrangler
 wrangler login          # opens a browser; needs an interactive terminal
 wrangler whoami         # confirms the account you just authorised
 ```
+
+If `git lfs` reports an unknown command, install Git LFS first —
+[git-lfs.com](https://git-lfs.com) has installers for every
+platform, and on macOS and most Linux it is one package
+(`brew install git-lfs`, `apt install git-lfs`). Git for Windows
+bundles it, but you still need to run `git lfs install` once.
 
 `wrangler whoami` should print the account matching `W1`. If you
 have several accounts, note which one — every `wrangler` command
@@ -305,28 +381,73 @@ below acts on the account you logged into.
 > `CLOUDFLARE_API_TOKEN` in the environment instead (see Phase 5.3
 > for the permission set) and skip `wrangler login`.
 
-## 0.3 Get the code
+> **Take an LTS release — 22 or 24.** Either works; the download
+> button on nodejs.org gives you 24. One dependency
+> (`better-sqlite3`) ships precompiled binaries only for the Node
+> majors that were current when it was published. A Node that is
+> past end-of-life, or newer than the dependency, has no binary to
+> download. npm then tries to compile it from source, which needs a
+> C++ toolchain you should not have to install. §0.4 says what that
+> failure looks like.
+
+> **Do this before you clone.** Seven images the globe renders —
+> the star-field skybox and the specular map — are stored with Git
+> LFS. Clone without it and you get 131-byte text files with `.jpg`
+> names in their place. Nothing reports this. `npm run build`
+> succeeds, the deploy succeeds, and the globe renders without
+> stars. §0.4 has the check.
+
+## 0.4 Get the code
 
 ```bash
-git clone https://github.com/<you>/terraviz.git
+git clone https://github.com/<W3>.git
 cd terraviz
 npm install
 ```
 
-`npm install` runs a `postinstall` that generates
-`src/styles/tokens.css` and the i18n message modules. Both are
-build artifacts and gitignored; if a later build complains about
-missing tokens, `npm run tokens && npm run locales` regenerates
-them.
+Check the LFS images arrived before you go further:
 
-## 0.4 What the tool finds out, and what only you can
+```bash
+git lfs pull                          # no-op if they already did
+ls -l public/assets/skybox/nx.jpg     # ~790 KB, not 131 bytes
+```
 
-Seven things in this guide cannot be done by an API, and
-`npm run setup -- --manual` prints all seven with their click paths.
+131 bytes means it is a pointer, not an image. Run `git lfs install`
+(§0.3), then `git lfs pull`, and check again. Doing this now costs a
+few seconds; finding out later means a deployed node whose globe has
+no stars and no clue why.
+
+`npm install` is not optional and is not only for contributors. It
+puts the tooling every later `npm run` command needs on your path.
+Skip it and the first one fails with something like
+`'tsx' is not recognized`.
+
+It also runs a `postinstall` that generates `src/styles/tokens.css`
+and the i18n message modules. Both are build artifacts and
+gitignored; if a later build complains about missing tokens,
+`npm run tokens && npm run locales` regenerates them.
+
+> **If `npm install` dies on `better-sqlite3`**, read the first
+> warning line, not the last error. It says:
+>
+> ```
+> prebuild-install warn install No prebuilt binaries found (target=… platform=win32)
+> ```
+>
+> That means your Node has no precompiled binary, so npm fell back
+> to building from source and hit a missing Python or C++ compiler.
+> The fix is almost always to change Node, not to install a
+> compiler. Check `node --version` and move to 22 or 24. This is
+> the one dependency in the tree that compiles anything.
+
+## 0.5 What the tool finds out, and what only you can
+
+Eight things in this guide cannot be done by an API, and
+`npm run setup -- --manual` prints all eight with their click paths.
 They are not equally your problem, and the difference is worth
 knowing before you start ticking boxes.
 
-**Five of the seven, a later step detects.** You do not need to
+**Five of the eight, a later step detects.** You do not need to
 verify them, remember them, or write anything down — if one is not
 done, the tool says so, by name, at the point it matters:
 
@@ -338,22 +459,23 @@ done, the tool says so, by name, at the point it matters:
 | Generate the node keypair | Phase 7 | The secrets step reports `NODE_ID_PRIVATE_KEY_PEM` absent |
 | Connect Pages to your Git remote | Phase 5 | Project creation reports whether a Git source is attached |
 
-**Two are genuinely on you**, because nothing in the API can see
+**Three are genuinely on you**, because nothing in the API can see
 them:
 
 | Prerequisite | Needed by | Why it cannot be detected |
 |---|---|---|
+| **Fork the repository** ([§0.2](#02-fork-the-repository)) | Phase 3 onward | The tool asks for `W3` and validates its shape. It cannot check that the repo exists, that you own it, or that your checkout points at it |
 | **Workers Paid ($5/mo)** | Phase 8 onward | Billing state is not exposed to the token. A free-plan account provisions everything successfully, then throttles Orbit once the day's Workers AI allocation is spent |
 | **Mint the R2 S3 API token** | Phase 13.1 | Automating it would need a token that can mint tokens — a credential able to grant itself more authority. It stays manual on purpose. (The secret is also shown exactly once, so capture all three values then) |
 
 That asymmetry is the whole reason the pre-flight list is short.
-Confirm those two; let the tool tell you about the rest.
+Confirm those three; let the tool tell you about the rest.
 
 > This table is generated from `MANUAL_STEPS` in
 > `scripts/lib/setup/interview.ts` on the [`/setup`](/setup) page,
 > which is where to look if it ever disagrees with this one.
 
-## 0.5 What the free plan actually costs you
+## 0.6 What the free plan actually costs you
 
 Less than the rest of this guide used to claim. Every product a
 Terraviz node binds has a free allocation, so a free-plan account
@@ -1879,6 +2001,47 @@ the binding *name* — that's what the code reads.
 ---
 
 # Reference E — Troubleshooting
+
+### `npm install` fails building `better-sqlite3`
+Your Node has no precompiled binary for this version of
+`better-sqlite3`, so npm fell back to `node-gyp`, which needs
+Python and a C++ compiler. The error names whichever of those is
+missing first — on Windows, usually Python. That is the symptom,
+not the cause. The cause is a few lines above it:
+
+```
+prebuild-install warn install No prebuilt binaries found (target=… platform=…)
+```
+
+Run `node --version`. `better-sqlite3` builds binaries only for the
+Node majors current at its release, so both a Node past end-of-life
+and a Node newer than the dependency land here. Install 22 or 24
+from [nodejs.org](https://nodejs.org/en/download), delete
+`node_modules`, and run `npm install` again. It is the only
+dependency here that compiles anything, so nothing else in the tree
+needs a toolchain.
+
+### The globe has no stars, or the Earth has no specular highlight
+Your clone has Git LFS pointers where the textures should be. Check:
+
+```bash
+ls -l public/assets/skybox/nx.jpg     # ~790 KB if real, 131 bytes if a pointer
+```
+
+131 bytes is a text file naming the object it stands for. Fix it
+with `git lfs install` then `git lfs pull`, rebuild, redeploy.
+
+Nothing catches this on your behalf: `npm run build` copies
+`public/` verbatim without looking inside, so the build reports no
+errors and the pointers ship to `dist/` under their `.jpg` names.
+If you deploy from GitHub Actions, note that
+`actions/checkout` does **not** fetch LFS unless you pass
+`lfs: true` — `ci.yml` and `poster.yml` already do.
+
+### `npm run …` says `'tsx' is not recognized`
+You skipped `npm install`, or ran it somewhere other than the
+repository root. Every `npm run` command in this guide runs from
+inside your clone, after a successful install. See §0.4.
 
 ### `/api/ingest` returns 204 but nothing lands in AE
 The `ANALYTICS` binding is missing in the environment serving
