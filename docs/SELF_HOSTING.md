@@ -361,10 +361,17 @@ git push -u origin main
 
 ```bash
 node --version          # 22 or 24 — see the LTS note below
+git lfs install         # once per machine; see the LFS note below
 npm install -g wrangler
 wrangler login          # opens a browser; needs an interactive terminal
 wrangler whoami         # confirms the account you just authorised
 ```
+
+If `git lfs` reports an unknown command, install Git LFS first —
+[git-lfs.com](https://git-lfs.com) has installers for every
+platform, and on macOS and most Linux it is one package
+(`brew install git-lfs`, `apt install git-lfs`). Git for Windows
+bundles it, but you still need to run `git lfs install` once.
 
 `wrangler whoami` should print the account matching `W1`. If you
 have several accounts, note which one — every `wrangler` command
@@ -383,6 +390,13 @@ below acts on the account you logged into.
 > C++ toolchain you should not have to install. §0.4 says what that
 > failure looks like.
 
+> **Do this before you clone.** Seven images the globe renders —
+> the star-field skybox and the specular map — are stored with Git
+> LFS. Clone without it and you get 131-byte text files with `.jpg`
+> names in their place. Nothing reports this. `npm run build`
+> succeeds, the deploy succeeds, and the globe renders without
+> stars. §0.4 has the check.
+
 ## 0.4 Get the code
 
 ```bash
@@ -390,6 +404,18 @@ git clone https://github.com/<W3>.git
 cd terraviz
 npm install
 ```
+
+Check the LFS images arrived before you go further:
+
+```bash
+git lfs pull                          # no-op if they already did
+ls -l public/assets/skybox/nx.jpg     # ~790 KB, not 131 bytes
+```
+
+131 bytes means it is a pointer, not an image. Run `git lfs install`
+(§0.3), then `git lfs pull`, and check again. Doing this now costs a
+few seconds; finding out later means a deployed node whose globe has
+no stars and no clue why.
 
 `npm install` is not optional and is not only for contributors. It
 puts the tooling every later `npm run` command needs on your path.
@@ -1994,6 +2020,23 @@ from [nodejs.org](https://nodejs.org/en/download), delete
 `node_modules`, and run `npm install` again. It is the only
 dependency here that compiles anything, so nothing else in the tree
 needs a toolchain.
+
+### The globe has no stars, or the Earth has no specular highlight
+Your clone has Git LFS pointers where the textures should be. Check:
+
+```bash
+ls -l public/assets/skybox/nx.jpg     # ~790 KB if real, 131 bytes if a pointer
+```
+
+131 bytes is a text file naming the object it stands for. Fix it
+with `git lfs install` then `git lfs pull`, rebuild, redeploy.
+
+Nothing catches this on your behalf: `npm run build` copies
+`public/` verbatim without looking inside, so the build reports no
+errors and the pointers ship to `dist/` under their `.jpg` names.
+If you deploy from GitHub Actions, note that
+`actions/checkout` does **not** fetch LFS unless you pass
+`lfs: true` — `ci.yml` and `poster.yml` already do.
 
 ### `npm run …` says `'tsx' is not recognized`
 You skipped `npm install`, or ran it somewhere other than the

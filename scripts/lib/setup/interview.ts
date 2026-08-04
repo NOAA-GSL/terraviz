@@ -290,6 +290,9 @@ export const MANUAL_STEPS: ManualStep[] = [
     steps: [
       'Install git if you do not have it. macOS and most Linux ship with it.',
       { code: 'git --version' },
+      'Turn on Git LFS in the same sitting. It is a separate install on macOS and Linux; Git for Windows bundles it, but the command below is still required once per machine.',
+      { code: 'git lfs install' },
+      { note: 'Seven of the images the globe renders are stored in LFS. Clone without it and you get small text files carrying .jpg names. Nothing reports it — the build passes, the deploy passes, and the globe comes up missing its stars.' },
       { note: 'You will also need a browser you can sign in to Cloudflare with — most of the steps below are dashboard clicking. On a headless machine, see the wrangler login note in the guide.' },
     ],
     // Not `detected`, though it looks like it should be. The tool
