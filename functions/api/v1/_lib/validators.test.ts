@@ -481,6 +481,32 @@ describe('validateRenderEncoding (data-encoded video)', () => {
   it('allows an update to clear the pair back to a picture', () => {
     expect(validateDraftUpdate({ render_encoding: null, color_scale: null })).toEqual([])
   })
+
+  it.each([
+    ['a non-integer dataMinLuma', scale({ dataMinLuma: 11.5 })],
+    ['a dataMinLuma past the 8-bit range', scale({ dataMinLuma: 255 })],
+    ['a dataMinLuma that disagrees with transparentRange',
+      scale({ dataMinLuma: 12, transparentRange: 0.2 })],
+  ])('refuses %s at write time', (_label, color_scale) => {
+    // The band decides what number every texel reports, so a sidecar
+    // that gets it wrong must not reach a viewer to be discovered
+    // there. `parseColorScale` fails closed and this inherits it.
+    expect(
+      validateDraftCreate({ ...base, render_encoding: 'data-luma', color_scale }).some(
+        e => e.field === 'color_scale' && e.code === 'invalid_value',
+      ),
+    ).toBe(true)
+  })
+
+  it('round-trips a well-formed nodata band', () => {
+    expect(
+      validateDraftCreate({
+        ...base,
+        render_encoding: 'data-luma',
+        color_scale: scale({ dataMinLuma: 12, transparentRange: 12 / 256 }),
+      }),
+    ).toEqual([])
+  })
 })
 
 describe('playback_fps', () => {
