@@ -207,6 +207,37 @@ describe('MANUAL_STEPS', () => {
     expect(text).toMatch(/not zyra-project\/terraviz/)
   })
 
+  // Someone installing hit `'tsx' is not recognized` at the first
+  // `npm run` step. tsx is a normal dependency, so any `npm install`
+  // provides it — but `npm install` appeared in none of the ten steps.
+  // It lived only in the guide, which a person working the sheet as a
+  // recipe never opens.
+  it('installs dependencies in the step that clones', () => {
+    const fork = MANUAL_STEPS.find(s => s.id === 'fork')!
+    expect(fork.steps.map(lineText).join('\n')).toMatch(/npm install/)
+  })
+
+  // Every `npm run` the sheet asks you to execute depends on that
+  // having happened. Scanned over `code` lines only — prose mentions
+  // npm run freely ("every command starts with npm run") without
+  // asking anyone to type one, and treating that as the trigger makes
+  // the check fire on step 1 forever.
+  it('installs dependencies before the first command it asks you to run', () => {
+    const commandsSoFar: string[] = []
+    for (const step of MANUAL_STEPS) {
+      const code = step.steps
+        .filter((l): l is { code: string } => typeof l !== 'string' && 'code' in l)
+        .map(l => l.code)
+      const asksToRun = code.some(c => /npm run/.test(c))
+      const installsHere = code.some(c => /npm install/.test(c))
+      if (asksToRun && !installsHere && !commandsSoFar.some(c => /npm install/.test(c))) {
+        throw new Error(`${step.id} runs an npm script before any step installs dependencies`)
+      }
+      commandsSoFar.push(...code)
+    }
+    expect(commandsSoFar.some(c => /npm install/.test(c))).toBe(true)
+  })
+
   it('lists every permission the API token needs', () => {
     const token = MANUAL_STEPS.find(s => s.id === 'api-token')!
     const text = token.steps.map(lineText).join('\n')
