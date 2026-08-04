@@ -280,17 +280,21 @@ export const MANUAL_STEPS: ManualStep[] = [
   },
   {
     id: 'git',
-    title: 'Install git',
+    title: 'Install git and Git LFS',
     why:
       'The next step clones your fork, and Cloudflare Pages builds ' +
       'from that remote. Downloading the repo as a zip gets you the ' +
       'code and no remote, which does not surface until Phase 5 has ' +
-      'nothing to connect to.',
+      'nothing to connect to. LFS belongs here for the opposite ' +
+      'reason: a clone without it fails so quietly that nothing ' +
+      'surfaces at all.',
     url: 'https://git-scm.com/install/',
+    docsUrl: 'https://github.com/zyra-project/terraviz/blob/main/docs/SELF_HOSTING.md#03-tools',
     steps: [
       'Install git if you do not have it. macOS and most Linux ship with it.',
       { code: 'git --version' },
-      'Turn on Git LFS in the same sitting. It is a separate install on macOS and Linux; Git for Windows bundles it, but the command below is still required once per machine.',
+      'Turn on Git LFS in the same sitting. Git for Windows bundles it. On macOS and Linux it is a separate package — get it from git-lfs.com, or use brew install git-lfs or apt install git-lfs.',
+      'Either way, run this once per machine:',
       { code: 'git lfs install' },
       { note: 'Seven of the images the globe renders are stored in LFS. Clone without it and you get small text files carrying .jpg names. Nothing reports it — the build passes, the deploy passes, and the globe comes up missing its stars.' },
       { note: 'You will also need a browser you can sign in to Cloudflare with — most of the steps below are dashboard clicking. On a headless machine, see the wrangler login note in the guide.' },
