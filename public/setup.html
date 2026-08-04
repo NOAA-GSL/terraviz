@@ -1050,7 +1050,7 @@ npm run setup -- --apply</pre>
   </div>
   <p style="margin:0 0 16px;max-width:64ch;color:var(--tv-text-muted);text-wrap:pretty">An account, a registrar, and a login. Get these four values written down and everything after this has something to stand on.</p>
   <div style="display:flex;flex-wrap:wrap;gap:6px;margin:0 0 20px;align-items:center">
-      <span style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim);margin-right:3px">Produces</span>
+      <span style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim);margin-right:3px">Produces <span style="text-transform:none;letter-spacing:0;font-weight:400;color:var(--tv-text-dim)">— tap one to record it</span></span>
       <span data-w="ORG" style="cursor:pointer;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:3px;padding:4px 8px;font:500 11px/1.2 var(--tv-font-mono);color:var(--tv-text-muted)">ORG your org domain</span>
       <span data-w="TRUST" style="cursor:pointer;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:3px;padding:4px 8px;font:500 11px/1.2 var(--tv-font-mono);color:var(--tv-text-muted)">TRUST auto-approve domains</span>
       <span data-w="W1" style="cursor:pointer;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:3px;padding:4px 8px;font:500 11px/1.2 var(--tv-font-mono);color:var(--tv-text-muted)">W1 cloudflare account id</span>
@@ -1067,6 +1067,65 @@ git clone https://github.com/<span data-slot="W3" data-w="W3" style="cursor:poin
 cd terraviz &amp;&amp; npm install</pre>
   <button data-copy="1" style="position:absolute;top:7px;right:8px;background:rgba(255,255,255,.07);color:var(--tv-text-dim);border:1px solid var(--tv-border-strong);border-radius:3px;font:500 10px/1 var(--tv-font-sans);letter-spacing:.08em;text-transform:uppercase;padding:5px 8px;cursor:pointer">Copy</button>
 </div>
+  <div data-noprint="1" style="background:var(--tv-surface-2);border:1px solid var(--tv-border-strong);border-radius:8px;padding:18px 20px;margin:22px 0 0">
+      <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim);margin:0 0 4px">Write these down before you move on</div>
+      <p style="margin:0 0 14px;max-width:62ch;font-size:13px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">You should have these 5 values now. Typing them here fills them into every command further down the page, so what you copy is ready to run.</p>
+      <div data-field-row="ORG" data-tier="2" style="margin:0 0 14px">
+    <div style="display:flex;align-items:center;gap:7px;margin:0 0 5px;flex-wrap:wrap">
+      <label style="font:500 11.5px/1.3 var(--tv-font-mono);color:var(--tv-text-muted)">ORG</label>
+      <span style="font:400 12.5px/1.3 var(--tv-font-sans);color:var(--tv-text)">Your org domain</span>
+      <span title="The interview asks for this one and validates your answer." style="background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:999px;padding:1px 7px;font:600 9px/1.6 var(--tv-font-sans);letter-spacing:.06em;text-transform:uppercase;color:var(--tv-text-dim)">you supply</span>
+      
+    </div>
+    <input data-field="ORG" data-validate="emailDomain" placeholder="your-org.org" spellcheck="false" autocomplete="off" style="width:100%;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:6px;padding:8px 10px;font:400 13px/1.4 var(--tv-font-mono);color:var(--tv-text)"/>
+    <div data-error="ORG" style="display:none;font:400 11.5px/1.5 var(--tv-font-sans);color:var(--tv-error);margin-top:4px"></div>
+    <div style="font:400 11.5px/1.5 var(--tv-font-sans);color:var(--tv-text-dim);margin-top:4px">The Access policy matches &quot;emails ending in&quot; this. A domain, not an address.</div>
+  </div>
+      <div data-field-row="TRUST" data-tier="2" style="margin:0 0 14px">
+    <div style="display:flex;align-items:center;gap:7px;margin:0 0 5px;flex-wrap:wrap">
+      <label style="font:500 11.5px/1.3 var(--tv-font-mono);color:var(--tv-text-muted)">TRUST</label>
+      <span style="font:400 12.5px/1.3 var(--tv-font-sans);color:var(--tv-text)">Auto-approve domains</span>
+      <span title="The interview asks for this one and validates your answer." style="background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:999px;padding:1px 7px;font:600 9px/1.6 var(--tv-font-sans);letter-spacing:.06em;text-transform:uppercase;color:var(--tv-text-dim)">you supply</span>
+      
+    </div>
+    <input data-field="TRUST" data-validate="emailDomainList" placeholder="your-org.org,partner.org" spellcheck="false" autocomplete="off" style="width:100%;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:6px;padding:8px 10px;font:400 13px/1.4 var(--tv-font-mono);color:var(--tv-text)"/>
+    <div data-error="TRUST" style="display:none;font:400 11.5px/1.5 var(--tv-font-sans);color:var(--tv-error);margin-top:4px"></div>
+    <div style="font:400 11.5px/1.5 var(--tv-font-sans);color:var(--tv-text-dim);margin-top:4px">Optional. Sign-ins from these domains skip the approval queue but land READ-ONLY (role reviewer). It grants nobody admin — the first sign-in does that. Blank means you approve everyone by hand.</div>
+  </div>
+      <div data-field-row="W1" data-tier="1" style="margin:0 0 14px">
+    <div style="display:flex;align-items:center;gap:7px;margin:0 0 5px;flex-wrap:wrap">
+      <label style="font:500 11.5px/1.3 var(--tv-font-mono);color:var(--tv-text-muted)">W1</label>
+      <span style="font:400 12.5px/1.3 var(--tv-font-sans);color:var(--tv-text)">Cloudflare account ID</span>
+      <span title="The interview asks for this one and validates your answer." style="background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:999px;padding:1px 7px;font:600 9px/1.6 var(--tv-font-sans);letter-spacing:.06em;text-transform:uppercase;color:var(--tv-text-dim)">you supply</span>
+      
+    </div>
+    <input data-field="W1" data-validate="accountId" placeholder="32-char hex" spellcheck="false" autocomplete="off" style="width:100%;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:6px;padding:8px 10px;font:400 13px/1.4 var(--tv-font-mono);color:var(--tv-text)"/>
+    <div data-error="W1" style="display:none;font:400 11.5px/1.5 var(--tv-font-sans);color:var(--tv-error);margin-top:4px"></div>
+    <div style="font:400 11.5px/1.5 var(--tv-font-sans);color:var(--tv-text-dim);margin-top:4px">Dashboard sidebar, and in every dashboard URL.</div>
+  </div>
+      <div data-field-row="W2" data-tier="1" style="margin:0 0 14px">
+    <div style="display:flex;align-items:center;gap:7px;margin:0 0 5px;flex-wrap:wrap">
+      <label style="font:500 11.5px/1.3 var(--tv-font-mono);color:var(--tv-text-muted)">W2</label>
+      <span style="font:400 12.5px/1.3 var(--tv-font-sans);color:var(--tv-text)">Node hostname</span>
+      <span title="The interview asks for this one and validates your answer." style="background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:999px;padding:1px 7px;font:600 9px/1.6 var(--tv-font-sans);letter-spacing:.06em;text-transform:uppercase;color:var(--tv-text-dim)">you supply</span>
+      
+    </div>
+    <input data-field="W2" data-validate="hostname" placeholder="terraviz.your-org.org" spellcheck="false" autocomplete="off" style="width:100%;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:6px;padding:8px 10px;font:400 13px/1.4 var(--tv-font-mono);color:var(--tv-text)"/>
+    <div data-error="W2" style="display:none;font:400 11.5px/1.5 var(--tv-font-sans);color:var(--tv-error);margin-top:4px"></div>
+    <div style="font:400 11.5px/1.5 var(--tv-font-sans);color:var(--tv-text-dim);margin-top:4px">Hostname only. No https://, no trailing path.</div>
+  </div>
+      <div data-field-row="W3" data-tier="1" style="margin:0 0 14px">
+    <div style="display:flex;align-items:center;gap:7px;margin:0 0 5px;flex-wrap:wrap">
+      <label style="font:500 11.5px/1.3 var(--tv-font-mono);color:var(--tv-text-muted)">W3</label>
+      <span style="font:400 12.5px/1.3 var(--tv-font-sans);color:var(--tv-text)">Git remote</span>
+      <span title="The interview asks for this one and validates your answer." style="background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:999px;padding:1px 7px;font:600 9px/1.6 var(--tv-font-sans);letter-spacing:.06em;text-transform:uppercase;color:var(--tv-text-dim)">you supply</span>
+      
+    </div>
+    <input data-field="W3" data-validate="repoSlug" placeholder="owner/repo" spellcheck="false" autocomplete="off" style="width:100%;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:6px;padding:8px 10px;font:400 13px/1.4 var(--tv-font-mono);color:var(--tv-text)"/>
+    <div data-error="W3" style="display:none;font:400 11.5px/1.5 var(--tv-font-sans);color:var(--tv-error);margin-top:4px"></div>
+    <div style="font:400 11.5px/1.5 var(--tv-font-sans);color:var(--tv-text-dim);margin-top:4px">Where Pages watches for builds.</div>
+  </div>
+    </div>
   <div style="background:var(--tv-accent-bg);border:1px solid var(--tv-accent-border);border-left:3px solid var(--tv-accent);border-radius:6px;padding:14px 16px;margin:0 0 14px">
     <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-accent);margin:0 0 7px">Gate</div>
     <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty"><code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">wrangler whoami</code> prints the account matching <span data-slot="W1" data-w="W1" style="cursor:pointer;padding:1px 5px;border-radius:3px"></span>.</p>
@@ -1132,7 +1191,7 @@ npm run dev:functions<span style="color:var(--tv-text-dim)">      # http://local
   </div>
   <p style="margin:0 0 16px;max-width:64ch;color:var(--tv-text-muted);text-wrap:pretty">Nothing consumes these yet — and that is deliberate. This phase exists so that when Phases 3 and 8 ask for IDs, you already have them written down.</p>
   <div style="display:flex;flex-wrap:wrap;gap:6px;margin:0 0 20px;align-items:center">
-      <span style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim);margin-right:3px">Produces</span>
+      <span style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim);margin-right:3px">Produces <span style="text-transform:none;letter-spacing:0;font-weight:400;color:var(--tv-text-dim)">— tap one to record it</span></span>
       <span data-w="W4" style="cursor:pointer;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:3px;padding:4px 8px;font:500 11px/1.2 var(--tv-font-mono);color:var(--tv-text-muted)">W4 d1 database id</span>
       <span data-w="W5" style="cursor:pointer;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:3px;padding:4px 8px;font:500 11px/1.2 var(--tv-font-mono);color:var(--tv-text-muted)">W5 kv — telemetry_kill_switch</span>
       <span data-w="W6" style="cursor:pointer;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:3px;padding:4px 8px;font:500 11px/1.2 var(--tv-font-mono);color:var(--tv-text-muted)">W6 kv — catalog_kv</span>
@@ -1145,6 +1204,76 @@ npm run dev:functions<span style="color:var(--tv-text-dim)">      # http://local
   <button data-copy="1" style="position:absolute;top:7px;right:8px;background:rgba(255,255,255,.07);color:var(--tv-text-dim);border:1px solid var(--tv-border-strong);border-radius:3px;font:500 10px/1 var(--tv-font-sans);letter-spacing:.08em;text-transform:uppercase;padding:5px 8px;cursor:pointer">Copy</button>
 </div>
   <p style="margin:0 0 16px;max-width:64ch;font-size:13.5px;color:var(--tv-text-muted);text-wrap:pretty">Creates or adopts the D1 database, both KV namespaces, the R2 bucket, and the Vectorize index with its three metadata indexes — and records every ID for you. Re-running adopts what already exists rather than making a second one.</p>
+  <div data-noprint="1" style="background:var(--tv-surface-2);border:1px solid var(--tv-border-strong);border-radius:8px;padding:18px 20px;margin:22px 0 0">
+      <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim);margin:0 0 4px">Write these down before you move on</div>
+      <p style="margin:0 0 14px;max-width:62ch;font-size:13px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">You should have these 6 values now. Typing them here fills them into every command further down the page, so what you copy is ready to run.</p>
+      <div data-field-row="W4" data-tier="1" style="margin:0 0 14px">
+    <div style="display:flex;align-items:center;gap:7px;margin:0 0 5px;flex-wrap:wrap">
+      <label style="font:500 11.5px/1.3 var(--tv-font-mono);color:var(--tv-text-muted)">W4</label>
+      <span style="font:400 12.5px/1.3 var(--tv-font-sans);color:var(--tv-text)">D1 database ID</span>
+      <span title="Created or read by the tool. You never type it." style="background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:999px;padding:1px 7px;font:600 9px/1.6 var(--tv-font-sans);letter-spacing:.06em;text-transform:uppercase;color:var(--tv-text-dim)">Cloudflare assigns</span>
+      
+    </div>
+    <input data-field="W4" placeholder="from wrangler d1 create" spellcheck="false" autocomplete="off" style="width:100%;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:6px;padding:8px 10px;font:400 13px/1.4 var(--tv-font-mono);color:var(--tv-text)"/>
+    <div data-error="W4" style="display:none;font:400 11.5px/1.5 var(--tv-font-sans);color:var(--tv-error);margin-top:4px"></div>
+    <div style="font:400 11.5px/1.5 var(--tv-font-sans);color:var(--tv-text-dim);margin-top:4px">The one value you cannot recover from a later error.</div>
+  </div>
+      <div data-field-row="W5" data-tier="1" style="margin:0 0 14px">
+    <div style="display:flex;align-items:center;gap:7px;margin:0 0 5px;flex-wrap:wrap">
+      <label style="font:500 11.5px/1.3 var(--tv-font-mono);color:var(--tv-text-muted)">W5</label>
+      <span style="font:400 12.5px/1.3 var(--tv-font-sans);color:var(--tv-text)">KV — TELEMETRY_KILL_SWITCH</span>
+      <span title="Created or read by the tool. You never type it." style="background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:999px;padding:1px 7px;font:600 9px/1.6 var(--tv-font-sans);letter-spacing:.06em;text-transform:uppercase;color:var(--tv-text-dim)">Cloudflare assigns</span>
+      
+    </div>
+    <input data-field="W5" placeholder="32-char hex" spellcheck="false" autocomplete="off" style="width:100%;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:6px;padding:8px 10px;font:400 13px/1.4 var(--tv-font-mono);color:var(--tv-text)"/>
+    <div data-error="W5" style="display:none;font:400 11.5px/1.5 var(--tv-font-sans);color:var(--tv-error);margin-top:4px"></div>
+    
+  </div>
+      <div data-field-row="W6" data-tier="2" style="margin:0 0 14px">
+    <div style="display:flex;align-items:center;gap:7px;margin:0 0 5px;flex-wrap:wrap">
+      <label style="font:500 11.5px/1.3 var(--tv-font-mono);color:var(--tv-text-muted)">W6</label>
+      <span style="font:400 12.5px/1.3 var(--tv-font-sans);color:var(--tv-text)">KV — CATALOG_KV</span>
+      <span title="Created or read by the tool. You never type it." style="background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:999px;padding:1px 7px;font:600 9px/1.6 var(--tv-font-sans);letter-spacing:.06em;text-transform:uppercase;color:var(--tv-text-dim)">Cloudflare assigns</span>
+      
+    </div>
+    <input data-field="W6" placeholder="32-char hex" spellcheck="false" autocomplete="off" style="width:100%;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:6px;padding:8px 10px;font:400 13px/1.4 var(--tv-font-mono);color:var(--tv-text)"/>
+    <div data-error="W6" style="display:none;font:400 11.5px/1.5 var(--tv-font-sans);color:var(--tv-error);margin-top:4px"></div>
+    
+  </div>
+      <div data-field-row="W7" data-tier="2" style="margin:0 0 14px">
+    <div style="display:flex;align-items:center;gap:7px;margin:0 0 5px;flex-wrap:wrap">
+      <label style="font:500 11.5px/1.3 var(--tv-font-mono);color:var(--tv-text-muted)">W7</label>
+      <span style="font:400 12.5px/1.3 var(--tv-font-sans);color:var(--tv-text)">R2 bucket name</span>
+      <span title="Ships with a working value; change only if you renamed the resource." style="background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:999px;padding:1px 7px;font:600 9px/1.6 var(--tv-font-sans);letter-spacing:.06em;text-transform:uppercase;color:var(--tv-text-dim)">has a default</span>
+      
+    </div>
+    <input data-field="W7" placeholder="terraviz-assets" spellcheck="false" autocomplete="off" style="width:100%;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:6px;padding:8px 10px;font:400 13px/1.4 var(--tv-font-mono);color:var(--tv-text)"/>
+    <div data-error="W7" style="display:none;font:400 11.5px/1.5 var(--tv-font-sans);color:var(--tv-error);margin-top:4px"></div>
+    <div style="font:400 11.5px/1.5 var(--tv-font-sans);color:var(--tv-text-dim);margin-top:4px">Yours to rename; keep the bindings in sync if you do.</div>
+  </div>
+      <div data-field-row="W8" data-tier="2" style="margin:0 0 14px">
+    <div style="display:flex;align-items:center;gap:7px;margin:0 0 5px;flex-wrap:wrap">
+      <label style="font:500 11.5px/1.3 var(--tv-font-mono);color:var(--tv-text-muted)">W8</label>
+      <span style="font:400 12.5px/1.3 var(--tv-font-sans);color:var(--tv-text)">Vectorize index</span>
+      <span title="Ships with a working value; change only if you renamed the resource." style="background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:999px;padding:1px 7px;font:600 9px/1.6 var(--tv-font-sans);letter-spacing:.06em;text-transform:uppercase;color:var(--tv-text-dim)">has a default</span>
+      
+    </div>
+    <input data-field="W8" placeholder="terraviz-datasets" spellcheck="false" autocomplete="off" style="width:100%;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:6px;padding:8px 10px;font:400 13px/1.4 var(--tv-font-mono);color:var(--tv-text)"/>
+    <div data-error="W8" style="display:none;font:400 11.5px/1.5 var(--tv-font-sans);color:var(--tv-error);margin-top:4px"></div>
+    
+  </div>
+      <div data-field-row="W9" data-tier="1" style="margin:0 0 14px">
+    <div style="display:flex;align-items:center;gap:7px;margin:0 0 5px;flex-wrap:wrap">
+      <label style="font:500 11.5px/1.3 var(--tv-font-mono);color:var(--tv-text-muted)">W9</label>
+      <span style="font:400 12.5px/1.3 var(--tv-font-sans);color:var(--tv-text)">Analytics Engine dataset</span>
+      <span title="Ships with a working value; change only if you renamed the resource." style="background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:999px;padding:1px 7px;font:600 9px/1.6 var(--tv-font-sans);letter-spacing:.06em;text-transform:uppercase;color:var(--tv-text-dim)">has a default</span>
+      
+    </div>
+    <input data-field="W9" placeholder="terraviz_events" spellcheck="false" autocomplete="off" style="width:100%;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:6px;padding:8px 10px;font:400 13px/1.4 var(--tv-font-mono);color:var(--tv-text)"/>
+    <div data-error="W9" style="display:none;font:400 11.5px/1.5 var(--tv-font-sans);color:var(--tv-error);margin-top:4px"></div>
+    <div style="font:400 11.5px/1.5 var(--tv-font-sans);color:var(--tv-text-dim);margin-top:4px">Nothing to create — it appears on first write.</div>
+  </div>
+    </div>
   <div style="background:var(--tv-accent-bg);border:1px solid var(--tv-accent-border);border-left:3px solid var(--tv-accent);border-radius:6px;padding:14px 16px;margin:0 0 14px">
     <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-accent);margin:0 0 7px">Gate</div>
     <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">W4 through W8 hold the IDs Cloudflare just printed, and W9 holds the dataset name you intend to use. Nothing creates W9 — an Analytics Engine dataset appears on first write.</p>
@@ -1232,7 +1361,7 @@ wrangler d1 migrations apply FEEDBACK_DB --remote<span style="color:var(--tv-tex
   </div>
   
   <div style="display:flex;flex-wrap:wrap;gap:6px;margin:0 0 20px;align-items:center">
-      <span style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim);margin-right:3px">Produces</span>
+      <span style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim);margin-right:3px">Produces <span style="text-transform:none;letter-spacing:0;font-weight:400;color:var(--tv-text-dim)">— tap one to record it</span></span>
       <span data-w="W10" style="cursor:pointer;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:3px;padding:4px 8px;font:500 11px/1.2 var(--tv-font-mono);color:var(--tv-text-muted)">W10 pages project name</span>
       <span data-w="W11" style="cursor:pointer;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:3px;padding:4px 8px;font:500 11px/1.2 var(--tv-font-mono);color:var(--tv-text-muted)">W11 cloudflare_api_token</span>
     </div>
@@ -1248,6 +1377,32 @@ wrangler d1 migrations apply FEEDBACK_DB --remote<span style="color:var(--tv-tex
   <p style="margin:0 0 10px;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty"><b style="font-weight:600;color:var(--tv-text)">GitHub Actions (Direct Upload):</b> set repo secrets for your API token and account ID. Change every <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">--project-name</code> to yours, and set the repo variable <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">TERRAVIZ_SERVER</code>. Do <i>not</i> connect the Git integration. Note that forks land with Actions disabled and no secrets — GitHub never copies those.</p>
   
 </div>
+  <div data-noprint="1" style="background:var(--tv-surface-2);border:1px solid var(--tv-border-strong);border-radius:8px;padding:18px 20px;margin:22px 0 0">
+      <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim);margin:0 0 4px">Write these down before you move on</div>
+      <p style="margin:0 0 14px;max-width:62ch;font-size:13px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">You should have these 2 values now. Typing them here fills them into every command further down the page, so what you copy is ready to run.</p>
+      <div data-field-row="W10" data-tier="1" style="margin:0 0 14px">
+    <div style="display:flex;align-items:center;gap:7px;margin:0 0 5px;flex-wrap:wrap">
+      <label style="font:500 11.5px/1.3 var(--tv-font-mono);color:var(--tv-text-muted)">W10</label>
+      <span style="font:400 12.5px/1.3 var(--tv-font-sans);color:var(--tv-text)">Pages project name</span>
+      <span title="The interview asks for this one and validates your answer." style="background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:999px;padding:1px 7px;font:600 9px/1.6 var(--tv-font-sans);letter-spacing:.06em;text-transform:uppercase;color:var(--tv-text-dim)">you supply</span>
+      
+    </div>
+    <input data-field="W10" data-validate="projectName" placeholder="terraviz" spellcheck="false" autocomplete="off" style="width:100%;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:6px;padding:8px 10px;font:400 13px/1.4 var(--tv-font-mono);color:var(--tv-text)"/>
+    <div data-error="W10" style="display:none;font:400 11.5px/1.5 var(--tv-font-sans);color:var(--tv-error);margin-top:4px"></div>
+    
+  </div>
+      <div data-field-row="W11" data-tier="1" style="margin:0 0 14px">
+    <div style="display:flex;align-items:center;gap:7px;margin:0 0 5px;flex-wrap:wrap">
+      <label style="font:500 11.5px/1.3 var(--tv-font-mono);color:var(--tv-text-muted)">W11</label>
+      <span style="font:400 12.5px/1.3 var(--tv-font-sans);color:var(--tv-text)">CLOUDFLARE_API_TOKEN</span>
+      <span title="A local command or dashboard action produces it." style="background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:999px;padding:1px 7px;font:600 9px/1.6 var(--tv-font-sans);letter-spacing:.06em;text-transform:uppercase;color:var(--tv-text-dim)">you generate</span>
+      <span style="background:var(--tv-error-bg);color:var(--tv-error);border:1px solid var(--tv-error-border);border-radius:999px;padding:1px 7px;font:600 9px/1.6 var(--tv-font-sans);letter-spacing:.06em;text-transform:uppercase">secret</span>
+    </div>
+    <input data-field="W11" placeholder="token value" spellcheck="false" autocomplete="off" style="width:100%;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:6px;padding:8px 10px;font:400 13px/1.4 var(--tv-font-mono);color:var(--tv-text)"/>
+    <div data-error="W11" style="display:none;font:400 11.5px/1.5 var(--tv-font-sans);color:var(--tv-error);margin-top:4px"></div>
+    <div style="font:400 11.5px/1.5 var(--tv-font-sans);color:var(--tv-text-dim);margin-top:4px">Minimum scope: Account → Cloudflare Pages → Edit.</div>
+  </div>
+    </div>
   <div style="background:var(--tv-accent-bg);border:1px solid var(--tv-accent-border);border-left:3px solid var(--tv-accent);border-radius:6px;padding:14px 16px;margin:0 0 14px">
     <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-accent);margin:0 0 7px">Gate</div>
     <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">The build goes green, the site loads at <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px"><span data-slot="W10" data-w="W10" style="cursor:pointer;padding:1px 5px;border-radius:3px"></span>.pages.dev</code>, and then <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">https://<span data-slot="W2" data-w="W2" style="cursor:pointer;padding:1px 5px;border-radius:3px"></span></code> serves it over TLS. Backend features will not work yet — no bindings.</p>
@@ -1267,7 +1422,7 @@ wrangler d1 migrations apply FEEDBACK_DB --remote<span style="color:var(--tv-tex
   </div>
   <p style="margin:0 0 16px;max-width:64ch;color:var(--tv-text-muted);text-wrap:pretty">Access is not optional for a publisher node. The middleware fails closed: without a team domain and an AUD, every publish route returns 503 and the CLI can do nothing.</p>
   <div style="display:flex;flex-wrap:wrap;gap:6px;margin:0 0 20px;align-items:center">
-      <span style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim);margin-right:3px">Produces</span>
+      <span style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim);margin-right:3px">Produces <span style="text-transform:none;letter-spacing:0;font-weight:400;color:var(--tv-text-dim)">— tap one to record it</span></span>
       <span data-w="W12" style="cursor:pointer;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:3px;padding:4px 8px;font:500 11px/1.2 var(--tv-font-mono);color:var(--tv-text-muted)">W12 access team domain</span>
       <span data-w="W13" style="cursor:pointer;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:3px;padding:4px 8px;font:500 11px/1.2 var(--tv-font-mono);color:var(--tv-text-muted)">W13 access aud (publisher app)</span>
       <span data-w="W14" style="cursor:pointer;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:3px;padding:4px 8px;font:500 11px/1.2 var(--tv-font-mono);color:var(--tv-text-muted)">W14 cf_access_client_id</span>
@@ -1283,6 +1438,54 @@ wrangler d1 migrations apply FEEDBACK_DB --remote<span style="color:var(--tv-tex
   <p style="margin:0 0 10px;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">Complete <b style="font-weight:600;color:var(--tv-text)">Zero Trust onboarding</b> in the dashboard and add at least one identity provider. One-time PIN over email works and needs no IdP setup; Google, Okta or Entra are better for a real team. You will choose a team name — your team domain becomes <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px"><span data-slot="W12" data-w="W12" style="cursor:pointer;padding:1px 5px;border-radius:3px"></span></code>.</p>
   
 </div>
+  <div data-noprint="1" style="background:var(--tv-surface-2);border:1px solid var(--tv-border-strong);border-radius:8px;padding:18px 20px;margin:22px 0 0">
+      <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim);margin:0 0 4px">Write these down before you move on</div>
+      <p style="margin:0 0 14px;max-width:62ch;font-size:13px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">You should have these 4 values now. Typing them here fills them into every command further down the page, so what you copy is ready to run.</p>
+      <div data-field-row="W12" data-tier="2" style="margin:0 0 14px">
+    <div style="display:flex;align-items:center;gap:7px;margin:0 0 5px;flex-wrap:wrap">
+      <label style="font:500 11.5px/1.3 var(--tv-font-mono);color:var(--tv-text-muted)">W12</label>
+      <span style="font:400 12.5px/1.3 var(--tv-font-sans);color:var(--tv-text)">Access team domain</span>
+      <span title="Created or read by the tool. You never type it." style="background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:999px;padding:1px 7px;font:600 9px/1.6 var(--tv-font-sans);letter-spacing:.06em;text-transform:uppercase;color:var(--tv-text-dim)">Cloudflare assigns</span>
+      
+    </div>
+    <input data-field="W12" placeholder="your-org.cloudflareaccess.com" spellcheck="false" autocomplete="off" style="width:100%;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:6px;padding:8px 10px;font:400 13px/1.4 var(--tv-font-mono);color:var(--tv-text)"/>
+    <div data-error="W12" style="display:none;font:400 11.5px/1.5 var(--tv-font-sans);color:var(--tv-error);margin-top:4px"></div>
+    <div style="font:400 11.5px/1.5 var(--tv-font-sans);color:var(--tv-text-dim);margin-top:4px">Team domain only, no https://. The tool discovers this for you.</div>
+  </div>
+      <div data-field-row="W13" data-tier="2" style="margin:0 0 14px">
+    <div style="display:flex;align-items:center;gap:7px;margin:0 0 5px;flex-wrap:wrap">
+      <label style="font:500 11.5px/1.3 var(--tv-font-mono);color:var(--tv-text-muted)">W13</label>
+      <span style="font:400 12.5px/1.3 var(--tv-font-sans);color:var(--tv-text)">Access AUD (publisher app)</span>
+      <span title="Created or read by the tool. You never type it." style="background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:999px;padding:1px 7px;font:600 9px/1.6 var(--tv-font-sans);letter-spacing:.06em;text-transform:uppercase;color:var(--tv-text-dim)">Cloudflare assigns</span>
+      
+    </div>
+    <input data-field="W13" data-validate="aud" placeholder="64-char hex" spellcheck="false" autocomplete="off" style="width:100%;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:6px;padding:8px 10px;font:400 13px/1.4 var(--tv-font-mono);color:var(--tv-text)"/>
+    <div data-error="W13" style="display:none;font:400 11.5px/1.5 var(--tv-font-sans);color:var(--tv-error);margin-top:4px"></div>
+    <div style="font:400 11.5px/1.5 var(--tv-font-sans);color:var(--tv-text-dim);margin-top:4px">Application → Overview → Application Audience Tag.</div>
+  </div>
+      <div data-field-row="W14" data-tier="2" style="margin:0 0 14px">
+    <div style="display:flex;align-items:center;gap:7px;margin:0 0 5px;flex-wrap:wrap">
+      <label style="font:500 11.5px/1.3 var(--tv-font-mono);color:var(--tv-text-muted)">W14</label>
+      <span style="font:400 12.5px/1.3 var(--tv-font-sans);color:var(--tv-text)">CF_ACCESS_CLIENT_ID</span>
+      <span title="Cloudflare displays it a single time. Save it immediately." style="background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:999px;padding:1px 7px;font:600 9px/1.6 var(--tv-font-sans);letter-spacing:.06em;text-transform:uppercase;color:var(--tv-text-dim)">shown once</span>
+      <span style="background:var(--tv-error-bg);color:var(--tv-error);border:1px solid var(--tv-error-border);border-radius:999px;padding:1px 7px;font:600 9px/1.6 var(--tv-font-sans);letter-spacing:.06em;text-transform:uppercase">secret</span>
+    </div>
+    <input data-field="W14" placeholder="….access" spellcheck="false" autocomplete="off" style="width:100%;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:6px;padding:8px 10px;font:400 13px/1.4 var(--tv-font-mono);color:var(--tv-text)"/>
+    <div data-error="W14" style="display:none;font:400 11.5px/1.5 var(--tv-font-sans);color:var(--tv-error);margin-top:4px"></div>
+    
+  </div>
+      <div data-field-row="W15" data-tier="2" style="margin:0 0 14px">
+    <div style="display:flex;align-items:center;gap:7px;margin:0 0 5px;flex-wrap:wrap">
+      <label style="font:500 11.5px/1.3 var(--tv-font-mono);color:var(--tv-text-muted)">W15</label>
+      <span style="font:400 12.5px/1.3 var(--tv-font-sans);color:var(--tv-text)">CF_ACCESS_CLIENT_SECRET</span>
+      <span title="Cloudflare displays it a single time. Save it immediately." style="background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:999px;padding:1px 7px;font:600 9px/1.6 var(--tv-font-sans);letter-spacing:.06em;text-transform:uppercase;color:var(--tv-text-dim)">shown once</span>
+      <span style="background:var(--tv-error-bg);color:var(--tv-error);border:1px solid var(--tv-error-border);border-radius:999px;padding:1px 7px;font:600 9px/1.6 var(--tv-font-sans);letter-spacing:.06em;text-transform:uppercase">secret</span>
+    </div>
+    <input data-field="W15" placeholder="shown once" spellcheck="false" autocomplete="off" style="width:100%;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:6px;padding:8px 10px;font:400 13px/1.4 var(--tv-font-mono);color:var(--tv-text)"/>
+    <div data-error="W15" style="display:none;font:400 11.5px/1.5 var(--tv-font-sans);color:var(--tv-error);margin-top:4px"></div>
+    <div style="font:400 11.5px/1.5 var(--tv-font-sans);color:var(--tv-text-dim);margin-top:4px">Cloudflare shows this exactly once. Save it before closing the dialog.</div>
+  </div>
+    </div>
   <div style="background:var(--tv-accent-bg);border:1px solid var(--tv-accent-border);border-left:3px solid var(--tv-accent);border-radius:6px;padding:14px 16px;margin:0 0 14px">
     <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-accent);margin:0 0 7px">Gate</div>
     <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">The AUD is copied, the token pair is in your password manager, and the token appears in the Automation policy's include list.</p>
@@ -1302,7 +1505,7 @@ wrangler d1 migrations apply FEEDBACK_DB --remote<span style="color:var(--tv-tex
   </div>
   <p style="margin:0 0 16px;max-width:64ch;color:var(--tv-text-muted);text-wrap:pretty">Two secrets are yours to create, and neither exists until you make it.</p>
   <div style="display:flex;flex-wrap:wrap;gap:6px;margin:0 0 20px;align-items:center">
-      <span style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim);margin-right:3px">Produces</span>
+      <span style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim);margin-right:3px">Produces <span style="text-transform:none;letter-spacing:0;font-weight:400;color:var(--tv-text-dim)">— tap one to record it</span></span>
       <span data-w="W16" style="cursor:pointer;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:3px;padding:4px 8px;font:500 11px/1.2 var(--tv-font-mono);color:var(--tv-text-muted)">W16 node_id_private_key_pem</span>
       <span data-w="W17" style="cursor:pointer;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:3px;padding:4px 8px;font:500 11px/1.2 var(--tv-font-mono);color:var(--tv-text-muted)">W17 node public key</span>
       <span data-w="W18" style="cursor:pointer;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:3px;padding:4px 8px;font:500 11px/1.2 var(--tv-font-mono);color:var(--tv-text-muted)">W18 preview_signing_key</span>
@@ -1318,6 +1521,43 @@ openssl rand -base64 32<span style="color:var(--tv-text-dim)">    # W18</span></
   <p style="margin:0 0 10px;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">It signs your node's federation responses. Regenerating it means re-provisioning your identity.</p>
   
 </div>
+  <div data-noprint="1" style="background:var(--tv-surface-2);border:1px solid var(--tv-border-strong);border-radius:8px;padding:18px 20px;margin:22px 0 0">
+      <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim);margin:0 0 4px">Write these down before you move on</div>
+      <p style="margin:0 0 14px;max-width:62ch;font-size:13px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">You should have these 3 values now. Typing them here fills them into every command further down the page, so what you copy is ready to run.</p>
+      <div data-field-row="W16" data-tier="2" style="margin:0 0 14px">
+    <div style="display:flex;align-items:center;gap:7px;margin:0 0 5px;flex-wrap:wrap">
+      <label style="font:500 11.5px/1.3 var(--tv-font-mono);color:var(--tv-text-muted)">W16</label>
+      <span style="font:400 12.5px/1.3 var(--tv-font-sans);color:var(--tv-text)">NODE_ID_PRIVATE_KEY_PEM</span>
+      <span title="A local command or dashboard action produces it." style="background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:999px;padding:1px 7px;font:600 9px/1.6 var(--tv-font-sans);letter-spacing:.06em;text-transform:uppercase;color:var(--tv-text-dim)">you generate</span>
+      <span style="background:var(--tv-error-bg);color:var(--tv-error);border:1px solid var(--tv-error-border);border-radius:999px;padding:1px 7px;font:600 9px/1.6 var(--tv-font-sans);letter-spacing:.06em;text-transform:uppercase">secret</span>
+    </div>
+    <input data-field="W16" placeholder="from .dev.vars" spellcheck="false" autocomplete="off" style="width:100%;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:6px;padding:8px 10px;font:400 13px/1.4 var(--tv-font-mono);color:var(--tv-text)"/>
+    <div data-error="W16" style="display:none;font:400 11.5px/1.5 var(--tv-font-sans);color:var(--tv-error);margin-top:4px"></div>
+    <div style="font:400 11.5px/1.5 var(--tv-font-sans);color:var(--tv-text-dim);margin-top:4px">Back this up. Regenerating it means re-provisioning your identity.</div>
+  </div>
+      <div data-field-row="W17" data-tier="2" style="margin:0 0 14px">
+    <div style="display:flex;align-items:center;gap:7px;margin:0 0 5px;flex-wrap:wrap">
+      <label style="font:500 11.5px/1.3 var(--tv-font-mono);color:var(--tv-text-muted)">W17</label>
+      <span style="font:400 12.5px/1.3 var(--tv-font-sans);color:var(--tv-text)">Node public key</span>
+      <span title="A local command or dashboard action produces it." style="background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:999px;padding:1px 7px;font:600 9px/1.6 var(--tv-font-sans);letter-spacing:.06em;text-transform:uppercase;color:var(--tv-text-dim)">you generate</span>
+      
+    </div>
+    <input data-field="W17" placeholder="ed25519:…" spellcheck="false" autocomplete="off" style="width:100%;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:6px;padding:8px 10px;font:400 13px/1.4 var(--tv-font-mono);color:var(--tv-text)"/>
+    <div data-error="W17" style="display:none;font:400 11.5px/1.5 var(--tv-font-sans);color:var(--tv-error);margin-top:4px"></div>
+    <div style="font:400 11.5px/1.5 var(--tv-font-sans);color:var(--tv-text-dim);margin-top:4px">Written to node-public-key.txt by gen:node-key.</div>
+  </div>
+      <div data-field-row="W18" data-tier="2" style="margin:0 0 14px">
+    <div style="display:flex;align-items:center;gap:7px;margin:0 0 5px;flex-wrap:wrap">
+      <label style="font:500 11.5px/1.3 var(--tv-font-mono);color:var(--tv-text-muted)">W18</label>
+      <span style="font:400 12.5px/1.3 var(--tv-font-sans);color:var(--tv-text)">PREVIEW_SIGNING_KEY</span>
+      <span title="A local command or dashboard action produces it." style="background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:999px;padding:1px 7px;font:600 9px/1.6 var(--tv-font-sans);letter-spacing:.06em;text-transform:uppercase;color:var(--tv-text-dim)">you generate</span>
+      <span style="background:var(--tv-error-bg);color:var(--tv-error);border:1px solid var(--tv-error-border);border-radius:999px;padding:1px 7px;font:600 9px/1.6 var(--tv-font-sans);letter-spacing:.06em;text-transform:uppercase">secret</span>
+    </div>
+    <input data-field="W18" placeholder="openssl rand -base64 32" spellcheck="false" autocomplete="off" style="width:100%;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:6px;padding:8px 10px;font:400 13px/1.4 var(--tv-font-mono);color:var(--tv-text)"/>
+    <div data-error="W18" style="display:none;font:400 11.5px/1.5 var(--tv-font-sans);color:var(--tv-error);margin-top:4px"></div>
+    
+  </div>
+    </div>
   <div style="background:var(--tv-accent-bg);border:1px solid var(--tv-accent-border);border-left:3px solid var(--tv-accent);border-radius:6px;padding:14px 16px;margin:0 0 14px">
     <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-accent);margin:0 0 7px">Gate</div>
     <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty"><code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">.dev.vars</code> holds a single-line private key, and <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">node-public-key.txt</code> holds an <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">ed25519:</code> line.</p>
@@ -2257,9 +2497,13 @@ function paintMap() {
 }
 
 function paintInputs() {
+  // querySelectorAll, not querySelector: each value now has an input in
+  // the drawer AND one at the end of the phase that produces it, and
+  // typing in either has to show up in the other.
   FIELDS.forEach(f => {
-    const el = document.querySelector('[data-field="' + f.id + '"]');
-    if (el && el !== document.activeElement) el.value = state.vals[f.id] || '';
+    q('[data-field="' + f.id + '"]').forEach(el => {
+      if (el !== document.activeElement) el.value = state.vals[f.id] || '';
+    });
   });
 }
 
@@ -2281,7 +2525,7 @@ document.addEventListener('input', e => {
   const id = el.getAttribute('data-field');
   state.vals[id] = el.value;
   validate(id, el.value);
-  persist(); paintSlots(); paintMap(); paintProgress();
+  persist(); paintSlots(); paintMap(); paintProgress(); paintInputs();
 });
 
 document.addEventListener('click', e => {

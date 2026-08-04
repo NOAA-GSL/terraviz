@@ -759,7 +759,7 @@ function phaseSection(p: Phase): string {
   if (p.produces?.length) {
     parts.push(
       `<div style="display:flex;flex-wrap:wrap;gap:6px;margin:0 0 20px;align-items:center">
-      <span style="${EYEBROW};margin-right:3px">Produces</span>
+      <span style="${EYEBROW};margin-right:3px">Produces <span style="text-transform:none;letter-spacing:0;font-weight:400;color:var(--tv-text-dim)">— tap one to record it</span></span>
       ${p.produces
         .map(id => {
           const w = WORKSHEET.find(x => x.id === id)
@@ -782,6 +782,32 @@ function phaseSection(p: Phase): string {
   for (const item of p.body ?? []) {
     if (isCallout(item)) parts.push(callout(item))
     else if (isCode(item)) parts.push(code(item))
+  }
+
+  // Capture, where the values actually are.
+  //
+  // The worksheet lived behind a floating button, and someone working
+  // through the install did not notice it existed — so the amber
+  // placeholders in every later command never got filled, and the
+  // Copy buttons handed out commands with `‹account-id›` still in
+  // them. The chips at the top of the phase announce what is coming;
+  // this asks for it at the point you have it on screen, without
+  // needing to find the drawer at all.
+  //
+  // The inputs are the drawer's own control, so both stay in step.
+  if (p.produces?.length) {
+    const fields = p.produces
+      .map(id => WORKSHEET.find(w => w.id === id))
+      .filter((w): w is WorksheetField => Boolean(w))
+    if (fields.length) {
+      parts.push(
+        `<div data-noprint="1" style="background:var(--tv-surface-2);border:1px solid var(--tv-border-strong);border-radius:8px;padding:18px 20px;margin:22px 0 0">
+      <div style="${EYEBROW};margin:0 0 4px">Write these down before you move on</div>
+      <p style="margin:0 0 14px;max-width:62ch;font-size:13px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">You should have ${fields.length === 1 ? 'this value' : `these ${fields.length} values`} now. Typing ${fields.length === 1 ? 'it' : 'them'} here fills ${fields.length === 1 ? 'it' : 'them'} into every command further down the page, so what you copy is ready to run.</p>
+      ${fields.map(worksheetField).join('\n      ')}
+    </div>`,
+      )
+    }
   }
 
   if (p.n === 3) {
@@ -849,8 +875,14 @@ function phaseSection(p: Phase): string {
 </section>`
 }
 
-function worksheetDrawer(): string {
-  const field = (w: WorksheetField): string => {
+/**
+ * One worksheet input.
+ *
+ * Shared by the drawer and by the capture block at the end of each
+ * phase, so the two are the same control rather than two spellings of
+ * it — same validator, same error slot, same note.
+ */
+function worksheetField(w: WorksheetField): string {
     const o = ORIGIN_LABELS[w.origin]
     return `<div data-field-row="${esc(w.id)}" data-tier="${w.minTier}" style="margin:0 0 14px">
     <div style="display:flex;align-items:center;gap:7px;margin:0 0 5px;flex-wrap:wrap">
@@ -863,7 +895,10 @@ function worksheetDrawer(): string {
     <div data-error="${esc(w.id)}" style="display:none;font:400 11.5px/1.5 var(--tv-font-sans);color:var(--tv-error);margin-top:4px"></div>
     ${w.note ? `<div style="font:400 11.5px/1.5 var(--tv-font-sans);color:var(--tv-text-dim);margin-top:4px">${esc(w.note)}</div>` : ''}
   </div>`
-  }
+}
+
+function worksheetDrawer(): string {
+  const field = worksheetField
 
   const askedCount = QUESTIONS.length
   return `<div data-drawer="1" data-noprint="1" style="display:none;position:fixed;inset:0;z-index:50;justify-content:flex-end">
@@ -1193,9 +1228,13 @@ function paintMap() {
 }
 
 function paintInputs() {
+  // querySelectorAll, not querySelector: each value now has an input in
+  // the drawer AND one at the end of the phase that produces it, and
+  // typing in either has to show up in the other.
   FIELDS.forEach(f => {
-    const el = document.querySelector('[data-field="' + f.id + '"]');
-    if (el && el !== document.activeElement) el.value = state.vals[f.id] || '';
+    q('[data-field="' + f.id + '"]').forEach(el => {
+      if (el !== document.activeElement) el.value = state.vals[f.id] || '';
+    });
   });
 }
 
@@ -1217,7 +1256,7 @@ document.addEventListener('input', e => {
   const id = el.getAttribute('data-field');
   state.vals[id] = el.value;
   validate(id, el.value);
-  persist(); paintSlots(); paintMap(); paintProgress();
+  persist(); paintSlots(); paintMap(); paintProgress(); paintInputs();
 });
 
 document.addEventListener('click', e => {

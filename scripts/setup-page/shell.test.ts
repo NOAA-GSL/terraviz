@@ -432,6 +432,30 @@ describe('the committed public/setup.html', () => {
     expect(sheet.slice(0, 2000)).toMatch(/password manager/i)
   })
 
+  // The worksheet lived behind a floating button and someone
+  // installing did not notice it, so every later command kept its
+  // amber placeholder and the Copy buttons handed out unrunnable
+  // commands. Each produced value now also has an input at the end of
+  // the phase that produces it.
+  it('asks for each value where the phase produces it', () => {
+    const page = html()
+    expect(page).toContain('Write these down before you move on')
+    // Two controls per produced value: the drawer, and the phase.
+    for (const id of ['W4', 'W10', 'W12']) {
+      expect(
+        (page.match(new RegExp(`data-field="${id}"`, 'g')) ?? []).length,
+        `${id} should have a drawer input and a phase input`,
+      ).toBe(2)
+    }
+  })
+
+  // Two inputs for one value are worse than one if they disagree.
+  it('paints every input for a field, not just the first', () => {
+    const page = html()
+    expect(page).toContain(`q('[data-field="' + f.id + '"]').forEach`)
+    expect(page).toMatch(/paintProgress\(\); paintInputs\(\);/)
+  })
+
   it('carries the CSP and the real favicon', () => {
     expect(html()).toContain(CSP_META)
     expect(html()).toContain(FAVICON_LINK)
