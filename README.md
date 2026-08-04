@@ -137,7 +137,7 @@ docker-compose up
 If you prefer to run locally:
 
 **Prerequisites:**
-- Node.js 18+ and npm/pnpm
+- Node.js 22+ and npm/pnpm ([nodejs.org](https://nodejs.org/en/download))
 - Git
 
 ```bash

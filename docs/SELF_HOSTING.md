@@ -289,7 +289,9 @@ error`.
 | A domain on **Cloudflare DNS** | For `W2`. Moving DNS to Cloudflare is free; you change nameservers at your registrar. Registering a new domain through Cloudflare also works. | No — registrar action |
 | GitHub or GitLab account | Pages builds from a Git remote (or you deploy by Direct Upload from CI). | No |
 | **Somewhere to keep secrets** | Four values in this guide are shown **exactly once** and cannot be read back: `W11`, `W15`, `W20b`, `W22`. A password manager is enough; a text file you will lose is not. | No — before you start |
-| Node.js 20+ and npm | Build, test, migrate. | — |
+| **Node.js 22+ and npm** | Build, test, migrate — and every `npm run` command in this guide. If you have no Node, install the LTS build from [nodejs.org](https://nodejs.org/en/download); it carries npm with it. `nvm` is fine if you already use it. | No — before you start |
+| `curl` | The verification steps in Phase 10. Ships with macOS, Linux and Windows 10+. | — |
+| `openssl` | One command, in Phase 7 — and only if you generate `W18` by hand rather than letting the tool do it. Absent on stock Windows without WSL or Git Bash. | — |
 
 Write your account ID (`W1`), your intended hostname (`W2`), and
 your Git remote (`W3`) on the worksheet now. The account ID is in
@@ -356,7 +358,7 @@ git push -u origin main
 ## 0.3 Tools
 
 ```bash
-node --version          # must be >= 20
+node --version          # must be >= 22
 npm install -g wrangler
 wrangler login          # opens a browser; needs an interactive terminal
 wrangler whoami         # confirms the account you just authorised
