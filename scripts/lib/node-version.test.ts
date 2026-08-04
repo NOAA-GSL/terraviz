@@ -60,4 +60,25 @@ describe('the documented Node version', () => {
     expect(page).toContain(`Node.js ${requiredNodeLabel()}`)
     expect(page).toContain(NODE_DOWNLOAD_URL)
   })
+
+  // Presence is not enough, and this is why: the first version of this
+  // test only asserted the page *contained* "Node.js 22+", so a stale
+  // `node --version # must be >= 20` in content.ts sailed through and
+  // reached a reader. `content.ts` is replaced wholesale by the design
+  // export, so its literal cannot be made drift-proof at the source —
+  // catching it in the built page is the mechanism that survives.
+  it('names no other version anywhere in the built page', () => {
+    const major = requiredNodeMajor()
+    const page = read('public/setup.html')
+    const named = [
+      ...page.matchAll(/(?:Node(?:\.js)?|node --version[^\n]*?)\s*(?:[≥>=v]|&gt;=|&gt;)*\s*(\d{2})/gi),
+    ].map(m => Number(m[1]))
+    expect(named.length, 'the page should say which Node it needs').toBeGreaterThan(0)
+    for (const n of named) {
+      expect(
+        n,
+        `public/setup.html names Node ${n}, engines requires ${major} — check scripts/setup-page/content.ts`,
+      ).toBe(major)
+    }
+  })
 })

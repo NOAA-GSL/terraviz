@@ -98,7 +98,7 @@ export const PHASES: Phase[] = [
     produces: ['ORG', 'TRUST', 'W1', 'W2', 'W3'],
     body: [
       {
-        code: `node --version          # must be >= 20
+        code: `node --version          # must be >= 22
 npm install -g wrangler
 wrangler login          # opens a browser
 wrangler whoami         # confirms the account
