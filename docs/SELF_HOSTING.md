@@ -119,7 +119,8 @@ W22 🔒 GITHUB_DISPATCH_TOKEN         ......................
 
 ## Shortcut: `npm run setup`
 
-Most of the phases below are mechanical, and a tool does them:
+Most of the phases below are mechanical, and a tool does them.
+Four ways to run it — these are alternatives, not a sequence:
 
 ```bash
 npm run setup -- --manual        # what only a human can do, with click paths

@@ -1026,20 +1026,35 @@ export R2_SECRET_ACCESS_KEY=...</div><p style="margin:0 0 6px;padding-inline-sta
   <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim);color:var(--tv-accent);margin:0 0 12px">Start here</div>
   <h2 style="font:700 27px/1.2 var(--tv-font-sans);letter-spacing:-.01em;color:var(--tv-text);margin:0 0 14px">Let the tool do the mechanical parts</h2>
   <p style="margin:0 0 18px;max-width:62ch;color:var(--tv-text-muted);text-wrap:pretty">Most of what follows is dashboard clicking that a script can do faster and without typos. <code style="font-family:var(--tv-font-mono);font-size:.92em">npm run setup</code> provisions the resources, rewrites the config, and applies the migrations in the order that works. It creates the Access application (<code style="font-family:var(--tv-font-mono);font-size:.92em">Terraviz Publisher</code>) with its <code style="font-family:var(--tv-font-mono);font-size:.92em">Staff</code> and <code style="font-family:var(--tv-font-mono);font-size:.92em">Automation</code> policies, then writes every binding to <i>both</i> environments.</p>
-  <div style="position:relative;margin:0 0 14px">
-  <pre style="margin:0;background:var(--tv-surface-code);border:1px solid var(--tv-border);color:var(--tv-text-muted);font:400 12.5px/1.8 var(--tv-font-mono);padding:36px 16px 15px;border-radius:6px;overflow-x:auto"><span style="color:var(--tv-text-dim)"># what only a human can do, with click paths</span>
-npm run setup -- --manual
-
-<span style="color:var(--tv-text-dim)"># answer 7 questions, validated at the prompt</span>
-npm run setup -- --interactive
-
-<span style="color:var(--tv-text-dim)"># plan only — writes nothing</span>
-npm run setup
-
-<span style="color:var(--tv-text-dim)"># provision + wire</span>
-npm run setup -- --apply</pre>
+  <p style="margin:0 0 12px;max-width:62ch;color:var(--tv-text-muted);text-wrap:pretty">Four ways to run it. <b style="font-weight:600;color:var(--tv-text)">These are alternatives, not a sequence</b> — one block, one command, so whatever you copy is the whole of what you meant to run.</p>
+  <div style="margin:0 0 12px">
+    <div style="position:relative;margin:0 0 14px">
+  <pre style="margin:0;background:var(--tv-surface-code);border:1px solid var(--tv-border);color:var(--tv-text-muted);font:400 12.5px/1.8 var(--tv-font-mono);padding:36px 16px 15px;border-radius:6px;overflow-x:auto">npm run setup -- --manual</pre>
   <button data-copy="1" style="position:absolute;top:7px;right:8px;background:rgba(255,255,255,.07);color:var(--tv-text-dim);border:1px solid var(--tv-border-strong);border-radius:3px;font:500 10px/1 var(--tv-font-sans);letter-spacing:.08em;text-transform:uppercase;padding:5px 8px;cursor:pointer">Copy</button>
 </div>
+    <p style="margin:5px 0 0;font-size:12.5px;line-height:1.5;color:var(--tv-text-dim);text-wrap:pretty">What only a human can do, with click paths. Prints and exits.</p>
+  </div>
+  <div style="margin:0 0 12px">
+    <div style="position:relative;margin:0 0 14px">
+  <pre style="margin:0;background:var(--tv-surface-code);border:1px solid var(--tv-border);color:var(--tv-text-muted);font:400 12.5px/1.8 var(--tv-font-mono);padding:36px 16px 15px;border-radius:6px;overflow-x:auto">npm run setup -- --interactive</pre>
+  <button data-copy="1" style="position:absolute;top:7px;right:8px;background:rgba(255,255,255,.07);color:var(--tv-text-dim);border:1px solid var(--tv-border-strong);border-radius:3px;font:500 10px/1 var(--tv-font-sans);letter-spacing:.08em;text-transform:uppercase;padding:5px 8px;cursor:pointer">Copy</button>
+</div>
+    <p style="margin:5px 0 0;font-size:12.5px;line-height:1.5;color:var(--tv-text-dim);text-wrap:pretty">Asks the 7 questions only you can answer, validating each at the prompt.</p>
+  </div>
+  <div style="margin:0 0 12px">
+    <div style="position:relative;margin:0 0 14px">
+  <pre style="margin:0;background:var(--tv-surface-code);border:1px solid var(--tv-border);color:var(--tv-text-muted);font:400 12.5px/1.8 var(--tv-font-mono);padding:36px 16px 15px;border-radius:6px;overflow-x:auto">npm run setup</pre>
+  <button data-copy="1" style="position:absolute;top:7px;right:8px;background:rgba(255,255,255,.07);color:var(--tv-text-dim);border:1px solid var(--tv-border-strong);border-radius:3px;font:500 10px/1 var(--tv-font-sans);letter-spacing:.08em;text-transform:uppercase;padding:5px 8px;cursor:pointer">Copy</button>
+</div>
+    <p style="margin:5px 0 0;font-size:12.5px;line-height:1.5;color:var(--tv-text-dim);text-wrap:pretty">Plan. Says what it would do and writes nothing — this is the default.</p>
+  </div>
+  <div style="margin:0 0 12px">
+    <div style="position:relative;margin:0 0 14px">
+  <pre style="margin:0;background:var(--tv-surface-code);border:1px solid var(--tv-border);color:var(--tv-text-muted);font:400 12.5px/1.8 var(--tv-font-mono);padding:36px 16px 15px;border-radius:6px;overflow-x:auto">npm run setup -- --apply</pre>
+  <button data-copy="1" style="position:absolute;top:7px;right:8px;background:rgba(255,255,255,.07);color:var(--tv-text-dim);border:1px solid var(--tv-border-strong);border-radius:3px;font:500 10px/1 var(--tv-font-sans);letter-spacing:.08em;text-transform:uppercase;padding:5px 8px;cursor:pointer">Copy</button>
+</div>
+    <p style="margin:5px 0 0;font-size:12.5px;line-height:1.5;color:var(--tv-text-dim);text-wrap:pretty">Provisions the resources and wires them up. The one that changes things.</p>
+  </div>
   <p style="margin:0 0 18px;max-width:62ch;color:var(--tv-text-muted);text-wrap:pretty">Every phase below leads with the tool. Where a human is genuinely required — billing, an OAuth handshake, the first SSO sign-in — it says so and shows you the clicks. Where you would rather do it yourself anyway, open <b style="font-weight:600;color:var(--tv-text)">Do it by hand</b>.</p>
   <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px">
     <div style="background:var(--tv-surface-3);border:1px solid var(--tv-border);border-radius:6px;padding:14px 16px">

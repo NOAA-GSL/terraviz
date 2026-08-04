@@ -1419,19 +1419,23 @@ code{overflow-wrap:anywhere}
   <div style="${EYEBROW};color:var(--tv-accent);margin:0 0 12px">Start here</div>
   <h2 style="font:700 27px/1.2 var(--tv-font-sans);letter-spacing:-.01em;color:var(--tv-text);margin:0 0 14px">Let the tool do the mechanical parts</h2>
   <p style="margin:0 0 18px;max-width:62ch;color:var(--tv-text-muted);text-wrap:pretty">Most of what follows is dashboard clicking that a script can do faster and without typos. <code style="font-family:var(--tv-font-mono);font-size:.92em">npm run setup</code> provisions the resources, rewrites the config, and applies the migrations in the order that works. It creates the Access application (<code style="font-family:var(--tv-font-mono);font-size:.92em">${esc(DEFAULT_NAMES.accessApp)}</code>) with its <code style="font-family:var(--tv-font-mono);font-size:.92em">${esc(STAFF_POLICY_NAME)}</code> and <code style="font-family:var(--tv-font-mono);font-size:.92em">${esc(AUTOMATION_POLICY_NAME)}</code> policies, then writes every binding to <i>both</i> environments.</p>
-  ${code({
-    code: `# what only a human can do, with click paths
-npm run setup -- --manual
-
-# answer ${QUESTIONS.length} questions, validated at the prompt
-npm run setup -- --interactive
-
-# plan only — writes nothing
-npm run setup
-
-# provision + wire
-npm run setup -- --apply`,
-  })}
+  <p style="margin:0 0 12px;max-width:62ch;color:var(--tv-text-muted);text-wrap:pretty">Four ways to run it. <b style="font-weight:600;color:var(--tv-text)">These are alternatives, not a sequence</b> — one block, one command, so whatever you copy is the whole of what you meant to run.</p>
+  ${[
+    ['npm run setup -- --manual', 'What only a human can do, with click paths. Prints and exits.'],
+    [
+      'npm run setup -- --interactive',
+      `Asks the ${QUESTIONS.length} questions only you can answer, validating each at the prompt.`,
+    ],
+    ['npm run setup', 'Plan. Says what it would do and writes nothing — this is the default.'],
+    ['npm run setup -- --apply', 'Provisions the resources and wires them up. The one that changes things.'],
+  ]
+    .map(
+      ([cmd, why]) => `<div style="margin:0 0 12px">
+    ${code({ code: cmd })}
+    <p style="margin:5px 0 0;font-size:12.5px;line-height:1.5;color:var(--tv-text-dim);text-wrap:pretty">${esc(why)}</p>
+  </div>`,
+    )
+    .join('\n  ')}
   <p style="margin:0 0 18px;max-width:62ch;color:var(--tv-text-muted);text-wrap:pretty">Every phase below leads with the tool. Where a human is genuinely required — billing, an OAuth handshake, the first SSO sign-in — it says so and shows you the clicks. Where you would rather do it yourself anyway, open <b style="font-weight:600;color:var(--tv-text)">Do it by hand</b>.</p>
   <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px">
     ${[

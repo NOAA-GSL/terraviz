@@ -476,6 +476,20 @@ describe('the committed public/setup.html', () => {
     expect(page).toContain('id="p0"')
   })
 
+  // The four ways to invoke setup were one copyable block, which reads
+  // as a script: Copy handed you all four, and pasting them runs
+  // --manual, then blocks on --interactive, then plans, then applies.
+  // They are alternatives. One command per block means whatever you
+  // copy is the whole of what you meant to run.
+  it('does not present the setup invocations as one runnable block', () => {
+    const page = html()
+    expect(page).toContain('These are alternatives, not a sequence')
+    for (const pre of page.match(/<pre[^>]*>[\s\S]*?<\/pre>/g) ?? []) {
+      const runs = (pre.match(/npm run setup/g) ?? []).length
+      expect(runs, `a single block offers ${runs} setup invocations`).toBeLessThan(2)
+    }
+  })
+
   it('carries the CSP and the real favicon', () => {
     expect(html()).toContain(CSP_META)
     expect(html()).toContain(FAVICON_LINK)
