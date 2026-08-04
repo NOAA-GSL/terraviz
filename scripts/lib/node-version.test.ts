@@ -70,8 +70,16 @@ describe('the documented Node version', () => {
   it('names no other version anywhere in the built page', () => {
     const major = requiredNodeMajor()
     const page = read('public/setup.html')
+    // Two plain patterns over entity-decoded text, rather than one that
+    // tries to absorb `&gt;=` inline. The combined version alternated
+    // `&gt;=` against a class that could also match it character by
+    // character, under a `*` — two ways to match the same input, which
+    // is exponential backtracking and what CodeQL flagged. These are
+    // literals plus a digit class: linear, and easier to read.
+    const decoded = page.replace(/&gt;/g, '>')
     const named = [
-      ...page.matchAll(/(?:Node(?:\.js)?|node --version[^\n]*?)\s*(?:[≥>=v]|&gt;=|&gt;)*\s*(\d{2})/gi),
+      ...decoded.matchAll(/Node(?:\.js)?\s+v?(\d{2})/gi),
+      ...decoded.matchAll(/must be >=\s*(\d{2})/gi),
     ].map(m => Number(m[1]))
     expect(named.length, 'the page should say which Node it needs').toBeGreaterThan(0)
     for (const n of named) {
