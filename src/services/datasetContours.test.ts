@@ -29,6 +29,7 @@ import {
   type ContourPoint,
 } from './datasetContours'
 import type { LumaSnapshot } from './glLumaSampler'
+import { lumaToValue } from '../types/color-scale'
 import type { ColorScale, DatasetOverlayOptions } from '../types'
 
 /** vmin 0 / vmax 255, so luma and value are numerically equal and an
@@ -187,6 +188,54 @@ describe('extractContours', () => {
       expect(p.lon).toBeGreaterThanOrEqual(-168.75)
       expect(p.lon).toBeLessThanOrEqual(168.75)
     }
+  })
+})
+
+describe('a band declared as dataMinLuma', () => {
+  /** The same band as `SCALE`, spelled the other way the sidecar
+   *  contract allows. Deliberately *not* the same scale: declaring the
+   *  band re-anchors the value mapping onto the data codes, so this
+   *  fixture loses `SCALE`'s luma-equals-value convenience and levels
+   *  have to be named through `lumaToValue`. Absence is what is under
+   *  test here, not the arithmetic. */
+  const BANDED: ColorScale = { ...SCALE, transparentRange: undefined, dataMinLuma: 12 }
+
+  it('refuses the no-data region however the band is spelled', () => {
+    // Same fixture and same assertion as the `transparentRange` case
+    // above. `buildCodeTable` settles absence through
+    // `isTransparentLuma` rather than reading either field, so this
+    // holds without the extractor knowing the field exists — which is
+    // precisely why it is worth pinning. Nothing else in this file would
+    // notice if that stopped being true, and the equivalent gap in
+    // `buildDisplayLut` hid a real bug until the two were crossed.
+    const frame = snap(8, 8, x => (x < 4 ? 0 : 200))
+    expect(extractContours(frame, BANDED, lumaToValue(100, BANDED), GLOBAL)).toEqual([])
+    // The same frame under no band does contour, so the assertion above
+    // is about absence rather than about the geometry.
+    expect(extractContours(frame, DENSE, 100, GLOBAL).length).toBeGreaterThan(0)
+  })
+
+  it('still contours the data-carrying part of a banded frame', () => {
+    const frame = snap(10, 6, x => (x < 2 ? 0 : 20 + (x - 2) * 30))
+    const lines = extractContours(frame, BANDED, lumaToValue(100, BANDED), GLOBAL)
+    expect(lines.length).toBeGreaterThan(0)
+    // Absent columns are x < 2, so no vertex can sit west of the x = 2
+    // centre — lon −90 at width 10.
+    for (const line of lines) {
+      for (const p of line) expect(p.lon).toBeGreaterThan(-90)
+    }
+  })
+
+  it('puts vmin at the first data code rather than at luma 0', () => {
+    // The re-anchoring, as a number a reader can check. Under the band,
+    // luma 12 *is* `vmin`. Under `transparentRange` — which hides
+    // without re-anchoring — the same code still reads above it. Two
+    // genuinely different claims, which is why the contract keeps both
+    // fields rather than deriving one from the other.
+    expect(lumaToValue(12, BANDED)).toBe(SCALE.vmin)
+    expect(lumaToValue(12, SCALE)).toBeGreaterThan(SCALE.vmin)
+    // The top of the range is the one place they must agree.
+    expect(lumaToValue(255, BANDED)).toBe(lumaToValue(255, SCALE))
   })
 })
 
