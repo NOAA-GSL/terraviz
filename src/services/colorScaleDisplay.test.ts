@@ -156,6 +156,70 @@ describe('buildDisplayLut — stretch', () => {
   })
 })
 
+describe('buildDisplayLut — a band declared as dataMinLuma', () => {
+  /** The same band as `SCALE`, spelled the other way the contract
+   *  allows: `dataMinLuma` alone, with no `transparentRange` beside it.
+   *  `parseColorScale` accepts this — it only requires the two to agree
+   *  when *both* are present — so the display path has to honour the
+   *  band unaided. Note this is not the same scale as `SCALE`: with the
+   *  band declared, the palette spans the data codes rather than all
+   *  256, so both the colours and `lumaToValue` legitimately differ. */
+  const BAND_ONLY: ColorScale = {
+    stops: SCALE.stops,
+    vmin: SCALE.vmin,
+    vmax: SCALE.vmax,
+    units: SCALE.units,
+    dataMinLuma: 12,
+  }
+
+  it('is transparent at the identity, where the source alpha still lines up', () => {
+    // Not the interesting case — but it is why the gap stayed hidden.
+    // Unstretched, each texel's alpha is copied from its own index in
+    // the source LUT, where the band is already zeroed, so nothing here
+    // depends on the explicit band test at all.
+    const lut = buildDisplayLut(BAND_ONLY, display())
+    expect(alphaAt(lut, 0)).toBe(0)
+    expect(alphaAt(lut, 11)).toBe(0)
+    expect(alphaAt(lut, 128)).toBeGreaterThan(0)
+  })
+
+  it('stays transparent under a stretch anchored at the low end', () => {
+    // The regression. A stretch pulls each texel's alpha from a *higher*
+    // source index, so the band's own zeroes slide out from under it and
+    // the reserved codes take alpha from real data — painting "nothing
+    // measured here" as measurement. Low-anchored is the common case
+    // rather than a corner: these fields put most of their data just
+    // above the band, which is what `lumaAtDataQuantile` exists for.
+    for (const hi of [0.1, 0.25, 0.5]) {
+      const lut = buildDisplayLut(BAND_ONLY, display({ stretch: { lo: 0, hi } }))
+      for (let luma = 0; luma < 12; luma++) {
+        expect(alphaAt(lut, luma), `luma ${luma} under stretch 0..${hi}`).toBe(0)
+      }
+      expect(alphaAt(lut, 128)).toBeGreaterThan(0)
+    }
+  })
+
+  it('is unchanged by a redundant transparentRange alongside it', () => {
+    // A well-formed sidecar may carry both fields, and the parser has
+    // already established they agree. The display path must therefore
+    // not care which arrived — same band, same LUT, byte for byte.
+    const BOTH: ColorScale = { ...BAND_ONLY, transparentRange: 12 / 256 }
+    for (const d of [display(), display({ stretch: { lo: 0, hi: 0.1 } })]) {
+      expect([...buildDisplayLut(BOTH, d)]).toEqual([...buildDisplayLut(BAND_ONLY, d)])
+    }
+  })
+
+  it('still applies a threshold to the data codes above the band', () => {
+    // The band is settled first, but it must not short-circuit the
+    // threshold for everything else.
+    const lut = buildDisplayLut(BAND_ONLY, display({ threshold: { min: null, max: 0.0002 } }))
+    expect(alphaAt(lut, 0)).toBe(0)
+    expect(alphaAt(lut, 11)).toBe(0)
+    expect(alphaAt(lut, 50)).toBeGreaterThan(0)
+    expect(alphaAt(lut, 200)).toBe(0)
+  })
+})
+
 describe('buildDisplayLut — threshold', () => {
   it('hides values below the minimum', () => {
     // Half-scale on a 0..5e-4 range.
