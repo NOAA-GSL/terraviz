@@ -181,6 +181,14 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      # The one place a pointer stub would reach the public. `lfs: true`
+      # above is what prevents it; this is what notices if that line is
+      # ever removed or the fetch silently fails, because the build
+      # itself will not — vite copies public/ without looking inside, so
+      # a stub deploys as a .jpg and the globe loses its stars with
+      # nothing in the log. --strict here only; see scripts/check-lfs.ts
+      # for why it must not gate the PR builds that skip LFS on purpose.
+      - run: npm run check:lfs -- --strict
       - run: npm run build
         env:
           # Same passthrough as the build job above — the deploy

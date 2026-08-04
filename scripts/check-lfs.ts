@@ -1,0 +1,247 @@
+/**
+ * Reports Git LFS files that are still pointer stubs in the working tree.
+ *
+ * ## The failure this exists for
+ *
+ * The repo tracks the skybox faces and the Earth specular map with Git
+ * LFS. `git clone` does not fetch them unless git-lfs is installed and
+ * `git lfs install` has been run, and when it has not, what lands on
+ * disk is a 131-byte text file still named `.jpg`:
+ *
+ *     version https://git-lfs.github.com/spec/v1
+ *     oid sha256:37c533d38ee7e1385236a79a49895c58be10d7c2b507ff419…
+ *     size 414140
+ *
+ * Nothing reports this. Vite copies `public/` verbatim without looking
+ * inside it, so `npm run build` finishes with zero errors and the
+ * pointers ride into `dist/` under their image names. The deploy is
+ * green. The globe comes up with no stars, and there is no error
+ * anywhere connecting that to a clone made twenty minutes earlier.
+ *
+ * That is the whole argument for this file: the failure is silent, and a
+ * silent failure is the kind worth spending a check on.
+ *
+ * ## Why it is advisory, and not in the `type-check` chain
+ *
+ * Mirrors `check-doc-freshness.ts`, for a related reason. `desktop.yml`
+ * and `mobile.yml` check out **without** LFS on pull requests, on
+ * purpose — their comment says the textures are not needed for `--debug`
+ * validation, and skipping the fetch is faster. Those jobs then run a
+ * build. A hard gate in `prebuild` would break them for doing the right
+ * thing, and the fix people reach for when a guard is wrong is to delete
+ * the guard.
+ *
+ * So: reports by default and exits 0. `--strict` exits non-zero, and is
+ * wired into the one job where a pointer would actually reach the
+ * public — `ci.yml`'s deploy, which already passes `lfs: true`.
+ *
+ * ## Why content and not attributes
+ *
+ * 34 tracked files match a `filter=lfs` pattern; only 22 are pointers.
+ * The other 12 — the `luma-check` fixtures, the events-tab handoff
+ * screenshots — were committed as ordinary blobs before or around the
+ * pattern being added, and are real bytes on disk. Reporting anything
+ * that merely *matches* the attribute would flag all 12 every run, and a
+ * check that cries wolf every run gets muted. So the attribute picks the
+ * candidates and the file's own first bytes decide.
+ *
+ * `git check-attr` does the matching rather than a hand-rolled glob:
+ * `.gitattributes` here has three negation lines (`public/*.png`,
+ * `src-tauri/icons/*.png`, `src-tauri/gen/**\/*.png` are `-filter`), and
+ * reimplementing precedence between those and the `*.png` catch-all
+ * above them is a bug waiting to happen. git already knows.
+ */
+
+import { closeSync, openSync, readSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { pathToFileURL } from 'node:url'
+
+/** First line of every pointer file, fixed by the LFS v1 spec. */
+export const POINTER_PREFIX = 'version https://git-lfs.github.com/spec/v1'
+
+/** Enough to see the prefix. A whole pointer is ~130 bytes; a real
+ *  asset may be hundreds of MB, so never read one to find out. */
+const HEAD_BYTES = 64
+
+/**
+ * Paths whose contents ship to users, and therefore turn a pointer into
+ * a broken deploy rather than a broken README image. Reported separately
+ * because the two deserve different urgency.
+ */
+const SHIPPED_PREFIXES = ['public/', 'poster/'] as const
+
+export interface Pointer {
+  readonly file: string
+  /** True when this file is served to users, not just read in the repo. */
+  readonly shipped: boolean
+}
+
+export function isPointer(head: string): boolean {
+  return head.startsWith(POINTER_PREFIX)
+}
+
+export function isShipped(file: string): boolean {
+  return SHIPPED_PREFIXES.some(p => file.startsWith(p))
+}
+
+/**
+ * Pull the `filter=lfs` paths out of `git check-attr --stdin -z filter`.
+ *
+ * The stream is flat NUL-separated triples — path, attribute, value —
+ * with no record terminator, which is why this walks in threes rather
+ * than splitting on something.
+ */
+export function parseCheckAttr(stdout: string): string[] {
+  const parts = stdout.split('\0')
+  const files: string[] = []
+  for (let i = 0; i + 2 < parts.length; i += 3) {
+    if (parts[i + 2] === 'lfs') files.push(parts[i])
+  }
+  return files
+}
+
+/** First bytes of a file, or `null` if it cannot be read. */
+export function readHead(file: string): string | null {
+  let fd: number | undefined
+  try {
+    fd = openSync(file, 'r')
+    const buf = Buffer.alloc(HEAD_BYTES)
+    const read = readSync(fd, buf, 0, HEAD_BYTES, 0)
+    return buf.subarray(0, read).toString('utf8')
+  } catch {
+    // A tracked file can be legitimately absent from the working tree
+    // (sparse checkout, or mid-rebase). Not this check's business.
+    return null
+  } finally {
+    if (fd !== undefined) closeSync(fd)
+  }
+}
+
+export function findPointers(
+  files: readonly string[],
+  read: (file: string) => string | null = readHead,
+): Pointer[] {
+  return files
+    .filter(f => {
+      const head = read(f)
+      return head !== null && isPointer(head)
+    })
+    .map(f => ({ file: f, shipped: isShipped(f) }))
+}
+
+/** Empty string when there is nothing to report. */
+export function formatReport(pointers: readonly Pointer[]): string {
+  if (pointers.length === 0) return ''
+
+  const shipped = pointers.filter(p => p.shipped)
+  const rest = pointers.filter(p => !p.shipped)
+  const lines: string[] = [
+    '',
+    `${pointers.length} Git LFS file(s) are pointer stubs, not their real contents.`,
+    '',
+  ]
+
+  if (shipped.length > 0) {
+    lines.push(
+      `These ${shipped.length} are served to users. A build made now succeeds,`,
+      'and deploys text files under image names:',
+      '',
+      ...shipped.map(p => `  ${p.file}`),
+      '',
+    )
+  }
+  if (rest.length > 0) {
+    lines.push(
+      `And ${rest.length} more, in the repo but not shipped:`,
+      '',
+      ...rest.map(p => `  ${p.file}`),
+      '',
+    )
+  }
+
+  lines.push(
+    'Fix:',
+    '',
+    '  git lfs install    # once per machine; installs the hooks',
+    '  git lfs pull       # fetches the real contents',
+    '',
+    'If `git lfs` is an unknown command, install it first — git-lfs.com,',
+    'or `brew install git-lfs` / `apt install git-lfs`. Git for Windows',
+    'bundles it, but `git lfs install` is still required once.',
+    '',
+    'See docs/SELF_HOSTING.md §0.3.',
+  )
+  return lines.join('\n')
+}
+
+export interface CheckDeps {
+  /** Tracked paths carrying `filter=lfs`. */
+  listLfsFiles?: () => string[] | null
+  read?: (file: string) => string | null
+  log?: (message: string) => void
+  warn?: (message: string) => void
+  fail?: () => void
+}
+
+/**
+ * Ask git which tracked files carry `filter=lfs`.
+ *
+ * Returns `null` rather than throwing when git is unavailable or this is
+ * not a repository — a source tarball has no `.git`, and refusing to run
+ * there would make this check a reason not to ship tarballs.
+ */
+export function listLfsFiles(): string[] | null {
+  try {
+    // stderr ignored: outside a repository git writes "fatal: not a git
+    // repository" itself, which would reach the user as an error above
+    // the line saying the check was skipped on purpose.
+    const tracked = execFileSync('git', ['ls-files', '-z'], {
+      encoding: 'utf8',
+      maxBuffer: 32 * 1024 * 1024,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    })
+    const attrs = execFileSync('git', ['check-attr', '--stdin', '-z', 'filter'], {
+      input: tracked,
+      encoding: 'utf8',
+      maxBuffer: 32 * 1024 * 1024,
+      stdio: ['pipe', 'pipe', 'ignore'],
+    })
+    return parseCheckAttr(attrs)
+  } catch {
+    return null
+  }
+}
+
+export function run(argv: readonly string[] = process.argv.slice(2), deps: CheckDeps = {}): void {
+  const strict = argv.includes('--strict')
+  // Suppresses the success line so a hook can run this every boot and
+  // stay silent until something is actually wrong.
+  const quiet = argv.includes('--quiet')
+
+  const list = deps.listLfsFiles ?? listLfsFiles
+  const read = deps.read ?? readHead
+  // eslint-disable-next-line no-console
+  const log = deps.log ?? ((m: string) => console.log(m))
+  const warn = deps.warn ?? ((m: string) => console.error(m))
+  const fail = deps.fail ?? (() => process.exit(1))
+
+  const files = list()
+  if (files === null) {
+    if (!quiet) log('· Git LFS check skipped (no git, or not a repository).')
+    return
+  }
+
+  const pointers = findPointers(files, read)
+  const report = formatReport(pointers)
+  if (report) {
+    warn(report)
+    if (strict) fail()
+    return
+  }
+  if (quiet) return
+  log(`✓ ${files.length} Git LFS-tracked file(s) present as real content.`)
+}
+
+if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  run()
+}
