@@ -606,6 +606,37 @@ describe('zonalMeans', () => {
     expect(rows[0].count).toBe(0)
     expect(rows[1].mean).toBeCloseTo(200, 6)
   })
+
+  it('restricts to the window on both axes', () => {
+    // Value depends on x alone, so a column-restricted mean is a
+    // different number rather than the same one — an x window that was
+    // ignored would still produce 130 here.
+    const s = snap(4, 4, (x) => 100 + x * 20)
+    const rows = zonalMeans(s, SCALE, RRFS, { x0: 0, y0: 1, x1: 2, y1: 3 })
+    expect(rows).toHaveLength(2)
+    for (const r of rows) {
+      expect(r.count).toBe(2)
+      expect(r.mean).toBeCloseTo(110, 6)
+    }
+    expect(zonalMeans(s, SCALE, RRFS)[0].mean).toBeCloseTo(130, 6)
+  })
+
+  it('keys latitude to the frame, not to the window', () => {
+    // A scoped profile must not relabel its rows. Row 2 of the frame is
+    // at one latitude whether or not the window starts above it —
+    // otherwise narrowing the region would slide the whole profile.
+    const s = snap(4, 4, (_x, y) => 100 + y * 20)
+    const full = zonalMeans(s, SCALE, RRFS)
+    const windowed = zonalMeans(s, SCALE, RRFS, { x0: 0, y0: 2, x1: 4, y1: 4 })
+    expect(windowed).toHaveLength(2)
+    expect(windowed[0].lat).toBeCloseTo(full[2].lat, 12)
+    expect(windowed[1].lat).toBeCloseTo(full[3].lat, 12)
+  })
+
+  it('returns nothing for an empty window rather than a frame of nulls', () => {
+    const s = snap(4, 4, () => 200)
+    expect(zonalMeans(s, SCALE, RRFS, { x0: 2, y0: 2, x1: 2, y1: 4 })).toEqual([])
+  })
 })
 
 describe('fullWindow', () => {

@@ -161,12 +161,38 @@
 /* The transect block. Separated by a rule rather than by spacing
    alone: it answers a different question from the statistics above it,
    and on a phone the two run together without one. */
-.analyze-transect-section {
+.analyze-transect-section,
+.analyze-zonal-section {
   display: flex;
   flex-direction: column;
   gap: var(--space-3, 0.75rem);
   padding-block-start: var(--space-3, 0.75rem);
   border-block-start: 1px solid var(--color-border, rgba(255, 255, 255, 0.18));
+}
+
+.analyze-zonal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2, 0.5rem);
+}
+
+.analyze-zonal-head h3 {
+  margin: 0;
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+/* Taller than either of the others, and deliberately: this is the one
+   chart here whose long axis is vertical, so the height is the
+   resolution. Squashing it to the transect's 5.5rem would compress a
+   pole-to-pole profile into something no shape survives. */
+.analyze-zonal {
+  inline-size: 100%;
+  block-size: 11rem;
+  display: block;
+  border-radius: var(--radius-sm, 0.25rem);
+  background: rgba(0, 0, 0, 0.35);
 }
 
 .analyze-transect-head {
