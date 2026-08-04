@@ -90,3 +90,73 @@ describe('the documented Node version', () => {
     }
   })
 })
+
+/**
+ * The one dependency that compiles.
+ *
+ * `better-sqlite3` is the only package in the tree with a
+ * `binding.gyp`, and it installs via `prebuild-install || node-gyp
+ * rebuild`. When a precompiled binary exists for your Node, that is a
+ * download. When it does not, it is a source build, and a source build
+ * needs Python and a C++ compiler that an operator standing up a museum
+ * node has no reason to have.
+ *
+ * This is not hypothetical. The guide said "install the LTS build from
+ * nodejs.org", nodejs.org handed over Node 24, and the pinned
+ * `better-sqlite3@11.10.0` had no Node 24 binary — so `npm install`
+ * died inside node-gyp hunting for a Python interpreter. The error
+ * names Python, which sends people off to install Python; the cause is
+ * three lines higher, in a `prebuild-install warn` nobody reads.
+ *
+ * `11.10.0` declared no `engines` at all, so there was nothing to check
+ * and nothing did. From `12.x` there is. The floor alone is not the
+ * interesting assertion — `floor + 2` is, because that is the major
+ * nodejs.org will be offering as LTS by the time someone follows this
+ * guide, and it is the one that was missing.
+ *
+ * Caveat worth knowing before trusting this: a declared `engines` range
+ * is a claim about source compatibility, not a promise that a binary
+ * was published. Measured against the actual release assets, `12.11.1`
+ * declares `20.x || 22.x || 23.x || 24.x || 25.x || 26.x` and publishes
+ * binaries for 22, 24 and 25 — identically on win32, linux and darwin.
+ * So this check is a floor, not a guarantee: it catches the dependency
+ * falling behind the Node the guide names, which is what happened, and
+ * it cannot catch a major that is declared but never built.
+ *
+ * That gap is also why the guide names 22 and 24 outright instead of
+ * describing a rule. The published set is "whatever was current when
+ * this version shipped" — 20 and 23 are gone for being end-of-life, 26
+ * is missing for being newer than the release. Any rule short enough to
+ * put in an install guide gets that wrong within a year.
+ */
+describe('the native dependency', () => {
+  const engines = (
+    JSON.parse(read('node_modules/better-sqlite3/package.json')) as {
+      engines?: { node?: string }
+    }
+  ).engines?.node
+
+  const majors = (range: string): number[] =>
+    [...range.matchAll(/(\d+)\.x/g)].map(m => Number(m[1]))
+
+  it('declares which Node majors it supports', () => {
+    expect(
+      engines,
+      'better-sqlite3 stopped declaring engines.node — this check is now blind',
+    ).toBeTruthy()
+    expect(majors(engines ?? '').length).toBeGreaterThan(0)
+  })
+
+  it('covers the Node this repo requires, and the next LTS after it', () => {
+    const floor = requiredNodeMajor()
+    const supported = majors(engines ?? '')
+    for (const wanted of [floor, floor + 2]) {
+      expect(
+        supported,
+        `better-sqlite3 supports ${supported.join(', ')} but the guide sends ` +
+          `operators to Node ${wanted}, where npm install would fall back to ` +
+          `a source build. Bump better-sqlite3, or stop naming that version.`,
+      ).toContain(wanted)
+    }
+  })
+})

@@ -360,7 +360,7 @@ git push -u origin main
 ## 0.3 Tools
 
 ```bash
-node --version          # must be >= 22
+node --version          # 22 or 24 — see the LTS note below
 npm install -g wrangler
 wrangler login          # opens a browser; needs an interactive terminal
 wrangler whoami         # confirms the account you just authorised
@@ -374,6 +374,15 @@ below acts on the account you logged into.
 > `CLOUDFLARE_API_TOKEN` in the environment instead (see Phase 5.3
 > for the permission set) and skip `wrangler login`.
 
+> **Take an LTS release — 22 or 24.** Either works; the download
+> button on nodejs.org gives you 24. One dependency
+> (`better-sqlite3`) ships precompiled binaries only for the Node
+> majors that were current when it was published. A Node that is
+> past end-of-life, or newer than the dependency, has no binary to
+> download. npm then tries to compile it from source, which needs a
+> C++ toolchain you should not have to install. §0.4 says what that
+> failure looks like.
+
 ## 0.4 Get the code
 
 ```bash
@@ -382,11 +391,28 @@ cd terraviz
 npm install
 ```
 
-`npm install` runs a `postinstall` that generates
-`src/styles/tokens.css` and the i18n message modules. Both are
-build artifacts and gitignored; if a later build complains about
-missing tokens, `npm run tokens && npm run locales` regenerates
-them.
+`npm install` is not optional and is not only for contributors. It
+puts the tooling every later `npm run` command needs on your path.
+Skip it and the first one fails with something like
+`'tsx' is not recognized`.
+
+It also runs a `postinstall` that generates `src/styles/tokens.css`
+and the i18n message modules. Both are build artifacts and
+gitignored; if a later build complains about missing tokens,
+`npm run tokens && npm run locales` regenerates them.
+
+> **If `npm install` dies on `better-sqlite3`**, read the first
+> warning line, not the last error. It says:
+>
+> ```
+> prebuild-install warn install No prebuilt binaries found (target=… platform=win32)
+> ```
+>
+> That means your Node has no precompiled binary, so npm fell back
+> to building from source and hit a missing Python or C++ compiler.
+> The fix is almost always to change Node, not to install a
+> compiler. Check `node --version` and move to 22 or 24. This is
+> the one dependency in the tree that compiles anything.
 
 ## 0.5 What the tool finds out, and what only you can
 
@@ -1949,6 +1975,30 @@ the binding *name* — that's what the code reads.
 ---
 
 # Reference E — Troubleshooting
+
+### `npm install` fails building `better-sqlite3`
+Your Node has no precompiled binary for this version of
+`better-sqlite3`, so npm fell back to `node-gyp`, which needs
+Python and a C++ compiler. The error names whichever of those is
+missing first — on Windows, usually Python. That is the symptom,
+not the cause. The cause is a few lines above it:
+
+```
+prebuild-install warn install No prebuilt binaries found (target=… platform=…)
+```
+
+Run `node --version`. `better-sqlite3` builds binaries only for the
+Node majors current at its release, so both a Node past end-of-life
+and a Node newer than the dependency land here. Install 22 or 24
+from [nodejs.org](https://nodejs.org/en/download), delete
+`node_modules`, and run `npm install` again. It is the only
+dependency here that compiles anything, so nothing else in the tree
+needs a toolchain.
+
+### `npm run …` says `'tsx' is not recognized`
+You skipped `npm install`, or ran it somewhere other than the
+repository root. Every `npm run` command in this guide runs from
+inside your clone, after a successful install. See §0.4.
 
 ### `/api/ingest` returns 204 but nothing lands in AE
 The `ANALYTICS` binding is missing in the environment serving

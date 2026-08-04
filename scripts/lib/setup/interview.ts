@@ -274,6 +274,7 @@ export const MANUAL_STEPS: ManualStep[] = [
       'Check what you have:',
       { code: 'node --version' },
       { note: 'Anything older than the version this repo requires and setup will stop with the number it found. You do not have to get this right up front — it is checked, not trusted.' },
+      { note: 'Take an LTS release — 22 or 24 both work, and the download button gives you 24. One dependency ships precompiled binaries only for the Node majors current when it was published. On anything older or newer, npm install tries to compile it and stops on a missing C++ toolchain.' },
     ],
     verification: 'detected',
   },
