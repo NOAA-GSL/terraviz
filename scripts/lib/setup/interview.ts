@@ -23,6 +23,7 @@
  * involved, and the flow control lives in the orchestrator.
  */
 
+import { requiredNodeLabel } from '../node-version'
 import { validators, wrap, type Question } from './prompt'
 import { DEFAULT_NAMES, type SetupState } from './state'
 
@@ -202,21 +203,50 @@ export function pendingQuestions(
 
 // ── Manual steps ──────────────────────────────────────────────────
 
+/**
+ * One line of a manual step's instructions.
+ *
+ * These are rendered to two surfaces with different shapes: a terminal
+ * ~66 columns wide, and a web card whose width the reader controls. The
+ * array used to be plain strings hand-wrapped for the terminal, with
+ * two-space continuation indents — so the console re-wrapped
+ * already-wrapped text and produced things like "needs no IdP / setup;"
+ * mid-sentence, in a monospace box that made prose look like terminal
+ * output.
+ *
+ * So a line says what *kind* of thing it is and lets each renderer
+ * decide how to lay it out. Entries are whole thoughts; neither the
+ * author nor the data does any wrapping.
+ *
+ * - a bare string is an **action** — something to go and do
+ * - `{ note }` is context around the actions, not a step in itself
+ * - `{ code }` is a literal: a command, or a table whose alignment
+ *   carries meaning. Preserved exactly, monospace on both surfaces.
+ */
+export type StepLine = string | { note: string } | { code: string }
+
+export const lineText = (l: StepLine): string =>
+  typeof l === 'string' ? l : 'note' in l ? l.note : l.code
+
 export interface ManualStep {
   id: string
   title: string
   /** Why it matters — what breaks without it. */
   why: string
-  /** Deep link into the Cloudflare dashboard, where the work happens. */
+  /**
+   * Deep link to where the work happens — the Cloudflare dashboard for
+   * all but the fork step, which is on GitHub.
+   */
   url?: string
   /**
-   * Cloudflare's own documentation for this task, when there is a
-   * canonical page for it. The dashboard link says *where*; this says
-   * *what the thing is* — which is what someone new to Cloudflare
-   * actually needs. Every URL here was checked to resolve.
+   * The vendor's own documentation for this task, when there is a
+   * canonical page for it — Cloudflare's, or GitHub's for the fork
+   * step. The dashboard link says *where*; this says *what the thing
+   * is*, which is what someone new to the platform actually needs.
+   * Every URL here was checked to resolve.
    */
   docsUrl?: string
-  steps: string[]
+  steps: StepLine[]
   /**
    * How completion is established. `detected` means a later step will
    * find out and say so, which is worth stating so the operator is
@@ -228,6 +258,82 @@ export interface ManualStep {
 }
 
 export const MANUAL_STEPS: ManualStep[] = [
+  {
+    id: 'node',
+    title: 'Install Node.js and npm',
+    why:
+      'Every command in this install starts with npm run, including ' +
+      'the setup tool itself. Without Node you cannot run step one. It ' +
+      'is listed here rather than in the prose above the checklist ' +
+      'because someone working through numbered steps reads the ' +
+      'numbered steps.',
+    url: 'https://nodejs.org/en/download',
+    docsUrl: 'https://github.com/zyra-project/terraviz/blob/main/docs/SELF_HOSTING.md#03-tools',
+    steps: [
+      `Install the LTS build from nodejs.org — this repo needs Node.js ${requiredNodeLabel()}. It carries npm with it.`,
+      'Check what you have:',
+      { code: 'node --version' },
+      { note: 'Anything older than the version this repo requires and setup will stop with the number it found. You do not have to get this right up front — it is checked, not trusted.' },
+      { note: 'Take an LTS release — 22 or 24 both work, and the download button gives you 24. One dependency ships precompiled binaries only for the Node majors current when it was published. On anything older or newer, npm install tries to compile it and stops on a missing C++ toolchain.' },
+    ],
+    verification: 'detected',
+  },
+  {
+    id: 'git',
+    title: 'Install git and Git LFS',
+    why:
+      'The next step clones your fork, and Cloudflare Pages builds ' +
+      'from that remote. Downloading the repo as a zip gets you the ' +
+      'code and no remote, which does not surface until Phase 5 has ' +
+      'nothing to connect to. LFS belongs here for the opposite ' +
+      'reason: a clone without it fails so quietly that nothing ' +
+      'surfaces at all.',
+    url: 'https://git-scm.com/install/',
+    docsUrl: 'https://github.com/zyra-project/terraviz/blob/main/docs/SELF_HOSTING.md#03-tools',
+    steps: [
+      'Install git if you do not have it. macOS and most Linux ship with it.',
+      { code: 'git --version' },
+      'Turn on Git LFS in the same sitting. Git for Windows bundles it. On macOS and Linux it is a separate package — get it from git-lfs.com, or use brew install git-lfs or apt install git-lfs.',
+      'Either way, run this once per machine:',
+      { code: 'git lfs install' },
+      { note: 'Seven of the images the globe renders are stored in LFS. Clone without it and you get small text files carrying .jpg names. Nothing reports it — the build passes, the deploy passes, and the globe comes up missing its stars.' },
+      { note: 'You will also need a browser you can sign in to Cloudflare with — most of the steps below are dashboard clicking. On a headless machine, see the wrangler login note in the guide.' },
+    ],
+    // Not `detected`, though it looks like it should be. The tool
+    // never runs git — it reads and writes files and calls wrangler —
+    // so a check here would exist only to make this label true, and
+    // would cost plan mode the property of running no commands at
+    // all. Claiming detection we do not do is the inversion this
+    // field exists to prevent, so: self.
+    verification: 'self',
+  },
+  {
+    id: 'fork',
+    title: 'Fork the repository',
+    why:
+      'Everything here assumes your own copy. Phase 3 rewrites ' +
+      'wrangler.toml with your resource IDs, Phase 5 points Pages at ' +
+      'your remote, and the transcode workflow runs in your repo — none ' +
+      'of which works against a repo you cannot push to. Cloning ' +
+      'upstream directly fails late rather than early: it clones, it ' +
+      'runs locally, and nothing complains until you have IDs to push ' +
+      'and nowhere to push them.',
+    url: 'https://github.com/zyra-project/terraviz/fork',
+    docsUrl:
+      'https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/working-with-forks/fork-a-repo',
+    steps: [
+      'Press Create fork. Nothing on that page needs changing: the owner is you, the repository name stays terraviz, and "Copy the main branch only" stays ticked.',
+      { note: 'main is the only branch a node needs, so leaving that box ticked is correct.' },
+      'Open the Actions tab of your new fork and enable workflows.',
+      { note: 'GitHub creates every fork with Actions turned off. Leave them off and the transcode and deploy workflows never run.' },
+      'Write the result down as owner/repo. That is the W3 the interview asks you for.',
+      'Clone your fork onto the machine you will install from. Everything after this runs inside that checkout.',
+      { code: 'git clone https://github.com/{{W3}}.git\ncd terraviz\nnpm install' },
+      { note: 'npm install is not optional and not just for contributors — it puts the tooling every later `npm run` command needs on your path. Skip it and the first one fails with something like \'tsx\' is not recognized.' },
+      { note: 'Clone your fork, not zyra-project/terraviz. A clone of upstream runs fine and then has nowhere to push the resource IDs Phase 3 writes.' },
+    ],
+    verification: 'self',
+  },
   {
     id: 'workers-paid',
     title: 'Enable Workers Paid ($5/month)',
@@ -241,8 +347,8 @@ export const MANUAL_STEPS: ManualStep[] = [
     url: 'https://dash.cloudflare.com/?to=/:account/workers/plans',
     docsUrl: 'https://developers.cloudflare.com/workers/platform/pricing/',
     steps: [
-      'Workers & Pages → Plans → Workers Paid → Subscribe.',
-      'Billing is per account, not per project.',
+      'Open Workers & Pages, go to Plans, and subscribe to Workers Paid.',
+      { note: 'Billing is per account, not per project. One subscription covers every node you run on this account.' },
     ],
     verification: 'self',
   },
@@ -256,9 +362,9 @@ export const MANUAL_STEPS: ManualStep[] = [
     url: 'https://dash.cloudflare.com/?to=/:account/add-site',
     docsUrl: 'https://developers.cloudflare.com/fundamentals/manage-domains/add-site/',
     steps: [
-      'Add the site in Cloudflare, then change the nameservers at your registrar.',
-      'Propagation is usually minutes, occasionally hours.',
-      'Transferring the registration is NOT required — only DNS.',
+      'Add your domain to Cloudflare, then change its nameservers at your registrar to the two Cloudflare gives you.',
+      { note: 'You do not need to transfer the registration. Cloudflare only needs to answer DNS for the domain.' },
+      { note: 'The change usually takes minutes to take effect, occasionally a few hours.' },
     ],
     verification: 'detected',
   },
@@ -269,17 +375,23 @@ export const MANUAL_STEPS: ManualStep[] = [
     url: 'https://dash.cloudflare.com/profile/api-tokens',
     docsUrl: 'https://developers.cloudflare.com/fundamentals/api/get-started/create-token/',
     steps: [
-      'My Profile → API Tokens → Create Token → Custom token.',
-      'Permissions (grant only what you plan to run):',
-      '  Account → Cloudflare Pages           → Edit   (Pages project + bindings)',
-      '  Account → Access: Apps and Policies  → Edit   (the publisher application)',
-      '  Account → Access: Service Tokens     → Edit   (the CLI credential)',
-      '  Account → Access: Organizations      → Read   (discovers your team domain)',
-      '  Account → Workers R2 Storage         → Edit   (only for --only=r2)',
-      '  Zone    → Zone                       → Read   (resolves the zone)',
-      '  Zone    → Zone WAF                   → Edit   (only for --only=waf)',
-      '  Account → D1                         → Edit   (only for CI migrations)',
-      'Then: export CLOUDFLARE_API_TOKEN=...',
+      'Go to My Profile, then API Tokens, then Create Token, and choose Custom token.',
+      'Add the permissions below. Grant only the ones you plan to use — the last four are for optional steps.',
+      {
+        code: [
+          'Account → Cloudflare Pages           Edit   Pages project + bindings',
+          'Account → Access: Apps and Policies  Edit   the publisher application',
+          'Account → Access: Service Tokens     Edit   the CLI credential',
+          'Account → Access: Organizations      Read   discovers your team domain',
+          'Zone    → Zone                       Read   resolves the zone',
+          'Account → Workers R2 Storage         Edit   only for --only=r2',
+          'Zone    → Zone WAF                   Edit   only for --only=waf',
+          'Account → D1                         Edit   only for CI migrations',
+        ].join('\n'),
+      },
+      'Copy the token when it is shown and put it in your shell, where the setup tool will find it.',
+      { code: 'export CLOUDFLARE_API_TOKEN=...' },
+      { note: 'Cloudflare shows the token once. If you lose it, revoke it and mint another.' },
     ],
     verification: 'detected',
   },
@@ -293,11 +405,11 @@ export const MANUAL_STEPS: ManualStep[] = [
     url: 'https://one.dash.cloudflare.com/',
     docsUrl: 'https://developers.cloudflare.com/cloudflare-one/setup/',
     steps: [
-      'Pick a team name — it becomes <team>.cloudflareaccess.com.',
-      'Settings → Authentication → add a login method.',
-      'One-time PIN over email works and needs no IdP setup;',
-      'Google / Okta / Entra are better for a real team.',
-      'The free Zero Trust plan covers up to 50 users.',
+      'Pick a team name when Cloudflare asks for one. It becomes your team domain, and you will need that later as W12.',
+      { code: '<team>.cloudflareaccess.com' },
+      'Go to Settings, then Authentication, and add at least one login method.',
+      { note: 'One-time PIN emails a code and needs no identity provider, so it is the quickest way to get working. Google, Okta or Entra are better once real staff are signing in.' },
+      { note: 'The free Zero Trust plan covers up to 50 users, which is more than most nodes need.' },
     ],
     verification: 'detected',
   },
@@ -309,9 +421,10 @@ export const MANUAL_STEPS: ManualStep[] = [
       '/.well-known/terraviz.json. The generator also writes ' +
       'node-public-key.txt, which `terraviz init-node` reads in Phase 9.',
     steps: [
-      'npm run gen:node-key',
-      'Writes NODE_ID_PRIVATE_KEY_PEM into .dev.vars at mode 0600.',
-      'Back that file up — regenerating means re-provisioning your identity.',
+      'Run the generator from your checkout.',
+      { code: 'npm run gen:node-key' },
+      { note: 'It writes NODE_ID_PRIVATE_KEY_PEM into .dev.vars, readable only by you, and node-public-key.txt beside it.' },
+      { note: 'Back that file up. Generating a second key gives your node a new identity, which means re-provisioning it everywhere.' },
     ],
     verification: 'detected',
   },
@@ -325,11 +438,10 @@ export const MANUAL_STEPS: ManualStep[] = [
       'variables have to be set wherever the build actually happens.',
     docsUrl: 'https://developers.cloudflare.com/pages/configuration/git-integration/',
     steps: [
-      'Either: Workers & Pages → your project → Settings → Builds →',
-      '  Connect to Git, then set the VITE_* variables in the dashboard.',
-      'Or: keep Direct Upload and deploy from CI with',
-      '  `wrangler pages deploy dist/ --project-name <your-project>`,',
-      '  setting the VITE_* variables in the CI job instead.',
+      'Either connect the repository: Workers & Pages, your project, Settings, then Builds, then Connect to Git. Set the VITE_* variables in the dashboard afterwards.',
+      'Or keep Direct Upload and deploy from CI instead, setting the VITE_* variables in the CI job.',
+      { code: 'wrangler pages deploy dist/ --project-name <your-project>' },
+      { note: 'Pick one. Whichever you choose, the VITE_* values are read where the build runs, not where the site is served.' },
     ],
     verification: 'detected',
   },
@@ -344,13 +456,18 @@ export const MANUAL_STEPS: ManualStep[] = [
     url: 'https://dash.cloudflare.com/?to=/:account/r2/api-tokens',
     docsUrl: 'https://developers.cloudflare.com/r2/api/tokens/',
     steps: [
-      'R2 → Manage R2 API Tokens → Create API token.',
-      'Permission: Object Read & Write, scoped to your assets bucket.',
-      'Copy all three values — the secret is shown once:',
-      '  export R2_S3_ENDPOINT=https://<account>.r2.cloudflarestorage.com',
-      '  export R2_ACCESS_KEY_ID=...',
-      '  export R2_SECRET_ACCESS_KEY=...',
-      'Then re-run setup; the bindings step picks them up from the shell.',
+      'Go to R2, then Manage R2 API Tokens, then Create API token.',
+      'Give it Object Read & Write, scoped to your assets bucket rather than the whole account.',
+      'Copy all three values before you leave the page and put them in your shell.',
+      {
+        code: [
+          'export R2_S3_ENDPOINT=https://<account>.r2.cloudflarestorage.com',
+          'export R2_ACCESS_KEY_ID=...',
+          'export R2_SECRET_ACCESS_KEY=...',
+        ].join('\n'),
+      },
+      { note: 'The secret is shown once. If you lose it, delete the token and make another.' },
+      'Re-run setup. The bindings step reads all three from your shell.',
     ],
     verification: 'self',
     featureGate: 'r2',
@@ -364,10 +481,34 @@ export function renderManualStep(step: ManualStep, index?: number): string {
   lines.push(`   Why: ${why[0] ?? ''}`)
   for (const line of why.slice(1)) lines.push(`        ${line}`)
   lines.push('')
-  if (step.url) lines.push(`   Dashboard: ${step.url}`)
-  if (step.docsUrl) lines.push(`   Docs:      ${step.docsUrl}`)
+  // "Where" rather than "Dashboard": six of these land in Cloudflare's
+  // dashboard, but forking happens on GitHub, and a label that names
+  // the wrong product is a small lie in the one place someone new is
+  // trusting the output.
+  if (step.url) lines.push(`   Where: ${step.url}`)
+  if (step.docsUrl) lines.push(`   Docs:  ${step.docsUrl}`)
   if (step.url || step.docsUrl) lines.push('')
-  for (const s of step.steps) lines.push(`   ${s}`)
+  // Each surface wraps to its own width. The data carries whole
+  // thoughts, so the terminal is free to break them at 66 columns and
+  // the web card at whatever the reader's viewport allows.
+  // `{{W3}}` is a live substitution slot on the web console. The
+  // terminal has no worksheet to read, so it falls back to the
+  // guide's own placeholder convention — `<W3>` — rather than
+  // printing braces at someone.
+  const slots = (t: string): string => t.replace(/\{\{(\w+)\}\}/g, '<$1>')
+  for (const raw of step.steps) {
+    const line = typeof raw === 'string' ? slots(raw) : raw
+    if (typeof line === 'string') {
+      const body = wrap(line, 62)
+      lines.push(`   - ${body[0] ?? ''}`)
+      for (const rest of body.slice(1)) lines.push(`     ${rest}`)
+    } else if ('note' in line) {
+      for (const rest of wrap(slots(line.note), 62)) lines.push(`     ${rest}`)
+    } else {
+      // A literal: a command, or a table whose columns carry meaning.
+      for (const rest of slots(line.code).split('\n')) lines.push(`       ${rest}`)
+    }
+  }
   lines.push('')
   lines.push(
     step.verification === 'detected'
@@ -381,6 +522,11 @@ export function renderManualSteps(features: Set<'r2' | 'transcode'> = new Set())
   const steps = MANUAL_STEPS.filter(s => !s.featureGate || features.has(s.featureGate))
   const out = [
     'Manual prerequisites — the parts no API can do for you.',
+    '',
+    'Before you start: have somewhere to put secrets. Four of the',
+    'values below are shown exactly once, by three different vendors,',
+    'and none can be read back — the only recovery is to revoke and',
+    'mint again. A password manager is enough.',
     '',
   ]
   steps.forEach((step, i) => {

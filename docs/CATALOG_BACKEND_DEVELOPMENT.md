@@ -30,7 +30,7 @@ issue — the checklist is a contract, not a wish.
   deploy story (see "Free-tier viability" in
   [`CATALOG_BACKEND_PLAN.md`](CATALOG_BACKEND_PLAN.md));
   contributors do not need it.
-- **Node.js ≥ 20.10.** Wrangler 4+ requires it.
+- **Node.js ≥ 22.** What `package.json` `engines` requires; Wrangler 4+ needs at least 20.10.
 - **A POSIX-y shell.** The dev scripts assume bash/zsh; PowerShell
   works but the npm scripts hard-code forward slashes.
 - **Rust toolchain** is only required if you will touch the

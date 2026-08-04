@@ -7,6 +7,7 @@ import {
   QUESTIONS,
   renderManualStep,
   renderManualSteps,
+  lineText,
 } from './interview'
 import { buildHandoff, renderHandoff } from './handoff'
 import { defaultState, DEFAULT_NAMES, type SetupState } from './state'
@@ -152,16 +153,94 @@ describe('MANUAL_STEPS', () => {
     expect(doc('git-connect')).toContain('/pages/configuration/git-integration')
     expect(doc('r2-token')).toContain('/r2/api/tokens')
     expect(doc('workers-paid')).toContain('/workers/platform/pricing')
+    expect(doc('fork')).toContain('/working-with-forks/fork-a-repo')
+    // Not a vendor page: the exact section of our own guide that
+    // says which version and how to check it. It matches
+    // MARKDOWN_URL, so applyDocLinks retargets it at the reader's
+    // own fork rather than sending them upstream.
+    expect(doc('node')).toContain('SELF_HOSTING.md#03-tools')
     // node-key is our own script, not a Cloudflare task.
     expect(doc('node-key')).toBe('')
+    // An allowlist of hosts rather than one host: forking is a GitHub
+    // task, and the point of this check is that a link goes somewhere
+    // we trust and vouched for, not that everything is Cloudflare.
+    const DOC_HOSTS = [
+      'https://developers.cloudflare.com/',
+      'https://docs.github.com/',
+      // Our own guide, pinned to the repo rather than to all of
+      // github.com — the point is that a link goes somewhere we
+      // vouched for, and 'any GitHub URL' vouches for nothing.
+      'https://github.com/zyra-project/terraviz/',
+    ]
     for (const s of MANUAL_STEPS) {
-      if (s.docsUrl) expect(s.docsUrl).toMatch(/^https:\/\/developers\.cloudflare\.com\//)
+      if (s.docsUrl) expect(DOC_HOSTS.some(h => s.docsUrl!.startsWith(h))).toBe(true)
     }
+  })
+
+  // The lines used to be hand-wrapped for a 66-column terminal, with
+  // two-space continuation indents — which the web console then
+  // re-wrapped at its own width, breaking sentences mid-phrase inside a
+  // monospace box. Each entry is a whole thought now; the renderers
+  // wrap. A leading indent means someone is hand-wrapping again.
+  it('carries whole thoughts, not terminal-width fragments', () => {
+    for (const step of MANUAL_STEPS) {
+      for (const line of step.steps) {
+        if (typeof line !== 'string') continue
+        expect(line, `${step.id}: "${line}"`).not.toMatch(/^\s/)
+        // Long enough to be a sentence, not a wrapped fragment.
+        expect(line.trim(), `${step.id}: "${line}"`).toMatch(/[.:?]$/)
+      }
+    }
+  })
+
+  // Someone installing forked, then missed the clone in Phase 0 and
+  // had nowhere to run anything. Forking and cloning are one action
+  // in a reader's head; splitting them across two documents loses the
+  // second half.
+  it('tells you to clone the fork, not just create it', () => {
+    const fork = MANUAL_STEPS.find(s => s.id === 'fork')!
+    const text = fork.steps.map(lineText).join('\n')
+    expect(text).toMatch(/git clone/)
+    expect(text).toMatch(/\{\{W3\}\}/)
+    // And which repo to clone, since a clone of upstream works right
+    // up until there is nowhere to push to.
+    expect(text).toMatch(/not zyra-project\/terraviz/)
+  })
+
+  // Someone installing hit `'tsx' is not recognized` at the first
+  // `npm run` step. tsx is a normal dependency, so any `npm install`
+  // provides it — but `npm install` appeared in none of the ten steps.
+  // It lived only in the guide, which a person working the sheet as a
+  // recipe never opens.
+  it('installs dependencies in the step that clones', () => {
+    const fork = MANUAL_STEPS.find(s => s.id === 'fork')!
+    expect(fork.steps.map(lineText).join('\n')).toMatch(/npm install/)
+  })
+
+  // Every `npm run` the sheet asks you to execute depends on that
+  // having happened. Scanned over `code` lines only — prose mentions
+  // npm run freely ("every command starts with npm run") without
+  // asking anyone to type one, and treating that as the trigger makes
+  // the check fire on step 1 forever.
+  it('installs dependencies before the first command it asks you to run', () => {
+    const commandsSoFar: string[] = []
+    for (const step of MANUAL_STEPS) {
+      const code = step.steps
+        .filter((l): l is { code: string } => typeof l !== 'string' && 'code' in l)
+        .map(l => l.code)
+      const asksToRun = code.some(c => /npm run/.test(c))
+      const installsHere = code.some(c => /npm install/.test(c))
+      if (asksToRun && !installsHere && !commandsSoFar.some(c => /npm install/.test(c))) {
+        throw new Error(`${step.id} runs an npm script before any step installs dependencies`)
+      }
+      commandsSoFar.push(...code)
+    }
+    expect(commandsSoFar.some(c => /npm install/.test(c))).toBe(true)
   })
 
   it('lists every permission the API token needs', () => {
     const token = MANUAL_STEPS.find(s => s.id === 'api-token')!
-    const text = token.steps.join('\n')
+    const text = token.steps.map(lineText).join('\n')
     for (const perm of [
       'Cloudflare Pages',
       'Access: Apps and Policies',
