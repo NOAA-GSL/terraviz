@@ -616,8 +616,9 @@ function preflight(): string {
     <h2 style="font:700 27px/1.2 var(--tv-font-sans);letter-spacing:-.01em;color:var(--tv-text);margin:0">Your install sheet</h2>
     <button data-act="print" data-noprint="1" style="flex:none;cursor:pointer;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:6px;padding:7px 12px;font:500 12px/1 var(--tv-font-sans);color:var(--tv-text-muted)">Print this page</button>
   </div>
-  <p style="margin:0 0 28px;max-width:62ch;color:var(--tv-text-muted);text-wrap:pretty">One page to print and keep next to the keyboard. On the left, what to sort out before you start. On the right, the install itself — every step, one line each, saying what finished looks like. Tick your way down.</p>
-  <div data-sheetgrid="1">
+  <p style="margin:0 0 10px;max-width:62ch;color:var(--tv-text-muted);text-wrap:pretty">One page to print and keep next to the keyboard. Two lists, in the order you need them: first the things only you can do, then every phase of the install with what finished looks like.</p>
+  <p style="margin:0 0 28px;max-width:62ch;color:var(--tv-text-muted);text-wrap:pretty"><b style="font-weight:600;color:var(--tv-text)">This sheet is the map, not the instructions.</b> The steps themselves are below it, one section per phase, with the commands and the click paths. Work the prerequisites here, then keep scrolling — the page is already in order.</p>
+  <div>
     <div style="margin:0 0 32px">
       ${sectionHead(
         'Before you start · only you can do these',
@@ -634,6 +635,9 @@ function preflight(): string {
         'Every step in order, with the one thing you should see once it has landed. Not extra work — it is the same check that sits at the foot of each step below, gathered here so the printed sheet stands on its own.',
       )}
       <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:9px 28px">${gates}</div>
+    </div>
+    <div data-noprint="1" style="background:var(--tv-accent-bg);border:1px solid var(--tv-accent-border);border-radius:8px;padding:16px 18px;margin:4px 0 0">
+      <p style="margin:0;font-size:13.5px;line-height:1.6;color:var(--tv-text-muted);text-wrap:pretty">That is the whole install on one page — but only the summary. <a href="#p0">Start Phase 0 below</a>, which is where the actual commands are. Each phase ends by asking for whatever it produced, so the values fill themselves into every later command as you go.</p>
     </div>
   </div>
 </section>`

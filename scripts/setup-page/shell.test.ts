@@ -456,6 +456,26 @@ describe('the committed public/setup.html', () => {
     expect(page).toMatch(/paintProgress\(\); paintInputs\(\);/)
   })
 
+  // The sheet's blurb described "on the left... on the right" long
+  // after the layout became two stacked lists, each internally two
+  // columns — the `data-sheetgrid` wrapper it referred to had no CSS
+  // rule anywhere, in print or on screen. A reader following that
+  // description looks for a column that is not there.
+  it('does not describe a left/right split it does not have', () => {
+    const page = html()
+    expect(page).not.toMatch(/On the left,[\s\S]{0,120}?On the right,/)
+    expect(page).not.toContain('data-sheetgrid')
+  })
+
+  // Someone installing worked the checklist and stopped, because
+  // nothing on the sheet said the real instructions were below it.
+  it('hands the reader off to the phases', () => {
+    const page = html()
+    expect(page).toContain('This sheet is the map, not the instructions')
+    expect(page).toContain('href="#p0"')
+    expect(page).toContain('id="p0"')
+  })
+
   it('carries the CSP and the real favicon', () => {
     expect(html()).toContain(CSP_META)
     expect(html()).toContain(FAVICON_LINK)
