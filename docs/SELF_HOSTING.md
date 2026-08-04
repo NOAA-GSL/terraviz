@@ -65,8 +65,8 @@ the install:
 |---|---|---|
 | `W11` | `CLOUDFLARE_API_TOKEN` | Cloudflare, at mint time (Phase 5) |
 | `W15` | `CF_ACCESS_CLIENT_SECRET` | Cloudflare, in the service-token dialog (Phase 6) |
-| `W20b` | `R2_SECRET_ACCESS_KEY` | Cloudflare, with `W20` (Phase 13.1) |
-| `W22` | `GITHUB_DISPATCH_TOKEN` | GitHub, at mint time (Phase 13.2) |
+| `W20b` | `R2_SECRET_ACCESS_KEY` | Cloudflare, with `W20` (Phase 8.5) |
+| `W22` | `GITHUB_DISPATCH_TOKEN` | GitHub, at mint time (Phase 13.1) |
 
 Losing one is recoverable but tedious: revoke it, mint a new one, and
 repoint everything already using it. `W16` and `W18` are different —
@@ -106,7 +106,7 @@ W16 🔒 NODE_ID_PRIVATE_KEY_PEM       ......................
 W17  Node public key (ed25519:...)  ......................
 W18 🔒 PREVIEW_SIGNING_KEY           ......................
 
-── Phase 13 (optional add-ons) ───────────────────────────
+── Phase 8.5 + Phase 13 (assets, then extras) ────────────
 W19  R2 public origin               ......................
 W20 🔒 R2_ACCESS_KEY_ID              ......................
 W20b 🔒 R2_SECRET_ACCESS_KEY         ......................
@@ -188,8 +188,8 @@ itself where it is known and not secret.
 | **6** | Discovers your Access team domain; creates the publisher application (six destinations), the Staff and Automation policies, and the service token — returning the AUD (`W13`) and the token pair (`W14`/`W15`). |
 | **7** | Generates `PREVIEW_SIGNING_KEY` into `.dev.vars`. |
 | **8** | Writes every binding, variable and available secret to **both** Production and Preview. |
-| **13.1** *(opt-in)* | Sets the R2 CORS policy and attaches the public bucket domain. |
-| **13.2/13.3** *(opt-in)* | Appends the two WAF skip rules, preserving your existing rules. |
+| **8.5** | Sets the R2 CORS policy and attaches the public bucket domain. |
+| **13.1/13.2** *(opt-in)* | Appends the two WAF skip rules, preserving your existing rules. |
 
 Two flags select different things, and it is worth keeping them
 straight. **`--only=` picks which steps run.** **`--with=` declares
@@ -227,8 +227,8 @@ so it cannot provision a deploy that
 | **6.1** | Zero Trust onboarding + choosing an identity provider. One-time, per account. |
 | **7** (half) | The node keypair — `npm run gen:node-key` owns it, because it also writes `node-public-key.txt` that Phase 9 reads and stamps your local D1. One command. |
 | **11** | The first SSO sign-in, which is what makes you admin. |
-| **13.1** (part) | Minting the R2 S3 API token. Doing that over the API needs a bootstrap token that can *create tokens* — a strictly larger credential than anything else here, one that could mint itself more authority. Two clicks in the R2 dashboard, once. |
-| **13.2** (part) | Writing GitHub Actions secrets, which requires libsodium sealed-box encryption (BLAKE2b, absent from `node:crypto`). Rather than add a dependency, `npm run setup -- --github-secrets` prints the exact `gh secret set` script, with values as `"$VAR"` references so it is safe to paste anywhere. |
+| **8.5** (part) | Minting the R2 S3 API token. Doing that over the API needs a bootstrap token that can *create tokens* — a strictly larger credential than anything else here, one that could mint itself more authority. Two clicks in the R2 dashboard, once. |
+| **13.1** (part) | Writing GitHub Actions secrets, which requires libsodium sealed-box encryption (BLAKE2b, absent from `node:crypto`). Rather than add a dependency, `npm run setup -- --github-secrets` prints the exact `gh secret set` script, with values as `"$VAR"` references so it is safe to paste anywhere. |
 
 The tool names whichever of these is blocking it. A typical Tier 2
 install, guided:
@@ -268,10 +268,10 @@ burning its timeout.
 | Account → Access: Apps and Policies → **Edit** | Phase 6 |
 | Account → Access: Service Tokens → **Edit** | Phase 6 |
 | Account → Access: Organizations → **Read** | discovering the team domain |
-| Account → Workers R2 Storage → **Edit** | Phase 13.1 (opt-in) |
-| Zone → Zone → **Read** | resolving the zone for 13.1 / 13.2 |
-| Zone → Zone WAF → **Edit** | Phase 13.2 (opt-in) |
-| Account → D1 → **Edit** | only if you enable CI migrations (13.6) |
+| Account → Workers R2 Storage → **Edit** | Phase 8.5 |
+| Zone → Zone → **Read** | resolving the zone for 8.5 / 13.1 |
+| Zone → Zone WAF → **Edit** | Phase 13.1 (opt-in) |
+| Account → D1 → **Edit** | only if you enable CI migrations (13.5) |
 
 Grant only what you plan to run — each step names the permission it
 is missing rather than failing with a bare `10000: Authentication
@@ -312,7 +312,7 @@ the Cloudflare dashboard sidebar and in every dashboard URL.
 Everything after this assumes you are working from **your own copy**
 of `zyra-project/terraviz`, not from upstream. Phase 3 rewrites
 `wrangler.toml` with your resource IDs, Phase 5 points Cloudflare
-Pages at your remote, and Phase 13.2 runs the transcode workflow in
+Pages at your remote, and Phase 13.1 runs the transcode workflow in
 your repo. None of that is possible against a repo you cannot push
 to.
 
@@ -466,7 +466,7 @@ them:
 |---|---|---|
 | **Fork the repository** ([§0.2](#02-fork-the-repository)) | Phase 3 onward | The tool asks for `W3` and validates its shape. It cannot check that the repo exists, that you own it, or that your checkout points at it |
 | **Workers Paid ($5/mo)** | Phase 8 onward | Billing state is not exposed to the token. A free-plan account provisions everything successfully, then throttles Orbit once the day's Workers AI allocation is spent |
-| **Mint the R2 S3 API token** | Phase 13.1 | Automating it would need a token that can mint tokens — a credential able to grant itself more authority. It stays manual on purpose. (The secret is also shown exactly once, so capture all three values then) |
+| **Mint the R2 S3 API token** | Phase 8.5 | Automating it would need a token that can mint tokens — a credential able to grant itself more authority. It stays manual on purpose. (The secret is also shown exactly once, so capture all three values then) |
 
 That asymmetry is the whole reason the pre-flight list is short.
 Confirm those three; let the tool tell you about the rest.
@@ -878,7 +878,7 @@ that isn't yours.
 
 `W11` needs, at minimum, **Account → Cloudflare Pages → Edit**. Add
 **Account → D1 → Edit** only if you enable CI migrations (Phase
-13.6). Mint it at
+13.5). Mint it at
 `https://dash.cloudflare.com/profile/api-tokens`.
 
 > Forks created with GitHub's **Fork** button land with Actions
@@ -1132,39 +1132,112 @@ wrangler pages secret put PREVIEW_SIGNING_KEY     --project-name <W10>
 > admin — see Phase 11. Domain matching is exact and
 > case-insensitive; `noaa.gov` does not match `x.noaa.gov`.
 
-## 8.4 The seven the audit also expects
+## 8.4 The other seven the audit expects
 
 `EXPECTED_BINDINGS` in `scripts/lib/expected-bindings.ts` carries
-**19** entries; 8.1–8.3 above are twelve of them. The remaining seven
-belong to add-ons you configure in Phase 13, and they are listed here
-because **`npm run check:pages-bindings` reports them as missing
-whether or not you want the add-on.** That is deliberate — the audit
-would rather name a value you have chosen not to set than stay quiet
-about one you meant to. If you are not running the add-on, the
-corresponding rows are expected to read MISSING and you can ignore
+**19** entries; 8.1–8.3 above are twelve of them. Here are the other
+seven, listed together because **`npm run check:pages-bindings`
+reports them as missing whether or not you want the feature behind
+them.** That is deliberate — the audit would rather name a value you
+have chosen not to set than stay quiet about one you meant to.
+
+Four are R2. Set them in 8.5 below, which is part of this phase
+rather than a later one: without them a published dataset has no
+readable image, and that is not really publishing.
+
+The other three are for video transcode, and are genuinely
+conditional — you need them only if publishers will upload video.
+Their GitHub-side half is Phase 13.1. If you are not doing video,
+those three rows are expected to read MISSING and you can ignore
 them.
 
 Plaintext:
 
-| Variable | Add-on | Value | Without it |
+| Variable | Set in | Value | Without it |
 |---|---|---|---|
-| `R2_PUBLIC_BASE` | 13.1 | `W19` — the R2 bucket's public origin | HLS manifests, `r2:datasets/…` assets and `r2:tours/…` JSON resolve to `r2_unconfigured`. **`R2_S3_ENDPOINT` is not a fallback here** — it signs S3-API access, not public reads, so falling through would produce an `hls` URL that 403s at play time |
-| `GITHUB_OWNER` | 13.2 | repo owner hosting `transcode-hls` | With `GITHUB_REPO` + `GITHUB_DISPATCH_TOKEN`, builds the `repository_dispatch` URL |
-| `GITHUB_REPO` | 13.2 | repo name hosting `transcode-hls` | See `GITHUB_OWNER` |
+| `R2_PUBLIC_BASE` | 8.5 | `W19` — the R2 bucket's public origin | HLS manifests, `r2:datasets/…` assets and `r2:tours/…` JSON resolve to `r2_unconfigured`. **`R2_S3_ENDPOINT` is not a fallback here** — it signs S3-API access, not public reads, so falling through would produce an `hls` URL that 403s at play time |
+| `GITHUB_OWNER` | 13.1 | repo owner hosting `transcode-hls` | With `GITHUB_REPO` + `GITHUB_DISPATCH_TOKEN`, builds the `repository_dispatch` URL |
+| `GITHUB_REPO` | 13.1 | repo name hosting `transcode-hls` | See `GITHUB_OWNER` |
 
 Secrets:
 
-| Secret | Add-on | Value | Without it |
+| Secret | Set in | Value | Without it |
 |---|---|---|---|
-| `R2_S3_ENDPOINT` | 13.1 | `W21` — `https://<acct>.r2.cloudflarestorage.com` | The `migrate-r2-hls` / `-assets` / `-tours` CLIs (and their rollbacks) fail at credential validation. The operator's shell needs the same value |
-| `R2_ACCESS_KEY_ID` | 13.1 | `W20` | As above |
-| `R2_SECRET_ACCESS_KEY` | 13.1 | `W20b` — shown once, when the token is minted | As above |
-| `GITHUB_DISPATCH_TOKEN` | 13.2 | `W22` — fine-grained PAT with Contents: write, or a classic PAT with `repo` | Video-upload finalisation 503s with `github_dispatch_unconfigured` |
+| `R2_S3_ENDPOINT` | 8.5 | `W21` — `https://<acct>.r2.cloudflarestorage.com` | The `migrate-r2-hls` / `-assets` / `-tours` CLIs (and their rollbacks) fail at credential validation. The operator's shell needs the same value |
+| `R2_ACCESS_KEY_ID` | 8.5 | `W20` | As above |
+| `R2_SECRET_ACCESS_KEY` | 8.5 | `W20b` — shown once, when the token is minted | As above |
+| `GITHUB_DISPATCH_TOKEN` | 13.1 | `W22` — fine-grained PAT with Contents: write, or a classic PAT with `repo` | Video-upload finalisation 503s with `github_dispatch_unconfigured` |
 
-## 8.5 Redeploy
+## 8.5 Asset storage — R2 public origin, CORS, and the S3 token
+
+**Do this now unless your node will only ever carry metadata.** The
+bucket exists (Phase 2, `W7`) but nothing can be read out of it yet.
+Until this is done, `resolveR2PublicUrl` returns null: uploaded
+thumbnails come back as `null`, HLS manifests answer
+`r2_unconfigured`, and the web zip-download cannot size a file. A
+dataset with no image is not much of a published dataset, which is
+why this is here rather than in the optional phase it used to live
+in.
+
+Skip it only for a node that mirrors the upstream catalog or
+publishes metadata-only rows. You can come back and do it later —
+nothing else depends on it — but you will redeploy again.
+
+> **Automated.** `npm run setup -- --apply --only=r2` sets the CORS
+> policy (built from your origins, so the two easy-to-mistype details
+> below cannot be got wrong) and attaches the public domain from
+> `R2_PUBLIC_BASE`. Step 4 — minting the S3 API token — stays manual
+> on purpose: automating it would need a token that can create
+> tokens.
+
+1. R2 → `terraviz-assets` → **Settings → Connect Domain** → e.g.
+   `assets.<W2>`. Record as `W19`.
+2. Pages variable `R2_PUBLIC_BASE` = `https://<W19>`, both
+   environments.
+3. R2 → bucket → **Settings → CORS policy**:
+
+```json
+[
+  {
+    "AllowedOrigins": ["https://terraviz.your-org.org"],
+    "AllowedMethods": ["GET", "HEAD"],
+    "AllowedHeaders": ["*"],
+    "ExposeHeaders": ["Content-Length", "Content-Range"],
+    "MaxAgeSeconds": 3600
+  },
+  {
+    "AllowedOrigins": ["https://terraviz.your-org.org"],
+    "AllowedMethods": ["PUT", "POST"],
+    "AllowedHeaders": ["Content-Type"],
+    "ExposeHeaders": ["ETag"],
+    "MaxAgeSeconds": 3600
+  }
+]
+```
+
+R2's CORS is strict in two ways. `HEAD` must be listed explicitly,
+even though Fetch treats it as a simple method. And `Content-Range`
+must be in `ExposeHeaders` — it isn't CORS-safelisted, so the zip
+dialog's Range-GET size probe can't read it otherwise. Add
+`http://localhost:5173` for dev; add `tauri://localhost`,
+`http://tauri.localhost` and `https://tauri.localhost` to the
+GET/HEAD rule for desktop builds.
+
+4. R2 → **Manage R2 API Tokens** → create a token with **Read+Write**
+   on the bucket. Record the endpoint (`W21`) and key pair (`W20`),
+   then set `R2_S3_ENDPOINT`, `R2_ACCESS_KEY_ID` and
+   `R2_SECRET_ACCESS_KEY` as Pages **secrets** on both environments.
+   These mint presigned PUT URLs server-side and verify upload
+   digests.
+
+## 8.6 Redeploy
 
 Bindings take effect on the *next* deployment, not immediately.
 **Deployments → ⋯ → Retry deployment**, or push a commit.
+
+Doing 8.5 before this point is what keeps it to one redeploy. The
+R2 values used to be set two phases later, which meant deploying
+twice to pick them up.
 
 **Gate:** open `https://<W2>` in a private window. The privacy
 disclosure banner appears on first load, and the DevTools network
@@ -1273,8 +1346,8 @@ Phase 6 too.
 `check:pages-bindings` will report `R2_PUBLIC_BASE`,
 `R2_S3_ENDPOINT`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`,
 `GITHUB_OWNER`, `GITHUB_REPO` and `GITHUB_DISPATCH_TOKEN` as
-**MISSING**. That is expected — those belong to the optional
-add-ons in Phase 13. Its source of truth is
+**MISSING**. That is expected — those belong to video transcode,
+Phase 13.1. Its source of truth is
 [`scripts/lib/expected-bindings.ts`](../scripts/lib/expected-bindings.ts),
 not this document; if you're never going to run uploads or
 transcode, prune those entries so the audit reflects your node's
@@ -1328,9 +1401,10 @@ Your node works but its catalog is empty. Two ways to fill it.
 
 ## 12.1 Publish your own (the normal path)
 
-`/publish/datasets/new` in the portal. Asset uploads need Phase
-13.1 (R2 public domain + CORS) first; metadata-only drafts work
-immediately.
+`/publish/datasets/new` in the portal. Metadata-only drafts work
+immediately, and asset uploads work too if you did 8.5. If you
+skipped it, uploads land in R2 but nothing can read them back —
+go do 8.5 and redeploy.
 
 ## 12.2 Mirror the upstream SOS catalog
 
@@ -1360,62 +1434,33 @@ and all six checks are green. **That's a complete Tier 2 node.**
 
 ---
 
-# Phase 13 — Optional add-ons
+# Phase 13 — Conditional and optional extras
 
-Independent of each other. Add what you need.
+Independent of each other, so read the trigger and skip the rest.
+They are not equally optional, and the previous version of this
+phase implied they were:
 
-## 13.1 R2 public domain and CORS
+| | Do it when | Skip it when |
+|---|---|---|
+| **13.1 Video transcode** | Publishers will upload video. For a node in the Science On a Sphere lineage that is most of the content | You publish images, data-encoded video built elsewhere, or metadata only |
+| **13.2 Feedback widget** | You ship the standalone HTML build | You only run the web app |
+| **13.3 Analytics export** | You want `/publish/analytics` to hold more than 30–90 days | Short retention is fine |
+| **13.4 Orbit chat providers** | Never — read it only if you want to *change* the default | Orbit already works on Workers AI with nothing set |
+| **13.5 CI migrations** | You want schema applied on push | You apply migrations by hand |
+| **13.6 Grafana** | You want ad-hoc SQL over the raw stream | Almost always — 13.3 covers the normal case |
+| **13.7 Voice, events, blog, YouTube** | Per-feature; each degrades quietly when unset | Per-feature |
+| **13.8 Content-Security-Policy** | Before you put the node in front of the public | Never, honestly — see below |
 
-Needed before publisher asset uploads or the web zip-download work.
+**13.8 is the odd one out.** It is hardening rather than a feature,
+the repo ships no policy, and a fork does not inherit upstream's
+edge rules. It sits at the bottom because it is the last thing you
+do, not because it is the least important.
 
-> **Automated.** `npm run setup -- --apply --only=r2` sets the CORS
-> policy (built from your origins, so the two easy-to-mistype details
-> below cannot be got wrong) and attaches the public domain from
-> `R2_PUBLIC_BASE`. Step 4 — minting the S3 API token — stays manual
-> on purpose: automating it would need a token that can create
-> tokens.
+R2 asset storage used to be 13.1, which put a prerequisite for
+publishing inside a phase labelled optional, after the phase that
+tells you to publish. It is now **8.5**.
 
-1. R2 → `terraviz-assets` → **Settings → Connect Domain** → e.g.
-   `assets.<W2>`. Record as `W19`.
-2. Pages variable `R2_PUBLIC_BASE` = `https://<W19>`, both
-   environments.
-3. R2 → bucket → **Settings → CORS policy**:
-
-```json
-[
-  {
-    "AllowedOrigins": ["https://terraviz.your-org.org"],
-    "AllowedMethods": ["GET", "HEAD"],
-    "AllowedHeaders": ["*"],
-    "ExposeHeaders": ["Content-Length", "Content-Range"],
-    "MaxAgeSeconds": 3600
-  },
-  {
-    "AllowedOrigins": ["https://terraviz.your-org.org"],
-    "AllowedMethods": ["PUT", "POST"],
-    "AllowedHeaders": ["Content-Type"],
-    "ExposeHeaders": ["ETag"],
-    "MaxAgeSeconds": 3600
-  }
-]
-```
-
-R2's CORS is strict in two ways. `HEAD` must be listed explicitly,
-even though Fetch treats it as a simple method. And `Content-Range`
-must be in `ExposeHeaders` — it isn't CORS-safelisted, so the zip
-dialog's Range-GET size probe can't read it otherwise. Add
-`http://localhost:5173` for dev; add `tauri://localhost`,
-`http://tauri.localhost` and `https://tauri.localhost` to the
-GET/HEAD rule for desktop builds.
-
-4. R2 → **Manage R2 API Tokens** → create a token with **Read+Write**
-   on the bucket. Record the endpoint (`W21`) and key pair (`W20`),
-   then set `R2_S3_ENDPOINT`, `R2_ACCESS_KEY_ID` and
-   `R2_SECRET_ACCESS_KEY` as Pages **secrets** on both environments.
-   These mint presigned PUT URLs server-side and verify upload
-   digests.
-
-## 13.2 Video transcode
+## 13.1 Video transcode
 
 Publisher video uploads hand off to a GitHub Actions workflow that
 runs the ffmpeg 4K/1080p/720p 2:1 spherical HLS ladder, via
@@ -1483,7 +1528,7 @@ at stage 5. The CLI detects the challenge HTML and prints a
 one-line pointer at this section rather than a 30 KB blob.
 
 > **Automated (opt-in).** `npm run setup -- --apply --only=waf`
-> appends this rule *and* the 13.3 feedback rule, preserving every
+> appends this rule *and* the 13.2 feedback rule, preserving every
 > existing rule in the zone. It is deliberately excluded from a
 > default run: the rulesets API replaces a zone's whole custom-rule
 > list rather than appending, so a careless implementation deletes
@@ -1533,7 +1578,7 @@ override on Free. Options, best first:
 | `Browser Integrity Check` | Step 1, that checkbox |
 | `Security level` | Step 1, that checkbox |
 
-## 13.3 Standalone feedback widget
+## 13.2 Standalone feedback widget
 
 `POST /api/feedback` serves the standalone HTML build's widget with
 wildcard CORS and no `Origin` requirement (it also runs from
@@ -1552,7 +1597,7 @@ Rules, or custom WAF rules acting on those signals, add a skip:
 (http.request.uri.path eq "/api/feedback" and http.request.method eq "POST")
 ```
 
-Same Skip checklist as 13.2. The endpoint keeps its own abuse
+Same Skip checklist as 13.1. The endpoint keeps its own abuse
 controls (JSON-only, ~12 MB cap, 10/hour per IP). Verify from a
 cookie-less client:
 
@@ -1565,7 +1610,7 @@ curl -X POST https://<W2>/api/feedback \
 # → 200 {"ok":true,"id":"…"}   (challenge HTML means the rule isn't matching)
 ```
 
-## 13.4 Analytics long-term export
+## 13.3 Analytics long-term export
 
 Analytics Engine retains 30–90 days. The export drains each
 completed UTC day into an R2 NDJSON archive plus D1 rollups — the
@@ -1606,7 +1651,7 @@ wrangler d1 execute sphere-feedback --remote --config wrangler.toml \
   --command "SELECT day, COUNT(*) FROM analytics_daily GROUP BY day ORDER BY day"
 ```
 
-## 13.5 Orbit chat providers
+## 13.4 Orbit chat providers
 
 **Default — Cloudflare Workers AI. Nothing to configure.**
 `functions/api/chat/completions.ts` calls the `AI` binding from
@@ -1630,7 +1675,7 @@ Routing Workers AI through an AI Gateway is a **code change** — the
 `AI.run()` call accepts a `gateway` option but the current code
 doesn't pass one. A gateway URL in config does nothing on its own.
 
-## 13.6 CI-applied migrations (opt-in)
+## 13.5 CI-applied migrations (opt-in)
 
 `ci.yml` can apply pending `CATALOG_DB` migrations on every push to
 `main`, just before deploy. **Off by default.** Enable by setting
@@ -1650,11 +1695,11 @@ share the same physical D1 as production.
 on destructive DDL unless the migration opts in with a
 `-- destructive: reviewed` comment.
 
-## 13.7 Grafana
+## 13.6 Grafana
 
 > **Probably skip this.** The primary analytics surface is the
 > in-app `/publish/analytics` tab — privilege-gated, no external
-> service, turned on by 13.4. Grafana remains for ad-hoc AE SQL
+> service, turned on by 13.3. Grafana remains for ad-hoc AE SQL
 > against the raw stream.
 
 Four dashboard JSONs ship under `grafana/dashboards/`; see
@@ -1664,7 +1709,7 @@ to
 `https://api.cloudflare.com/client/v4/accounts/<W1>/analytics_engine/sql`,
 with `root_selector: "data"`.
 
-## 13.8 Voice, events, blog, YouTube
+## 13.7 Voice, events, blog, YouTube
 
 | Feature | Variables | Notes |
 |---|---|---|
@@ -1674,7 +1719,7 @@ with `root_selector: "data"`.
 | YouTube media suggestions | `YOUTUBE_API_KEY` (**secret**) | Absent = source stays off, nothing errors. [`YOUTUBE_API_KEY.md`](YOUTUBE_API_KEY.md) |
 | Current events / blog | none beyond Phase 8 | Feeds console at `/publish/feeds`. [`CURRENT_EVENTS_PLAN.md`](CURRENT_EVENTS_PLAN.md) |
 
-## 13.9 Content-Security-Policy
+## 13.8 Content-Security-Policy
 
 **The repo ships no CSP.** `src/index.html` has no `<meta>` policy,
 and `public/_headers` sets `X-Content-Type-Options`,
@@ -2195,7 +2240,7 @@ Tools → Privacy.
   ceiling.
 - **Test your own feedback loop.** File a report through the in-app
   form and confirm it appears in `/publish/feedback`.
-- **Add a CSP** (13.9).
+- **Add a CSP** (13.8).
 
 If something here is wrong or under-documented, please open an
 issue — most of this document exists because someone hit a snag
