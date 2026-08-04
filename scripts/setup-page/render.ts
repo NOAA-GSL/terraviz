@@ -508,8 +508,23 @@ function preflight(): string {
    */
   const howTo = (s: ManualStep): string => {
     if (!s.steps.length && !s.url) return ''
+    // Prose in a monospace pre-wrap box reads as terminal output, and
+    // re-wraps the author's terminal-width line breaks at whatever the
+    // card happens to be — which is how "needs no IdP / setup;" got in
+    // front of a reader. Actions are a list, notes are prose, and the
+    // monospace box is kept for what is actually literal.
     const body = s.steps.length
-      ? `<div style="white-space:pre-wrap;margin:8px 0 0;padding:10px 12px;background:var(--tv-surface-code);border:1px solid var(--tv-border);border-radius:5px;font:400 11.5px/1.65 var(--tv-font-mono);color:var(--tv-text-muted);overflow-x:auto">${s.steps.map(esc).join('\n')}</div>`
+      ? `<div style="margin:8px 0 0">${s.steps
+          .map(line => {
+            if (typeof line === 'string') {
+              return `<div style="display:flex;gap:8px;margin:0 0 6px"><span aria-hidden="true" style="flex:none;color:var(--tv-accent)">→</span><span style="font:400 13px/1.55 var(--tv-font-sans);color:var(--tv-text-muted);text-wrap:pretty">${inline(line)}</span></div>`
+            }
+            if ('note' in line) {
+              return `<p style="margin:0 0 6px;padding-inline-start:20px;font:400 12.5px/1.55 var(--tv-font-sans);color:var(--tv-text-dim);text-wrap:pretty">${inline(line.note)}</p>`
+            }
+            return `<div style="white-space:pre;margin:0 0 8px;margin-inline-start:20px;padding:9px 11px;background:var(--tv-surface-code);border:1px solid var(--tv-border);border-radius:5px;font:400 11.5px/1.6 var(--tv-font-mono);color:var(--tv-text-muted);overflow-x:auto">${esc(line.code)}</div>`
+          })
+          .join('')}</div>`
       : ''
     // The action link says *where*; the docs link says *what the thing
     // is*. Someone new to the platform needs the second before the

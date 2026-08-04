@@ -7,6 +7,7 @@ import {
   QUESTIONS,
   renderManualStep,
   renderManualSteps,
+  lineText,
 } from './interview'
 import { buildHandoff, renderHandoff } from './handoff'
 import { defaultState, DEFAULT_NAMES, type SetupState } from './state'
@@ -164,9 +165,25 @@ describe('MANUAL_STEPS', () => {
     }
   })
 
+  // The lines used to be hand-wrapped for a 66-column terminal, with
+  // two-space continuation indents — which the web console then
+  // re-wrapped at its own width, breaking sentences mid-phrase inside a
+  // monospace box. Each entry is a whole thought now; the renderers
+  // wrap. A leading indent means someone is hand-wrapping again.
+  it('carries whole thoughts, not terminal-width fragments', () => {
+    for (const step of MANUAL_STEPS) {
+      for (const line of step.steps) {
+        if (typeof line !== 'string') continue
+        expect(line, `${step.id}: "${line}"`).not.toMatch(/^\s/)
+        // Long enough to be a sentence, not a wrapped fragment.
+        expect(line.trim(), `${step.id}: "${line}"`).toMatch(/[.:?]$/)
+      }
+    }
+  })
+
   it('lists every permission the API token needs', () => {
     const token = MANUAL_STEPS.find(s => s.id === 'api-token')!
-    const text = token.steps.join('\n')
+    const text = token.steps.map(lineText).join('\n')
     for (const perm of [
       'Cloudflare Pages',
       'Access: Apps and Policies',

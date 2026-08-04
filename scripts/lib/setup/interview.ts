@@ -202,6 +202,31 @@ export function pendingQuestions(
 
 // ── Manual steps ──────────────────────────────────────────────────
 
+/**
+ * One line of a manual step's instructions.
+ *
+ * These are rendered to two surfaces with different shapes: a terminal
+ * ~66 columns wide, and a web card whose width the reader controls. The
+ * array used to be plain strings hand-wrapped for the terminal, with
+ * two-space continuation indents — so the console re-wrapped
+ * already-wrapped text and produced things like "needs no IdP / setup;"
+ * mid-sentence, in a monospace box that made prose look like terminal
+ * output.
+ *
+ * So a line says what *kind* of thing it is and lets each renderer
+ * decide how to lay it out. Entries are whole thoughts; neither the
+ * author nor the data does any wrapping.
+ *
+ * - a bare string is an **action** — something to go and do
+ * - `{ note }` is context around the actions, not a step in itself
+ * - `{ code }` is a literal: a command, or a table whose alignment
+ *   carries meaning. Preserved exactly, monospace on both surfaces.
+ */
+export type StepLine = string | { note: string } | { code: string }
+
+export const lineText = (l: StepLine): string =>
+  typeof l === 'string' ? l : 'note' in l ? l.note : l.code
+
 export interface ManualStep {
   id: string
   title: string
@@ -220,7 +245,7 @@ export interface ManualStep {
    * Every URL here was checked to resolve.
    */
   docsUrl?: string
-  steps: string[]
+  steps: StepLine[]
   /**
    * How completion is established. `detected` means a later step will
    * find out and say so, which is worth stating so the operator is
@@ -247,13 +272,11 @@ export const MANUAL_STEPS: ManualStep[] = [
     docsUrl:
       'https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/working-with-forks/fork-a-repo',
     steps: [
-      'Press Create fork. Nothing on that page needs changing —',
-      '  the owner is you, the name stays terraviz, and "Copy the',
-      '  main branch only" stays ticked. main is the only branch',
-      '  a node needs.',
-      'A fork lands with Actions DISABLED — enable them in the',
-      '  Actions tab, or the transcode and deploy workflows never run.',
-      'Record it as owner/repo; that is the W3 the interview asks for.',
+      'Press Create fork. Nothing on that page needs changing: the owner is you, the repository name stays terraviz, and "Copy the main branch only" stays ticked.',
+      { note: 'main is the only branch a node needs, so leaving that box ticked is correct.' },
+      'Open the Actions tab of your new fork and enable workflows.',
+      { note: 'GitHub creates every fork with Actions turned off. Leave them off and the transcode and deploy workflows never run.' },
+      'Write the result down as owner/repo. That is the W3 the interview asks you for.',
     ],
     verification: 'self',
   },
@@ -270,8 +293,8 @@ export const MANUAL_STEPS: ManualStep[] = [
     url: 'https://dash.cloudflare.com/?to=/:account/workers/plans',
     docsUrl: 'https://developers.cloudflare.com/workers/platform/pricing/',
     steps: [
-      'Workers & Pages → Plans → Workers Paid → Subscribe.',
-      'Billing is per account, not per project.',
+      'Open Workers & Pages, go to Plans, and subscribe to Workers Paid.',
+      { note: 'Billing is per account, not per project. One subscription covers every node you run on this account.' },
     ],
     verification: 'self',
   },
@@ -285,9 +308,9 @@ export const MANUAL_STEPS: ManualStep[] = [
     url: 'https://dash.cloudflare.com/?to=/:account/add-site',
     docsUrl: 'https://developers.cloudflare.com/fundamentals/manage-domains/add-site/',
     steps: [
-      'Add the site in Cloudflare, then change the nameservers at your registrar.',
-      'Propagation is usually minutes, occasionally hours.',
-      'Transferring the registration is NOT required — only DNS.',
+      'Add your domain to Cloudflare, then change its nameservers at your registrar to the two Cloudflare gives you.',
+      { note: 'You do not need to transfer the registration. Cloudflare only needs to answer DNS for the domain.' },
+      { note: 'The change usually takes minutes to take effect, occasionally a few hours.' },
     ],
     verification: 'detected',
   },
@@ -298,17 +321,23 @@ export const MANUAL_STEPS: ManualStep[] = [
     url: 'https://dash.cloudflare.com/profile/api-tokens',
     docsUrl: 'https://developers.cloudflare.com/fundamentals/api/get-started/create-token/',
     steps: [
-      'My Profile → API Tokens → Create Token → Custom token.',
-      'Permissions (grant only what you plan to run):',
-      '  Account → Cloudflare Pages           → Edit   (Pages project + bindings)',
-      '  Account → Access: Apps and Policies  → Edit   (the publisher application)',
-      '  Account → Access: Service Tokens     → Edit   (the CLI credential)',
-      '  Account → Access: Organizations      → Read   (discovers your team domain)',
-      '  Account → Workers R2 Storage         → Edit   (only for --only=r2)',
-      '  Zone    → Zone                       → Read   (resolves the zone)',
-      '  Zone    → Zone WAF                   → Edit   (only for --only=waf)',
-      '  Account → D1                         → Edit   (only for CI migrations)',
-      'Then: export CLOUDFLARE_API_TOKEN=...',
+      'Go to My Profile, then API Tokens, then Create Token, and choose Custom token.',
+      'Add the permissions below. Grant only the ones you plan to use — the last four are for optional steps.',
+      {
+        code: [
+          'Account → Cloudflare Pages           Edit   Pages project + bindings',
+          'Account → Access: Apps and Policies  Edit   the publisher application',
+          'Account → Access: Service Tokens     Edit   the CLI credential',
+          'Account → Access: Organizations      Read   discovers your team domain',
+          'Zone    → Zone                       Read   resolves the zone',
+          'Account → Workers R2 Storage         Edit   only for --only=r2',
+          'Zone    → Zone WAF                   Edit   only for --only=waf',
+          'Account → D1                         Edit   only for CI migrations',
+        ].join('\n'),
+      },
+      'Copy the token when it is shown and put it in your shell, where the setup tool will find it.',
+      { code: 'export CLOUDFLARE_API_TOKEN=...' },
+      { note: 'Cloudflare shows the token once. If you lose it, revoke it and mint another.' },
     ],
     verification: 'detected',
   },
@@ -322,11 +351,11 @@ export const MANUAL_STEPS: ManualStep[] = [
     url: 'https://one.dash.cloudflare.com/',
     docsUrl: 'https://developers.cloudflare.com/cloudflare-one/setup/',
     steps: [
-      'Pick a team name — it becomes <team>.cloudflareaccess.com.',
-      'Settings → Authentication → add a login method.',
-      'One-time PIN over email works and needs no IdP setup;',
-      'Google / Okta / Entra are better for a real team.',
-      'The free Zero Trust plan covers up to 50 users.',
+      'Pick a team name when Cloudflare asks for one. It becomes your team domain, and you will need that later as W12.',
+      { code: '<team>.cloudflareaccess.com' },
+      'Go to Settings, then Authentication, and add at least one login method.',
+      { note: 'One-time PIN emails a code and needs no identity provider, so it is the quickest way to get working. Google, Okta or Entra are better once real staff are signing in.' },
+      { note: 'The free Zero Trust plan covers up to 50 users, which is more than most nodes need.' },
     ],
     verification: 'detected',
   },
@@ -338,9 +367,10 @@ export const MANUAL_STEPS: ManualStep[] = [
       '/.well-known/terraviz.json. The generator also writes ' +
       'node-public-key.txt, which `terraviz init-node` reads in Phase 9.',
     steps: [
-      'npm run gen:node-key',
-      'Writes NODE_ID_PRIVATE_KEY_PEM into .dev.vars at mode 0600.',
-      'Back that file up — regenerating means re-provisioning your identity.',
+      'Run the generator from your checkout.',
+      { code: 'npm run gen:node-key' },
+      { note: 'It writes NODE_ID_PRIVATE_KEY_PEM into .dev.vars, readable only by you, and node-public-key.txt beside it.' },
+      { note: 'Back that file up. Generating a second key gives your node a new identity, which means re-provisioning it everywhere.' },
     ],
     verification: 'detected',
   },
@@ -354,11 +384,10 @@ export const MANUAL_STEPS: ManualStep[] = [
       'variables have to be set wherever the build actually happens.',
     docsUrl: 'https://developers.cloudflare.com/pages/configuration/git-integration/',
     steps: [
-      'Either: Workers & Pages → your project → Settings → Builds →',
-      '  Connect to Git, then set the VITE_* variables in the dashboard.',
-      'Or: keep Direct Upload and deploy from CI with',
-      '  `wrangler pages deploy dist/ --project-name <your-project>`,',
-      '  setting the VITE_* variables in the CI job instead.',
+      'Either connect the repository: Workers & Pages, your project, Settings, then Builds, then Connect to Git. Set the VITE_* variables in the dashboard afterwards.',
+      'Or keep Direct Upload and deploy from CI instead, setting the VITE_* variables in the CI job.',
+      { code: 'wrangler pages deploy dist/ --project-name <your-project>' },
+      { note: 'Pick one. Whichever you choose, the VITE_* values are read where the build runs, not where the site is served.' },
     ],
     verification: 'detected',
   },
@@ -373,13 +402,18 @@ export const MANUAL_STEPS: ManualStep[] = [
     url: 'https://dash.cloudflare.com/?to=/:account/r2/api-tokens',
     docsUrl: 'https://developers.cloudflare.com/r2/api/tokens/',
     steps: [
-      'R2 → Manage R2 API Tokens → Create API token.',
-      'Permission: Object Read & Write, scoped to your assets bucket.',
-      'Copy all three values — the secret is shown once:',
-      '  export R2_S3_ENDPOINT=https://<account>.r2.cloudflarestorage.com',
-      '  export R2_ACCESS_KEY_ID=...',
-      '  export R2_SECRET_ACCESS_KEY=...',
-      'Then re-run setup; the bindings step picks them up from the shell.',
+      'Go to R2, then Manage R2 API Tokens, then Create API token.',
+      'Give it Object Read & Write, scoped to your assets bucket rather than the whole account.',
+      'Copy all three values before you leave the page and put them in your shell.',
+      {
+        code: [
+          'export R2_S3_ENDPOINT=https://<account>.r2.cloudflarestorage.com',
+          'export R2_ACCESS_KEY_ID=...',
+          'export R2_SECRET_ACCESS_KEY=...',
+        ].join('\n'),
+      },
+      { note: 'The secret is shown once. If you lose it, delete the token and make another.' },
+      'Re-run setup. The bindings step reads all three from your shell.',
     ],
     verification: 'self',
     featureGate: 'r2',
@@ -400,7 +434,21 @@ export function renderManualStep(step: ManualStep, index?: number): string {
   if (step.url) lines.push(`   Where: ${step.url}`)
   if (step.docsUrl) lines.push(`   Docs:  ${step.docsUrl}`)
   if (step.url || step.docsUrl) lines.push('')
-  for (const s of step.steps) lines.push(`   ${s}`)
+  // Each surface wraps to its own width. The data carries whole
+  // thoughts, so the terminal is free to break them at 66 columns and
+  // the web card at whatever the reader's viewport allows.
+  for (const line of step.steps) {
+    if (typeof line === 'string') {
+      const body = wrap(line, 62)
+      lines.push(`   - ${body[0] ?? ''}`)
+      for (const rest of body.slice(1)) lines.push(`     ${rest}`)
+    } else if ('note' in line) {
+      for (const rest of wrap(line.note, 62)) lines.push(`     ${rest}`)
+    } else {
+      // A literal: a command, or a table whose columns carry meaning.
+      for (const rest of line.code.split('\n')) lines.push(`       ${rest}`)
+    }
+  }
   lines.push('')
   lines.push(
     step.verification === 'detected'

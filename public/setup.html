@@ -597,13 +597,7 @@ code{overflow-wrap:anywhere}
       <div style="font-size:13px;line-height:1.5;color:var(--tv-text-muted);text-wrap:pretty">Everything here assumes your own copy. Phase 3 rewrites wrangler.toml with your resource IDs, Phase 5 points Pages at your remote, and the transcode workflow runs in your repo — none of which works against a repo you cannot push to. Cloning upstream directly fails late rather than early: it clones, it runs locally, and nothing complains until you have IDs to push and nowhere to push them.</div>
       <details style="margin:5px 0 0">
       <summary style="cursor:pointer;font:500 12px/1.4 var(--tv-font-sans);color:var(--tv-accent);list-style:none">How to do this ▸</summary>
-      <div style="white-space:pre-wrap;margin:8px 0 0;padding:10px 12px;background:var(--tv-surface-code);border:1px solid var(--tv-border);border-radius:5px;font:400 11.5px/1.65 var(--tv-font-mono);color:var(--tv-text-muted);overflow-x:auto">Press Create fork. Nothing on that page needs changing —
-  the owner is you, the name stays terraviz, and &quot;Copy the
-  main branch only&quot; stays ticked. main is the only branch
-  a node needs.
-A fork lands with Actions DISABLED — enable them in the
-  Actions tab, or the transcode and deploy workflows never run.
-Record it as owner/repo; that is the W3 the interview asks for.</div>
+      <div style="margin:8px 0 0"><div style="display:flex;gap:8px;margin:0 0 6px"><span aria-hidden="true" style="flex:none;color:var(--tv-accent)">→</span><span style="font:400 13px/1.55 var(--tv-font-sans);color:var(--tv-text-muted);text-wrap:pretty">Press Create fork. Nothing on that page needs changing: the owner is you, the repository name stays terraviz, and &quot;Copy the main branch only&quot; stays ticked.</span></div><p style="margin:0 0 6px;padding-inline-start:20px;font:400 12.5px/1.55 var(--tv-font-sans);color:var(--tv-text-dim);text-wrap:pretty">main is the only branch a node needs, so leaving that box ticked is correct.</p><div style="display:flex;gap:8px;margin:0 0 6px"><span aria-hidden="true" style="flex:none;color:var(--tv-accent)">→</span><span style="font:400 13px/1.55 var(--tv-font-sans);color:var(--tv-text-muted);text-wrap:pretty">Open the Actions tab of your new fork and enable workflows.</span></div><p style="margin:0 0 6px;padding-inline-start:20px;font:400 12.5px/1.55 var(--tv-font-sans);color:var(--tv-text-dim);text-wrap:pretty">GitHub creates every fork with Actions turned off. Leave them off and the transcode and deploy workflows never run.</p><div style="display:flex;gap:8px;margin:0 0 6px"><span aria-hidden="true" style="flex:none;color:var(--tv-accent)">→</span><span style="font:400 13px/1.55 var(--tv-font-sans);color:var(--tv-text-muted);text-wrap:pretty">Write the result down as owner/repo. That is the W3 the interview asks you for.</span></div></div>
       <div style="display:flex;flex-wrap:wrap;gap:14px;margin:8px 0 0;font:500 12px/1.4 var(--tv-font-sans)"><a href="https://github.com/zyra-project/terraviz/fork">Open on GitHub ↗</a><a href="https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/working-with-forks/fork-a-repo">GitHub's docs for this ↗</a></div>
     </details>
     </div>
@@ -618,8 +612,7 @@ Record it as owner/repo; that is the W3 the interview asks for.</div>
       <div style="font-size:13px;line-height:1.5;color:var(--tv-text-muted);text-wrap:pretty">Optional — every product this node binds has a Workers Free allocation, so a free-plan account installs and runs. What you buy is headroom. Workers AI stops at 10,000 Neurons a day, roughly 200 Orbit turns, and that ceiling cannot be raised without upgrading. It fails soft, which is worse than failing loudly: Orbit quietly degrades to its keyword engine mid-demo.</div>
       <details style="margin:5px 0 0">
       <summary style="cursor:pointer;font:500 12px/1.4 var(--tv-font-sans);color:var(--tv-accent);list-style:none">How to do this ▸</summary>
-      <div style="white-space:pre-wrap;margin:8px 0 0;padding:10px 12px;background:var(--tv-surface-code);border:1px solid var(--tv-border);border-radius:5px;font:400 11.5px/1.65 var(--tv-font-mono);color:var(--tv-text-muted);overflow-x:auto">Workers &amp; Pages → Plans → Workers Paid → Subscribe.
-Billing is per account, not per project.</div>
+      <div style="margin:8px 0 0"><div style="display:flex;gap:8px;margin:0 0 6px"><span aria-hidden="true" style="flex:none;color:var(--tv-accent)">→</span><span style="font:400 13px/1.55 var(--tv-font-sans);color:var(--tv-text-muted);text-wrap:pretty">Open Workers &amp; Pages, go to Plans, and subscribe to Workers Paid.</span></div><p style="margin:0 0 6px;padding-inline-start:20px;font:400 12.5px/1.55 var(--tv-font-sans);color:var(--tv-text-dim);text-wrap:pretty">Billing is per account, not per project. One subscription covers every node you run on this account.</p></div>
       <div style="display:flex;flex-wrap:wrap;gap:14px;margin:8px 0 0;font:500 12px/1.4 var(--tv-font-sans)"><a href="https://dash.cloudflare.com/?to=/:account/workers/plans">Open in the Cloudflare dashboard ↗</a><a href="https://developers.cloudflare.com/workers/platform/pricing/">Cloudflare's docs for this ↗</a></div>
     </details>
     </div>
@@ -644,9 +637,7 @@ Billing is per account, not per project.</div>
       <div style="font-size:13px;line-height:1.5;color:var(--tv-text-muted);text-wrap:pretty">Pages provisions the certificate and CNAME for your custom domain, and R2 can only serve a public bucket from a zone Cloudflare controls. Neither works on a domain hosted elsewhere.</div>
       <details style="margin:5px 0 0">
       <summary style="cursor:pointer;font:500 12px/1.4 var(--tv-font-sans);color:var(--tv-accent);list-style:none">How to do this ▸</summary>
-      <div style="white-space:pre-wrap;margin:8px 0 0;padding:10px 12px;background:var(--tv-surface-code);border:1px solid var(--tv-border);border-radius:5px;font:400 11.5px/1.65 var(--tv-font-mono);color:var(--tv-text-muted);overflow-x:auto">Add the site in Cloudflare, then change the nameservers at your registrar.
-Propagation is usually minutes, occasionally hours.
-Transferring the registration is NOT required — only DNS.</div>
+      <div style="margin:8px 0 0"><div style="display:flex;gap:8px;margin:0 0 6px"><span aria-hidden="true" style="flex:none;color:var(--tv-accent)">→</span><span style="font:400 13px/1.55 var(--tv-font-sans);color:var(--tv-text-muted);text-wrap:pretty">Add your domain to Cloudflare, then change its nameservers at your registrar to the two Cloudflare gives you.</span></div><p style="margin:0 0 6px;padding-inline-start:20px;font:400 12.5px/1.55 var(--tv-font-sans);color:var(--tv-text-dim);text-wrap:pretty">You do not need to transfer the registration. Cloudflare only needs to answer DNS for the domain.</p><p style="margin:0 0 6px;padding-inline-start:20px;font:400 12.5px/1.55 var(--tv-font-sans);color:var(--tv-text-dim);text-wrap:pretty">The change usually takes minutes to take effect, occasionally a few hours.</p></div>
       <div style="display:flex;flex-wrap:wrap;gap:14px;margin:8px 0 0;font:500 12px/1.4 var(--tv-font-sans)"><a href="https://dash.cloudflare.com/?to=/:account/add-site">Open in the Cloudflare dashboard ↗</a><a href="https://developers.cloudflare.com/fundamentals/manage-domains/add-site/">Cloudflare's docs for this ↗</a></div>
     </details>
     </div>
@@ -661,17 +652,14 @@ Transferring the registration is NOT required — only DNS.</div>
       <div style="font-size:13px;line-height:1.5;color:var(--tv-text-muted);text-wrap:pretty">Everything this tool does runs through it.</div>
       <details style="margin:5px 0 0">
       <summary style="cursor:pointer;font:500 12px/1.4 var(--tv-font-sans);color:var(--tv-accent);list-style:none">How to do this ▸</summary>
-      <div style="white-space:pre-wrap;margin:8px 0 0;padding:10px 12px;background:var(--tv-surface-code);border:1px solid var(--tv-border);border-radius:5px;font:400 11.5px/1.65 var(--tv-font-mono);color:var(--tv-text-muted);overflow-x:auto">My Profile → API Tokens → Create Token → Custom token.
-Permissions (grant only what you plan to run):
-  Account → Cloudflare Pages           → Edit   (Pages project + bindings)
-  Account → Access: Apps and Policies  → Edit   (the publisher application)
-  Account → Access: Service Tokens     → Edit   (the CLI credential)
-  Account → Access: Organizations      → Read   (discovers your team domain)
-  Account → Workers R2 Storage         → Edit   (only for --only=r2)
-  Zone    → Zone                       → Read   (resolves the zone)
-  Zone    → Zone WAF                   → Edit   (only for --only=waf)
-  Account → D1                         → Edit   (only for CI migrations)
-Then: export CLOUDFLARE_API_TOKEN=...</div>
+      <div style="margin:8px 0 0"><div style="display:flex;gap:8px;margin:0 0 6px"><span aria-hidden="true" style="flex:none;color:var(--tv-accent)">→</span><span style="font:400 13px/1.55 var(--tv-font-sans);color:var(--tv-text-muted);text-wrap:pretty">Go to My Profile, then API Tokens, then Create Token, and choose Custom token.</span></div><div style="display:flex;gap:8px;margin:0 0 6px"><span aria-hidden="true" style="flex:none;color:var(--tv-accent)">→</span><span style="font:400 13px/1.55 var(--tv-font-sans);color:var(--tv-text-muted);text-wrap:pretty">Add the permissions below. Grant only the ones you plan to use — the last four are for optional steps.</span></div><div style="white-space:pre;margin:0 0 8px;margin-inline-start:20px;padding:9px 11px;background:var(--tv-surface-code);border:1px solid var(--tv-border);border-radius:5px;font:400 11.5px/1.6 var(--tv-font-mono);color:var(--tv-text-muted);overflow-x:auto">Account → Cloudflare Pages           Edit   Pages project + bindings
+Account → Access: Apps and Policies  Edit   the publisher application
+Account → Access: Service Tokens     Edit   the CLI credential
+Account → Access: Organizations      Read   discovers your team domain
+Zone    → Zone                       Read   resolves the zone
+Account → Workers R2 Storage         Edit   only for --only=r2
+Zone    → Zone WAF                   Edit   only for --only=waf
+Account → D1                         Edit   only for CI migrations</div><div style="display:flex;gap:8px;margin:0 0 6px"><span aria-hidden="true" style="flex:none;color:var(--tv-accent)">→</span><span style="font:400 13px/1.55 var(--tv-font-sans);color:var(--tv-text-muted);text-wrap:pretty">Copy the token when it is shown and put it in your shell, where the setup tool will find it.</span></div><div style="white-space:pre;margin:0 0 8px;margin-inline-start:20px;padding:9px 11px;background:var(--tv-surface-code);border:1px solid var(--tv-border);border-radius:5px;font:400 11.5px/1.6 var(--tv-font-mono);color:var(--tv-text-muted);overflow-x:auto">export CLOUDFLARE_API_TOKEN=...</div><p style="margin:0 0 6px;padding-inline-start:20px;font:400 12.5px/1.55 var(--tv-font-sans);color:var(--tv-text-dim);text-wrap:pretty">Cloudflare shows the token once. If you lose it, revoke it and mint another.</p></div>
       <div style="display:flex;flex-wrap:wrap;gap:14px;margin:8px 0 0;font:500 12px/1.4 var(--tv-font-sans)"><a href="https://dash.cloudflare.com/profile/api-tokens">Open in the Cloudflare dashboard ↗</a><a href="https://developers.cloudflare.com/fundamentals/api/get-started/create-token/">Cloudflare's docs for this ↗</a></div>
     </details>
     </div>
@@ -686,11 +674,7 @@ Then: export CLOUDFLARE_API_TOKEN=...</div>
       <div style="font-size:13px;line-height:1.5;color:var(--tv-text-muted);text-wrap:pretty">The Access application that gates the publisher API cannot exist until the account has a Zero Trust organization and at least one identity provider. Without it every /api/v1/publish/** route 503s.</div>
       <details style="margin:5px 0 0">
       <summary style="cursor:pointer;font:500 12px/1.4 var(--tv-font-sans);color:var(--tv-accent);list-style:none">How to do this ▸</summary>
-      <div style="white-space:pre-wrap;margin:8px 0 0;padding:10px 12px;background:var(--tv-surface-code);border:1px solid var(--tv-border);border-radius:5px;font:400 11.5px/1.65 var(--tv-font-mono);color:var(--tv-text-muted);overflow-x:auto">Pick a team name — it becomes &lt;team&gt;.cloudflareaccess.com.
-Settings → Authentication → add a login method.
-One-time PIN over email works and needs no IdP setup;
-Google / Okta / Entra are better for a real team.
-The free Zero Trust plan covers up to 50 users.</div>
+      <div style="margin:8px 0 0"><div style="display:flex;gap:8px;margin:0 0 6px"><span aria-hidden="true" style="flex:none;color:var(--tv-accent)">→</span><span style="font:400 13px/1.55 var(--tv-font-sans);color:var(--tv-text-muted);text-wrap:pretty">Pick a team name when Cloudflare asks for one. It becomes your team domain, and you will need that later as W12.</span></div><div style="white-space:pre;margin:0 0 8px;margin-inline-start:20px;padding:9px 11px;background:var(--tv-surface-code);border:1px solid var(--tv-border);border-radius:5px;font:400 11.5px/1.6 var(--tv-font-mono);color:var(--tv-text-muted);overflow-x:auto">&lt;team&gt;.cloudflareaccess.com</div><div style="display:flex;gap:8px;margin:0 0 6px"><span aria-hidden="true" style="flex:none;color:var(--tv-accent)">→</span><span style="font:400 13px/1.55 var(--tv-font-sans);color:var(--tv-text-muted);text-wrap:pretty">Go to Settings, then Authentication, and add at least one login method.</span></div><p style="margin:0 0 6px;padding-inline-start:20px;font:400 12.5px/1.55 var(--tv-font-sans);color:var(--tv-text-dim);text-wrap:pretty">One-time PIN emails a code and needs no identity provider, so it is the quickest way to get working. Google, Okta or Entra are better once real staff are signing in.</p><p style="margin:0 0 6px;padding-inline-start:20px;font:400 12.5px/1.55 var(--tv-font-sans);color:var(--tv-text-dim);text-wrap:pretty">The free Zero Trust plan covers up to 50 users, which is more than most nodes need.</p></div>
       <div style="display:flex;flex-wrap:wrap;gap:14px;margin:8px 0 0;font:500 12px/1.4 var(--tv-font-sans)"><a href="https://one.dash.cloudflare.com/">Open in the Cloudflare dashboard ↗</a><a href="https://developers.cloudflare.com/cloudflare-one/setup/">Cloudflare's docs for this ↗</a></div>
     </details>
     </div>
@@ -705,9 +689,7 @@ The free Zero Trust plan covers up to 50 users.</div>
       <div style="font-size:13px;line-height:1.5;color:var(--tv-text-muted);text-wrap:pretty">Signs your node federation responses and is advertised at /.well-known/terraviz.json. The generator also writes node-public-key.txt, which <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">terraviz init-node</code> reads in Phase 9.</div>
       <details style="margin:5px 0 0">
       <summary style="cursor:pointer;font:500 12px/1.4 var(--tv-font-sans);color:var(--tv-accent);list-style:none">How to do this ▸</summary>
-      <div style="white-space:pre-wrap;margin:8px 0 0;padding:10px 12px;background:var(--tv-surface-code);border:1px solid var(--tv-border);border-radius:5px;font:400 11.5px/1.65 var(--tv-font-mono);color:var(--tv-text-muted);overflow-x:auto">npm run gen:node-key
-Writes NODE_ID_PRIVATE_KEY_PEM into .dev.vars at mode 0600.
-Back that file up — regenerating means re-provisioning your identity.</div>
+      <div style="margin:8px 0 0"><div style="display:flex;gap:8px;margin:0 0 6px"><span aria-hidden="true" style="flex:none;color:var(--tv-accent)">→</span><span style="font:400 13px/1.55 var(--tv-font-sans);color:var(--tv-text-muted);text-wrap:pretty">Run the generator from your checkout.</span></div><div style="white-space:pre;margin:0 0 8px;margin-inline-start:20px;padding:9px 11px;background:var(--tv-surface-code);border:1px solid var(--tv-border);border-radius:5px;font:400 11.5px/1.6 var(--tv-font-mono);color:var(--tv-text-muted);overflow-x:auto">npm run gen:node-key</div><p style="margin:0 0 6px;padding-inline-start:20px;font:400 12.5px/1.55 var(--tv-font-sans);color:var(--tv-text-dim);text-wrap:pretty">It writes NODE_ID_PRIVATE_KEY_PEM into .dev.vars, readable only by you, and node-public-key.txt beside it.</p><p style="margin:0 0 6px;padding-inline-start:20px;font:400 12.5px/1.55 var(--tv-font-sans);color:var(--tv-text-dim);text-wrap:pretty">Back that file up. Generating a second key gives your node a new identity, which means re-provisioning it everywhere.</p></div>
       
     </details>
     </div>
@@ -722,11 +704,7 @@ Back that file up — regenerating means re-provisioning your identity.</div>
       <div style="font-size:13px;line-height:1.5;color:var(--tv-text-muted);text-wrap:pretty">The Cloudflare↔GitHub handshake is an OAuth flow with no API, so this tool creates a Direct Upload project. Cloudflare will not run your build until you connect a remote, which means the VITE_* build variables have to be set wherever the build actually happens.</div>
       <details style="margin:5px 0 0">
       <summary style="cursor:pointer;font:500 12px/1.4 var(--tv-font-sans);color:var(--tv-accent);list-style:none">How to do this ▸</summary>
-      <div style="white-space:pre-wrap;margin:8px 0 0;padding:10px 12px;background:var(--tv-surface-code);border:1px solid var(--tv-border);border-radius:5px;font:400 11.5px/1.65 var(--tv-font-mono);color:var(--tv-text-muted);overflow-x:auto">Either: Workers &amp; Pages → your project → Settings → Builds →
-  Connect to Git, then set the VITE_* variables in the dashboard.
-Or: keep Direct Upload and deploy from CI with
-  `wrangler pages deploy dist/ --project-name &lt;your-project&gt;`,
-  setting the VITE_* variables in the CI job instead.</div>
+      <div style="margin:8px 0 0"><div style="display:flex;gap:8px;margin:0 0 6px"><span aria-hidden="true" style="flex:none;color:var(--tv-accent)">→</span><span style="font:400 13px/1.55 var(--tv-font-sans);color:var(--tv-text-muted);text-wrap:pretty">Either connect the repository: Workers &amp; Pages, your project, Settings, then Builds, then Connect to Git. Set the VITE_* variables in the dashboard afterwards.</span></div><div style="display:flex;gap:8px;margin:0 0 6px"><span aria-hidden="true" style="flex:none;color:var(--tv-accent)">→</span><span style="font:400 13px/1.55 var(--tv-font-sans);color:var(--tv-text-muted);text-wrap:pretty">Or keep Direct Upload and deploy from CI instead, setting the VITE_* variables in the CI job.</span></div><div style="white-space:pre;margin:0 0 8px;margin-inline-start:20px;padding:9px 11px;background:var(--tv-surface-code);border:1px solid var(--tv-border);border-radius:5px;font:400 11.5px/1.6 var(--tv-font-mono);color:var(--tv-text-muted);overflow-x:auto">wrangler pages deploy dist/ --project-name &lt;your-project&gt;</div><p style="margin:0 0 6px;padding-inline-start:20px;font:400 12.5px/1.55 var(--tv-font-sans);color:var(--tv-text-dim);text-wrap:pretty">Pick one. Whichever you choose, the VITE_* values are read where the build runs, not where the site is served.</p></div>
       <div style="display:flex;flex-wrap:wrap;gap:14px;margin:8px 0 0;font:500 12px/1.4 var(--tv-font-sans)"><a href="https://developers.cloudflare.com/pages/configuration/git-integration/">Cloudflare's docs for this ↗</a></div>
     </details>
     </div>
@@ -741,13 +719,9 @@ Or: keep Direct Upload and deploy from CI with
       <div style="font-size:13px;line-height:1.5;color:var(--tv-text-muted);text-wrap:pretty">Server-side presigned uploads and digest verification need S3-API credentials. Automating this would require a token that can create tokens — a credential that could grant itself more authority — so it stays a deliberate manual step.</div>
       <details style="margin:5px 0 0">
       <summary style="cursor:pointer;font:500 12px/1.4 var(--tv-font-sans);color:var(--tv-accent);list-style:none">How to do this ▸</summary>
-      <div style="white-space:pre-wrap;margin:8px 0 0;padding:10px 12px;background:var(--tv-surface-code);border:1px solid var(--tv-border);border-radius:5px;font:400 11.5px/1.65 var(--tv-font-mono);color:var(--tv-text-muted);overflow-x:auto">R2 → Manage R2 API Tokens → Create API token.
-Permission: Object Read &amp; Write, scoped to your assets bucket.
-Copy all three values — the secret is shown once:
-  export R2_S3_ENDPOINT=https://&lt;account&gt;.r2.cloudflarestorage.com
-  export R2_ACCESS_KEY_ID=...
-  export R2_SECRET_ACCESS_KEY=...
-Then re-run setup; the bindings step picks them up from the shell.</div>
+      <div style="margin:8px 0 0"><div style="display:flex;gap:8px;margin:0 0 6px"><span aria-hidden="true" style="flex:none;color:var(--tv-accent)">→</span><span style="font:400 13px/1.55 var(--tv-font-sans);color:var(--tv-text-muted);text-wrap:pretty">Go to R2, then Manage R2 API Tokens, then Create API token.</span></div><div style="display:flex;gap:8px;margin:0 0 6px"><span aria-hidden="true" style="flex:none;color:var(--tv-accent)">→</span><span style="font:400 13px/1.55 var(--tv-font-sans);color:var(--tv-text-muted);text-wrap:pretty">Give it Object Read &amp; Write, scoped to your assets bucket rather than the whole account.</span></div><div style="display:flex;gap:8px;margin:0 0 6px"><span aria-hidden="true" style="flex:none;color:var(--tv-accent)">→</span><span style="font:400 13px/1.55 var(--tv-font-sans);color:var(--tv-text-muted);text-wrap:pretty">Copy all three values before you leave the page and put them in your shell.</span></div><div style="white-space:pre;margin:0 0 8px;margin-inline-start:20px;padding:9px 11px;background:var(--tv-surface-code);border:1px solid var(--tv-border);border-radius:5px;font:400 11.5px/1.6 var(--tv-font-mono);color:var(--tv-text-muted);overflow-x:auto">export R2_S3_ENDPOINT=https://&lt;account&gt;.r2.cloudflarestorage.com
+export R2_ACCESS_KEY_ID=...
+export R2_SECRET_ACCESS_KEY=...</div><p style="margin:0 0 6px;padding-inline-start:20px;font:400 12.5px/1.55 var(--tv-font-sans);color:var(--tv-text-dim);text-wrap:pretty">The secret is shown once. If you lose it, delete the token and make another.</p><div style="display:flex;gap:8px;margin:0 0 6px"><span aria-hidden="true" style="flex:none;color:var(--tv-accent)">→</span><span style="font:400 13px/1.55 var(--tv-font-sans);color:var(--tv-text-muted);text-wrap:pretty">Re-run setup. The bindings step reads all three from your shell.</span></div></div>
       <div style="display:flex;flex-wrap:wrap;gap:14px;margin:8px 0 0;font:500 12px/1.4 var(--tv-font-sans)"><a href="https://dash.cloudflare.com/?to=/:account/r2/api-tokens">Open in the Cloudflare dashboard ↗</a><a href="https://developers.cloudflare.com/r2/api/tokens/">Cloudflare's docs for this ↗</a></div>
     </details>
     </div>
