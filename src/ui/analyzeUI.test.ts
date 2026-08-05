@@ -9,7 +9,7 @@
  * a user looking for the wrong problem), and that the export carries
  * enough context to be falsifiable later.
  */
-import { describe, expect, it, beforeEach, vi } from 'vitest'
+import { describe, expect, it, afterEach, beforeEach, vi } from 'vitest'
 import {
   closeAnalyzeUI,
   currentResult,
@@ -29,6 +29,7 @@ import {
 } from '../services/datasetStats'
 import { resolveRegion } from '../data/regions'
 import { DEFAULT_DISPLAY } from '../services/colorScaleDisplay'
+import type { ContourLevel } from '../services/datasetContours'
 import type { LumaSnapshot } from '../services/glLumaSampler'
 import type { ColorScale, DatasetOverlayOptions } from '../types'
 
@@ -666,5 +667,390 @@ describe('§A6 — opening pre-scoped from an Orbit chip', () => {
 
     openAnalyzeUI()
     expect(select().value).toBe('named:Alaska')
+  })
+})
+
+/**
+ * The contour section.
+ *
+ * It draws a *set* of isolines at the colour bar's own round-number
+ * ticks, not one line at a threshold. The threshold scopes which ticks
+ * are drawn rather than being the level itself, so the two controls
+ * compose instead of competing.
+ */
+function makeContours() {
+  const shown: ContourLevel[][] = []
+  let clears = 0
+  return {
+    overlay: {
+      show(levels: ContourLevel[]) { shown.push(levels) },
+      clear() { clears++ },
+    },
+    shown: () => shown,
+    last: () => shown[shown.length - 1],
+    clears: () => clears,
+  }
+}
+
+/** A frame with a real gradient, so several levels actually cross it. */
+const RAMP = () => ({
+  snapshot: snap(24, 24, x => 10 + x * 10),
+  scale: SCALE,
+  options: OPTIONS,
+})
+
+const contourButton = () =>
+  Array.from(document.querySelectorAll('.analyze-contour-head .analyze-action'))[0] as
+    | HTMLButtonElement
+    | undefined
+
+const levelRows = () =>
+  Array.from(document.querySelectorAll('.analyze-contour-levels li'))
+
+describe('contours', () => {
+  it('draws several lines across the range with no threshold set', () => {
+    const c = makeContours()
+    initAnalyzeUI(makeSource({ contours: () => c.overlay, frame: RAMP }))
+    openAnalyzeUI()
+    contourButton()!.click()
+
+    expect(c.shown()).toHaveLength(1)
+    // A contour map, not a threshold outline: more than one level, each
+    // with its own value, ascending.
+    expect(c.last().length).toBeGreaterThan(1)
+    const values = c.last().map(l => l.value)
+    expect([...values].sort((a, b) => a - b)).toEqual(values)
+  })
+
+  it('uses round values, which is what makes them readable against the bar', () => {
+    const c = makeContours()
+    initAnalyzeUI(makeSource({ contours: () => c.overlay, frame: RAMP }))
+    openAnalyzeUI()
+    contourButton()!.click()
+    // vmin 0 / vmax 255 over a 1/2/5 x 10^k step lands on whole numbers.
+    for (const level of c.last()) {
+      expect(Number.isInteger(level.value)).toBe(true)
+    }
+  })
+
+  it('paints each line in the colour the globe uses at that level', () => {
+    const c = makeContours()
+    initAnalyzeUI(makeSource({ contours: () => c.overlay, frame: RAMP }))
+    openAnalyzeUI()
+    contourButton()!.click()
+    // Every level that traced something carries a colour, and the
+    // colours differ — one flat colour would mean the LUT lookup was
+    // ignoring the level.
+    const drawn = c.last().filter(l => l.lines.length > 0)
+    expect(drawn.length).toBeGreaterThan(1)
+    for (const level of drawn) expect(level.color).toMatch(/^rgb\(/)
+    expect(new Set(drawn.map(l => l.color)).size).toBeGreaterThan(1)
+  })
+
+  it('lets the threshold scope the levels rather than replace them', () => {
+    const wide = makeContours()
+    initAnalyzeUI(makeSource({ contours: () => wide.overlay, frame: RAMP }))
+    openAnalyzeUI()
+    contourButton()!.click()
+    const unscoped = wide.last().length
+
+    const narrow = makeContours()
+    initAnalyzeUI(makeSource({
+      contours: () => narrow.overlay,
+      frame: RAMP,
+      display: () => ({ ...DEFAULT_DISPLAY, threshold: { min: 100, max: 160 } }),
+    }))
+    openAnalyzeUI()
+    contourButton()!.click()
+
+    // Fewer lines, and every one inside the isolated band.
+    expect(narrow.last().length).toBeLessThan(unscoped)
+    expect(narrow.last().length).toBeGreaterThan(0)
+    for (const level of narrow.last()) {
+      expect(level.value).toBeGreaterThanOrEqual(100)
+      expect(level.value).toBeLessThanOrEqual(160)
+    }
+  })
+
+  it('reports the area above each line, not one number for the whole band', () => {
+    initAnalyzeUI(makeSource({ contours: () => makeContours().overlay, frame: RAMP }))
+    openAnalyzeUI()
+    const rows = levelRows()
+    expect(rows.length).toBeGreaterThan(1)
+    for (const row of rows) expect(row.textContent).toContain('km²')
+    // Area above a higher line can never exceed area above a lower one.
+    // Parse only the figure in front of `km²` — the row also carries the
+    // level itself, and stripping every non-digit glues the two numbers
+    // into one.
+    const areas = rows.map(r => {
+      const m = /([\d,]+)\s*km²/.exec(r.textContent ?? '')
+      expect(m).not.toBeNull()
+      return Number((m as RegExpExecArray)[1].replace(/,/g, ''))
+    })
+    for (let i = 1; i < areas.length; i++) {
+      expect(areas[i]).toBeLessThanOrEqual(areas[i - 1])
+    }
+  })
+
+  it('says so when the isolated band is too narrow to hold a round value', () => {
+    const c = makeContours()
+    initAnalyzeUI(makeSource({
+      contours: () => c.overlay,
+      frame: RAMP,
+      display: () => ({ ...DEFAULT_DISPLAY, threshold: { min: 100.4, max: 100.6 } }),
+    }))
+    openAnalyzeUI()
+    expect(bodyText()).toContain('colour bar')
+    expect(contourButton()).toBeUndefined()
+    expect(c.shown()).toHaveLength(0)
+  })
+
+  it('toggles to Clear once drawn, and takes the lines away', () => {
+    const c = makeContours()
+    initAnalyzeUI(makeSource({ contours: () => c.overlay, frame: RAMP }))
+    openAnalyzeUI()
+    contourButton()!.click()
+    const before = c.clears()
+    contourButton()!.click()
+    expect(c.clears()).toBe(before + 1)
+    expect(contourButton()!.textContent).toBe('Outline on globe')
+  })
+
+  it('takes the outline with it when the panel closes', () => {
+    const c = makeContours()
+    initAnalyzeUI(makeSource({ contours: () => c.overlay, frame: RAMP }))
+    openAnalyzeUI()
+    contourButton()!.click()
+    const before = c.clears()
+    closeAnalyzeUI()
+    expect(c.clears()).toBeGreaterThan(before)
+  })
+
+  it('is absent when there is no globe to draw on', () => {
+    initAnalyzeUI(makeSource({ frame: RAMP }))
+    openAnalyzeUI()
+    expect(document.querySelector('.analyze-contour-section')).toBeNull()
+  })
+
+  it('clears the outline when the dataset underneath is replaced', () => {
+    const c = makeContours()
+    initAnalyzeUI(makeSource({ contours: () => c.overlay, frame: RAMP }))
+    openAnalyzeUI()
+    contourButton()!.click()
+    const before = c.clears()
+    notifyAnalyzeDatasetChanged('INTERNAL_SOMETHING_ELSE')
+    expect(c.clears()).toBeGreaterThan(before)
+  })
+})
+
+/**
+ * Time.
+ *
+ * Every number this panel shows is measured from one frame of an
+ * animation, and until now the panel never said which — and a drawn
+ * contour went on sitting over the globe after playback had moved on,
+ * describing a field it was not measured from. Both are the same
+ * failure the panel already guards everywhere else: an annotation
+ * outliving the thing that explains it.
+ */
+describe('frame time', () => {
+  it('names the frame the numbers were measured from', () => {
+    initAnalyzeUI(makeSource({ frameTime: () => '2026-07-31 12:00Z' }))
+    openAnalyzeUI()
+    expect(bodyText()).toContain('2026-07-31 12:00Z')
+  })
+
+  it('says nothing when the dataset has no time label to name', () => {
+    initAnalyzeUI(makeSource({ frameTime: () => null }))
+    openAnalyzeUI()
+    expect(bodyText()).not.toContain('Measured on the frame')
+  })
+
+  it('works for a source that does not implement the seam at all', () => {
+    initAnalyzeUI(makeSource())
+    openAnalyzeUI()
+    expect(bodyText()).not.toContain('Measured on the frame')
+  })
+})
+
+describe('contours going stale as the globe plays', () => {
+  beforeEach(() => { vi.useFakeTimers() })
+  afterEach(() => { vi.useRealTimers() })
+
+  /** A source whose reported frame can be moved from the test.
+   *
+   *  Drives `frameId` — the playhead identity — not `frameTime`, which
+   *  is the human label and is the wrong thing to compare. */
+  function movingSource(c: ReturnType<typeof makeContours>) {
+    let now = '0'
+    return {
+      src: makeSource({
+        contours: () => c.overlay,
+        frame: RAMP,
+        frameId: () => now,
+      }),
+      advance: (to: string) => { now = to },
+    }
+  }
+
+  it('removes the lines once the globe shows a different frame', () => {
+    const c = makeContours()
+    const m = movingSource(c)
+    initAnalyzeUI(m.src)
+    openAnalyzeUI()
+    contourButton()!.click()
+    expect(c.shown()).toHaveLength(1)
+    const before = c.clears()
+
+    m.advance('1.5')
+    vi.advanceTimersByTime(600)
+
+    expect(c.clears()).toBeGreaterThan(before)
+    // And says why, rather than leaving the lines to vanish unexplained.
+    expect(bodyText()).toContain('moved to another frame')
+  })
+
+  it('leaves them alone while the globe stays on the same frame', () => {
+    const c = makeContours()
+    initAnalyzeUI(movingSource(c).src)
+    openAnalyzeUI()
+    contourButton()!.click()
+    const before = c.clears()
+
+    vi.advanceTimersByTime(5000)
+
+    expect(c.clears()).toBe(before)
+    expect(bodyText()).not.toContain('moved to another frame')
+  })
+
+  it('offers to draw again, and drops the explanation once you do', () => {
+    const c = makeContours()
+    const m = movingSource(c)
+    initAnalyzeUI(m.src)
+    openAnalyzeUI()
+    contourButton()!.click()
+    m.advance('1.5')
+    vi.advanceTimersByTime(600)
+    expect(contourButton()!.textContent).toBe('Outline on globe')
+
+    contourButton()!.click()
+    expect(c.shown()).toHaveLength(2)
+    expect(bodyText()).not.toContain('moved to another frame')
+  })
+
+  it('drops the explanation when the panel is closed and reopened', () => {
+    // The explanation belongs to one draw/watch cycle. Carried into a
+    // session that drew nothing, it describes an event the viewer never
+    // saw — and points at contours that were never on the globe.
+    const c = makeContours()
+    const m = movingSource(c)
+    initAnalyzeUI(m.src)
+    openAnalyzeUI()
+    contourButton()!.click()
+    m.advance('1.5')
+    vi.advanceTimersByTime(600)
+    expect(bodyText()).toContain('moved to another frame')
+
+    closeAnalyzeUI()
+    openAnalyzeUI()
+    expect(bodyText()).not.toContain('moved to another frame')
+  })
+
+  it('drops the explanation when the region changes', () => {
+    // The likelier path of the two: a scope change already clears the
+    // lines for its own reasons, so keeping the playback explanation
+    // beside a freshly-scoped region blames the wrong thing.
+    const c = makeContours()
+    const m = movingSource(c)
+    initAnalyzeUI(m.src)
+    openAnalyzeUI()
+    contourButton()!.click()
+    m.advance('1.5')
+    vi.advanceTimersByTime(600)
+    expect(bodyText()).toContain('moved to another frame')
+
+    select().value = 'view'
+    select().dispatchEvent(new Event('change', { bubbles: true }))
+    expect(bodyText()).not.toContain('moved to another frame')
+  })
+
+  it('stops watching once the panel closes, so no timer outlives it', () => {
+    const c = makeContours()
+    const m = movingSource(c)
+    initAnalyzeUI(m.src)
+    openAnalyzeUI()
+    contourButton()!.click()
+    closeAnalyzeUI()
+    const after = c.clears()
+
+    // A watch still running would call clear() again on the next tick.
+    m.advance('1.5')
+    vi.advanceTimersByTime(2000)
+    expect(c.clears()).toBe(after)
+  })
+
+  it('says so, loudly, when it cannot identify the frame at all', () => {
+    // No `frameId` seam: nothing to compare, so nothing can be removed.
+    // The lines stay — but the panel must SAY they are pinned, rather
+    // than going quietly inert and letting a stale outline look
+    // supervised. `15a5926` is the precedent: a gate that closes
+    // silently costs an evening aimed at the wrong half of the feature.
+    const c = makeContours()
+    initAnalyzeUI(makeSource({ contours: () => c.overlay, frame: RAMP }))
+    openAnalyzeUI()
+    contourButton()!.click()
+    const before = c.clears()
+    vi.advanceTimersByTime(5000)
+    expect(c.clears()).toBe(before)
+    expect(bodyText()).toContain('pinned to one frame')
+  })
+
+  it('does not claim to watch when the frame id is null at draw time', () => {
+    // A seam that exists but reports nothing is the same blindness as no
+    // seam at all, and must read the same way on the surface.
+    const c = makeContours()
+    initAnalyzeUI(makeSource({
+      contours: () => c.overlay, frame: RAMP, frameId: () => null,
+    }))
+    openAnalyzeUI()
+    contourButton()!.click()
+    // Baseline after drawing: `clears()` counts lifecycle clears
+    // (init, refresh) too, so only the delta across the timer means
+    // "the watch fired".
+    const before = c.clears()
+    vi.advanceTimersByTime(5000)
+    expect(c.clears()).toBe(before)
+    expect(bodyText()).toContain('pinned to one frame')
+  })
+
+  it('does not show the pinned warning when it IS watching', () => {
+    const c = makeContours()
+    initAnalyzeUI(movingSource(c).src)
+    openAnalyzeUI()
+    contourButton()!.click()
+    expect(bodyText()).not.toContain('pinned to one frame')
+  })
+})
+
+describe('contours and the region scope', () => {
+  it('removes the lines when the scope changes under them', () => {
+    // Contours are extracted against the region's texel window, so
+    // whole-dataset lines left on the globe beside a panel quoting
+    // Alabama's areas is the same annotation-outliving-its-explanation
+    // failure the playback watch prevents, one trigger further along.
+    const c = makeContours()
+    initAnalyzeUI(makeSource({ contours: () => c.overlay, frame: RAMP }))
+    openAnalyzeUI()
+    contourButton()!.click()
+    expect(c.shown()).toHaveLength(1)
+    const before = c.clears()
+
+    select().value = 'named:Alabama'
+    select().dispatchEvent(new Event('change', { bubbles: true }))
+
+    expect(c.clears()).toBeGreaterThan(before)
+    // And offers to draw again for the region now selected, rather than
+    // claiming lines are up.
+    expect(contourButton()?.textContent).toBe('Outline on globe')
   })
 })
