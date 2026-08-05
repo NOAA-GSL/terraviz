@@ -2156,6 +2156,60 @@ The catalog migrations weren't applied — usually because
 binding name (Phase 4). Confirm with
 `wrangler d1 migrations list CATALOG_DB --remote`.
 
+### A Zyra run builds its frames, then every frame PUT 401s
+The workflow fires, downloads its data and renders images, and dies
+on the upload:
+
+```
+[zyra-run] frames-publish: 85 image/png frame(s), 30354195 bytes total
+[zyra-run] FAIL: frame-sequence publish → frames-publish: frame PUT
+  20260804T140000.png failed (401): <Error><Code>Unauthorized</Code>…
+```
+
+**Two things that log already rules out.** The runner does not sign
+these uploads: it asks your node for presigned URLs and PUTs bytes
+to them. So the R2 keys in your *GitHub* secrets are not what
+failed. And the request that mints those URLs succeeded. A missing
+`R2_S3_ENDPOINT`, `R2_ACCESS_KEY_ID` or `R2_SECRET_ACCESS_KEY`
+raises a configuration error, which the route returns as **503
+`*_unconfigured`**. You would have seen `asset init failed (503)`
+instead.
+
+So all three are set on the Pages environment that served the
+request, and R2 rejected them. They are present and wrong, which is
+a much smaller search:
+
+1. **The wrong field was pasted.** R2 shows you three values when a
+   token is created — Access Key ID, Secret Access Key, and a token
+   value. Only the first two belong in these secrets.
+2. **The token was rotated or deleted** in R2 after the secrets were
+   set.
+3. **`R2_S3_ENDPOINT` belongs to a different account** than the
+   token was minted in.
+4. **The token is scoped to a different bucket.** R2 API tokens can
+   be limited to named buckets, and the bucket here is
+   `CATALOG_R2_BUCKET` or `terraviz-assets` if unset.
+5. **Only one environment is current.** The runner calls your public
+   hostname, so it is Production's copy that matters — Preview being
+   right proves nothing.
+
+**You cannot read a Pages secret back**, which is the awkward part:
+there is nothing to compare against. Rather than guess which of the
+five it is, mint a fresh R2 token (§8.5 step 4), set all three
+secrets again on **both** environments, and redeploy. That costs a
+few minutes and settles every case above at once.
+
+To confirm the credentials first, make a signed request from your
+own shell with the same three values. For example `aws s3api
+put-object --endpoint-url "$R2_S3_ENDPOINT"` against the bucket,
+with the key pair in `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`.
+A 401 there too means the credentials themselves are wrong, rather
+than merely stale in Pages.
+
+`npm run terraviz -- migrate-r2-assets --dry-run` is **not** that
+check. It prints its plan and returns before it ever reaches the
+credential code.
+
 ### Access blocks your own `@your-org.org` account
 The policy uses **Emails** (exact match) instead of **Emails ending
 in** (suffix match).
