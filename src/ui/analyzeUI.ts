@@ -24,12 +24,14 @@ import {
   summarizeTransect,
   transectSampleCount,
   windowForBounds,
+  zonalMeans,
   type LatLonBounds,
   type LumaHistogram,
   type RegionStats,
   type TexelWindow,
   type TransectEndpoints,
   type TransectSample,
+  type ZonalSample,
 } from '../services/datasetStats'
 import { extractContourSet, type ContourLevel } from '../services/datasetContours'
 import type { LumaSnapshot } from '../services/glLumaSampler'
@@ -49,8 +51,9 @@ import {
   renderHistogram,
   renderStatTile,
   renderTransectChart,
+  renderZonalChart,
 } from './analyzeCharts'
-import { buildCsvText, buildTransectCsvText, downloadCsv } from './analyzeExport'
+import { buildCsvText, buildTransectCsvText, buildZonalCsvText, downloadCsv } from './analyzeExport'
 import { t } from '../i18n'
 import { formatNumber } from '../i18n/format'
 
@@ -165,6 +168,21 @@ export type AnalyzeScope =
 let source: AnalyzeSource | null = null
 let scope: AnalyzeScope = { kind: 'dataset' }
 let lastResult: { stats: RegionStats; hist: LumaHistogram; scale: ColorScale } | null = null
+/**
+ * The texel window the region statistics were computed over.
+ *
+ * Both surfaces below the statistics read it, for the same reason: the
+ * zonal profile must describe the same box rather than silently widening
+ * to the whole frame, and an isoline must cover exactly the region the
+ * numbers beside it describe. They arrived as two variables holding one
+ * value — `lastWindow` and `contourWindow` — which is a pair that can
+ * only ever drift apart, so they are one.
+ *
+ * `undefined` is the whole dataset, which is what the reducers already
+ * take to mean "no window". Only read when `lastResult` is set.
+ */
+let lastWindow: TexelWindow | undefined
+let lastZonal: { samples: ZonalSample[]; scale: ColorScale } | null = null
 let lastTrigger: HTMLElement | null = null
 let root: HTMLElement | null = null
 /** The dataset the numbers on screen were computed from. */
@@ -199,9 +217,6 @@ let contourStaleCleared = false
  * fields.
  */
 const CONTOUR_LEVEL_TARGET = 5
-/** The texel window the region statistics used, so the isoline covers
- *  exactly the region the numbers beside it describe. */
-let contourWindow: TexelWindow | undefined
 let lastTransect: { samples: TransectSample[]; scale: ColorScale } | null = null
 /**
  * The frame everything on screen was computed from.
@@ -437,6 +452,8 @@ function boundsForScope(s: AnalyzeScope, src: AnalyzeSource): ScopeBounds {
 function refresh(body: HTMLElement): void {
   body.replaceChildren()
   lastResult = null
+  lastWindow = undefined
+  lastZonal = null
   lastFrame = null
   transectHost = null
   contourHost = null
@@ -468,6 +485,17 @@ function refresh(body: HTMLElement): void {
   }
 
   renderRegionBlock(body, src, frame)
+
+  // Gated on the region block having produced numbers, unlike the
+  // transect below. This profile describes the same window those
+  // statistics cover, so under an "outside the dataset" message it would
+  // be a chart of nothing captioned as a chart of something.
+  if (lastResult) {
+    const zonalHost = document.createElement('section')
+    zonalHost.className = 'analyze-zonal-section'
+    body.appendChild(zonalHost)
+    renderZonalSection(zonalHost, frame, lastWindow)
+  }
 
   // Appended whatever the region block decided, and deliberately so: a
   // named region can be empty while the dataset is full, and the line a
@@ -520,7 +548,7 @@ function renderRegionBlock(
   }
   const hist = buildHistogram(snapshot, scale, options, window ?? undefined)
   lastResult = { stats, hist, scale }
-  contourWindow = window ?? undefined
+  lastWindow = window ?? undefined
 
   body.appendChild(renderHistogram(hist, scale, src.display()))
   body.appendChild(renderHistogramCaption(scale))
@@ -536,6 +564,101 @@ function renderRegionBlock(
   }
   body.appendChild(renderPrecisionNote(scale))
   body.appendChild(renderExport(src))
+}
+
+/**
+ * The zonal block: the field's shape against latitude.
+ *
+ * No control and no picking — unlike the transect, this needs nothing
+ * from the user, because the axis it reduces along is already chosen by
+ * the region. One extra pass over the same window the statistics above
+ * used, on a surface whose every number already costs a full-frame
+ * readback.
+ *
+ * Latitude is the one axis of a global field that is never arbitrary:
+ * insolation, circulation and the fields that follow them are organised
+ * by it. Which is why this is the summary worth showing unprompted and
+ * the transect is the one worth asking for.
+ */
+function renderZonalSection(
+  host: HTMLElement,
+  frame: { snapshot: LumaSnapshot; scale: ColorScale; options: DatasetOverlayOptions },
+  window: TexelWindow | undefined,
+): void {
+  const { snapshot, scale, options } = frame
+  const head = document.createElement('div')
+  head.className = 'analyze-zonal-head'
+  const label = document.createElement('h3')
+  label.textContent = t('analyze.zonal.title')
+  head.appendChild(label)
+  host.appendChild(head)
+
+  const samples = zonalMeans(snapshot, scale, options, window)
+  const withData = samples.reduce((n, s) => n + (s.mean == null ? 0 : 1), 0)
+  // Two bands is the minimum that can be a line rather than a point. A
+  // region one texel tall is a legitimate pick — a thin equatorial strip
+  // — and saying so is better than drawing an empty axis.
+  if (withData < 2) {
+    host.appendChild(message(t('analyze.zonal.narrow')))
+    return
+  }
+  lastZonal = { samples, scale }
+
+  host.appendChild(renderZonalChart(samples, scale, source?.display() ?? DEFAULT_DISPLAY))
+  host.appendChild(caption(t('analyze.zonal.caption')))
+
+  // The peak band, which is the question a zonal profile is usually
+  // being asked: not how much there is, but *where* it is. Reported as
+  // the band's own latitude rather than interpolated between bands —
+  // the profile has the resolution of the grid, and no more.
+  let peak = samples[0]
+  for (const s of samples) {
+    if (s.mean != null && (peak.mean == null || s.mean > peak.mean)) peak = s
+  }
+  const grid = document.createElement('div')
+  grid.className = 'analyze-stats'
+  grid.appendChild(renderStatTile(t('analyze.zonal.stat.peak'), formatLatitude(peak.lat)))
+  grid.appendChild(
+    renderStatTile(
+      t('analyze.zonal.stat.peakValue'),
+      peak.mean == null ? t('analyze.stat.none') : formatStatValue(peak.mean, scale.units),
+    ),
+  )
+  host.appendChild(grid)
+
+  host.appendChild(
+    coverageNote(
+      t('analyze.zonal.coverage', {
+        withData: formatNumber(withData),
+        rows: formatNumber(samples.length),
+      }),
+    ),
+  )
+
+  const exportBtn = actionButton(t('analyze.zonal.export'), () => {
+    if (!lastZonal) return
+    downloadCsv(
+      'terraviz-zonal.csv',
+      buildZonalCsvText(lastZonal.samples, lastZonal.scale, {
+        // The same region label the statistics export carries — this
+        // profile is of that region, not of a separate pick.
+        datasetTitle: source?.datasetTitle() ?? null,
+        scopeLabel: scopeToValue(scope),
+      }),
+    )
+  })
+  exportBtn.className = 'analyze-export'
+  host.appendChild(exportBtn)
+}
+
+/** `12.3°N`. The same *shape* `browseUI` and `chatUI` use for a bare
+ *  latitude — one decimal, degree sign, hemisphere letter — but built
+ *  with `formatNumber` where they use `toFixed`, so the decimal
+ *  separator follows the locale instead of always being a point. Not
+ *  formatting parity with them; deliberately a little better. */
+function formatLatitude(lat: number): string {
+  // i18n-exempt: compass hemisphere letters, same treatment as browseUI
+  return `${formatNumber(Math.abs(lat), { maximumFractionDigits: 1 })}°${lat >= 0 ? 'N' : 'S'}`
 }
 
 /**
@@ -741,7 +864,7 @@ function renderContourSection(): void {
           clearContours()
         } else {
           const set = extractContourSet(
-            frame.snapshot, frame.scale, levels, frame.options, contourWindow)
+            frame.snapshot, frame.scale, levels, frame.options, lastWindow)
           // Each line painted in the colour the globe is already using
           // at that level, so the map and its own contours cannot
           // disagree. A level the ramp hides gets no colour back and
