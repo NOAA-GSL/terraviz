@@ -501,7 +501,7 @@ npm run terraviz -- import-snapshot \\
     ],
     gate: 'Whichever add-ons you chose report healthy.',
     gateShort: 'The extras you chose are working.',
-    anchor: 'phase-13--optional-add-ons',
+    anchor: 'phase-13--conditional-and-optional-extras',
     linkText: 'All nine add-ons in full',
   },
   {
