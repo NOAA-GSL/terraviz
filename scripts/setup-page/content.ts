@@ -492,20 +492,36 @@ npm run terraviz -- import-snapshot \\
   {
     n: 13,
     label: 'Optional add-ons',
-    title: 'Optional add-ons',
+    title: 'Optional features',
     minTier: 2,
     duration: 'optional',
-    aside: 'Tier 2+ · independent of each other',
+    aside: 'Tier 2+ · take what you want',
     intro: [
-      'Add what you need, when you need it. Nothing here blocks a working node — but the first one is required before publishers can upload assets.',
+      'Your node is complete and serving content without any of this. All five are independent — read the trigger, take what you want, and come back for the rest whenever.',
+      'Four things used to be filed here and are not, because calling them optional was wrong. R2 asset storage is now 8.5, video transcode 8.6, and Orbit chat providers 8.7 — that last one was never a task at all. The Content-Security-Policy is Phase 14, because every fork needs one.',
     ],
-    gate: 'Whichever add-ons you chose report healthy.',
-    gateShort: 'The extras you chose are working.',
-    anchor: 'phase-13--conditional-and-optional-extras',
-    linkText: 'All nine add-ons in full',
+    gate: 'Each feature you turned on answers: the widget POST returns 200, the export writes an NDJSON object, `/publish/analytics` shows yesterday.',
+    gateShort: 'The optional features you chose are working.',
+    anchor: 'phase-13--optional-features',
+    linkText: 'All five, in full',
   },
   {
     n: 14,
+    label: 'Add a CSP',
+    title: 'Content-Security-Policy',
+    minTier: 1,
+    duration: '≈20 min',
+    aside: 'all tiers · before you go public',
+    intro: [
+      '**The repo ships no CSP.** Upstream enforces one at the Cloudflare edge, and edge rules do not travel with a fork — so every fork is unprotected until its operator adds one. Your node works without it; do it anyway before the node faces the public.',
+      'Remember `blob:` — the app uses it for preview tours and screenshots, and omitting it reproduces the "may not load data from blob:" failure. Test playback, VR and a tour before locking it down.',
+    ],
+    gate: 'Playback, VR and a tour all still work with the policy live.',
+    gateShort: 'A CSP is in place and nothing broke.',
+    anchor: 'phase-14--content-security-policy',
+  },
+  {
+    n: 15,
     label: 'Desktop app',
     title: 'Desktop app fork',
     minTier: 3,
@@ -517,11 +533,16 @@ npm run terraviz -- import-snapshot \\
     ],
     gate: 'A signed desktop build that talks to your API origin, not upstream.',
     gateShort: 'Your desktop app talks to your node, not the original one.',
-    anchor: 'phase-14--desktop-app-fork-tier-3',
+    anchor: 'phase-15--desktop-app-fork-tier-3',
   },
 ]
 
-/** The 13.x add-ons, summarised. Full text stays in the Markdown. */
+/**
+ * Every optional feature, with its trigger. Not a curated subset:
+ * the card used to show four of nine, so the ids read as an
+ * arbitrary sample rather than a list — 13.2 sitting next to 13.7
+ * with nothing between them. If it is in Phase 13, it is here.
+ */
 export const ADDONS: Array<{
   id: string
   title: string
@@ -530,16 +551,34 @@ export const ADDONS: Array<{
   extra?: string
 }> = [
   {
+    id: '13.1',
+    title: 'Standalone feedback widget',
+    flag: 'if you ship it',
+    body: 'The standalone HTML build posts to `/api/feedback`, which takes wildcard CORS and no Origin so it works from `file://`. It needs a WAF skip rule: the widget runs without cookies and its fallback is a `mailto:` draft, so an interstitial silently swallows every submission rather than failing loudly.',
+  },
+  {
     id: '13.2',
     title: 'Analytics long-term export',
     flag: 'recommended',
     body: 'Analytics Engine retains 30–90 days. A daily job drains each completed day into an archive bucket plus rollups — that is the data behind the in-app analytics tab. Run the backfill once while AE still remembers.',
   },
   {
-    id: '13.7',
-    title: 'Content-Security-Policy',
-    flag: 'worth doing',
-    body: '**The repo ships no CSP.** Upstream enforces one at the Cloudflare edge, which a fork does not inherit. Your node works without one; you should still add your own. Remember `blob:` — the app uses it for preview tours and screenshots. Test playback, VR and a tour before locking it down.',
+    id: '13.3',
+    title: 'CI-applied migrations',
+    flag: 'opt-in',
+    body: 'Lets `ci.yml` apply pending catalog migrations on every push to `main`, just before deploy. Off unless you set `ENABLE_D1_MIGRATE=1` — and only after granting your API token D1 Edit, because the step runs before the deploy and a token without it blocks the whole thing.',
+  },
+  {
+    id: '13.4',
+    title: 'Grafana',
+    flag: 'probably skip',
+    body: 'The in-app analytics tab is the primary surface and needs no external service. Grafana is here for ad-hoc SQL against the raw stream; there is no native Analytics Engine plugin, so the shipped dashboards post SQL over HTTP through Infinity.',
+  },
+  {
+    id: '13.5',
+    title: 'Voice, events, blog, YouTube',
+    flag: 'per-feature',
+    body: 'Orbit voice runs on the `AI` binding with nothing set. Realtime streaming STT, the wake word and YouTube media suggestions each want their own variables. Each degrades quietly when those are absent rather than erroring, so turning one on is additive and turning it off is safe.',
   },
 ]
 

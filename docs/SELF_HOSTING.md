@@ -32,13 +32,15 @@ Two companion reads:
 ## Pick your node type first
 
 Everything below is written for **Tier 2**. Tier 1 operators stop
-after Phase 5; Tier 3 operators add Phase 14.
+after Phase 5; Tier 3 operators add Phase 15. Every tier should
+finish with Phase 14 before going public — it is the CSP a fork
+does not inherit.
 
 | Tier | What you get | What it costs you | Stop after |
 |---|---|---|---|
-| **1 — Viewer node** | The globe, the upstream SOS dataset catalog, Orbit chat, telemetry. No publishing. | ~30 min, $5/mo (Workers Paid) | Phase 5 |
-| **2 — Publisher node** | Everything above, plus your own datasets/tours, the publisher portal, semantic search, events, blog. | ~2–3 h, $5/mo + storage | Phase 12 |
-| **3 — Publisher node + desktop app** | Tier 2 plus branded Tauri desktop builds with your own update feed. | + ~1 h | Phase 14 |
+| **1 — Viewer node** | The globe, the upstream SOS dataset catalog, Orbit chat, telemetry. No publishing. | ~30 min, $5/mo (Workers Paid) | Phase 5, then 14 |
+| **2 — Publisher node** | Everything above, plus your own datasets/tours, the publisher portal, semantic search, events, blog. | ~2–3 h, $5/mo + storage | Phase 12, then 14 |
+| **3 — Publisher node + desktop app** | Tier 2 plus branded Tauri desktop builds with your own update feed. | + ~1 h | Phase 15 |
 
 > **Time estimates assume nothing goes wrong and your domain is
 > already on Cloudflare DNS.** Budget a working afternoon for a
@@ -271,7 +273,7 @@ burning its timeout.
 | Account → Workers R2 Storage → **Edit** | Phase 8.5 |
 | Zone → Zone → **Read** | resolving the zone for 8.5 / 8.6 |
 | Zone → Zone WAF → **Edit** | Phase 8.6 |
-| Account → D1 → **Edit** | only if you enable CI migrations (13.4) |
+| Account → D1 → **Edit** | only if you enable CI migrations (13.3) |
 
 Grant only what you plan to run — each step names the permission it
 is missing rather than failing with a bare `10000: Authentication
@@ -849,7 +851,7 @@ Changing one later requires a rebuild, not just a redeploy.
 | `VITE_BUILD_CHANNEL` | `public` | or `internal` / `canary` |
 | `VITE_TELEMETRY_ENABLED` | `true` | |
 | `VITE_EARTH_ASSET_BASE` | your CDN | **Recommended.** Defaults to upstream's CloudFront. See Reference C. |
-| `VITE_API_ORIGIN` | `https://` + `W2` | Only needed for desktop builds (Phase 14), harmless to set now. |
+| `VITE_API_ORIGIN` | `https://` + `W2` | Only needed for desktop builds (Phase 15), harmless to set now. |
 | `VITE_DEFAULT_UI_SCALE` | *(unset)* | `1.5` suits kiosks. Clamped to [0.5, 2.0]; a visitor's own choice always wins. |
 
 Save and Deploy. Record the project name as `W10`.
@@ -878,7 +880,7 @@ that isn't yours.
 
 `W11` needs, at minimum, **Account → Cloudflare Pages → Edit**. Add
 **Account → D1 → Edit** only if you enable CI migrations (Phase
-13.4). Mint it at
+13.3). Mint it at
 `https://dash.cloudflare.com/profile/api-tokens`.
 
 > Forks created with GitHub's **Fork** button land with Actions
@@ -1361,7 +1363,35 @@ override on Free. Options, best first:
 | `Browser Integrity Check` | Step 1, that checkbox |
 | `Security level` | Step 1, that checkbox |
 
-## 8.7 Redeploy
+## 8.7 Orbit's chat provider — nothing to do
+
+Listed here because this is where you wired the `AI` binding, and
+because the question "how do I configure Orbit?" has a surprising
+answer: you already did.
+
+**Default — Cloudflare Workers AI. Nothing to configure.**
+`functions/api/chat/completions.ts` calls the `AI` binding from
+Phase 8 and streams an OpenAI-shaped SSE response;
+`functions/api/models.ts` backs the "Test Connection" button. No
+API key reaches the browser. Model choice lives in `MODEL_MAP` in
+that file.
+
+There is **no server-side proxy for third-party providers.** Older
+docs described `LLM_PROVIDER_URL` / `LLM_PROVIDER_KEY` — those env
+vars are read by nothing. To use OpenAI or a local model, set the
+API URL + key in the running app under **Tools → Orbit Settings**
+(localStorage on web, OS keychain on desktop). Because the key
+lives client-side, that path suits a single operator's browser or a
+desktop install — not a shared public deployment. Local endpoints
+(`http://localhost:11434/v1` Ollama, `:1234` LM Studio, `:8080`
+llama.cpp) only work from desktop or dev, since Pages can't reach
+your localhost.
+
+Routing Workers AI through an AI Gateway is a **code change** — the
+`AI.run()` call accepts a `gateway` option but the current code
+doesn't pass one. A gateway URL in config does nothing on its own.
+
+## 8.8 Redeploy
 
 Bindings take effect on the *next* deployment, not immediately.
 **Deployments → ⋯ → Retry deployment**, or push a commit.
@@ -1566,32 +1596,29 @@ and all six checks are green. **That's a complete Tier 2 node.**
 
 ---
 
-# Phase 13 — Conditional and optional extras
+# Phase 13 — Optional features
 
-Independent of each other, so read the trigger and skip the rest.
-They are not equally optional, and the previous version of this
-phase implied they were:
+Everything here is genuinely optional: your node is complete and
+serving content without any of it. Independent of each other, so
+read the trigger and take what you want.
 
-| | Do it when | Skip it when |
+| | Do it when |
+|---|---|
+| **13.1 Feedback widget** | You ship the standalone HTML build and want its reports to reach `/publish/feedback` |
+| **13.2 Analytics export** | You want `/publish/analytics` to hold more than the 30–90 days Analytics Engine keeps |
+| **13.3 CI migrations** | You want schema applied automatically on push to `main` |
+| **13.4 Grafana** | You want ad-hoc SQL against the raw telemetry stream. 13.2 covers the normal case |
+| **13.5 Voice, events, blog, YouTube** | Per-feature. Each degrades quietly when its variables are unset |
+
+**Four things used to be filed here and are not,** because calling
+them optional was wrong:
+
+| Was | Now | Why |
 |---|---|---|
-| **13.1 Feedback widget** | You ship the standalone HTML build | You only run the web app |
-| **13.2 Analytics export** | You want `/publish/analytics` to hold more than 30–90 days | Short retention is fine |
-| **13.3 Orbit chat providers** | Never — read it only if you want to *change* the default | Orbit already works on Workers AI with nothing set |
-| **13.4 CI migrations** | You want schema applied on push | You apply migrations by hand |
-| **13.5 Grafana** | You want ad-hoc SQL over the raw stream | Almost always — 13.2 covers the normal case |
-| **13.6 Voice, events, blog, YouTube** | Per-feature; each degrades quietly when unset | Per-feature |
-| **13.7 Content-Security-Policy** | Before you put the node in front of the public | Never, honestly — see below |
-
-**13.7 is the odd one out.** It is hardening rather than a feature,
-the repo ships no policy, and a fork does not inherit upstream's
-edge rules. It sits at the bottom because it is the last thing you
-do, not because it is the least important.
-
-**Two things left this phase**, because neither was optional. R2
-asset storage is now **8.5** and video transcode is **8.6**. Both
-were filed here, after the phase that tells you to publish, while
-being prerequisites for publishing — and 138 of the upstream
-catalog's 204 datasets are video.
+| R2 asset storage | **8.5** | A published dataset with no readable image is not published |
+| Video transcode | **8.6** | 138 of upstream's 204 datasets are video, and an upload without it 503s |
+| Orbit chat providers | **8.7** | Not a task — Orbit already works. It is a note next to the `AI` binding |
+| Content-Security-Policy | **Phase 14** | Hardening, and every fork needs it |
 
 ## 13.1 Standalone feedback widget
 
@@ -1666,31 +1693,7 @@ wrangler d1 execute sphere-feedback --remote --config wrangler.toml \
   --command "SELECT day, COUNT(*) FROM analytics_daily GROUP BY day ORDER BY day"
 ```
 
-## 13.3 Orbit chat providers
-
-**Default — Cloudflare Workers AI. Nothing to configure.**
-`functions/api/chat/completions.ts` calls the `AI` binding from
-Phase 8 and streams an OpenAI-shaped SSE response;
-`functions/api/models.ts` backs the "Test Connection" button. No
-API key reaches the browser. Model choice lives in `MODEL_MAP` in
-that file.
-
-There is **no server-side proxy for third-party providers.** Older
-docs described `LLM_PROVIDER_URL` / `LLM_PROVIDER_KEY` — those env
-vars are read by nothing. To use OpenAI or a local model, set the
-API URL + key in the running app under **Tools → Orbit Settings**
-(localStorage on web, OS keychain on desktop). Because the key
-lives client-side, that path suits a single operator's browser or a
-desktop install — not a shared public deployment. Local endpoints
-(`http://localhost:11434/v1` Ollama, `:1234` LM Studio, `:8080`
-llama.cpp) only work from desktop or dev, since Pages can't reach
-your localhost.
-
-Routing Workers AI through an AI Gateway is a **code change** — the
-`AI.run()` call accepts a `gateway` option but the current code
-doesn't pass one. A gateway URL in config does nothing on its own.
-
-## 13.4 CI-applied migrations (opt-in)
+## 13.3 CI-applied migrations (opt-in)
 
 `ci.yml` can apply pending `CATALOG_DB` migrations on every push to
 `main`, just before deploy. **Off by default.** Enable by setting
@@ -1710,7 +1713,7 @@ share the same physical D1 as production.
 on destructive DDL unless the migration opts in with a
 `-- destructive: reviewed` comment.
 
-## 13.5 Grafana
+## 13.4 Grafana
 
 > **Probably skip this.** The primary analytics surface is the
 > in-app `/publish/analytics` tab — privilege-gated, no external
@@ -1724,7 +1727,7 @@ to
 `https://api.cloudflare.com/client/v4/accounts/<W1>/analytics_engine/sql`,
 with `root_selector: "data"`.
 
-## 13.6 Voice, events, blog, YouTube
+## 13.5 Voice, events, blog, YouTube
 
 | Feature | Variables | Notes |
 |---|---|---|
@@ -1734,7 +1737,13 @@ with `root_selector: "data"`.
 | YouTube media suggestions | `YOUTUBE_API_KEY` (**secret**) | Absent = source stays off, nothing errors. [`YOUTUBE_API_KEY.md`](YOUTUBE_API_KEY.md) |
 | Current events / blog | none beyond Phase 8 | Feeds console at `/publish/feeds`. [`CURRENT_EVENTS_PLAN.md`](CURRENT_EVENTS_PLAN.md) |
 
-## 13.7 Content-Security-Policy
+# Phase 14 — Content-Security-Policy
+
+**All tiers, and the last thing before you put the node in front of
+the public.** This used to be the bottom entry of the optional list,
+which was wrong twice over. It is hardening rather than a feature.
+And *every* fork needs it: upstream enforces its policy at the
+Cloudflare edge, and edge rules do not travel with a fork.
 
 **The repo ships no CSP.** `src/index.html` has no `<meta>` policy,
 and `public/_headers` sets `X-Content-Type-Options`,
@@ -1758,7 +1767,9 @@ playback, VR and a tour before locking it down.
 
 ---
 
-# Phase 14 — Desktop app fork (Tier 3)
+---
+
+# Phase 15 — Desktop app fork (Tier 3)
 
 Three upstream-pinned values need changing. Skip entirely for a
 web-only node.
@@ -2255,7 +2266,7 @@ Tools → Privacy.
   ceiling.
 - **Test your own feedback loop.** File a report through the in-app
   form and confirm it appears in `/publish/feedback`.
-- **Add a CSP** (13.7).
+- **Add a CSP** — Phase 14, if you have not already.
 
 If something here is wrong or under-documented, please open an
 issue — most of this document exists because someone hit a snag

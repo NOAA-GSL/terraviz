@@ -70,6 +70,28 @@ describe('console deep-links into the guide', () => {
     expect(new Set(seen).size).toBe(seen.length)
   })
 
+  // A renumber that updates the heading but leaves the old phase
+  // number in the anchor resolves fine and lands on the wrong section
+  // — the same failure wearing a different hat, and not caught by the
+  // existence check above.
+  it('each anchor names the phase it belongs to', () => {
+    const mismatched = PHASES.filter(p => !p.anchor.startsWith(`phase-${p.n}-`)).map(
+      p => `phase ${p.n} → #${p.anchor}`,
+    )
+    expect(
+      mismatched,
+      'these anchors point at a different phase than the card they sit on',
+    ).toEqual([])
+  })
+
+  it('phase numbers are contiguous and ordered', () => {
+    const ns = PHASES.map(p => p.n)
+    expect(ns, 'PHASES is rendered in array order, so it must be sorted').toEqual(
+      [...ns].sort((a, b) => a - b),
+    )
+    expect(new Set(ns).size, 'two phases share a number').toBe(ns.length)
+  })
+
   // Pins the slug rule itself. If this drifts, the check above starts
   // passing or failing for the wrong reason.
   it('slugifies a phase heading the way GitHub does', () => {
