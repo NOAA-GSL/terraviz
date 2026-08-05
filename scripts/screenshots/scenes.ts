@@ -388,7 +388,7 @@ export const scenes: Scene[] = [
   {
     name: 'analyze-panel',
     description:
-      'Analyze panel for a data-encoded dataset — region picker, palette-coloured histogram, area-weighted statistics, coverage, the quantisation caveat, and a drawn transect with its value profile. The zonal profile renders between the statistics and the transect and is in neither the full shot nor the crop, so it is not in the visual record',
+      'Analyze panel for a data-encoded dataset — region picker, palette-coloured histogram, area-weighted statistics, coverage, the quantisation caveat, and a drawn transect with its value profile. NOT captured: the zonal profile (between the statistics and the transect) and the contour section (below it). Both fall outside the full shot and this scene\'s single crop — see the note on `crop` below',
     fixtures: catalogReportFixtures(),
     // Loads a dataset onto the WebGL globe; the panel is captured as a
     // crop, which the Weblate capturer ignores anyway.

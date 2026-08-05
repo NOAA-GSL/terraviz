@@ -17,6 +17,7 @@
  */
 
 import {
+  areaAboveKm2,
   buildHistogram,
   sampleTransect,
   summarize,
@@ -32,8 +33,15 @@ import {
   type TransectSample,
   type ZonalSample,
 } from '../services/datasetStats'
+import { extractContourSet, type ContourLevel } from '../services/datasetContours'
 import type { LumaSnapshot } from '../services/glLumaSampler'
-import { DEFAULT_DISPLAY, type ColorScaleDisplay } from '../services/colorScaleDisplay'
+import {
+  DEFAULT_DISPLAY,
+  buildDisplayLut,
+  colorbarTicks,
+  displayColorAtValue,
+  type ColorScaleDisplay,
+} from '../services/colorScaleDisplay'
 import type { ColorScale } from '../types/color-scale'
 import type { DatasetOverlayOptions } from '../types'
 import { getRegionNames, resolveRegion } from '../data/regions'
@@ -78,6 +86,44 @@ export interface AnalyzeSource {
   /** Drawing the analysed box on the globe. Same optionality, same
    *  reason. */
   regionOutline?(): RegionOutline | null
+  /** Drawing isolines on the globe. Same optionality, same reason. */
+  contours?(): ContourOverlay | null
+  /**
+   * The frame the globe is showing, as the label it displays.
+   *
+   * These datasets are animations — an 85-frame forecast for the shipped
+   * rows — so every number on this panel is a claim about one instant,
+   * and until now the panel never said which. Injected rather than read
+   * from the DOM here so the panel keeps its one-way dependency, and
+   * sourced from the same label Orbit's tools stamp on their results, so
+   * the two cannot disagree about which frame was measured.
+   */
+  frameTime?(): string | null
+  /**
+   * Identity of the frame on the globe — not for display, only for
+   * telling whether it changed.
+   *
+   * Separate from `frameTime()` on purpose. That one is the label a
+   * human reads, and it is the wrong thing to compare against: it is
+   * snapped to the dataset's display interval, so several video frames
+   * share one label, and it is absent entirely for a dataset with no
+   * start/end times. A watch built on it compares null to null forever
+   * and never fires — silently, which is the failure mode `15a5926`
+   * already taught this codebase to distrust.
+   */
+  frameId?(): string | null
+}
+
+/**
+ * The globe's side of the contours: draw the isoline, and take it away.
+ *
+ * Same seam shape as `RegionOutline` and `TransectPicker`, for the same
+ * reason — the panel computes geometry and never learns that MapLibre
+ * exists, and a test can drive the contour section with no map.
+ */
+export interface ContourOverlay {
+  show(levels: ContourLevel[]): void
+  clear(): void
 }
 
 /**
@@ -122,11 +168,19 @@ export type AnalyzeScope =
 let source: AnalyzeSource | null = null
 let scope: AnalyzeScope = { kind: 'dataset' }
 let lastResult: { stats: RegionStats; hist: LumaHistogram; scale: ColorScale } | null = null
-/** The texel window the region statistics were computed over, so the
- *  zonal profile below them describes the same box rather than silently
- *  widening to the whole frame. `undefined` is the whole dataset, which
- *  is what the reducers already take to mean "no window". Only read when
- *  `lastResult` is set. */
+/**
+ * The texel window the region statistics were computed over.
+ *
+ * Both surfaces below the statistics read it, for the same reason: the
+ * zonal profile must describe the same box rather than silently widening
+ * to the whole frame, and an isoline must cover exactly the region the
+ * numbers beside it describe. They arrived as two variables holding one
+ * value — `lastWindow` and `contourWindow` — which is a pair that can
+ * only ever drift apart, so they are one.
+ *
+ * `undefined` is the whole dataset, which is what the reducers already
+ * take to mean "no window". Only read when `lastResult` is set.
+ */
 let lastWindow: TexelWindow | undefined
 let lastZonal: { samples: ZonalSample[]; scale: ColorScale } | null = null
 let lastTrigger: HTMLElement | null = null
@@ -138,6 +192,31 @@ let openedFor: string | null = null
 let transectHost: HTMLElement | null = null
 let transectEnds: TransectEndpoints | null = null
 let transectArmed = false
+/** The contour section's own container, so changing the threshold
+ *  redraws the isoline without recomputing the histogram above it. */
+let contourHost: HTMLElement | null = null
+/** Whether lines are currently on the globe, so the section can offer
+ *  Draw or Clear rather than inferring it from the threshold. */
+let contourDrawn = false
+/** Identity of the frame the drawn contours were computed from, as
+ *  reported by `frameId()`. Compared, never displayed. */
+let contourFrameId: string | null = null
+/** Interval handle for the staleness watch, live only while lines are up. */
+let contourWatch: number | null = null
+/** Set when the watch removed the lines, so the section can say why they
+ *  went rather than leaving the user to wonder. Cleared on the next draw. */
+let contourStaleCleared = false
+/**
+ * How many isolines to aim for.
+ *
+ * Passed to `colorbarTicks`, which rounds to a 1/2/5 × 10^k step and so
+ * returns near this rather than exactly it. Five is a starting point,
+ * not a measurement: on a smoke plume at low zoom, much past a dozen
+ * lines reads as hatching rather than as structure, and the right
+ * number is the sort of thing that only settles by looking at real
+ * fields.
+ */
+const CONTOUR_LEVEL_TARGET = 5
 let lastTransect: { samples: TransectSample[]; scale: ColorScale } | null = null
 /**
  * The frame everything on screen was computed from.
@@ -165,6 +244,7 @@ let lastFrame: {
 export function initAnalyzeUI(src: AnalyzeSource): void {
   source?.transect?.()?.clear()
   source?.regionOutline?.()?.clear()
+  clearContours()
   source = src
   scope = { kind: 'dataset' }
   transectEnds = null
@@ -183,11 +263,13 @@ export function closeAnalyzeUI(): void {
   // would be an annotation with nothing on screen left to explain or
   // remove it.
   clearTransect()
+  clearContours()
   source?.regionOutline?.()?.clear()
   root?.remove()
   root = null
   openedFor = null
   transectHost = null
+  contourHost = null
   lastFrame = null
   document.removeEventListener('keydown', onEscape, true)
   lastTrigger?.focus()
@@ -374,6 +456,15 @@ function refresh(body: HTMLElement): void {
   lastZonal = null
   lastFrame = null
   transectHost = null
+  contourHost = null
+  // Anything already drawn was extracted against the *previous* frame
+  // and the previous region window, so it cannot survive a recompute.
+  // Changing the scope from the whole dataset to Alabama and leaving the
+  // old lines up would put whole-dataset contours on the globe beside a
+  // panel quoting Alabama's areas — the same annotation-outliving-its-
+  // explanation failure the playback watch exists to prevent, one
+  // trigger further along.
+  clearContours()
 
   const src = source
   if (!src) {
@@ -388,6 +479,7 @@ function refresh(body: HTMLElement): void {
     // data-encoded work takes. The box goes with the numbers it was
     // explaining.
     src.regionOutline?.()?.clear()
+    clearContours()
     body.appendChild(message(t('analyze.empty.noDataset')))
     return
   }
@@ -414,6 +506,18 @@ function refresh(body: HTMLElement): void {
     transectHost.className = 'analyze-transect-section'
     body.appendChild(transectHost)
     renderTransectSection()
+  }
+
+  // Same availability-not-state rule as the transect: present whenever
+  // there is a globe to draw on. Unlike the transect it needs the
+  // region block to have produced a histogram, which `renderContourSection`
+  // checks for itself rather than being gated here — the two reasons a
+  // section can be absent should not be spelled in two places.
+  if (src.contours?.()) {
+    contourHost = document.createElement('section')
+    contourHost.className = 'analyze-contour-section'
+    body.appendChild(contourHost)
+    renderContourSection()
   }
 }
 
@@ -450,6 +554,14 @@ function renderRegionBlock(
   body.appendChild(renderHistogramCaption(scale))
   body.appendChild(renderStats(stats))
   body.appendChild(renderCoverage(stats))
+  const measuredAt = src.frameTime?.()
+  // Which instant these numbers describe. These are animations, so a
+  // statistic with no frame named is a claim about an unnamed moment —
+  // the same reason Orbit's tool results carry a `frameTime`. Absent for
+  // a dataset with no time label, where there is nothing to name.
+  if (measuredAt) {
+    body.appendChild(caption(t('analyze.frameTime', { time: measuredAt })))
+  }
   body.appendChild(renderPrecisionNote(scale))
   body.appendChild(renderExport(src))
 }
@@ -672,6 +784,209 @@ function renderTransectSection(): void {
   // inline action in the header row.
   exportBtn.className = 'analyze-export'
   host.appendChild(exportBtn)
+}
+
+/**
+ * The contour block: outline whatever the colorbar's threshold is
+ * isolating, and say how much area that is.
+ *
+ * The threshold is A1's, not one of this panel's own. That makes the
+ * line and the colour agree by construction — what the globe is
+ * isolating is what gets outlined and what gets measured — at the cost
+ * of the contour being tied to a viewing control, so resetting the
+ * palette takes it away. That tradeoff was chosen deliberately.
+ *
+ * Read at Draw time rather than subscribed to, which is this panel's
+ * standing doctrine: computation is user-initiated and one-shot. Moving
+ * the colorbar afterwards leaves the drawn lines where they were until
+ * Draw is pressed again, and the caption says so rather than leaving
+ * someone to discover it.
+ */
+function renderContourSection(): void {
+  const host = contourHost
+  const overlay = source?.contours?.()
+  const src = source
+  if (!host || !overlay || !src) return
+  host.replaceChildren()
+
+  const head = document.createElement('div')
+  head.className = 'analyze-contour-head'
+  const label = document.createElement('h3')
+  label.textContent = t('analyze.contour.title')
+  head.appendChild(label)
+  host.appendChild(head)
+
+  const frame = lastFrame
+  const result = lastResult
+  if (!frame || !result) {
+    host.appendChild(message(t('analyze.empty.noValues')))
+    return
+  }
+
+  const display = src.display()
+  const { min, max } = display.threshold
+  const { scale } = result
+
+  // Levels are the colour bar's own round-number ticks, not an even
+  // division of min..max. Two reasons: a tick lands on 1/2/5 × 10^k
+  // rather than on 3.47e-5, which is what every paper contour map does
+  // and what a reader can hold in their head; and because they are
+  // *the same* ticks the bar is labelled with, a line on the globe can
+  // be read against the legend without interpolating between labels.
+  //
+  // The threshold scopes rather than sets them. With no threshold the
+  // contours span the whole range; with one, they subdivide only the
+  // band the globe is isolating — which is the colour bar saying which
+  // part of the range is worth subdividing.
+  const inScope = (v: number): boolean =>
+    (min === null || v >= min) && (max === null || v <= max)
+  const lut = buildDisplayLut(scale, display)
+  const levels = colorbarTicks(scale, display, CONTOUR_LEVEL_TARGET)
+    .map(tick => tick.value)
+    .filter(v => Number.isFinite(v) && inScope(v))
+
+  if (!levels.length) {
+    // Can happen with a narrow threshold band that no round tick falls
+    // inside. Say which control moves it rather than showing a dead
+    // button.
+    host.appendChild(message(t('analyze.contour.noLevels')))
+    return
+  }
+
+  head.appendChild(
+    actionButton(
+      contourDrawn ? t('analyze.contour.clear') : t('analyze.contour.draw'),
+      () => {
+        if (contourDrawn) {
+          clearContours()
+        } else {
+          const set = extractContourSet(
+            frame.snapshot, frame.scale, levels, frame.options, lastWindow)
+          // Each line painted in the colour the globe is already using
+          // at that level, so the map and its own contours cannot
+          // disagree. A level the ramp hides gets no colour back and
+          // falls through to the default rather than being drawn in a
+          // colour that appears nowhere on the surface.
+          overlay.show(set.map((level): ContourLevel => {
+            const color = displayColorAtValue(lut, scale, level.value)
+            return color ? { ...level, color } : level
+          }))
+          contourDrawn = true
+          contourStaleCleared = false
+          contourFrameId = src.frameId?.() ?? null
+          startContourWatch()
+        }
+        renderContourSection()
+      },
+    ),
+  )
+
+  // Area at each level, from the histogram rather than from the polygons
+  // the lines enclose — see `datasetContours`' header for why the counted
+  // number is the one to quote. This is the newsroom question asked at
+  // every line rather than at one.
+  const list = document.createElement('ul')
+  list.className = 'analyze-contour-levels'
+  for (const value of levels) {
+    const row = document.createElement('li')
+    const swatch = document.createElement('span')
+    swatch.className = 'analyze-contour-swatch'
+    const color = displayColorAtValue(lut, scale, value)
+    if (color) swatch.style.background = color
+    row.appendChild(swatch)
+    const text = document.createElement('span')
+    text.textContent = t('analyze.contour.levelRow', {
+      level: formatStatValue(value, scale.units),
+      km2: formatNumber(Math.round(areaAboveKm2(result.hist, scale, value))),
+    })
+    row.appendChild(text)
+    list.appendChild(row)
+  }
+  host.appendChild(list)
+
+  host.appendChild(
+    caption(
+      min !== null || max !== null
+        ? t('analyze.contour.scopedCaption', { count: formatNumber(levels.length) })
+        : t('analyze.contour.rangeCaption', { count: formatNumber(levels.length) }),
+    ),
+  )
+  if (contourStaleCleared) host.appendChild(message(t('analyze.contour.staleCleared')))
+  // Drawn, but with no way to notice the globe moving on. Say it on the
+  // surface: a guard that cannot run is worth exactly as much as the
+  // user's knowledge that it cannot run.
+  if (contourDrawn && contourWatch === null) {
+    host.appendChild(message(t('analyze.contour.unwatched')))
+  }
+  host.appendChild(caption(t('analyze.contour.staleNote')))
+}
+
+function clearContours(): void {
+  source?.contours?.()?.clear()
+  contourDrawn = false
+  contourFrameId = null
+  // The staleness explanation belongs to one draw/watch cycle. Left set,
+  // it outlives the lines it was explaining: reopening the panel, or
+  // changing region, shows "the globe moved to another frame" beside a
+  // section that drew nothing — blaming playback for something else, and
+  // pointing at contours that were never on screen. The watch re-sets it
+  // on the line after it calls this, so clearing it here costs nothing.
+  contourStaleCleared = false
+  stopContourWatch()
+}
+
+/**
+ * How often to ask whether the globe has moved to another frame.
+ *
+ * A string compare twice a second, and only while lines are actually on
+ * the globe. The panel's standing rule is that nothing here runs per
+ * frame or per pointer event; this runs at neither rate, and the
+ * alternative — a seam from the playback controller into this panel —
+ * is a larger change than removing a stale annotation warrants.
+ */
+const CONTOUR_WATCH_MS = 500
+
+/**
+ * Remove the lines once the globe is showing a different frame.
+ *
+ * Contours are computed from one frame and never recomputed, so on a
+ * playing animation they very quickly describe something that is no
+ * longer on screen — a confident isoline over a field it was not
+ * measured from. Every other annotation this panel draws is cleared when
+ * the thing explaining it goes away: the region box on dataset change,
+ * the transect on close, all of them on dispose. Playback was the case
+ * that got missed.
+ *
+ * Clearing rather than recomputing is deliberate. Recomputing means a
+ * full ~8 MB readback, which `glLumaSampler`'s docstring is emphatic
+ * cannot happen per displayed frame. Removing the line costs nothing and
+ * is honest; following it live is a separate piece of work with a
+ * separate budget.
+ */
+function startContourWatch(): void {
+  stopContourWatch()
+  const src = source
+  // No way to identify the frame means no way to notice it changing.
+  // Say so on the surface rather than running a watch that compares
+  // null to null forever and reports nothing.
+  if (!src?.frameId || contourFrameId === null) return
+  contourWatch = window.setInterval(() => {
+    if (!contourDrawn) {
+      stopContourWatch()
+      return
+    }
+    const now = src.frameId?.() ?? null
+    if (now === contourFrameId) return
+    clearContours()
+    contourStaleCleared = true
+    renderContourSection()
+  }, CONTOUR_WATCH_MS)
+}
+
+function stopContourWatch(): void {
+  if (contourWatch === null) return
+  window.clearInterval(contourWatch)
+  contourWatch = null
 }
 
 function actionButton(text: string, onClick: () => void): HTMLButtonElement {

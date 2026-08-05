@@ -70,7 +70,7 @@ import { resolveRegion } from './data/regions'
 import type { PublicEvent } from './services/eventsService'
 import { TourEngine, type TourTelemetryMeta } from './services/tourEngine'
 import { showTourControls, hideTourControls, hideAllTourTextBoxes, hideAllTourImages, hideAllTourVideos, hideAllTourPopups, hideAllTourQuestions } from './ui/tourUI'
-import { initLegendForDataset, clearLegendCache, loadConfig } from './services/docentService'
+import { initLegendForDataset, clearLegendCache, loadConfig, readCurrentTime } from './services/docentService'
 import { isMobile, IS_MOBILE_NATIVE, getCloudTextureUrl } from './utils/deviceCapability'
 import { initDeepLinks } from './services/deepLinkService'
 import {
@@ -450,6 +450,24 @@ class InteractiveSphere {
             clear: () => primary.clearRegionOutline(),
           }
         },
+        contours: () => {
+          const primary = this.viewports.getPrimary()
+          if (!primary) return null
+          return {
+            show: (levels) => primary.showContours(levels),
+            clear: () => primary.clearContours(),
+          }
+        },
+        // The same label Orbit's tool results are stamped with, so the
+        // panel and an Orbit answer can never name different frames for
+        // the same measurement.
+        frameTime: () => readCurrentTime(),
+        // Identity, not display. `readCurrentTime` reads the *label*,
+        // which is snapped to the display interval and hidden outright
+        // for a dataset without start/end times — useless for telling
+        // whether the frame moved. This is the video playhead, the same
+        // value the luma sampler keys its snapshot cache on.
+        frameId: () => this.viewports.getPrimary()?.currentFrameId() ?? null,
       })
       // The same frame, reachable from Orbit's tool executors (§A6).
       // Registered rather than passed down: `processMessage` already
