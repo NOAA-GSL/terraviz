@@ -1066,7 +1066,7 @@ openssl rand -base64 32      # → W18
 
 ---
 
-# Phase 8 — Wire bindings, variables and secrets
+# Phase 8 — Wire bindings, storage and transcode
 
 Everything referenced below now exists. Pages → your project →
 **Settings → Bindings** (and **Variables and secrets**).
