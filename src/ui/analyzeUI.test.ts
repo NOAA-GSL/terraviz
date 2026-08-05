@@ -628,6 +628,14 @@ describe('zonal profile', () => {
 })
 
 describe('recomputing when the globe settles on a frame', () => {
+  // Drawing contours arms a real `setInterval` staleness watch. The
+  // top-level `beforeEach` stops it via `closeAnalyzeUI`, but that only
+  // covers the *next* test — the last one in this block would otherwise
+  // leave a live 500 ms timer running past the end of the file, into
+  // whichever suite the worker picks up next. Observed: it failed an
+  // unrelated publisher test.
+  afterEach(() => { closeAnalyzeUI() })
+
   /** A source whose frame content can be swapped from the test, standing
    *  in for playback moving the globe underneath the panel. */
   function movingFrame() {
@@ -665,6 +673,57 @@ describe('recomputing when the globe settles on a frame', () => {
     m.advance(240)
     notifyAnalyzePlaybackSettled()
     expect(document.querySelector('.analyze-zonal-section')!.textContent).not.toBe(before)
+  })
+
+  it('puts the contours back, against the frame just settled on', () => {
+    // The case #342 named as "merely unbuilt": lines drawn, playback
+    // moves, the watch takes them down. On settle they should return —
+    // recomputed against the new frame, not the old geometry restored.
+    const c = makeContours()
+    const m = movingFrame()
+    initAnalyzeUI(makeSource({ contours: () => c.overlay, frame: m.src.frame }))
+    openAnalyzeUI()
+    contourButton()!.click()
+    expect(c.shown()).toHaveLength(1)
+
+    m.advance(240)
+    notifyAnalyzePlaybackSettled()
+    expect(c.shown()).toHaveLength(2)
+    // And the section knows they are up, rather than offering to draw
+    // what is already on the globe.
+    expect(contourButton()!.textContent).toBe('Clear outline')
+  })
+
+  it('does not draw contours that were never asked for', () => {
+    // The expensive half. A pause with no lines on the globe must not
+    // spend 178-376 ms extracting a set nobody requested.
+    const c = makeContours()
+    const m = movingFrame()
+    initAnalyzeUI(makeSource({ contours: () => c.overlay, frame: m.src.frame }))
+    openAnalyzeUI()
+    expect(c.shown()).toHaveLength(0)
+
+    m.advance(240)
+    notifyAnalyzePlaybackSettled()
+    expect(c.shown()).toHaveLength(0)
+    expect(contourButton()!.textContent).toBe('Outline on globe')
+  })
+
+  it('stops redrawing once the viewer clears the lines', () => {
+    // Clearing is the withdrawal of the request, so later settles must
+    // not keep resurrecting them.
+    const c = makeContours()
+    const m = movingFrame()
+    initAnalyzeUI(makeSource({ contours: () => c.overlay, frame: m.src.frame }))
+    openAnalyzeUI()
+    contourButton()!.click()
+    contourButton()!.click() // toggles to Clear
+    expect(contourButton()!.textContent).toBe('Outline on globe')
+    const before = c.shown().length
+
+    m.advance(240)
+    notifyAnalyzePlaybackSettled()
+    expect(c.shown()).toHaveLength(before)
   })
 
   it('does nothing when the panel is closed', () => {

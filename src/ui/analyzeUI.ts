@@ -206,6 +206,10 @@ let contourWatch: number | null = null
 /** Set when the watch removed the lines, so the section can say why they
  *  went rather than leaving the user to wonder. Cleared on the next draw. */
 let contourStaleCleared = false
+/** Set when a settle should put the lines back. Survives the `refresh`
+ *  that clears every other contour flag, because it records what the
+ *  viewer asked for rather than what is currently on the globe. */
+let contourRedrawPending = false
 /**
  * How many isolines to aim for.
  *
@@ -322,20 +326,25 @@ export function notifyAnalyzeDatasetChanged(datasetId: string | null): void {
  * on a 4096×2048 frame, which on a settle is a hitch nobody perceives,
  * with no worker and no async readback.
  *
- * **Contours are not redrawn**, and that is a decision rather than an
- * omission. They cost 178–376 ms depending on how much perimeter the
- * levels cut — an order more than everything else here — and drawing
- * them is something the viewer explicitly asked for by clicking. Putting
- * that on every pause spends the user's frame budget on an overlay they
- * did not request this time. The staleness watch has already taken the
- * old lines down and said why; the button is right there. Whether a
- * *drawn* set should follow the playhead is a product call, and belongs
- * with whoever makes it rather than inside the seam that made it
- * possible.
+ * **Contours come back too, but only if they were up.** They are the
+ * expensive part — 178–376 ms depending on how much perimeter the levels
+ * cut, against ~60 ms for everything else — so they are redrawn on the
+ * strength of the viewer having asked for them, never speculatively. A
+ * pause with no lines on the globe costs nothing extra.
+ *
+ * That intent has to be read *before* `refresh`, which clears every
+ * contour flag by design: anything drawn was extracted against the
+ * previous frame and cannot survive a recompute. `contourDrawn` covers a
+ * pause quick enough that the staleness watch has not fired yet;
+ * `contourStaleCleared` covers the ordinary case where it has, and the
+ * lines are already down with the panel explaining why. Either means the
+ * same thing here — the viewer wanted contours, and there is now a
+ * settled frame to draw them against.
  */
 export function notifyAnalyzePlaybackSettled(): void {
   const body = root?.querySelector('.analyze-body') as HTMLElement | null
   if (!body) return
+  contourRedrawPending = contourDrawn || contourStaleCleared
   refresh(body)
 }
 
@@ -841,6 +850,13 @@ function renderTransectSection(): void {
  * someone to discover it.
  */
 function renderContourSection(): void {
+  // Consumed exactly once per render, whichever path this takes. Read
+  // here rather than at the draw site so an early return — no levels in
+  // scope, no numbers to draw against — cannot leave the request armed
+  // to fire on some later, unrelated render.
+  const redrawPending = contourRedrawPending
+  contourRedrawPending = false
+
   const host = contourHost
   const overlay = source?.contours?.()
   const src = source
@@ -891,29 +907,37 @@ function renderContourSection(): void {
     return
   }
 
+  const draw = (): void => {
+    const set = extractContourSet(
+      frame.snapshot, frame.scale, levels, frame.options, lastWindow)
+    // Each line painted in the colour the globe is already using at that
+    // level, so the map and its own contours cannot disagree. A level
+    // the ramp hides gets no colour back and falls through to the
+    // default rather than being drawn in a colour that appears nowhere
+    // on the surface.
+    overlay.show(set.map((level): ContourLevel => {
+      const color = displayColorAtValue(lut, scale, level.value)
+      return color ? { ...level, color } : level
+    }))
+    contourDrawn = true
+    contourStaleCleared = false
+    contourFrameId = src.frameId?.() ?? null
+    startContourWatch()
+  }
+
+  // Redraw before the button is built, so its label reads Clear rather
+  // than flashing Draw for one render. Doing it here rather than after
+  // `refresh` returns is what keeps this to a single pass: the section
+  // is being rebuilt anyway, and `draw` already has every derived piece
+  // in scope.
+  if (redrawPending) draw()
+
   head.appendChild(
     actionButton(
       contourDrawn ? t('analyze.contour.clear') : t('analyze.contour.draw'),
       () => {
-        if (contourDrawn) {
-          clearContours()
-        } else {
-          const set = extractContourSet(
-            frame.snapshot, frame.scale, levels, frame.options, lastWindow)
-          // Each line painted in the colour the globe is already using
-          // at that level, so the map and its own contours cannot
-          // disagree. A level the ramp hides gets no colour back and
-          // falls through to the default rather than being drawn in a
-          // colour that appears nowhere on the surface.
-          overlay.show(set.map((level): ContourLevel => {
-            const color = displayColorAtValue(lut, scale, level.value)
-            return color ? { ...level, color } : level
-          }))
-          contourDrawn = true
-          contourStaleCleared = false
-          contourFrameId = src.frameId?.() ?? null
-          startContourWatch()
-        }
+        if (contourDrawn) clearContours()
+        else draw()
         renderContourSection()
       },
     ),
