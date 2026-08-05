@@ -491,22 +491,6 @@ npm run terraviz -- import-snapshot \\
   },
   {
     n: 13,
-    label: 'Optional add-ons',
-    title: 'Optional features',
-    minTier: 2,
-    duration: 'optional',
-    aside: 'Tier 2+ · take what you want',
-    intro: [
-      'Your node is complete and serving content without any of this. All five are independent — read the trigger, take what you want, and come back for the rest whenever.',
-      'Four things used to be filed here and are not, because calling them optional was wrong. R2 asset storage is now 8.5, video transcode 8.6, and Orbit chat providers 8.7 — that last one was never a task at all. The Content-Security-Policy is Phase 14, because every fork needs one.',
-    ],
-    gate: 'Each feature you turned on answers: the widget POST returns 200, the export writes an NDJSON object, `/publish/analytics` shows yesterday.',
-    gateShort: 'The optional features you chose are working.',
-    anchor: 'phase-13--optional-features',
-    linkText: 'All five, in full',
-  },
-  {
-    n: 14,
     label: 'Add a CSP',
     title: 'Content-Security-Policy',
     minTier: 1,
@@ -518,7 +502,23 @@ npm run terraviz -- import-snapshot \\
     ],
     gate: 'Playback, VR and a tour all still work with the policy live.',
     gateShort: 'A CSP is in place and nothing broke.',
-    anchor: 'phase-14--content-security-policy',
+    anchor: 'phase-13--content-security-policy',
+  },
+  {
+    n: 14,
+    label: 'Optional features',
+    title: 'Optional features',
+    minTier: 2,
+    duration: 'optional',
+    aside: 'Tier 2+ · take what you want',
+    intro: [
+      'Everything up to here is work every node does. This is the first phase you can genuinely skip \u2014 the node is complete and serving content without any of it. All five are independent — read the trigger, take what you want, and come back for the rest whenever.',
+      'Four things used to be filed here and are not, because calling them optional was wrong. R2 asset storage is now 8.5, video transcode 8.6, and Orbit chat providers 8.7 — that last one was never a task at all. The Content-Security-Policy is Phase 13, because every fork needs one.',
+    ],
+    gate: 'Each feature you turned on answers: the widget POST returns 200, the export writes an NDJSON object, `/publish/analytics` shows yesterday.',
+    gateShort: 'The optional features you chose are working.',
+    anchor: 'phase-14--optional-features',
+    linkText: 'All five, in full',
   },
   {
     n: 15,
@@ -551,7 +551,7 @@ export const ADDONS: Array<{
   extra?: string
 }> = [
   {
-    id: '13.1',
+    id: '14.1',
     title: 'Standalone feedback widget',
     flag: 'if you ship it',
     body: 'The standalone HTML build posts to `/api/feedback`, which takes wildcard CORS and no Origin so it works from `file://`. It needs a WAF skip rule: the widget runs without cookies and its fallback is a `mailto:` draft, so an interstitial silently swallows every submission rather than failing loudly.',
@@ -559,7 +559,7 @@ export const ADDONS: Array<{
       '**What it takes:** one WAF skip rule on `POST /api/feedback`, then a `curl` from a cookie-less client to confirm you get `200 {"ok":true}` rather than challenge HTML. The bindings it needs — `FEEDBACK_DB`, and `CATALOG_R2` for screenshots — you already set in Phase 8.',
   },
   {
-    id: '13.2',
+    id: '14.2',
     title: 'Analytics long-term export',
     flag: 'recommended',
     body: 'Analytics Engine retains 30–90 days. A daily job drains each completed day into an archive bucket plus rollups — that is the data behind the in-app analytics tab. Run the backfill once while AE still remembers.',
@@ -567,7 +567,7 @@ export const ADDONS: Array<{
       '**What it takes:** `wrangler r2 bucket create terraviz-analytics`, bind it as `ANALYTICS_R2`, set `CF_ACCOUNT_ID` plus an `ANALYTICS_SQL_TOKEN` secret scoped to Account Analytics → Read, redeploy, then enable the daily workflow — forks start with scheduled workflows off. Run the backfill once from the Actions tab while Analytics Engine still remembers. Two commands verify it.',
   },
   {
-    id: '13.3',
+    id: '14.3',
     title: 'CI-applied migrations',
     flag: 'opt-in',
     body: 'Lets `ci.yml` apply pending catalog migrations on every push to `main`, just before deploy. Off unless you set `ENABLE_D1_MIGRATE=1` — and only after granting your API token D1 Edit, because the step runs before the deploy and a token without it blocks the whole thing.',
@@ -575,7 +575,7 @@ export const ADDONS: Array<{
       "**What it takes:** grant your API token Account → D1 → Edit, *then* set the repo variable `ENABLE_D1_MIGRATE=1`. That order matters — the step runs before the deploy, so a token without D1 access blocks the whole deploy rather than just the migration. Editing a token's permissions keeps its value, so nothing needs rotating.",
   },
   {
-    id: '13.4',
+    id: '14.4',
     title: 'Grafana',
     flag: 'probably skip',
     body: 'The in-app analytics tab is the primary surface and needs no external service. Grafana is here for ad-hoc SQL against the raw stream; there is no native Analytics Engine plugin, so the shipped dashboards post SQL over HTTP through Infinity.',
@@ -583,7 +583,7 @@ export const ADDONS: Array<{
       '**What it takes:** import the four dashboard JSONs from `grafana/dashboards/` and point an Infinity datasource at the Analytics Engine SQL endpoint. There is no native plugin, so the dashboards post SQL over HTTP with `root_selector: "data"`.',
   },
   {
-    id: '13.5',
+    id: '14.5',
     title: 'Voice, events, blog, YouTube',
     flag: 'per-feature',
     body: 'Orbit voice runs on the `AI` binding with nothing set. Realtime streaming STT, the wake word and YouTube media suggestions each want their own variables. Each degrades quietly when those are absent rather than erroring, so turning one on is additive and turning it off is safe.',

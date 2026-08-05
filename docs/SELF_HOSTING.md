@@ -32,14 +32,15 @@ Two companion reads:
 ## Pick your node type first
 
 Everything below is written for **Tier 2**. Tier 1 operators stop
-after Phase 5; Tier 3 operators add Phase 15. Every tier should
-finish with Phase 14 before going public — it is the CSP a fork
-does not inherit.
+after Phase 5; Tier 3 operators add Phase 15. Every tier finishes
+with Phase 13 before going public — it is the CSP a fork does not
+inherit. Phase 14 is genuinely optional and comes after it for
+exactly that reason.
 
 | Tier | What you get | What it costs you | Stop after |
 |---|---|---|---|
-| **1 — Viewer node** | The globe, the upstream SOS dataset catalog, Orbit chat, telemetry. No publishing. | ~30 min, $5/mo (Workers Paid) | Phase 5, then 14 |
-| **2 — Publisher node** | Everything above, plus your own datasets/tours, the publisher portal, semantic search, events, blog. | ~2–3 h, $5/mo + storage | Phase 12, then 14 |
+| **1 — Viewer node** | The globe, the upstream SOS dataset catalog, Orbit chat, telemetry. No publishing. | ~30 min, $5/mo (Workers Paid) | Phase 5, then 13 |
+| **2 — Publisher node** | Everything above, plus your own datasets/tours, the publisher portal, semantic search, events, blog. | ~2–3 h, $5/mo + storage | Phase 13 |
 | **3 — Publisher node + desktop app** | Tier 2 plus branded Tauri desktop builds with your own update feed. | + ~1 h | Phase 15 |
 
 > **Time estimates assume nothing goes wrong and your domain is
@@ -191,7 +192,7 @@ itself where it is known and not secret.
 | **7** | Generates `PREVIEW_SIGNING_KEY` into `.dev.vars`. |
 | **8** | Writes every binding, variable and available secret to **both** Production and Preview. |
 | **8.5** | Sets the R2 CORS policy and attaches the public bucket domain. |
-| **8.6/13.1** | Appends the two WAF skip rules, preserving your existing rules. |
+| **8.6/14.1** | Appends the two WAF skip rules, preserving your existing rules. |
 
 Two flags select different things, and it is worth keeping them
 straight. **`--only=` picks which steps run.** **`--with=` declares
@@ -273,7 +274,7 @@ burning its timeout.
 | Account → Workers R2 Storage → **Edit** | Phase 8.5 |
 | Zone → Zone → **Read** | resolving the zone for 8.5 / 8.6 |
 | Zone → Zone WAF → **Edit** | Phase 8.6 |
-| Account → D1 → **Edit** | only if you enable CI migrations (13.3) |
+| Account → D1 → **Edit** | only if you enable CI migrations (14.3) |
 
 Grant only what you plan to run — each step names the permission it
 is missing rather than failing with a bare `10000: Authentication
@@ -880,7 +881,7 @@ that isn't yours.
 
 `W11` needs, at minimum, **Account → Cloudflare Pages → Edit**. Add
 **Account → D1 → Edit** only if you enable CI migrations (Phase
-13.3). Mint it at
+14.3). Mint it at
 `https://dash.cloudflare.com/profile/api-tokens`.
 
 > Forks created with GitHub's **Fork** button land with Actions
@@ -1313,7 +1314,7 @@ at stage 5. The CLI detects the challenge HTML and prints a
 one-line pointer at this section rather than a 30 KB blob.
 
 > **Automated (opt-in).** `npm run setup -- --apply --only=waf`
-> appends this rule *and* the 13.1 feedback rule, preserving every
+> appends this rule *and* the 14.1 feedback rule, preserving every
 > existing rule in the zone. It is deliberately excluded from a
 > default run: the rulesets API replaces a zone's whole custom-rule
 > list rather than appending, so a careless implementation deletes
@@ -1596,7 +1597,43 @@ and all six checks are green. **That's a complete Tier 2 node.**
 
 ---
 
-# Phase 13 — Optional features
+# Phase 13 — Content-Security-Policy
+
+**All tiers, and the last thing before you put the node in front of
+the public.** It used to be the bottom entry of an optional list,
+which was wrong twice over. It is hardening rather than a feature.
+And *every* fork needs it: upstream enforces its policy at the
+Cloudflare edge, and edge rules do not travel with a fork.
+
+It sits ahead of the optional phase deliberately. Everything from
+here to Phase 13 is work every node does; Phase 14 is the first
+thing you may genuinely skip.
+
+**The repo ships no CSP.** `src/index.html` has no `<meta>` policy,
+and `public/_headers` sets `X-Content-Type-Options`,
+`Referrer-Policy` and `Permissions-Policy` but no CSP. Upstream's
+production deploy enforces a strict `connect-src` policy **at the
+Cloudflare edge** via Transform Rules — which a fork does **not**
+inherit. Your node works without one; you should still add your
+own, as an edge rule or a `Content-Security-Policy` line in
+`public/_headers`:
+
+- `connect-src`: `'self'`, `gibs.earthdata.nasa.gov`,
+  `s3.dualstack.us-east-1.amazonaws.com` (SOS snapshot), your video
+  and caption proxies, and `W19`.
+- `img-src` / `media-src`: `'self' data: blob:`, your
+  `VITE_EARTH_ASSET_BASE` host, the SOS/CloudFront asset hosts,
+  and `W19`.
+
+The app uses `blob:` for preview tours and screenshots — omitting
+it reproduces the "may not load data from blob:" failure. Test
+playback, VR and a tour before locking it down.
+
+---
+
+---
+
+# Phase 14 — Optional features
 
 Everything here is genuinely optional: your node is complete and
 serving content without any of it. Independent of each other, so
@@ -1604,11 +1641,11 @@ read the trigger and take what you want.
 
 | | Do it when |
 |---|---|
-| **13.1 Feedback widget** | You ship the standalone HTML build and want its reports to reach `/publish/feedback` |
-| **13.2 Analytics export** | You want `/publish/analytics` to hold more than the 30–90 days Analytics Engine keeps |
-| **13.3 CI migrations** | You want schema applied automatically on push to `main` |
-| **13.4 Grafana** | You want ad-hoc SQL against the raw telemetry stream. 13.2 covers the normal case |
-| **13.5 Voice, events, blog, YouTube** | Per-feature. Each degrades quietly when its variables are unset |
+| **14.1 Feedback widget** | You ship the standalone HTML build and want its reports to reach `/publish/feedback` |
+| **14.2 Analytics export** | You want `/publish/analytics` to hold more than the 30–90 days Analytics Engine keeps |
+| **14.3 CI migrations** | You want schema applied automatically on push to `main` |
+| **14.4 Grafana** | You want ad-hoc SQL against the raw telemetry stream. 14.2 covers the normal case |
+| **14.5 Voice, events, blog, YouTube** | Per-feature. Each degrades quietly when its variables are unset |
 
 **Four things used to be filed here and are not,** because calling
 them optional was wrong:
@@ -1618,9 +1655,9 @@ them optional was wrong:
 | R2 asset storage | **8.5** | A published dataset with no readable image is not published |
 | Video transcode | **8.6** | 138 of upstream's 204 datasets are video, and an upload without it 503s |
 | Orbit chat providers | **8.7** | Not a task — Orbit already works. It is a note next to the `AI` binding |
-| Content-Security-Policy | **Phase 14** | Hardening, and every fork needs it |
+| Content-Security-Policy | **Phase 13** | Hardening, and every fork needs it |
 
-## 13.1 Standalone feedback widget
+## 14.1 Standalone feedback widget
 
 `POST /api/feedback` serves the standalone HTML build's widget with
 wildcard CORS and no `Origin` requirement (it also runs from
@@ -1652,7 +1689,7 @@ curl -X POST https://<W2>/api/feedback \
 # → 200 {"ok":true,"id":"…"}   (challenge HTML means the rule isn't matching)
 ```
 
-## 13.2 Analytics long-term export
+## 14.2 Analytics long-term export
 
 Analytics Engine retains 30–90 days. The export drains each
 completed UTC day into an R2 NDJSON archive plus D1 rollups — the
@@ -1693,7 +1730,7 @@ wrangler d1 execute sphere-feedback --remote --config wrangler.toml \
   --command "SELECT day, COUNT(*) FROM analytics_daily GROUP BY day ORDER BY day"
 ```
 
-## 13.3 CI-applied migrations (opt-in)
+## 14.3 CI-applied migrations (opt-in)
 
 `ci.yml` can apply pending `CATALOG_DB` migrations on every push to
 `main`, just before deploy. **Off by default.** Enable by setting
@@ -1713,11 +1750,11 @@ share the same physical D1 as production.
 on destructive DDL unless the migration opts in with a
 `-- destructive: reviewed` comment.
 
-## 13.4 Grafana
+## 14.4 Grafana
 
 > **Probably skip this.** The primary analytics surface is the
 > in-app `/publish/analytics` tab — privilege-gated, no external
-> service, turned on by 13.2. Grafana remains for ad-hoc AE SQL
+> service, turned on by 14.2. Grafana remains for ad-hoc AE SQL
 > against the raw stream.
 
 Four dashboard JSONs ship under `grafana/dashboards/`; see
@@ -1727,7 +1764,7 @@ to
 `https://api.cloudflare.com/client/v4/accounts/<W1>/analytics_engine/sql`,
 with `root_selector: "data"`.
 
-## 13.5 Voice, events, blog, YouTube
+## 14.5 Voice, events, blog, YouTube
 
 | Feature | Variables | Notes |
 |---|---|---|
@@ -1737,44 +1774,12 @@ with `root_selector: "data"`.
 | YouTube media suggestions | `YOUTUBE_API_KEY` (**secret**) | Absent = source stays off, nothing errors. [`YOUTUBE_API_KEY.md`](YOUTUBE_API_KEY.md) |
 | Current events / blog | none beyond Phase 8 | Feeds console at `/publish/feeds`. [`CURRENT_EVENTS_PLAN.md`](CURRENT_EVENTS_PLAN.md) |
 
-# Phase 14 — Content-Security-Policy
-
-**All tiers, and the last thing before you put the node in front of
-the public.** This used to be the bottom entry of the optional list,
-which was wrong twice over. It is hardening rather than a feature.
-And *every* fork needs it: upstream enforces its policy at the
-Cloudflare edge, and edge rules do not travel with a fork.
-
-**The repo ships no CSP.** `src/index.html` has no `<meta>` policy,
-and `public/_headers` sets `X-Content-Type-Options`,
-`Referrer-Policy` and `Permissions-Policy` but no CSP. Upstream's
-production deploy enforces a strict `connect-src` policy **at the
-Cloudflare edge** via Transform Rules — which a fork does **not**
-inherit. Your node works without one; you should still add your
-own, as an edge rule or a `Content-Security-Policy` line in
-`public/_headers`:
-
-- `connect-src`: `'self'`, `gibs.earthdata.nasa.gov`,
-  `s3.dualstack.us-east-1.amazonaws.com` (SOS snapshot), your video
-  and caption proxies, and `W19`.
-- `img-src` / `media-src`: `'self' data: blob:`, your
-  `VITE_EARTH_ASSET_BASE` host, the SOS/CloudFront asset hosts,
-  and `W19`.
-
-The app uses `blob:` for preview tours and screenshots — omitting
-it reproduces the "may not load data from blob:" failure. Test
-playback, VR and a tour before locking it down.
-
----
-
----
-
 # Phase 15 — Desktop app fork (Tier 3)
 
 Three upstream-pinned values need changing. Skip entirely for a
 web-only node.
 
-**14.1 Updater endpoint + signing key.** `src-tauri/tauri.conf.json`
+**15.1 Updater endpoint + signing key.** `src-tauri/tauri.conf.json`
 hardcodes upstream's feed and public key. Leave them and your
 users' apps poll *upstream's* releases and reject anything you
 sign.
@@ -1789,7 +1794,7 @@ Paste the public half into `updater.pubkey`; point
 repo secrets `TAURI_SIGNING_PRIVATE_KEY` and
 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`.
 
-**14.2 macOS notarization (optional).** `release.yml` signs and
+**15.2 macOS notarization (optional).** `release.yml` signs and
 notarizes only when all six `APPLE_*` secrets are present
 (`APPLE_DEVELOPER_ID_CERTIFICATE_BASE64`,
 `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID`,
@@ -1797,7 +1802,7 @@ notarizes only when all six `APPLE_*` secrets are present
 build succeeds but ships unsigned, and macOS users hit the
 Gatekeeper "damaged" warning.
 
-**14.3 `VITE_API_ORIGIN`.** Desktop webviews are served from
+**15.3 `VITE_API_ORIGIN`.** Desktop webviews are served from
 `tauri://localhost`, so relative `/api/` paths don't resolve.
 `src/services/catalogSource.ts` rewrites them to an absolute
 origin, defaulting to `https://terraviz.zyra-project.org`. Set
@@ -1806,7 +1811,7 @@ origin, defaulting to `https://terraviz.zyra-project.org`. Set
 so setting it also makes your node accept its own `/dataset/<id>`
 links.
 
-**14.4 Weblate.** `sync-weblate.yml` targets upstream's Weblate
+**15.4 Weblate.** `sync-weblate.yml` targets upstream's Weblate
 project and needs `WEBLATE_TOKEN`. Disable the workflow unless you
 run your own pipeline; otherwise it fails on every push to `main`.
 
@@ -1832,21 +1837,21 @@ is [`scripts/lib/expected-bindings.ts`](../scripts/lib/expected-bindings.ts).
 | `TRUSTED_PUBLISHER_DOMAINS` | plaintext | 8 | Skip approval queue (→ `reviewer`, read-only) |
 | `NODE_ID_PRIVATE_KEY_PEM` | secret | 8 | Federation signing |
 | `PREVIEW_SIGNING_KEY` | secret | 8 | `terraviz preview` |
-| `R2_PUBLIC_BASE` | plaintext | 13.1 | Serving any R2 asset |
-| `R2_S3_ENDPOINT` | secret | 13.1 | Presigned uploads |
-| `R2_ACCESS_KEY_ID` | secret | 13.1 | Presigned uploads |
-| `R2_SECRET_ACCESS_KEY` | secret | 13.1 | Presigned uploads |
-| `GITHUB_OWNER` | plaintext | 13.2 | Video transcode |
-| `GITHUB_REPO` | plaintext | 13.2 | Video transcode |
-| `GITHUB_DISPATCH_TOKEN` | secret | 13.2 | Video transcode |
-| `ANALYTICS_R2` | R2 | 13.4 | Analytics archive |
-| `CF_ACCOUNT_ID` | plaintext | 13.4 / 13.8 | AE SQL API, voice gateway |
-| `ANALYTICS_SQL_TOKEN` | secret | 13.4 | AE SQL API |
-| `ANALYTICS_AE_DATASET` | plaintext | 13.4 | Renamed AE dataset |
-| `CF_AI_GATEWAY` | plaintext | 13.8 | Realtime STT |
-| `CF_AIG_TOKEN` | secret | 13.8 | Realtime STT |
-| `VOICE_STREAM_MODEL` | plaintext | 13.8 | STT model override |
-| `YOUTUBE_API_KEY` | secret | 13.8 | YouTube suggestions |
+| `R2_PUBLIC_BASE` | plaintext | 8.5 | Serving any R2 asset |
+| `R2_S3_ENDPOINT` | secret | 8.5 | Presigned uploads |
+| `R2_ACCESS_KEY_ID` | secret | 8.5 | Presigned uploads |
+| `R2_SECRET_ACCESS_KEY` | secret | 8.5 | Presigned uploads |
+| `GITHUB_OWNER` | plaintext | 8.6 | Video transcode |
+| `GITHUB_REPO` | plaintext | 8.6 | Video transcode |
+| `GITHUB_DISPATCH_TOKEN` | secret | 8.6 | Video transcode |
+| `ANALYTICS_R2` | R2 | 14.2 | Analytics archive |
+| `CF_ACCOUNT_ID` | plaintext | 14.2 / 14.5 | AE SQL API, voice gateway |
+| `ANALYTICS_SQL_TOKEN` | secret | 14.2 | AE SQL API |
+| `ANALYTICS_AE_DATASET` | plaintext | 14.2 | Renamed AE dataset |
+| `CF_AI_GATEWAY` | plaintext | 14.5 | Realtime STT |
+| `CF_AIG_TOKEN` | secret | 14.5 | Realtime STT |
+| `VOICE_STREAM_MODEL` | plaintext | 14.5 | STT model override |
+| `YOUTUBE_API_KEY` | secret | 14.5 | YouTube suggestions |
 | `KILL_VOICE` | plaintext | — | Voice kill switch |
 | `KILL_TELEMETRY` | plaintext | — | Telemetry kill switch (410) |
 | `FEEDBACK_ADMIN_TOKEN` | secret | 6.4 | Bearer fallback for legacy admin routes |
@@ -1878,8 +1883,8 @@ not.
 | `ci.yml` **deploy** job | `CLOUDFLARE_API_TOKEN` (`W11`), `CLOUDFLARE_ACCOUNT_ID` (`W1`); envs `production`/`preview`; rename `--project-name` to `W10` | you deploy via the dashboard Git integration (Phase 5.3) |
 | `poster.yml` | same, plus `terraviz-poster` rename; envs `poster-*` | no poster sub-site |
 | `visual-report.yml` | smoke/report/diff: nothing. Optional report deploy: the two Cloudflare secrets + a `terraviz-visual` project; optional `vars.VISUAL_DEPLOY_URL` | **keep** the gating jobs; drop only the deploy step |
-| `transcode-hls.yml` | the seven Phase 13.2 GitHub secrets | no publisher video uploads |
-| `analytics-export.yml` / `analytics-backfill.yml` | `TERRAVIZ_SERVER`, `CF_ACCESS_CLIENT_ID`, `CF_ACCESS_CLIENT_SECRET` | you skipped 13.4 |
+| `transcode-hls.yml` | the seven Phase 8.6 GitHub secrets | no publisher video uploads |
+| `analytics-export.yml` / `analytics-backfill.yml` | `TERRAVIZ_SERVER`, `CF_ACCESS_CLIENT_ID`, `CF_ACCESS_CLIENT_SECRET` | you skipped 14.2 |
 | `release.yml` / `desktop.yml` | `TAURI_SIGNING_PRIVATE_KEY` + `_PASSWORD`, 6× `APPLE_*` | web-only node |
 | `sync-weblate.yml` | `WEBLATE_TOKEN` | no translation pipeline of your own |
 | `codeql.yml`, `mobile.yml` | nothing | **keep** — fork-safe |
@@ -2266,7 +2271,7 @@ Tools → Privacy.
   ceiling.
 - **Test your own feedback loop.** File a report through the in-app
   form and confirm it appears in `/publish/feedback`.
-- **Add a CSP** — Phase 14, if you have not already.
+- **Add a CSP** — Phase 13, if you have not already.
 
 If something here is wrong or under-documented, please open an
 issue — most of this document exists because someone hit a snag
