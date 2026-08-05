@@ -790,26 +790,45 @@ export function summarizeTransect(
  * A zonal-mean profile: the shape of the field against latitude, with
  * longitude integrated out. One of the densest summaries available for
  * a global or wide-regional field, and a single pass over the frame.
+ *
+ * `window` scopes it the same way it scopes `summarize` and
+ * `buildHistogram`, and for the same reason: a profile shown under a
+ * region's statistics has to describe that region. Rows outside the
+ * window are dropped entirely rather than returned empty — a profile
+ * covering a box should not be padded to pole-to-pole with nulls, which
+ * would draw the box as a sliver of a mostly-blank axis.
  */
 export function zonalMeans(
   snapshot: LumaSnapshot,
   scale: ColorScale,
   options?: DatasetOverlayOptions,
+  window?: TexelWindow,
 ): ZonalSample[] {
   const { data, width, height } = snapshot
-  const firstDataCode = firstDataLuma(scale)
+  const win = window ?? fullWindow(snapshot)
+  const x0 = Math.max(0, Math.floor(win.x0))
+  const y0 = Math.max(0, Math.floor(win.y0))
+  const x1 = Math.min(width, Math.ceil(win.x1))
+  const y1 = Math.min(height, Math.ceil(win.y1))
+
   const out: ZonalSample[] = []
-  for (let y = 0; y < height; y++) {
+  if (x1 <= x0 || y1 <= y0) return out
+
+  const firstDataCode = firstDataLuma(scale)
+  for (let y = y0; y < y1; y++) {
     const row = y * width
     let sum = 0
     let count = 0
-    for (let x = 0; x < width; x++) {
+    for (let x = x0; x < x1; x++) {
       const luma = data[row + x]
       if (luma < firstDataCode) continue
       sum += lumaToValue(luma, scale)
       count++
     }
     out.push({
+      // Keyed to the full frame height, not the window's. Latitude is a
+      // property of where the row sits in the image; scoping the view
+      // must not relabel it.
       lat: texelUvToLatLon({ u: 0.5, v: (y + 0.5) / height }, options).lat,
       mean: count > 0 ? sum / count : null,
       count,

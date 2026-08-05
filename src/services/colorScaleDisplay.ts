@@ -393,3 +393,41 @@ export function displayGradientStops(
   }
   return out
 }
+
+/**
+ * The colour a display LUT gives to one physical value, as CSS.
+ *
+ * Used to paint each contour isoline in the colour the globe is already
+ * using at that level, so a line and the surface it sits on cannot
+ * disagree — the same discipline `displayGradientStops` follows for the
+ * bar.
+ *
+ * Finds the luma code by scanning `lumaToValue` rather than inverting
+ * it. An inverse would be a second copy of a mapping that has to agree
+ * with the first one forever, and A0 is in flight to change that mapping
+ * — see `datasetContours` for the same reasoning at greater length. 256
+ * steps for a handful of levels is not worth a correctness risk.
+ *
+ * Returns `null` for a value the ramp hides, where a line would be drawn
+ * in a colour the globe is not showing anywhere.
+ */
+export function displayColorAtValue(
+  lut: Uint8Array,
+  scale: ColorScale,
+  value: number,
+): string | null {
+  if (!Number.isFinite(value)) return null
+  let best = 0
+  let bestDelta = Infinity
+  for (let luma = 0; luma < COLOR_SCALE_LUT_SIZE; luma++) {
+    const delta = Math.abs(lumaToValue(luma, scale) - value)
+    if (delta < bestDelta) {
+      bestDelta = delta
+      best = luma
+    }
+  }
+  const o = best * 4
+  const alpha = lut[o + 3]
+  if (alpha === 0) return null
+  return `rgb(${lut[o]}, ${lut[o + 1]}, ${lut[o + 2]})`
+}

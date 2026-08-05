@@ -11,7 +11,12 @@
  * See `docs/DATA_ANALYSIS_PLAN.md` §A3.
  */
 
-import { LUMA_LEVELS, type LumaHistogram, type TransectSample } from '../services/datasetStats'
+import {
+  LUMA_LEVELS,
+  type LumaHistogram,
+  type TransectSample,
+  type ZonalSample,
+} from '../services/datasetStats'
 import { buildDisplayLut, type ColorScaleDisplay } from '../services/colorScaleDisplay'
 import type { ColorScale } from '../types/color-scale'
 import { t } from '../i18n'
@@ -240,6 +245,154 @@ export function renderTransectChart(
     svg.appendChild(seg)
   }
   return svg
+}
+
+const ZONAL_W = 256
+const ZONAL_H = 148
+/** Gutter on the value axis, so the strip and the profile sit side by
+ *  side rather than the strip underneath as in the transect. */
+const ZONAL_STRIP_W = 8
+const ZONAL_PLOT_W = ZONAL_W - ZONAL_STRIP_W - RIBBON_GAP
+
+/**
+ * The zonal-mean profile: the field's shape against latitude.
+ *
+ * **Latitude runs down the vertical axis**, which is the one real
+ * difference from `renderTransectChart` and is not a stylistic choice.
+ * Latitude is spatially vertical, so a profile drawn this way lines up
+ * with the globe beside it — a bulge at 60°N sits where 60°N is. Laid
+ * out the other way it would be a chart the reader has to mentally
+ * rotate before it means anything, which for the one summary whose
+ * whole subject is *latitude* defeats the point.
+ *
+ * Scaled to the profile's own value range rather than the dataset's, as
+ * the transect is. Averaging a row flattens extremes hard — a zonal mean
+ * of a smoke field occupies a small fraction of the full scale — so
+ * drawing it against `vmin..vmax` would render every real field as a
+ * straight line hugging the axis.
+ *
+ * Gaps stay gaps, for the reason they do everywhere else here: a row
+ * with no data is `mean: null`, and both the stroke and the strip break
+ * rather than interpolating a value across latitudes nothing was
+ * measured at.
+ *
+ * Not filled, same as the transect. The baseline is the profile's own
+ * minimum rather than zero, so an area under the curve would shade a
+ * quantity that is not a quantity.
+ */
+export function renderZonalChart(
+  samples: readonly ZonalSample[],
+  scale: ColorScale,
+  display: ColorScaleDisplay,
+): SVGSVGElement {
+  const svg = document.createElementNS(SVG_NS, 'svg')
+  svg.setAttribute('viewBox', `0 0 ${ZONAL_W} ${ZONAL_H}`)
+  svg.setAttribute('preserveAspectRatio', 'none')
+  svg.setAttribute('class', 'analyze-zonal')
+  svg.setAttribute('role', 'img')
+  svg.setAttribute('aria-label', t('analyze.zonal.aria'))
+  if (samples.length < 2) return svg
+
+  const span = zonalValueSpan(samples)
+  if (!span) return svg
+
+  const lut = buildDisplayLut(scale, display)
+  // Latitude descends the axis — north at the top, as on the globe and
+  // on every map the reader has seen.
+  //
+  // The extremes come from *every* sample rather than from the first and
+  // last. Taking the ends looks equivalent, because `zonalMeans` returns
+  // image-row order, but a Y-flipped dataset (`isFlippedInY`, which the
+  // publisher form exposes) has row 0 at the south edge. Ends-based
+  // extremes make `latSpan` negative there, the sign cancels in the
+  // division, and the profile draws in array order — which is to say
+  // upside down, on exactly the datasets whose orientation is the
+  // unusual one.
+  let north = -Infinity
+  let south = Infinity
+  for (const s of samples) {
+    if (s.lat > north) north = s.lat
+    if (s.lat < south) south = s.lat
+  }
+  const latSpan = north - south
+  const yAt = (i: number): number =>
+    latSpan > 0
+      ? ((north - samples[i].lat) / latSpan) * ZONAL_H
+      : (i / (samples.length - 1)) * ZONAL_H
+  const xAt = (v: number): number =>
+    ZONAL_STRIP_W + RIBBON_GAP + ((v - span.lo) / (span.hi - span.lo)) * ZONAL_PLOT_W
+  const colourAt = (v: number): string => {
+    const o = lumaIndexFor(v, scale) * 4
+    return `rgb(${lut[o]}, ${lut[o + 1]}, ${lut[o + 2]})`
+  }
+
+  const strip = document.createElementNS(SVG_NS, 'g')
+  strip.setAttribute('class', 'analyze-zonal-strip')
+  strip.setAttribute('shape-rendering', 'crispEdges')
+  // Each cell runs from the midpoint to the row above it to the midpoint
+  // to the row below, so the strip is positioned by latitude exactly as
+  // the profile is. A constant height derived from the sample *count*
+  // would be the index-spaced answer next to a latitude-spaced line —
+  // the two disagreeing wherever the rows are not evenly spaced, which
+  // is the case this chart already goes out of its way to draw
+  // correctly. The ends extend by half their one neighbouring gap.
+  const ys = samples.map((_, i) => yAt(i))
+  for (let i = 0; i < samples.length; i++) {
+    const v = samples[i].mean
+    if (v == null) continue
+    const y = ys[i]
+    const before = i > 0 ? (ys[i - 1] + y) / 2 : y - Math.abs(ys[1] - ys[0]) / 2
+    const after = i < ys.length - 1
+      ? (y + ys[i + 1]) / 2
+      : y + Math.abs(ys[i] - ys[i - 1]) / 2
+    const y0 = Math.max(0, Math.min(before, after))
+    const y1 = Math.min(ZONAL_H, Math.max(before, after))
+    const cell = document.createElementNS(SVG_NS, 'rect')
+    cell.setAttribute('x', '0')
+    cell.setAttribute('y', y0.toFixed(3))
+    cell.setAttribute('width', String(ZONAL_STRIP_W))
+    cell.setAttribute('height', Math.max(0, y1 - y0).toFixed(3))
+    cell.setAttribute('fill', colourAt(v))
+    strip.appendChild(cell)
+  }
+  svg.appendChild(strip)
+
+  for (let i = 1; i < samples.length; i++) {
+    const a = samples[i - 1].mean
+    const b = samples[i].mean
+    if (a == null || b == null) continue
+    const seg = document.createElementNS(SVG_NS, 'line')
+    seg.setAttribute('x1', xAt(a).toFixed(3))
+    seg.setAttribute('y1', yAt(i - 1).toFixed(3))
+    seg.setAttribute('x2', xAt(b).toFixed(3))
+    seg.setAttribute('y2', yAt(i).toFixed(3))
+    seg.setAttribute('stroke', colourAt((a + b) / 2))
+    seg.setAttribute('stroke-width', '2')
+    seg.setAttribute('vector-effect', 'non-scaling-stroke')
+    seg.setAttribute('stroke-linecap', 'round')
+    svg.appendChild(seg)
+  }
+  return svg
+}
+
+/** The value range the zonal profile is drawn against. Same flat-field
+ *  guard as `transectValueSpan`, which a single-row window hits. */
+export function zonalValueSpan(
+  samples: readonly ZonalSample[],
+): { lo: number; hi: number } | null {
+  let lo = Infinity
+  let hi = -Infinity
+  for (const s of samples) {
+    if (s.mean == null) continue
+    if (s.mean < lo) lo = s.mean
+    if (s.mean > hi) hi = s.mean
+  }
+  if (!Number.isFinite(lo)) return null
+  if (hi === lo) {
+    const pad = Math.abs(lo) > 0 ? Math.abs(lo) * 0.5 : 1
+    return { lo: lo - pad, hi: hi + pad }
+  }
+  return { lo, hi }
 }
 
 /**
