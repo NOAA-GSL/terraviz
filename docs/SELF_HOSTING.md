@@ -56,7 +56,7 @@ Every phase that *produces* a value tells you to write it down
 here. Every phase that *consumes* one refers to it by line number.
 
 **If you use `npm run setup`, most of this is kept for you** in
-`.terraviz-setup.json` — the resource IDs, the Access AUD, the team
+`.terraviz-setup.json` — the resource IDs, the Access AUD (the audience tag that identifies your application), the team
 domain. What it cannot keep is anything marked 🔒: secrets are never
 written to that file. Capture those yourself, in a password manager.
 
@@ -171,7 +171,7 @@ itself where it is known and not secret.
 ── Wherever your build runs
    → VITE_API_ORIGIN = https://terraviz.example.org
    · VITE_EARTH_ASSET_BASE
-       from: your own CDN, after mirroring the Earth basemap textures
+       from: your own content delivery network (CDN), after mirroring the Earth basemap textures
 
 ── GitHub → Settings → Secrets and variables → Actions
    → CF_ACCESS_CLIENT_SECRET
@@ -192,7 +192,7 @@ itself where it is known and not secret.
 | **7** | Generates `PREVIEW_SIGNING_KEY` into `.dev.vars`. |
 | **8** | Writes every binding, variable and available secret to **both** Production and Preview. |
 | **8.5** | Sets the R2 CORS policy and attaches the public bucket domain. |
-| **8.6/14.1** | Appends the two WAF skip rules, preserving your existing rules. |
+| **8.6/14.1** | Appends the two web-application-firewall (WAF) skip rules, preserving your existing rules. |
 
 Two flags select different things, and it is worth keeping them
 straight. **`--only=` picks which steps run.** **`--with=` declares
@@ -229,7 +229,7 @@ so it cannot provision a deploy that
 | **5** (part) | *Connecting* the project to a Git remote. That handshake is an OAuth flow between Cloudflare and GitHub with no API — a token cannot grant Cloudflare access to your repos on your behalf. The tool creates the project; you either click Connect, or deploy from CI with `wrangler pages deploy dist/`. |
 | **6.1** | Zero Trust onboarding + choosing an identity provider. One-time, per account. |
 | **7** (half) | The node keypair — `npm run gen:node-key` owns it, because it also writes `node-public-key.txt` that Phase 9 reads and stamps your local D1. One command. |
-| **11** | The first SSO sign-in, which is what makes you admin. |
+| **11** | The first single sign-on (SSO) sign-in, which is what makes you admin. |
 | **8.5** (part) | Minting the R2 S3 API token. Doing that over the API needs a bootstrap token that can *create tokens* — a strictly larger credential than anything else here, one that could mint itself more authority. Two clicks in the R2 dashboard, once. |
 | **8.6** (part) | Writing GitHub Actions secrets, which requires libsodium sealed-box encryption (BLAKE2b, absent from `node:crypto`). Rather than add a dependency, `npm run setup -- --github-secrets` prints the exact `gh secret set` script, with values as `"$VAR"` references so it is safe to paste anywhere. |
 
@@ -938,7 +938,7 @@ choose a **team name**; your team domain becomes
 `<team>.cloudflareaccess.com`. **Record it as `W12`.**
 
 Add at least one identity provider (Zero Trust → Settings →
-Authentication). One-time PIN over email works and needs no IdP
+Authentication). One-time PIN over email works and needs no identity provider (IdP)
 setup; Google/Okta/Entra are better for a real team.
 
 ## 6.2 Create the publisher application
@@ -1169,7 +1169,7 @@ Secrets:
 | `R2_S3_ENDPOINT` | 8.5 | `W21` — `https://<acct>.r2.cloudflarestorage.com` | The `migrate-r2-hls` / `-assets` / `-tours` CLIs (and their rollbacks) fail at credential validation. The operator's shell needs the same value |
 | `R2_ACCESS_KEY_ID` | 8.5 | `W20` | As above |
 | `R2_SECRET_ACCESS_KEY` | 8.5 | `W20b` — shown once, when the token is minted | As above |
-| `GITHUB_DISPATCH_TOKEN` | 8.6 | `W22` — fine-grained PAT with Contents: write, or a classic PAT with `repo` | Video-upload finalisation 503s with `github_dispatch_unconfigured` |
+| `GITHUB_DISPATCH_TOKEN` | 8.6 | `W22` — fine-grained personal access token (PAT) with Contents: write, or a classic PAT with `repo` | Video-upload finalisation 503s with `github_dispatch_unconfigured` |
 
 ## 8.5 Asset storage — R2 public origin, CORS, and the S3 token
 
@@ -1348,7 +1348,7 @@ override on Free. Options, best first:
 
 1. **Disable BFM zone-wide** (Security → Bots → Configure). For a
    small portal where authenticated traffic dominates and the
-   public SPA is cache-served, BFM adds little over Access + the
+   public single-page app is cache-served, Bot Fight Mode adds little over Access + the
    role-gated routes + the Step 1 rule. Recommended on Free.
 2. **Upgrade to Pro** — SBFM *is* skippable from Step 1's rule.
 3. **Live with manual recovery** — re-issue `/transcode-complete`
@@ -1692,7 +1692,7 @@ curl -X POST https://<W2>/api/feedback \
 ## 14.2 Analytics long-term export
 
 Analytics Engine retains 30–90 days. The export drains each
-completed UTC day into an R2 NDJSON archive plus D1 rollups — the
+completed UTC day into an R2 newline-delimited JSON (NDJSON) archive plus D1 rollups — the
 data behind `/publish/analytics`.
 
 ```bash
@@ -1747,7 +1747,7 @@ the repo-root `migrations/`, which also holds the generated
 migration. Gated to `refs/heads/main`, because preview deploys
 share the same physical D1 as production.
 `npm run check:migrations` (in the type-check job) fails the build
-on destructive DDL unless the migration opts in with a
+on destructive schema statements (DDL) unless the migration opts in with a
 `-- destructive: reviewed` comment.
 
 ## 14.4 Grafana
@@ -1768,7 +1768,7 @@ with `root_selector: "data"`.
 
 | Feature | Variables | Notes |
 |---|---|---|
-| Orbit voice (batch STT/TTS) | none | Runs on the `AI` binding. `KILL_VOICE=1` is the kill switch. |
+| Orbit voice (batch speech-to-text and text-to-speech) | none | Runs on the `AI` binding. `KILL_VOICE=1` is the kill switch. |
 | Realtime streaming STT | `CF_ACCOUNT_ID`, `CF_AI_GATEWAY`, `CF_AIG_TOKEN` (**secret**), optional `VOICE_STREAM_MODEL` | Opt-in. Absent any of them, `/api/voice/stream` sends a JSON error frame and the client falls back to batch Whisper. See [`ORBIT_VOICE_PLAN.md`](ORBIT_VOICE_PLAN.md) §3. |
 | Wake word | `VITE_VOICE_WAKEWORD_MODEL_URL` (build-time) | [`ORBIT_WAKEWORD.md`](ORBIT_WAKEWORD.md) |
 | YouTube media suggestions | `YOUTUBE_API_KEY` (**secret**) | Absent = source stays off, nothing errors. [`YOUTUBE_API_KEY.md`](YOUTUBE_API_KEY.md) |
@@ -1946,137 +1946,7 @@ but takes `--server`, `TERRAVIZ_SERVER`, or
 
 ---
 
-# Reference D — Verification status of this guide
-
-Rewritten 2026-08-01. Honest accounting of what was actually
-exercised.
-
-**Verified by running it** (Linux, Node 22.22.2, wrangler 4.112.0):
-
-- `npm install`, `npm run dev` (SPA boots).
-- `npm run db:migrate` — all 43 catalog migrations apply clean.
-- `npm run db:seed`, `npm run gen:node-key`, and the **ordering
-  dependency between them** (Phase 1.2).
-- `wrangler pages dev` failing without Cloudflare credentials, the
-  `[ai]` binding being the cause, `experimental_remote = false`
-  *not* fixing it, and `pages dev` rejecting `--config`.
-- With `[ai]` commented out: `/api/v1/catalog`,
-  `/.well-known/terraviz.json`, `/api/v1/publish/me` (role `admin`
-  via dev bypass) and `/api/v1/search` all answering 200.
-- The `TRUSTED_PUBLISHER_DOMAINS` behaviour, read from
-  `provisioningDefaults()` and its tests.
-- The first-user admin bootstrap, read from `getOrCreatePublisher()`.
-- **The Phase 4 migration ordering**, both directions, against a
-  clean database. `CATALOG_DB` first leaves all 51 migrations
-  recorded and every table present; `FEEDBACK_DB` first exits 0 and
-  then makes `CATALOG_DB` fail with `table node_identity already
-  exists`. This is an install-stopper, and it is the order the
-  previous revision prescribed (its Step 5 applied `FEEDBACK_DB`
-  before its Step 11 applied `CATALOG_DB`).
-- `npm run setup` end to end in plan mode, and its migration step
-  under `--apply --local-migrations` against a clean database.
-- The interactive interview end to end against a scripted terminal:
-  validation and re-prompting, defaults, optional skips, the
-  missing-token warning, and the handoff report.
-
-**Modelled from documentation, not executed.** `npm run setup`
-makes these Cloudflare API calls:
-
-- Access applications, policies and service tokens.
-- The Pages project and its custom domain.
-- The R2 CORS policy and public domain.
-- The WAF ruleset entrypoint.
-- The Pages bindings PATCH.
-
-Each was written against Cloudflare's documented API. The Access
-calls were also written against what
-`functions/api/v1/_lib/access-auth.ts` proves about the resulting
-JWTs. **No live Cloudflare account was available to exercise any of
-them.**
-
-What that risk is bounded by:
-
-- Every request body is built by a pure, unit-tested function, so
-  the shape is pinned and reviewable in the diff.
-- A shape mismatch surfaces as a Cloudflare validation error naming
-  the field, not as a silent misconfiguration.
-- The R2 step prints the dashboard-paste JSON if its call fails.
-- The WAF step refuses to write when its read failed.
-- Plan mode makes no network calls at all.
-
-Run the risky steps one at a time on your first real install —
-`--only=pages`, then `--only=access`, then the rest — and check the
-dashboard between them.
-
-**Not verified — no Cloudflare account was available in this
-environment.** Four things here were reconstructed rather than
-executed: every dashboard click path, the Access application and
-service-token flows, the remote migration apply, and both Phase 10
-verification tools. Each was reconstructed from the code that
-consumes it — `expected-bindings.ts`, `verify-checks.ts`,
-`_middleware.ts`, `access-auth.ts`, `github-dispatch.ts`.
-Dashboard labels drift; if one doesn't match, trust
-the binding *name* — that's what the code reads.
-
-**Defects found and corrected from the previous revision:**
-
-1. Resource IDs were repointed (old Step 2) *before* the resources
-   were created (old Steps 5, 10) — and old Step 5 pointed back at
-   Step 2. Circular.
-2. Old Steps 12 and 13 used `$CF_ACCESS_CLIENT_ID` /
-   `$CF_ACCESS_CLIENT_SECRET`, which nothing had created. Service
-   tokens first appeared in old Step 15b, three steps later.
-3. **No step created the Access application for
-   `/api/v1/publish/**`.** Yet old Step 10 told you to configure its
-   AUD, and old Step 16 opened by claiming "Step 10's Access config
-   protected the publisher API". It hadn't.
-4. Old Step 10 asked for `NODE_ID_PRIVATE_KEY_PEM` and
-   `PREVIEW_SIGNING_KEY` before old Step 12 introduced
-   `gen:node-key`.
-5. Old Step 16b claimed `TRUSTED_PUBLISHER_DOMAINS` grants
-   `role=admin, is_admin=1`. The code grants `reviewer`,
-   `is_admin=0`. Old Step 10's table had it right — the doc
-   contradicted itself.
-6. Old Step 16b described the default as `publisher/pending`; that
-   role was renamed in `0039_publisher_roles_five.sql`. Actual
-   default is `reviewer/pending`.
-7. Old troubleshooting told you to expect `role` to report `staff`
-   or `community` — renamed in `0023_publisher_roles_two_tier.sql`.
-8. Old Step 11 hard-coded "the directory runs through `0016`"; it
-   runs through `0043`.
-9. Local setup order (`db:seed` before `gen:node-key`) was never
-   stated, and getting it wrong silently ships a placeholder key.
-10. `npm run dev:functions` cannot run on a fresh clone, contrary
-    to the mock-mode claims in `.dev.vars.example`.
-
-11. The migration order was backwards, and following it exactly makes
-    the catalog schema unapplyable. See Phase 4. (This one survived
-    into the first pass of *this* rewrite too — it only surfaced when
-    `npm run setup` ran the commands for real.)
-
-**Still open** (not fixed here, needs a code change):
-
-- `migrations/catalog-schema.sql` is a generated snapshot living
-  inside `FEEDBACK_DB`'s `migrations_dir`, which is the root cause of
-  the Phase 4 ordering trap. Moving it out of that directory (and
-  updating `db:dump-schema` plus the CI drift check) would remove the
-  hazard rather than document around it.
-
-- The `[ai]` binding blocking offline dev. `wrangler.toml` is
-  documentation-only for Pages, so removing the block would cost
-  nothing and unblock the contributor path — but that's a repo
-  change, not a doc change.
-- `functions/api/v1/_lib/env.ts`'s doc comment on
-  `TRUSTED_PUBLISHER_DOMAINS` still describes the pre-role-model
-  admin behaviour.
-- Two migrations share the number `0036`.
-- The 503 `identity_missing` error text tells operators to run
-  `npm run gen:node-key`, which does not write remote D1. It should
-  point at `terraviz init-node`.
-
----
-
-# Reference E — Troubleshooting
+# Reference D — Troubleshooting
 
 ### `npm install` fails building `better-sqlite3`
 Your Node has no precompiled binary for this version of
@@ -2098,7 +1968,8 @@ dependency here that compiles anything, so nothing else in the tree
 needs a toolchain.
 
 ### The globe has no stars, or the Earth has no specular highlight
-Your clone has Git LFS pointers where the textures should be. Check:
+Your clone has Git LFS (Large File Storage) pointers where the
+textures should be. Check:
 
 ```bash
 ls -l public/assets/skybox/nx.jpg     # ~790 KB if real, 131 bytes if a pointer
@@ -2119,14 +1990,14 @@ You skipped `npm install`, or ran it somewhere other than the
 repository root. Every `npm run` command in this guide runs from
 inside your clone, after a successful install. See §0.4.
 
-### `/api/ingest` returns 204 but nothing lands in AE
+### `/api/ingest` returns 204 but nothing lands in Analytics Engine
 The `ANALYTICS` binding is missing in the environment serving
 traffic. Check both Production and Preview.
 `functions/api/ingest.ts` reads `context.env.ANALYTICS` and
 silently skips the write when undefined.
 
 ### `/api/ingest` returns 403
-The CORS gate rejected it, for one of two reasons.
+The cross-origin (CORS) gate rejected it, for one of two reasons.
 
 1. The `Origin` header is missing. Browsers always send it; curl
    doesn't, unless you pass `-H "Origin: …"`.
@@ -2139,7 +2010,10 @@ Production but not Preview. Confirm with
 `npm run check:pages-bindings`.
 
 ### Publisher API returns 401 "Invalid or expired Access assertion"
-`ACCESS_AUD` doesn't match the application that issued the JWT.
+`ACCESS_AUD` doesn't match the application that issued the token.
+Access signs every request with a JSON Web Token (JWT), and the `aud`
+claim inside it names the application. `ACCESS_AUD` has to be that
+same audience tag.
 Re-copy `W13` from the application's Overview tab. A token minted
 for a *different* application of the same team is rejected by
 design.
@@ -2331,13 +2205,13 @@ Tools → Privacy.
   telemetry_enabled disabled --namespace-id=<W5>` (clients get 410
   + `Retry-After: 300`; `wrangler kv key delete` to resume), and
   the `KILL_TELEMETRY=1` env var. Document who can flip them.
-- **Token expiry.** If `W11` or `ANALYTICS_SQL_TOKEN` has a TTL,
+- **Token expiry.** If `W11` or `ANALYTICS_SQL_TOKEN` has an expiry (a TTL),
   put the date in a calendar. A silently expired token is a
   silently broken dashboard.
 - **Watch the first week.** Errors-by-category: a flood of
-  `network` usually means an asset CDN rate-limiting; `auth` means
-  an LLM key issue. Watch Orbit rounds/day against the free-tier
-  ceiling.
+  `network` usually means the content delivery network serving an
+  asset is rate-limiting; `auth` means a language-model key issue.
+  Watch Orbit rounds/day against the free-tier ceiling.
 - **Test your own feedback loop.** File a report through the in-app
   form and confirm it appears in `/publish/feedback`.
 - **Add a CSP** — Phase 13, if you have not already.

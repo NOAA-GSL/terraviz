@@ -212,6 +212,5 @@ that predicate is where to change it.
 ## Not in scope
 
 The page links into `SELF_HOSTING.md` for anything long: the full
-sixteen troubleshooting symptoms, all nine add-ons, the click paths,
-Reference D's verification status. The Markdown stays canonical. This
-is the front door.
+troubleshooting list, every optional feature, the click paths. The
+Markdown stays canonical. This is the front door.
