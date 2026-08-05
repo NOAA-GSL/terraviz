@@ -938,6 +938,42 @@ describe('contours going stale as the globe plays', () => {
     expect(bodyText()).not.toContain('moved to another frame')
   })
 
+  it('drops the explanation when the panel is closed and reopened', () => {
+    // The explanation belongs to one draw/watch cycle. Carried into a
+    // session that drew nothing, it describes an event the viewer never
+    // saw — and points at contours that were never on the globe.
+    const c = makeContours()
+    const m = movingSource(c)
+    initAnalyzeUI(m.src)
+    openAnalyzeUI()
+    contourButton()!.click()
+    m.advance('1.5')
+    vi.advanceTimersByTime(600)
+    expect(bodyText()).toContain('moved to another frame')
+
+    closeAnalyzeUI()
+    openAnalyzeUI()
+    expect(bodyText()).not.toContain('moved to another frame')
+  })
+
+  it('drops the explanation when the region changes', () => {
+    // The likelier path of the two: a scope change already clears the
+    // lines for its own reasons, so keeping the playback explanation
+    // beside a freshly-scoped region blames the wrong thing.
+    const c = makeContours()
+    const m = movingSource(c)
+    initAnalyzeUI(m.src)
+    openAnalyzeUI()
+    contourButton()!.click()
+    m.advance('1.5')
+    vi.advanceTimersByTime(600)
+    expect(bodyText()).toContain('moved to another frame')
+
+    select().value = 'view'
+    select().dispatchEvent(new Event('change', { bubbles: true }))
+    expect(bodyText()).not.toContain('moved to another frame')
+  })
+
   it('stops watching once the panel closes, so no timer outlives it', () => {
     const c = makeContours()
     const m = movingSource(c)

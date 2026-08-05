@@ -805,6 +805,13 @@ function clearContours(): void {
   source?.contours?.()?.clear()
   contourDrawn = false
   contourFrameId = null
+  // The staleness explanation belongs to one draw/watch cycle. Left set,
+  // it outlives the lines it was explaining: reopening the panel, or
+  // changing region, shows "the globe moved to another frame" beside a
+  // section that drew nothing — blaming playback for something else, and
+  // pointing at contours that were never on screen. The watch re-sets it
+  // on the line after it calls this, so clearing it here costs nothing.
+  contourStaleCleared = false
   stopContourWatch()
 }
 
