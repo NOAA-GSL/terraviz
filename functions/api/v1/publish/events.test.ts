@@ -7,7 +7,7 @@
  * and 503 when CATALOG_DB is unbound.
  */
 
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { onRequestGet as eventsGet, onRequestPost as eventsPost } from './events'
 import { asD1, seedFixtures } from '../_lib/test-helpers'
 import {
@@ -35,6 +35,44 @@ const ADMIN: PublisherRow = {
 const PUBLISHER: PublisherRow = { ...ADMIN, id: 'PUB-PUBLISHER', email: 'c@e', role: 'publisher', is_admin: 0 }
 
 const DS_0 = 'DS000' + 'A'.repeat(21)
+
+/**
+ * Every URL the suite tried to fetch. Empty is the expected state for
+ * most tests; the og:image fallback is the one path that reaches out.
+ */
+let fetched: string[] = []
+
+/**
+ * These tests exercise the route, and the route hands `ingestEvent` a
+ * live `fetch` for the og:image fallback (`events.ts`). The fixture
+ * below carries no `imageUrl` and a real `source.url`, so every test
+ * in this file was issuing a genuine request to `eonet.gsfc.nasa.gov`
+ * — 4.9s for the file against vitest's 5s per-test timeout, which is
+ * why it flaked in CI under load rather than failing outright (#358).
+ *
+ * `events-ingest.test.ts` injects its own `ogFetch` and is unaffected.
+ * The route builds its own, so the seam here is the global: the
+ * closure resolves `fetch` at call time, which is what makes stubbing
+ * it sufficient and keeps this a test-only fix.
+ *
+ * The stub answers with a non-HTML content type, which `fetchOgImage`
+ * rejects at its content-type gate — so the event arrives imageless,
+ * exactly as it did when the real request returned something
+ * unusable. No assertion in this file changes.
+ */
+beforeEach(() => {
+  fetched = []
+  vi.stubGlobal('fetch', (input: RequestInfo | URL) => {
+    fetched.push(String(input instanceof Request ? input.url : input))
+    return Promise.resolve(
+      new Response('', { status: 204, headers: { 'content-type': 'text/plain' } }),
+    )
+  })
+})
+
+afterEach(() => {
+  vi.unstubAllGlobals()
+})
 
 function setupEnv() {
   const sqlite = seedFixtures({ count: 2 })
@@ -217,6 +255,19 @@ describe('POST /api/v1/publish/events', () => {
     // Persisted: the link is queryable from the store.
     const links = await listLinksForEvent(env.CATALOG_DB, body.event.id)
     expect(links.some(l => l.dataset_id === DS_0 && l.status === 'proposed')).toBe(true)
+  })
+
+  // Pins the boundary the stub above establishes. Without it the stub is
+  // just a speed-up that nobody would notice losing; with it, a future
+  // change that reaches somewhere new fails here and names the URL,
+  // rather than turning into an intermittent timeout three months later.
+  it('contacts only the cited article, and only for the og:image fallback', async () => {
+    const { env } = setupEnv()
+    const res = await eventsPost(postCtx({ env, body: CREATE }))
+    expect(res.status).toBe(201)
+    expect(fetched, 'an unexpected host was contacted during ingest').toEqual([
+      CREATE.source.url,
+    ])
   })
 
   it('is idempotent on (feedId, externalId): a re-ingest updates, not duplicates', async () => {
