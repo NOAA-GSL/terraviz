@@ -206,6 +206,10 @@ let contourWatch: number | null = null
 /** Set when the watch removed the lines, so the section can say why they
  *  went rather than leaving the user to wonder. Cleared on the next draw. */
 let contourStaleCleared = false
+/** Set when a settle should put the lines back. Survives the `refresh`
+ *  that clears every other contour flag, because it records what the
+ *  viewer asked for rather than what is currently on the globe. */
+let contourRedrawPending = false
 /**
  * How many isolines to aim for.
  *
@@ -264,6 +268,7 @@ export function closeAnalyzeUI(): void {
   // remove it.
   clearTransect()
   clearContours()
+  stopLayoutWatch()
   source?.regionOutline?.()?.clear()
   root?.remove()
   root = null
@@ -302,6 +307,120 @@ function clearTransect(): void {
  */
 export function notifyAnalyzeDatasetChanged(datasetId: string | null): void {
   if (root && openedFor !== datasetId) closeAnalyzeUI()
+}
+
+/**
+ * Recompute against the frame the globe has settled on.
+ *
+ * The host calls this when playback pauses or a seek finishes — see
+ * `services/playbackSettle`, which decides *when* that is and is
+ * deliberately silent during playback at any rate. Until now the panel
+ * computed once, on open, and everything on it then described whichever
+ * frame happened to be up at that moment for as long as it stayed open.
+ * It said which frame, so it was honest, but it went quietly out of date
+ * the moment anyone touched the transport.
+ *
+ * `refresh` is the whole of it because `refresh` was already the "the
+ * frame or the region moved, do it all again" path — the same one the
+ * scope picker uses. `npm run bench:analysis` is what makes that
+ * affordable: histogram, summary and zonal profile together are ~60 ms
+ * on a 4096×2048 frame, which on a settle is a hitch nobody perceives,
+ * with no worker and no async readback.
+ *
+ * **Contours come back too, but only if they were up.** They are the
+ * expensive part — 178–376 ms depending on how much perimeter the levels
+ * cut, against ~60 ms for everything else — so they are redrawn on the
+ * strength of the viewer having asked for them, never speculatively. A
+ * pause with no lines on the globe costs nothing extra.
+ *
+ * That intent has to be read *before* `refresh`, which clears every
+ * contour flag by design: anything drawn was extracted against the
+ * previous frame and cannot survive a recompute. `contourDrawn` covers a
+ * pause quick enough that the staleness watch has not fired yet;
+ * `contourStaleCleared` covers the ordinary case where it has, and the
+ * lines are already down with the panel explaining why. Either means the
+ * same thing here — the viewer wanted contours, and there is now a
+ * settled frame to draw them against.
+ */
+export function notifyAnalyzePlaybackSettled(): void {
+  const body = root?.querySelector('.analyze-body') as HTMLElement | null
+  if (!body) return
+  contourRedrawPending = contourDrawn || contourStaleCleared
+  refresh(body)
+}
+
+/** Gap between the panel's bottom edge and whatever it is clearing. */
+const PANEL_CLEARANCE_GAP = 12
+
+/**
+ * Keep the panel clear of the playback transport and the Tools bar.
+ *
+ * All three want the same bottom-end corner — the panel's own header
+ * comment says it deliberately shares it with the colorbar controls,
+ * which is fine because those two are never open together. The
+ * transport is not like that. It is open exactly when the panel is most
+ * useful, the panel is `z-index: 60` and wins, and closing the panel to
+ * reach Play takes the contours with it (`closeAnalyzeUI` clears them,
+ * so the annotation cannot outlive its explanation). The result was no
+ * pointer-only way to play a dataset while looking at its analysis.
+ *
+ * `mapControlsUI.updateMapControlsPosition` already solves this for the
+ * Tools bar by measuring the transport, so the shape here follows it.
+ * Both are measured rather than only the Tools bar: that would work
+ * today, since the bar is kept above the transport, but it would make
+ * this quietly depend on an invariant maintained in another module.
+ *
+ * `max-block-size` shrinks by the same amount. Without it a tall panel
+ * on a short window keeps its 34rem and simply grows off the top.
+ */
+function positionAnalyzePanel(): void {
+  const panel = root
+  if (!panel) return
+
+  let clearance = 0
+  for (const id of ['playback-controls', 'map-controls']) {
+    const el = document.getElementById(id)
+    if (!el || el.classList.contains('hidden')) continue
+    const rect = el.getBoundingClientRect()
+    // Zero-sized means display:none by some other route; ignore it
+    // rather than clearing a strip of nothing.
+    if (rect.height <= 0) continue
+    clearance = Math.max(clearance, window.innerHeight - rect.top)
+  }
+
+  if (clearance <= 0) {
+    // Nothing to clear — hand the corner back to the stylesheet rather
+    // than pinning an inline value it would then have to fight.
+    panel.style.insetBlockEnd = ''
+    panel.style.maxBlockSize = ''
+    return
+  }
+  const offset = clearance + PANEL_CLEARANCE_GAP
+  panel.style.insetBlockEnd = `${offset}px`
+  panel.style.maxBlockSize = `min(34rem, calc(100vh - ${offset}px - 1rem))`
+}
+
+/** Watches what the panel has to stay clear of, for as long as it is
+ *  open. A dataset loading mounts the transport *after* the panel may
+ *  already be up, and toggling `display:none` reports as a resize to
+ *  zero, so one observer covers both appearing and vanishing. */
+let layoutWatch: ResizeObserver | null = null
+
+function startLayoutWatch(): void {
+  stopLayoutWatch()
+  window.addEventListener('resize', positionAnalyzePanel)
+  if (typeof ResizeObserver === 'undefined') return
+  layoutWatch = new ResizeObserver(() => positionAnalyzePanel())
+  for (const id of ['playback-controls', 'map-controls']) {
+    const el = document.getElementById(id)
+    if (el) layoutWatch.observe(el)
+  }
+}
+
+function stopLayoutWatch(): void {
+  window.removeEventListener('resize', positionAnalyzePanel)
+  layoutWatch?.disconnect()
+  layoutWatch = null
 }
 
 function onEscape(ev: KeyboardEvent): void {
@@ -358,6 +477,8 @@ export function openAnalyzeUI(
 
   document.body.appendChild(root)
   document.addEventListener('keydown', onEscape, true)
+  positionAnalyzePanel()
+  startLayoutWatch()
   openedFor = source?.datasetId() ?? null
   refresh(body)
   return root
@@ -806,6 +927,13 @@ function renderTransectSection(): void {
  * someone to discover it.
  */
 function renderContourSection(): void {
+  // Consumed exactly once per render, whichever path this takes. Read
+  // here rather than at the draw site so an early return — no levels in
+  // scope, no numbers to draw against — cannot leave the request armed
+  // to fire on some later, unrelated render.
+  const redrawPending = contourRedrawPending
+  contourRedrawPending = false
+
   const host = contourHost
   const overlay = source?.contours?.()
   const src = source
@@ -856,29 +984,37 @@ function renderContourSection(): void {
     return
   }
 
+  const draw = (): void => {
+    const set = extractContourSet(
+      frame.snapshot, frame.scale, levels, frame.options, lastWindow)
+    // Each line painted in the colour the globe is already using at that
+    // level, so the map and its own contours cannot disagree. A level
+    // the ramp hides gets no colour back and falls through to the
+    // default rather than being drawn in a colour that appears nowhere
+    // on the surface.
+    overlay.show(set.map((level): ContourLevel => {
+      const color = displayColorAtValue(lut, scale, level.value)
+      return color ? { ...level, color } : level
+    }))
+    contourDrawn = true
+    contourStaleCleared = false
+    contourFrameId = src.frameId?.() ?? null
+    startContourWatch()
+  }
+
+  // Redraw before the button is built, so its label reads Clear rather
+  // than flashing Draw for one render. Doing it here rather than after
+  // `refresh` returns is what keeps this to a single pass: the section
+  // is being rebuilt anyway, and `draw` already has every derived piece
+  // in scope.
+  if (redrawPending) draw()
+
   head.appendChild(
     actionButton(
       contourDrawn ? t('analyze.contour.clear') : t('analyze.contour.draw'),
       () => {
-        if (contourDrawn) {
-          clearContours()
-        } else {
-          const set = extractContourSet(
-            frame.snapshot, frame.scale, levels, frame.options, lastWindow)
-          // Each line painted in the colour the globe is already using
-          // at that level, so the map and its own contours cannot
-          // disagree. A level the ramp hides gets no colour back and
-          // falls through to the default rather than being drawn in a
-          // colour that appears nowhere on the surface.
-          overlay.show(set.map((level): ContourLevel => {
-            const color = displayColorAtValue(lut, scale, level.value)
-            return color ? { ...level, color } : level
-          }))
-          contourDrawn = true
-          contourStaleCleared = false
-          contourFrameId = src.frameId?.() ?? null
-          startContourWatch()
-        }
+        if (contourDrawn) clearContours()
+        else draw()
         renderContourSection()
       },
     ),

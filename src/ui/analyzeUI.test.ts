@@ -16,6 +16,7 @@ import {
   initAnalyzeUI,
   isAnalyzeUIOpen,
   notifyAnalyzeDatasetChanged,
+  notifyAnalyzePlaybackSettled,
   openAnalyzeUI,
   type AnalyzeSource,
   type TransectPicker,
@@ -623,6 +624,186 @@ describe('zonal profile', () => {
     }))
     openAnalyzeUI()
     expect(zonal()).toBeNull()
+  })
+})
+
+describe('staying clear of the playback transport', () => {
+  /** Mount a bottom-anchored bar of the given height, as the transport
+   *  and the Tools bar both are. */
+  function mountBar(id: string, height: number): HTMLElement {
+    const el = document.createElement('div')
+    el.id = id
+    document.body.appendChild(el)
+    el.getBoundingClientRect = () => ({
+      height, top: window.innerHeight - height, bottom: window.innerHeight,
+      left: 0, right: 0, width: 0, x: 0, y: window.innerHeight - height,
+      toJSON: () => ({}),
+    }) as DOMRect
+    return el
+  }
+
+  afterEach(() => {
+    closeAnalyzeUI()
+    document.getElementById('playback-controls')?.remove()
+    document.getElementById('map-controls')?.remove()
+  })
+
+  it('lifts above the transport rather than covering it', () => {
+    // The panel is z-index 60 and wins the corner outright, and closing
+    // it to reach Play takes the contours with it — so covering the
+    // transport left no pointer-only way to play a dataset while
+    // looking at its analysis.
+    mountBar('playback-controls', 64)
+    initAnalyzeUI(makeSource())
+    const panel = openAnalyzeUI()
+    expect(parseFloat(panel.style.insetBlockEnd)).toBeGreaterThanOrEqual(64)
+  })
+
+  it('clears the Tools bar when it sits higher than the transport', () => {
+    // Both measured rather than only the bar. The bar is kept above the
+    // transport by another module, and depending on that invariant from
+    // here would be a coupling nothing states.
+    mountBar('playback-controls', 40)
+    mountBar('map-controls', 120)
+    initAnalyzeUI(makeSource())
+    const panel = openAnalyzeUI()
+    expect(parseFloat(panel.style.insetBlockEnd)).toBeGreaterThanOrEqual(120)
+  })
+
+  it('shrinks its height by the same amount it lifts', () => {
+    // Otherwise a tall panel on a short window keeps its 34rem and
+    // simply grows off the top instead.
+    mountBar('playback-controls', 90)
+    initAnalyzeUI(makeSource())
+    const panel = openAnalyzeUI()
+    expect(panel.style.maxBlockSize).toContain('100vh')
+    expect(panel.style.maxBlockSize).toContain('px')
+  })
+
+  it('hands the corner back when nothing is there to clear', () => {
+    // An image dataset, or a still. Pinning an inline offset the
+    // stylesheet would then have to fight is worse than not setting one.
+    initAnalyzeUI(makeSource())
+    const panel = openAnalyzeUI()
+    expect(panel.style.insetBlockEnd).toBe('')
+    expect(panel.style.maxBlockSize).toBe('')
+  })
+
+  it('ignores a transport that is hidden', () => {
+    const bar = mountBar('playback-controls', 64)
+    bar.classList.add('hidden')
+    initAnalyzeUI(makeSource())
+    const panel = openAnalyzeUI()
+    expect(panel.style.insetBlockEnd).toBe('')
+  })
+})
+
+describe('recomputing when the globe settles on a frame', () => {
+  // Drawing contours arms a real `setInterval` staleness watch. The
+  // top-level `beforeEach` stops it via `closeAnalyzeUI`, but that only
+  // covers the *next* test — the last one in this block would otherwise
+  // leave a live 500 ms timer running past the end of the file, into
+  // whichever suite the worker picks up next. Observed: it failed an
+  // unrelated publisher test.
+  afterEach(() => { closeAnalyzeUI() })
+
+  /** A source whose frame content can be swapped from the test, standing
+   *  in for playback moving the globe underneath the panel. */
+  function movingFrame() {
+    let fill = 100
+    return {
+      src: makeSource({
+        frame: () => ({ snapshot: snap(8, 8, () => fill), scale: SCALE, options: OPTIONS }),
+      }),
+      advance: (to: number) => { fill = to },
+    }
+  }
+
+  it('recomputes the statistics against the new frame', () => {
+    // The panel used to compute once, on open, and then describe that
+    // frame for as long as it stayed open.
+    const m = movingFrame()
+    initAnalyzeUI(m.src)
+    openAnalyzeUI()
+    expect(currentResult()!.mean).toBeCloseTo(100, 6)
+
+    m.advance(200)
+    notifyAnalyzePlaybackSettled()
+    expect(currentResult()!.mean).toBeCloseTo(200, 6)
+  })
+
+  it('brings the zonal profile with it', () => {
+    // The sections below the statistics read the same frame, so a
+    // recompute that reached only the tiles would leave the profile
+    // describing a frame the numbers above it no longer do.
+    const m = movingFrame()
+    initAnalyzeUI(m.src)
+    openAnalyzeUI()
+    const before = document.querySelector('.analyze-zonal-section')!.textContent
+
+    m.advance(240)
+    notifyAnalyzePlaybackSettled()
+    expect(document.querySelector('.analyze-zonal-section')!.textContent).not.toBe(before)
+  })
+
+  it('puts the contours back, against the frame just settled on', () => {
+    // The case #342 named as "merely unbuilt": lines drawn, playback
+    // moves, the watch takes them down. On settle they should return —
+    // recomputed against the new frame, not the old geometry restored.
+    const c = makeContours()
+    const m = movingFrame()
+    initAnalyzeUI(makeSource({ contours: () => c.overlay, frame: m.src.frame }))
+    openAnalyzeUI()
+    contourButton()!.click()
+    expect(c.shown()).toHaveLength(1)
+
+    m.advance(240)
+    notifyAnalyzePlaybackSettled()
+    expect(c.shown()).toHaveLength(2)
+    // And the section knows they are up, rather than offering to draw
+    // what is already on the globe.
+    expect(contourButton()!.textContent).toBe('Clear outline')
+  })
+
+  it('does not draw contours that were never asked for', () => {
+    // The expensive half. A pause with no lines on the globe must not
+    // spend 178-376 ms extracting a set nobody requested.
+    const c = makeContours()
+    const m = movingFrame()
+    initAnalyzeUI(makeSource({ contours: () => c.overlay, frame: m.src.frame }))
+    openAnalyzeUI()
+    expect(c.shown()).toHaveLength(0)
+
+    m.advance(240)
+    notifyAnalyzePlaybackSettled()
+    expect(c.shown()).toHaveLength(0)
+    expect(contourButton()!.textContent).toBe('Outline on globe')
+  })
+
+  it('stops redrawing once the viewer clears the lines', () => {
+    // Clearing is the withdrawal of the request, so later settles must
+    // not keep resurrecting them.
+    const c = makeContours()
+    const m = movingFrame()
+    initAnalyzeUI(makeSource({ contours: () => c.overlay, frame: m.src.frame }))
+    openAnalyzeUI()
+    contourButton()!.click()
+    contourButton()!.click() // toggles to Clear
+    expect(contourButton()!.textContent).toBe('Outline on globe')
+    const before = c.shown().length
+
+    m.advance(240)
+    notifyAnalyzePlaybackSettled()
+    expect(c.shown()).toHaveLength(before)
+  })
+
+  it('does nothing when the panel is closed', () => {
+    // The host ticks the watcher from the playback loop, which runs
+    // whether or not anyone has the panel open.
+    initAnalyzeUI(movingFrame().src)
+    expect(isAnalyzeUIOpen()).toBe(false)
+    expect(() => notifyAnalyzePlaybackSettled()).not.toThrow()
+    expect(document.querySelector('.analyze-panel')).toBeNull()
   })
 })
 
