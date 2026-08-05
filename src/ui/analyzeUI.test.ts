@@ -16,6 +16,7 @@ import {
   initAnalyzeUI,
   isAnalyzeUIOpen,
   notifyAnalyzeDatasetChanged,
+  notifyAnalyzePlaybackSettled,
   openAnalyzeUI,
   type AnalyzeSource,
   type TransectPicker,
@@ -623,6 +624,56 @@ describe('zonal profile', () => {
     }))
     openAnalyzeUI()
     expect(zonal()).toBeNull()
+  })
+})
+
+describe('recomputing when the globe settles on a frame', () => {
+  /** A source whose frame content can be swapped from the test, standing
+   *  in for playback moving the globe underneath the panel. */
+  function movingFrame() {
+    let fill = 100
+    return {
+      src: makeSource({
+        frame: () => ({ snapshot: snap(8, 8, () => fill), scale: SCALE, options: OPTIONS }),
+      }),
+      advance: (to: number) => { fill = to },
+    }
+  }
+
+  it('recomputes the statistics against the new frame', () => {
+    // The panel used to compute once, on open, and then describe that
+    // frame for as long as it stayed open.
+    const m = movingFrame()
+    initAnalyzeUI(m.src)
+    openAnalyzeUI()
+    expect(currentResult()!.mean).toBeCloseTo(100, 6)
+
+    m.advance(200)
+    notifyAnalyzePlaybackSettled()
+    expect(currentResult()!.mean).toBeCloseTo(200, 6)
+  })
+
+  it('brings the zonal profile with it', () => {
+    // The sections below the statistics read the same frame, so a
+    // recompute that reached only the tiles would leave the profile
+    // describing a frame the numbers above it no longer do.
+    const m = movingFrame()
+    initAnalyzeUI(m.src)
+    openAnalyzeUI()
+    const before = document.querySelector('.analyze-zonal-section')!.textContent
+
+    m.advance(240)
+    notifyAnalyzePlaybackSettled()
+    expect(document.querySelector('.analyze-zonal-section')!.textContent).not.toBe(before)
+  })
+
+  it('does nothing when the panel is closed', () => {
+    // The host ticks the watcher from the playback loop, which runs
+    // whether or not anyone has the panel open.
+    initAnalyzeUI(movingFrame().src)
+    expect(isAnalyzeUIOpen()).toBe(false)
+    expect(() => notifyAnalyzePlaybackSettled()).not.toThrow()
+    expect(document.querySelector('.analyze-panel')).toBeNull()
   })
 })
 

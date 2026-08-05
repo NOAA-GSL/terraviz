@@ -304,6 +304,41 @@ export function notifyAnalyzeDatasetChanged(datasetId: string | null): void {
   if (root && openedFor !== datasetId) closeAnalyzeUI()
 }
 
+/**
+ * Recompute against the frame the globe has settled on.
+ *
+ * The host calls this when playback pauses or a seek finishes — see
+ * `services/playbackSettle`, which decides *when* that is and is
+ * deliberately silent during playback at any rate. Until now the panel
+ * computed once, on open, and everything on it then described whichever
+ * frame happened to be up at that moment for as long as it stayed open.
+ * It said which frame, so it was honest, but it went quietly out of date
+ * the moment anyone touched the transport.
+ *
+ * `refresh` is the whole of it because `refresh` was already the "the
+ * frame or the region moved, do it all again" path — the same one the
+ * scope picker uses. `npm run bench:analysis` is what makes that
+ * affordable: histogram, summary and zonal profile together are ~60 ms
+ * on a 4096×2048 frame, which on a settle is a hitch nobody perceives,
+ * with no worker and no async readback.
+ *
+ * **Contours are not redrawn**, and that is a decision rather than an
+ * omission. They cost 178–376 ms depending on how much perimeter the
+ * levels cut — an order more than everything else here — and drawing
+ * them is something the viewer explicitly asked for by clicking. Putting
+ * that on every pause spends the user's frame budget on an overlay they
+ * did not request this time. The staleness watch has already taken the
+ * old lines down and said why; the button is right there. Whether a
+ * *drawn* set should follow the playhead is a product call, and belongs
+ * with whoever makes it rather than inside the seam that made it
+ * possible.
+ */
+export function notifyAnalyzePlaybackSettled(): void {
+  const body = root?.querySelector('.analyze-body') as HTMLElement | null
+  if (!body) return
+  refresh(body)
+}
+
 function onEscape(ev: KeyboardEvent): void {
   if (ev.key === 'Escape') {
     ev.stopPropagation()
