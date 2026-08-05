@@ -24,10 +24,14 @@
  * permission on the project.
  */
 
-export const WEBLATE_URL = process.env.WEBLATE_URL ?? 'https://hosted.weblate.org'
-export const WEBLATE_PROJECT = process.env.WEBLATE_PROJECT ?? 'terraviz'
-export const WEBLATE_COMPONENT = process.env.WEBLATE_COMPONENT ?? 'app-locales'
-const WEBLATE_TOKEN = process.env.WEBLATE_TOKEN
+// All trimmed on read: the token goes into an `Authorization`
+// header and the rest into URLs, and a value pasted from the
+// Weblate UI (or exported from a file) commonly carries a
+// trailing newline that turns a working setup into a 401.
+export const WEBLATE_URL = process.env.WEBLATE_URL?.trim() || 'https://hosted.weblate.org'
+export const WEBLATE_PROJECT = process.env.WEBLATE_PROJECT?.trim() || 'terraviz'
+export const WEBLATE_COMPONENT = process.env.WEBLATE_COMPONENT?.trim() || 'app-locales'
+const WEBLATE_TOKEN = process.env.WEBLATE_TOKEN?.trim()
 
 /** Thrown for any auth / HTTP failure surfaced by this client. */
 export class WeblateError extends Error {}

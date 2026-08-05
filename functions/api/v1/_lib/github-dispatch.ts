@@ -161,13 +161,21 @@ async function sendRepositoryDispatch(
   if (env.MOCK_GITHUB_DISPATCH === 'true') {
     return { ok: true, mocked: true }
   }
-  if (!env.GITHUB_OWNER || !env.GITHUB_REPO || !env.GITHUB_DISPATCH_TOKEN) {
+  // Trimmed on read: a secret put through `wrangler pages secret
+  // put` from a file or a clipboard keeps whatever whitespace came
+  // with it, and an untrimmed token yields a 401 from GitHub that
+  // reads like a revoked credential. Same for the owner/repo pair,
+  // which would otherwise build a URL with a stray byte in the path.
+  const owner = env.GITHUB_OWNER?.trim()
+  const repo = env.GITHUB_REPO?.trim()
+  const dispatchToken = env.GITHUB_DISPATCH_TOKEN?.trim()
+  if (!owner || !repo || !dispatchToken) {
     throw new ConfigurationError(
       'GitHub dispatch is not configured. Set GITHUB_OWNER, GITHUB_REPO, ' +
         'and GITHUB_DISPATCH_TOKEN (or MOCK_GITHUB_DISPATCH=true for local dev).',
     )
   }
-  const url = `https://api.github.com/repos/${env.GITHUB_OWNER}/${env.GITHUB_REPO}/dispatches`
+  const url = `https://api.github.com/repos/${owner}/${repo}/dispatches`
   const body = JSON.stringify({
     event_type: eventType,
     client_payload: clientPayload,
@@ -178,7 +186,7 @@ async function sendRepositoryDispatch(
       method: 'POST',
       headers: {
         Accept: 'application/vnd.github+json',
-        Authorization: `Bearer ${env.GITHUB_DISPATCH_TOKEN}`,
+        Authorization: `Bearer ${dispatchToken}`,
         'Content-Type': 'application/json',
         'User-Agent': 'terraviz-publisher-api',
         'X-GitHub-Api-Version': '2022-11-28',

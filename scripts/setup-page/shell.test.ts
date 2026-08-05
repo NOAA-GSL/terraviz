@@ -29,6 +29,8 @@ import {
   GLOBE_MARK,
   repairSummary,
   TOKEN_ALIASES,
+  actionLabel,
+  docsLabel,
 } from './shell'
 import { MARKDOWN_URL, WORKSHEET } from './content'
 import { estimateStorage, REFERENCE_NODE } from './pricing'
@@ -369,6 +371,122 @@ describe('the committed public/setup.html', () => {
     const page = html()
     for (const leaked of ['&lt;span', '&lt;div', '&lt;a ', '&lt;p&gt;']) {
       expect(page, `${leaked} is being shown to the reader as text`).not.toContain(leaked)
+    }
+  })
+
+  // The sheet's two link labels were hardcoded to "Cloudflare", which
+  // was true of every manual step until the fork step, which points at
+  // GitHub. Naming the wrong product is a small lie in the one place
+  // someone new to the platform is trusting this page.
+  it('never labels a GitHub link as Cloudflare', () => {
+    const page = html()
+    for (const m of page.matchAll(/<a href="(https:\/\/[^"]+)"[^>]*>([^<]*)<\/a>/g)) {
+      const [, href, label] = m
+      if (/^https:\/\/(www\.)?(github|docs\.github)\.com\//.test(href)) {
+        expect(label, `${href} labelled "${label}"`).not.toMatch(/cloudflare/i)
+      }
+    }
+  })
+
+  it('labels the fork step by its actual destination', () => {
+    const page = html()
+    expect(page).toContain('Open on GitHub')
+    expect(page).toContain("GitHub's docs for this")
+    // The Cloudflare steps keep their own wording.
+    expect(page).toContain('Open in the Cloudflare dashboard')
+    expect(page).toContain("Cloudflare's docs for this")
+  })
+
+  // CodeQL flagged the first spelling of this (endsWith) as incomplete
+  // URL substring sanitization. Not reachable — every URL here is a
+  // constant — but a predicate that answers "is this GitHub?" wrongly
+  // should not survive on the grounds that its callers happen to be
+  // safe.
+  it('matches a host by label boundary, not by suffix', () => {
+    expect(actionLabel('https://github.com/x/y')).toBe('Open on GitHub')
+    expect(actionLabel('https://docs.github.com/x')).toBe('Open on GitHub')
+    expect(docsLabel('https://developers.cloudflare.com/x')).toBe(
+      "Cloudflare's docs for this",
+    )
+    // The whole point: a lookalike host must not borrow the label.
+    for (const bad of [
+      'https://evilgithub.com/x',
+      'https://notcloudflare.com/x',
+      'https://github.com.attacker.example/x',
+      'https://cloudflare.com.attacker.example/x',
+    ]) {
+      expect(actionLabel(bad), bad).toBe('Open this page')
+      expect(docsLabel(bad), bad).toBe('Documentation for this')
+    }
+    // A value that is not a URL at all falls back rather than throwing.
+    expect(actionLabel('not a url')).toBe('Open this page')
+  })
+
+  // Four values in this install are shown exactly once. The sheet
+  // already said so at each field; what it did not do was say it
+  // before the reader started, which is the only point at which
+  // "have somewhere to put this" is actionable.
+  it('warns about one-time secrets before the first step', () => {
+    const page = html()
+    const sheet = page.slice(page.indexOf('only you can do these'))
+    expect(sheet.slice(0, 2000)).toMatch(/password manager/i)
+  })
+
+  // The worksheet lived behind a floating button and someone
+  // installing did not notice it, so every later command kept its
+  // amber placeholder and the Copy buttons handed out unrunnable
+  // commands. Each produced value now also has an input at the end of
+  // the phase that produces it.
+  it('asks for each value where the phase produces it', () => {
+    const page = html()
+    expect(page).toContain('Write these down before you move on')
+    // Two controls per produced value: the drawer, and the phase.
+    for (const id of ['W4', 'W10', 'W12']) {
+      expect(
+        (page.match(new RegExp(`data-field="${id}"`, 'g')) ?? []).length,
+        `${id} should have a drawer input and a phase input`,
+      ).toBe(2)
+    }
+  })
+
+  // Two inputs for one value are worse than one if they disagree.
+  it('paints every input for a field, not just the first', () => {
+    const page = html()
+    expect(page).toContain(`q('[data-field="' + f.id + '"]').forEach`)
+    expect(page).toMatch(/paintProgress\(\); paintInputs\(\);/)
+  })
+
+  // The sheet's blurb described "on the left... on the right" long
+  // after the layout became two stacked lists, each internally two
+  // columns — the `data-sheetgrid` wrapper it referred to had no CSS
+  // rule anywhere, in print or on screen. A reader following that
+  // description looks for a column that is not there.
+  it('does not describe a left/right split it does not have', () => {
+    const page = html()
+    expect(page).not.toMatch(/On the left,[\s\S]{0,120}?On the right,/)
+    expect(page).not.toContain('data-sheetgrid')
+  })
+
+  // Someone installing worked the checklist and stopped, because
+  // nothing on the sheet said the real instructions were below it.
+  it('hands the reader off to the phases', () => {
+    const page = html()
+    expect(page).toContain('This sheet is the map, not the instructions')
+    expect(page).toContain('href="#p0"')
+    expect(page).toContain('id="p0"')
+  })
+
+  // The four ways to invoke setup were one copyable block, which reads
+  // as a script: Copy handed you all four, and pasting them runs
+  // --manual, then blocks on --interactive, then plans, then applies.
+  // They are alternatives. One command per block means whatever you
+  // copy is the whole of what you meant to run.
+  it('does not present the setup invocations as one runnable block', () => {
+    const page = html()
+    expect(page).toContain('These are alternatives, not a sequence')
+    for (const pre of page.match(/<pre[^>]*>[\s\S]*?<\/pre>/g) ?? []) {
+      const runs = (pre.match(/npm run setup/g) ?? []).length
+      expect(runs, `a single block offers ${runs} setup invocations`).toBeLessThan(2)
     }
   })
 
