@@ -42,7 +42,7 @@
 
 import type { FeatureKey } from '../../../../src/types/node-features'
 import { CatalogEnv } from '../_lib/env'
-import { verifyAccessJwt, type AccessIdentity } from '../_lib/access-auth'
+import { accessConfig, verifyAccessJwt, type AccessIdentity } from '../_lib/access-auth'
 import { isLoopbackHost } from '../_lib/loopback'
 import { getEffectiveFeatures } from '../_lib/node-settings-store'
 import {
@@ -179,7 +179,12 @@ export const onRequest: PagesFunction<CatalogEnv> = async context => {
   }
 
   const devBypass = context.env.DEV_BYPASS_ACCESS === 'true'
-  const accessConfigured = !!(context.env.ACCESS_TEAM_DOMAIN && context.env.ACCESS_AUD)
+  // Via `accessConfig` so a whitespace-only value counts as unset:
+  // otherwise the deploy looks configured here and then fails every
+  // assertion inside the verifier, which is a much worse error to
+  // debug than a 503 naming the two variables.
+  const { teamDomain, aud } = accessConfig(context.env)
+  const accessConfigured = !!(teamDomain && aud)
 
   if (!devBypass && !accessConfigured) {
     return jsonError(
@@ -207,7 +212,7 @@ export const onRequest: PagesFunction<CatalogEnv> = async context => {
       type: 'user',
     }
   } else {
-    const token = context.request.headers.get('Cf-Access-Jwt-Assertion')
+    const token = context.request.headers.get('Cf-Access-Jwt-Assertion')?.trim()
     if (!token) {
       return jsonError(401, 'unauthenticated', 'Missing Cf-Access-Jwt-Assertion header.')
     }

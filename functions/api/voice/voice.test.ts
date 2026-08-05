@@ -135,6 +135,11 @@ describe('voice stream proxy helpers', () => {
     expect(streamConfigured({})).toBe(false)
     expect(streamConfigured({ CF_ACCOUNT_ID: 'a', CF_AI_GATEWAY: 'g' })).toBe(false)
     expect(streamConfigured({ CF_ACCOUNT_ID: 'a', CF_AI_GATEWAY: 'g', CF_AIG_TOKEN: 't' })).toBe(true)
+    // Whitespace-only counts as unset — otherwise the deploy looks
+    // configured and every socket dies at the gateway instead.
+    expect(streamConfigured({ CF_ACCOUNT_ID: 'a', CF_AI_GATEWAY: 'g', CF_AIG_TOKEN: '  ' })).toBe(
+      false,
+    )
   })
 
   it('buildGatewayUrl targets Nova-3 linear16 16k with interim results + language', () => {
@@ -149,6 +154,17 @@ describe('voice stream proxy helpers', () => {
 
   it('buildGatewayUrl honours a model override', () => {
     const url = buildGatewayUrl({ CF_ACCOUNT_ID: 'a', CF_AI_GATEWAY: 'g', CF_AIG_TOKEN: 't', VOICE_STREAM_MODEL: '@cf/deepgram/flux' }, 'en')
+    expect(url).toContain('model=%40cf%2Fdeepgram%2Fflux')
+  })
+
+  it('buildGatewayUrl trims the account id, gateway name, and model', () => {
+    // These land in the URL path, where a trailing newline routes
+    // the socket somewhere that does not exist.
+    const url = buildGatewayUrl(
+      { CF_ACCOUNT_ID: ' acct\n', CF_AI_GATEWAY: 'gw ', CF_AIG_TOKEN: 't', VOICE_STREAM_MODEL: ' @cf/deepgram/flux\n' },
+      'en',
+    )
+    expect(url).toContain('wss://gateway.ai.cloudflare.com/v1/acct/gw/workers-ai?')
     expect(url).toContain('model=%40cf%2Fdeepgram%2Fflux')
   })
 })

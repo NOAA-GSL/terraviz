@@ -143,6 +143,44 @@ describe('streamChat', () => {
     expect(opts.headers.Authorization).toBeUndefined()
   })
 
+  it('trims whitespace off the API key before it becomes a header', async () => {
+    // The key is stored verbatim (localStorage or the OS keychain);
+    // this is the one place it is normalised. A trailing newline
+    // makes fetch reject the header outright, and a trailing space
+    // reaches the provider as a key it does not recognise.
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      body: makeSSEStream(['data: [DONE]']),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const gen = streamChat(
+      [{ role: 'user', content: 'hi' }],
+      [],
+      { ...testConfig, apiKey: '  sk-test-123\n' },
+    )
+    for await (const _ of gen) { /* consume */ }
+
+    const [, opts] = fetchMock.mock.calls[0]
+    expect(opts.headers.Authorization).toBe('Bearer sk-test-123')
+  })
+
+  it('treats a whitespace-only API key as no key', async () => {
+    // Otherwise the request carries a `Bearer ` header with nothing
+    // after it, which a local no-auth provider rejects outright.
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      body: makeSSEStream(['data: [DONE]']),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const gen = streamChat([{ role: 'user', content: 'hi' }], [], { ...testConfig, apiKey: '   ' })
+    for await (const _ of gen) { /* consume */ }
+
+    const [, opts] = fetchMock.mock.calls[0]
+    expect(opts.headers.Authorization).toBeUndefined()
+  })
+
   it('handles [DONE] signal', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
       ok: true,

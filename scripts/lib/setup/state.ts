@@ -206,7 +206,28 @@ export interface SetupEnv {
   GITHUB_REPO?: string
 }
 
-export function applyEnvOverrides(state: SetupState, env: SetupEnv): SetupState {
+/**
+ * Trim every override, and treat a blank one as unset.
+ *
+ * These values are copied out of dashboards into a shell profile
+ * or a `.env`, and several of them (`ACCESS_AUD` above all) are
+ * long opaque strings whose trailing whitespace is invisible.
+ * Left untrimmed they are written into the node's state file and
+ * from there into its Pages bindings, where the padding is no
+ * longer recoverable by inspection — the node just refuses every
+ * Access assertion it is handed.
+ */
+function trimOverrides(env: SetupEnv): SetupEnv {
+  const out: Record<string, string | undefined> = {}
+  for (const [key, value] of Object.entries(env)) {
+    const trimmed = typeof value === 'string' ? value.trim() : value
+    out[key] = trimmed ? trimmed : undefined
+  }
+  return out as SetupEnv
+}
+
+export function applyEnvOverrides(state: SetupState, rawEnv: SetupEnv): SetupState {
+  const env = trimOverrides(rawEnv)
   const next: SetupState = {
     ...state,
     d1: { ...state.d1 },

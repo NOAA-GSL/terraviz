@@ -80,14 +80,19 @@ export function accessHeadersFromEnv(
   id: string | undefined = process.env.VISUAL_ACCESS_CLIENT_ID,
   secret: string | undefined = process.env.VISUAL_ACCESS_CLIENT_SECRET,
 ): Record<string, string> | undefined {
-  if (id && secret) {
-    return { 'CF-Access-Client-Id': id, 'CF-Access-Client-Secret': secret }
+  // Trimmed: a CI secret pasted with a line break would otherwise
+  // reach Access as a value it rejects, and the capture would look
+  // like an SSO timeout rather than a whitespace problem.
+  const trimmedId = id?.trim()
+  const trimmedSecret = secret?.trim()
+  if (trimmedId && trimmedSecret) {
+    return { 'CF-Access-Client-Id': trimmedId, 'CF-Access-Client-Secret': trimmedSecret }
   }
   return undefined
 }
 
-const ACCESS_ID = process.env.VISUAL_ACCESS_CLIENT_ID
-const ACCESS_SECRET = process.env.VISUAL_ACCESS_CLIENT_SECRET
+const ACCESS_ID = process.env.VISUAL_ACCESS_CLIENT_ID?.trim()
+const ACCESS_SECRET = process.env.VISUAL_ACCESS_CLIENT_SECRET?.trim()
 const ACCESS_HEADERS = accessHeadersFromEnv(ACCESS_ID, ACCESS_SECRET)
 // With an Access service token we are authenticating against a real
 // backend, so we want the *real* data the portal renders — fixtures

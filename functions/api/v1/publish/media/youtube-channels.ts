@@ -109,7 +109,11 @@ export const onRequestPost: PagesFunction<CatalogEnv> = async context => {
     return json(400, { errors: [{ field: 'url', code: 'required', message: 'A channel URL is required.' }] })
   }
 
-  const resolved = await resolveChannelUrl(url, context.env.YOUTUBE_API_KEY, (i, init) => fetch(i, init))
+  // Trimmed on read — the key is a query-string parameter, so a
+  // trailing newline surfaces as a `keyInvalid` 400 from the API
+  // rather than as the whitespace problem it is.
+  const apiKey = context.env.YOUTUBE_API_KEY?.trim() || undefined
+  const resolved = await resolveChannelUrl(url, apiKey, (i, init) => fetch(i, init))
   if (!resolved.ok) {
     const message =
       resolved.code === 'invalid_url'

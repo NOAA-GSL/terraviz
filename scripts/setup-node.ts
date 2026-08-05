@@ -52,6 +52,11 @@ import { fileURLToPath } from 'node:url'
 
 import { EXPECTED_BINDINGS } from './lib/expected-bindings.ts'
 import {
+  NODE_DOWNLOAD_URL,
+  requiredNodeLabel,
+  requiredNodeMajor,
+} from './lib/node-version.ts'
+import {
   buildPatchBody,
   formatBindingsPlan,
   OPTIONAL_EXTRAS,
@@ -151,6 +156,34 @@ const DEFAULT_STEPS: Step[] = [
   'bindings',
 ]
 
+/**
+ * Is the running Node new enough?
+ *
+ * Pure and exported so the failure path is testable — the alternative
+ * is trusting a check nobody can exercise on the one version we cannot
+ * reproduce here.
+ */
+export function checkNodeVersion(version: string): { ok: boolean; found: string } {
+  const found = version.replace(/^v/, '')
+  const major = Number(/^(\d+)/.exec(found)?.[1] ?? NaN)
+  return { ok: Number.isFinite(major) && major >= requiredNodeMajor(), found }
+}
+
+/**
+ * The Cloudflare API token, trimmed, with blank read as unset.
+ *
+ * The token is minted in the dashboard and pasted into a shell —
+ * `export CLOUDFLARE_API_TOKEN=$(cat token.txt)` keeps the file's
+ * newline, and so does a copy that caught a trailing space.
+ * Untrimmed it goes straight into an `Authorization: Bearer`
+ * header, and Cloudflare answers 401, which reads like a token
+ * with the wrong permissions rather than a token with an extra
+ * byte. Every read of the token in this file goes through here.
+ */
+function apiToken(env: Record<string, string | undefined>): string | undefined {
+  return env.CLOUDFLARE_API_TOKEN?.trim() || undefined
+}
+
 export interface SetupDeps {
   argv: string[]
   env: SetupEnv & Record<string, string | undefined>
@@ -168,6 +201,11 @@ export interface SetupDeps {
    * worse than a clean failure.
    */
   prompter?: Prompter
+  /**
+   * The running Node version, as `process.version`. Injectable so the
+   * check can be tested against versions this process is not on.
+   */
+  nodeVersion?: string
 }
 
 interface Options {
@@ -357,6 +395,19 @@ export async function runSetup(deps: SetupDeps): Promise<number> {
     return 0
   }
 
+  // Node is the one prerequisite this tool can check for certain — it
+  // is running on it. The pre-flight sheet says "setup will catch
+  // this", so it has to actually catch it rather than trust that a
+  // reader saw the prose above the checklist.
+  const node = checkNodeVersion(deps.nodeVersion ?? process.version)
+  if (!node.ok) {
+    deps.stderr.write(
+      `setup: Node ${node.found} is too old — this repo needs ${requiredNodeLabel()}.\n` +
+        `       Install the LTS build from ${NODE_DOWNLOAD_URL}, then run this again.\n`,
+    )
+    return 2
+  }
+
   // ── State ───────────────────────────────────────────────────────
   let stateForSecrets = hydrateState(
     deps.exists(opts.statePath) ? safeJson(deps.readFile(opts.statePath)) : null,
@@ -435,7 +486,7 @@ export async function runSetup(deps: SetupDeps): Promise<number> {
       prompter.say(`\n  Answers saved to ${opts.statePath}.\n`)
     }
 
-    if (!deps.env.CLOUDFLARE_API_TOKEN) {
+    if (!apiToken(deps.env)) {
       prompter.say(
         '\n  ! CLOUDFLARE_API_TOKEN is not set in this shell.\n' +
           '    Everything that talks to Cloudflare needs it. See\n' +
@@ -480,7 +531,7 @@ export async function runSetup(deps: SetupDeps): Promise<number> {
             : '  ! TERRAVIZ_HOSTNAME unset — no custom domain will be attached\n\n'),
       )
     } else {
-      const token = deps.env.CLOUDFLARE_API_TOKEN
+      const token = apiToken(deps.env)
       if (!token || !state.accountId) {
         deps.stderr.write(
           '  ✘ CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID are required.\n' +
@@ -709,7 +760,7 @@ export async function runSetup(deps: SetupDeps): Promise<number> {
           `  would ensure token        ${tokenName}\n\n`,
       )
     } else {
-      const token = deps.env.CLOUDFLARE_API_TOKEN
+      const token = apiToken(deps.env)
       if (!token || !state.accountId) {
         deps.stderr.write(
           '  ✘ CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID are required.\n' +
@@ -853,7 +904,7 @@ export async function runSetup(deps: SetupDeps): Promise<number> {
     }
 
     if (opts.apply) {
-      const token = deps.env.CLOUDFLARE_API_TOKEN
+      const token = apiToken(deps.env)
       const accountId = state.accountId
       if (!token || !accountId) {
         deps.stderr.write(
@@ -916,7 +967,7 @@ export async function runSetup(deps: SetupDeps): Promise<number> {
             : '  ! R2_PUBLIC_BASE unset — no public domain will be attached\n\n'),
       )
     } else {
-      const token = deps.env.CLOUDFLARE_API_TOKEN
+      const token = apiToken(deps.env)
       if (!token || !state.accountId) {
         deps.stderr.write(
           '  ✘ CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID are required.\n' +
@@ -978,7 +1029,7 @@ export async function runSetup(deps: SetupDeps): Promise<number> {
         '  Existing custom rules are preserved — new rules are appended last.\n\n',
       )
     } else {
-      const token = deps.env.CLOUDFLARE_API_TOKEN
+      const token = apiToken(deps.env)
       if (!token) {
         deps.stderr.write(
           '  ✘ CLOUDFLARE_API_TOKEN is required (Zone → Zone WAF → Edit).\n\n',

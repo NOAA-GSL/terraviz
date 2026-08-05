@@ -56,9 +56,12 @@ export interface RunDeps {
 }
 
 export async function runCheck(deps: RunDeps): Promise<number> {
-  const token = deps.env.CLOUDFLARE_API_TOKEN
-  const accountId = deps.env.CLOUDFLARE_ACCOUNT_ID
-  const projectName = deps.env.CLOUDFLARE_PAGES_PROJECT_NAME ?? 'terraviz'
+  // Trimmed on read: a token exported from a file keeps the file's
+  // newline, and Cloudflare answers the resulting Bearer header
+  // with a 401 that reads like a permissions problem.
+  const token = deps.env.CLOUDFLARE_API_TOKEN?.trim()
+  const accountId = deps.env.CLOUDFLARE_ACCOUNT_ID?.trim()
+  const projectName = deps.env.CLOUDFLARE_PAGES_PROJECT_NAME?.trim() || 'terraviz'
 
   if (!token || !accountId) {
     deps.stderr.write(
