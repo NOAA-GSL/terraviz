@@ -268,6 +268,7 @@ export function closeAnalyzeUI(): void {
   // remove it.
   clearTransect()
   clearContours()
+  stopLayoutWatch()
   source?.regionOutline?.()?.clear()
   root?.remove()
   root = null
@@ -348,6 +349,80 @@ export function notifyAnalyzePlaybackSettled(): void {
   refresh(body)
 }
 
+/** Gap between the panel's bottom edge and whatever it is clearing. */
+const PANEL_CLEARANCE_GAP = 12
+
+/**
+ * Keep the panel clear of the playback transport and the Tools bar.
+ *
+ * All three want the same bottom-end corner — the panel's own header
+ * comment says it deliberately shares it with the colorbar controls,
+ * which is fine because those two are never open together. The
+ * transport is not like that. It is open exactly when the panel is most
+ * useful, the panel is `z-index: 60` and wins, and closing the panel to
+ * reach Play takes the contours with it (`closeAnalyzeUI` clears them,
+ * so the annotation cannot outlive its explanation). The result was no
+ * pointer-only way to play a dataset while looking at its analysis.
+ *
+ * `mapControlsUI.updateMapControlsPosition` already solves this for the
+ * Tools bar by measuring the transport, so the shape here follows it.
+ * Both are measured rather than only the Tools bar: that would work
+ * today, since the bar is kept above the transport, but it would make
+ * this quietly depend on an invariant maintained in another module.
+ *
+ * `max-block-size` shrinks by the same amount. Without it a tall panel
+ * on a short window keeps its 34rem and simply grows off the top.
+ */
+function positionAnalyzePanel(): void {
+  const panel = root
+  if (!panel) return
+
+  let clearance = 0
+  for (const id of ['playback-controls', 'map-controls']) {
+    const el = document.getElementById(id)
+    if (!el || el.classList.contains('hidden')) continue
+    const rect = el.getBoundingClientRect()
+    // Zero-sized means display:none by some other route; ignore it
+    // rather than clearing a strip of nothing.
+    if (rect.height <= 0) continue
+    clearance = Math.max(clearance, window.innerHeight - rect.top)
+  }
+
+  if (clearance <= 0) {
+    // Nothing to clear — hand the corner back to the stylesheet rather
+    // than pinning an inline value it would then have to fight.
+    panel.style.insetBlockEnd = ''
+    panel.style.maxBlockSize = ''
+    return
+  }
+  const offset = clearance + PANEL_CLEARANCE_GAP
+  panel.style.insetBlockEnd = `${offset}px`
+  panel.style.maxBlockSize = `min(34rem, calc(100vh - ${offset}px - 1rem))`
+}
+
+/** Watches what the panel has to stay clear of, for as long as it is
+ *  open. A dataset loading mounts the transport *after* the panel may
+ *  already be up, and toggling `display:none` reports as a resize to
+ *  zero, so one observer covers both appearing and vanishing. */
+let layoutWatch: ResizeObserver | null = null
+
+function startLayoutWatch(): void {
+  stopLayoutWatch()
+  window.addEventListener('resize', positionAnalyzePanel)
+  if (typeof ResizeObserver === 'undefined') return
+  layoutWatch = new ResizeObserver(() => positionAnalyzePanel())
+  for (const id of ['playback-controls', 'map-controls']) {
+    const el = document.getElementById(id)
+    if (el) layoutWatch.observe(el)
+  }
+}
+
+function stopLayoutWatch(): void {
+  window.removeEventListener('resize', positionAnalyzePanel)
+  layoutWatch?.disconnect()
+  layoutWatch = null
+}
+
 function onEscape(ev: KeyboardEvent): void {
   if (ev.key === 'Escape') {
     ev.stopPropagation()
@@ -402,6 +477,8 @@ export function openAnalyzeUI(
 
   document.body.appendChild(root)
   document.addEventListener('keydown', onEscape, true)
+  positionAnalyzePanel()
+  startLayoutWatch()
   openedFor = source?.datasetId() ?? null
   refresh(body)
   return root

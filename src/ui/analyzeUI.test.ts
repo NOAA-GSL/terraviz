@@ -627,6 +627,77 @@ describe('zonal profile', () => {
   })
 })
 
+describe('staying clear of the playback transport', () => {
+  /** Mount a bottom-anchored bar of the given height, as the transport
+   *  and the Tools bar both are. */
+  function mountBar(id: string, height: number): HTMLElement {
+    const el = document.createElement('div')
+    el.id = id
+    document.body.appendChild(el)
+    el.getBoundingClientRect = () => ({
+      height, top: window.innerHeight - height, bottom: window.innerHeight,
+      left: 0, right: 0, width: 0, x: 0, y: window.innerHeight - height,
+      toJSON: () => ({}),
+    }) as DOMRect
+    return el
+  }
+
+  afterEach(() => {
+    closeAnalyzeUI()
+    document.getElementById('playback-controls')?.remove()
+    document.getElementById('map-controls')?.remove()
+  })
+
+  it('lifts above the transport rather than covering it', () => {
+    // The panel is z-index 60 and wins the corner outright, and closing
+    // it to reach Play takes the contours with it — so covering the
+    // transport left no pointer-only way to play a dataset while
+    // looking at its analysis.
+    mountBar('playback-controls', 64)
+    initAnalyzeUI(makeSource())
+    const panel = openAnalyzeUI()
+    expect(parseFloat(panel.style.insetBlockEnd)).toBeGreaterThanOrEqual(64)
+  })
+
+  it('clears the Tools bar when it sits higher than the transport', () => {
+    // Both measured rather than only the bar. The bar is kept above the
+    // transport by another module, and depending on that invariant from
+    // here would be a coupling nothing states.
+    mountBar('playback-controls', 40)
+    mountBar('map-controls', 120)
+    initAnalyzeUI(makeSource())
+    const panel = openAnalyzeUI()
+    expect(parseFloat(panel.style.insetBlockEnd)).toBeGreaterThanOrEqual(120)
+  })
+
+  it('shrinks its height by the same amount it lifts', () => {
+    // Otherwise a tall panel on a short window keeps its 34rem and
+    // simply grows off the top instead.
+    mountBar('playback-controls', 90)
+    initAnalyzeUI(makeSource())
+    const panel = openAnalyzeUI()
+    expect(panel.style.maxBlockSize).toContain('100vh')
+    expect(panel.style.maxBlockSize).toContain('px')
+  })
+
+  it('hands the corner back when nothing is there to clear', () => {
+    // An image dataset, or a still. Pinning an inline offset the
+    // stylesheet would then have to fight is worse than not setting one.
+    initAnalyzeUI(makeSource())
+    const panel = openAnalyzeUI()
+    expect(panel.style.insetBlockEnd).toBe('')
+    expect(panel.style.maxBlockSize).toBe('')
+  })
+
+  it('ignores a transport that is hidden', () => {
+    const bar = mountBar('playback-controls', 64)
+    bar.classList.add('hidden')
+    initAnalyzeUI(makeSource())
+    const panel = openAnalyzeUI()
+    expect(panel.style.insetBlockEnd).toBe('')
+  })
+})
+
 describe('recomputing when the globe settles on a frame', () => {
   // Drawing contours arms a real `setInterval` staleness watch. The
   // top-level `beforeEach` stops it via `closeAnalyzeUI`, but that only
