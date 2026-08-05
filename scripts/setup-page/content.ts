@@ -335,7 +335,8 @@ openssl rand -base64 32    # W18`,
     aside: 'all tiers',
     intro: [
       'Everything referenced here now exists. This is roughly forty dashboard interactions by hand, which is exactly why it is worth letting the tool do it.',
-      'It also includes asset storage — the R2 public origin, its CORS policy and an S3 token. That used to sit in the optional phase, after the phase that tells you to publish. Without it an uploaded thumbnail has no readable URL, so a published dataset has no image. Do it here and one redeploy picks everything up.',
+      'It also includes asset storage — the R2 public origin, its CORS policy and an S3 token — and video transcode. Both used to sit in the optional phase, after the phase that tells you to publish, while being prerequisites for publishing. Without R2 an uploaded thumbnail has no readable URL; without transcode, finalising a video upload returns 503 and rolls back. Do them here and one redeploy picks everything up.',
+      '138 of the upstream catalog\u2019s 204 datasets are video, so transcode is the common case rather than an extra. Skip it only for a node publishing images, tours, metadata, or a mirror of upstream.',
     ],
     automated: { code: 'npm run setup -- --apply --only=bindings' },
     automatedNote: [
@@ -348,6 +349,13 @@ openssl rand -base64 32    # W18`,
         title: 'Set every entry on BOTH Production and Preview',
         body: [
           'The environment selector is at the top of the page and forgetting it is the most common cutover failure — "works on preview, breaks on production", or the reverse. Phase 10\u2019s audit catches it, but only if you run it.',
+        ],
+      },
+      {
+        kind: 'trap',
+        title: 'There is a WAF trap in video transcode',
+        body: [
+          'Access service tokens bypass Access but not Bot Fight Mode. The runner\u2019s final callback gets an interstitial, ffmpeg finishes, the bundle lands, and the job still exits non-zero. You need a WAF skip rule on that path — and on the Free plan, plain Bot Fight Mode has no per-path override, so disabling it zone-wide is the recommended option.',
         ],
       },
       {
@@ -457,7 +465,7 @@ npm run terraviz -- verify-deploy --server https://{{W2}}`,
     duration: '≈15 min',
     aside: 'Tier 2+ · the last required phase',
     intro: [
-      'Your node works but its catalog is empty. Publish your own from `/publish/datasets/new` — metadata-only drafts work immediately, and asset uploads work if you did Phase 8.5. Or mirror the upstream catalog, which is about 200 datasets.',
+      'Your node works but its catalog is empty. Publish your own from `/publish/datasets/new` — metadata-only drafts work immediately, asset uploads need Phase 8.5, and video needs 8.6 as well. Or mirror the upstream catalog, which is about 200 datasets.',
     ],
     body: [
       {
@@ -522,21 +530,13 @@ export const ADDONS: Array<{
   extra?: string
 }> = [
   {
-    id: '13.1',
-    title: 'Video transcode',
-    flag: '--github-secrets',
-    body: 'Video uploads hand off to a GitHub Actions workflow running the ffmpeg spherical HLS ladder. Both halves — Pages bindings and GitHub secrets — are required and fail closed. Free-tier Actions covers roughly 50 uploads a month; R2 storage is what actually costs, at ~250 MB per minute of 4K source.',
-    extra:
-      '**There is a WAF trap here.** Access service tokens bypass Access but not Bot Fight Mode. The runner\u2019s final callback gets an interstitial, ffmpeg finishes, the bundle lands, and the job still exits non-zero. You need a WAF skip rule on that path — and on the Free plan, plain Bot Fight Mode has no per-path override, so disabling it zone-wide is the recommended option.',
-  },
-  {
-    id: '13.3',
+    id: '13.2',
     title: 'Analytics long-term export',
     flag: 'recommended',
     body: 'Analytics Engine retains 30–90 days. A daily job drains each completed day into an archive bucket plus rollups — that is the data behind the in-app analytics tab. Run the backfill once while AE still remembers.',
   },
   {
-    id: '13.8',
+    id: '13.7',
     title: 'Content-Security-Policy',
     flag: 'worth doing',
     body: '**The repo ships no CSP.** Upstream enforces one at the Cloudflare edge, which a fork does not inherit. Your node works without one; you should still add your own. Remember `blob:` — the app uses it for preview tours and screenshots. Test playback, VR and a tour before locking it down.',
@@ -607,7 +607,7 @@ export const WEEK_ONE = [
   },
   {
     title: 'Add a Content-Security-Policy',
-    body: "The repo ships none, and upstream's edge policy does not travel with a fork. See Phase 13.8 — and test playback, VR and a tour before you lock it down.",
+    body: "The repo ships none, and upstream's edge policy does not travel with a fork. See Phase 13.7 — and test playback, VR and a tour before you lock it down.",
     wide: true,
   },
 ]
@@ -681,7 +681,7 @@ export const WORKSHEET: WorksheetField[] = [
   { id: 'W20', label: 'R2_ACCESS_KEY_ID', phase: 8, token: '‹r2-access-key›', placeholder: 'R2 S3 API token', note: 'Phase 8.5.', secret: true, origin: 'shown-once', consumedBy: [8], minTier: 2 },
   { id: 'W20b', label: 'R2_SECRET_ACCESS_KEY', phase: 8, token: '‹r2-secret-key›', placeholder: 'shown once at mint time', note: 'Phase 8.5. Paired with the access key id.', secret: true, origin: 'shown-once', consumedBy: [8], minTier: 2 },
   { id: 'W21', label: 'R2 S3 endpoint', phase: 8, token: '‹r2-s3-endpoint›', placeholder: 'https://….r2.cloudflarestorage.com', note: 'Phase 8.5.', origin: 'shown-once', consumedBy: [8], minTier: 2 },
-  { id: 'W22', label: 'GITHUB_DISPATCH_TOKEN', phase: 13, token: '‹github-dispatch-token›', placeholder: 'PAT with repo scope', note: 'Optional — Phase 13.1 video transcode.', secret: true, origin: 'generated', consumedBy: [13], minTier: 2 },
+  { id: 'W22', label: 'GITHUB_DISPATCH_TOKEN', phase: 8, token: '‹github-dispatch-token›', placeholder: 'PAT with repo scope', note: 'Phase 8.6 — needed for video uploads.', secret: true, origin: 'generated', consumedBy: [8], minTier: 2 },
 ]
 
 export const ORIGIN_LABELS: Record<Origin, { label: string; hint: string }> = {
@@ -703,8 +703,8 @@ export const MAP_READINGS = [
     body: 'Six values born, none consumed until Phase 3. That gap is deliberate — it is what lets Phase 3 and Phase 8 ask for IDs you already have written down instead of sending you back to the dashboard mid-edit.',
   },
   {
-    title: 'The extras are self-contained',
-    body: 'Everything Phase 13 produces, Phase 13 also consumes — no bar leaves it. That is why you can come back for them a month later without unpicking anything. Asset storage used to be in here and is not, because a published dataset with no readable image is not really published; its four values now belong to Phase 8.',
+    title: 'Phase 13 has no bars at all now',
+    body: 'It used to own five — the R2 origin, its key pair and endpoint, and the GitHub dispatch token. All five moved to Phase 8. Neither asset storage nor video transcode was really optional: a dataset with no readable image is not published, and 138 of upstream\u2019s 204 datasets are video. What is left in Phase 13 needs nothing written down, which is a fair test of whether something belongs there.',
   },
 ]
 

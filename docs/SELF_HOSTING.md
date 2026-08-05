@@ -66,7 +66,7 @@ the install:
 | `W11` | `CLOUDFLARE_API_TOKEN` | Cloudflare, at mint time (Phase 5) |
 | `W15` | `CF_ACCESS_CLIENT_SECRET` | Cloudflare, in the service-token dialog (Phase 6) |
 | `W20b` | `R2_SECRET_ACCESS_KEY` | Cloudflare, with `W20` (Phase 8.5) |
-| `W22` | `GITHUB_DISPATCH_TOKEN` | GitHub, at mint time (Phase 13.1) |
+| `W22` | `GITHUB_DISPATCH_TOKEN` | GitHub, at mint time (Phase 8.6) |
 
 Losing one is recoverable but tedious: revoke it, mint a new one, and
 repoint everything already using it. `W16` and `W18` are different —
@@ -106,7 +106,7 @@ W16 🔒 NODE_ID_PRIVATE_KEY_PEM       ......................
 W17  Node public key (ed25519:...)  ......................
 W18 🔒 PREVIEW_SIGNING_KEY           ......................
 
-── Phase 8.5 + Phase 13 (assets, then extras) ────────────
+── Phase 8.5–8.6 (assets and video) ──────────────────────
 W19  R2 public origin               ......................
 W20 🔒 R2_ACCESS_KEY_ID              ......................
 W20b 🔒 R2_SECRET_ACCESS_KEY         ......................
@@ -189,7 +189,7 @@ itself where it is known and not secret.
 | **7** | Generates `PREVIEW_SIGNING_KEY` into `.dev.vars`. |
 | **8** | Writes every binding, variable and available secret to **both** Production and Preview. |
 | **8.5** | Sets the R2 CORS policy and attaches the public bucket domain. |
-| **13.1/13.2** *(opt-in)* | Appends the two WAF skip rules, preserving your existing rules. |
+| **8.6/13.1** | Appends the two WAF skip rules, preserving your existing rules. |
 
 Two flags select different things, and it is worth keeping them
 straight. **`--only=` picks which steps run.** **`--with=` declares
@@ -228,7 +228,7 @@ so it cannot provision a deploy that
 | **7** (half) | The node keypair — `npm run gen:node-key` owns it, because it also writes `node-public-key.txt` that Phase 9 reads and stamps your local D1. One command. |
 | **11** | The first SSO sign-in, which is what makes you admin. |
 | **8.5** (part) | Minting the R2 S3 API token. Doing that over the API needs a bootstrap token that can *create tokens* — a strictly larger credential than anything else here, one that could mint itself more authority. Two clicks in the R2 dashboard, once. |
-| **13.1** (part) | Writing GitHub Actions secrets, which requires libsodium sealed-box encryption (BLAKE2b, absent from `node:crypto`). Rather than add a dependency, `npm run setup -- --github-secrets` prints the exact `gh secret set` script, with values as `"$VAR"` references so it is safe to paste anywhere. |
+| **8.6** (part) | Writing GitHub Actions secrets, which requires libsodium sealed-box encryption (BLAKE2b, absent from `node:crypto`). Rather than add a dependency, `npm run setup -- --github-secrets` prints the exact `gh secret set` script, with values as `"$VAR"` references so it is safe to paste anywhere. |
 
 The tool names whichever of these is blocking it. A typical Tier 2
 install, guided:
@@ -269,9 +269,9 @@ burning its timeout.
 | Account → Access: Service Tokens → **Edit** | Phase 6 |
 | Account → Access: Organizations → **Read** | discovering the team domain |
 | Account → Workers R2 Storage → **Edit** | Phase 8.5 |
-| Zone → Zone → **Read** | resolving the zone for 8.5 / 13.1 |
-| Zone → Zone WAF → **Edit** | Phase 13.1 (opt-in) |
-| Account → D1 → **Edit** | only if you enable CI migrations (13.5) |
+| Zone → Zone → **Read** | resolving the zone for 8.5 / 8.6 |
+| Zone → Zone WAF → **Edit** | Phase 8.6 |
+| Account → D1 → **Edit** | only if you enable CI migrations (13.4) |
 
 Grant only what you plan to run — each step names the permission it
 is missing rather than failing with a bare `10000: Authentication
@@ -312,7 +312,7 @@ the Cloudflare dashboard sidebar and in every dashboard URL.
 Everything after this assumes you are working from **your own copy**
 of `zyra-project/terraviz`, not from upstream. Phase 3 rewrites
 `wrangler.toml` with your resource IDs, Phase 5 points Cloudflare
-Pages at your remote, and Phase 13.1 runs the transcode workflow in
+Pages at your remote, and Phase 8.6 runs the transcode workflow in
 your repo. None of that is possible against a repo you cannot push
 to.
 
@@ -878,7 +878,7 @@ that isn't yours.
 
 `W11` needs, at minimum, **Account → Cloudflare Pages → Edit**. Add
 **Account → D1 → Edit** only if you enable CI migrations (Phase
-13.5). Mint it at
+13.4). Mint it at
 `https://dash.cloudflare.com/profile/api-tokens`.
 
 > Forks created with GitHub's **Fork** button land with Actions
@@ -1145,19 +1145,19 @@ Four are R2. Set them in 8.5 below, which is part of this phase
 rather than a later one: without them a published dataset has no
 readable image, and that is not really publishing.
 
-The other three are for video transcode, and are genuinely
-conditional — you need them only if publishers will upload video.
-Their GitHub-side half is Phase 13.1. If you are not doing video,
-those three rows are expected to read MISSING and you can ignore
-them.
+The other three are for video transcode. Set them in 8.6, which is
+also part of this phase — 138 of the upstream catalog's 204 datasets
+are video, so this is the common case rather than an extra. If your
+node genuinely publishes no video, those three rows are expected to
+read MISSING and you can ignore them.
 
 Plaintext:
 
 | Variable | Set in | Value | Without it |
 |---|---|---|---|
 | `R2_PUBLIC_BASE` | 8.5 | `W19` — the R2 bucket's public origin | HLS manifests, `r2:datasets/…` assets and `r2:tours/…` JSON resolve to `r2_unconfigured`. **`R2_S3_ENDPOINT` is not a fallback here** — it signs S3-API access, not public reads, so falling through would produce an `hls` URL that 403s at play time |
-| `GITHUB_OWNER` | 13.1 | repo owner hosting `transcode-hls` | With `GITHUB_REPO` + `GITHUB_DISPATCH_TOKEN`, builds the `repository_dispatch` URL |
-| `GITHUB_REPO` | 13.1 | repo name hosting `transcode-hls` | See `GITHUB_OWNER` |
+| `GITHUB_OWNER` | 8.6 | repo owner hosting `transcode-hls` | With `GITHUB_REPO` + `GITHUB_DISPATCH_TOKEN`, builds the `repository_dispatch` URL |
+| `GITHUB_REPO` | 8.6 | repo name hosting `transcode-hls` | See `GITHUB_OWNER` |
 
 Secrets:
 
@@ -1166,7 +1166,7 @@ Secrets:
 | `R2_S3_ENDPOINT` | 8.5 | `W21` — `https://<acct>.r2.cloudflarestorage.com` | The `migrate-r2-hls` / `-assets` / `-tours` CLIs (and their rollbacks) fail at credential validation. The operator's shell needs the same value |
 | `R2_ACCESS_KEY_ID` | 8.5 | `W20` | As above |
 | `R2_SECRET_ACCESS_KEY` | 8.5 | `W20b` — shown once, when the token is minted | As above |
-| `GITHUB_DISPATCH_TOKEN` | 13.1 | `W22` — fine-grained PAT with Contents: write, or a classic PAT with `repo` | Video-upload finalisation 503s with `github_dispatch_unconfigured` |
+| `GITHUB_DISPATCH_TOKEN` | 8.6 | `W22` — fine-grained PAT with Contents: write, or a classic PAT with `repo` | Video-upload finalisation 503s with `github_dispatch_unconfigured` |
 
 ## 8.5 Asset storage — R2 public origin, CORS, and the S3 token
 
@@ -1230,14 +1230,145 @@ GET/HEAD rule for desktop builds.
    These mint presigned PUT URLs server-side and verify upload
    digests.
 
-## 8.6 Redeploy
+## 8.6 Video transcode
+
+**Do this now if publishers will upload video.** In the upstream
+catalog 138 of 204 datasets are `video/mp4` — for a node in the
+Science On a Sphere lineage, video is not a side case, it is most of
+the content. Without the three bindings below, finalising a video
+upload returns 503 `github_dispatch_unconfigured` and rolls the
+dataset's transcoding state back. It does not degrade; it fails.
+
+Skip it for a node that publishes only images, tours or metadata.
+Skip it too for data-encoded video built by a Zyra pipeline, and for
+a mirror of the upstream catalog — those rows carry `vimeo:` refs
+and never touch this. As with 8.5 you can come back later, at the
+cost of another redeploy.
+
+Publisher video uploads hand off to a GitHub Actions workflow that
+runs the ffmpeg 4K/1080p/720p 2:1 spherical HLS ladder, via
+`repository_dispatch`. Both source shapes — a single `source.mp4`,
+or up to 10 000 image-sequence frames — feed the same pipeline and
+encode to **30 fps output** regardless of source rate (the tour
+engine's `frameRate` task assumes 30).
+
+**Pages side** (both environments):
+
+| Binding | Value |
+|---|---|
+| `GITHUB_OWNER` | your fork's owner |
+| `GITHUB_REPO` | your fork's name |
+| `GITHUB_DISPATCH_TOKEN` | **Secret** — PAT with `repo` scope (or fine-grained Contents:write) on that repo. `W22`. |
+
+**GitHub side** (repo Settings → Secrets and variables → Actions):
+`R2_S3_ENDPOINT` (`W21`), `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY`
+(`W20`), `TERRAVIZ_SERVER` (`https://<W2>`), `CF_ACCESS_CLIENT_ID`
+(`W14`), `CF_ACCESS_CLIENT_SECRET` (`W15`), and optionally
+`CATALOG_R2_BUCKET`.
+
+`npm run setup -- --github-secrets` prints the exact `gh secret set`
+commands for all of them, annotated with what each is for and which
+ones your current shell can't supply. Values are emitted as `"$VAR"`
+references rather than inlined, so the script is safe to paste into a
+runbook.
+
+Both halves are required and fail closed. Missing
+`GITHUB_DISPATCH_TOKEN` → `/asset/complete` returns 503
+`github_dispatch_unconfigured`; the source bytes stay in R2 and the
+upload can be retried. Missing GitHub secrets → the workflow exits
+non-zero with a stage code (2 download, 3 encode, 4 upload, 5
+PATCH), the row stays `transcoding=1`, and the portal's
+"Transcoding…" badge is your signal.
+
+**Recovery is operator-only.** `/asset/…/complete` refuses a
+different upload while `transcoding=1` and the active-upload
+binding is set, so publishers can't self-recover. Clear the row:
+
+```sql
+UPDATE datasets SET transcoding = NULL, active_transcode_upload_id = NULL
+WHERE id = '…';
+```
+
+**Cost.** GitHub Actions' free tier (2000 min/mo, public repos)
+comfortably covers ~50 uploads/month. R2 **storage** dominates: a
+4K ladder is ~250 MB per minute of source, billed until deleted.
+Egress is zero-rated.
+
+**Local dev:** `MOCK_GITHUB_DISPATCH=true` in `.dev.vars` skips the
+dispatch while still stamping `transcoding=1`, so you can exercise
+the portal's polling surface. Refused on non-loopback hostnames.
+
+### WAF skip rule for the transcode-complete callback
+
+Access service tokens bypass Access but **not** Bot Fight Mode, the
+Managed Ruleset, or custom WAF rules. Bot Fight Mode is on by
+default from the Free plan up. If any of those are active, the
+runner's final POST to
+`/api/v1/publish/datasets/{id}/transcode-complete` gets a `Just a
+moment...` interstitial and never reaches the Worker. ffmpeg
+finishes, the HLS bundle lands in R2, and the runner exits non-zero
+at stage 5. The CLI detects the challenge HTML and prints a
+one-line pointer at this section rather than a 30 KB blob.
+
+> **Automated (opt-in).** `npm run setup -- --apply --only=waf`
+> appends this rule *and* the 13.1 feedback rule, preserving every
+> existing rule in the zone. It is deliberately excluded from a
+> default run: the rulesets API replaces a zone's whole custom-rule
+> list rather than appending, so a careless implementation deletes
+> your WAF config. The merge is a pure, tested function, and a failed
+> read aborts rather than writing. Step 2 below (plain Bot Fight
+> Mode) has no per-path override and stays manual.
+
+**Step 1 — WAF Custom Rule.** Security → WAF → Custom rules →
+Create rule, `transcode-complete service token skip`:
+
+```
+(starts_with(http.request.uri.path, "/api/v1/publish/")
+  and ends_with(http.request.uri.path, "/transcode-complete")
+  and len(http.request.headers["cf-access-client-id"][0]) > 0)
+```
+
+Action **Skip**, ticking: all remaining custom rules, all managed
+rules, all Super Bot Fight Mode rules, Browser Integrity Check,
+and Security Level.
+
+This is safe for three reasons. Only requests carrying a
+service-token id can match. Access still validates the token
+afterwards, so a forged header without the secret can't
+authenticate. And the route handler independently enforces
+`role='service'`.
+
+**Step 2 — plain Bot Fight Mode (Free/Pro).** The Skip action's
+"All Super Bot Fight Mode Rules" covers SBFM (Pro+) but not plain
+BFM, which runs zone-wide at a different layer and has no per-path
+override on Free. Options, best first:
+
+1. **Disable BFM zone-wide** (Security → Bots → Configure). For a
+   small portal where authenticated traffic dominates and the
+   public SPA is cache-served, BFM adds little over Access + the
+   role-gated routes + the Step 1 rule. Recommended on Free.
+2. **Upgrade to Pro** — SBFM *is* skippable from Step 1's rule.
+3. **Live with manual recovery** — re-issue `/transcode-complete`
+   from an authenticated browser session when it fails.
+
+**Which rule fired?** Security → Events, "Service" column:
+
+| Says | Fixed by |
+|---|---|
+| `Bot fight mode` | Step 2 |
+| `Managed challenge` | Step 1, "All managed rules" |
+| `Super Bot Fight Mode` | Step 1, SBFM checkbox |
+| `Browser Integrity Check` | Step 1, that checkbox |
+| `Security level` | Step 1, that checkbox |
+
+## 8.7 Redeploy
 
 Bindings take effect on the *next* deployment, not immediately.
 **Deployments → ⋯ → Retry deployment**, or push a commit.
 
-Doing 8.5 before this point is what keeps it to one redeploy. The
-R2 values used to be set two phases later, which meant deploying
-twice to pick them up.
+Doing 8.5 and 8.6 before this point is what keeps it to one
+redeploy. Both used to be set five phases later, which meant
+deploying again to pick them up.
 
 **Gate:** open `https://<W2>` in a private window. The privacy
 disclosure banner appears on first load, and the DevTools network
@@ -1346,8 +1477,8 @@ Phase 6 too.
 `check:pages-bindings` will report `R2_PUBLIC_BASE`,
 `R2_S3_ENDPOINT`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`,
 `GITHUB_OWNER`, `GITHUB_REPO` and `GITHUB_DISPATCH_TOKEN` as
-**MISSING**. That is expected — those belong to video transcode,
-Phase 13.1. Its source of truth is
+**MISSING**. That is expected if your node publishes no video —
+they belong to 8.6. Its source of truth is
 [`scripts/lib/expected-bindings.ts`](../scripts/lib/expected-bindings.ts),
 not this document; if you're never going to run uploads or
 transcode, prune those entries so the audit reflects your node's
@@ -1402,9 +1533,10 @@ Your node works but its catalog is empty. Two ways to fill it.
 ## 12.1 Publish your own (the normal path)
 
 `/publish/datasets/new` in the portal. Metadata-only drafts work
-immediately, and asset uploads work too if you did 8.5. If you
-skipped it, uploads land in R2 but nothing can read them back —
-go do 8.5 and redeploy.
+immediately. Asset uploads need 8.5, and video uploads need 8.6 as
+well. If you skipped 8.5, uploads land in R2 but nothing can read
+them back; if you skipped 8.6, finalising a video returns 503. Both
+are fixable after the fact — do the step and redeploy.
 
 ## 12.2 Mirror the upstream SOS catalog
 
@@ -1442,143 +1574,26 @@ phase implied they were:
 
 | | Do it when | Skip it when |
 |---|---|---|
-| **13.1 Video transcode** | Publishers will upload video. For a node in the Science On a Sphere lineage that is most of the content | You publish images, data-encoded video built elsewhere, or metadata only |
-| **13.2 Feedback widget** | You ship the standalone HTML build | You only run the web app |
-| **13.3 Analytics export** | You want `/publish/analytics` to hold more than 30–90 days | Short retention is fine |
-| **13.4 Orbit chat providers** | Never — read it only if you want to *change* the default | Orbit already works on Workers AI with nothing set |
-| **13.5 CI migrations** | You want schema applied on push | You apply migrations by hand |
-| **13.6 Grafana** | You want ad-hoc SQL over the raw stream | Almost always — 13.3 covers the normal case |
-| **13.7 Voice, events, blog, YouTube** | Per-feature; each degrades quietly when unset | Per-feature |
-| **13.8 Content-Security-Policy** | Before you put the node in front of the public | Never, honestly — see below |
+| **13.1 Feedback widget** | You ship the standalone HTML build | You only run the web app |
+| **13.2 Analytics export** | You want `/publish/analytics` to hold more than 30–90 days | Short retention is fine |
+| **13.3 Orbit chat providers** | Never — read it only if you want to *change* the default | Orbit already works on Workers AI with nothing set |
+| **13.4 CI migrations** | You want schema applied on push | You apply migrations by hand |
+| **13.5 Grafana** | You want ad-hoc SQL over the raw stream | Almost always — 13.2 covers the normal case |
+| **13.6 Voice, events, blog, YouTube** | Per-feature; each degrades quietly when unset | Per-feature |
+| **13.7 Content-Security-Policy** | Before you put the node in front of the public | Never, honestly — see below |
 
-**13.8 is the odd one out.** It is hardening rather than a feature,
+**13.7 is the odd one out.** It is hardening rather than a feature,
 the repo ships no policy, and a fork does not inherit upstream's
 edge rules. It sits at the bottom because it is the last thing you
 do, not because it is the least important.
 
-R2 asset storage used to be 13.1, which put a prerequisite for
-publishing inside a phase labelled optional, after the phase that
-tells you to publish. It is now **8.5**.
+**Two things left this phase**, because neither was optional. R2
+asset storage is now **8.5** and video transcode is **8.6**. Both
+were filed here, after the phase that tells you to publish, while
+being prerequisites for publishing — and 138 of the upstream
+catalog's 204 datasets are video.
 
-## 13.1 Video transcode
-
-Publisher video uploads hand off to a GitHub Actions workflow that
-runs the ffmpeg 4K/1080p/720p 2:1 spherical HLS ladder, via
-`repository_dispatch`. Both source shapes — a single `source.mp4`,
-or up to 10 000 image-sequence frames — feed the same pipeline and
-encode to **30 fps output** regardless of source rate (the tour
-engine's `frameRate` task assumes 30).
-
-**Pages side** (both environments):
-
-| Binding | Value |
-|---|---|
-| `GITHUB_OWNER` | your fork's owner |
-| `GITHUB_REPO` | your fork's name |
-| `GITHUB_DISPATCH_TOKEN` | **Secret** — PAT with `repo` scope (or fine-grained Contents:write) on that repo. `W22`. |
-
-**GitHub side** (repo Settings → Secrets and variables → Actions):
-`R2_S3_ENDPOINT` (`W21`), `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY`
-(`W20`), `TERRAVIZ_SERVER` (`https://<W2>`), `CF_ACCESS_CLIENT_ID`
-(`W14`), `CF_ACCESS_CLIENT_SECRET` (`W15`), and optionally
-`CATALOG_R2_BUCKET`.
-
-`npm run setup -- --github-secrets` prints the exact `gh secret set`
-commands for all of them, annotated with what each is for and which
-ones your current shell can't supply. Values are emitted as `"$VAR"`
-references rather than inlined, so the script is safe to paste into a
-runbook.
-
-Both halves are required and fail closed. Missing
-`GITHUB_DISPATCH_TOKEN` → `/asset/complete` returns 503
-`github_dispatch_unconfigured`; the source bytes stay in R2 and the
-upload can be retried. Missing GitHub secrets → the workflow exits
-non-zero with a stage code (2 download, 3 encode, 4 upload, 5
-PATCH), the row stays `transcoding=1`, and the portal's
-"Transcoding…" badge is your signal.
-
-**Recovery is operator-only.** `/asset/…/complete` refuses a
-different upload while `transcoding=1` and the active-upload
-binding is set, so publishers can't self-recover. Clear the row:
-
-```sql
-UPDATE datasets SET transcoding = NULL, active_transcode_upload_id = NULL
-WHERE id = '…';
-```
-
-**Cost.** GitHub Actions' free tier (2000 min/mo, public repos)
-comfortably covers ~50 uploads/month. R2 **storage** dominates: a
-4K ladder is ~250 MB per minute of source, billed until deleted.
-Egress is zero-rated.
-
-**Local dev:** `MOCK_GITHUB_DISPATCH=true` in `.dev.vars` skips the
-dispatch while still stamping `transcoding=1`, so you can exercise
-the portal's polling surface. Refused on non-loopback hostnames.
-
-### WAF skip rule for the transcode-complete callback
-
-Access service tokens bypass Access but **not** Bot Fight Mode, the
-Managed Ruleset, or custom WAF rules. Bot Fight Mode is on by
-default from the Free plan up. If any of those are active, the
-runner's final POST to
-`/api/v1/publish/datasets/{id}/transcode-complete` gets a `Just a
-moment...` interstitial and never reaches the Worker. ffmpeg
-finishes, the HLS bundle lands in R2, and the runner exits non-zero
-at stage 5. The CLI detects the challenge HTML and prints a
-one-line pointer at this section rather than a 30 KB blob.
-
-> **Automated (opt-in).** `npm run setup -- --apply --only=waf`
-> appends this rule *and* the 13.2 feedback rule, preserving every
-> existing rule in the zone. It is deliberately excluded from a
-> default run: the rulesets API replaces a zone's whole custom-rule
-> list rather than appending, so a careless implementation deletes
-> your WAF config. The merge is a pure, tested function, and a failed
-> read aborts rather than writing. Step 2 below (plain Bot Fight
-> Mode) has no per-path override and stays manual.
-
-**Step 1 — WAF Custom Rule.** Security → WAF → Custom rules →
-Create rule, `transcode-complete service token skip`:
-
-```
-(starts_with(http.request.uri.path, "/api/v1/publish/")
-  and ends_with(http.request.uri.path, "/transcode-complete")
-  and len(http.request.headers["cf-access-client-id"][0]) > 0)
-```
-
-Action **Skip**, ticking: all remaining custom rules, all managed
-rules, all Super Bot Fight Mode rules, Browser Integrity Check,
-and Security Level.
-
-This is safe for three reasons. Only requests carrying a
-service-token id can match. Access still validates the token
-afterwards, so a forged header without the secret can't
-authenticate. And the route handler independently enforces
-`role='service'`.
-
-**Step 2 — plain Bot Fight Mode (Free/Pro).** The Skip action's
-"All Super Bot Fight Mode Rules" covers SBFM (Pro+) but not plain
-BFM, which runs zone-wide at a different layer and has no per-path
-override on Free. Options, best first:
-
-1. **Disable BFM zone-wide** (Security → Bots → Configure). For a
-   small portal where authenticated traffic dominates and the
-   public SPA is cache-served, BFM adds little over Access + the
-   role-gated routes + the Step 1 rule. Recommended on Free.
-2. **Upgrade to Pro** — SBFM *is* skippable from Step 1's rule.
-3. **Live with manual recovery** — re-issue `/transcode-complete`
-   from an authenticated browser session when it fails.
-
-**Which rule fired?** Security → Events, "Service" column:
-
-| Says | Fixed by |
-|---|---|
-| `Bot fight mode` | Step 2 |
-| `Managed challenge` | Step 1, "All managed rules" |
-| `Super Bot Fight Mode` | Step 1, SBFM checkbox |
-| `Browser Integrity Check` | Step 1, that checkbox |
-| `Security level` | Step 1, that checkbox |
-
-## 13.2 Standalone feedback widget
+## 13.1 Standalone feedback widget
 
 `POST /api/feedback` serves the standalone HTML build's widget with
 wildcard CORS and no `Origin` requirement (it also runs from
@@ -1597,7 +1612,7 @@ Rules, or custom WAF rules acting on those signals, add a skip:
 (http.request.uri.path eq "/api/feedback" and http.request.method eq "POST")
 ```
 
-Same Skip checklist as 13.1. The endpoint keeps its own abuse
+Same Skip checklist as 8.6. The endpoint keeps its own abuse
 controls (JSON-only, ~12 MB cap, 10/hour per IP). Verify from a
 cookie-less client:
 
@@ -1610,7 +1625,7 @@ curl -X POST https://<W2>/api/feedback \
 # → 200 {"ok":true,"id":"…"}   (challenge HTML means the rule isn't matching)
 ```
 
-## 13.3 Analytics long-term export
+## 13.2 Analytics long-term export
 
 Analytics Engine retains 30–90 days. The export drains each
 completed UTC day into an R2 NDJSON archive plus D1 rollups — the
@@ -1651,7 +1666,7 @@ wrangler d1 execute sphere-feedback --remote --config wrangler.toml \
   --command "SELECT day, COUNT(*) FROM analytics_daily GROUP BY day ORDER BY day"
 ```
 
-## 13.4 Orbit chat providers
+## 13.3 Orbit chat providers
 
 **Default — Cloudflare Workers AI. Nothing to configure.**
 `functions/api/chat/completions.ts` calls the `AI` binding from
@@ -1675,7 +1690,7 @@ Routing Workers AI through an AI Gateway is a **code change** — the
 `AI.run()` call accepts a `gateway` option but the current code
 doesn't pass one. A gateway URL in config does nothing on its own.
 
-## 13.5 CI-applied migrations (opt-in)
+## 13.4 CI-applied migrations (opt-in)
 
 `ci.yml` can apply pending `CATALOG_DB` migrations on every push to
 `main`, just before deploy. **Off by default.** Enable by setting
@@ -1695,11 +1710,11 @@ share the same physical D1 as production.
 on destructive DDL unless the migration opts in with a
 `-- destructive: reviewed` comment.
 
-## 13.6 Grafana
+## 13.5 Grafana
 
 > **Probably skip this.** The primary analytics surface is the
 > in-app `/publish/analytics` tab — privilege-gated, no external
-> service, turned on by 13.3. Grafana remains for ad-hoc AE SQL
+> service, turned on by 13.2. Grafana remains for ad-hoc AE SQL
 > against the raw stream.
 
 Four dashboard JSONs ship under `grafana/dashboards/`; see
@@ -1709,7 +1724,7 @@ to
 `https://api.cloudflare.com/client/v4/accounts/<W1>/analytics_engine/sql`,
 with `root_selector: "data"`.
 
-## 13.7 Voice, events, blog, YouTube
+## 13.6 Voice, events, blog, YouTube
 
 | Feature | Variables | Notes |
 |---|---|---|
@@ -1719,7 +1734,7 @@ with `root_selector: "data"`.
 | YouTube media suggestions | `YOUTUBE_API_KEY` (**secret**) | Absent = source stays off, nothing errors. [`YOUTUBE_API_KEY.md`](YOUTUBE_API_KEY.md) |
 | Current events / blog | none beyond Phase 8 | Feeds console at `/publish/feeds`. [`CURRENT_EVENTS_PLAN.md`](CURRENT_EVENTS_PLAN.md) |
 
-## 13.8 Content-Security-Policy
+## 13.7 Content-Security-Policy
 
 **The repo ships no CSP.** `src/index.html` has no `<meta>` policy,
 and `public/_headers` sets `X-Content-Type-Options`,
@@ -2240,7 +2255,7 @@ Tools → Privacy.
   ceiling.
 - **Test your own feedback loop.** File a report through the in-app
   form and confirm it appears in `/publish/feedback`.
-- **Add a CSP** (13.8).
+- **Add a CSP** (13.7).
 
 If something here is wrong or under-documented, please open an
 issue — most of this document exists because someone hit a snag

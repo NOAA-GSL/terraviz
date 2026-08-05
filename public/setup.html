@@ -313,7 +313,7 @@ code{overflow-wrap:anywhere}
 <!--
   GENERATED FILE — do not edit.
 
-  Produced by scripts/build-setup-page.ts on 2026-08-04.
+  Produced by scripts/build-setup-page.ts on 2026-08-05.
   Prose lives in scripts/setup-page/content.ts; every binding,
   prerequisite and validator is imported from the modules the setup
   tool itself uses, so this page cannot disagree with `npm run setup`.
@@ -997,7 +997,7 @@ export R2_SECRET_ACCESS_KEY=...</div><p style="margin:0 0 6px;padding-inline-sta
       <span style="font-size:11.5px;color:var(--tv-text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">R2 S3 endpoint</span>
     </div><div data-cell="0" style="height:27px;display:flex;align-items:center;justify-content:center"><span data-mark="1"></span></div><div data-cell="1" style="height:27px;display:flex;align-items:center;justify-content:center"><span data-mark="1"></span></div><div data-cell="2" style="height:27px;display:flex;align-items:center;justify-content:center"><span data-mark="1"></span></div><div data-cell="3" style="height:27px;display:flex;align-items:center;justify-content:center"><span data-mark="1"></span></div><div data-cell="4" style="height:27px;display:flex;align-items:center;justify-content:center"><span data-mark="1"></span></div><div data-cell="5" style="height:27px;display:flex;align-items:center;justify-content:center"><span data-mark="1"></span></div><div data-cell="6" style="height:27px;display:flex;align-items:center;justify-content:center"><span data-mark="1"></span></div><div data-cell="7" style="height:27px;display:flex;align-items:center;justify-content:center"><span data-mark="1"></span></div><div data-cell="8" style="height:27px;display:flex;align-items:center;justify-content:center"><span data-mark="1"></span></div><div data-cell="9" style="height:27px;display:flex;align-items:center;justify-content:center"><span data-mark="1"></span></div><div data-cell="10" style="height:27px;display:flex;align-items:center;justify-content:center"><span data-mark="1"></span></div><div data-cell="11" style="height:27px;display:flex;align-items:center;justify-content:center"><span data-mark="1"></span></div><div data-cell="12" style="height:27px;display:flex;align-items:center;justify-content:center"><span data-mark="1"></span></div><div data-cell="13" style="height:27px;display:flex;align-items:center;justify-content:center"><span data-mark="1"></span></div><div data-cell="14" style="height:27px;display:flex;align-items:center;justify-content:center"><span data-mark="1"></span></div>
   </div>
-  <div data-map-row="W22" data-w="W22" data-produced="13" data-consumed="13" data-tier="2" style="display:grid;grid-template-columns:224px repeat(15,minmax(0,1fr));align-items:center;cursor:pointer;border-radius:4px">
+  <div data-map-row="W22" data-w="W22" data-produced="8" data-consumed="8" data-tier="2" style="display:grid;grid-template-columns:224px repeat(15,minmax(0,1fr));align-items:center;cursor:pointer;border-radius:4px">
     <div style="display:flex;align-items:baseline;gap:7px;padding:0 6px 0 4px;min-width:0">
       <span data-map-id="1" style="flex:none;font:500 10.5px/1 var(--tv-font-mono)">W22</span>
       <span style="font-size:11.5px;color:var(--tv-text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">GITHUB_DISPATCH_TOKEN</span>
@@ -1018,8 +1018,8 @@ export R2_SECRET_ACCESS_KEY=...</div><p style="margin:0 0 6px;padding-inline-sta
       <p style="margin:0;font-size:12.5px;line-height:1.5;color:var(--tv-text-dim);text-wrap:pretty">Six values born, none consumed until Phase 3. That gap is deliberate — it is what lets Phase 3 and Phase 8 ask for IDs you already have written down instead of sending you back to the dashboard mid-edit.</p>
     </div>
     <div style="background:var(--tv-surface-3);border:1px solid var(--tv-border);border-radius:6px;padding:14px 16px">
-      <div style="font:600 12.5px/1.3 var(--tv-font-sans);color:var(--tv-text);margin:0 0 5px">The extras are self-contained</div>
-      <p style="margin:0;font-size:12.5px;line-height:1.5;color:var(--tv-text-dim);text-wrap:pretty">Everything Phase 13 produces, Phase 13 also consumes — no bar leaves it. That is why you can come back for them a month later without unpicking anything. Asset storage used to be in here and is not, because a published dataset with no readable image is not really published; its four values now belong to Phase 8.</p>
+      <div style="font:600 12.5px/1.3 var(--tv-font-sans);color:var(--tv-text);margin:0 0 5px">Phase 13 has no bars at all now</div>
+      <p style="margin:0;font-size:12.5px;line-height:1.5;color:var(--tv-text-dim);text-wrap:pretty">It used to own five — the R2 origin, its key pair and endpoint, and the GitHub dispatch token. All five moved to Phase 8. Neither asset storage nor video transcode was really optional: a dataset with no readable image is not published, and 138 of upstream’s 204 datasets are video. What is left in Phase 13 needs nothing written down, which is a fair test of whether something belongs there.</p>
     </div>
   </div>
 </section>
@@ -1611,7 +1611,8 @@ openssl rand -base64 32<span style="color:var(--tv-text-dim)">    # W18</span></
     </div>
   </div>
   <p style="margin:0 0 16px;max-width:64ch;color:var(--tv-text-muted);text-wrap:pretty">Everything referenced here now exists. This is roughly forty dashboard interactions by hand, which is exactly why it is worth letting the tool do it.</p>
-  <p style="margin:0 0 16px;max-width:64ch;color:var(--tv-text-muted);text-wrap:pretty">It also includes asset storage — the R2 public origin, its CORS policy and an S3 token. That used to sit in the optional phase, after the phase that tells you to publish. Without it an uploaded thumbnail has no readable URL, so a published dataset has no image. Do it here and one redeploy picks everything up.</p>
+  <p style="margin:0 0 16px;max-width:64ch;color:var(--tv-text-muted);text-wrap:pretty">It also includes asset storage — the R2 public origin, its CORS policy and an S3 token — and video transcode. Both used to sit in the optional phase, after the phase that tells you to publish, while being prerequisites for publishing. Without R2 an uploaded thumbnail has no readable URL; without transcode, finalising a video upload returns 503 and rolls back. Do them here and one redeploy picks everything up.</p>
+  <p style="margin:0 0 16px;max-width:64ch;color:var(--tv-text-muted);text-wrap:pretty">138 of the upstream catalog’s 204 datasets are video, so transcode is the common case rather than an extra. Skip it only for a node publishing images, tours, metadata, or a mirror of upstream.</p>
   <div style="position:relative;margin:0 0 14px">
   <pre style="margin:0;background:var(--tv-surface-code);border:1px solid var(--tv-border);color:var(--tv-text-muted);font:400 12.5px/1.8 var(--tv-font-mono);padding:36px 16px 15px;border-radius:6px;overflow-x:auto">npm run setup -- --apply --only=bindings</pre>
   <button data-copy="1" style="position:absolute;top:7px;right:8px;background:rgba(255,255,255,.07);color:var(--tv-text-dim);border:1px solid var(--tv-border-strong);border-radius:3px;font:500 10px/1 var(--tv-font-sans);letter-spacing:.08em;text-transform:uppercase;padding:5px 8px;cursor:pointer">Copy</button>
@@ -1621,6 +1622,11 @@ openssl rand -base64 32<span style="color:var(--tv-text-dim)">    # W18</span></
   <div style="background:var(--tv-error-bg);border:1px solid var(--tv-error-border);border-left:3px solid var(--tv-error);border-radius:6px;padding:15px 17px;margin:0 0 16px">
   <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-error);margin:0 0 8px">Trap · Set every entry on BOTH Production and Preview</div>
   <p style="margin:0 0 10px;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">The environment selector is at the top of the page and forgetting it is the most common cutover failure — &quot;works on preview, breaks on production&quot;, or the reverse. Phase 10’s audit catches it, but only if you run it.</p>
+  
+</div>
+  <div style="background:var(--tv-error-bg);border:1px solid var(--tv-error-border);border-left:3px solid var(--tv-error);border-radius:6px;padding:15px 17px;margin:0 0 16px">
+  <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-error);margin:0 0 8px">Trap · There is a WAF trap in video transcode</div>
+  <p style="margin:0 0 10px;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">Access service tokens bypass Access but not Bot Fight Mode. The runner’s final callback gets an interstitial, ffmpeg finishes, the bundle lands, and the job still exits non-zero. You need a WAF skip rule on that path — and on the Free plan, plain Bot Fight Mode has no per-path override, so disabling it zone-wide is the recommended option.</p>
   
 </div>
   <div style="background:var(--tv-error-bg);border:1px solid var(--tv-error-border);border-left:3px solid var(--tv-error);border-radius:6px;padding:15px 17px;margin:0 0 16px">
@@ -1863,7 +1869,7 @@ npm run terraviz -- verify-deploy --server https://<span data-slot="W2" data-w="
       <h2 style="font:700 24px/1.25 var(--tv-font-sans);letter-spacing:-.01em;color:var(--tv-text);margin:0">Put content in</h2>
     </div>
   </div>
-  <p style="margin:0 0 16px;max-width:64ch;color:var(--tv-text-muted);text-wrap:pretty">Your node works but its catalog is empty. Publish your own from <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">/publish/datasets/new</code> — metadata-only drafts work immediately, and asset uploads work if you did Phase 8.5. Or mirror the upstream catalog, which is about 200 datasets.</p>
+  <p style="margin:0 0 16px;max-width:64ch;color:var(--tv-text-muted);text-wrap:pretty">Your node works but its catalog is empty. Publish your own from <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">/publish/datasets/new</code> — metadata-only drafts work immediately, asset uploads need Phase 8.5, and video needs 8.6 as well. Or mirror the upstream catalog, which is about 200 datasets.</p>
   <div style="position:relative;margin:0 0 14px">
   <pre style="margin:0;background:var(--tv-surface-code);border:1px solid var(--tv-border);color:var(--tv-text-muted);font:400 12.5px/1.8 var(--tv-font-mono);padding:36px 16px 15px;border-radius:6px;overflow-x:auto">npx tsx scripts/refresh-sos-snapshot.ts
 
@@ -1899,15 +1905,7 @@ npm run terraviz -- import-snapshot \
   <p style="margin:0 0 16px;max-width:64ch;color:var(--tv-text-muted);text-wrap:pretty">Add what you need, when you need it. Nothing here blocks a working node — but the first one is required before publishers can upload assets.</p>
   <div style="display:flex;flex-direction:column;gap:10px;margin:0 0 16px"><div style="border:1px solid var(--tv-border);border-radius:6px;padding:15px 17px">
         <div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin:0 0 6px">
-          <div style="font:500 15px/1.3 var(--tv-font-sans);color:var(--tv-text)">13.1 · Video transcode</div>
-          <span style="flex:none;font:500 11px/1 var(--tv-font-mono);color:var(--tv-accent)">--github-secrets</span>
-        </div>
-        <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">Video uploads hand off to a GitHub Actions workflow running the ffmpeg spherical HLS ladder. Both halves — Pages bindings and GitHub secrets — are required and fail closed. Free-tier Actions covers roughly 50 uploads a month; R2 storage is what actually costs, at ~250 MB per minute of 4K source.</p>
-        <p style="margin:8px 0 0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty"><b style="font-weight:600;color:var(--tv-text)">There is a WAF trap here.</b> Access service tokens bypass Access but not Bot Fight Mode. The runner’s final callback gets an interstitial, ffmpeg finishes, the bundle lands, and the job still exits non-zero. You need a WAF skip rule on that path — and on the Free plan, plain Bot Fight Mode has no per-path override, so disabling it zone-wide is the recommended option.</p>
-      </div>
-    <div style="border:1px solid var(--tv-border);border-radius:6px;padding:15px 17px">
-        <div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin:0 0 6px">
-          <div style="font:500 15px/1.3 var(--tv-font-sans);color:var(--tv-text)">13.3 · Analytics long-term export</div>
+          <div style="font:500 15px/1.3 var(--tv-font-sans);color:var(--tv-text)">13.2 · Analytics long-term export</div>
           <span style="flex:none;font:500 11px/1 var(--tv-font-mono);color:var(--tv-accent)">recommended</span>
         </div>
         <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">Analytics Engine retains 30–90 days. A daily job drains each completed day into an archive bucket plus rollups — that is the data behind the in-app analytics tab. Run the backfill once while AE still remembers.</p>
@@ -1915,7 +1913,7 @@ npm run terraviz -- import-snapshot \
       </div>
     <div style="border:1px solid var(--tv-border);border-radius:6px;padding:15px 17px">
         <div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin:0 0 6px">
-          <div style="font:500 15px/1.3 var(--tv-font-sans);color:var(--tv-text)">13.8 · Content-Security-Policy</div>
+          <div style="font:500 15px/1.3 var(--tv-font-sans);color:var(--tv-text)">13.7 · Content-Security-Policy</div>
           <span style="flex:none;font:500 11px/1 var(--tv-font-mono);color:var(--tv-accent)">worth doing</span>
         </div>
         <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty"><b style="font-weight:600;color:var(--tv-text)">The repo ships no CSP.</b> Upstream enforces one at the Cloudflare edge, which a fork does not inherit. Your node works without one; you should still add your own. Remember <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">blob:</code> — the app uses it for preview tours and screenshots. Test playback, VR and a tour before locking it down.</p>
@@ -2015,7 +2013,7 @@ npm run terraviz -- import-snapshot \
     </div>
     <div style="background:var(--tv-surface-2);border:1px solid var(--tv-border);border-radius:8px;padding:16px 18px;grid-column:1 / -1">
       <div style="font:500 14px/1.3 var(--tv-font-sans);color:var(--tv-text);margin:0 0 6px">Add a Content-Security-Policy</div>
-      <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">The repo ships none, and upstream's edge policy does not travel with a fork. See Phase 13.8 — and test playback, VR and a tour before you lock it down.</p>
+      <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">The repo ships none, and upstream's edge policy does not travel with a fork. See Phase 13.7 — and test playback, VR and a tour before you lock it down.</p>
     </div>
   </div>
 </section>
@@ -2322,7 +2320,7 @@ npm run terraviz -- import-snapshot \
     </div>
     <input data-field="W22" placeholder="PAT with repo scope" spellcheck="false" autocomplete="off" style="width:100%;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:6px;padding:8px 10px;font:400 13px/1.4 var(--tv-font-mono);color:var(--tv-text)"/>
     <div data-error="W22" style="display:none;font:400 11.5px/1.5 var(--tv-font-sans);color:var(--tv-error);margin-top:4px"></div>
-    <div style="font:400 11.5px/1.5 var(--tv-font-sans);color:var(--tv-text-dim);margin-top:4px">Optional — Phase 13.1 video transcode.</div>
+    <div style="font:400 11.5px/1.5 var(--tv-font-sans);color:var(--tv-text-dim);margin-top:4px">Phase 8.6 — needed for video uploads.</div>
   </div>
       <button data-act="clear" style="margin-top:8px;cursor:pointer;background:none;border:1px solid var(--tv-border-strong);border-radius:6px;padding:8px 12px;font:500 12px/1 var(--tv-font-sans);color:var(--tv-error)">Clear everything on this page</button>
     </div>
