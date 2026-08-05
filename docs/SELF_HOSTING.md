@@ -2166,45 +2166,60 @@ on the upload:
   20260804T140000.png failed (401): <Error><Code>Unauthorized</Code>…
 ```
 
-**Two things that log already rules out.** The runner does not sign
-these uploads: it asks your node for presigned URLs and PUTs bytes
-to them. So the R2 keys in your *GitHub* secrets are not what
-failed. And the request that mints those URLs succeeded. A missing
-`R2_S3_ENDPOINT`, `R2_ACCESS_KEY_ID` or `R2_SECRET_ACCESS_KEY`
-raises a configuration error, which the route returns as **503
-`*_unconfigured`**. You would have seen `asset init failed (503)`
-instead.
+**The runner did not sign this, and your GitHub secrets are not what
+failed.** It asks your node for presigned URLs and PUTs bytes at
+them. The signing happens inside the publisher API, using the R2
+credentials you set as Pages secrets in 8.5.
 
-So all three are set on the Pages environment that served the
-request, and R2 rejected them. They are present and wrong, which is
-a much smaller search:
+**Those secrets are set.** A missing `R2_S3_ENDPOINT`,
+`R2_ACCESS_KEY_ID` or `R2_SECRET_ACCESS_KEY` raises a configuration
+error, which the route returns as **503 `*_unconfigured`**. You would
+have seen `asset init failed (503)` and never reached a frame PUT.
 
-1. **The wrong field was pasted.** R2 shows you three values when a
-   token is created — Access Key ID, Secret Access Key, and a token
-   value. Only the first two belong in these secrets.
-2. **The token was rotated or deleted** in R2 after the secrets were
-   set.
-3. **`R2_S3_ENDPOINT` belongs to a different account** than the
-   token was minted in.
-4. **The token is scoped to a different bucket.** R2 API tokens can
-   be limited to named buckets, and the bucket here is
-   `CATALOG_R2_BUCKET` or `terraviz-assets` if unset.
-5. **Only one environment is current.** The runner calls your public
-   hostname, so it is Production's copy that matters — Preview being
-   right proves nothing.
+So they are set, and R2 rejected them. Cloudflare defines this exact
+code — `Unauthorized`, HTTP 401 — as **"missing or invalid
+authentication credentials"**, and the documented fix is to check the
+access key is correct and unexpired
+([R2 error codes](https://developers.cloudflare.com/r2/api/error-codes/)).
+That narrows it to three things:
 
-**You cannot read a Pages secret back**, which is the awkward part:
-there is nothing to compare against. Rather than guess which of the
-five it is, mint a fresh R2 token (§8.5 step 4), set all three
-secrets again on **both** environments, and redeploy. That costs a
-few minutes and settles every case above at once.
+- The token was **deleted, rotated or expired** in R2 after you set
+  the secrets.
+- **`R2_ACCESS_KEY_ID` holds the wrong string.** R2 shows three
+  values when a token is minted: Access Key ID, Secret Access Key,
+  and a token value. Only the first two belong here.
+- **`R2_S3_ENDPOINT` belongs to a different account** than the token,
+  so the key is unknown at that host.
 
-To confirm the credentials first, make a signed request from your
-own shell with the same three values. For example `aws s3api
-put-object --endpoint-url "$R2_S3_ENDPOINT"` against the bucket,
-with the key pair in `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`.
-A 401 there too means the credentials themselves are wrong, rather
-than merely stale in Pages.
+**What it is not.** These are the usual suspects, and each fails
+with a different status — so a 401 rules them out:
+
+| Suspicion | What you would actually see |
+|---|---|
+| Token scoped to the wrong bucket | 403 — that is authorization, not authentication |
+| `R2_SECRET_ACCESS_KEY` wrong | 403 `SignatureDoesNotMatch` — the key id still resolves |
+| A different `Content-Type` sent than signed | 403 `SignatureDoesNotMatch` — it is a signed header |
+| Presigned URL expired | 403, and the 15-minute TTL is nowhere near tight for 85 frames |
+
+**You can read the key id off the URL.** These are query-string
+presigned, so the credential rides in the clear:
+
+```
+X-Amz-Credential=<access-key-id>/<YYYYMMDD>/auto/s3/aws4_request
+```
+
+Compare that against the token list in the R2 dashboard. A Pages
+secret cannot be read back, so this is the only way to see which key
+your node is actually signing with.
+
+The fix either way: mint a fresh token (8.5 step 4), set all three
+secrets again on **both** environments, and redeploy.
+
+To test the credentials first, make a signed request from your own
+shell with the same three values. Use `aws s3api put-object
+--endpoint-url "$R2_S3_ENDPOINT"` against the bucket, with the key
+pair in `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`. A 401 there
+too confirms the credentials rather than the wiring.
 
 `npm run terraviz -- migrate-r2-assets --dry-run` is **not** that
 check. It prints its plan and returns before it ever reaches the
