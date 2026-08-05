@@ -249,6 +249,53 @@ describe('renderZonalChart', () => {
     expect(drop2).toBeGreaterThan(drop1 * 4)
   })
 
+  it('keeps north at the top for a south-up dataset', () => {
+    // `isFlippedInY` is publisher-settable, and for such a dataset
+    // `zonalMeans` returns row 0 at the *south* edge. Deriving the
+    // extremes from the first and last samples makes the span negative,
+    // the sign cancels in the division, and the profile draws in array
+    // order — upside down, on exactly the datasets whose orientation is
+    // already the unusual one.
+    const southUp: ZonalSample[] = [
+      { lat: -60, mean: 1, count: 10 },
+      { lat: -20, mean: 2, count: 10 },
+      { lat: 20, mean: 3, count: 10 },
+      { lat: 60, mean: 4, count: 10 },
+    ]
+    const svg = renderZonalChart(southUp, SCALE, DEFAULT_DISPLAY)
+    const segs = [...svg.querySelectorAll('line')]
+    expect(segs).toHaveLength(3)
+    // First sample is the southernmost, so it must sit at the BOTTOM.
+    expect(Number(segs[0].getAttribute('y1'))).toBeGreaterThan(
+      Number(segs[segs.length - 1].getAttribute('y2')),
+    )
+  })
+
+  it('spaces the colour strip by latitude, not by sample index', () => {
+    // The strip and the profile must agree about where a row is. A
+    // constant cell height derived from the sample count is the
+    // index-spaced answer beside a latitude-spaced line, and they
+    // diverge wherever the rows are uneven.
+    const uneven: ZonalSample[] = [
+      { lat: 60, mean: 1, count: 10 },
+      { lat: 50, mean: 2, count: 10 },
+      { lat: 0, mean: 3, count: 10 },
+    ]
+    const svg = renderZonalChart(uneven, SCALE, DEFAULT_DISPLAY)
+    const cells = [...svg.querySelectorAll('rect')]
+    expect(cells).toHaveLength(3)
+    const h = cells.map(c => Number(c.getAttribute('height')))
+    // The 50°→0° gap is five times the 60°→50° one, so the cell covering
+    // it must be far taller. Constant heights would make these equal.
+    expect(h[2]).toBeGreaterThan(h[0] * 3)
+    // And they must tile without overlapping: each cell starts where the
+    // previous one ended.
+    const y = cells.map(c => Number(c.getAttribute('y')))
+    for (let i = 1; i < cells.length; i++) {
+      expect(y[i]).toBeCloseTo(y[i - 1] + h[i - 1], 3)
+    }
+  })
+
   it('breaks at a latitude band with no data', () => {
     const svg = renderZonalChart(profile([1, 2, null, 4, 5]), SCALE, DEFAULT_DISPLAY)
     expect(svg.querySelectorAll('line')).toHaveLength(2)

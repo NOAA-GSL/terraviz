@@ -651,8 +651,11 @@ function renderZonalSection(
   host.appendChild(exportBtn)
 }
 
-/** `12.3°N`. Matches the inline form `browseUI` and `chatUI` already
- *  use for a bare latitude, rather than inventing a third. */
+/** `12.3°N`. The same *shape* `browseUI` and `chatUI` use for a bare
+ *  latitude — one decimal, degree sign, hemisphere letter — but built
+ *  with `formatNumber` where they use `toFixed`, so the decimal
+ *  separator follows the locale instead of always being a point. Not
+ *  formatting parity with them; deliberately a little better. */
 function formatLatitude(lat: number): string {
   // i18n-exempt: compass hemisphere letters, same treatment as browseUI
   return `${formatNumber(Math.abs(lat), { maximumFractionDigits: 1 })}°${lat >= 0 ? 'N' : 'S'}`

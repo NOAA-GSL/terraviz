@@ -298,15 +298,25 @@ export function renderZonalChart(
 
   const lut = buildDisplayLut(scale, display)
   // Latitude descends the axis — north at the top, as on the globe and
-  // on every map the reader has seen. The samples arrive in image-row
-  // order, which is already north-to-south, but position is computed
-  // from the latitudes themselves so a south-up dataset cannot silently
-  // draw the profile upside down.
-  const north = samples[0].lat
-  const south = samples[samples.length - 1].lat
+  // on every map the reader has seen.
+  //
+  // The extremes come from *every* sample rather than from the first and
+  // last. Taking the ends looks equivalent, because `zonalMeans` returns
+  // image-row order, but a Y-flipped dataset (`isFlippedInY`, which the
+  // publisher form exposes) has row 0 at the south edge. Ends-based
+  // extremes make `latSpan` negative there, the sign cancels in the
+  // division, and the profile draws in array order — which is to say
+  // upside down, on exactly the datasets whose orientation is the
+  // unusual one.
+  let north = -Infinity
+  let south = Infinity
+  for (const s of samples) {
+    if (s.lat > north) north = s.lat
+    if (s.lat < south) south = s.lat
+  }
   const latSpan = north - south
   const yAt = (i: number): number =>
-    latSpan !== 0
+    latSpan > 0
       ? ((north - samples[i].lat) / latSpan) * ZONAL_H
       : (i / (samples.length - 1)) * ZONAL_H
   const xAt = (v: number): number =>
@@ -319,13 +329,24 @@ export function renderZonalChart(
   const strip = document.createElementNS(SVG_NS, 'g')
   strip.setAttribute('class', 'analyze-zonal-strip')
   strip.setAttribute('shape-rendering', 'crispEdges')
-  const half = ZONAL_H / (samples.length - 1) / 2
+  // Each cell runs from the midpoint to the row above it to the midpoint
+  // to the row below, so the strip is positioned by latitude exactly as
+  // the profile is. A constant height derived from the sample *count*
+  // would be the index-spaced answer next to a latitude-spaced line —
+  // the two disagreeing wherever the rows are not evenly spaced, which
+  // is the case this chart already goes out of its way to draw
+  // correctly. The ends extend by half their one neighbouring gap.
+  const ys = samples.map((_, i) => yAt(i))
   for (let i = 0; i < samples.length; i++) {
     const v = samples[i].mean
     if (v == null) continue
-    const y = yAt(i)
-    const y0 = Math.max(0, y - half)
-    const y1 = Math.min(ZONAL_H, y + half)
+    const y = ys[i]
+    const before = i > 0 ? (ys[i - 1] + y) / 2 : y - Math.abs(ys[1] - ys[0]) / 2
+    const after = i < ys.length - 1
+      ? (y + ys[i + 1]) / 2
+      : y + Math.abs(ys[i] - ys[i - 1]) / 2
+    const y0 = Math.max(0, Math.min(before, after))
+    const y1 = Math.min(ZONAL_H, Math.max(before, after))
     const cell = document.createElementNS(SVG_NS, 'rect')
     cell.setAttribute('x', '0')
     cell.setAttribute('y', y0.toFixed(3))
