@@ -555,30 +555,40 @@ export const ADDONS: Array<{
     title: 'Standalone feedback widget',
     flag: 'if you ship it',
     body: 'The standalone HTML build posts to `/api/feedback`, which takes wildcard CORS and no Origin so it works from `file://`. It needs a WAF skip rule: the widget runs without cookies and its fallback is a `mailto:` draft, so an interstitial silently swallows every submission rather than failing loudly.',
+    extra:
+      '**What it takes:** one WAF skip rule on `POST /api/feedback`, then a `curl` from a cookie-less client to confirm you get `200 {"ok":true}` rather than challenge HTML. The bindings it needs — `FEEDBACK_DB`, and `CATALOG_R2` for screenshots — you already set in Phase 8.',
   },
   {
     id: '13.2',
     title: 'Analytics long-term export',
     flag: 'recommended',
     body: 'Analytics Engine retains 30–90 days. A daily job drains each completed day into an archive bucket plus rollups — that is the data behind the in-app analytics tab. Run the backfill once while AE still remembers.',
+    extra:
+      '**What it takes:** `wrangler r2 bucket create terraviz-analytics`, bind it as `ANALYTICS_R2`, set `CF_ACCOUNT_ID` plus an `ANALYTICS_SQL_TOKEN` secret scoped to Account Analytics → Read, redeploy, then enable the daily workflow — forks start with scheduled workflows off. Run the backfill once from the Actions tab while Analytics Engine still remembers. Two commands verify it.',
   },
   {
     id: '13.3',
     title: 'CI-applied migrations',
     flag: 'opt-in',
     body: 'Lets `ci.yml` apply pending catalog migrations on every push to `main`, just before deploy. Off unless you set `ENABLE_D1_MIGRATE=1` — and only after granting your API token D1 Edit, because the step runs before the deploy and a token without it blocks the whole thing.',
+    extra:
+      "**What it takes:** grant your API token Account → D1 → Edit, *then* set the repo variable `ENABLE_D1_MIGRATE=1`. That order matters — the step runs before the deploy, so a token without D1 access blocks the whole deploy rather than just the migration. Editing a token's permissions keeps its value, so nothing needs rotating.",
   },
   {
     id: '13.4',
     title: 'Grafana',
     flag: 'probably skip',
     body: 'The in-app analytics tab is the primary surface and needs no external service. Grafana is here for ad-hoc SQL against the raw stream; there is no native Analytics Engine plugin, so the shipped dashboards post SQL over HTTP through Infinity.',
+    extra:
+      '**What it takes:** import the four dashboard JSONs from `grafana/dashboards/` and point an Infinity datasource at the Analytics Engine SQL endpoint. There is no native plugin, so the dashboards post SQL over HTTP with `root_selector: "data"`.',
   },
   {
     id: '13.5',
     title: 'Voice, events, blog, YouTube',
     flag: 'per-feature',
     body: 'Orbit voice runs on the `AI` binding with nothing set. Realtime streaming STT, the wake word and YouTube media suggestions each want their own variables. Each degrades quietly when those are absent rather than erroring, so turning one on is additive and turning it off is safe.',
+    extra:
+      '**What it takes:** nothing for Orbit voice or the events/blog feeds — both already run. Realtime streaming STT wants three variables plus an AI Gateway token, the wake word wants a build-time model URL, and YouTube suggestions want an API key. Each is independent, and each stays off rather than erroring when its variables are absent.',
   },
 ]
 
