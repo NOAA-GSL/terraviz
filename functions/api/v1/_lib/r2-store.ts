@@ -461,7 +461,12 @@ export async function presignPut(
 ): Promise<PresignedPut> {
   const ttl = options.ttlSeconds ?? R2_PUT_TTL_SECONDS
   const now = normaliseNow(options.now)
-  const bucket = env.CATALOG_R2_BUCKET || 'terraviz-assets'
+  // Trimmed like every other read of this var (r2-public-url,
+  // sphere-thumbnail-job, the manifest endpoint). It matters most
+  // here: the bucket name becomes part of the SigV4 signed host,
+  // so a padded value produces a signature R2 rejects rather than
+  // a URL that is merely wrong-looking.
+  const bucket = env.CATALOG_R2_BUCKET?.trim() || 'terraviz-assets'
 
   if (env.MOCK_R2 === 'true') {
     const exp = new Date(now.getTime() + ttl * 1000).toISOString()

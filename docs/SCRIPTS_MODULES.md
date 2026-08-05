@@ -37,6 +37,7 @@ Most of these files carry a substantial header comment explaining the
 | `scripts/lib/cli.ts` | Shared CLI helpers for the tsx-based scripts; `isInvokedAsScript()` is the cross-platform "is this file the entry point" check that gates `main()`-style top-level calls |
 | `scripts/lib/d1-local.ts` | Locates the local D1 SQLite file Wrangler maintains under `.wrangler/state/v3/d1/` — used by `seed-catalog.ts` and the migrations smoke test |
 | `scripts/lib/expected-bindings.ts` | The declared binding manifest for the production Pages project; `check-pages-bindings` diffs the live project against it, and `setup/bindings-plan.ts` builds the write payload from the same list |
+| `scripts/lib/node-version.ts` | The required Node version, read from `package.json`'s `engines` — the generated surfaces interpolate it and a test fails the build when the hand-written prose in `SELF_HOSTING.md` or `README.md` disagrees. Exists because the version was written out by hand in three places and all three were wrong |
 | `scripts/lib/plain-language.ts` | Readability measurement for the operator-facing docs, behind `check:plain-language` — prose extraction from Markdown and from generated HTML (the hard part: code fences, tables, click paths and code spans must not be measured as prose), sentence splitting, Flesch / Flesch–Kincaid, and the long-sentence gate. Scores are reported, sentence length is enforced |
 
 ## Node provisioning (`scripts/lib/setup/`)

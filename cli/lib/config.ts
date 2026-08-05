@@ -59,16 +59,43 @@ function readPersisted(path: string): PersistedConfig | null {
   }
 }
 
+/**
+ * Normalise a credential read from a flag, an env var, or the
+ * persisted config: trim surrounding whitespace, and treat a
+ * blank result as absent.
+ *
+ * Trailing whitespace on a service token is easy to introduce and
+ * hard to see — `export TERRAVIZ_ACCESS_CLIENT_SECRET=$(cat
+ * token.txt)` keeps the file's newline, a GitHub Actions secret
+ * pasted with a line break keeps it too, and so does a config
+ * value edited by hand. The header then either fails to send at
+ * all (a `\n` in a header value is rejected by fetch) or reaches
+ * the downstream node with a byte the Access token comparison
+ * does not forgive, which surfaces as an opaque 403 rather than
+ * as a configuration error.
+ *
+ * Blank-is-absent also means a whitespace-only env var falls
+ * through to the persisted config instead of shadowing it with a
+ * value that could never authenticate.
+ */
+function cleanCredential(value: string | undefined): string | undefined {
+  const trimmed = value?.trim()
+  return trimmed ? trimmed : undefined
+}
+
 export function resolveConfig(options: ResolveOptions = {}): CliConfig {
   const env = options.env ?? process.env
   const configPath =
     options.configPath ?? resolve(homedir(), '.terraviz', 'config.json')
   const persisted = readPersisted(configPath) ?? {}
 
+  // The server URL gets the same treatment: a trailing newline
+  // survives the `/+$` strip below and produces a URL that fails
+  // to parse against every downstream node.
   const server =
-    options.flagServer ??
-    env.TERRAVIZ_SERVER ??
-    persisted.server ??
+    cleanCredential(options.flagServer) ??
+    cleanCredential(env.TERRAVIZ_SERVER) ??
+    cleanCredential(persisted.server) ??
     DEFAULT_SERVER
 
   // Boolean flags: explicit truthy from any layer wins.
@@ -78,17 +105,19 @@ export function resolveConfig(options: ResolveOptions = {}): CliConfig {
     env.TERRAVIZ_INSECURE_LOCAL === 'true'
 
   const clientId =
-    options.flagClientId ?? env.TERRAVIZ_ACCESS_CLIENT_ID ?? persisted.client_id
+    cleanCredential(options.flagClientId) ??
+    cleanCredential(env.TERRAVIZ_ACCESS_CLIENT_ID) ??
+    cleanCredential(persisted.client_id)
   const clientSecret =
-    options.flagClientSecret ??
-    env.TERRAVIZ_ACCESS_CLIENT_SECRET ??
-    persisted.client_secret
+    cleanCredential(options.flagClientSecret) ??
+    cleanCredential(env.TERRAVIZ_ACCESS_CLIENT_SECRET) ??
+    cleanCredential(persisted.client_secret)
 
   return {
     server: server.replace(/\/+$/, ''),
     insecureLocal,
-    clientId: clientId || undefined,
-    clientSecret: clientSecret || undefined,
+    clientId,
+    clientSecret,
   }
 }
 

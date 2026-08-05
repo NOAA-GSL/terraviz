@@ -35,11 +35,16 @@ interface Env {
 
 function authenticate(request: Request, token?: string): boolean {
   if (isInternalRequest(request)) return true
-  if (!token) return false
+  // Both sides trimmed. A FEEDBACK_ADMIN_TOKEN stored with a
+  // trailing newline can never match a correctly-sent header, and
+  // the failure is a flat 401 with nothing to distinguish it from
+  // a wrong token. A whitespace-only secret counts as unset.
+  const expected = token?.trim()
+  if (!expected) return false
   const auth = request.headers.get('Authorization')
   if (!auth) return false
-  const bearer = auth.replace(/^Bearer\s+/i, '')
-  return bearer === token
+  const bearer = auth.replace(/^Bearer\s+/i, '').trim()
+  return bearer === expected
 }
 
 const JSON_HEADERS = { 'Content-Type': 'application/json' }

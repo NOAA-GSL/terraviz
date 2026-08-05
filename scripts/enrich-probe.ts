@@ -68,8 +68,10 @@ async function runModel(
 }
 
 async function main(): Promise<number> {
-  const accountId = process.env.CLOUDFLARE_ACCOUNT_ID
-  const token = process.env.CLOUDFLARE_API_TOKEN
+  // Trimmed on read — an exported token keeps whatever newline
+  // came with it, and the Bearer header then 401s.
+  const accountId = process.env.CLOUDFLARE_ACCOUNT_ID?.trim()
+  const token = process.env.CLOUDFLARE_API_TOKEN?.trim()
   if (!accountId || !token) {
     console.error(
       'Set CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN (a token with Workers AI permission).',
