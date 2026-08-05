@@ -529,11 +529,39 @@ npm run terraviz -- import-snapshot \\
     duration: '≈1 h',
     aside: 'Tier 3 only',
     intro: [
-      "Three upstream-pinned values need changing. Leave them and your users' apps poll *upstream's* releases and reject anything you sign.",
+      "Three upstream-pinned values need changing, and each fails in its own way if you leave it. Skip this phase entirely for a web-only node.",
     ],
-    gate: 'A signed desktop build that talks to your API origin, not upstream.',
+    body: [
+      {
+        kind: 'trap',
+        title: 'The updater endpoint and signing key (15.1)',
+        body: [
+          "`src-tauri/tauri.conf.json` hardcodes upstream's release feed and public key. Leave them and your users' apps poll *upstream's* releases and reject every build you sign — the update path looks fine until the day you ship one.",
+          'Generate a key pair, paste the public half into `updater.pubkey`, point `updater.endpoints` at your own fork\u2019s `latest.json`, and set `TAURI_SIGNING_PRIVATE_KEY` plus its password as repo secrets.',
+        ],
+        code: { code: 'npm run tauri signer generate -- -w "<password>"' },
+      },
+      {
+        kind: 'trap',
+        title: '`VITE_API_ORIGIN` (15.3)',
+        body: [
+          "Desktop webviews are served from `tauri://localhost`, so relative `/api/` paths do not resolve. The app rewrites them to an absolute origin that defaults to **upstream's**. Set `VITE_API_ORIGIN=https://{{W2}}` at build time or your desktop app talks to somebody else's backend.",
+          'The same value drives deep-link host recognition, so setting it is also what makes your node accept its own `/dataset/…` links.',
+        ],
+      },
+      {
+        kind: 'note',
+        title: 'Two more that only bite later',
+        body: [
+          '**macOS notarization (15.2)** is optional but conspicuous: `release.yml` signs only when all six `APPLE_*` secrets are present. Without them the build succeeds and ships unsigned, and macOS users meet the Gatekeeper "damaged" warning.',
+          '**Weblate (15.4)** — `sync-weblate.yml` targets upstream\u2019s translation project. Disable the workflow unless you run your own, or it fails on every push to `main`.',
+        ],
+      },
+    ],
+    gate: 'A signed desktop build that talks to your API origin, not upstream. Install it and confirm the update check hits your fork\u2019s releases.',
     gateShort: 'Your desktop app talks to your node, not the original one.',
     anchor: 'phase-15--desktop-app-fork-tier-3',
+    linkText: 'All four steps, in full',
   },
 ]
 
