@@ -93,13 +93,22 @@ export const PHASES: Phase[] = [
     duration: '≈20 min',
     aside: 'all tiers · nothing here is automatable',
     intro: [
-      'An account, a registrar, and a login. Get these four values written down and everything after this has something to stand on.',
+      'An account, a registrar, a login, and your own copy of the repository. Get these five values written down and everything after this has something to stand on.',
     ],
     produces: ['ORG', 'TRUST', 'W1', 'W2', 'W3'],
     body: [
       {
+        kind: 'trap',
+        title: 'Fork the repository first — {{W3}} is your fork, not upstream',
+        body: [
+          'Phase 3 rewrites `wrangler.toml` with your resource IDs, Phase 5 hands your remote to Cloudflare Pages, and Phase 8.6 runs the transcode workflow in your repo. A clone of upstream does all of that fine right up until you have IDs to push and nowhere to push them.',
+          'Use GitHub\u2019s Fork button and keep every default. Then enable workflows in the Actions tab — GitHub creates forks with Actions off, so the transcode and deploy workflows never fire until you do.',
+        ],
+      },
+      {
         code: `node --version          # must be >= 22
 npm install -g wrangler
+git lfs install         # once per machine, before the clone
 wrangler login          # opens a browser
 wrangler whoami         # confirms the account
 
@@ -247,7 +256,9 @@ wrangler d1 migrations apply FEEDBACK_DB --remote   # ends in a harmless error`,
     minTier: 1,
     duration: '≈25 min',
     aside: 'all tiers · Tier 1 finishes here',
-    intro: [],
+    intro: [
+      'Push your fork, then create the Pages project that builds from it and attach your hostname. This is the phase where your node gets a public address.',
+    ],
     produces: ['W10', 'W11'],
     automated: { code: 'npm run setup -- --apply --only=pages' },
     automatedNote: [

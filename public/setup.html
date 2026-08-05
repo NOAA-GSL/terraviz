@@ -1093,7 +1093,7 @@ export R2_SECRET_ACCESS_KEY=...</div><p style="margin:0 0 6px;padding-inline-sta
       <h2 style="font:700 24px/1.25 var(--tv-font-sans);letter-spacing:-.01em;color:var(--tv-text);margin:0">Before you touch Cloudflare</h2>
     </div>
   </div>
-  <p style="margin:0 0 16px;max-width:64ch;color:var(--tv-text-muted);text-wrap:pretty">An account, a registrar, and a login. Get these four values written down and everything after this has something to stand on.</p>
+  <p style="margin:0 0 16px;max-width:64ch;color:var(--tv-text-muted);text-wrap:pretty">An account, a registrar, a login, and your own copy of the repository. Get these five values written down and everything after this has something to stand on.</p>
   <div style="display:flex;flex-wrap:wrap;gap:6px;margin:0 0 20px;align-items:center">
       <span style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim);margin-right:3px">Produces <span style="text-transform:none;letter-spacing:0;font-weight:400;color:var(--tv-text-dim)">— tap one to record it</span></span>
       <span data-w="ORG" style="cursor:pointer;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:3px;padding:4px 8px;font:500 11px/1.2 var(--tv-font-mono);color:var(--tv-text-muted)">ORG your org domain</span>
@@ -1102,9 +1102,16 @@ export R2_SECRET_ACCESS_KEY=...</div><p style="margin:0 0 6px;padding-inline-sta
       <span data-w="W2" style="cursor:pointer;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:3px;padding:4px 8px;font:500 11px/1.2 var(--tv-font-mono);color:var(--tv-text-muted)">W2 node hostname</span>
       <span data-w="W3" style="cursor:pointer;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:3px;padding:4px 8px;font:500 11px/1.2 var(--tv-font-mono);color:var(--tv-text-muted)">W3 git remote</span>
     </div>
+  <div style="background:var(--tv-error-bg);border:1px solid var(--tv-error-border);border-left:3px solid var(--tv-error);border-radius:6px;padding:15px 17px;margin:0 0 16px">
+  <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-error);margin:0 0 8px">Trap · Fork the repository first — {{W3}} is your fork, not upstream</div>
+  <p style="margin:0 0 10px;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">Phase 3 rewrites <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">wrangler.toml</code> with your resource IDs, Phase 5 hands your remote to Cloudflare Pages, and Phase 8.6 runs the transcode workflow in your repo. A clone of upstream does all of that fine right up until you have IDs to push and nowhere to push them.</p>
+  <p style="margin:0 0 10px;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">Use GitHub’s Fork button and keep every default. Then enable workflows in the Actions tab — GitHub creates forks with Actions off, so the transcode and deploy workflows never fire until you do.</p>
+  
+</div>
   <div style="position:relative;margin:0 0 14px">
   <pre style="margin:0;background:var(--tv-surface-code);border:1px solid var(--tv-border);color:var(--tv-text-muted);font:400 12.5px/1.8 var(--tv-font-mono);padding:36px 16px 15px;border-radius:6px;overflow-x:auto">node --version<span style="color:var(--tv-text-dim)">          # must be &gt;= 22</span>
 npm install -g wrangler
+git lfs install<span style="color:var(--tv-text-dim)">         # once per machine, before the clone</span>
 wrangler login<span style="color:var(--tv-text-dim)">          # opens a browser</span>
 wrangler whoami<span style="color:var(--tv-text-dim)">         # confirms the account</span>
 
@@ -1404,7 +1411,7 @@ wrangler d1 migrations apply FEEDBACK_DB --remote<span style="color:var(--tv-tex
       <h2 style="font:700 24px/1.25 var(--tv-font-sans);letter-spacing:-.01em;color:var(--tv-text);margin:0">Create the Pages project</h2>
     </div>
   </div>
-  
+  <p style="margin:0 0 16px;max-width:64ch;color:var(--tv-text-muted);text-wrap:pretty">Push your fork, then create the Pages project that builds from it and attach your hostname. This is the phase where your node gets a public address.</p>
   <div style="display:flex;flex-wrap:wrap;gap:6px;margin:0 0 20px;align-items:center">
       <span style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-text-dim);margin-right:3px">Produces <span style="text-transform:none;letter-spacing:0;font-weight:400;color:var(--tv-text-dim)">— tap one to record it</span></span>
       <span data-w="W10" style="cursor:pointer;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:3px;padding:4px 8px;font:500 11px/1.2 var(--tv-font-mono);color:var(--tv-text-muted)">W10 pages project name</span>
