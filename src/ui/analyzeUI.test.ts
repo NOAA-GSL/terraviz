@@ -20,11 +20,12 @@ import {
   type AnalyzeSource,
   type TransectPicker,
 } from './analyzeUI'
-import { buildCsvText, buildTransectCsvText, downloadCsv } from './analyzeExport'
+import { buildCsvText, buildTransectCsvText, buildZonalCsvText, downloadCsv } from './analyzeExport'
 import {
   buildHistogram,
   sampleTransect,
   summarize,
+  zonalMeans,
   type TransectEndpoints,
 } from '../services/datasetStats'
 import { resolveRegion } from '../data/regions'
@@ -82,7 +83,12 @@ describe('openAnalyzeUI', () => {
     expect(isAnalyzeUIOpen()).toBe(true)
     expect(currentResult()?.mean).toBeCloseTo(200, 6)
     expect(document.querySelector('.analyze-histogram')).not.toBeNull()
-    expect(document.querySelectorAll('.analyze-stat')).toHaveLength(8)
+    // Scoped to the region block's own grid — the first on the panel.
+    // The zonal section below it carries its own two tiles, and this
+    // assertion is about the region statistics.
+    expect(
+      document.querySelector('.analyze-stats')!.querySelectorAll('.analyze-stat'),
+    ).toHaveLength(8)
   })
 
   it('states the quantisation step next to the numbers, not in a footnote', () => {
@@ -414,8 +420,12 @@ describe('transect', () => {
     p.settle(CROSSING)
 
     expect(document.querySelector('.analyze-transect')).not.toBeNull()
-    // Length / lowest / highest / mean, on top of the region's eight.
-    expect(document.querySelectorAll('.analyze-stat')).toHaveLength(12)
+    // Length / lowest / highest / mean. Scoped to the transect's own
+    // section, so the count stays about the transect rather than about
+    // how many other sections the panel happens to render.
+    expect(
+      document.querySelector('.analyze-transect-section')!.querySelectorAll('.analyze-stat'),
+    ).toHaveLength(4)
     expect(buttonSaying('export line')).toBeDefined()
   })
 
@@ -537,6 +547,105 @@ describe('buildTransectCsvText', () => {
       datasetTitle: null, scopeLabel: 'x',
     })
     expect(csv).toMatch(/0\.\d{5,}/)
+  })
+})
+
+describe('zonal profile', () => {
+  const zonal = () => document.querySelector('.analyze-zonal-section')
+
+  it('appears unprompted, unlike the transect', () => {
+    // No picker, no control, no user action — the axis it reduces along
+    // is already chosen by the region.
+    initAnalyzeUI(makeSource())
+    openAnalyzeUI()
+    expect(zonal()).not.toBeNull()
+    expect(document.querySelector('.analyze-zonal')).not.toBeNull()
+    expect(zonal()!.querySelectorAll('.analyze-stat')).toHaveLength(2)
+  })
+
+  it('names the latitude band carrying the highest average', () => {
+    // A band of high values at the top of the frame, low below. The
+    // peak tile must point north, which is the question a zonal profile
+    // is actually being asked.
+    initAnalyzeUI(makeSource({
+      frame: () => ({
+        snapshot: snap(8, 8, (_x, y) => (y < 2 ? 240 : 40)),
+        scale: SCALE,
+        options: OPTIONS,
+      }),
+    }))
+    openAnalyzeUI()
+    const text = zonal()!.textContent ?? ''
+    expect(text).toContain('°N')
+    // The frame spans 5..85°N, so the top two rows sit above 70°N.
+    expect(text).toMatch(/[78]\d(\.\d)?°N/)
+  })
+
+  it('describes the picked region rather than the whole frame', () => {
+    // The scoped window has to reach the profile, or a user who picks a
+    // box gets a global answer under a regional heading.
+    const source = makeSource({
+      frame: () => ({
+        // Both halves carry data — 40 is above the 12-code absent band,
+        // so this tests scoping rather than accidentally testing the
+        // no-values path.
+        snapshot: snap(8, 8, (_x, y) => (y < 4 ? 250 : 40)),
+        scale: SCALE,
+        options: OPTIONS,
+      }),
+      visibleBounds: () => ({ n: 40, s: 5, w: -175, e: -20 }),
+    })
+    initAnalyzeUI(source)
+    openAnalyzeUI()
+    const whole = zonal()!.textContent ?? ''
+    select().value = 'view'
+    select().dispatchEvent(new Event('change', { bubbles: true }))
+    const viewOnly = zonal()!.textContent ?? ''
+    // The southern half is the low band, so scoping to it must change
+    // both the band count and the reported peak.
+    expect(viewOnly).not.toBe(whole)
+  })
+
+  it('says so rather than drawing an axis when the region is one band tall', () => {
+    initAnalyzeUI(makeSource({
+      frame: () => ({ snapshot: snap(8, 1, () => 200), scale: SCALE, options: OPTIONS }),
+    }))
+    openAnalyzeUI()
+    expect(document.querySelector('.analyze-zonal')).toBeNull()
+    expect(zonal()!.textContent).toContain('too few latitude bands')
+  })
+
+  it('is absent when the region block produced no numbers', () => {
+    // A profile under an "outside the dataset" message would be a chart
+    // of nothing captioned as a chart of something.
+    initAnalyzeUI(makeSource({
+      frame: () => ({ snapshot: snap(4, 4, () => 0), scale: SCALE, options: OPTIONS }),
+    }))
+    openAnalyzeUI()
+    expect(zonal()).toBeNull()
+  })
+})
+
+describe('buildZonalCsvText', () => {
+  const rows = zonalMeans(snap(8, 8, (_x, y) => (y < 4 ? 0 : 200)), SCALE, OPTIONS)
+
+  it('carries the per-row texel count, not just the mean', () => {
+    const csv = buildZonalCsvText(rows, SCALE, {
+      datasetTitle: 'Wildfire Smoke Overhead', scopeLabel: 'Whole dataset',
+    })
+    expect(csv).toContain('dataset,Wildfire Smoke Overhead')
+    expect(csv).toContain('region,Whole dataset')
+    expect(csv).toContain('lat,mean,texel_count')
+    expect(csv).toContain('rows,8')
+    expect(csv).toContain('rows_with_data,4')
+  })
+
+  it('keeps an empty band as a row with no mean', () => {
+    const csv = buildZonalCsvText(rows, SCALE, { datasetTitle: null, scopeLabel: 'x' })
+    const body = csv.split('lat,mean,texel_count\r\n')[1].trim().split('\r\n')
+    expect(body).toHaveLength(rows.length)
+    // The four absent rows keep their latitude and their zero count.
+    expect(body.filter((r) => r.includes(',,0')).length).toBe(4)
   })
 })
 
