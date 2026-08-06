@@ -174,9 +174,27 @@ export function formatReport(pointers: readonly Pointer[]): string {
   return lines.join('\n')
 }
 
+/**
+ * What asking git produced.
+ *
+ * `absent` and `failed` both mean "no file list", and collapsing them
+ * into one `null` was a real bug rather than a naming quibble: every
+ * error became "no git, or not a repository" and exited 0, so a
+ * transient git failure in the deploy job would bypass `--strict`
+ * while printing a cause that was not the cause. A gate that answers
+ * "skipped, on purpose" to something it never diagnosed is the exact
+ * silent pass this script exists to catch.
+ */
+export type LfsListing =
+  | { kind: 'ok'; files: string[] }
+  /** No git binary, or not a repository. Both are legitimate. */
+  | { kind: 'absent'; why: string }
+  /** git ran and something else went wrong. Not a skip. */
+  | { kind: 'failed'; reason: string }
+
 export interface CheckDeps {
   /** Tracked paths carrying `filter=lfs`. */
-  listLfsFiles?: () => string[] | null
+  listLfsFiles?: () => LfsListing
   read?: (file: string) => string | null
   log?: (message: string) => void
   warn?: (message: string) => void
@@ -190,25 +208,36 @@ export interface CheckDeps {
  * not a repository — a source tarball has no `.git`, and refusing to run
  * there would make this check a reason not to ship tarballs.
  */
-export function listLfsFiles(): string[] | null {
+export function listLfsFiles(): LfsListing {
+  const opts = { encoding: 'utf8' as const, maxBuffer: 32 * 1024 * 1024 }
   try {
-    // stderr ignored: outside a repository git writes "fatal: not a git
-    // repository" itself, which would reach the user as an error above
-    // the line saying the check was skipped on purpose.
+    // stderr is captured rather than inherited so git's own "fatal: not
+    // a git repository" cannot print above the line explaining the
+    // skip — but it is captured rather than discarded, because it is
+    // what distinguishes a legitimate skip from a real failure.
     const tracked = execFileSync('git', ['ls-files', '-z'], {
-      encoding: 'utf8',
-      maxBuffer: 32 * 1024 * 1024,
-      stdio: ['ignore', 'pipe', 'ignore'],
+      ...opts,
+      stdio: ['ignore', 'pipe', 'pipe'],
     })
     const attrs = execFileSync('git', ['check-attr', '--stdin', '-z', 'filter'], {
+      ...opts,
       input: tracked,
-      encoding: 'utf8',
-      maxBuffer: 32 * 1024 * 1024,
-      stdio: ['pipe', 'pipe', 'ignore'],
+      stdio: ['pipe', 'pipe', 'pipe'],
     })
-    return parseCheckAttr(attrs)
-  } catch {
-    return null
+    return { kind: 'ok', files: parseCheckAttr(attrs) }
+  } catch (err) {
+    const e = err as NodeJS.ErrnoException & { stderr?: Buffer | string }
+    if (e.code === 'ENOENT') {
+      return { kind: 'absent', why: 'git is not installed' }
+    }
+    const stderr = String(e.stderr ?? '')
+    if (/not a git repository/i.test(stderr)) {
+      return { kind: 'absent', why: 'not a git repository' }
+    }
+    // Anything else: a broken index, a permissions problem, git killed
+    // mid-run. Report it rather than calling it a skip.
+    const first = stderr.trim().split('\n')[0] || e.message || 'unknown error'
+    return { kind: 'failed', reason: first }
   }
 }
 
@@ -225,12 +254,24 @@ export function run(argv: readonly string[] = process.argv.slice(2), deps: Check
   const warn = deps.warn ?? ((m: string) => console.error(m))
   const fail = deps.fail ?? (() => process.exit(1))
 
-  const files = list()
-  if (files === null) {
-    if (!quiet) log('· Git LFS check skipped (no git, or not a repository).')
+  const listing = list()
+  if (listing.kind === 'absent') {
+    // A source tarball has no .git, and a check that made tarballs
+    // unshippable would be a worse bug than the one it detects.
+    if (!quiet) log(`\u00b7 Git LFS check skipped \u2014 ${listing.why}.`)
+    return
+  }
+  if (listing.kind === 'failed') {
+    warn(
+      `Git LFS check could not run: ${listing.reason}\n` +
+        'This is not a clean skip — git was present and the command failed, ' +
+        'so nothing was verified.',
+    )
+    if (strict) fail()
     return
   }
 
+  const files = listing.files
   const pointers = findPointers(files, read)
   const report = formatReport(pointers)
   if (report) {

@@ -150,7 +150,7 @@ describe('run', () => {
       err,
       failed: () => failed,
       deps: {
-        listLfsFiles: () => files,
+        listLfsFiles: () => ({ kind: 'ok' as const, files }),
         read: head,
         log: (m: string) => out.push(m),
         warn: (m: string) => err.push(m),
@@ -198,17 +198,60 @@ describe('run', () => {
 
   // A source tarball has no .git. Refusing to run there would make this
   // check a reason not to ship tarballs.
-  it('skips cleanly when git is unavailable', () => {
-    const out: string[] = []
+  it('skips cleanly when there is no git or no repository', () => {
+    for (const why of ['git is not installed', 'not a git repository']) {
+      const out: string[] = []
+      let failed = false
+      run(['--strict'], {
+        listLfsFiles: () => ({ kind: 'absent', why }),
+        log: (m: string) => out.push(m),
+        fail: () => {
+          failed = true
+        },
+      })
+      expect(out.join('\n')).toContain('skipped')
+      expect(out.join('\n'), 'the skip should name its own cause').toContain(why)
+      expect(failed, 'a tarball must stay shippable even under --strict').toBe(false)
+    }
+  })
+
+  /**
+   * The distinction Copilot asked for on #359, and it is not cosmetic.
+   * Every git failure used to collapse into the same `null`, so a broken
+   * index or a killed process printed "no git, or not a repository" and
+   * exited 0 — under `--strict`, in the deploy job. The gate would have
+   * reported a clean skip for something it never diagnosed, which is the
+   * silent pass this whole script exists to catch.
+   */
+  it('a real git failure is not a skip, and fails under --strict', () => {
+    const err: string[] = []
     let failed = false
     run(['--strict'], {
-      listLfsFiles: () => null,
-      log: (m: string) => out.push(m),
+      listLfsFiles: () => ({ kind: 'failed', reason: 'fatal: index file corrupt' }),
+      warn: (m: string) => err.push(m),
       fail: () => {
         failed = true
       },
     })
-    expect(out.join('\n')).toContain('skipped')
-    expect(failed).toBe(false)
+    const text = err.join('\n')
+    expect(text, 'the reason git gave should survive to the operator').toContain(
+      'index file corrupt',
+    )
+    expect(text, 'and it must not read as a deliberate skip').toContain('not a clean skip')
+    expect(failed).toBe(true)
+  })
+
+  it('a real git failure still reports without --strict', () => {
+    const err: string[] = []
+    let failed = false
+    run([], {
+      listLfsFiles: () => ({ kind: 'failed', reason: 'fatal: index file corrupt' }),
+      warn: (m: string) => err.push(m),
+      fail: () => {
+        failed = true
+      },
+    })
+    expect(err.join('\n')).toContain('index file corrupt')
+    expect(failed, 'advisory by default, same as every other path').toBe(false)
   })
 })
