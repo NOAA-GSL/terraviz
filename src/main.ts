@@ -36,7 +36,14 @@ import { openCreditsPanel } from './ui/creditsPanel'
 import { initChatUI, openChat, openChatSettings, notifyDatasetChanged, showChatTrigger, hideChatTrigger, closeChat, flushPendingGlobeActions } from './ui/chatUI'
 import { loadViewPreferences, saveViewPreferences, type ViewPreferences } from './utils/viewPreferences'
 import { renderColorbar, openDisplayControls, closeDisplayControls } from './ui/colorbarUI'
-import { initAnalyzeUI, openAnalyzeUI, closeAnalyzeUI, notifyAnalyzeDatasetChanged } from './ui/analyzeUI'
+import {
+  initAnalyzeUI,
+  openAnalyzeUI,
+  closeAnalyzeUI,
+  notifyAnalyzeDatasetChanged,
+  notifyAnalyzePlaybackSettled,
+} from './ui/analyzeUI'
+import { createPlaybackSettleWatcher } from './services/playbackSettle'
 import { registerAnalysisSource } from './services/docentAnalysisTools'
 import { buildHistogram } from './services/datasetStats'
 import { DEFAULT_DISPLAY, type ColorScaleDisplay } from './services/colorScaleDisplay'
@@ -70,7 +77,7 @@ import { resolveRegion } from './data/regions'
 import type { PublicEvent } from './services/eventsService'
 import { TourEngine, type TourTelemetryMeta } from './services/tourEngine'
 import { showTourControls, hideTourControls, hideAllTourTextBoxes, hideAllTourImages, hideAllTourVideos, hideAllTourPopups, hideAllTourQuestions } from './ui/tourUI'
-import { initLegendForDataset, clearLegendCache, loadConfig } from './services/docentService'
+import { initLegendForDataset, clearLegendCache, loadConfig, readCurrentTime } from './services/docentService'
 import { isMobile, IS_MOBILE_NATIVE, getCloudTextureUrl } from './utils/deviceCapability'
 import { initDeepLinks } from './services/deepLinkService'
 import {
@@ -450,6 +457,24 @@ class InteractiveSphere {
             clear: () => primary.clearRegionOutline(),
           }
         },
+        contours: () => {
+          const primary = this.viewports.getPrimary()
+          if (!primary) return null
+          return {
+            show: (levels) => primary.showContours(levels),
+            clear: () => primary.clearContours(),
+          }
+        },
+        // The same label Orbit's tool results are stamped with, so the
+        // panel and an Orbit answer can never name different frames for
+        // the same measurement.
+        frameTime: () => readCurrentTime(),
+        // Identity, not display. `readCurrentTime` reads the *label*,
+        // which is snapped to the display interval and hidden outright
+        // for a dataset without start/end times — useless for telling
+        // whether the frame moved. This is the video playhead, the same
+        // value the luma sampler keys its snapshot cache on.
+        frameId: () => this.viewports.getPrimary()?.currentFrameId() ?? null,
       })
       // The same frame, reachable from Orbit's tool executors (§A6).
       // Registered rather than passed down: `processMessage` already
@@ -1142,6 +1167,30 @@ class InteractiveSphere {
     }
   }
 
+  /**
+   * Tells the Analyze panel when the globe has stopped on a frame.
+   *
+   * Reads the transport rather than subscribing to it, because the
+   * playback loop below already runs every frame and a second
+   * requestAnimationFrame on a page whose performance story is a WebGL
+   * globe would be a poor trade for a signal that only matters when
+   * nothing is moving. `playbackSettle` owns the decision about what
+   * counts as settled; this only supplies the sample.
+   *
+   * A missing video is reported as `paused` with no playhead — an image
+   * dataset has nothing to settle on, and the detector treats that as
+   * "forget where you were" rather than as a still frame.
+   */
+  private readonly playbackSettle = createPlaybackSettleWatcher(
+    () => {
+      const video = this.hlsService?.getVideo() ?? null
+      return video
+        ? { playhead: video.currentTime, paused: video.paused, seeking: video.seeking }
+        : { playhead: null, paused: true }
+    },
+    () => notifyAnalyzePlaybackSettled(),
+  )
+
   /** Start the requestAnimationFrame playback loop that syncs the scrubber, time label, and auto-loop. */
   private doStartPlaybackLoop(): void {
     startPlaybackLoop(
@@ -1155,7 +1204,14 @@ class InteractiveSphere {
       // master clock; siblings are kept in temporal lockstep here
       // rather than free-running on a once-set playbackRate (which
       // integrates duration-imprecision error into visible drift).
-      () => this.correctSiblingDrift(),
+      () => {
+        this.correctSiblingDrift()
+        // Cheap on every frame — a comparison and a subtraction — and it
+        // has to be sampled at frame rate to know when the playhead
+        // stopped. The loop already treats a throw here as something to
+        // log and survive, and the watcher swallows its own.
+        this.playbackSettle.tick(performance.now())
+      },
     )
   }
 

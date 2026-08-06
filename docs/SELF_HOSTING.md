@@ -32,13 +32,16 @@ Two companion reads:
 ## Pick your node type first
 
 Everything below is written for **Tier 2**. Tier 1 operators stop
-after Phase 5; Tier 3 operators add Phase 14.
+after Phase 5; Tier 3 operators add Phase 15. Every tier finishes
+with Phase 13 before going public — it is the CSP a fork does not
+inherit. Phase 14 is genuinely optional and comes after it for
+exactly that reason.
 
 | Tier | What you get | What it costs you | Stop after |
 |---|---|---|---|
-| **1 — Viewer node** | The globe, the upstream SOS dataset catalog, Orbit chat, telemetry. No publishing. | ~30 min, $5/mo (Workers Paid) | Phase 5 |
-| **2 — Publisher node** | Everything above, plus your own datasets/tours, the publisher portal, semantic search, events, blog. | ~2–3 h, $5/mo + storage | Phase 12 |
-| **3 — Publisher node + desktop app** | Tier 2 plus branded Tauri desktop builds with your own update feed. | + ~1 h | Phase 14 |
+| **1 — Viewer node** | The globe, the upstream SOS dataset catalog, Orbit chat, telemetry. No publishing. | ~30 min, $5/mo (Workers Paid) | Phase 5, then 13 |
+| **2 — Publisher node** | Everything above, plus your own datasets/tours, the publisher portal, semantic search, events, blog. | ~2–3 h, $5/mo + storage | Phase 13 |
+| **3 — Publisher node + desktop app** | Tier 2 plus branded Tauri desktop builds with your own update feed. | + ~1 h | Phase 15 |
 
 > **Time estimates assume nothing goes wrong and your domain is
 > already on Cloudflare DNS.** Budget a working afternoon for a
@@ -53,7 +56,7 @@ Every phase that *produces* a value tells you to write it down
 here. Every phase that *consumes* one refers to it by line number.
 
 **If you use `npm run setup`, most of this is kept for you** in
-`.terraviz-setup.json` — the resource IDs, the Access AUD, the team
+`.terraviz-setup.json` — the resource IDs, the Access AUD (the audience tag that identifies your application), the team
 domain. What it cannot keep is anything marked 🔒: secrets are never
 written to that file. Capture those yourself, in a password manager.
 
@@ -65,8 +68,8 @@ the install:
 |---|---|---|
 | `W11` | `CLOUDFLARE_API_TOKEN` | Cloudflare, at mint time (Phase 5) |
 | `W15` | `CF_ACCESS_CLIENT_SECRET` | Cloudflare, in the service-token dialog (Phase 6) |
-| `W20b` | `R2_SECRET_ACCESS_KEY` | Cloudflare, with `W20` (Phase 13.1) |
-| `W22` | `GITHUB_DISPATCH_TOKEN` | GitHub, at mint time (Phase 13.2) |
+| `W20b` | `R2_SECRET_ACCESS_KEY` | Cloudflare, with `W20` (Phase 8.5) |
+| `W22` | `GITHUB_DISPATCH_TOKEN` | GitHub, at mint time (Phase 8.6) |
 
 Losing one is recoverable but tedious: revoke it, mint a new one, and
 repoint everything already using it. `W16` and `W18` are different —
@@ -106,7 +109,7 @@ W16 🔒 NODE_ID_PRIVATE_KEY_PEM       ......................
 W17  Node public key (ed25519:...)  ......................
 W18 🔒 PREVIEW_SIGNING_KEY           ......................
 
-── Phase 13 (optional add-ons) ───────────────────────────
+── Phase 8.5–8.6 (assets and video) ──────────────────────
 W19  R2 public origin               ......................
 W20 🔒 R2_ACCESS_KEY_ID              ......................
 W20b 🔒 R2_SECRET_ACCESS_KEY         ......................
@@ -168,7 +171,7 @@ itself where it is known and not secret.
 ── Wherever your build runs
    → VITE_API_ORIGIN = https://terraviz.example.org
    · VITE_EARTH_ASSET_BASE
-       from: your own CDN, after mirroring the Earth basemap textures
+       from: your own content delivery network (CDN), after mirroring the Earth basemap textures
 
 ── GitHub → Settings → Secrets and variables → Actions
    → CF_ACCESS_CLIENT_SECRET
@@ -188,8 +191,8 @@ itself where it is known and not secret.
 | **6** | Discovers your Access team domain; creates the publisher application (six destinations), the Staff and Automation policies, and the service token — returning the AUD (`W13`) and the token pair (`W14`/`W15`). |
 | **7** | Generates `PREVIEW_SIGNING_KEY` into `.dev.vars`. |
 | **8** | Writes every binding, variable and available secret to **both** Production and Preview. |
-| **13.1** *(opt-in)* | Sets the R2 CORS policy and attaches the public bucket domain. |
-| **13.2/13.3** *(opt-in)* | Appends the two WAF skip rules, preserving your existing rules. |
+| **8.5** | Sets the R2 CORS policy and attaches the public bucket domain. |
+| **8.6/14.1** | Appends the two web-application-firewall (WAF) skip rules, preserving your existing rules. |
 
 Two flags select different things, and it is worth keeping them
 straight. **`--only=` picks which steps run.** **`--with=` declares
@@ -226,9 +229,9 @@ so it cannot provision a deploy that
 | **5** (part) | *Connecting* the project to a Git remote. That handshake is an OAuth flow between Cloudflare and GitHub with no API — a token cannot grant Cloudflare access to your repos on your behalf. The tool creates the project; you either click Connect, or deploy from CI with `wrangler pages deploy dist/`. |
 | **6.1** | Zero Trust onboarding + choosing an identity provider. One-time, per account. |
 | **7** (half) | The node keypair — `npm run gen:node-key` owns it, because it also writes `node-public-key.txt` that Phase 9 reads and stamps your local D1. One command. |
-| **11** | The first SSO sign-in, which is what makes you admin. |
-| **13.1** (part) | Minting the R2 S3 API token. Doing that over the API needs a bootstrap token that can *create tokens* — a strictly larger credential than anything else here, one that could mint itself more authority. Two clicks in the R2 dashboard, once. |
-| **13.2** (part) | Writing GitHub Actions secrets, which requires libsodium sealed-box encryption (BLAKE2b, absent from `node:crypto`). Rather than add a dependency, `npm run setup -- --github-secrets` prints the exact `gh secret set` script, with values as `"$VAR"` references so it is safe to paste anywhere. |
+| **11** | The first single sign-on (SSO) sign-in, which is what makes you admin. |
+| **8.5** (part) | Minting the R2 S3 API token. Doing that over the API needs a bootstrap token that can *create tokens* — a strictly larger credential than anything else here, one that could mint itself more authority. Two clicks in the R2 dashboard, once. |
+| **8.6** (part) | Writing GitHub Actions secrets, which requires libsodium sealed-box encryption (BLAKE2b, absent from `node:crypto`). Rather than add a dependency, `npm run setup -- --github-secrets` prints the exact `gh secret set` script, with values as `"$VAR"` references so it is safe to paste anywhere. |
 
 The tool names whichever of these is blocking it. A typical Tier 2
 install, guided:
@@ -268,10 +271,10 @@ burning its timeout.
 | Account → Access: Apps and Policies → **Edit** | Phase 6 |
 | Account → Access: Service Tokens → **Edit** | Phase 6 |
 | Account → Access: Organizations → **Read** | discovering the team domain |
-| Account → Workers R2 Storage → **Edit** | Phase 13.1 (opt-in) |
-| Zone → Zone → **Read** | resolving the zone for 13.1 / 13.2 |
-| Zone → Zone WAF → **Edit** | Phase 13.2 (opt-in) |
-| Account → D1 → **Edit** | only if you enable CI migrations (13.6) |
+| Account → Workers R2 Storage → **Edit** | Phase 8.5 |
+| Zone → Zone → **Read** | resolving the zone for 8.5 / 8.6 |
+| Zone → Zone WAF → **Edit** | Phase 8.6 |
+| Account → D1 → **Edit** | only if you enable CI migrations (14.3) |
 
 Grant only what you plan to run — each step names the permission it
 is missing rather than failing with a bare `10000: Authentication
@@ -312,7 +315,7 @@ the Cloudflare dashboard sidebar and in every dashboard URL.
 Everything after this assumes you are working from **your own copy**
 of `zyra-project/terraviz`, not from upstream. Phase 3 rewrites
 `wrangler.toml` with your resource IDs, Phase 5 points Cloudflare
-Pages at your remote, and Phase 13.2 runs the transcode workflow in
+Pages at your remote, and Phase 8.6 runs the transcode workflow in
 your repo. None of that is possible against a repo you cannot push
 to.
 
@@ -466,7 +469,7 @@ them:
 |---|---|---|
 | **Fork the repository** ([§0.2](#02-fork-the-repository)) | Phase 3 onward | The tool asks for `W3` and validates its shape. It cannot check that the repo exists, that you own it, or that your checkout points at it |
 | **Workers Paid ($5/mo)** | Phase 8 onward | Billing state is not exposed to the token. A free-plan account provisions everything successfully, then throttles Orbit once the day's Workers AI allocation is spent |
-| **Mint the R2 S3 API token** | Phase 13.1 | Automating it would need a token that can mint tokens — a credential able to grant itself more authority. It stays manual on purpose. (The secret is also shown exactly once, so capture all three values then) |
+| **Mint the R2 S3 API token** | Phase 8.5 | Automating it would need a token that can mint tokens — a credential able to grant itself more authority. It stays manual on purpose. (The secret is also shown exactly once, so capture all three values then) |
 
 That asymmetry is the whole reason the pre-flight list is short.
 Confirm those three; let the tool tell you about the rest.
@@ -849,7 +852,7 @@ Changing one later requires a rebuild, not just a redeploy.
 | `VITE_BUILD_CHANNEL` | `public` | or `internal` / `canary` |
 | `VITE_TELEMETRY_ENABLED` | `true` | |
 | `VITE_EARTH_ASSET_BASE` | your CDN | **Recommended.** Defaults to upstream's CloudFront. See Reference C. |
-| `VITE_API_ORIGIN` | `https://` + `W2` | Only needed for desktop builds (Phase 14), harmless to set now. |
+| `VITE_API_ORIGIN` | `https://` + `W2` | Only needed for desktop builds (Phase 15), harmless to set now. |
 | `VITE_DEFAULT_UI_SCALE` | *(unset)* | `1.5` suits kiosks. Clamped to [0.5, 2.0]; a visitor's own choice always wins. |
 
 Save and Deploy. Record the project name as `W10`.
@@ -878,7 +881,7 @@ that isn't yours.
 
 `W11` needs, at minimum, **Account → Cloudflare Pages → Edit**. Add
 **Account → D1 → Edit** only if you enable CI migrations (Phase
-13.6). Mint it at
+14.3). Mint it at
 `https://dash.cloudflare.com/profile/api-tokens`.
 
 > Forks created with GitHub's **Fork** button land with Actions
@@ -935,7 +938,7 @@ choose a **team name**; your team domain becomes
 `<team>.cloudflareaccess.com`. **Record it as `W12`.**
 
 Add at least one identity provider (Zero Trust → Settings →
-Authentication). One-time PIN over email works and needs no IdP
+Authentication). One-time PIN over email works and needs no identity provider (IdP)
 setup; Google/Okta/Entra are better for a real team.
 
 ## 6.2 Create the publisher application
@@ -1066,7 +1069,7 @@ openssl rand -base64 32      # → W18
 
 ---
 
-# Phase 8 — Wire bindings, variables and secrets
+# Phase 8 — Wire bindings, storage and transcode
 
 Everything referenced below now exists. Pages → your project →
 **Settings → Bindings** (and **Variables and secrets**).
@@ -1132,39 +1135,271 @@ wrangler pages secret put PREVIEW_SIGNING_KEY     --project-name <W10>
 > admin — see Phase 11. Domain matching is exact and
 > case-insensitive; `noaa.gov` does not match `x.noaa.gov`.
 
-## 8.4 The seven the audit also expects
+## 8.4 The other seven the audit expects
 
 `EXPECTED_BINDINGS` in `scripts/lib/expected-bindings.ts` carries
-**19** entries; 8.1–8.3 above are twelve of them. The remaining seven
-belong to add-ons you configure in Phase 13, and they are listed here
-because **`npm run check:pages-bindings` reports them as missing
-whether or not you want the add-on.** That is deliberate — the audit
-would rather name a value you have chosen not to set than stay quiet
-about one you meant to. If you are not running the add-on, the
-corresponding rows are expected to read MISSING and you can ignore
-them.
+**19** entries; 8.1–8.3 above are twelve of them. Here are the other
+seven, listed together because **`npm run check:pages-bindings`
+reports them as missing whether or not you want the feature behind
+them.** That is deliberate — the audit would rather name a value you
+have chosen not to set than stay quiet about one you meant to.
+
+Four are R2. Set them in 8.5 below, which is part of this phase
+rather than a later one: without them a published dataset has no
+readable image, and that is not really publishing.
+
+The other three are for video transcode. Set them in 8.6, which is
+also part of this phase — 138 of the upstream catalog's 204 datasets
+are video, so this is the common case rather than an extra. If your
+node genuinely publishes no video, those three rows are expected to
+read MISSING and you can ignore them.
 
 Plaintext:
 
-| Variable | Add-on | Value | Without it |
+| Variable | Set in | Value | Without it |
 |---|---|---|---|
-| `R2_PUBLIC_BASE` | 13.1 | `W19` — the R2 bucket's public origin | HLS manifests, `r2:datasets/…` assets and `r2:tours/…` JSON resolve to `r2_unconfigured`. **`R2_S3_ENDPOINT` is not a fallback here** — it signs S3-API access, not public reads, so falling through would produce an `hls` URL that 403s at play time |
-| `GITHUB_OWNER` | 13.2 | repo owner hosting `transcode-hls` | With `GITHUB_REPO` + `GITHUB_DISPATCH_TOKEN`, builds the `repository_dispatch` URL |
-| `GITHUB_REPO` | 13.2 | repo name hosting `transcode-hls` | See `GITHUB_OWNER` |
+| `R2_PUBLIC_BASE` | 8.5 | `W19` — the R2 bucket's public origin | HLS manifests, `r2:datasets/…` assets and `r2:tours/…` JSON resolve to `r2_unconfigured`. **`R2_S3_ENDPOINT` is not a fallback here** — it signs S3-API access, not public reads, so falling through would produce an `hls` URL that 403s at play time |
+| `GITHUB_OWNER` | 8.6 | repo owner hosting `transcode-hls` | With `GITHUB_REPO` + `GITHUB_DISPATCH_TOKEN`, builds the `repository_dispatch` URL |
+| `GITHUB_REPO` | 8.6 | repo name hosting `transcode-hls` | See `GITHUB_OWNER` |
 
 Secrets:
 
-| Secret | Add-on | Value | Without it |
+| Secret | Set in | Value | Without it |
 |---|---|---|---|
-| `R2_S3_ENDPOINT` | 13.1 | `W21` — `https://<acct>.r2.cloudflarestorage.com` | The `migrate-r2-hls` / `-assets` / `-tours` CLIs (and their rollbacks) fail at credential validation. The operator's shell needs the same value |
-| `R2_ACCESS_KEY_ID` | 13.1 | `W20` | As above |
-| `R2_SECRET_ACCESS_KEY` | 13.1 | `W20b` — shown once, when the token is minted | As above |
-| `GITHUB_DISPATCH_TOKEN` | 13.2 | `W22` — fine-grained PAT with Contents: write, or a classic PAT with `repo` | Video-upload finalisation 503s with `github_dispatch_unconfigured` |
+| `R2_S3_ENDPOINT` | 8.5 | `W21` — `https://<acct>.r2.cloudflarestorage.com` | The `migrate-r2-hls` / `-assets` / `-tours` CLIs (and their rollbacks) fail at credential validation. The operator's shell needs the same value |
+| `R2_ACCESS_KEY_ID` | 8.5 | `W20` | As above |
+| `R2_SECRET_ACCESS_KEY` | 8.5 | `W20b` — shown once, when the token is minted | As above |
+| `GITHUB_DISPATCH_TOKEN` | 8.6 | `W22` — fine-grained personal access token (PAT) with Contents: write, or a classic PAT with `repo` | Video-upload finalisation 503s with `github_dispatch_unconfigured` |
 
-## 8.5 Redeploy
+## 8.5 Asset storage — R2 public origin, CORS, and the S3 token
+
+**Do this now unless your node will only ever carry metadata.** The
+bucket exists (Phase 2, `W7`) but nothing can be read out of it yet.
+Until this is done, `resolveR2PublicUrl` returns null: uploaded
+thumbnails come back as `null`, HLS manifests answer
+`r2_unconfigured`, and the web zip-download cannot size a file. A
+dataset with no image is not much of a published dataset, which is
+why this is here rather than in the optional phase it used to live
+in.
+
+Skip it only for a node that mirrors the upstream catalog or
+publishes metadata-only rows. You can come back and do it later —
+nothing else depends on it — but you will redeploy again.
+
+> **Automated.** `npm run setup -- --apply --only=r2` sets the CORS
+> policy (built from your origins, so the two easy-to-mistype details
+> below cannot be got wrong) and attaches the public domain from
+> `R2_PUBLIC_BASE`. Step 4 — minting the S3 API token — stays manual
+> on purpose: automating it would need a token that can create
+> tokens.
+
+1. R2 → `terraviz-assets` → **Settings → Connect Domain** → e.g.
+   `assets.<W2>`. Record as `W19`.
+2. Pages variable `R2_PUBLIC_BASE` = `https://<W19>`, both
+   environments.
+3. R2 → bucket → **Settings → CORS policy**:
+
+```json
+[
+  {
+    "AllowedOrigins": ["https://terraviz.your-org.org"],
+    "AllowedMethods": ["GET", "HEAD"],
+    "AllowedHeaders": ["*"],
+    "ExposeHeaders": ["Content-Length", "Content-Range"],
+    "MaxAgeSeconds": 3600
+  },
+  {
+    "AllowedOrigins": ["https://terraviz.your-org.org"],
+    "AllowedMethods": ["PUT", "POST"],
+    "AllowedHeaders": ["Content-Type"],
+    "ExposeHeaders": ["ETag"],
+    "MaxAgeSeconds": 3600
+  }
+]
+```
+
+R2's CORS is strict in two ways. `HEAD` must be listed explicitly,
+even though Fetch treats it as a simple method. And `Content-Range`
+must be in `ExposeHeaders` — it isn't CORS-safelisted, so the zip
+dialog's Range-GET size probe can't read it otherwise. Add
+`http://localhost:5173` for dev; add `tauri://localhost`,
+`http://tauri.localhost` and `https://tauri.localhost` to the
+GET/HEAD rule for desktop builds.
+
+4. R2 → **Manage R2 API Tokens** → create a token with **Read+Write**
+   on the bucket. Record the endpoint (`W21`) and key pair (`W20`),
+   then set `R2_S3_ENDPOINT`, `R2_ACCESS_KEY_ID` and
+   `R2_SECRET_ACCESS_KEY` as Pages **secrets** on both environments.
+   These mint presigned PUT URLs server-side and verify upload
+   digests.
+
+## 8.6 Video transcode
+
+**Do this now if publishers will upload video.** In the upstream
+catalog 138 of 204 datasets are `video/mp4` — for a node in the
+Science On a Sphere lineage, video is not a side case, it is most of
+the content. Without the three bindings below, finalising a video
+upload returns 503 `github_dispatch_unconfigured` and rolls the
+dataset's transcoding state back. It does not degrade; it fails.
+
+Skip it for a node that publishes only images, tours or metadata.
+Skip it too for data-encoded video built by a Zyra pipeline, and for
+a mirror of the upstream catalog — those rows carry `vimeo:` refs
+and never touch this. As with 8.5 you can come back later, at the
+cost of another redeploy.
+
+Publisher video uploads hand off to a GitHub Actions workflow that
+runs the ffmpeg 4K/1080p/720p 2:1 spherical HLS ladder, via
+`repository_dispatch`. Both source shapes — a single `source.mp4`,
+or up to 10 000 image-sequence frames — feed the same pipeline and
+encode to **30 fps output** regardless of source rate (the tour
+engine's `frameRate` task assumes 30).
+
+**Pages side** (both environments):
+
+| Binding | Value |
+|---|---|
+| `GITHUB_OWNER` | your fork's owner |
+| `GITHUB_REPO` | your fork's name |
+| `GITHUB_DISPATCH_TOKEN` | **Secret** — PAT with `repo` scope (or fine-grained Contents:write) on that repo. `W22`. |
+
+**GitHub side** (repo Settings → Secrets and variables → Actions):
+`R2_S3_ENDPOINT` (`W21`), `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY`
+(`W20`), `TERRAVIZ_SERVER` (`https://<W2>`), `CF_ACCESS_CLIENT_ID`
+(`W14`), `CF_ACCESS_CLIENT_SECRET` (`W15`), and optionally
+`CATALOG_R2_BUCKET`.
+
+`npm run setup -- --github-secrets` prints the exact `gh secret set`
+commands for all of them, annotated with what each is for and which
+ones your current shell can't supply. Values are emitted as `"$VAR"`
+references rather than inlined, so the script is safe to paste into a
+runbook.
+
+Both halves are required and fail closed. Missing
+`GITHUB_DISPATCH_TOKEN` → `/asset/complete` returns 503
+`github_dispatch_unconfigured`; the source bytes stay in R2 and the
+upload can be retried. Missing GitHub secrets → the workflow exits
+non-zero with a stage code (2 download, 3 encode, 4 upload, 5
+PATCH), the row stays `transcoding=1`, and the portal's
+"Transcoding…" badge is your signal.
+
+**Recovery is operator-only.** `/asset/…/complete` refuses a
+different upload while `transcoding=1` and the active-upload
+binding is set, so publishers can't self-recover. Clear the row:
+
+```sql
+UPDATE datasets SET transcoding = NULL, active_transcode_upload_id = NULL
+WHERE id = '…';
+```
+
+**Cost.** GitHub Actions' free tier (2000 min/mo, public repos)
+comfortably covers ~50 uploads/month. R2 **storage** dominates: a
+4K ladder is ~250 MB per minute of source, billed until deleted.
+Egress is zero-rated.
+
+**Local dev:** `MOCK_GITHUB_DISPATCH=true` in `.dev.vars` skips the
+dispatch while still stamping `transcoding=1`, so you can exercise
+the portal's polling surface. Refused on non-loopback hostnames.
+
+### WAF skip rule for the transcode-complete callback
+
+Access service tokens bypass Access but **not** Bot Fight Mode, the
+Managed Ruleset, or custom WAF rules. Bot Fight Mode is on by
+default from the Free plan up. If any of those are active, the
+runner's final POST to
+`/api/v1/publish/datasets/{id}/transcode-complete` gets a `Just a
+moment...` interstitial and never reaches the Worker. ffmpeg
+finishes, the HLS bundle lands in R2, and the runner exits non-zero
+at stage 5. The CLI detects the challenge HTML and prints a
+one-line pointer at this section rather than a 30 KB blob.
+
+> **Automated (opt-in).** `npm run setup -- --apply --only=waf`
+> appends this rule *and* the 14.1 feedback rule, preserving every
+> existing rule in the zone. It is deliberately excluded from a
+> default run: the rulesets API replaces a zone's whole custom-rule
+> list rather than appending, so a careless implementation deletes
+> your WAF config. The merge is a pure, tested function, and a failed
+> read aborts rather than writing. Step 2 below (plain Bot Fight
+> Mode) has no per-path override and stays manual.
+
+**Step 1 — WAF Custom Rule.** Security → WAF → Custom rules →
+Create rule, `transcode-complete service token skip`:
+
+```
+(starts_with(http.request.uri.path, "/api/v1/publish/")
+  and ends_with(http.request.uri.path, "/transcode-complete")
+  and len(http.request.headers["cf-access-client-id"][0]) > 0)
+```
+
+Action **Skip**, ticking: all remaining custom rules, all managed
+rules, all Super Bot Fight Mode rules, Browser Integrity Check,
+and Security Level.
+
+This is safe for three reasons. Only requests carrying a
+service-token id can match. Access still validates the token
+afterwards, so a forged header without the secret can't
+authenticate. And the route handler independently enforces
+`role='service'`.
+
+**Step 2 — plain Bot Fight Mode (Free/Pro).** The Skip action's
+"All Super Bot Fight Mode Rules" covers SBFM (Pro+) but not plain
+BFM, which runs zone-wide at a different layer and has no per-path
+override on Free. Options, best first:
+
+1. **Disable BFM zone-wide** (Security → Bots → Configure). For a
+   small portal where authenticated traffic dominates and the
+   public single-page app is cache-served, Bot Fight Mode adds little over Access + the
+   role-gated routes + the Step 1 rule. Recommended on Free.
+2. **Upgrade to Pro** — SBFM *is* skippable from Step 1's rule.
+3. **Live with manual recovery** — re-issue `/transcode-complete`
+   from an authenticated browser session when it fails.
+
+**Which rule fired?** Security → Events, "Service" column:
+
+| Says | Fixed by |
+|---|---|
+| `Bot fight mode` | Step 2 |
+| `Managed challenge` | Step 1, "All managed rules" |
+| `Super Bot Fight Mode` | Step 1, SBFM checkbox |
+| `Browser Integrity Check` | Step 1, that checkbox |
+| `Security level` | Step 1, that checkbox |
+
+## 8.7 Orbit's chat provider — nothing to do
+
+Listed here because this is where you wired the `AI` binding, and
+because the question "how do I configure Orbit?" has a surprising
+answer: you already did.
+
+**Default — Cloudflare Workers AI. Nothing to configure.**
+`functions/api/chat/completions.ts` calls the `AI` binding from
+Phase 8 and streams an OpenAI-shaped SSE response;
+`functions/api/models.ts` backs the "Test Connection" button. No
+API key reaches the browser. Model choice lives in `MODEL_MAP` in
+that file.
+
+There is **no server-side proxy for third-party providers.** Older
+docs described `LLM_PROVIDER_URL` / `LLM_PROVIDER_KEY` — those env
+vars are read by nothing. To use OpenAI or a local model, set the
+API URL + key in the running app under **Tools → Orbit Settings**
+(localStorage on web, OS keychain on desktop). Because the key
+lives client-side, that path suits a single operator's browser or a
+desktop install — not a shared public deployment. Local endpoints
+(`http://localhost:11434/v1` Ollama, `:1234` LM Studio, `:8080`
+llama.cpp) only work from desktop or dev, since Pages can't reach
+your localhost.
+
+Routing Workers AI through an AI Gateway is a **code change** — the
+`AI.run()` call accepts a `gateway` option but the current code
+doesn't pass one. A gateway URL in config does nothing on its own.
+
+## 8.8 Redeploy
 
 Bindings take effect on the *next* deployment, not immediately.
 **Deployments → ⋯ → Retry deployment**, or push a commit.
+
+Doing 8.5 and 8.6 before this point is what keeps it to one
+redeploy. Both used to be set five phases later, which meant
+deploying again to pick them up.
 
 **Gate:** open `https://<W2>` in a private window. The privacy
 disclosure banner appears on first load, and the DevTools network
@@ -1273,8 +1508,8 @@ Phase 6 too.
 `check:pages-bindings` will report `R2_PUBLIC_BASE`,
 `R2_S3_ENDPOINT`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`,
 `GITHUB_OWNER`, `GITHUB_REPO` and `GITHUB_DISPATCH_TOKEN` as
-**MISSING**. That is expected — those belong to the optional
-add-ons in Phase 13. Its source of truth is
+**MISSING**. That is expected if your node publishes no video —
+they belong to 8.6. Its source of truth is
 [`scripts/lib/expected-bindings.ts`](../scripts/lib/expected-bindings.ts),
 not this document; if you're never going to run uploads or
 transcode, prune those entries so the audit reflects your node's
@@ -1328,16 +1563,18 @@ Your node works but its catalog is empty. Two ways to fill it.
 
 ## 12.1 Publish your own (the normal path)
 
-`/publish/datasets/new` in the portal. Asset uploads need Phase
-13.1 (R2 public domain + CORS) first; metadata-only drafts work
-immediately.
+`/publish/datasets/new` in the portal. Metadata-only drafts work
+immediately. Asset uploads need 8.5, and video uploads need 8.6 as
+well. If you skipped 8.5, uploads land in R2 but nothing can read
+them back; if you skipped 8.6, finalising a video returns 503. Both
+are fixable after the fact — do the step and redeploy.
 
 ## 12.2 Mirror the upstream SOS catalog
 
-Gives you ~600 datasets to look at. Note the tradeoff: those rows
-carry `vimeo:` data refs that resolve through **upstream's** video
-proxy, so their playback depends on upstream's uptime unless you
-also mirror the proxy (Reference C).
+Gives you about 200 datasets — everything upstream publishes. Note
+the tradeoff: those rows carry `vimeo:` data refs that resolve
+through **upstream's** video proxy, so their playback depends on
+upstream's uptime unless you also mirror the proxy (Reference C).
 
 ```bash
 npx tsx scripts/refresh-sos-snapshot.ts
@@ -1360,180 +1597,67 @@ and all six checks are green. **That's a complete Tier 2 node.**
 
 ---
 
-# Phase 13 — Optional add-ons
+# Phase 13 — Content-Security-Policy
 
-Independent of each other. Add what you need.
+**All tiers, and the last thing before you put the node in front of
+the public.** It used to be the bottom entry of an optional list,
+which was wrong twice over. It is hardening rather than a feature.
+And *every* fork needs it: upstream enforces its policy at the
+Cloudflare edge, and edge rules do not travel with a fork.
 
-## 13.1 R2 public domain and CORS
+It sits ahead of the optional phase deliberately. Everything from
+here to Phase 13 is work every node does; Phase 14 is the first
+thing you may genuinely skip.
 
-Needed before publisher asset uploads or the web zip-download work.
+**The repo ships no CSP.** `src/index.html` has no `<meta>` policy,
+and `public/_headers` sets `X-Content-Type-Options`,
+`Referrer-Policy` and `Permissions-Policy` but no CSP. Upstream's
+production deploy enforces a strict `connect-src` policy **at the
+Cloudflare edge** via Transform Rules — which a fork does **not**
+inherit. Your node works without one; you should still add your
+own, as an edge rule or a `Content-Security-Policy` line in
+`public/_headers`:
 
-> **Automated.** `npm run setup -- --apply --only=r2` sets the CORS
-> policy (built from your origins, so the two easy-to-mistype details
-> below cannot be got wrong) and attaches the public domain from
-> `R2_PUBLIC_BASE`. Step 4 — minting the S3 API token — stays manual
-> on purpose: automating it would need a token that can create
-> tokens.
+- `connect-src`: `'self'`, `gibs.earthdata.nasa.gov`,
+  `s3.dualstack.us-east-1.amazonaws.com` (SOS snapshot), your video
+  and caption proxies, and `W19`.
+- `img-src` / `media-src`: `'self' data: blob:`, your
+  `VITE_EARTH_ASSET_BASE` host, the SOS/CloudFront asset hosts,
+  and `W19`.
 
-1. R2 → `terraviz-assets` → **Settings → Connect Domain** → e.g.
-   `assets.<W2>`. Record as `W19`.
-2. Pages variable `R2_PUBLIC_BASE` = `https://<W19>`, both
-   environments.
-3. R2 → bucket → **Settings → CORS policy**:
+The app uses `blob:` for preview tours and screenshots — omitting
+it reproduces the "may not load data from blob:" failure. Test
+playback, VR and a tour before locking it down.
 
-```json
-[
-  {
-    "AllowedOrigins": ["https://terraviz.your-org.org"],
-    "AllowedMethods": ["GET", "HEAD"],
-    "AllowedHeaders": ["*"],
-    "ExposeHeaders": ["Content-Length", "Content-Range"],
-    "MaxAgeSeconds": 3600
-  },
-  {
-    "AllowedOrigins": ["https://terraviz.your-org.org"],
-    "AllowedMethods": ["PUT", "POST"],
-    "AllowedHeaders": ["Content-Type"],
-    "ExposeHeaders": ["ETag"],
-    "MaxAgeSeconds": 3600
-  }
-]
-```
+---
 
-R2's CORS is strict in two ways. `HEAD` must be listed explicitly,
-even though Fetch treats it as a simple method. And `Content-Range`
-must be in `ExposeHeaders` — it isn't CORS-safelisted, so the zip
-dialog's Range-GET size probe can't read it otherwise. Add
-`http://localhost:5173` for dev; add `tauri://localhost`,
-`http://tauri.localhost` and `https://tauri.localhost` to the
-GET/HEAD rule for desktop builds.
+---
 
-4. R2 → **Manage R2 API Tokens** → create a token with **Read+Write**
-   on the bucket. Record the endpoint (`W21`) and key pair (`W20`),
-   then set `R2_S3_ENDPOINT`, `R2_ACCESS_KEY_ID` and
-   `R2_SECRET_ACCESS_KEY` as Pages **secrets** on both environments.
-   These mint presigned PUT URLs server-side and verify upload
-   digests.
+# Phase 14 — Optional features
 
-## 13.2 Video transcode
+Everything here is genuinely optional: your node is complete and
+serving content without any of it. Independent of each other, so
+read the trigger and take what you want.
 
-Publisher video uploads hand off to a GitHub Actions workflow that
-runs the ffmpeg 4K/1080p/720p 2:1 spherical HLS ladder, via
-`repository_dispatch`. Both source shapes — a single `source.mp4`,
-or up to 10 000 image-sequence frames — feed the same pipeline and
-encode to **30 fps output** regardless of source rate (the tour
-engine's `frameRate` task assumes 30).
-
-**Pages side** (both environments):
-
-| Binding | Value |
+| | Do it when |
 |---|---|
-| `GITHUB_OWNER` | your fork's owner |
-| `GITHUB_REPO` | your fork's name |
-| `GITHUB_DISPATCH_TOKEN` | **Secret** — PAT with `repo` scope (or fine-grained Contents:write) on that repo. `W22`. |
+| **14.1 Feedback widget** | You ship the standalone HTML build and want its reports to reach `/publish/feedback` |
+| **14.2 Analytics export** | You want `/publish/analytics` to hold more than the 30–90 days Analytics Engine keeps |
+| **14.3 CI migrations** | You want schema applied automatically on push to `main` |
+| **14.4 Grafana** | You want ad-hoc SQL against the raw telemetry stream. 14.2 covers the normal case |
+| **14.5 Voice, events, blog, YouTube** | Per-feature. Each degrades quietly when its variables are unset |
 
-**GitHub side** (repo Settings → Secrets and variables → Actions):
-`R2_S3_ENDPOINT` (`W21`), `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY`
-(`W20`), `TERRAVIZ_SERVER` (`https://<W2>`), `CF_ACCESS_CLIENT_ID`
-(`W14`), `CF_ACCESS_CLIENT_SECRET` (`W15`), and optionally
-`CATALOG_R2_BUCKET`.
+**Four things used to be filed here and are not,** because calling
+them optional was wrong:
 
-`npm run setup -- --github-secrets` prints the exact `gh secret set`
-commands for all of them, annotated with what each is for and which
-ones your current shell can't supply. Values are emitted as `"$VAR"`
-references rather than inlined, so the script is safe to paste into a
-runbook.
+| Was | Now | Why |
+|---|---|---|
+| R2 asset storage | **8.5** | A published dataset with no readable image is not published |
+| Video transcode | **8.6** | 138 of upstream's 204 datasets are video, and an upload without it 503s |
+| Orbit chat providers | **8.7** | Not a task — Orbit already works. It is a note next to the `AI` binding |
+| Content-Security-Policy | **Phase 13** | Hardening, and every fork needs it |
 
-Both halves are required and fail closed. Missing
-`GITHUB_DISPATCH_TOKEN` → `/asset/complete` returns 503
-`github_dispatch_unconfigured`; the source bytes stay in R2 and the
-upload can be retried. Missing GitHub secrets → the workflow exits
-non-zero with a stage code (2 download, 3 encode, 4 upload, 5
-PATCH), the row stays `transcoding=1`, and the portal's
-"Transcoding…" badge is your signal.
-
-**Recovery is operator-only.** `/asset/…/complete` refuses a
-different upload while `transcoding=1` and the active-upload
-binding is set, so publishers can't self-recover. Clear the row:
-
-```sql
-UPDATE datasets SET transcoding = NULL, active_transcode_upload_id = NULL
-WHERE id = '…';
-```
-
-**Cost.** GitHub Actions' free tier (2000 min/mo, public repos)
-comfortably covers ~50 uploads/month. R2 **storage** dominates: a
-4K ladder is ~250 MB per minute of source, billed until deleted.
-Egress is zero-rated.
-
-**Local dev:** `MOCK_GITHUB_DISPATCH=true` in `.dev.vars` skips the
-dispatch while still stamping `transcoding=1`, so you can exercise
-the portal's polling surface. Refused on non-loopback hostnames.
-
-### WAF skip rule for the transcode-complete callback
-
-Access service tokens bypass Access but **not** Bot Fight Mode, the
-Managed Ruleset, or custom WAF rules. Bot Fight Mode is on by
-default from the Free plan up. If any of those are active, the
-runner's final POST to
-`/api/v1/publish/datasets/{id}/transcode-complete` gets a `Just a
-moment...` interstitial and never reaches the Worker. ffmpeg
-finishes, the HLS bundle lands in R2, and the runner exits non-zero
-at stage 5. The CLI detects the challenge HTML and prints a
-one-line pointer at this section rather than a 30 KB blob.
-
-> **Automated (opt-in).** `npm run setup -- --apply --only=waf`
-> appends this rule *and* the 13.3 feedback rule, preserving every
-> existing rule in the zone. It is deliberately excluded from a
-> default run: the rulesets API replaces a zone's whole custom-rule
-> list rather than appending, so a careless implementation deletes
-> your WAF config. The merge is a pure, tested function, and a failed
-> read aborts rather than writing. Step 2 below (plain Bot Fight
-> Mode) has no per-path override and stays manual.
-
-**Step 1 — WAF Custom Rule.** Security → WAF → Custom rules →
-Create rule, `transcode-complete service token skip`:
-
-```
-(starts_with(http.request.uri.path, "/api/v1/publish/")
-  and ends_with(http.request.uri.path, "/transcode-complete")
-  and len(http.request.headers["cf-access-client-id"][0]) > 0)
-```
-
-Action **Skip**, ticking: all remaining custom rules, all managed
-rules, all Super Bot Fight Mode rules, Browser Integrity Check,
-and Security Level.
-
-This is safe for three reasons. Only requests carrying a
-service-token id can match. Access still validates the token
-afterwards, so a forged header without the secret can't
-authenticate. And the route handler independently enforces
-`role='service'`.
-
-**Step 2 — plain Bot Fight Mode (Free/Pro).** The Skip action's
-"All Super Bot Fight Mode Rules" covers SBFM (Pro+) but not plain
-BFM, which runs zone-wide at a different layer and has no per-path
-override on Free. Options, best first:
-
-1. **Disable BFM zone-wide** (Security → Bots → Configure). For a
-   small portal where authenticated traffic dominates and the
-   public SPA is cache-served, BFM adds little over Access + the
-   role-gated routes + the Step 1 rule. Recommended on Free.
-2. **Upgrade to Pro** — SBFM *is* skippable from Step 1's rule.
-3. **Live with manual recovery** — re-issue `/transcode-complete`
-   from an authenticated browser session when it fails.
-
-**Which rule fired?** Security → Events, "Service" column:
-
-| Says | Fixed by |
-|---|---|
-| `Bot fight mode` | Step 2 |
-| `Managed challenge` | Step 1, "All managed rules" |
-| `Super Bot Fight Mode` | Step 1, SBFM checkbox |
-| `Browser Integrity Check` | Step 1, that checkbox |
-| `Security level` | Step 1, that checkbox |
-
-## 13.3 Standalone feedback widget
+## 14.1 Standalone feedback widget
 
 `POST /api/feedback` serves the standalone HTML build's widget with
 wildcard CORS and no `Origin` requirement (it also runs from
@@ -1552,7 +1676,7 @@ Rules, or custom WAF rules acting on those signals, add a skip:
 (http.request.uri.path eq "/api/feedback" and http.request.method eq "POST")
 ```
 
-Same Skip checklist as 13.2. The endpoint keeps its own abuse
+Same Skip checklist as 8.6. The endpoint keeps its own abuse
 controls (JSON-only, ~12 MB cap, 10/hour per IP). Verify from a
 cookie-less client:
 
@@ -1565,10 +1689,10 @@ curl -X POST https://<W2>/api/feedback \
 # → 200 {"ok":true,"id":"…"}   (challenge HTML means the rule isn't matching)
 ```
 
-## 13.4 Analytics long-term export
+## 14.2 Analytics long-term export
 
 Analytics Engine retains 30–90 days. The export drains each
-completed UTC day into an R2 NDJSON archive plus D1 rollups — the
+completed UTC day into an R2 newline-delimited JSON (NDJSON) archive plus D1 rollups — the
 data behind `/publish/analytics`.
 
 ```bash
@@ -1606,31 +1730,7 @@ wrangler d1 execute sphere-feedback --remote --config wrangler.toml \
   --command "SELECT day, COUNT(*) FROM analytics_daily GROUP BY day ORDER BY day"
 ```
 
-## 13.5 Orbit chat providers
-
-**Default — Cloudflare Workers AI. Nothing to configure.**
-`functions/api/chat/completions.ts` calls the `AI` binding from
-Phase 8 and streams an OpenAI-shaped SSE response;
-`functions/api/models.ts` backs the "Test Connection" button. No
-API key reaches the browser. Model choice lives in `MODEL_MAP` in
-that file.
-
-There is **no server-side proxy for third-party providers.** Older
-docs described `LLM_PROVIDER_URL` / `LLM_PROVIDER_KEY` — those env
-vars are read by nothing. To use OpenAI or a local model, set the
-API URL + key in the running app under **Tools → Orbit Settings**
-(localStorage on web, OS keychain on desktop). Because the key
-lives client-side, that path suits a single operator's browser or a
-desktop install — not a shared public deployment. Local endpoints
-(`http://localhost:11434/v1` Ollama, `:1234` LM Studio, `:8080`
-llama.cpp) only work from desktop or dev, since Pages can't reach
-your localhost.
-
-Routing Workers AI through an AI Gateway is a **code change** — the
-`AI.run()` call accepts a `gateway` option but the current code
-doesn't pass one. A gateway URL in config does nothing on its own.
-
-## 13.6 CI-applied migrations (opt-in)
+## 14.3 CI-applied migrations (opt-in)
 
 `ci.yml` can apply pending `CATALOG_DB` migrations on every push to
 `main`, just before deploy. **Off by default.** Enable by setting
@@ -1647,14 +1747,14 @@ the repo-root `migrations/`, which also holds the generated
 migration. Gated to `refs/heads/main`, because preview deploys
 share the same physical D1 as production.
 `npm run check:migrations` (in the type-check job) fails the build
-on destructive DDL unless the migration opts in with a
+on destructive schema statements (DDL) unless the migration opts in with a
 `-- destructive: reviewed` comment.
 
-## 13.7 Grafana
+## 14.4 Grafana
 
 > **Probably skip this.** The primary analytics surface is the
 > in-app `/publish/analytics` tab — privilege-gated, no external
-> service, turned on by 13.4. Grafana remains for ad-hoc AE SQL
+> service, turned on by 14.2. Grafana remains for ad-hoc AE SQL
 > against the raw stream.
 
 Four dashboard JSONs ship under `grafana/dashboards/`; see
@@ -1664,46 +1764,22 @@ to
 `https://api.cloudflare.com/client/v4/accounts/<W1>/analytics_engine/sql`,
 with `root_selector: "data"`.
 
-## 13.8 Voice, events, blog, YouTube
+## 14.5 Voice, events, blog, YouTube
 
 | Feature | Variables | Notes |
 |---|---|---|
-| Orbit voice (batch STT/TTS) | none | Runs on the `AI` binding. `KILL_VOICE=1` is the kill switch. |
+| Orbit voice (batch speech-to-text and text-to-speech) | none | Runs on the `AI` binding. `KILL_VOICE=1` is the kill switch. |
 | Realtime streaming STT | `CF_ACCOUNT_ID`, `CF_AI_GATEWAY`, `CF_AIG_TOKEN` (**secret**), optional `VOICE_STREAM_MODEL` | Opt-in. Absent any of them, `/api/voice/stream` sends a JSON error frame and the client falls back to batch Whisper. See [`ORBIT_VOICE_PLAN.md`](ORBIT_VOICE_PLAN.md) §3. |
 | Wake word | `VITE_VOICE_WAKEWORD_MODEL_URL` (build-time) | [`ORBIT_WAKEWORD.md`](ORBIT_WAKEWORD.md) |
 | YouTube media suggestions | `YOUTUBE_API_KEY` (**secret**) | Absent = source stays off, nothing errors. [`YOUTUBE_API_KEY.md`](YOUTUBE_API_KEY.md) |
 | Current events / blog | none beyond Phase 8 | Feeds console at `/publish/feeds`. [`CURRENT_EVENTS_PLAN.md`](CURRENT_EVENTS_PLAN.md) |
 
-## 13.9 Content-Security-Policy
-
-**The repo ships no CSP.** `src/index.html` has no `<meta>` policy,
-and `public/_headers` sets `X-Content-Type-Options`,
-`Referrer-Policy` and `Permissions-Policy` but no CSP. Upstream's
-production deploy enforces a strict `connect-src` policy **at the
-Cloudflare edge** via Transform Rules — which a fork does **not**
-inherit. Your node works without one; you should still add your
-own, as an edge rule or a `Content-Security-Policy` line in
-`public/_headers`:
-
-- `connect-src`: `'self'`, `gibs.earthdata.nasa.gov`,
-  `s3.dualstack.us-east-1.amazonaws.com` (SOS snapshot), your video
-  and caption proxies, and `W19`.
-- `img-src` / `media-src`: `'self' data: blob:`, your
-  `VITE_EARTH_ASSET_BASE` host, the SOS/CloudFront asset hosts,
-  and `W19`.
-
-The app uses `blob:` for preview tours and screenshots — omitting
-it reproduces the "may not load data from blob:" failure. Test
-playback, VR and a tour before locking it down.
-
----
-
-# Phase 14 — Desktop app fork (Tier 3)
+# Phase 15 — Desktop app fork (Tier 3)
 
 Three upstream-pinned values need changing. Skip entirely for a
 web-only node.
 
-**14.1 Updater endpoint + signing key.** `src-tauri/tauri.conf.json`
+**15.1 Updater endpoint + signing key.** `src-tauri/tauri.conf.json`
 hardcodes upstream's feed and public key. Leave them and your
 users' apps poll *upstream's* releases and reject anything you
 sign.
@@ -1718,7 +1794,7 @@ Paste the public half into `updater.pubkey`; point
 repo secrets `TAURI_SIGNING_PRIVATE_KEY` and
 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`.
 
-**14.2 macOS notarization (optional).** `release.yml` signs and
+**15.2 macOS notarization (optional).** `release.yml` signs and
 notarizes only when all six `APPLE_*` secrets are present
 (`APPLE_DEVELOPER_ID_CERTIFICATE_BASE64`,
 `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID`,
@@ -1726,7 +1802,7 @@ notarizes only when all six `APPLE_*` secrets are present
 build succeeds but ships unsigned, and macOS users hit the
 Gatekeeper "damaged" warning.
 
-**14.3 `VITE_API_ORIGIN`.** Desktop webviews are served from
+**15.3 `VITE_API_ORIGIN`.** Desktop webviews are served from
 `tauri://localhost`, so relative `/api/` paths don't resolve.
 `src/services/catalogSource.ts` rewrites them to an absolute
 origin, defaulting to `https://terraviz.zyra-project.org`. Set
@@ -1735,7 +1811,7 @@ origin, defaulting to `https://terraviz.zyra-project.org`. Set
 so setting it also makes your node accept its own `/dataset/<id>`
 links.
 
-**14.4 Weblate.** `sync-weblate.yml` targets upstream's Weblate
+**15.4 Weblate.** `sync-weblate.yml` targets upstream's Weblate
 project and needs `WEBLATE_TOKEN`. Disable the workflow unless you
 run your own pipeline; otherwise it fails on every push to `main`.
 
@@ -1761,21 +1837,21 @@ is [`scripts/lib/expected-bindings.ts`](../scripts/lib/expected-bindings.ts).
 | `TRUSTED_PUBLISHER_DOMAINS` | plaintext | 8 | Skip approval queue (→ `reviewer`, read-only) |
 | `NODE_ID_PRIVATE_KEY_PEM` | secret | 8 | Federation signing |
 | `PREVIEW_SIGNING_KEY` | secret | 8 | `terraviz preview` |
-| `R2_PUBLIC_BASE` | plaintext | 13.1 | Serving any R2 asset |
-| `R2_S3_ENDPOINT` | secret | 13.1 | Presigned uploads |
-| `R2_ACCESS_KEY_ID` | secret | 13.1 | Presigned uploads |
-| `R2_SECRET_ACCESS_KEY` | secret | 13.1 | Presigned uploads |
-| `GITHUB_OWNER` | plaintext | 13.2 | Video transcode |
-| `GITHUB_REPO` | plaintext | 13.2 | Video transcode |
-| `GITHUB_DISPATCH_TOKEN` | secret | 13.2 | Video transcode |
-| `ANALYTICS_R2` | R2 | 13.4 | Analytics archive |
-| `CF_ACCOUNT_ID` | plaintext | 13.4 / 13.8 | AE SQL API, voice gateway |
-| `ANALYTICS_SQL_TOKEN` | secret | 13.4 | AE SQL API |
-| `ANALYTICS_AE_DATASET` | plaintext | 13.4 | Renamed AE dataset |
-| `CF_AI_GATEWAY` | plaintext | 13.8 | Realtime STT |
-| `CF_AIG_TOKEN` | secret | 13.8 | Realtime STT |
-| `VOICE_STREAM_MODEL` | plaintext | 13.8 | STT model override |
-| `YOUTUBE_API_KEY` | secret | 13.8 | YouTube suggestions |
+| `R2_PUBLIC_BASE` | plaintext | 8.5 | Serving any R2 asset |
+| `R2_S3_ENDPOINT` | secret | 8.5 | Presigned uploads |
+| `R2_ACCESS_KEY_ID` | secret | 8.5 | Presigned uploads |
+| `R2_SECRET_ACCESS_KEY` | secret | 8.5 | Presigned uploads |
+| `GITHUB_OWNER` | plaintext | 8.6 | Video transcode |
+| `GITHUB_REPO` | plaintext | 8.6 | Video transcode |
+| `GITHUB_DISPATCH_TOKEN` | secret | 8.6 | Video transcode |
+| `ANALYTICS_R2` | R2 | 14.2 | Analytics archive |
+| `CF_ACCOUNT_ID` | plaintext | 14.2 / 14.5 | AE SQL API, voice gateway |
+| `ANALYTICS_SQL_TOKEN` | secret | 14.2 | AE SQL API |
+| `ANALYTICS_AE_DATASET` | plaintext | 14.2 | Renamed AE dataset |
+| `CF_AI_GATEWAY` | plaintext | 14.5 | Realtime STT |
+| `CF_AIG_TOKEN` | secret | 14.5 | Realtime STT |
+| `VOICE_STREAM_MODEL` | plaintext | 14.5 | STT model override |
+| `YOUTUBE_API_KEY` | secret | 14.5 | YouTube suggestions |
 | `KILL_VOICE` | plaintext | — | Voice kill switch |
 | `KILL_TELEMETRY` | plaintext | — | Telemetry kill switch (410) |
 | `FEEDBACK_ADMIN_TOKEN` | secret | 6.4 | Bearer fallback for legacy admin routes |
@@ -1807,8 +1883,8 @@ not.
 | `ci.yml` **deploy** job | `CLOUDFLARE_API_TOKEN` (`W11`), `CLOUDFLARE_ACCOUNT_ID` (`W1`); envs `production`/`preview`; rename `--project-name` to `W10` | you deploy via the dashboard Git integration (Phase 5.3) |
 | `poster.yml` | same, plus `terraviz-poster` rename; envs `poster-*` | no poster sub-site |
 | `visual-report.yml` | smoke/report/diff: nothing. Optional report deploy: the two Cloudflare secrets + a `terraviz-visual` project; optional `vars.VISUAL_DEPLOY_URL` | **keep** the gating jobs; drop only the deploy step |
-| `transcode-hls.yml` | the seven Phase 13.2 GitHub secrets | no publisher video uploads |
-| `analytics-export.yml` / `analytics-backfill.yml` | `TERRAVIZ_SERVER`, `CF_ACCESS_CLIENT_ID`, `CF_ACCESS_CLIENT_SECRET` | you skipped 13.4 |
+| `transcode-hls.yml` | the seven Phase 8.6 GitHub secrets | no publisher video uploads |
+| `analytics-export.yml` / `analytics-backfill.yml` | `TERRAVIZ_SERVER`, `CF_ACCESS_CLIENT_ID`, `CF_ACCESS_CLIENT_SECRET` | you skipped 14.2 |
 | `release.yml` / `desktop.yml` | `TAURI_SIGNING_PRIVATE_KEY` + `_PASSWORD`, 6× `APPLE_*` | web-only node |
 | `sync-weblate.yml` | `WEBLATE_TOKEN` | no translation pipeline of your own |
 | `codeql.yml`, `mobile.yml` | nothing | **keep** — fork-safe |
@@ -1870,137 +1946,7 @@ but takes `--server`, `TERRAVIZ_SERVER`, or
 
 ---
 
-# Reference D — Verification status of this guide
-
-Rewritten 2026-08-01. Honest accounting of what was actually
-exercised.
-
-**Verified by running it** (Linux, Node 22.22.2, wrangler 4.112.0):
-
-- `npm install`, `npm run dev` (SPA boots).
-- `npm run db:migrate` — all 43 catalog migrations apply clean.
-- `npm run db:seed`, `npm run gen:node-key`, and the **ordering
-  dependency between them** (Phase 1.2).
-- `wrangler pages dev` failing without Cloudflare credentials, the
-  `[ai]` binding being the cause, `experimental_remote = false`
-  *not* fixing it, and `pages dev` rejecting `--config`.
-- With `[ai]` commented out: `/api/v1/catalog`,
-  `/.well-known/terraviz.json`, `/api/v1/publish/me` (role `admin`
-  via dev bypass) and `/api/v1/search` all answering 200.
-- The `TRUSTED_PUBLISHER_DOMAINS` behaviour, read from
-  `provisioningDefaults()` and its tests.
-- The first-user admin bootstrap, read from `getOrCreatePublisher()`.
-- **The Phase 4 migration ordering**, both directions, against a
-  clean database. `CATALOG_DB` first leaves all 51 migrations
-  recorded and every table present; `FEEDBACK_DB` first exits 0 and
-  then makes `CATALOG_DB` fail with `table node_identity already
-  exists`. This is an install-stopper, and it is the order the
-  previous revision prescribed (its Step 5 applied `FEEDBACK_DB`
-  before its Step 11 applied `CATALOG_DB`).
-- `npm run setup` end to end in plan mode, and its migration step
-  under `--apply --local-migrations` against a clean database.
-- The interactive interview end to end against a scripted terminal:
-  validation and re-prompting, defaults, optional skips, the
-  missing-token warning, and the handoff report.
-
-**Modelled from documentation, not executed.** `npm run setup`
-makes these Cloudflare API calls:
-
-- Access applications, policies and service tokens.
-- The Pages project and its custom domain.
-- The R2 CORS policy and public domain.
-- The WAF ruleset entrypoint.
-- The Pages bindings PATCH.
-
-Each was written against Cloudflare's documented API. The Access
-calls were also written against what
-`functions/api/v1/_lib/access-auth.ts` proves about the resulting
-JWTs. **No live Cloudflare account was available to exercise any of
-them.**
-
-What that risk is bounded by:
-
-- Every request body is built by a pure, unit-tested function, so
-  the shape is pinned and reviewable in the diff.
-- A shape mismatch surfaces as a Cloudflare validation error naming
-  the field, not as a silent misconfiguration.
-- The R2 step prints the dashboard-paste JSON if its call fails.
-- The WAF step refuses to write when its read failed.
-- Plan mode makes no network calls at all.
-
-Run the risky steps one at a time on your first real install —
-`--only=pages`, then `--only=access`, then the rest — and check the
-dashboard between them.
-
-**Not verified — no Cloudflare account was available in this
-environment.** Four things here were reconstructed rather than
-executed: every dashboard click path, the Access application and
-service-token flows, the remote migration apply, and both Phase 10
-verification tools. Each was reconstructed from the code that
-consumes it — `expected-bindings.ts`, `verify-checks.ts`,
-`_middleware.ts`, `access-auth.ts`, `github-dispatch.ts`.
-Dashboard labels drift; if one doesn't match, trust
-the binding *name* — that's what the code reads.
-
-**Defects found and corrected from the previous revision:**
-
-1. Resource IDs were repointed (old Step 2) *before* the resources
-   were created (old Steps 5, 10) — and old Step 5 pointed back at
-   Step 2. Circular.
-2. Old Steps 12 and 13 used `$CF_ACCESS_CLIENT_ID` /
-   `$CF_ACCESS_CLIENT_SECRET`, which nothing had created. Service
-   tokens first appeared in old Step 15b, three steps later.
-3. **No step created the Access application for
-   `/api/v1/publish/**`.** Yet old Step 10 told you to configure its
-   AUD, and old Step 16 opened by claiming "Step 10's Access config
-   protected the publisher API". It hadn't.
-4. Old Step 10 asked for `NODE_ID_PRIVATE_KEY_PEM` and
-   `PREVIEW_SIGNING_KEY` before old Step 12 introduced
-   `gen:node-key`.
-5. Old Step 16b claimed `TRUSTED_PUBLISHER_DOMAINS` grants
-   `role=admin, is_admin=1`. The code grants `reviewer`,
-   `is_admin=0`. Old Step 10's table had it right — the doc
-   contradicted itself.
-6. Old Step 16b described the default as `publisher/pending`; that
-   role was renamed in `0039_publisher_roles_five.sql`. Actual
-   default is `reviewer/pending`.
-7. Old troubleshooting told you to expect `role` to report `staff`
-   or `community` — renamed in `0023_publisher_roles_two_tier.sql`.
-8. Old Step 11 hard-coded "the directory runs through `0016`"; it
-   runs through `0043`.
-9. Local setup order (`db:seed` before `gen:node-key`) was never
-   stated, and getting it wrong silently ships a placeholder key.
-10. `npm run dev:functions` cannot run on a fresh clone, contrary
-    to the mock-mode claims in `.dev.vars.example`.
-
-11. The migration order was backwards, and following it exactly makes
-    the catalog schema unapplyable. See Phase 4. (This one survived
-    into the first pass of *this* rewrite too — it only surfaced when
-    `npm run setup` ran the commands for real.)
-
-**Still open** (not fixed here, needs a code change):
-
-- `migrations/catalog-schema.sql` is a generated snapshot living
-  inside `FEEDBACK_DB`'s `migrations_dir`, which is the root cause of
-  the Phase 4 ordering trap. Moving it out of that directory (and
-  updating `db:dump-schema` plus the CI drift check) would remove the
-  hazard rather than document around it.
-
-- The `[ai]` binding blocking offline dev. `wrangler.toml` is
-  documentation-only for Pages, so removing the block would cost
-  nothing and unblock the contributor path — but that's a repo
-  change, not a doc change.
-- `functions/api/v1/_lib/env.ts`'s doc comment on
-  `TRUSTED_PUBLISHER_DOMAINS` still describes the pre-role-model
-  admin behaviour.
-- Two migrations share the number `0036`.
-- The 503 `identity_missing` error text tells operators to run
-  `npm run gen:node-key`, which does not write remote D1. It should
-  point at `terraviz init-node`.
-
----
-
-# Reference E — Troubleshooting
+# Reference D — Troubleshooting
 
 ### `npm install` fails building `better-sqlite3`
 Your Node has no precompiled binary for this version of
@@ -2022,7 +1968,8 @@ dependency here that compiles anything, so nothing else in the tree
 needs a toolchain.
 
 ### The globe has no stars, or the Earth has no specular highlight
-Your clone has Git LFS pointers where the textures should be. Check:
+Your clone has Git LFS (Large File Storage) pointers where the
+textures should be. Check:
 
 ```bash
 ls -l public/assets/skybox/nx.jpg     # ~790 KB if real, 131 bytes if a pointer
@@ -2043,14 +1990,14 @@ You skipped `npm install`, or ran it somewhere other than the
 repository root. Every `npm run` command in this guide runs from
 inside your clone, after a successful install. See §0.4.
 
-### `/api/ingest` returns 204 but nothing lands in AE
+### `/api/ingest` returns 204 but nothing lands in Analytics Engine
 The `ANALYTICS` binding is missing in the environment serving
 traffic. Check both Production and Preview.
 `functions/api/ingest.ts` reads `context.env.ANALYTICS` and
 silently skips the write when undefined.
 
 ### `/api/ingest` returns 403
-The CORS gate rejected it, for one of two reasons.
+The cross-origin (CORS) gate rejected it, for one of two reasons.
 
 1. The `Origin` header is missing. Browsers always send it; curl
    doesn't, unless you pass `-H "Origin: …"`.
@@ -2063,7 +2010,10 @@ Production but not Preview. Confirm with
 `npm run check:pages-bindings`.
 
 ### Publisher API returns 401 "Invalid or expired Access assertion"
-`ACCESS_AUD` doesn't match the application that issued the JWT.
+`ACCESS_AUD` doesn't match the application that issued the token.
+Access signs every request with a JSON Web Token (JWT), and the `aud`
+claim inside it names the application. `ACCESS_AUD` has to be that
+same audience tag.
 Re-copy `W13` from the application's Overview tab. A token minted
 for a *different* application of the same team is rejected by
 design.
@@ -2079,6 +2029,75 @@ The catalog migrations weren't applied — usually because
 `migrations apply` was given the database *name* instead of the
 binding name (Phase 4). Confirm with
 `wrangler d1 migrations list CATALOG_DB --remote`.
+
+### A Zyra run builds its frames, then every frame PUT 401s
+The workflow fires, downloads its data and renders images, and dies
+on the upload:
+
+```
+[zyra-run] frames-publish: 85 image/png frame(s), 30354195 bytes total
+[zyra-run] FAIL: frame-sequence publish → frames-publish: frame PUT
+  20260804T140000.png failed (401): <Error><Code>Unauthorized</Code>…
+```
+
+**The runner did not sign this, and your GitHub secrets are not what
+failed.** It asks your node for presigned URLs and PUTs bytes at
+them. The signing happens inside the publisher API, using the R2
+credentials you set as Pages secrets in 8.5.
+
+**Those secrets are set.** A missing `R2_S3_ENDPOINT`,
+`R2_ACCESS_KEY_ID` or `R2_SECRET_ACCESS_KEY` raises a configuration
+error, which the route returns as **503 `*_unconfigured`**. You would
+have seen `asset init failed (503)` and never reached a frame PUT.
+
+So they are set, and R2 rejected them. Cloudflare defines this exact
+code — `Unauthorized`, HTTP 401 — as **"missing or invalid
+authentication credentials"**, and the documented fix is to check the
+access key is correct and unexpired
+([R2 error codes](https://developers.cloudflare.com/r2/api/error-codes/)).
+That narrows it to three things:
+
+- The token was **deleted, rotated or expired** in R2 after you set
+  the secrets.
+- **`R2_ACCESS_KEY_ID` holds the wrong string.** R2 shows three
+  values when a token is minted: Access Key ID, Secret Access Key,
+  and a token value. Only the first two belong here.
+- **`R2_S3_ENDPOINT` belongs to a different account** than the token,
+  so the key is unknown at that host.
+
+**What it is not.** These are the usual suspects, and each fails
+with a different status — so a 401 rules them out:
+
+| Suspicion | What you would actually see |
+|---|---|
+| Token scoped to the wrong bucket | 403 — that is authorization, not authentication |
+| `R2_SECRET_ACCESS_KEY` wrong | 403 `SignatureDoesNotMatch` — the key id still resolves |
+| A different `Content-Type` sent than signed | 403 `SignatureDoesNotMatch` — it is a signed header |
+| Presigned URL expired | 403, and the 15-minute TTL is nowhere near tight for 85 frames |
+
+**You can read the key id off the URL.** These are query-string
+presigned, so the credential rides in the clear:
+
+```
+X-Amz-Credential=<access-key-id>/<YYYYMMDD>/auto/s3/aws4_request
+```
+
+Compare that against the token list in the R2 dashboard. A Pages
+secret cannot be read back, so this is the only way to see which key
+your node is actually signing with.
+
+The fix either way: mint a fresh token (8.5 step 4), set all three
+secrets again on **both** environments, and redeploy.
+
+To test the credentials first, make a signed request from your own
+shell with the same three values. Use `aws s3api put-object
+--endpoint-url "$R2_S3_ENDPOINT"` against the bucket, with the key
+pair in `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`. A 401 there
+too confirms the credentials rather than the wiring.
+
+`npm run terraviz -- migrate-r2-assets --dry-run` is **not** that
+check. It prints its plan and returns before it ever reaches the
+credential code.
 
 ### Access blocks your own `@your-org.org` account
 The policy uses **Emails** (exact match) instead of **Emails ending
@@ -2186,16 +2205,16 @@ Tools → Privacy.
   telemetry_enabled disabled --namespace-id=<W5>` (clients get 410
   + `Retry-After: 300`; `wrangler kv key delete` to resume), and
   the `KILL_TELEMETRY=1` env var. Document who can flip them.
-- **Token expiry.** If `W11` or `ANALYTICS_SQL_TOKEN` has a TTL,
+- **Token expiry.** If `W11` or `ANALYTICS_SQL_TOKEN` has an expiry (a TTL),
   put the date in a calendar. A silently expired token is a
   silently broken dashboard.
 - **Watch the first week.** Errors-by-category: a flood of
-  `network` usually means an asset CDN rate-limiting; `auth` means
-  an LLM key issue. Watch Orbit rounds/day against the free-tier
-  ceiling.
+  `network` usually means the content delivery network serving an
+  asset is rate-limiting; `auth` means a language-model key issue.
+  Watch Orbit rounds/day against the free-tier ceiling.
 - **Test your own feedback loop.** File a report through the in-app
   form and confirm it appears in `/publish/feedback`.
-- **Add a CSP** (13.9).
+- **Add a CSP** — Phase 13, if you have not already.
 
 If something here is wrong or under-documented, please open an
 issue — most of this document exists because someone hit a snag

@@ -21,6 +21,7 @@ import type {
 import { setDatasetCreditsSource } from '../ui/creditsPanel'
 import { getSharedLumaSampler, type LumaSnapshot } from './glLumaSampler'
 import { DEFAULT_DISPLAY, type ColorScaleDisplay } from './colorScaleDisplay'
+import { contourSetToGeoJson, type ContourLevel } from './datasetContours'
 import { boundsRing, greatCirclePath, type TransectEndpoints } from './datasetStats'
 import type { ColorScale } from '../types/color-scale'
 import {
@@ -1119,6 +1120,25 @@ export class MapRenderer implements GlobeRenderer {
     return { snapshot, scale: options.colorScale, options }
   }
 
+  /**
+   * Identity of the frame currently on the globe.
+   *
+   * The *same* expression `glLumaSampler` keys its snapshot cache on, so
+   * "this string changed" and "the sampler would read a different frame"
+   * are the same statement by construction rather than by coincidence.
+   *
+   * Deliberately not the `#time-label` text: that is snapped to the
+   * dataset's display interval, so several video frames can share one
+   * label, and it is hidden entirely for a dataset without start/end
+   * times — a watch built on it goes silently inert exactly when it is
+   * most needed. Costs a property read; no readback, no upload.
+   */
+  currentFrameId(): string | null {
+    const source = this.probeSource
+    if (!source) return null
+    return source instanceof HTMLVideoElement ? `${source.currentTime}` : 'static'
+  }
+
   // --- Analysed-region outline (Analyze §A3) ---
 
   private regionOutlineId: string | null = null
@@ -1149,6 +1169,73 @@ export class MapRenderer implements GlobeRenderer {
     if (!this.regionOutlineId) return
     this.removeHighlight(this.regionOutlineId)
     this.regionOutlineId = null
+  }
+
+  // --- Isolines (Analyze §A5) ---
+
+  private contourId: string | null = null
+
+  /**
+   * Draw the contour set the Analyze panel extracted.
+   *
+   * Its own source and layer rather than `highlightRegion`, for two
+   * reasons. `highlightRegion` paints one fixed colour, and a contour map
+   * needs each line drawn at its own level's colour — which is a
+   * data-driven `['get', 'color']` over one FeatureCollection, not a
+   * source per level. And it always adds a `fill` layer, which over a
+   * MultiLineString draws nothing and is pure weight.
+   *
+   * Line only, no fill, for the same reason `showRegionOutline` refuses
+   * one: a wash over the enclosed region would tint the values being
+   * measured, and on this path nothing decorative is allowed to change
+   * what a colour means. A dark halo underneath keeps a pale line legible
+   * over a pale part of the ramp — without it the lightest levels vanish
+   * into exactly the region they are describing.
+   *
+   * The geometry arrives already split at the antimeridian; see
+   * `datasetContours.splitAtSeam` for why drawing it unsplit puts a
+   * stripe across the globe.
+   */
+  showContours(levels: ContourLevel[]): void {
+    this.clearContours()
+    if (!this.map || !this.map.isStyleLoaded() || !levels.length) return
+    const data = contourSetToGeoJson(levels)
+    if (!data.features.length) return
+
+    const id = `contours-${++this.highlightCounter}`
+    const sourceId = `${id}-source`
+    this.map.addSource(sourceId, { type: 'geojson', data })
+    this.map.addLayer({
+      id: `${id}-halo`,
+      type: 'line',
+      source: sourceId,
+      paint: {
+        'line-color': 'rgba(0, 0, 0, 0.55)',
+        'line-width': 3.5,
+      },
+    })
+    this.map.addLayer({
+      id: `${id}-line`,
+      type: 'line',
+      source: sourceId,
+      paint: {
+        'line-color': ['get', 'color'],
+        'line-width': 1.5,
+      },
+    })
+    this.contourId = id
+  }
+
+  clearContours(): void {
+    if (!this.contourId || !this.map) {
+      this.contourId = null
+      return
+    }
+    const id = this.contourId
+    try { this.map.removeLayer(`${id}-line`) } catch { /* noop */ }
+    try { this.map.removeLayer(`${id}-halo`) } catch { /* noop */ }
+    try { this.map.removeSource(`${id}-source`) } catch { /* noop */ }
+    this.contourId = null
   }
 
   // --- Transect picking (Analyze §A4) ---
@@ -1627,6 +1714,7 @@ export class MapRenderer implements GlobeRenderer {
     this.clearLatLngCallbacks()
     this.clearTransect()
     this.clearRegionOutline()
+    this.clearContours()
     // The probe sampler is page-shared and deliberately NOT disposed
     // here — other panels may still be using it, and tearing down its
     // context would take their readouts with it. Dropping the source

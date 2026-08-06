@@ -22,6 +22,7 @@ import {
   type LumaHistogram,
   type RegionStats,
   type TransectSample,
+  type ZonalSample,
 } from '../services/datasetStats'
 import { lumaToValue, type ColorScale } from '../types/color-scale'
 
@@ -128,6 +129,43 @@ export function buildTransectCsvText(
     ['distance_km', 'lat', 'lon', 'value'],
   ]
   const body = samples.map((s): Cell[] => [s.distanceKm, s.lat, s.lon, s.value])
+  return `${rows(head)}\r\n${rows(body)}\r\n`
+}
+
+/**
+ * Serialise a zonal profile: one row per image row, north to south.
+ *
+ * Rows with no data are kept with an empty mean, for the same reason
+ * absent transect samples are — a latitude band nothing was measured at
+ * is a fact about the field, and dropping the row would let a reader
+ * join two latitudes that are not neighbours.
+ *
+ * `texel_count` rides along per row because it is what makes a mean
+ * interpretable: near a pole, or at the edge of a region, a row can be
+ * a handful of texels wide, and a mean over four texels does not
+ * deserve the same weight as one over four thousand. The chart cannot
+ * show that; the file can.
+ */
+export function buildZonalCsvText(
+  samples: readonly ZonalSample[],
+  scale: ColorScale,
+  ctx: CsvContext,
+): string {
+  const step = Math.abs(scale.vmax - scale.vmin) / 255
+  const withData = samples.reduce((n, s) => n + (s.mean == null ? 0 : 1), 0)
+  const head: Cell[][] = [
+    ['dataset', ctx.datasetTitle ?? ''],
+    ['region', ctx.scopeLabel],
+    ['units', scale.units ?? ''],
+    ['value_min', scale.vmin],
+    ['value_max', scale.vmax],
+    ['quantisation_step', step],
+    ['rows', samples.length],
+    ['rows_with_data', withData],
+    [],
+    ['lat', 'mean', 'texel_count'],
+  ]
+  const body = samples.map((s): Cell[] => [s.lat, s.mean, s.count])
   return `${rows(head)}\r\n${rows(body)}\r\n`
 }
 

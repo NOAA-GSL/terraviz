@@ -93,13 +93,22 @@ export const PHASES: Phase[] = [
     duration: '≈20 min',
     aside: 'all tiers · nothing here is automatable',
     intro: [
-      'An account, a registrar, and a login. Get these four values written down and everything after this has something to stand on.',
+      'An account, a registrar, a login, and your own copy of the repository. Get these five values written down and everything after this has something to stand on.',
     ],
     produces: ['ORG', 'TRUST', 'W1', 'W2', 'W3'],
     body: [
       {
+        kind: 'trap',
+        title: 'Fork the repository first — {{W3}} is your fork, not upstream',
+        body: [
+          'Phase 3 rewrites `wrangler.toml` with your resource IDs, Phase 5 hands your remote to Cloudflare Pages, and Phase 8.6 runs the transcode workflow in your repo. A clone of upstream does all of that fine right up until you have IDs to push and nowhere to push them.',
+          'Use GitHub\u2019s Fork button and keep every default. Then enable workflows in the Actions tab — GitHub creates forks with Actions off, so the transcode and deploy workflows never fire until you do.',
+        ],
+      },
+      {
         code: `node --version          # must be >= 22
 npm install -g wrangler
+git lfs install         # once per machine, before the clone
 wrangler login          # opens a browser
 wrangler whoami         # confirms the account
 
@@ -247,7 +256,9 @@ wrangler d1 migrations apply FEEDBACK_DB --remote   # ends in a harmless error`,
     minTier: 1,
     duration: '≈25 min',
     aside: 'all tiers · Tier 1 finishes here',
-    intro: [],
+    intro: [
+      'Push your fork, then create the Pages project that builds from it and attach your hostname. This is the phase where your node gets a public address.',
+    ],
     produces: ['W10', 'W11'],
     automated: { code: 'npm run setup -- --apply --only=pages' },
     automatedNote: [
@@ -328,17 +339,20 @@ openssl rand -base64 32    # W18`,
   },
   {
     n: 8,
-    label: 'Wire bindings',
-    title: 'Wire bindings, variables and secrets',
+    label: 'Wire it up',
+    title: 'Wire bindings, storage and transcode',
     minTier: 1,
-    duration: '≈20 min by hand, or one command',
+    duration: '≈35 min by hand, mostly one command',
     aside: 'all tiers',
     intro: [
       'Everything referenced here now exists. This is roughly forty dashboard interactions by hand, which is exactly why it is worth letting the tool do it.',
+      'It also includes asset storage — the R2 public origin, its CORS policy and an S3 token — and video transcode. Both used to sit in the optional phase, after the phase that tells you to publish, while being prerequisites for publishing. Without R2 an uploaded thumbnail has no readable URL; without transcode, finalising a video upload returns 503 and rolls back. Do them here and one redeploy picks everything up.',
+      '138 of the upstream catalog\u2019s 204 datasets are video, so transcode is the common case rather than an extra. Skip it only for a node publishing images, tours, metadata, or a mirror of upstream.',
     ],
     automated: { code: 'npm run setup -- --apply --only=bindings' },
     automatedNote: [
       'Writes every entry to both environments in a single call, from the same manifest the audit checks against — so it cannot produce a deploy that Phase 10 then calls broken. Anything it has no value for is listed as skipped, with the reason, rather than written blank.',
+      '`npm run setup -- --apply --only=r2` does the storage half: it builds the CORS policy from your origins, so the two details that are easy to mistype cannot be, and attaches the public domain. Minting the S3 API token stays manual on purpose — automating it would need a token that can create tokens.',
     ],
     body: [
       {
@@ -348,10 +362,24 @@ openssl rand -base64 32    # W18`,
           'The environment selector is at the top of the page and forgetting it is the most common cutover failure — "works on preview, breaks on production", or the reverse. Phase 10\u2019s audit catches it, but only if you run it.',
         ],
       },
+      {
+        kind: 'trap',
+        title: 'There is a WAF trap in video transcode',
+        body: [
+          'Access service tokens bypass Access but not Bot Fight Mode. The runner\u2019s final callback gets an interstitial, ffmpeg finishes, the bundle lands, and the job still exits non-zero. You need a WAF skip rule on that path — and on the Free plan, plain Bot Fight Mode has no per-path override, so disabling it zone-wide is the recommended option.',
+        ],
+      },
+      {
+        kind: 'trap',
+        title: "R2's CORS is strict in two ways",
+        body: [
+          '`HEAD` must be listed explicitly, even though Fetch treats it as a simple method. And `Content-Range` must be in `ExposeHeaders` — it is not CORS-safelisted, so the download dialog cannot read a file\u2019s size without it. Let the tool build the policy and neither can be mistyped.',
+        ],
+      },
     ],
     gate: 'Bindings take effect on the *next* deployment — **Deployments → ⋯ → Retry deployment**, or push a commit. Then open your node in a private window: the privacy disclosure banner appears on first load, and the network tab shows 204 responses from `/api/ingest`.',
     gateShort: 'Your node can reach its database, storage and AI. Check in a private window.',
-    anchor: 'phase-8--wire-bindings-variables-and-secrets',
+    anchor: 'phase-8--wire-bindings-storage-and-transcode',
   },
   {
     n: 9,
@@ -448,7 +476,7 @@ npm run terraviz -- verify-deploy --server https://{{W2}}`,
     duration: '≈15 min',
     aside: 'Tier 2+ · the last required phase',
     intro: [
-      'Your node works but its catalog is empty. Publish your own from `/publish/datasets/new` — metadata-only drafts work immediately, asset uploads need Phase 13.1 first. Or mirror the upstream catalog for ~600 datasets to look at.',
+      'Your node works but its catalog is empty. Publish your own from `/publish/datasets/new` — metadata-only drafts work immediately, asset uploads need Phase 8.5, and video needs 8.6 as well. Or mirror the upstream catalog, which is about 200 datasets.',
     ],
     body: [
       {
@@ -474,21 +502,37 @@ npm run terraviz -- import-snapshot \\
   },
   {
     n: 13,
-    label: 'Optional add-ons',
-    title: 'Optional add-ons',
-    minTier: 2,
-    duration: 'optional',
-    aside: 'Tier 2+ · independent of each other',
+    label: 'Add a CSP',
+    title: 'Content-Security-Policy',
+    minTier: 1,
+    duration: '≈20 min',
+    aside: 'all tiers · before you go public',
     intro: [
-      'Add what you need, when you need it. Nothing here blocks a working node — but the first one is required before publishers can upload assets.',
+      '**The repo ships no CSP.** Upstream enforces one at the Cloudflare edge, and edge rules do not travel with a fork — so every fork is unprotected until its operator adds one. Your node works without it; do it anyway before the node faces the public.',
+      'Remember `blob:` — the app uses it for preview tours and screenshots, and omitting it reproduces the "may not load data from blob:" failure. Test playback, VR and a tour before locking it down.',
     ],
-    gate: 'Whichever add-ons you chose report healthy.',
-    gateShort: 'The extras you chose are working.',
-    anchor: 'phase-13--optional-add-ons',
-    linkText: 'All nine add-ons in full',
+    gate: 'Playback, VR and a tour all still work with the policy live.',
+    gateShort: 'A CSP is in place and nothing broke.',
+    anchor: 'phase-13--content-security-policy',
   },
   {
     n: 14,
+    label: 'Optional features',
+    title: 'Optional features',
+    minTier: 2,
+    duration: 'optional',
+    aside: 'Tier 2+ · take what you want',
+    intro: [
+      'Everything up to here is work every node does. This is the first phase you can genuinely skip \u2014 the node is complete and serving content without any of it. All five are independent — read the trigger, take what you want, and come back for the rest whenever.',
+      'Four things used to be filed here and are not, because calling them optional was wrong. R2 asset storage is now 8.5, video transcode 8.6, and Orbit chat providers 8.7 — that last one was never a task at all. The Content-Security-Policy is Phase 13, because every fork needs one.',
+    ],
+    gate: 'Each feature you turned on answers: the widget POST returns 200, the export writes an NDJSON object, `/publish/analytics` shows yesterday.',
+    gateShort: 'The optional features you chose are working.',
+    anchor: 'phase-14--optional-features',
+    linkText: 'All five, in full',
+  },
+  {
+    n: 15,
     label: 'Desktop app',
     title: 'Desktop app fork',
     minTier: 3,
@@ -496,15 +540,48 @@ npm run terraviz -- import-snapshot \\
     duration: '≈1 h',
     aside: 'Tier 3 only',
     intro: [
-      "Three upstream-pinned values need changing. Leave them and your users' apps poll *upstream's* releases and reject anything you sign.",
+      "Three upstream-pinned values need changing, and each fails in its own way if you leave it. Skip this phase entirely for a web-only node.",
     ],
-    gate: 'A signed desktop build that talks to your API origin, not upstream.',
+    body: [
+      {
+        kind: 'trap',
+        title: 'The updater endpoint and signing key (15.1)',
+        body: [
+          "`src-tauri/tauri.conf.json` hardcodes upstream's release feed and public key. Leave them and your users' apps poll *upstream's* releases and reject every build you sign — the update path looks fine until the day you ship one.",
+          'Generate a key pair, paste the public half into `updater.pubkey`, point `updater.endpoints` at your own fork\u2019s `latest.json`, and set `TAURI_SIGNING_PRIVATE_KEY` plus its password as repo secrets.',
+        ],
+        code: { code: 'npm run tauri signer generate -- -w "<password>"' },
+      },
+      {
+        kind: 'trap',
+        title: '`VITE_API_ORIGIN` (15.3)',
+        body: [
+          "Desktop webviews are served from `tauri://localhost`, so relative `/api/` paths do not resolve. The app rewrites them to an absolute origin that defaults to **upstream's**. Set `VITE_API_ORIGIN=https://{{W2}}` at build time or your desktop app talks to somebody else's backend.",
+          'The same value drives deep-link host recognition, so setting it is also what makes your node accept its own `/dataset/…` links.',
+        ],
+      },
+      {
+        kind: 'note',
+        title: 'Two more that only bite later',
+        body: [
+          '**macOS notarization (15.2)** is optional but conspicuous: `release.yml` signs only when all six `APPLE_*` secrets are present. Without them the build succeeds and ships unsigned, and macOS users meet the Gatekeeper "damaged" warning.',
+          '**Weblate (15.4)** — `sync-weblate.yml` targets upstream\u2019s translation project. Disable the workflow unless you run your own, or it fails on every push to `main`.',
+        ],
+      },
+    ],
+    gate: 'A signed desktop build that talks to your API origin, not upstream. Install it and confirm the update check hits your fork\u2019s releases.',
     gateShort: 'Your desktop app talks to your node, not the original one.',
-    anchor: 'phase-14--desktop-app-fork-tier-3',
+    anchor: 'phase-15--desktop-app-fork-tier-3',
+    linkText: 'All four steps, in full',
   },
 ]
 
-/** The 13.x add-ons, summarised. Full text stays in the Markdown. */
+/**
+ * Every optional feature, with its trigger. Not a curated subset:
+ * the card used to show four of nine, so the ids read as an
+ * arbitrary sample rather than a list — 13.2 sitting next to 13.7
+ * with nothing between them. If it is in Phase 13, it is here.
+ */
 export const ADDONS: Array<{
   id: string
   title: string
@@ -513,30 +590,44 @@ export const ADDONS: Array<{
   extra?: string
 }> = [
   {
-    id: '13.1',
-    title: 'R2 public domain and CORS',
-    flag: '--only=r2',
-    body: "Needed before publisher asset uploads or zip downloads work. R2's CORS is strict in two ways. HEAD must be listed explicitly, even though Fetch treats it as a simple method. And Content-Range must be exposed, or the download dialog cannot read a file's size. The tool builds the policy from your origins so neither can be mistyped. **Minting the S3 API token stays manual on purpose** — automating it would need a token that can create tokens.",
-  },
-  {
-    id: '13.2',
-    title: 'Video transcode',
-    flag: '--github-secrets',
-    body: 'Video uploads hand off to a GitHub Actions workflow running the ffmpeg spherical HLS ladder. Both halves — Pages bindings and GitHub secrets — are required and fail closed. Free-tier Actions covers roughly 50 uploads a month; R2 storage is what actually costs, at ~250 MB per minute of 4K source.',
+    id: '14.1',
+    title: 'Standalone feedback widget',
+    flag: 'if you ship it',
+    body: 'The standalone HTML build posts to `/api/feedback`, which takes wildcard CORS and no Origin so it works from `file://`. It needs a WAF skip rule: the widget runs without cookies and its fallback is a `mailto:` draft, so an interstitial silently swallows every submission rather than failing loudly.',
     extra:
-      '**There is a WAF trap here.** Access service tokens bypass Access but not Bot Fight Mode. The runner\u2019s final callback gets an interstitial, ffmpeg finishes, the bundle lands, and the job still exits non-zero. You need a WAF skip rule on that path — and on the Free plan, plain Bot Fight Mode has no per-path override, so disabling it zone-wide is the recommended option.',
+      '**What it takes:** one WAF skip rule on `POST /api/feedback`, then a `curl` from a cookie-less client to confirm you get `200 {"ok":true}` rather than challenge HTML. The bindings it needs — `FEEDBACK_DB`, and `CATALOG_R2` for screenshots — you already set in Phase 8.',
   },
   {
-    id: '13.4',
+    id: '14.2',
     title: 'Analytics long-term export',
     flag: 'recommended',
     body: 'Analytics Engine retains 30–90 days. A daily job drains each completed day into an archive bucket plus rollups — that is the data behind the in-app analytics tab. Run the backfill once while AE still remembers.',
+    extra:
+      '**What it takes:** `wrangler r2 bucket create terraviz-analytics`, bind it as `ANALYTICS_R2`, set `CF_ACCOUNT_ID` plus an `ANALYTICS_SQL_TOKEN` secret scoped to Account Analytics → Read, redeploy, then enable the daily workflow — forks start with scheduled workflows off. Run the backfill once from the Actions tab while Analytics Engine still remembers. Two commands verify it.',
   },
   {
-    id: '13.9',
-    title: 'Content-Security-Policy',
-    flag: 'worth doing',
-    body: '**The repo ships no CSP.** Upstream enforces one at the Cloudflare edge, which a fork does not inherit. Your node works without one; you should still add your own. Remember `blob:` — the app uses it for preview tours and screenshots. Test playback, VR and a tour before locking it down.',
+    id: '14.3',
+    title: 'CI-applied migrations',
+    flag: 'opt-in',
+    body: 'Lets `ci.yml` apply pending catalog migrations on every push to `main`, just before deploy. Off unless you set `ENABLE_D1_MIGRATE=1` — and only after granting your API token D1 Edit, because the step runs before the deploy and a token without it blocks the whole thing.',
+    extra:
+      "**What it takes:** grant your API token Account → D1 → Edit, *then* set the repo variable `ENABLE_D1_MIGRATE=1`. That order matters — the step runs before the deploy, so a token without D1 access blocks the whole deploy rather than just the migration. Editing a token's permissions keeps its value, so nothing needs rotating.",
+  },
+  {
+    id: '14.4',
+    title: 'Grafana',
+    flag: 'probably skip',
+    body: 'The in-app analytics tab is the primary surface and needs no external service. Grafana is here for ad-hoc SQL against the raw stream; there is no native Analytics Engine plugin, so the shipped dashboards post SQL over HTTP through Infinity.',
+    extra:
+      '**What it takes:** import the four dashboard JSONs from `grafana/dashboards/` and point an Infinity datasource at the Analytics Engine SQL endpoint. There is no native plugin, so the dashboards post SQL over HTTP with `root_selector: "data"`.',
+  },
+  {
+    id: '14.5',
+    title: 'Voice, events, blog, YouTube',
+    flag: 'per-feature',
+    body: 'Orbit voice runs on the `AI` binding with nothing set. Realtime streaming STT, the wake word and YouTube media suggestions each want their own variables. Each degrades quietly when those are absent rather than erroring, so turning one on is additive and turning it off is safe.',
+    extra:
+      '**What it takes:** nothing for Orbit voice or the events/blog feeds — both already run. Realtime streaming STT wants three variables plus an AI Gateway token, the wake word wants a build-time model URL, and YouTube suggestions want an API key. Each is independent, and each stays off rather than erroring when its variables are absent.',
   },
 ]
 
@@ -604,7 +695,7 @@ export const WEEK_ONE = [
   },
   {
     title: 'Add a Content-Security-Policy',
-    body: "The repo ships none, and upstream's edge policy does not travel with a fork. See Phase 13.9 — and test playback, VR and a tour before you lock it down.",
+    body: "The repo ships none, and upstream's edge policy does not travel with a fork. See Phase 13.7 — and test playback, VR and a tour before you lock it down.",
     wide: true,
   },
 ]
@@ -674,11 +765,11 @@ export const WORKSHEET: WorksheetField[] = [
   { id: 'W16', label: 'NODE_ID_PRIVATE_KEY_PEM', phase: 7, token: '‹node-private-key›', placeholder: 'from .dev.vars', note: 'Back this up. Regenerating it means re-provisioning your identity.', secret: true, origin: 'generated', consumedBy: [8], minTier: 2 },
   { id: 'W17', label: 'Node public key', phase: 7, token: 'ed25519:‹public-key›', placeholder: 'ed25519:…', note: 'Written to node-public-key.txt by gen:node-key.', origin: 'generated', consumedBy: [9], minTier: 2 },
   { id: 'W18', label: 'PREVIEW_SIGNING_KEY', phase: 7, token: '‹preview-signing-key›', placeholder: 'openssl rand -base64 32', secret: true, origin: 'generated', consumedBy: [8], minTier: 2 },
-  { id: 'W19', label: 'R2 public origin', phase: 13, token: 'assets.‹your-hostname›', placeholder: 'https://assets.your-org.org', note: 'Optional — Phase 13.1.', origin: 'asked', fromTool: 'r2PublicBase', validator: 'url', consumedBy: [13], minTier: 2 },
-  { id: 'W20', label: 'R2_ACCESS_KEY_ID', phase: 13, token: '‹r2-access-key›', placeholder: 'R2 S3 API token', note: 'Optional — Phase 13.1.', secret: true, origin: 'shown-once', consumedBy: [13], minTier: 2 },
-  { id: 'W20b', label: 'R2_SECRET_ACCESS_KEY', phase: 13, token: '‹r2-secret-key›', placeholder: 'shown once at mint time', note: 'Optional — Phase 13.1. Paired with the access key id.', secret: true, origin: 'shown-once', consumedBy: [13], minTier: 2 },
-  { id: 'W21', label: 'R2 S3 endpoint', phase: 13, token: '‹r2-s3-endpoint›', placeholder: 'https://….r2.cloudflarestorage.com', note: 'Optional — Phase 13.1.', origin: 'shown-once', consumedBy: [13], minTier: 2 },
-  { id: 'W22', label: 'GITHUB_DISPATCH_TOKEN', phase: 13, token: '‹github-dispatch-token›', placeholder: 'PAT with repo scope', note: 'Optional — Phase 13.2 video transcode.', secret: true, origin: 'generated', consumedBy: [13], minTier: 2 },
+  { id: 'W19', label: 'R2 public origin', phase: 8, token: 'assets.‹your-hostname›', placeholder: 'https://assets.your-org.org', note: 'Phase 8.5 — needed for asset uploads.', origin: 'asked', fromTool: 'r2PublicBase', validator: 'url', consumedBy: [8], minTier: 2 },
+  { id: 'W20', label: 'R2_ACCESS_KEY_ID', phase: 8, token: '‹r2-access-key›', placeholder: 'R2 S3 API token', note: 'Phase 8.5.', secret: true, origin: 'shown-once', consumedBy: [8], minTier: 2 },
+  { id: 'W20b', label: 'R2_SECRET_ACCESS_KEY', phase: 8, token: '‹r2-secret-key›', placeholder: 'shown once at mint time', note: 'Phase 8.5. Paired with the access key id.', secret: true, origin: 'shown-once', consumedBy: [8], minTier: 2 },
+  { id: 'W21', label: 'R2 S3 endpoint', phase: 8, token: '‹r2-s3-endpoint›', placeholder: 'https://….r2.cloudflarestorage.com', note: 'Phase 8.5.', origin: 'shown-once', consumedBy: [8], minTier: 2 },
+  { id: 'W22', label: 'GITHUB_DISPATCH_TOKEN', phase: 8, token: '‹github-dispatch-token›', placeholder: 'PAT with repo scope', note: 'Phase 8.6 — needed for video uploads.', secret: true, origin: 'generated', consumedBy: [8], minTier: 2 },
 ]
 
 export const ORIGIN_LABELS: Record<Origin, { label: string; hint: string }> = {
@@ -700,8 +791,8 @@ export const MAP_READINGS = [
     body: 'Six values born, none consumed until Phase 3. That gap is deliberate — it is what lets Phase 3 and Phase 8 ask for IDs you already have written down instead of sending you back to the dashboard mid-edit.',
   },
   {
-    title: 'The add-ons are self-contained',
-    body: 'Everything Phase 13 produces, Phase 13 also consumes — no bar leaves it. That is why the add-ons are genuinely optional, and why you can come back for them a month later without unpicking anything.',
+    title: 'Phase 13 has no bars at all now',
+    body: 'It used to own five — the R2 origin, its key pair and endpoint, and the GitHub dispatch token. All five moved to Phase 8. Neither asset storage nor video transcode was really optional: a dataset with no readable image is not published, and 138 of upstream\u2019s 204 datasets are video. What is left in Phase 13 needs nothing written down, which is a fair test of whether something belongs there.',
   },
 ]
 
