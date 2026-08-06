@@ -420,6 +420,10 @@ ls -l public/assets/skybox/nx.jpg     # ~790 KB, not 131 bytes
 few seconds; finding out later means a deployed node whose globe has
 no stars and no clue why.
 
+That checks one file because it is all you can check before
+installing anything. Once `npm install` below has finished,
+`npm run check:lfs` reports every LFS file at once.
+
 `npm install` is not optional and is not only for contributors. It
 puts the tooling every later `npm run` command needs on your path.
 Skip it and the first one fails with something like
@@ -1978,12 +1982,26 @@ ls -l public/assets/skybox/nx.jpg     # ~790 KB if real, 131 bytes if a pointer
 131 bytes is a text file naming the object it stands for. Fix it
 with `git lfs install` then `git lfs pull`, rebuild, redeploy.
 
-Nothing catches this on your behalf: `npm run build` copies
-`public/` verbatim without looking inside, so the build reports no
-errors and the pointers ship to `dist/` under their `.jpg` names.
-If you deploy from GitHub Actions, note that
-`actions/checkout` does **not** fetch LFS unless you pass
-`lfs: true` — `ci.yml` and `poster.yml` already do.
+`npm run check:lfs` reports every one of them at once, with the
+repair, so you do not have to guess which files to look at:
+
+```bash
+npm run check:lfs
+```
+
+It is advisory and exits 0, because a build that skips LFS on
+purpose is a legitimate thing to do. Add `--strict` to make it a
+gate in your own workflow.
+
+The build will not tell you: `npm run build` copies `public/`
+verbatim without looking inside, so it reports no errors and the
+pointers ship to `dist/` under their `.jpg` names.
+
+Deploying from GitHub Actions? `actions/checkout` does **not**
+fetch LFS unless you pass `lfs: true`. Both `ci.yml` and
+`poster.yml` already pass it. `ci.yml`'s deploy also runs
+`check:lfs --strict` straight after the checkout, so a missing
+texture stops the deploy rather than reaching your visitors.
 
 ### `npm run …` says `'tsx' is not recognized`
 You skipped `npm install`, or ran it somewhere other than the
