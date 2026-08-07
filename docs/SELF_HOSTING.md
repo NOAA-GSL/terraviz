@@ -569,42 +569,29 @@ Then start the Functions dev server:
 npm run dev:functions   # http://localhost:8788
 ```
 
-> ### ⚠️ Known blocker: `dev:functions` needs Cloudflare credentials
+> ### This step needs no Cloudflare account
 >
-> On a fresh clone this fails with:
+> Phase 1 runs entirely on your laptop. Every binding is served
+> from `.wrangler/` on local disk, and `.dev.vars` sets
+> `MOCK_AI=true` so the paths that would call Workers AI use a
+> local mock. You do not need `wrangler login` until Phase 2.
 >
+> **To exercise the real Workers AI** — Orbit chat, voice, live
+> embeddings rather than the mock — sign in and use the `:ai`
+> variant instead:
+>
+> ```bash
+> wrangler login
+> npm run dev:functions:ai   # same server, plus --ai AI
 > ```
-> ✘ [ERROR] Failed to start the remote proxy session
->   Could not start remote dev session. No credentials found…
-> ```
 >
-> **Cause.** `wrangler.toml` declares an `[ai]` binding. Wrangler
-> runs Workers AI bindings in *remote* mode unconditionally. So
-> `wrangler pages dev` opens an authenticated proxy session to
-> Cloudflare before it will serve anything — even though
-> `.dev.vars` sets `MOCK_AI=true` precisely so you don't need the
-> real service. Setting `experimental_remote = false` on the
-> `[ai]` block does not suppress it, and `pages dev` rejects
-> `--config`, so you can't point it at a stripped-down file.
->
-> **Two workarounds, pick one:**
->
-> 1. **`wrangler login` first** (or export `CLOUDFLARE_API_TOKEN`).
->    The proxy session opens, everything else still runs locally
->    against `.wrangler/`. Simplest if you already have an account.
-> 2. **Comment out the `[ai]` block in `wrangler.toml`** while you
->    work locally. `MOCK_AI=true` covers every code path that
->    would have used it. This is the only option if you want a
->    genuinely offline dev loop.
->
->    ```toml
->    # [ai]
->    # binding = "AI"
->    ```
->
->    Nothing in the deploy depends on this block — **Pages reads
->    its bindings from the dashboard, not from `wrangler.toml`**
->    (see Phase 8). Don't commit the change.
+> That one binding is the exception: wrangler can only run Workers
+> AI against Cloudflare, never locally, so `dev:functions:ai`
+> opens an authenticated proxy session and fails without
+> credentials. `wrangler.toml` therefore does not declare `[ai]`,
+> and the flag is how you opt in. Everything else stays local
+> either way. See the comment at the top of `wrangler.toml`, and
+> Phase 8 for wiring `AI` on the deployed node.
 
 Before starting, seed `.dev.vars` from the template:
 

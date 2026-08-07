@@ -147,11 +147,11 @@ npm run gen:node-key  # 3. keypair, and stamps its public half
         },
       },
       {
-        kind: 'trap',
-        title: 'Known blocker · dev:functions needs credentials',
+        kind: 'note',
+        title: 'No Cloudflare account needed yet',
         body: [
-          'On a fresh clone, `npm run dev:functions` fails with "Could not start remote dev session. No credentials found." The cause: `wrangler.toml` declares an `[ai]` binding, and wrangler runs those in remote mode unconditionally — even though `MOCK_AI=true` exists precisely so you do not need the real service.',
-          '**Two fixes, pick one.** Run `wrangler login` first — the proxy session opens and everything else still runs locally. Or comment out the `[ai]` block while you work, which is the only route to a genuinely offline dev loop. Nothing in the deploy depends on it; Pages reads its bindings from the dashboard, not from this file. Do not commit the change.',
+          'Phase 1 runs entirely on your laptop. Every binding is served from `.wrangler/` on local disk, and `.dev.vars` sets `MOCK_AI=true` so the paths that would call Workers AI use a local mock. You do not need `wrangler login` until Phase 2.',
+          'To exercise the real Workers AI — Orbit chat, voice, live embeddings — sign in and run `npm run dev:functions:ai` instead. That adds the `AI` binding, which wrangler can only run against Cloudflare rather than locally, so it is the one thing here that needs credentials.',
         ],
       },
       {
