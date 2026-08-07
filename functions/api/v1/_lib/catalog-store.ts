@@ -197,9 +197,36 @@ export interface NodeIdentityRow {
 }
 
 /**
+ * The operator-facing half of a 503 `identity_missing`.
+ *
+ * Shared because six endpoints raise this and every one of them
+ * carried its own copy of the same sentence — which is how all six
+ * came to name a command that cannot fix it. `npm run gen:node-key`
+ * generates a keypair and *updates* `node_identity.public_key`; it
+ * does not insert the row, and it reaches only the local
+ * `.wrangler/` SQLite file. Told to run it, an operator on a
+ * deployed node changes nothing and the 503 persists, and a
+ * contributor locally gets "No node_identity row found in local D1"
+ * and an exit code of 0.
+ *
+ * The commands that actually create the row are `terraviz init-node`
+ * remotely (it writes through the publisher API, so it needs only
+ * the Phase 6.3 service token) and `npm run db:seed` locally. Both
+ * are named because the same code answers in both places.
+ *
+ * Reaches a publisher through the error card's `<details>`
+ * disclosure, which prints the raw body for exactly this reason.
+ */
+export const IDENTITY_MISSING_MESSAGE =
+  'Node identity has not been provisioned. On a deployed node run ' +
+  '`npm run terraviz -- init-node` (docs/SELF_HOSTING.md Phase 9). ' +
+  'For local development `npm run db:seed` inserts the row.'
+
+/**
  * The single-row catalog identity. Returns null on a fresh
- * deployment that hasn't run `npm run gen:node-key` yet (Commit D);
- * the read endpoints surface that as a 503 with a clear message.
+ * deployment whose `node_identity` row has never been written —
+ * see `IDENTITY_MISSING_MESSAGE` for what writes it. The read
+ * endpoints surface that as a 503 with a clear message.
  */
 export async function getNodeIdentity(db: D1Database): Promise<NodeIdentityRow | null> {
   return db

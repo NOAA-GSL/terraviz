@@ -62,7 +62,11 @@ describe('node-identity check', () => {
     })
     const out = await findCheck('node-identity').run({ ...baseDeps, fetchImpl })
     expect(out.status).toBe('fail')
-    expect(out.detail).toMatch(/gen:node-key/)
+    // Must name a command that provisions the row on a *deployed*
+    // node. `gen:node-key` only writes local files and the local D1,
+    // so the previous hint left the operator stuck.
+    expect(out.detail).toMatch(/init-node/)
+    expect(out.detail).not.toMatch(/gen:node-key/)
   })
 
   it('fails on non-200', async () => {

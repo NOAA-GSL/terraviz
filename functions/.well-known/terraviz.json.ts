@@ -29,7 +29,7 @@
  */
 
 import { CatalogEnv } from '../api/v1/_lib/env'
-import { getNodeIdentity } from '../api/v1/_lib/catalog-store'
+import { getNodeIdentity, IDENTITY_MISSING_MESSAGE } from '../api/v1/_lib/catalog-store'
 import { computeEtag } from '../api/v1/_lib/snapshot'
 
 const CACHE_CONTROL = 'public, max-age=300, stale-while-revalidate=600'
@@ -78,7 +78,7 @@ export const onRequestGet: PagesFunction<CatalogEnv> = async context => {
     return jsonError(
       503,
       'identity_missing',
-      'Node identity has not been provisioned. Run `npm run gen:node-key`.',
+      IDENTITY_MISSING_MESSAGE,
     )
   }
 
