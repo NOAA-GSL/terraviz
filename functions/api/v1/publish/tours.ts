@@ -64,8 +64,8 @@ export const onRequestPost: PagesFunction<CatalogEnv> = async context => {
     return jsonError(403, 'forbidden_role', 'Creating tours requires an authoring role.')
   }
   // See publish/datasets.ts — the createTour SQL embeds the
-  // node_identity row id as `origin_node`, so a fresh deploy that
-  // has no node_identity row would crash with a NOT NULL error.
+  // node_identity row id as `origin_node`, so running this before
+  // that row is written would crash with a NOT NULL error.
   // Surface as 503 identity_missing instead.
   const identity = await getNodeIdentity(context.env.CATALOG_DB!)
   if (!identity) {
