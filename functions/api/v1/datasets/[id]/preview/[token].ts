@@ -38,6 +38,7 @@ import {
   type DatasetRow,
   getDecorations,
   getNodeIdentity,
+  IDENTITY_MISSING_MESSAGE,
 } from '../../../_lib/catalog-store'
 import { serializeDataset } from '../../../_lib/dataset-serializer'
 import { makeDataRefResolver } from '../../../_lib/data-ref-resolver'
@@ -112,7 +113,7 @@ export const onRequestGet: PagesFunction<CatalogEnv, Params> = async context => 
     return jsonError(
       503,
       'identity_missing',
-      'Node identity has not been provisioned. Run `npm run gen:node-key`.',
+      IDENTITY_MISSING_MESSAGE,
     )
   }
   if (!row) return jsonError(404, 'not_found', `Dataset ${id} not found.`)

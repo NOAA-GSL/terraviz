@@ -17,7 +17,7 @@
 import type { CatalogEnv } from '../_lib/env'
 import type { PublisherData } from './_middleware'
 import { writeDatasetAudit } from '../_lib/audit-store'
-import { getNodeIdentity } from '../_lib/catalog-store'
+import { getNodeIdentity, IDENTITY_MISSING_MESSAGE } from '../_lib/catalog-store'
 import {
   canMutateDataset,
   createDataset,
@@ -95,7 +95,7 @@ export const onRequestPost: PagesFunction<CatalogEnv> = async context => {
   }
   // The mutation embeds the node_identity row id as `origin_node`
   // via `(SELECT node_id FROM node_identity LIMIT 1)`. If a
-  // contributor hits POST before running `gen:node-key`, that
+  // contributor hits POST before seeding node_identity, that
   // SELECT returns NULL and the INSERT fails with a NOT NULL
   // constraint error — surface as 503 identity_missing instead so
   // the operator gets the fix-it hint rather than a stack trace.
@@ -104,7 +104,7 @@ export const onRequestPost: PagesFunction<CatalogEnv> = async context => {
     return jsonError(
       503,
       'identity_missing',
-      'Node identity has not been provisioned. Run `npm run gen:node-key`.',
+      IDENTITY_MISSING_MESSAGE,
     )
   }
   let body: unknown

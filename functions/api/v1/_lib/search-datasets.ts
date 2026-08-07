@@ -178,8 +178,8 @@ export async function searchDatasets(
   // through as-is; a missing peer_id matches all peers.
   //
   // The builder returns `'unresolvable'` when the caller asked for
-  // `'local'` but no node identity row exists yet (fresh deploy
-  // pre-`gen:node-key`). Falling through with no filter would
+  // `'local'` but no node identity row exists yet (a deploy that has
+  // not run `terraviz init-node`). Falling through with no filter would
   // broaden the search to all peers — exactly the opposite of
   // local-only — so short-circuit to an empty result instead.
   const baseFilter = await buildVectorizeFilter(env, options.filters)

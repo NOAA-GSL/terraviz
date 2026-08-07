@@ -49,7 +49,11 @@
 
 import { CatalogEnv } from '../../_lib/env'
 import { parseScheduleSeconds } from '../../_lib/workflow-schedule'
-import { getNodeIdentity, getPublicDataset } from '../../_lib/catalog-store'
+import {
+  getNodeIdentity,
+  getPublicDataset,
+  IDENTITY_MISSING_MESSAGE,
+} from '../../_lib/catalog-store'
 import { isConfigurationError } from '../../_lib/errors'
 import { streamPlaybackUrl } from '../../_lib/stream-store'
 import { computeEtag } from '../../_lib/snapshot'
@@ -433,7 +437,7 @@ export const onRequestGet: PagesFunction<CatalogEnv, 'id'> = async context => {
     return jsonError(
       503,
       'identity_missing',
-      'Node identity has not been provisioned. Run `npm run gen:node-key`.',
+      IDENTITY_MISSING_MESSAGE,
     )
   }
   if (!row) return jsonError(404, 'not_found', `Dataset ${id} not found.`)
