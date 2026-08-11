@@ -9,13 +9,30 @@
  *
  * ## Why they are fetched rather than committed
  *
- * 18.5 MB across eleven files is small for a CDN and large for a git
- * repository, and LFS has already proved a poor fit for assets a build
- * silently needs: a clone without `git lfs pull` produces text files
- * wearing `.jpg` names, the build passes, the deploy passes, and the
- * globe comes up missing its stars. Fetching into a gitignored
- * directory has neither failure mode — the file is either there or the
- * fetch failed loudly.
+ * Committing them means LFS, whether or not anyone intends it:
+ * `.gitattributes` sends every `*.jpg` and `*.png` through the LFS
+ * filter at any depth, and the three exemptions cover `public/*.png`
+ * and the Tauri icons, not this directory. `git check-attr` on any
+ * file here reports `filter: lfs`.
+ *
+ * Two reasons that is the wrong destination.
+ *
+ * **It moves the bandwidth problem rather than solving it.** GitHub
+ * charges LFS bandwidth to the *parent* repository — "forking and
+ * pulling a repository counts against the parent repository's
+ * bandwidth usage" — and `ci.yml`, `poster.yml` and `desktop.yml` all
+ * check out with `lfs: true`. So every fork's CI run would draw 18.5 MB
+ * from upstream's 10 GiB monthly allowance, which is the same leeching
+ * this change exists to end, wearing a different vendor's name. It is
+ * also worse in kind: a CDN degrades under load, while an exhausted
+ * LFS quota fails the checkout outright and breaks every fork at once.
+ *
+ * **It fails silently when it fails.** A clone without `git lfs pull`
+ * produces text files wearing `.jpg` names; the build passes, the
+ * deploy passes, and the globe comes up missing its stars. That is why
+ * `check-lfs.ts` exists, and it is advisory. Fetching into a gitignored
+ * directory has neither failure mode — the file is there, or the fetch
+ * stopped with a filename and a reason.
  *
  * ## Why they are not left on upstream's CDN
  *
