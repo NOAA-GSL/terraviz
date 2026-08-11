@@ -114,7 +114,3 @@ scripts/luma-range-check/out/
 # exported bundle is a deliverable, never committed.
 export-out/
 __pycache__/
-
-# Fetched by `npm run fetch:basemaps` (postinstall). 18.5 MB of Earth
-# textures, served same-origin from the deploy — see scripts/lib/basemaps.ts.
-public/assets/basemaps/
