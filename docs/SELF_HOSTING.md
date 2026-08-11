@@ -171,8 +171,8 @@ itself where it is known and not secret.
 ── Wherever your build runs
    → VITE_API_ORIGIN = https://terraviz.example.org
    · VITE_EARTH_ASSET_BASE
-       from: nothing — the Earth textures ship in your own build now.
-             Set it only to serve them from a CDN instead.
+       from: nothing — the Earth textures ship in your own build
+       (set it only to serve them from a CDN instead)
 
 ── GitHub → Settings → Secrets and variables → Actions
    → CF_ACCESS_CLIENT_SECRET
@@ -816,7 +816,7 @@ Changing one later requires a rebuild, not just a redeploy.
 |---|---|---|
 | `VITE_BUILD_CHANNEL` | `public` | or `internal` / `canary` |
 | `VITE_TELEMETRY_ENABLED` | `true` | |
-| `VITE_EARTH_ASSET_BASE` | *(unset)* | Leave it. The Earth textures are fetched into your own build at install time and served from your domain. Set it only to put them on a CDN instead. |
+| `VITE_EARTH_ASSET_BASE` | *(unset)* | Leave it. The Earth textures are committed to the repo, so your build ships them and serves them from your domain. Set it only to put them on a CDN instead. |
 | `VITE_API_ORIGIN` | `https://` + `W2` | Only needed for desktop builds (Phase 15), harmless to set now. |
 | `VITE_DEFAULT_UI_SCALE` | *(unset)* | `1.5` suits kiosks. Clamped to [0.5, 2.0]; a visitor's own choice always wins. |
 
@@ -1883,7 +1883,7 @@ quietly dependent on upstream infrastructure.
 
 | Env var | Default | What it is | Change it when |
 |---|---|---|---|
-| `VITE_EARTH_ASSET_BASE` | *(unset — served from your own origin)* | Earth basemap textures (diffuse / night lights / normal / borders) for the photoreal Earth and 2D overlays — loaded by **every** node. | **Nothing to do.** `npm install` fetches the eleven files into `public/assets/basemaps/`, so your build serves them itself. Set this only to move them to a CDN. |
+| `VITE_EARTH_ASSET_BASE` | *(unset — served from your own origin)* | Earth basemap textures (diffuse / night lights / normal / borders) for the photoreal Earth and 2D overlays — loaded by **every** node. | **Nothing to do.** The eleven files are committed under `public/assets/basemaps/`, so your clone has them and your build serves them itself — no install-time fetch, and it works air-gapped. Set this only to move them to a CDN. |
 | `VITE_VIDEO_PROXY_BASE` | `https://video-proxy.zyra-project.org/video` | Resolves **legacy SOS** `vimeo:` data refs into HLS/MP4. | Only if you ran `import-snapshot` and want video independent of upstream. The proxy worker isn't in this repo. |
 | `VITE_CAPTION_PROXY_BASE` | `https://video-proxy.zyra-project.org/captions` | CORS shim for legacy `sos.noaa.gov` `.srt` captions. | Same. |
 | `TERRAVIZ_DOCS_URL` | `https://github.com/zyra-project/terraviz/blob/main/docs/SELF_HOSTING.md` | Base for the 19 links the `/setup` console makes into this guide (17 anchored per phase). Read at **build** time by `npm run build:setup-page`. | Once your fork's copy of this guide diverges from upstream's. Set it to your own blob URL — including the branch, if yours isn't `main` — and rebuild. |

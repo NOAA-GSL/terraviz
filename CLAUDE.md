@@ -107,7 +107,6 @@ npm run build        # tokens + tsc + vite build
 npm run type-check   # tsc --noEmit (must pass before committing)
 npm run test         # vitest run
 npm run tokens       # regenerate src/styles/tokens.css from tokens/*.json
-npm run fetch:basemaps  # pull the Earth textures into public/assets/basemaps/
 npm run setup        # provision a self-hosted node (plan by default)
 npm run setup -- --interactive   # guided, with instructions + validation
 npm run setup -- --manual        # the prerequisites no API can do for you
@@ -126,14 +125,15 @@ npm run screenshots:smoke   # gating interaction tests (search, Orbit, nav)
 > `npm install`, and by `npm run build`. Run `npm run tokens` manually
 > if you edit any file under `tokens/`.
 
-> **Note:** `public/assets/basemaps/` is fetched, not committed —
-> 18.5 MB of Earth textures pulled by `postinstall` via
-> `npm run fetch:basemaps` and served same-origin from the deploy.
-> They are gitignored for the reason LFS handled badly: a clone
-> missing them used to produce text files wearing `.jpg` names and
-> ship them. If the globe renders untextured, run the fetch. Setting
-> `VITE_EARTH_ASSET_BASE` serves them from a CDN instead and skips
-> the fetch entirely. See `scripts/lib/basemaps.ts`.
+> **Note:** `public/assets/basemaps/` is committed — 18.5 MB of
+> Earth textures stored as ordinary git blobs and served same-origin
+> from the deploy. They carry a `.gitattributes` exemption from the
+> `*.jpg` / `*.png` LFS catch-all, which is deliberate and explained
+> in the comment there: LFS bills the **parent** repository for every
+> fork's checkout, and a clone without `git lfs pull` yields text
+> files wearing `.jpg` names that build and deploy green. Plain blobs
+> arrive with the clone and work air-gapped. Setting
+> `VITE_EARTH_ASSET_BASE` serves them from a CDN instead.
 
 ### Module map
 

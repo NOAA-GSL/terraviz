@@ -58,9 +58,10 @@ export const CAPTION_PROXY_BASE = normalizeBase(
  * lights, normal map, and country-borders PNG. Consumers append
  * `/earth_diffuse_4096.jpg`, `/country-borders-black-8192.png`, etc.
  *
- * Same-origin by default. `npm run fetch:basemaps` puts the eleven
- * files under `public/assets/basemaps/` at install time, so a build
- * serves them from the node's own domain with nothing configured.
+ * Same-origin by default. The eleven files are committed under
+ * `public/assets/basemaps/`, so a build serves them from the node's
+ * own domain with nothing configured, no install-time network, and
+ * nothing that can be missing when the globe first paints.
  *
  * This used to default to upstream's CloudFront distribution, which
  * meant every fork's visitors pulled the Earth from upstream's
@@ -69,7 +70,8 @@ export const CAPTION_PROXY_BASE = normalizeBase(
  * table applying to every node, and the only one with no tooling.
  *
  * Override with `VITE_EARTH_ASSET_BASE` to serve them from a CDN
- * instead; setting it also skips the fetch. See `scripts/lib/basemaps.ts`.
+ * instead — an optimisation now, not a workaround. `.gitattributes`
+ * carries the note on why these are plain blobs rather than LFS.
  */
 export const EARTH_ASSET_BASE = normalizeBase(
   import.meta.env.VITE_EARTH_ASSET_BASE,
