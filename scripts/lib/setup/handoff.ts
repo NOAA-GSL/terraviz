@@ -103,8 +103,8 @@ export function buildHandoff(state: SetupState, opts: HandoffOptions = {}): Hand
       {
         name: 'VITE_EARTH_ASSET_BASE',
         status: 'optional',
-        source: 'your own CDN, after mirroring the Earth basemap textures',
-        why: 'left unset, every page load pulls basemaps from upstream',
+        source: 'nothing — the Earth textures ship in your own build',
+        why: 'set it only to serve them from a CDN instead',
       },
     ],
   })

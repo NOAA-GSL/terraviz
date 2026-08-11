@@ -16,3 +16,22 @@
 public/*.png            -filter -diff -merge
 src-tauri/icons/*.png   -filter -diff -merge
 src-tauri/gen/**/*.png  -filter -diff -merge
+
+# The Earth basemap textures are deliberately plain blobs too,
+# for a different reason than the icons above. Every node loads
+# them — they are the globe's surface, not an optional extra — so
+# how they fail matters more than the 18.5 MB they cost.
+#
+# LFS fails them twice. GitHub bills LFS bandwidth to the *parent*
+# repository, so every fork's CI checkout would draw on upstream's
+# quota — the same leeching that serving them from upstream's CDN
+# used to cause, wearing a different vendor's name. And a clone
+# without `git lfs pull` produces text files wearing `.jpg` names:
+# the build passes, the deploy passes, and the globe comes up
+# missing its stars.
+#
+# Plain blobs arrive with the clone, work air-gapped, need no
+# override variable, and cannot show up as pointer stubs. The
+# price is carrying them in history, which is why they are 2048 /
+# 4096 / 8192 and not larger.
+public/assets/basemaps/** -filter -diff -merge

@@ -171,7 +171,8 @@ itself where it is known and not secret.
 ── Wherever your build runs
    → VITE_API_ORIGIN = https://terraviz.example.org
    · VITE_EARTH_ASSET_BASE
-       from: your own content delivery network (CDN), after mirroring the Earth basemap textures
+       from: nothing — the Earth textures ship in your own build
+       (set it only to serve them from a CDN instead)
 
 ── GitHub → Settings → Secrets and variables → Actions
    → CF_ACCESS_CLIENT_SECRET
@@ -876,7 +877,7 @@ variable at all — they ship in your own build.
 |---|---|---|
 | `VITE_BUILD_CHANNEL` | `public` | or `internal` / `canary` |
 | `VITE_TELEMETRY_ENABLED` | `true` | |
-| `VITE_EARTH_ASSET_BASE` | your CDN | **Recommended.** Defaults to upstream's CloudFront. See Reference C. |
+| `VITE_EARTH_ASSET_BASE` | *(unset)* | Leave it. The Earth textures are committed to the repo, so your build ships them and serves them from your domain. Set it only to put them on a CDN instead. |
 | `VITE_API_ORIGIN` | `https://` + `W2` | Only needed for desktop builds (Phase 15), harmless to set now. |
 | `VITE_DEFAULT_UI_SCALE` | *(unset)* | `1.5` suits kiosks. Clamped to [0.5, 2.0]; a visitor's own choice always wins. |
 
@@ -1658,9 +1659,10 @@ own, as an edge rule or a `Content-Security-Policy` line in
 - `connect-src`: `'self'`, `gibs.earthdata.nasa.gov`,
   `s3.dualstack.us-east-1.amazonaws.com` (SOS snapshot), your video
   and caption proxies, and `W19`.
-- `img-src` / `media-src`: `'self' data: blob:`, your
-  `VITE_EARTH_ASSET_BASE` host, the SOS/CloudFront asset hosts,
-  and `W19`.
+- `img-src` / `media-src`: `'self' data: blob:`, the SOS/CloudFront
+  asset hosts, and `W19`. The Earth basemap textures need no entry —
+  they are served from your own origin, so `'self'` already covers
+  them. Add a host here only if you set `VITE_EARTH_ASSET_BASE`.
 
 The app uses `blob:` for preview tours and screenshots — omitting
 it reproduces the "may not load data from blob:" failure. Test
@@ -1954,7 +1956,7 @@ quietly dependent on upstream infrastructure.
 
 | Env var | Default | What it is | Change it when |
 |---|---|---|---|
-| `VITE_EARTH_ASSET_BASE` | `https://d3sik7mbbzunjo.cloudfront.net/terraviz/basemaps` | Earth basemap textures (diffuse / night lights / normal / borders) for the photoreal Earth and 2D overlays — loaded by **every** node. | **Any independent node.** Mirror the static `.jpg`/`.png` files to your own bucket and point here. |
+| `VITE_EARTH_ASSET_BASE` | *(unset — served from your own origin)* | Earth basemap textures (diffuse / night lights / normal / borders) for the photoreal Earth and 2D overlays — loaded by **every** node. | **Nothing to do.** The eleven files are committed under `public/assets/basemaps/`, so your clone has them and your build serves them itself — no install-time fetch, and it works air-gapped. Set this only to move them to a CDN. |
 | `VITE_VIDEO_PROXY_BASE` | `https://video-proxy.zyra-project.org/video` | Resolves **legacy SOS** `vimeo:` data refs into HLS/MP4. | Only if you ran `import-snapshot` and want video independent of upstream. The proxy worker isn't in this repo. |
 | `VITE_CAPTION_PROXY_BASE` | `https://video-proxy.zyra-project.org/captions` | CORS shim for legacy `sos.noaa.gov` `.srt` captions. | Same. |
 | `TERRAVIZ_DOCS_URL` | `https://github.com/zyra-project/terraviz/blob/main/docs/SELF_HOSTING.md` | Base for the 19 links the `/setup` console makes into this guide (17 anchored per phase). Read at **build** time by `npm run build:setup-page`. | Once your fork's copy of this guide diverges from upstream's. Set it to your own blob URL — including the branch, if yours isn't `main` — and rebuild. |
