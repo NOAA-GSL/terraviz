@@ -405,6 +405,45 @@ no API key is used — the semantic pass runs on the host session.
 
 ---
 
+## Waiting in tests
+
+**Wait for a signal, never for a number of event-loop turns.** Use
+`until()` from [`src/test-utils.ts`](src/test-utils.ts):
+
+```ts
+await until(() => fetchFn.mock.calls.length >= 2, 'the /asset mint')
+```
+
+`npm run check:tick-drain` (in the `type-check` chain) fails on the
+banned shape — a loop whose body awaits a timer:
+
+```ts
+for (let i = 0; i < 10; i++) await new Promise(r => setTimeout(r, 0))
+```
+
+The count is a guess about how long an async chain takes. It holds on
+an idle machine and fails on a loaded CI runner, against whichever
+unrelated PR is open that day — which teaches people to re-run rather
+than read. Raising it moves the threshold instead of removing it.
+
+Two things to get right when converting one:
+
+- **Anchor on a signal weaker than the assertion.** Waiting for
+  exactly what you are about to assert makes the assertion vacuous and
+  turns a useful diff into a timeout. Wait for the chain to *finish*
+  (a callback fired, an element present), then assert the specifics.
+- **A negative assertion needs a positive anchor.** `expect(x).not
+  .toHaveBeenCalled()` after a wait only means something if the wait
+  proves the chain reached its end state.
+
+A single un-looped `await new Promise(r => setTimeout(r, 0))` is
+allowed and not flagged — yielding one turn to let resolved microtasks
+settle is bounded, unlike guessing a count. For a test that genuinely
+must bound elapsed time, `// tick-drain-exempt: <reason>` on the same
+line, reason mandatory — same convention as `i18n-exempt:`.
+
+---
+
 ## Visual testing & reporting
 
 A Playwright-driven tool captures the real UI to catch visual and

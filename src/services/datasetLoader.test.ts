@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { displayDatasetInfo } from './datasetLoader'
 import type { Dataset } from '../types'
+import { until } from '../test-utils'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -185,9 +186,15 @@ describe('displayDatasetInfo', () => {
     ]
 
     displayDatasetInfo(target, catalog, onLoad)
-    // The lexical list renders synchronously in catalog order (A, B);
-    // drain the async semantic enhancement (fetch → json → re-render).
-    for (let i = 0; i < 6; i++) await new Promise(r => setTimeout(r, 0))
+    // The lexical list renders synchronously in catalog order (A, B).
+    // The semantic enhancement replaces those nodes, so waiting for the
+    // first one to be detached is the re-render signal — deliberately
+    // weaker than the ordering assertion below, which still does the work.
+    const lexicalFirst = document.querySelector('.info-related a[data-dataset-id]')!
+    await until(
+      () => !document.contains(lexicalFirst),
+      'the semantic re-render to replace the lexical list',
+    )
 
     const ids = Array.from(document.querySelectorAll('.info-related a[data-dataset-id]')).map(
       l => l.getAttribute('data-dataset-id'),
@@ -394,7 +401,15 @@ describe('displayDatasetInfo', () => {
 })
 
 describe('displayDatasetInfo — "In the news"', () => {
-  const flush = async () => { for (let i = 0; i < 4; i++) await new Promise(r => setTimeout(r, 0)) }
+  // `displayDatasetInfo` renders the "In the news" slot synchronously and
+  // empty; `renderInTheNews` then either fills it (events) or removes it
+  // (none). Either outcome ends the wait, which keeps this weaker than
+  // every assertion below — including the removed-placeholder one.
+  const newsSettled = async (): Promise<void> =>
+    until(() => {
+      const slot = document.querySelector('.info-in-the-news-section')
+      return slot === null || slot.innerHTML !== ''
+    }, 'the In the news slot to be filled or removed')
   const NEWS_EVENT = {
     id: 'E1',
     title: 'Marine heatwave off the coast',
@@ -420,7 +435,7 @@ describe('displayDatasetInfo — "In the news"', () => {
   it('renders an "In the news" section when the dataset has approved events', async () => {
     stubFetchWithEvents([NEWS_EVENT])
     displayDatasetInfo(makeDataset({ id: 'ds-news' }), [], vi.fn())
-    await flush()
+    await newsSettled()
     const body = document.getElementById('info-body')!
     const section = body.querySelector('.info-in-the-news-section')
     expect(section).not.toBeNull()
@@ -432,14 +447,14 @@ describe('displayDatasetInfo — "In the news"', () => {
   it('removes the placeholder when the dataset has no events (graceful absence)', async () => {
     stubFetchWithEvents([])
     displayDatasetInfo(makeDataset({ id: 'ds-quiet' }), [], vi.fn())
-    await flush()
+    await newsSettled()
     expect(document.getElementById('info-body')!.querySelector('.info-in-the-news-section')).toBeNull()
   })
 
   it('renders a "View on globe" button when the event has a place/time', async () => {
     stubFetchWithEvents([NEWS_EVENT])
     displayDatasetInfo(makeDataset({ id: 'ds-news' }), [], vi.fn(), vi.fn())
-    await flush()
+    await newsSettled()
     const body = document.getElementById('info-body')!
     expect(body.querySelector('.info-news-locate')).not.toBeNull()
     // The out-of-range note ships hidden until a click reports it.
@@ -449,7 +464,7 @@ describe('displayDatasetInfo — "In the news"', () => {
   it('omits the button for an event with neither geometry nor time', async () => {
     stubFetchWithEvents([{ ...NEWS_EVENT, occurredStart: undefined, geometry: {} }])
     displayDatasetInfo(makeDataset({ id: 'ds-news' }), [], vi.fn(), vi.fn())
-    await flush()
+    await newsSettled()
     expect(document.getElementById('info-body')!.querySelector('.info-news-locate')).toBeNull()
   })
 
@@ -457,7 +472,7 @@ describe('displayDatasetInfo — "In the news"', () => {
     stubFetchWithEvents([NEWS_EVENT])
     const onNav = vi.fn(() => ({ navigated: true, time: 'seeked' as const }))
     displayDatasetInfo(makeDataset({ id: 'ds-news' }), [], vi.fn(), onNav)
-    await flush()
+    await newsSettled()
     ;(document.querySelector('.info-news-locate') as HTMLButtonElement).click()
     expect(onNav).toHaveBeenCalledTimes(1)
     expect(onNav).toHaveBeenCalledWith(expect.objectContaining({ id: 'E1' }))
@@ -467,7 +482,7 @@ describe('displayDatasetInfo — "In the news"', () => {
     stubFetchWithEvents([NEWS_EVENT])
     const onNav = vi.fn(() => ({ navigated: true, time: 'out-of-range' as const }))
     displayDatasetInfo(makeDataset({ id: 'ds-news' }), [], vi.fn(), onNav)
-    await flush()
+    await newsSettled()
     const btn = document.querySelector('.info-news-locate') as HTMLButtonElement
     const note = btn.parentElement!.querySelector('.info-news-note') as HTMLElement
     expect(note.hidden).toBe(true)
@@ -479,7 +494,7 @@ describe('displayDatasetInfo — "In the news"', () => {
     stubFetchWithEvents([NEWS_EVENT])
     const onNav = vi.fn(() => ({ navigated: true, time: 'seeked' as const }))
     displayDatasetInfo(makeDataset({ id: 'ds-news' }), [], vi.fn(), onNav)
-    await flush()
+    await newsSettled()
     const btn = document.querySelector('.info-news-locate') as HTMLButtonElement
     btn.click()
     const note = btn.parentElement!.querySelector('.info-news-note') as HTMLElement
