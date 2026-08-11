@@ -875,8 +875,8 @@ variable at all — they ship in your own build.
 
 | Variable | Value | Notes |
 |---|---|---|
-| `VITE_BUILD_CHANNEL` | `public` | or `internal` / `canary` |
-| `VITE_TELEMETRY_ENABLED` | `true` | |
+| `VITE_BUILD_CHANNEL` | *(unset)* | Already `public`. Set it only for an `internal` or `canary` build. |
+| `VITE_TELEMETRY_ENABLED` | *(unset)* | Already on. `false` is the only value that changes anything, for a telemetry-free build. |
 | `VITE_EARTH_ASSET_BASE` | *(unset)* | Leave it. The Earth textures are committed to the repo, so your build ships them and serves them from your domain. Set it only to put them on a CDN instead. |
 | `VITE_API_ORIGIN` | `https://` + `W2` | Only needed for desktop builds (Phase 15), harmless to set now. |
 | `VITE_DEFAULT_UI_SCALE` | *(unset)* | `1.5` suits kiosks. Clamped to [0.5, 2.0]; a visitor's own choice always wins. |
