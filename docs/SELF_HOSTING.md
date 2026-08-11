@@ -859,9 +859,10 @@ a working default. But `VITE_*` values are baked into the bundle
 at build time, so setting one later means a rebuild rather than
 just a redeploy. Cheaper to decide now.
 
-The one worth setting is `VITE_EARTH_ASSET_BASE`: left alone, it
-serves the Earth textures from upstream CDN rather than from
-yours.
+`VITE_API_ORIGIN` is the one most likely to be wanted later:
+desktop builds and deep-link host recognition read it, and adding
+it afterwards means a rebuild. The Earth textures need no
+variable at all — they ship in your own build.
 
 > `VITE_*` is a naming convention, not a Cloudflare product. Vite
 > is the bundler that builds this app, and it copies variables

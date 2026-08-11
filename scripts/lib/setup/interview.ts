@@ -510,7 +510,7 @@ export const MANUAL_STEPS: ManualStep[] = [
         note: '`VITE_*` is a naming convention, not a product. Vite is the bundler that builds this app, and it copies variables with that prefix into the JavaScript it emits. That is why they belong wherever the build runs — by the time a visitor loads the page, the values are already inside the file being served.',
       },
       {
-        note: 'None of them is required — the build succeeds with all of them unset, so this is tuning rather than a gate. §5.2 of the guide lists them with their values. The one worth setting is `VITE_EARTH_ASSET_BASE`: left alone, it serves the Earth textures from upstream CDN rather than from yours.',
+        note: 'None of them is required — the build succeeds with all of them unset, so this is tuning rather than a gate. §5.2 of the guide lists them with their values. `VITE_API_ORIGIN` is the one most likely to be wanted later: desktop builds and deep-link host recognition read it. The Earth textures need no variable at all — they ship in your own build.',
       },
       'Option A — let Cloudflare build. In Workers & Pages, open your project, then Settings, then Builds, then Connect to Git.',
       {
