@@ -853,9 +853,15 @@ authorise, pick `W3`, then:
 - Build output directory: `dist`
 - Root directory: *(empty)*
 
-**Build-time environment variables** — set these *before* the first
-build. `VITE_*` values are baked into the bundle at build time.
-Changing one later requires a rebuild, not just a redeploy.
+**Build-time environment variables.** None of these is required —
+the build succeeds with all of them unset, and each falls back to
+a working default. But `VITE_*` values are baked into the bundle
+at build time, so setting one later means a rebuild rather than
+just a redeploy. Cheaper to decide now.
+
+The one worth setting is `VITE_EARTH_ASSET_BASE`: left alone, it
+serves the Earth textures from upstream CDN rather than from
+yours.
 
 > `VITE_*` is a naming convention, not a Cloudflare product. Vite
 > is the bundler that builds this app, and it copies variables
@@ -900,9 +906,9 @@ through the first one; you never start from the GitHub side.
   `CLOUDFLARE_ACCOUNT_ID` (`W1`). Change every
   `--project-name terraviz` to `W10`. Set the repo **Variable**
   `TERRAVIZ_SERVER` to `https://<W2>`. And do *not* connect the Git
-  integration. Take this one if the build needs a secret you won't
-  put in the Cloudflare dashboard, or if CI already gates deploys
-  on tests.
+  integration. Take this one if you want deploys gated on the tests
+  your fork already runs, or would rather not grant Cloudflare
+  access to the repository.
 
 A token used only by CI needs **Account → Cloudflare Pages → Edit**
 and nothing else. Add **Account → D1 → Edit** if you enable CI

@@ -372,6 +372,40 @@ describe('MANUAL_STEPS', () => {
     ).toEqual([])
   })
 
+  /**
+   * A `§N.M` pointing into the guide has to land on a real section.
+   *
+   * The Git-connect step tells the reader that §5.2 lists the
+   * `VITE_*` variables, because duplicating that table here would
+   * give it two copies to drift apart. That trade only holds while
+   * the pointer is right — a stale one is worse than no pointer,
+   * since GitHub answers a missing fragment with the top of the
+   * document and the reader concludes the list does not exist.
+   *
+   * Subsections are written two ways: `## 8.5 …` headings for most
+   * phases, and `**15.1 …**` bold labels inside Phase 15. Both count.
+   */
+  it('points its section references at sections that exist', () => {
+    const guide = readFileSync(
+      resolve(dirname(fileURLToPath(import.meta.url)), '../../../docs/SELF_HOSTING.md'),
+      'utf8',
+    )
+    const sections = new Set([
+      ...[...guide.matchAll(/^#{2,3} (\d+\.\d+)\b/gm)].map(m => m[1]),
+      ...[...guide.matchAll(/^\*\*(\d+\.\d+) /gm)].map(m => m[1]),
+    ])
+    expect(sections.size, 'no subsections parsed — did the guide restructure?')
+      .toBeGreaterThan(10)
+
+    const dangling = MANUAL_STEPS.flatMap(s =>
+      s.steps
+        .flatMap(l => [...lineText(l).matchAll(/§(\d+\.\d+)/g)].map(m => m[1]))
+        .filter(ref => !sections.has(ref))
+        .map(ref => `${s.id} → §${ref}`),
+    )
+    expect(dangling, 'SELF_HOSTING.md has no such subsection').toEqual([])
+  })
+
   it('renders a step with its heading, rationale and link', () => {
     const text = renderManualStep(MANUAL_STEPS[0], 1)
     expect(text).toContain('1. ')

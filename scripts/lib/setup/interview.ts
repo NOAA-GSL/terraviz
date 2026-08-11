@@ -509,6 +509,9 @@ export const MANUAL_STEPS: ManualStep[] = [
       {
         note: '`VITE_*` is a naming convention, not a product. Vite is the bundler that builds this app, and it copies variables with that prefix into the JavaScript it emits. That is why they belong wherever the build runs — by the time a visitor loads the page, the values are already inside the file being served.',
       },
+      {
+        note: 'None of them is required — the build succeeds with all of them unset, so this is tuning rather than a gate. §5.2 of the guide lists them with their values. The one worth setting is `VITE_EARTH_ASSET_BASE`: left alone, it serves the Earth textures from upstream CDN rather than from yours.',
+      },
       'Option A — let Cloudflare build. In Workers & Pages, open your project, then Settings, then Builds, then Connect to Git.',
       {
         note: 'Set the `VITE_*` variables in the dashboard afterwards, under the same Settings tab. Cloudflare rebuilds on every push to your default branch.',
@@ -516,7 +519,7 @@ export const MANUAL_STEPS: ManualStep[] = [
       'Option B — keep Direct Upload and build in CI. Set the `VITE_*` variables in the CI job instead, then deploy the finished directory.',
       { code: 'wrangler pages deploy dist/ --project-name <your-project>' },
       {
-        note: 'Take A if you want pushes to deploy themselves and would rather not maintain a workflow. Take B if the build needs a secret you will not put in the Cloudflare dashboard, or if CI already gates deploys on tests. A is the shorter path and the one most nodes want.',
+        note: '`npm run setup` already made you a Direct Upload project, so B is keeping what you have and A is converting it. Take A if you want a push to deploy itself and would rather not maintain a workflow — that is most nodes. Take B if you want deploys gated on the tests your fork already runs, or would rather not grant Cloudflare access to the repository.',
       },
       {
         note: 'Cloudflare moves this menu occasionally. If Builds is not where this says, look for Git repository or Connect to Git anywhere in the project settings — the wording changes, the capability does not.',
