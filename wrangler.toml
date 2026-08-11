@@ -1,12 +1,34 @@
 # Cloudflare Pages configuration
-# The AI binding gives Pages Functions access to Workers AI models
-# at no extra cost on the free tier (~10k requests/day).
 
 name = "terraviz"
 compatibility_date = "2024-12-01"
 
-[ai]
-binding = "AI"
+# Workers AI — deliberately NOT declared here.
+#
+# `AI` is a real production binding. The Orbit chat proxy, voice
+# STT/TTS, dataset embeddings, event enrichment and blog drafting
+# all call `env.AI`, at no extra cost on the free tier (~10k
+# requests/day). It is wired in the dashboard like every other
+# binding in this file — Settings → Bindings → Workers AI →
+# variable name `AI` — and audited by `npm run check:pages-bindings`
+# against `scripts/lib/expected-bindings.ts`, which is where the
+# deploy-time contract actually lives.
+#
+# What makes it the one binding not also declared here for
+# documentation, the way the blocks below are: wrangler opens an
+# authenticated *remote* proxy session for an AI binding before
+# `pages dev` will serve anything. Declaring it made a fresh clone
+# impossible to run without `wrangler login`, even though
+# `.dev.vars` sets `MOCK_AI=true` precisely so the real service is
+# not needed. Every other binding here runs local.
+#
+# There is no way to keep both the declaration and the offline
+# loop: `experimental_remote = false` leaves the binding in remote
+# mode, `remote = false` reports it as "not supported" and opens
+# the session anyway, and `pages dev` rejects `--config`.
+#
+# To exercise real Workers AI locally, `wrangler login` and then
+# `npm run dev:functions:ai` — same binding, passed as `--ai AI`.
 
 # D1 database for storing AI feedback (thumbs up/down ratings)
 [[d1_databases]]

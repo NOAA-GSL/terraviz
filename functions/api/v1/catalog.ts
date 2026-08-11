@@ -75,7 +75,8 @@ async function renderCatalog(
   const db = env.CATALOG_DB!
   const identity = await getNodeIdentity(db)
   if (!identity) {
-    // Fresh deploy without `npm run gen:node-key`. Render an empty
+    // No `node_identity` row yet — a fresh deploy, or an unseeded
+    // local database. Render an empty
     // catalog with a placeholder identity rather than 503'ing the
     // public read path — the operator may still want browse to
     // work even before the well-known doc is ready.

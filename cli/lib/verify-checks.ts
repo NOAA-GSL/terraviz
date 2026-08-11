@@ -79,7 +79,9 @@ const wellKnownNodeIdentity: VerifyCheck = {
       if (typeof b.node_id !== 'string' || !b.node_id) {
         return {
           status: 'fail',
-          detail: 'response missing node_id — run `npm run gen:node-key` then redeploy',
+          detail:
+            'response missing node_id — the node_identity row is not provisioned; ' +
+            'run `terraviz init-node`',
         }
       }
       if (typeof b.public_key !== 'string' || !b.public_key.startsWith('ed25519:')) {

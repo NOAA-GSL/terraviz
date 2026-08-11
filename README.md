@@ -235,17 +235,16 @@ curl http://localhost:8788/api/v1/catalog | jq '.datasets | length'
 # → 20
 ```
 
-> **Step 4 fails on a fresh clone.** `wrangler pages dev` opens an
-> authenticated remote proxy session before it serves anything,
-> because `wrangler.toml` declares an `[ai]` binding — and it does
-> that regardless of `MOCK_AI=true`. You get `Could not start remote
-> dev session. No credentials found.`
+> **Step 4 runs offline**, with no Cloudflare account and no
+> `wrangler login`. Every binding it needs is served from
+> `.wrangler/`, and `.dev.vars` sets `MOCK_AI=true` so the code
+> paths that would call Workers AI use a local mock instead.
 >
-> Two ways past it: run `wrangler login` once (everything else still
-> runs locally), or comment out the `[ai]` block while you work,
-> which is the only genuinely offline loop today. Nothing in the
-> deploy reads that block — Pages takes its bindings from the
-> dashboard — but do not commit the change.
+> To exercise the real Workers AI — Orbit chat, voice, live
+> embeddings — run `wrangler login` and use `npm run
+> dev:functions:ai`. That adds the `AI` binding, which wrangler can
+> only run against Cloudflare, so it is the one thing here that
+> needs credentials.
 
 The full developer walkthrough — bindings, data model, and the
 publishing CLI — lives in

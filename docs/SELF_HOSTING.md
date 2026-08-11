@@ -171,7 +171,8 @@ itself where it is known and not secret.
 ── Wherever your build runs
    → VITE_API_ORIGIN = https://terraviz.example.org
    · VITE_EARTH_ASSET_BASE
-       from: your own content delivery network (CDN), after mirroring the Earth basemap textures
+       from: nothing — the Earth textures ship in your own build
+       (set it only to serve them from a CDN instead)
 
 ── GitHub → Settings → Secrets and variables → Actions
    → CF_ACCESS_CLIENT_SECRET
@@ -238,7 +239,7 @@ install, guided:
 
 ```bash
 npm run setup -- --manual         # do these in the dashboard first
-export CLOUDFLARE_API_TOKEN=...   # from --manual step 3
+export CLOUDFLARE_API_TOKEN=...   # the "Mint a Cloudflare API token" step
 
 npm run gen:node-key              # Phase 7, the half the tool doesn't own
 npm run setup -- --interactive    # answer 4-5 questions, see the plan
@@ -263,22 +264,56 @@ burning its timeout.
 
 `npm run setup -- --help` lists every flag and environment variable.
 
-**Token scope.** The single `CLOUDFLARE_API_TOKEN` this needs:
+**Token scope.** The single `CLOUDFLARE_API_TOKEN` this needs.
+Every node needs these five, because Phase 2 creates all five
+resources:
 
 | Permission | For |
 |---|---|
 | Account → Cloudflare Pages → **Edit** | Phases 5 and 8 |
+| Account → D1 → **Edit** | Phase 2 creates it, Phase 4 migrates it |
+| Account → Workers KV Storage → **Edit** | both namespaces, Phase 2 |
+| Account → Workers R2 Storage → **Edit** | the bucket in Phase 2, the origin in 8.5 |
+| Account → Vectorize → **Edit** | the search index, Phase 2 |
+
+A publisher node adds Access. A viewer node never calls it:
+
+| Permission | For |
+|---|---|
 | Account → Access: Apps and Policies → **Edit** | Phase 6 |
 | Account → Access: Service Tokens → **Edit** | Phase 6 |
 | Account → Access: Organizations → **Read** | discovering the team domain |
-| Account → Workers R2 Storage → **Edit** | Phase 8.5 |
-| Zone → Zone → **Read** | resolving the zone for 8.5 / 8.6 |
-| Zone → Zone WAF → **Edit** | Phase 8.6 |
-| Account → D1 → **Edit** | only if you enable CI migrations (14.3) |
 
-Grant only what you plan to run — each step names the permission it
-is missing rather than failing with a bare `10000: Authentication
-error`.
+These two are needed only for the step named beside each:
+
+| Permission | For |
+|---|---|
+| Zone → Zone → **Read** | `--only=r2` and `--only=waf` |
+| Zone → Zone WAF → **Edit** | `--only=waf` |
+
+Each step names the permission it is missing rather than failing
+with a bare `10000: Authentication error`.
+
+> **The two Zone rows are the ones people cannot find.** Each
+> permission row has three dropdowns, and the first one — the
+> scope — starts on **Account**. Zone permissions are not in the
+> Account list at all. Change that first dropdown to **Zone** and
+> the middle one refills with `Zone`, `Zone WAF` and the rest.
+>
+> A zone-scoped row also needs the **Zone Resources** section
+> below Permissions. Leave it unset and the token carries the
+> permission but reaches no zone. Include the zone your node runs
+> on, or every zone in the account.
+>
+> **`export CLOUDFLARE_API_TOKEN=…` outranks `wrangler login`.**
+> Wrangler prefers the token over your browser session, so Phases 2
+> and 4 run with the scopes above rather than your own account
+> access. This is why a Pages-only token reaches Phase 2 and then
+> fails on D1, KV or Vectorize.
+>
+> The names above are current. If some other permission is missing
+> from the list, `GET /user/tokens/permission_groups` returns every
+> one with its scope.
 
 ---
 
@@ -419,6 +454,10 @@ ls -l public/assets/skybox/nx.jpg     # ~790 KB, not 131 bytes
 (§0.3), then `git lfs pull`, and check again. Doing this now costs a
 few seconds; finding out later means a deployed node whose globe has
 no stars and no clue why.
+
+That checks one file because it is all you can check before
+installing anything. Once `npm install` below has finished,
+`npm run check:lfs` reports every LFS file at once.
 
 `npm install` is not optional and is not only for contributors. It
 puts the tooling every later `npm run` command needs on your path.
@@ -565,42 +604,29 @@ Then start the Functions dev server:
 npm run dev:functions   # http://localhost:8788
 ```
 
-> ### ⚠️ Known blocker: `dev:functions` needs Cloudflare credentials
+> ### This step needs no Cloudflare account
 >
-> On a fresh clone this fails with:
+> Phase 1 runs entirely on your laptop. Every binding is served
+> from `.wrangler/` on local disk, and `.dev.vars` sets
+> `MOCK_AI=true` so the paths that would call Workers AI use a
+> local mock. You do not need `wrangler login` until Phase 2.
 >
+> **To exercise the real Workers AI** — Orbit chat, voice, live
+> embeddings rather than the mock — sign in and use the `:ai`
+> variant instead:
+>
+> ```bash
+> wrangler login
+> npm run dev:functions:ai   # same server, plus --ai AI
 > ```
-> ✘ [ERROR] Failed to start the remote proxy session
->   Could not start remote dev session. No credentials found…
-> ```
 >
-> **Cause.** `wrangler.toml` declares an `[ai]` binding. Wrangler
-> runs Workers AI bindings in *remote* mode unconditionally. So
-> `wrangler pages dev` opens an authenticated proxy session to
-> Cloudflare before it will serve anything — even though
-> `.dev.vars` sets `MOCK_AI=true` precisely so you don't need the
-> real service. Setting `experimental_remote = false` on the
-> `[ai]` block does not suppress it, and `pages dev` rejects
-> `--config`, so you can't point it at a stripped-down file.
->
-> **Two workarounds, pick one:**
->
-> 1. **`wrangler login` first** (or export `CLOUDFLARE_API_TOKEN`).
->    The proxy session opens, everything else still runs locally
->    against `.wrangler/`. Simplest if you already have an account.
-> 2. **Comment out the `[ai]` block in `wrangler.toml`** while you
->    work locally. `MOCK_AI=true` covers every code path that
->    would have used it. This is the only option if you want a
->    genuinely offline dev loop.
->
->    ```toml
->    # [ai]
->    # binding = "AI"
->    ```
->
->    Nothing in the deploy depends on this block — **Pages reads
->    its bindings from the dashboard, not from `wrangler.toml`**
->    (see Phase 8). Don't commit the change.
+> That one binding is the exception: wrangler can only run Workers
+> AI against Cloudflare, never locally, so `dev:functions:ai`
+> opens an authenticated proxy session and fails without
+> credentials. `wrangler.toml` therefore does not declare `[ai]`,
+> and the flag is how you opt in. Everything else stays local
+> either way. See the comment at the top of `wrangler.toml`, and
+> Phase 8 for wiring `AI` on the deployed node.
 
 Before starting, seed `.dev.vars` from the template:
 
@@ -666,11 +692,23 @@ Each `create` prints the ID. **Copy them onto the worksheet now** —
 ID is the one thing you cannot recover from a later error message.
 To re-read them: `wrangler d1 list`, `wrangler kv namespace list`.
 
-**W9 — Analytics Engine.** There is nothing to create. AE datasets
-come into existence the first time something writes to them; you
-name the dataset in the binding (Phase 8) and it appears. Use
-`terraviz_events` unless you have a reason not to — the Grafana
-dashboards and the export pipeline default to that name.
+**W9 — Analytics Engine.** There is no dataset to create. AE
+datasets come into existence the first time something writes to
+them; you name the dataset in the binding (Phase 8) and it
+appears. Use `terraviz_events` unless you have a reason not to —
+the Grafana dashboards and the export pipeline default to that
+name.
+
+> ⚠️ **The product itself does have to be turned on.** Open
+> **Workers & Pages → Analytics Engine** once. Until you do, the
+> Pages deploy in Phase 8.8 fails with `Failed to publish your
+> Function. You need to enable Analytics Engine.` — not a
+> degraded feature, a deploy that will not publish.
+>
+> The dialog asks for two values, and both are fixed by the code:
+> Dataset Name `terraviz_events`, Dataset Binding `ANALYTICS`.
+> Those are the names Phase 8.1 binds and
+> `functions/api/ingest.ts` writes through.
 
 **Tier 1 operators:** you only need `W4` (D1) and `W5` (KV). Skip
 the R2 and Vectorize commands; add them later if you upgrade.
@@ -733,46 +771,13 @@ wrangler d1 info CATALOG_DB     # should print YOUR database, 0 tables
 Two migration sets live in this repo, keyed by **binding name**.
 
 > **Automated.** `npm run setup -- --apply --only=migrations` applies
-> both, in the order that works, and distinguishes the expected
-> `catalog-schema.sql` failure below from a real one. Add
-> `--local-migrations` to rehearse against the local `.wrangler/`
-> database first.
+> both and stops on any failure. Add `--local-migrations` to rehearse
+> against the local `.wrangler/` database first.
 
 ```bash
 wrangler d1 migrations apply CATALOG_DB  --remote    # migrations/catalog/
 wrangler d1 migrations apply FEEDBACK_DB --remote    # migrations/
 ```
-
-> ⚠️ **Run `CATALOG_DB` first. The order is not cosmetic.**
->
-> `FEEDBACK_DB`'s `migrations_dir` is the repo-root `migrations/`,
-> which also contains **`catalog-schema.sql`** — a *generated
-> snapshot* of the fully-migrated catalog schema, written by
-> `npm run db:dump-schema` for reference. Wrangler has no way to know
-> it isn't a migration, so it queues it as one.
->
-> On an empty database, running `FEEDBACK_DB` first means that
-> snapshot **applies for real**, creating the entire catalog schema
-> outside the migration tracker. Every subsequent `CATALOG_DB`
-> migration then fails on `table node_identity already exists`, and
-> the install cannot be completed. Verified on a clean database:
->
-> ```
-> wrangler d1 migrations apply FEEDBACK_DB   → exit 0
-> wrangler d1 migrations apply CATALOG_DB    → exit 1
->   ✘ table node_identity already exists at offset 13: SQLITE_ERROR
-> ```
->
-> Run `CATALOG_DB` first and every table in the snapshot already
-> exists, so it fails on its first statement and changes nothing.
->
-> **So the second command is expected to end with an error** —
-> `table analytics_daily already exists` — *after* applying the seven
-> real feedback migrations. That one failure is harmless. Any other
-> failure is not. (`npm run setup` handles this distinction for you,
-> keying on the `Migration <name> failed` line wrangler prints — a
-> failure in any *other* file still stops the run. It is also why
-> `ci.yml` only ever auto-applies `CATALOG_DB`.)
 
 > ⚠️ **Always select by binding name, never by database name.**
 > Both `[[d1_databases]]` blocks declare
@@ -788,8 +793,14 @@ wrangler d1 migrations apply FEEDBACK_DB --remote    # migrations/
 
 ```bash
 wrangler d1 migrations list CATALOG_DB --remote     # "No migrations to apply"
-wrangler d1 migrations list FEEDBACK_DB --remote    # only catalog-schema.sql pending
+wrangler d1 migrations list FEEDBACK_DB --remote    # "No migrations to apply"
 ```
+
+Both should be clean. `FEEDBACK_DB` used to report one file pending
+forever — the generated `catalog-schema.sql` snapshot lived in its
+migrations directory, so wrangler queued a file that was never a
+migration. The snapshot moved to `schema/`, so a pending entry here
+now means what it says.
 
 That command diffs the whole `migrations/catalog/` directory
 against the remote tracker table, so it stays correct as the
@@ -843,15 +854,30 @@ authorise, pick `W3`, then:
 - Build output directory: `dist`
 - Root directory: *(empty)*
 
-**Build-time environment variables** — set these *before* the first
-build. `VITE_*` values are baked into the bundle at build time.
-Changing one later requires a rebuild, not just a redeploy.
+**Build-time environment variables.** None of these is required —
+the build succeeds with all of them unset, and each falls back to
+a working default. But `VITE_*` values are baked into the bundle
+at build time, so setting one later means a rebuild rather than
+just a redeploy. Cheaper to decide now.
+
+`VITE_API_ORIGIN` is the one most likely to be wanted later:
+desktop builds and deep-link host recognition read it, and adding
+it afterwards means a rebuild. The Earth textures need no
+variable at all — they ship in your own build.
+
+> `VITE_*` is a naming convention, not a Cloudflare product. Vite
+> is the bundler that builds this app, and it copies variables
+> carrying that prefix into the JavaScript it emits. So they have
+> to be set wherever the build runs — the Cloudflare dashboard if
+> Cloudflare builds, your CI job if CI builds. By the time a
+> visitor loads the page the values are already inside the file
+> being served.
 
 | Variable | Value | Notes |
 |---|---|---|
-| `VITE_BUILD_CHANNEL` | `public` | or `internal` / `canary` |
-| `VITE_TELEMETRY_ENABLED` | `true` | |
-| `VITE_EARTH_ASSET_BASE` | your CDN | **Recommended.** Defaults to upstream's CloudFront. See Reference C. |
+| `VITE_BUILD_CHANNEL` | *(unset)* | Already `public`. Set it only for an `internal` or `canary` build. |
+| `VITE_TELEMETRY_ENABLED` | *(unset)* | Already on. `false` is the only value that changes anything, for a telemetry-free build. |
+| `VITE_EARTH_ASSET_BASE` | *(unset)* | Leave it. The Earth textures are committed to the repo, so your build ships them and serves them from your domain. Set it only to put them on a CDN instead. |
 | `VITE_API_ORIGIN` | `https://` + `W2` | Only needed for desktop builds (Phase 15), harmless to set now. |
 | `VITE_DEFAULT_UI_SCALE` | *(unset)* | `1.5` suits kiosks. Clamped to [0.5, 2.0]; a visitor's own choice always wins. |
 
@@ -868,21 +894,33 @@ terraviz`. On a fresh fork that job either fails for lack of
 secrets, or — worse, if you've set them — deploys to a project name
 that isn't yours.
 
+Both paths are configured in the **Cloudflare** dashboard, not on
+GitHub. Cloudflare asks GitHub for repository access partway
+through the first one; you never start from the GitHub side.
+
 - **Using the dashboard Git integration (recommended):** delete or
   disable the `deploy` job in `ci.yml` and `poster.yml`. Keep
   `type-check`, `unit-tests`, and `build` — they're fork-safe and
-  need no secrets.
+  need no secrets. Take this one if you want pushes to deploy
+  themselves and would rather not maintain a workflow.
 - **Using GitHub Actions to deploy (Direct Upload):** four things.
   Set repo secrets `CLOUDFLARE_API_TOKEN` (`W11`) and
   `CLOUDFLARE_ACCOUNT_ID` (`W1`). Change every
   `--project-name terraviz` to `W10`. Set the repo **Variable**
   `TERRAVIZ_SERVER` to `https://<W2>`. And do *not* connect the Git
-  integration.
+  integration. Take this one if you want deploys gated on the tests
+  your fork already runs, or would rather not grant Cloudflare
+  access to the repository.
 
-`W11` needs, at minimum, **Account → Cloudflare Pages → Edit**. Add
-**Account → D1 → Edit** only if you enable CI migrations (Phase
-14.3). Mint it at
+A token used only by CI needs **Account → Cloudflare Pages → Edit**
+and nothing else. Add **Account → D1 → Edit** if you enable CI
+migrations (Phase 14.3). Mint it at
 `https://dash.cloudflare.com/profile/api-tokens`.
+
+If you reuse the token you minted for `npm run setup`, it already
+carries more than this — see the token-scope table under
+[Shortcut: `npm run setup`](#shortcut-npm-run-setup). That is fine
+for a repo you control, and worth narrowing for one you share.
 
 > Forks created with GitHub's **Fork** button land with Actions
 > **disabled** and no secrets, variables, or environments — GitHub
@@ -1621,9 +1659,10 @@ own, as an edge rule or a `Content-Security-Policy` line in
 - `connect-src`: `'self'`, `gibs.earthdata.nasa.gov`,
   `s3.dualstack.us-east-1.amazonaws.com` (SOS snapshot), your video
   and caption proxies, and `W19`.
-- `img-src` / `media-src`: `'self' data: blob:`, your
-  `VITE_EARTH_ASSET_BASE` host, the SOS/CloudFront asset hosts,
-  and `W19`.
+- `img-src` / `media-src`: `'self' data: blob:`, the SOS/CloudFront
+  asset hosts, and `W19`. The Earth basemap textures need no entry —
+  they are served from your own origin, so `'self'` already covers
+  them. Add a host here only if you set `VITE_EARTH_ASSET_BASE`.
 
 The app uses `blob:` for preview tours and screenshots — omitting
 it reproduces the "may not load data from blob:" failure. Test
@@ -1741,11 +1780,12 @@ because the step runs before the deploy, that blocks the whole
 deploy. Editing a token's permissions keeps its value, so no
 rotation is needed.
 
-It applies `CATALOG_DB` only — `FEEDBACK_DB`'s `migrations_dir` is
-the repo-root `migrations/`, which also holds the generated
-`catalog-schema.sql` snapshot that wrangler would misread as a
-migration. Gated to `refs/heads/main`, because preview deploys
-share the same physical D1 as production.
+It applies `CATALOG_DB` only. That was once a safety requirement and
+is now just scope. Both bindings point at the same physical database,
+so the catalog migrations are all the backend needs, and feedback
+schema changes are rare enough to apply by hand. Gated to
+`refs/heads/main`, because preview deploys share the same physical D1
+as production.
 `npm run check:migrations` (in the type-check job) fails the build
 on destructive schema statements (DDL) unless the migration opts in with a
 `-- destructive: reviewed` comment.
@@ -1916,7 +1956,7 @@ quietly dependent on upstream infrastructure.
 
 | Env var | Default | What it is | Change it when |
 |---|---|---|---|
-| `VITE_EARTH_ASSET_BASE` | `https://d3sik7mbbzunjo.cloudfront.net/terraviz/basemaps` | Earth basemap textures (diffuse / night lights / normal / borders) for the photoreal Earth and 2D overlays — loaded by **every** node. | **Any independent node.** Mirror the static `.jpg`/`.png` files to your own bucket and point here. |
+| `VITE_EARTH_ASSET_BASE` | *(unset — served from your own origin)* | Earth basemap textures (diffuse / night lights / normal / borders) for the photoreal Earth and 2D overlays — loaded by **every** node. | **Nothing to do.** The eleven files are committed under `public/assets/basemaps/`, so your clone has them and your build serves them itself — no install-time fetch, and it works air-gapped. Set this only to move them to a CDN. |
 | `VITE_VIDEO_PROXY_BASE` | `https://video-proxy.zyra-project.org/video` | Resolves **legacy SOS** `vimeo:` data refs into HLS/MP4. | Only if you ran `import-snapshot` and want video independent of upstream. The proxy worker isn't in this repo. |
 | `VITE_CAPTION_PROXY_BASE` | `https://video-proxy.zyra-project.org/captions` | CORS shim for legacy `sos.noaa.gov` `.srt` captions. | Same. |
 | `TERRAVIZ_DOCS_URL` | `https://github.com/zyra-project/terraviz/blob/main/docs/SELF_HOSTING.md` | Base for the 19 links the `/setup` console makes into this guide (17 anchored per phase). Read at **build** time by `npm run build:setup-page`. | Once your fork's copy of this guide diverges from upstream's. Set it to your own blob URL — including the branch, if yours isn't `main` — and rebuild. |
@@ -1978,17 +2018,45 @@ ls -l public/assets/skybox/nx.jpg     # ~790 KB if real, 131 bytes if a pointer
 131 bytes is a text file naming the object it stands for. Fix it
 with `git lfs install` then `git lfs pull`, rebuild, redeploy.
 
-Nothing catches this on your behalf: `npm run build` copies
-`public/` verbatim without looking inside, so the build reports no
-errors and the pointers ship to `dist/` under their `.jpg` names.
-If you deploy from GitHub Actions, note that
-`actions/checkout` does **not** fetch LFS unless you pass
-`lfs: true` — `ci.yml` and `poster.yml` already do.
+`npm run check:lfs` reports every one of them at once, with the
+repair, so you do not have to guess which files to look at:
+
+```bash
+npm run check:lfs
+```
+
+It is advisory and exits 0, because a build that skips LFS on
+purpose is a legitimate thing to do. Add `--strict` to make it a
+gate in your own workflow.
+
+The build will not tell you: `npm run build` copies `public/`
+verbatim without looking inside, so it reports no errors and the
+pointers ship to `dist/` under their `.jpg` names.
+
+Deploying from GitHub Actions? `actions/checkout` does **not**
+fetch LFS unless you pass `lfs: true`. Both `ci.yml` and
+`poster.yml` already pass it. `ci.yml`'s deploy also runs
+`check:lfs --strict` straight after the checkout, so a missing
+texture stops the deploy rather than reaching your visitors.
 
 ### `npm run …` says `'tsx' is not recognized`
 You skipped `npm install`, or ran it somewhere other than the
 repository root. Every `npm run` command in this guide runs from
 inside your clone, after a successful install. See §0.4.
+
+### Deploy fails: "You need to enable Analytics Engine"
+The product is off on your account, and stays off until somebody
+opens it once. A Pages Function that declares an
+`analytics_engine_datasets` binding cannot publish without it, so
+this fails the whole deploy rather than degrading one route.
+
+Open **Workers & Pages → Analytics Engine** and create a dataset:
+Dataset Name `terraviz_events`, Dataset Binding `ANALYTICS`. Then
+retry the deployment. The error links straight to the page.
+
+Creating the dataset is not strictly what fixes it — AE datasets
+appear on first write regardless. Enabling the product is. The
+dialog is just the shortest path to both.
 
 ### `/api/ingest` returns 204 but nothing lands in Analytics Engine
 The `ANALYTICS` binding is missing in the environment serving

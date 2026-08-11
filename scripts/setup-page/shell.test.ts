@@ -342,6 +342,32 @@ describe('the committed public/setup.html', () => {
     expect(html()).not.toContain('data-paid-only')
   })
 
+  /**
+   * The two names the Cloudflare dialog asks for, on the built page.
+   *
+   * An operator hit `Failed to publish your Function. You need to
+   * enable Analytics Engine.` at the Phase 8.8 deploy — a hard stop,
+   * with nothing earlier in the install mentioning the product. The
+   * dashboard then asks for a Dataset Name and a Dataset Binding, and
+   * both are fixed by the code rather than free choices: `ingest.ts`
+   * writes through `env.ANALYTICS`, and the Grafana dashboards and the
+   * export pipeline read `terraviz_events`.
+   *
+   * Guessing either one produces a node that deploys and silently
+   * drops every telemetry write, which is the failure the whole
+   * bindings audit exists to prevent. Asserted on the built page
+   * because the prerequisite renders through render.ts, and a name is
+   * exactly the kind of literal a design export overwrites without
+   * anyone noticing.
+   */
+  it('names the Analytics Engine dataset and binding the dialog asks for', () => {
+    const page = html()
+    expect(page).toContain('terraviz_events')
+    expect(page).toContain('ANALYTICS')
+    // Paired, not merely both present somewhere on a 380 KB page.
+    expect(page).toMatch(/Dataset Name\s+terraviz_events\s*\n\s*Dataset Binding\s+ANALYTICS/)
+  })
+
   // The specific wrong claim, in the words it shipped in.
   it('does not claim Analytics Engine is unavailable on the free plan', () => {
     const page = html()

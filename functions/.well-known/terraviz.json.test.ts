@@ -6,7 +6,7 @@
  *   - 503 when node_identity has not been provisioned.
  *   - 200 with the documented wire shape — keys, endpoint paths,
  *     `schema_versions_supported`, `policy` defaults — sourced from
- *     the row inserted by the seed (or eventually `gen:node-key`).
+ *     the row inserted by the seed (or `terraviz init-node`).
  *   - ETag in the response header.
  *   - 304 with matching `If-None-Match`.
  */
@@ -55,7 +55,12 @@ describe('GET /.well-known/terraviz.json', () => {
     expect(res.status).toBe(503)
     const body = await readJson<{ error: string; message: string }>(res)
     expect(body.error).toBe('identity_missing')
-    expect(body.message).toContain('gen:node-key')
+    // The hint has to name what actually inserts the row: `init-node`
+    // remotely, `db:seed` locally. `gen:node-key` updates the key on
+    // an existing row and cannot fix this.
+    expect(body.message).toContain('init-node')
+    expect(body.message).toContain('db:seed')
+    expect(body.message).not.toContain('gen:node-key')
   })
 
   it('serves the documented wire shape from the seeded node identity', async () => {

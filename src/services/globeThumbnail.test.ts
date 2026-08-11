@@ -5,6 +5,7 @@ import {
   orthoHalfExtent,
   resolveGlobeThumbnailOptions,
 } from './globeThumbnail'
+import { until } from '../test-utils'
 
 describe('resolveGlobeThumbnailOptions', () => {
   it('fills in the documented defaults', () => {
@@ -255,9 +256,11 @@ describe('generateGlobeThumbnail', () => {
       { overlay: { boundingBox: { n: 60, s: 20, w: -10, e: 30 } }, baseDiffuseTimeoutMs: 10_000 },
       { loadThree: async () => three, createCanvas: fakeCanvasFactory(blob), createEarth },
     )
-    // Let setTexture + the base-diffuse subscribe settle.
-    for (let i = 0; i < 4; i++) await new Promise(r => setTimeout(r, 0))
+    // Wait for the actual precondition rather than a tick count: once
+    // setTexture has run, the base-diffuse subscribe is in place.
+    await until(() => events.includes('earth.setTexture'), 'the overlay texture to be set')
     // The render is gated on the base diffuse — it hasn't fired yet.
+    // Meaningful now: setTexture HAS happened and render still has not.
     expect(events).not.toContain('render')
 
     fireBaseLoaded()

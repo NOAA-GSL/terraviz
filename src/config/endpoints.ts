@@ -57,10 +57,23 @@ export const CAPTION_PROXY_BASE = normalizeBase(
  * (VR + Orbit character) and the 2D globe overlays: diffuse, night
  * lights, normal map, and country-borders PNG. Consumers append
  * `/earth_diffuse_4096.jpg`, `/country-borders-black-8192.png`, etc.
- * Override with `VITE_EARTH_ASSET_BASE` (and mirror the assets to
- * your own host) to decouple from upstream's CDN.
+ *
+ * Same-origin by default. The eleven files are committed under
+ * `public/assets/basemaps/`, so a build serves them from the node's
+ * own domain with nothing configured, no install-time network, and
+ * nothing that can be missing when the globe first paints.
+ *
+ * This used to default to upstream's CloudFront distribution, which
+ * meant every fork's visitors pulled the Earth from upstream's
+ * bandwidth unless its operator noticed Reference C and mirrored the
+ * files by hand. Almost none did — it was the only entry in that
+ * table applying to every node, and the only one with no tooling.
+ *
+ * Override with `VITE_EARTH_ASSET_BASE` to serve them from a CDN
+ * instead — an optimisation now, not a workaround. `.gitattributes`
+ * carries the note on why these are plain blobs rather than LFS.
  */
 export const EARTH_ASSET_BASE = normalizeBase(
   import.meta.env.VITE_EARTH_ASSET_BASE,
-  'https://d3sik7mbbzunjo.cloudfront.net/terraviz/basemaps',
+  '/assets/basemaps',
 )

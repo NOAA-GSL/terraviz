@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { hashFileSha256, renderAssetUploader } from './asset-uploader'
 import { ROUTE_CHANGE_START_EVENT } from '../router'
+import { until } from '../../../test-utils'
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -143,7 +144,7 @@ describe('renderAssetUploader', () => {
 
     pickFile(mount, 'video/mp4', 'mock-mp4-bytes')
     // microtask + queueMicrotask + a couple of awaits to settle
-    for (let i = 0; i < 8; i++) await new Promise(r => setTimeout(r, 0))
+    await until(() => onUploaded.mock.calls.length > 0, 'the upload to report back')
 
     expect(onUploaded).toHaveBeenCalledWith({ mode: 'transcoding' })
     expect(mount.textContent).toContain('Transcoding the video')
@@ -188,7 +189,7 @@ describe('renderAssetUploader', () => {
     )
 
     pickFile(mount, 'image/png', 'mock-png-bytes')
-    for (let i = 0; i < 8; i++) await new Promise(r => setTimeout(r, 0))
+    await until(() => onUploaded.mock.calls.length > 0, 'the upload to report back')
 
     expect(onUploaded).toHaveBeenCalledWith({
       mode: 'direct',
@@ -236,7 +237,7 @@ describe('renderAssetUploader', () => {
     )
 
     pickFile(mount, 'image/jpg', 'mock-jpeg-bytes')
-    for (let i = 0; i < 8; i++) await new Promise(r => setTimeout(r, 0))
+    await until(() => fetchFn.mock.calls.length > 0, 'the mint request')
 
     // Mint call body uses image/jpeg (the canonical form), not
     // the file's reported image/jpg.
@@ -284,7 +285,9 @@ describe('renderAssetUploader', () => {
     )
 
     pickFile(mount, 'image/png')
-    for (let i = 0; i < 8; i++) await new Promise(r => setTimeout(r, 0))
+    await until(() => onUploaded.mock.calls.length > 0, 'the upload to report back')
+    // Meaningful only because the chain reached its end state:
+    // it finished without ever touching the XHR path.
 
     expect(xhrFactory).not.toHaveBeenCalled()
     expect(onUploaded).toHaveBeenCalled()
@@ -329,7 +332,7 @@ describe('renderAssetUploader', () => {
     )
 
     pickFile(mount, 'image/png', 'mock-png-bytes')
-    for (let i = 0; i < 8; i++) await new Promise(r => setTimeout(r, 0))
+    await until(() => fetchFn.mock.calls.length > 0, 'the mint request')
 
     expect(ensureDatasetId).toHaveBeenCalledTimes(1)
     // The mint targets the id ensureDatasetId returned.
@@ -362,7 +365,7 @@ describe('renderAssetUploader', () => {
     )
 
     pickFile(mount, 'image/png', 'mock-png-bytes')
-    for (let i = 0; i < 8; i++) await new Promise(r => setTimeout(r, 0))
+    await until(() => ensureDatasetId.mock.calls.length > 0, 'the draft-id callback')
 
     expect(ensureDatasetId).toHaveBeenCalledTimes(1)
     expect(fetchFn).not.toHaveBeenCalled()
@@ -431,7 +434,7 @@ describe('renderAssetUploader — auxiliary kinds (thumbnail / legend)', () => {
     )
 
     pickFile(mount, 'image/png', 'mock-png-bytes')
-    for (let i = 0; i < 8; i++) await new Promise(r => setTimeout(r, 0))
+    await until(() => onUploaded.mock.calls.length > 0, 'the upload to report back')
 
     // The mint body carried kind=thumbnail, not data.
     const mintBody = JSON.parse(fetchFn.mock.calls[0][1].body as string) as { kind: string }
@@ -477,7 +480,7 @@ describe('renderAssetUploader — auxiliary kinds (thumbnail / legend)', () => {
     )
 
     pickFile(mount, 'image/webp', 'mock-webp-bytes')
-    for (let i = 0; i < 8; i++) await new Promise(r => setTimeout(r, 0))
+    await until(() => onUploaded.mock.calls.length > 0, 'the upload to report back')
 
     expect(onUploaded).toHaveBeenCalledWith({
       mode: 'aux',
@@ -522,7 +525,10 @@ describe('renderAssetUploader — auxiliary kinds (thumbnail / legend)', () => {
     )
 
     pickFile(mount, 'image/png', 'mock-png-bytes')
-    for (let i = 0; i < 8; i++) await new Promise(r => setTimeout(r, 0))
+    await until(
+      () => mount.querySelector('.publisher-asset-uploader-status-error') !== null,
+      'the error status to render',
+    )
 
     expect(onUploaded).not.toHaveBeenCalled()
     expect(mount.querySelector('.publisher-asset-uploader-status-error')).not.toBeNull()
@@ -627,7 +633,10 @@ describe('renderAssetUploader — auxiliary kinds (thumbnail / legend)', () => {
       configurable: true,
     })
     genInput.dispatchEvent(new Event('change', { bubbles: true }))
-    for (let i = 0; i < 6; i++) await new Promise(r => setTimeout(r, 0))
+    await until(
+      () => mount.querySelector('.publisher-asset-uploader-generate-preview') !== null,
+      'the generated preview',
+    )
 
     // Decode + render ran; a preview is shown.
     expect(decodeImage).toHaveBeenCalledOnce()
@@ -642,7 +651,7 @@ describe('renderAssetUploader — auxiliary kinds (thumbnail / legend)', () => {
       b => b.textContent === 'Use this thumbnail',
     )!
     useBtn.click()
-    for (let i = 0; i < 8; i++) await new Promise(r => setTimeout(r, 0))
+    await until(() => onUploaded.mock.calls.length > 0, 'the upload to report back')
 
     const mintBody = JSON.parse(fetchFn.mock.calls[0][1].body as string) as { kind: string }
     expect(mintBody.kind).toBe('thumbnail')
@@ -681,7 +690,7 @@ describe('renderAssetUploader — auxiliary kinds (thumbnail / legend)', () => {
       configurable: true,
     })
     genInput.dispatchEvent(new Event('change', { bubbles: true }))
-    for (let i = 0; i < 6; i++) await new Promise(r => setTimeout(r, 0))
+    await until(() => generateThumbnail.mock.calls.length >= 1, 'the first render')
 
     expect(generateThumbnail).toHaveBeenCalledTimes(1)
     // First render is at the default orientation.
@@ -694,7 +703,7 @@ describe('renderAssetUploader — auxiliary kinds (thumbnail / legend)', () => {
     lonSlider.value = '120'
     lonSlider.dispatchEvent(new Event('input', { bubbles: true }))
     lonSlider.dispatchEvent(new Event('change', { bubbles: true }))
-    for (let i = 0; i < 6; i++) await new Promise(r => setTimeout(r, 0))
+    await until(() => generateThumbnail.mock.calls.length >= 2, 'the rotation re-render')
 
     // Re-rendered at the new longitude, reusing the decoded source
     // (no second decode).
@@ -730,7 +739,10 @@ describe('renderAssetUploader — auxiliary kinds (thumbnail / legend)', () => {
       b.textContent?.includes('Generate from this dataset'),
     )!
     fromDataBtn.click()
-    for (let i = 0; i < 6; i++) await new Promise(r => setTimeout(r, 0))
+    await until(
+      () => mount.querySelector('.publisher-asset-uploader-generate-preview') !== null,
+      'the generated preview',
+    )
 
     expect(fetchImageBlob).toHaveBeenCalledWith('https://cdn.example/data.png')
     expect(generateThumbnail).toHaveBeenCalledOnce()
@@ -765,7 +777,7 @@ describe('renderAssetUploader — auxiliary kinds (thumbnail / legend)', () => {
     Array.from(mount.querySelectorAll('button'))
       .find(b => b.textContent?.includes('Generate from this dataset'))!
       .click()
-    for (let i = 0; i < 6; i++) await new Promise(r => setTimeout(r, 0))
+    await until(() => mount.contains(fakeVideo), 'the scrub UI to mount the video')
 
     expect(loadVideoScrub).toHaveBeenCalledWith('https://assets.example/master.m3u8')
     // The scrub UI mounts the video + a Capture button.
@@ -778,7 +790,10 @@ describe('renderAssetUploader — auxiliary kinds (thumbnail / legend)', () => {
     // Capturing renders a globe thumbnail from the grabbed frame and
     // tears the stream down.
     captureBtn.click()
-    for (let i = 0; i < 6; i++) await new Promise(r => setTimeout(r, 0))
+    await until(
+      () => mount.querySelector('.publisher-asset-uploader-generate-preview') !== null,
+      'the captured preview',
+    )
 
     expect(generateThumbnail).toHaveBeenCalledOnce()
     expect(generateThumbnail.mock.calls[0][0]).toBe(capturedCanvas)
@@ -809,13 +824,16 @@ describe('renderAssetUploader — auxiliary kinds (thumbnail / legend)', () => {
     Array.from(mount.querySelectorAll('button'))
       .find(b => b.textContent?.includes('Generate from this dataset'))!
       .click()
-    for (let i = 0; i < 4; i++) await new Promise(r => setTimeout(r, 0))
+    await until(
+      () => mount.textContent?.includes('Loading video') === true,
+      'the scrub load to start',
+    )
 
     // Navigate away while still "Loading video…".
     window.dispatchEvent(new Event(ROUTE_CHANGE_START_EVENT))
     // Now the load resolves — too late.
     resolveLoad({ video: document.createElement('video'), capture: () => document.createElement('canvas'), dispose })
-    for (let i = 0; i < 4; i++) await new Promise(r => setTimeout(r, 0))
+    await until(() => dispose.mock.calls.length > 0, 'the late stream to be disposed')
 
     expect(dispose).toHaveBeenCalled()
     expect(mount.querySelector('.publisher-asset-uploader-generate-video')).toBeNull()
@@ -841,7 +859,10 @@ describe('renderAssetUploader — auxiliary kinds (thumbnail / legend)', () => {
     Array.from(mount.querySelectorAll('button'))
       .find(b => b.textContent?.includes('Generate from this dataset'))!
       .click()
-    for (let i = 0; i < 6; i++) await new Promise(r => setTimeout(r, 0))
+    await until(
+      () => Array.from(mount.querySelectorAll('button')).some(b => b.textContent === 'Cancel'),
+      'the Cancel button',
+    )
     Array.from(mount.querySelectorAll('button'))
       .find(b => b.textContent === 'Cancel')!
       .click()
@@ -875,7 +896,7 @@ describe('renderAssetUploader — auxiliary kinds (thumbnail / legend)', () => {
     Array.from(mount.querySelectorAll('button'))
       .find(b => b.textContent?.includes('Generate from this dataset'))!
       .click()
-    for (let i = 0; i < 6; i++) await new Promise(r => setTimeout(r, 0))
+    await until(() => generateThumbnail.mock.calls.length > 0, 'the render')
 
     expect(generateThumbnail).toHaveBeenCalled()
     expect(generateThumbnail.mock.calls[0][1]).toMatchObject({ overlay })
@@ -912,7 +933,7 @@ describe('renderAssetUploader — auxiliary kinds (thumbnail / legend)', () => {
       configurable: true,
     })
     genInput.dispatchEvent(new Event('change', { bubbles: true }))
-    for (let i = 0; i < 6; i++) await new Promise(r => setTimeout(r, 0))
+    await until(() => generateThumbnail.mock.calls.length > 0, 'the render')
 
     expect(generateThumbnail).toHaveBeenCalled()
     expect(generateThumbnail.mock.calls[0][1]?.overlay).toBeUndefined()
@@ -946,7 +967,10 @@ describe('renderAssetUploader — auxiliary kinds (thumbnail / legend)', () => {
       configurable: true,
     })
     genInput.dispatchEvent(new Event('change', { bubbles: true }))
-    for (let i = 0; i < 6; i++) await new Promise(r => setTimeout(r, 0))
+    await until(
+      () => mount.querySelector('.publisher-asset-uploader-generate .publisher-asset-uploader-status-error') !== null,
+      'the generator error to render',
+    )
 
     expect(mount.querySelector('.publisher-asset-uploader-generate .publisher-asset-uploader-status-error')).not.toBeNull()
     expect(fetchFn).not.toHaveBeenCalled()
@@ -1001,7 +1025,7 @@ describe('renderAssetUploader — auxiliary kinds (thumbnail / legend)', () => {
       configurable: true,
     })
     genInput.dispatchEvent(new Event('change', { bubbles: true }))
-    for (let i = 0; i < 6; i++) await new Promise(r => setTimeout(r, 0))
+    await until(() => useBtn() !== undefined, 'the preview controls')
     expect(useBtn()?.disabled).toBe(false)
     expect(discardBtn()?.disabled).toBe(false)
 
@@ -1010,7 +1034,9 @@ describe('renderAssetUploader — auxiliary kinds (thumbnail / legend)', () => {
     lon.value = '90'
     lon.dispatchEvent(new Event('input', { bubbles: true }))
     lon.dispatchEvent(new Event('change', { bubbles: true }))
-    for (let i = 0; i < 2; i++) await new Promise(r => setTimeout(r, 0))
+    // The second render has been invoked and is hanging — which is
+    // the in-flight state the assertions below describe.
+    await until(() => generateThumbnail.mock.calls.length >= 2, 'the re-render to start')
     // Use + Discard are inert while the re-render is in flight — Use
     // can't upload a stale capture, and Discard can't be undone by a
     // late render repainting the preview.
@@ -1019,7 +1045,7 @@ describe('renderAssetUploader — auxiliary kinds (thumbnail / legend)', () => {
 
     // Let the re-render settle → both re-enable.
     resolveSecond(g2)
-    for (let i = 0; i < 6; i++) await new Promise(r => setTimeout(r, 0))
+    await until(() => useBtn()?.disabled === false, 'Use to re-enable')
     expect(useBtn()?.disabled).toBe(false)
     expect(discardBtn()?.disabled).toBe(false)
   })
@@ -1048,12 +1074,17 @@ describe('renderAssetUploader — auxiliary kinds (thumbnail / legend)', () => {
     Array.from(mount.querySelectorAll('button'))
       .find(b => b.textContent?.includes('Generate from this dataset'))!
       .click()
-    for (let i = 0; i < 4; i++) await new Promise(r => setTimeout(r, 0))
+    await until(
+      () => Array.from(mount.querySelectorAll('button')).some(
+        b => b.textContent === 'Capture this frame',
+      ),
+      'the Capture button',
+    )
 
     Array.from(mount.querySelectorAll('button'))
       .find(b => b.textContent === 'Capture this frame')!
       .click()
-    for (let i = 0; i < 4; i++) await new Promise(r => setTimeout(r, 0))
+    await until(() => dispose.mock.calls.length > 0, 'the stream to be disposed')
 
     expect(dispose).toHaveBeenCalled()
     expect(
@@ -1094,7 +1125,10 @@ describe('renderAssetUploader — auxiliary kinds (thumbnail / legend)', () => {
       configurable: true,
     })
     genInput.dispatchEvent(new Event('change', { bubbles: true }))
-    for (let i = 0; i < 6; i++) await new Promise(r => setTimeout(r, 0))
+    await until(
+      () => mount.querySelector('.publisher-asset-uploader-generate-preview') !== null,
+      'the generated preview',
+    )
     expect(mount.querySelector('.publisher-asset-uploader-generate-preview')).not.toBeNull()
 
     // Move the longitude slider — the re-render rejects.
@@ -1104,7 +1138,10 @@ describe('renderAssetUploader — auxiliary kinds (thumbnail / legend)', () => {
     lonSlider.value = '90'
     lonSlider.dispatchEvent(new Event('input', { bubbles: true }))
     lonSlider.dispatchEvent(new Event('change', { bubbles: true }))
-    for (let i = 0; i < 6; i++) await new Promise(r => setTimeout(r, 0))
+    await until(
+      () => mount.querySelector('.publisher-asset-uploader-generate .publisher-asset-uploader-status-error') !== null,
+      'the rejected re-render to surface its error',
+    )
 
     // The generator surfaces the error rather than throwing into the void.
     expect(
@@ -1342,7 +1379,7 @@ describe('renderAssetUploader — frames tab (3pf/D)', () => {
     // `crypto.subtle.digest` (used for the canonical
     // source-filenames hash) yields to a macrotask, so
     // microtask-only drains aren't enough.
-    for (let i = 0; i < 16; i++) await new Promise(r => setTimeout(r, 0))
+    await until(() => fetchSpy.mock.calls.length >= 3, 'mint + blob PUT + complete')
 
     // The /asset POST + the blob PUT + the /complete POST.
     expect(fetchSpy).toHaveBeenCalledTimes(3)
@@ -1423,7 +1460,7 @@ describe('renderAssetUploader — frames tab (3pf/D)', () => {
       b.textContent?.includes('Upload 1'),
     )!
     startBtn.click()
-    for (let i = 0; i < 16; i++) await new Promise(r => setTimeout(r, 0))
+    await until(() => fetchSpy.mock.calls.length >= 4, 'mint + two PUTs + complete')
 
     // 4 calls: /asset + first blob PUT (failed) + second blob PUT
     // (succeeded) + /complete.

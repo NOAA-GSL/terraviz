@@ -147,11 +147,11 @@ npm run gen:node-key  # 3. keypair, and stamps its public half
         },
       },
       {
-        kind: 'trap',
-        title: 'Known blocker · dev:functions needs credentials',
+        kind: 'note',
+        title: 'No Cloudflare account needed yet',
         body: [
-          'On a fresh clone, `npm run dev:functions` fails with "Could not start remote dev session. No credentials found." The cause: `wrangler.toml` declares an `[ai]` binding, and wrangler runs those in remote mode unconditionally — even though `MOCK_AI=true` exists precisely so you do not need the real service.',
-          '**Two fixes, pick one.** Run `wrangler login` first — the proxy session opens and everything else still runs locally. Or comment out the `[ai]` block while you work, which is the only route to a genuinely offline dev loop. Nothing in the deploy depends on it; Pages reads its bindings from the dashboard, not from this file. Do not commit the change.',
+          'Phase 1 runs entirely on your laptop. Every binding is served from `.wrangler/` on local disk, and `.dev.vars` sets `MOCK_AI=true` so the paths that would call Workers AI use a local mock. You do not need `wrangler login` until Phase 2.',
+          'To exercise the real Workers AI — Orbit chat, voice, live embeddings — sign in and run `npm run dev:functions:ai` instead. That adds the `AI` binding, which wrangler can only run against Cloudflare rather than locally, so it is the one thing here that needs credentials.',
         ],
       },
       {
@@ -179,7 +179,7 @@ npm run dev:functions      # http://localhost:8788`,
     automatedNote: [
       'Creates or adopts the D1 database, both KV namespaces, the R2 bucket, and the Vectorize index with its three metadata indexes — and records every ID for you. Re-running adopts what already exists rather than making a second one.',
     ],
-    gate: 'W4 through W8 hold the IDs Cloudflare just printed, and W9 holds the dataset name you intend to use. Nothing creates W9 — an Analytics Engine dataset appears on first write.',
+    gate: 'W4 through W8 hold the IDs Cloudflare just printed, and W9 holds the dataset name you intend to use. No command creates W9 — an Analytics Engine dataset appears on first write. Turning the product on is a separate one-time click, and Phase 8.8 will not deploy without it.',
     gateShort: 'You have written down the six IDs Cloudflare just gave you.',
     anchor: 'phase-2--create-the-cloudflare-resources',
   },
@@ -221,31 +221,30 @@ npm run dev:functions      # http://localhost:8788`,
     body: [
       {
         kind: 'trap',
-        title: 'Run CATALOG_DB first, and the order is not cosmetic',
+        title: 'Select by binding name, never by database name',
         body: [
-          "FEEDBACK_DB's migrations directory is the repo root, which also contains `catalog-schema.sql` — a generated snapshot of the fully-migrated catalog schema. Wrangler has no way to know it is not a migration, so it queues it as one.",
-          'On an empty database, running FEEDBACK_DB first means that snapshot **applies for real**, creating the entire catalog schema outside the migration tracker. Every subsequent CATALOG_DB migration then fails on `table node_identity already exists`, and the install cannot be completed. Run CATALOG_DB first and the snapshot fails harmlessly on its first statement instead.',
-          '**So the second command is expected to end with an error** — `table analytics_daily already exists` — after applying the seven real feedback migrations. That one failure is harmless. Any other failure is not.',
+          'Both `[[d1_databases]]` blocks declare `database_name = "sphere-feedback"` with **different** migration directories. Passing the bare name is ambiguous: wrangler resolves it to the first match, silently applies the wrong set, and leaves the catalog tables uncreated.',
+          'The symptom lands a long way from the cause — `table datasets has no column named bbox_n`, the first time somebody clicks Save draft in the portal.',
         ],
       },
     ],
     automated: { code: 'npm run setup -- --apply --only=migrations' },
     automatedNote: [
-      'Applies both sets in the order that works, and distinguishes the expected failure above from a real one. Add `--local-migrations` to rehearse against your local database first.',
+      'Applies both sets and stops on any failure. Add `--local-migrations` to rehearse against your local database first.',
     ],
     manual: {
       summary: 'Do it by hand',
       body: [
         {
-          code: `wrangler d1 migrations apply CATALOG_DB  --remote   # first!
-wrangler d1 migrations apply FEEDBACK_DB --remote   # ends in a harmless error`,
+          code: `wrangler d1 migrations apply CATALOG_DB  --remote   # migrations/catalog/
+wrangler d1 migrations apply FEEDBACK_DB --remote   # migrations/`,
         },
         {
-          html: '<b>Always select by binding name, never by database name.</b> Both blocks declare <code>database_name = "sphere-feedback"</code> with different migration dirs. Passing the bare name is ambiguous; wrangler silently applies the wrong set and leaves the catalog tables uncreated. The symptom lands much later as <code>table datasets has no column named bbox_n</code> when someone clicks Save draft.',
+          html: 'Either order works now. FEEDBACK_DB used to have to run second: the generated catalog snapshot sat in its migrations directory and would apply for real on an empty database. That file lives in <code>schema/</code>.',
         },
       ],
     },
-    gate: 'Both migration lists report nothing pending except `catalog-schema.sql` on FEEDBACK_DB. Re-run both after every `git pull` that brings new migration files — they are idempotent.',
+    gate: 'Both migration lists report nothing pending. Re-run both after every `git pull` that brings new migration files — they are idempotent.',
     gateShort: 'Your database has its tables, with nothing left to apply.',
     anchor: 'phase-4--create-the-schema',
   },
@@ -654,6 +653,10 @@ export const TROUBLESHOOTING = [
     fix: "Remote node identity is empty — Phase 9 was not run. The local seed and key-gen paths do **not** write remote D1. The 503's own error text tells you to run `gen:node-key`; that hint is wrong. Use `init-node`.",
   },
   {
+    symptom: 'Deploy fails: "You need to enable Analytics Engine"',
+    fix: 'The product is off on your account until somebody opens it once, and a Function declaring the binding cannot publish without it. Open Workers & Pages → Analytics Engine and create a dataset — name `terraviz_events`, binding `ANALYTICS` — then retry the deployment.',
+  },
+  {
     symptom: 'Ingest returns 204 but nothing lands in Analytics Engine',
     fix: "The binding is missing in the environment serving traffic — check *both* Production and Preview. The function silently skips the write when it is undefined. (A 403 instead means the CORS gate rejected it: curl does not send an Origin header unless you pass one.)",
   },
@@ -749,7 +752,7 @@ export const WORKSHEET: WorksheetField[] = [
   { id: 'W1', label: 'Cloudflare account ID', phase: 0, token: '‹account-id›', placeholder: '32-char hex', note: 'Dashboard sidebar, and in every dashboard URL.', origin: 'asked', fromTool: 'accountId', validator: 'accountId', consumedBy: [5, 10, 13], minTier: 1 },
   { id: 'W2', label: 'Node hostname', phase: 0, token: '‹your-hostname›', placeholder: 'terraviz.your-org.org', note: 'Hostname only. No https://, no trailing path.', origin: 'asked', fromTool: 'hostname', validator: 'hostname', consumedBy: [5, 6, 8, 9, 10, 13, 14], minTier: 1 },
   { id: 'W3', label: 'Git remote', phase: 0, token: '‹owner/repo›', placeholder: 'owner/repo', note: 'Where Pages watches for builds.', origin: 'asked', fromTool: 'githubRepo', validator: 'repoSlug', consumedBy: [5, 14], minTier: 1 },
-  { id: 'TRUST', label: 'Auto-approve domains', phase: 0, token: '‹trusted-domains›', placeholder: 'your-org.org,partner.org', note: 'Optional. Sign-ins from these domains skip the approval queue but land READ-ONLY (role reviewer). It grants nobody admin — the first sign-in does that. Blank means you approve everyone by hand.', origin: 'asked', fromTool: 'trustedPublisherDomains', validator: 'emailDomainList', consumedBy: [8, 11], minTier: 2 },
+  { id: 'TRUST', label: 'Auto-approve domains', phase: 0, token: '‹trusted-domains›', placeholder: 'your-org.org,partner.org', note: 'Optional, and reversible from the Users tab later. Sign-ins from these domains skip the approval queue but land READ-ONLY (role reviewer), able to publish nothing. It grants nobody admin — the first sign-in does that. Blank means every sign-in waits for you, your own team included.', origin: 'asked', fromTool: 'trustedPublisherDomains', validator: 'emailDomainList', consumedBy: [8, 11], minTier: 2 },
   { id: 'W4', label: 'D1 database ID', phase: 2, token: '‹d1-id›', placeholder: 'from wrangler d1 create', note: 'The one value you cannot recover from a later error.', origin: 'discovered', consumedBy: [3, 8], minTier: 1 },
   { id: 'W5', label: 'KV — TELEMETRY_KILL_SWITCH', phase: 2, token: '‹kv-killswitch-id›', placeholder: '32-char hex', origin: 'discovered', consumedBy: [3, 8], minTier: 1 },
   { id: 'W6', label: 'KV — CATALOG_KV', phase: 2, token: '‹catalog-kv-id›', placeholder: '32-char hex', origin: 'discovered', consumedBy: [3, 8], minTier: 2 },
