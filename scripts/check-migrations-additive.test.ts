@@ -67,7 +67,35 @@ describe('findPrefixCollisions', () => {
 
   it('reports a number claimed twice', () => {
     const out = findPrefixCollisions('m', ['0007_a.sql', '0007_b.sql'], FROZEN)
-    expect(out).toEqual([{ dir: 'm', prefix: '0007', files: ['0007_a.sql', '0007_b.sql'] }])
+    expect(out).toEqual([{ dir: 'm', migrationNumber: 7, files: ['0007_a.sql', '0007_b.sql'] }])
+  })
+
+  // Wrangler reads the prefix with `parseInt`, so `0043` and `43` are
+  // one migration number to it. Bucketing the prefix as text filed them
+  // apart and reported no collision for two files wrangler considers
+  // tied. Review catch on #368.
+  it('treats differently-padded prefixes as the same number', () => {
+    const out = findPrefixCollisions('m', ['0043_existing.sql', '43_new.sql'], FROZEN)
+    expect(out).toEqual([
+      { dir: 'm', migrationNumber: 43, files: ['0043_existing.sql', '43_new.sql'] },
+    ])
+  })
+
+  // The same normalization has to reach the freeze, or a shipped
+  // collision could be re-reported under a different padding.
+  it('honours a freeze across padding differences', () => {
+    const frozen = [['0043_existing.sql', '43_new.sql']]
+    expect(findPrefixCollisions('m', ['0043_existing.sql', '43_new.sql'], frozen)).toEqual([])
+  })
+
+  // Numeric ordering: a string compare would put 10 before 9.
+  it('orders findings by number, not by prefix text', () => {
+    const out = findPrefixCollisions(
+      'm',
+      ['9_a.sql', '9_b.sql', '0010_c.sql', '0010_d.sql'],
+      FROZEN,
+    )
+    expect(out.map(c => c.migrationNumber)).toEqual([9, 10])
   })
 
   it('lets a frozen pair through', () => {

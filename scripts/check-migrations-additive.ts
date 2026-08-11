@@ -92,7 +92,13 @@ interface Finding {
 
 export interface PrefixCollision {
   dir: string
-  prefix: string
+  /**
+   * The number *wrangler* derives, via
+   * `parseInt(name.split('_')[0], 10)` — numeric, not the literal text.
+   * `0043_a.sql` and `43_b.sql` are one migration number to wrangler,
+   * so they have to be one here too.
+   */
+  migrationNumber: number
   files: string[]
 }
 
@@ -108,14 +114,18 @@ export function findPrefixCollisions(
   names: string[],
   frozen: string[][] = FROZEN_COLLISIONS,
 ): PrefixCollision[] {
-  const byPrefix = new Map<string, string[]>()
+  const byNumber = new Map<number, string[]>()
   for (const name of names) {
     if (!name.endsWith('.sql')) continue
     const prefix = name.split('_')[0]
     // Numbered files only. A `.sql` with no leading number is not
     // part of the sequence and cannot collide within it.
     if (!/^\d+$/.test(prefix)) continue
-    byPrefix.set(prefix, [...(byPrefix.get(prefix) ?? []), name])
+    // Keyed by value, mirroring wrangler's `leadingMigrationNumber`.
+    // Bucketing the text would file `0043` and `43` apart and report
+    // no collision for two files wrangler considers tied.
+    const migrationNumber = parseInt(prefix, 10)
+    byNumber.set(migrationNumber, [...(byNumber.get(migrationNumber) ?? []), name])
   }
 
   // Both sides are normalized. `files` comes from readdir, whose order
@@ -128,13 +138,15 @@ export function findPrefixCollisions(
     frozenSorted.some(set => set.length === files.length && set.every((f, i) => f === files[i]))
 
   const collisions: PrefixCollision[] = []
-  for (const [prefix, files] of byPrefix) {
+  for (const [migrationNumber, files] of byNumber) {
     if (files.length < 2) continue
     const sorted = [...files].sort()
     if (isFrozen(sorted)) continue
-    collisions.push({ dir, prefix, files: sorted })
+    collisions.push({ dir, migrationNumber, files: sorted })
   }
-  return collisions.sort((a, b) => a.prefix.localeCompare(b.prefix))
+  // Numeric, so 9 sorts before 10 whatever the padding. A string compare
+  // got this right only while every prefix was padded to the same width.
+  return collisions.sort((a, b) => a.migrationNumber - b.migrationNumber)
 }
 
 /**
@@ -183,7 +195,11 @@ function main(): void {
   if (collisions.length > 0) {
     console.error('✗ Two or more migrations claim the same number:\n')
     for (const c of collisions) {
-      console.error(`  ${c.dir}: ${c.files.join(', ')}`)
+      // The number is spelled out because it is not always the shared
+      // prefix text — wrangler reads it with parseInt, so `0043` and
+      // `43` are one number, and seeing "43" explains a pairing the
+      // filenames alone make look like a mistake in the report.
+      console.error(`  ${c.dir}: ${c.migrationNumber} — ${c.files.join(', ')}`)
     }
     console.error(
       '\nWrangler tolerates this — it orders by leading number, then by full\n' +
