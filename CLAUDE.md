@@ -125,6 +125,16 @@ npm run screenshots:smoke   # gating interaction tests (search, Orbit, nav)
 > `npm install`, and by `npm run build`. Run `npm run tokens` manually
 > if you edit any file under `tokens/`.
 
+> **Note:** `public/assets/basemaps/` is committed — 18.5 MB of
+> Earth textures stored as ordinary git blobs and served same-origin
+> from the deploy. They carry a `.gitattributes` exemption from the
+> `*.jpg` / `*.png` LFS catch-all, which is deliberate and explained
+> in the comment there: LFS bills the **parent** repository for every
+> fork's checkout, and a clone without `git lfs pull` yields text
+> files wearing `.jpg` names that build and deploy green. Plain blobs
+> arrive with the clone and work air-gapped. Setting
+> `VITE_EARTH_ASSET_BASE` serves them from a CDN instead.
+
 ### Module map
 
 | File | Responsibility |
