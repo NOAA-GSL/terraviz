@@ -34,6 +34,13 @@ describe('QUESTIONS', () => {
     const help = q.help!.join(' ')
     expect(help).toMatch(/READ-ONLY|reviewer/)
     expect(help).toMatch(/does not make anyone/i)
+    // "Auto-approve domains" reads like it opens a door to the
+    // internet. It cannot: `publish/_middleware.ts` verifies the
+    // Access JWT and only then consults the trusted-domain list, so
+    // a domain named here reaches nobody Access does not already
+    // admit. The prompt has to say so, or the scariest-sounding
+    // reading is the one an operator acts on.
+    expect(help).toMatch(/Access/)
   })
 })
 
