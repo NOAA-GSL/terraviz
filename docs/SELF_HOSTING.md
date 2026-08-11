@@ -293,22 +293,26 @@ These two are needed only for the step named beside each:
 Each step names the permission it is missing rather than failing
 with a bare `10000: Authentication error`.
 
-> **Two things about this token surprise people.**
+> **The two Zone rows are the ones people cannot find.** Each
+> permission row has three dropdowns, and the first one — the
+> scope — starts on **Account**. Zone permissions are not in the
+> Account list at all. Change that first dropdown to **Zone** and
+> the middle one refills with `Zone`, `Zone WAF` and the rest.
 >
-> Zone permissions are not in the Account list. Each row in the
-> token editor has its own scope control, and it starts on Account.
-> Leave it there and the two Zone rows look like they no longer
-> exist.
+> A zone-scoped row also needs the **Zone Resources** section
+> below Permissions. Leave it unset and the token carries the
+> permission but reaches no zone. Include the zone your node runs
+> on, or every zone in the account.
 >
-> `export CLOUDFLARE_API_TOKEN=…` also outranks `wrangler login`.
+> **`export CLOUDFLARE_API_TOKEN=…` outranks `wrangler login`.**
 > Wrangler prefers the token over your browser session, so Phases 2
 > and 4 run with the scopes above rather than your own account
 > access. This is why a Pages-only token reaches Phase 2 and then
 > fails on D1, KV or Vectorize.
 >
-> Cloudflare renames permissions occasionally. If one is missing
-> from the list, `GET /user/tokens/permission_groups` returns the
-> current names with their scopes.
+> The names above are current. If some other permission is missing
+> from the list, `GET /user/tokens/permission_groups` returns every
+> one with its scope.
 
 ---
 

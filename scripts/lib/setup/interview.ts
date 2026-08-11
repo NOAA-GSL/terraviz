@@ -384,9 +384,6 @@ export const MANUAL_STEPS: ManualStep[] = [
     docsUrl: 'https://developers.cloudflare.com/fundamentals/api/get-started/create-token/',
     steps: [
       'Go to My Profile, then API Tokens, then Create Token, and choose Custom token.',
-      {
-        note: 'Each permission row has three controls: a scope, the permission itself, and the access level. The scope starts on Account. A row below that reads Zone needs that first control changed — zone permissions are not in the Account list, which is what makes them look absent.',
-      },
       'Add these five first. Every node needs them, because Phase 2 creates all five resources.',
       {
         code: [
@@ -413,7 +410,13 @@ export const MANUAL_STEPS: ManualStep[] = [
         ].join('\n'),
       },
       {
-        note: 'Cloudflare renames permissions from time to time. If one of these is not in the list, ask the API for the current names rather than guessing: GET /user/tokens/permission_groups returns every one, with its scope.',
+        note: 'These two are the ones people cannot find. Each permission row has three dropdowns, and the first one — the scope — starts on Account. Zone permissions are not in the Account list at all. Change that first dropdown to Zone and the middle one refills with `Zone`, `Zone WAF` and the rest.',
+      },
+      {
+        note: 'A zone-scoped row also needs the Zone Resources section below Permissions. Leave it unset and the token carries the permission but reaches no zone. Include the zone your node runs on, or every zone in the account.',
+      },
+      {
+        note: 'Both names above are current. If some other permission is missing from the list, `GET /user/tokens/permission_groups` returns every one with its scope.',
       },
       'Copy the token when it is shown and put it in your shell, where the setup tool will find it.',
       { code: 'export CLOUDFLARE_API_TOKEN=...' },
