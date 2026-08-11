@@ -376,22 +376,43 @@ export const MANUAL_STEPS: ManualStep[] = [
     docsUrl: 'https://developers.cloudflare.com/fundamentals/api/get-started/create-token/',
     steps: [
       'Go to My Profile, then API Tokens, then Create Token, and choose Custom token.',
-      'Add the permissions below. Grant only the ones you plan to use — the last four are for optional steps.',
+      {
+        note: 'Each permission row has three controls: a scope, the permission itself, and the access level. The scope starts on Account. A row below that reads Zone needs that first control changed — zone permissions are not in the Account list, which is what makes them look absent.',
+      },
+      'Add these five first. Every node needs them, because Phase 2 creates all five resources.',
       {
         code: [
-          'Account → Cloudflare Pages           Edit   Pages project + bindings',
+          'Account → Cloudflare Pages           Edit   the project and its bindings',
+          'Account → D1                         Edit   creates the database, runs migrations',
+          'Account → Workers KV Storage         Edit   creates both KV namespaces',
+          'Account → Workers R2 Storage         Edit   creates the assets bucket',
+          'Account → Vectorize                  Edit   creates the search index',
+        ].join('\n'),
+      },
+      'Add these three for a publisher node. A viewer node never calls Access, so skip them.',
+      {
+        code: [
           'Account → Access: Apps and Policies  Edit   the publisher application',
           'Account → Access: Service Tokens     Edit   the CLI credential',
           'Account → Access: Organizations      Read   discovers your team domain',
-          'Zone    → Zone                       Read   resolves the zone',
-          'Account → Workers R2 Storage         Edit   only for --only=r2',
-          'Zone    → Zone WAF                   Edit   only for --only=waf',
-          'Account → D1                         Edit   only for CI migrations',
         ].join('\n'),
+      },
+      'Add these two only if you intend to run the step named beside each one.',
+      {
+        code: [
+          'Zone    → Zone                       Read   --only=r2 and --only=waf',
+          'Zone    → Zone WAF                   Edit   --only=waf',
+        ].join('\n'),
+      },
+      {
+        note: 'Cloudflare renames permissions from time to time. If one of these is not in the list, ask the API for the current names rather than guessing: GET /user/tokens/permission_groups returns every one, with its scope.',
       },
       'Copy the token when it is shown and put it in your shell, where the setup tool will find it.',
       { code: 'export CLOUDFLARE_API_TOKEN=...' },
       { note: 'Cloudflare shows the token once. If you lose it, revoke it and mint another.' },
+      {
+        note: 'That export also outranks wrangler login. Wrangler prefers the token over your browser session, so Phases 2 and 4 run with these scopes rather than your own account access. A token holding only the Pages permission gets through the Pages step and then fails on D1, KV or Vectorize.',
+      },
     ],
     verification: 'detected',
   },

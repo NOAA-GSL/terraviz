@@ -1,4 +1,7 @@
 import { describe, expect, it } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import {
   applyAnswer,
   isAnswered,
@@ -238,19 +241,109 @@ describe('MANUAL_STEPS', () => {
     expect(commandsSoFar.some(c => /npm install/.test(c))).toBe(true)
   })
 
-  it('lists every permission the API token needs', () => {
-    const token = MANUAL_STEPS.find(s => s.id === 'api-token')!
-    const text = token.steps.map(lineText).join('\n')
+  /**
+   * Derived from what `provision.ts` actually runs, not restated.
+   *
+   * The previous version of this test was a hand-written list of six
+   * permissions, and it was written from the same wrong source as the
+   * step it guarded. Both omitted Workers KV Storage and Vectorize —
+   * so a token minted from the checklist created the D1 database and
+   * then failed on `kv namespace create`, several minutes in, with an
+   * authentication error that named no permission. A list checked
+   * against a list can only catch deletions; it cannot catch the
+   * permission nobody thought of.
+   *
+   * So the product set comes out of the provisioning source. Adding a
+   * fifth resource type to Phase 2 now fails here until the token step
+   * names the permission that creates it.
+   */
+  const WRANGLER_PERMISSION: Record<string, string> = {
+    d1: 'D1',
+    kv: 'Workers KV Storage',
+    r2: 'Workers R2 Storage',
+    vectorize: 'Vectorize',
+  }
+
+  /**
+   * The permission rows only, never the prose around them.
+   *
+   * Searching the whole step for "Vectorize" passes on a step that
+   * merely *mentions* Vectorize — and the note explaining which
+   * permissions a Pages-only token fails on does exactly that. The
+   * first draft of this check was satisfied by that sentence while the
+   * table row was missing, which is the same false-negative it was
+   * written to remove. A grant is a table row: scope, permission,
+   * access level.
+   */
+  const grantedPermissions = (): string[] =>
+    MANUAL_STEPS.find(s => s.id === 'api-token')!
+      .steps.filter((l): l is { code: string } => typeof l !== 'string' && 'code' in l)
+      .flatMap(l => l.code.split('\n'))
+      .map(row => /^\s*(?:Account|Zone|User)\s+→\s+(.+?)\s{2,}(Read|Edit)\b/.exec(row))
+      .filter((m): m is RegExpExecArray => m !== null)
+      .map(m => m[1].trim())
+
+  it('names a permission for every resource the tool provisions', () => {
+    const source = readFileSync(
+      resolve(dirname(fileURLToPath(import.meta.url)), 'provision.ts'),
+      'utf8',
+    )
+    // `run(['vectorize', 'create', …])` — the first argument of every
+    // wrangler invocation is the product.
+    const products = new Set(
+      [...source.matchAll(/run\(\[\s*'([a-z0-9]+)'/g)].map(m => m[1]),
+    )
+    expect(products.size, 'no wrangler calls found — did provision.ts move?').toBeGreaterThan(0)
+
+    const granted = grantedPermissions()
+    expect(granted.length, 'no permission rows parsed — did the table format change?')
+      .toBeGreaterThan(0)
+
+    const unnamed = [...products]
+      .filter(p => WRANGLER_PERMISSION[p])
+      .filter(p => !granted.includes(WRANGLER_PERMISSION[p]))
+      .map(p => `${p} → ${WRANGLER_PERMISSION[p]}`)
+
+    expect(
+      unnamed,
+      'provision.ts runs these wrangler products, but the API-token step ' +
+        'does not tell anyone to grant the permission each one needs',
+    ).toEqual([])
+
+    // Every product the mapping does not cover is a gap in the mapping
+    // itself, which would otherwise make the filter above silently
+    // vacuous. `pages` is REST-side, asserted separately below.
+    const unmapped = [...products].filter(p => !WRANGLER_PERMISSION[p] && p !== 'pages')
+    expect(unmapped, 'add these to WRANGLER_PERMISSION with their token permission').toEqual([])
+  })
+
+  // The REST-driven half: Pages bindings and Access have no wrangler
+  // command to derive from, so they stay named here.
+  it('lists the permissions the REST calls need', () => {
+    const granted = grantedPermissions()
     for (const perm of [
       'Cloudflare Pages',
       'Access: Apps and Policies',
       'Access: Service Tokens',
       'Access: Organizations',
-      'Workers R2 Storage',
       'Zone WAF',
     ]) {
-      expect(text).toContain(perm)
+      expect(granted, `${perm} is not granted by any permission row`).toContain(perm)
     }
+  })
+
+  /**
+   * Grant-only-what-you-need is the whole point of the split, and it
+   * only works if each optional row says what turns it on. A row that
+   * reads "only for optional steps" tells a reader they might not need
+   * it and gives them no way to decide.
+   */
+  it('names the trigger beside each optional permission', () => {
+    const text = MANUAL_STEPS.find(s => s.id === 'api-token')!.steps
+      .map(lineText)
+      .join('\n')
+    expect(text).toMatch(/Zone WAF\s+Edit\s+--only=waf/)
+    expect(text).toMatch(/Zone\s+Read\s+--only=r2/)
   })
 
   it('renders a step with its heading, rationale and link', () => {

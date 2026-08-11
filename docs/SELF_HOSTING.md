@@ -263,22 +263,52 @@ burning its timeout.
 
 `npm run setup -- --help` lists every flag and environment variable.
 
-**Token scope.** The single `CLOUDFLARE_API_TOKEN` this needs:
+**Token scope.** The single `CLOUDFLARE_API_TOKEN` this needs.
+Every node needs these five, because Phase 2 creates all five
+resources:
 
 | Permission | For |
 |---|---|
 | Account → Cloudflare Pages → **Edit** | Phases 5 and 8 |
+| Account → D1 → **Edit** | Phase 2 creates it, Phase 4 migrates it |
+| Account → Workers KV Storage → **Edit** | both namespaces, Phase 2 |
+| Account → Workers R2 Storage → **Edit** | the bucket in Phase 2, the origin in 8.5 |
+| Account → Vectorize → **Edit** | the search index, Phase 2 |
+
+A publisher node adds Access. A viewer node never calls it:
+
+| Permission | For |
+|---|---|
 | Account → Access: Apps and Policies → **Edit** | Phase 6 |
 | Account → Access: Service Tokens → **Edit** | Phase 6 |
 | Account → Access: Organizations → **Read** | discovering the team domain |
-| Account → Workers R2 Storage → **Edit** | Phase 8.5 |
-| Zone → Zone → **Read** | resolving the zone for 8.5 / 8.6 |
-| Zone → Zone WAF → **Edit** | Phase 8.6 |
-| Account → D1 → **Edit** | only if you enable CI migrations (14.3) |
 
-Grant only what you plan to run — each step names the permission it
-is missing rather than failing with a bare `10000: Authentication
-error`.
+These two are needed only for the step named beside each:
+
+| Permission | For |
+|---|---|
+| Zone → Zone → **Read** | `--only=r2` and `--only=waf` |
+| Zone → Zone WAF → **Edit** | `--only=waf` |
+
+Each step names the permission it is missing rather than failing
+with a bare `10000: Authentication error`.
+
+> **Two things about this token surprise people.**
+>
+> Zone permissions are not in the Account list. Each row in the
+> token editor has its own scope control, and it starts on Account.
+> Leave it there and the two Zone rows look like they no longer
+> exist.
+>
+> `export CLOUDFLARE_API_TOKEN=…` also outranks `wrangler login`.
+> Wrangler prefers the token over your browser session, so Phases 2
+> and 4 run with the scopes above rather than your own account
+> access. This is why a Pages-only token reaches Phase 2 and then
+> fails on D1, KV or Vectorize.
+>
+> Cloudflare renames permissions occasionally. If one is missing
+> from the list, `GET /user/tokens/permission_groups` returns the
+> current names with their scopes.
 
 ---
 
@@ -843,10 +873,15 @@ that isn't yours.
   `TERRAVIZ_SERVER` to `https://<W2>`. And do *not* connect the Git
   integration.
 
-`W11` needs, at minimum, **Account → Cloudflare Pages → Edit**. Add
-**Account → D1 → Edit** only if you enable CI migrations (Phase
-14.3). Mint it at
+A token used only by CI needs **Account → Cloudflare Pages → Edit**
+and nothing else. Add **Account → D1 → Edit** if you enable CI
+migrations (Phase 14.3). Mint it at
 `https://dash.cloudflare.com/profile/api-tokens`.
+
+If you reuse the token you minted for `npm run setup`, it already
+carries more than this — see the token-scope table under
+[Shortcut: `npm run setup`](#shortcut-npm-run-setup). That is fine
+for a repo you control, and worth narrowing for one you share.
 
 > Forks created with GitHub's **Fork** button land with Actions
 > **disabled** and no secrets, variables, or environments — GitHub
