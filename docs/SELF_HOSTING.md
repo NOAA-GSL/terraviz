@@ -1857,6 +1857,117 @@ run your own pipeline; otherwise it fails on every push to `main`.
 
 ---
 
+# Updating an existing node
+
+Everything above assumes a fresh install. This is the other path:
+your node is already running, upstream has moved, and you want the
+changes.
+
+## Sync your fork
+
+Your node deploys from your fork, so upstream work reaches you
+only when you merge it.
+
+```bash
+git remote add upstream https://github.com/zyra-project/terraviz.git
+git fetch upstream main
+git merge upstream/main
+```
+
+Add the remote once. The fetch and merge are the routine part.
+
+**Then pull the LFS content before you build.**
+
+```bash
+git lfs install    # once per machine
+git lfs pull
+```
+
+This is not optional tidiness. Most images here are Git LFS
+objects, and a clone or fetch without LFS leaves them as small
+text files still wearing `.jpg` and `.png` names. The build
+succeeds, the deploy succeeds, and the skybox arrives as garbage.
+`npm run check:lfs` reports the state, and it is advisory — it
+will not stop a build that is about to ship pointer text as
+imagery.
+
+## Rebuild, do not just redeploy
+
+`VITE_*` values are read at build time and written into the
+JavaScript. Redeploying an existing `dist/` therefore carries the
+old values forward regardless of what you changed in a dashboard.
+
+- **Cloudflare builds your project** — push to your default
+  branch, or use Retry deployment.
+- **Direct Upload** — run `npm run build` yourself, then
+  `wrangler pages deploy dist/ --project-name <W10>`.
+
+## Check whether a default you overrode has changed
+
+This is the failure mode worth naming, because it is silent.
+`normalizeBase` in [`src/config/endpoints.ts`](../src/config/endpoints.ts)
+takes any non-empty value ahead of the built-in fallback. So when
+upstream improves a default, a variable you set once — for a
+reason that has since gone away — keeps winning, and the upgrade
+appears to do nothing.
+
+**The current case: Earth textures.** They used to be served from
+upstream's CDN, and Reference C used to tell you to mirror the
+files to your own bucket and point `VITE_EARTH_ASSET_BASE` there.
+They are now committed to the repository and served from your own
+origin with nothing set.
+
+If you followed that advice, unset the variable. Otherwise you
+ship 18.5 MB of textures in your bundle and go on loading them
+from your mirror.
+
+- **Cloudflare Pages** → Settings → Variables and Secrets →
+  Build, delete `VITE_EARTH_ASSET_BASE`, then rebuild.
+- **Direct Upload** — remove the export from your CI job, then
+  rebuild.
+
+Keep it only if you deliberately want a CDN in front of them. It
+is an optimisation now rather than a workaround.
+
+## Verify
+
+The Phase 10 checks apply unchanged after an upgrade, and are the
+fastest way to catch a binding that drifted while you were away.
+Run both.
+
+For the textures specifically, the useful check is local and
+happens before you deploy:
+
+```bash
+npm run build
+grep -rl "cloudfront.net/terraviz/basemaps" dist/assets/*.js
+# → no output. A hit means VITE_EARTH_ASSET_BASE is still set.
+```
+
+Then, once deployed:
+
+```bash
+curl -sI https://<W2>/assets/basemaps/earth_diffuse_4096.jpg | head -1
+# → HTTP/2 200
+```
+
+The first command is the one that matters. The second only proves
+Vite copied the files into `dist/`. It stays green even when the
+bundle points somewhere else, because the unused copy sits right
+there at that path.
+
+## What else an upgrade can need
+
+- **New bindings.** Phase 8 creates them; `check:pages-bindings`
+  names anything missing, so run it first and let it tell you.
+- **Schema migrations.** Phase 14.3 if you opted into CI-applied
+  migrations, otherwise apply them with wrangler yourself.
+- **New manual steps.** `npm run setup -- --manual` reprints the
+  current pre-flight sheet, including any step added since you
+  installed. Turning on Analytics Engine arrived this way.
+
+---
+
 # Reference A — Complete variable inventory
 
 Everything the deployed backend reads. The audit's source of truth
