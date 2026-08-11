@@ -239,7 +239,7 @@ install, guided:
 
 ```bash
 npm run setup -- --manual         # do these in the dashboard first
-export CLOUDFLARE_API_TOKEN=...   # from --manual step 3
+export CLOUDFLARE_API_TOKEN=...   # the "Mint a Cloudflare API token" step
 
 npm run gen:node-key              # Phase 7, the half the tool doesn't own
 npm run setup -- --interactive    # answer 4-5 questions, see the plan
@@ -264,22 +264,56 @@ burning its timeout.
 
 `npm run setup -- --help` lists every flag and environment variable.
 
-**Token scope.** The single `CLOUDFLARE_API_TOKEN` this needs:
+**Token scope.** The single `CLOUDFLARE_API_TOKEN` this needs.
+Every node needs these five, because Phase 2 creates all five
+resources:
 
 | Permission | For |
 |---|---|
 | Account → Cloudflare Pages → **Edit** | Phases 5 and 8 |
+| Account → D1 → **Edit** | Phase 2 creates it, Phase 4 migrates it |
+| Account → Workers KV Storage → **Edit** | both namespaces, Phase 2 |
+| Account → Workers R2 Storage → **Edit** | the bucket in Phase 2, the origin in 8.5 |
+| Account → Vectorize → **Edit** | the search index, Phase 2 |
+
+A publisher node adds Access. A viewer node never calls it:
+
+| Permission | For |
+|---|---|
 | Account → Access: Apps and Policies → **Edit** | Phase 6 |
 | Account → Access: Service Tokens → **Edit** | Phase 6 |
 | Account → Access: Organizations → **Read** | discovering the team domain |
-| Account → Workers R2 Storage → **Edit** | Phase 8.5 |
-| Zone → Zone → **Read** | resolving the zone for 8.5 / 8.6 |
-| Zone → Zone WAF → **Edit** | Phase 8.6 |
-| Account → D1 → **Edit** | only if you enable CI migrations (14.3) |
 
-Grant only what you plan to run — each step names the permission it
-is missing rather than failing with a bare `10000: Authentication
-error`.
+These two are needed only for the step named beside each:
+
+| Permission | For |
+|---|---|
+| Zone → Zone → **Read** | `--only=r2` and `--only=waf` |
+| Zone → Zone WAF → **Edit** | `--only=waf` |
+
+Each step names the permission it is missing rather than failing
+with a bare `10000: Authentication error`.
+
+> **The two Zone rows are the ones people cannot find.** Each
+> permission row has three dropdowns, and the first one — the
+> scope — starts on **Account**. Zone permissions are not in the
+> Account list at all. Change that first dropdown to **Zone** and
+> the middle one refills with `Zone`, `Zone WAF` and the rest.
+>
+> A zone-scoped row also needs the **Zone Resources** section
+> below Permissions. Leave it unset and the token carries the
+> permission but reaches no zone. Include the zone your node runs
+> on, or every zone in the account.
+>
+> **`export CLOUDFLARE_API_TOKEN=…` outranks `wrangler login`.**
+> Wrangler prefers the token over your browser session, so Phases 2
+> and 4 run with the scopes above rather than your own account
+> access. This is why a Pages-only token reaches Phase 2 and then
+> fails on D1, KV or Vectorize.
+>
+> The names above are current. If some other permission is missing
+> from the list, `GET /user/tokens/permission_groups` returns every
+> one with its scope.
 
 ---
 
@@ -658,11 +692,23 @@ Each `create` prints the ID. **Copy them onto the worksheet now** —
 ID is the one thing you cannot recover from a later error message.
 To re-read them: `wrangler d1 list`, `wrangler kv namespace list`.
 
-**W9 — Analytics Engine.** There is nothing to create. AE datasets
-come into existence the first time something writes to them; you
-name the dataset in the binding (Phase 8) and it appears. Use
-`terraviz_events` unless you have a reason not to — the Grafana
-dashboards and the export pipeline default to that name.
+**W9 — Analytics Engine.** There is no dataset to create. AE
+datasets come into existence the first time something writes to
+them; you name the dataset in the binding (Phase 8) and it
+appears. Use `terraviz_events` unless you have a reason not to —
+the Grafana dashboards and the export pipeline default to that
+name.
+
+> ⚠️ **The product itself does have to be turned on.** Open
+> **Workers & Pages → Analytics Engine** once. Until you do, the
+> Pages deploy in Phase 8.8 fails with `Failed to publish your
+> Function. You need to enable Analytics Engine.` — not a
+> degraded feature, a deploy that will not publish.
+>
+> The dialog asks for two values, and both are fixed by the code:
+> Dataset Name `terraviz_events`, Dataset Binding `ANALYTICS`.
+> Those are the names Phase 8.1 binds and
+> `functions/api/ingest.ts` writes through.
 
 **Tier 1 operators:** you only need `W4` (D1) and `W5` (KV). Skip
 the R2 and Vectorize commands; add them later if you upgrade.
@@ -808,14 +854,29 @@ authorise, pick `W3`, then:
 - Build output directory: `dist`
 - Root directory: *(empty)*
 
-**Build-time environment variables** — set these *before* the first
-build. `VITE_*` values are baked into the bundle at build time.
-Changing one later requires a rebuild, not just a redeploy.
+**Build-time environment variables.** None of these is required —
+the build succeeds with all of them unset, and each falls back to
+a working default. But `VITE_*` values are baked into the bundle
+at build time, so setting one later means a rebuild rather than
+just a redeploy. Cheaper to decide now.
+
+`VITE_API_ORIGIN` is the one most likely to be wanted later:
+desktop builds and deep-link host recognition read it, and adding
+it afterwards means a rebuild. The Earth textures need no
+variable at all — they ship in your own build.
+
+> `VITE_*` is a naming convention, not a Cloudflare product. Vite
+> is the bundler that builds this app, and it copies variables
+> carrying that prefix into the JavaScript it emits. So they have
+> to be set wherever the build runs — the Cloudflare dashboard if
+> Cloudflare builds, your CI job if CI builds. By the time a
+> visitor loads the page the values are already inside the file
+> being served.
 
 | Variable | Value | Notes |
 |---|---|---|
-| `VITE_BUILD_CHANNEL` | `public` | or `internal` / `canary` |
-| `VITE_TELEMETRY_ENABLED` | `true` | |
+| `VITE_BUILD_CHANNEL` | *(unset)* | Already `public`. Set it only for an `internal` or `canary` build. |
+| `VITE_TELEMETRY_ENABLED` | *(unset)* | Already on. `false` is the only value that changes anything, for a telemetry-free build. |
 | `VITE_EARTH_ASSET_BASE` | *(unset)* | Leave it. The Earth textures are committed to the repo, so your build ships them and serves them from your domain. Set it only to put them on a CDN instead. |
 | `VITE_API_ORIGIN` | `https://` + `W2` | Only needed for desktop builds (Phase 15), harmless to set now. |
 | `VITE_DEFAULT_UI_SCALE` | *(unset)* | `1.5` suits kiosks. Clamped to [0.5, 2.0]; a visitor's own choice always wins. |
@@ -833,21 +894,33 @@ terraviz`. On a fresh fork that job either fails for lack of
 secrets, or — worse, if you've set them — deploys to a project name
 that isn't yours.
 
+Both paths are configured in the **Cloudflare** dashboard, not on
+GitHub. Cloudflare asks GitHub for repository access partway
+through the first one; you never start from the GitHub side.
+
 - **Using the dashboard Git integration (recommended):** delete or
   disable the `deploy` job in `ci.yml` and `poster.yml`. Keep
   `type-check`, `unit-tests`, and `build` — they're fork-safe and
-  need no secrets.
+  need no secrets. Take this one if you want pushes to deploy
+  themselves and would rather not maintain a workflow.
 - **Using GitHub Actions to deploy (Direct Upload):** four things.
   Set repo secrets `CLOUDFLARE_API_TOKEN` (`W11`) and
   `CLOUDFLARE_ACCOUNT_ID` (`W1`). Change every
   `--project-name terraviz` to `W10`. Set the repo **Variable**
   `TERRAVIZ_SERVER` to `https://<W2>`. And do *not* connect the Git
-  integration.
+  integration. Take this one if you want deploys gated on the tests
+  your fork already runs, or would rather not grant Cloudflare
+  access to the repository.
 
-`W11` needs, at minimum, **Account → Cloudflare Pages → Edit**. Add
-**Account → D1 → Edit** only if you enable CI migrations (Phase
-14.3). Mint it at
+A token used only by CI needs **Account → Cloudflare Pages → Edit**
+and nothing else. Add **Account → D1 → Edit** if you enable CI
+migrations (Phase 14.3). Mint it at
 `https://dash.cloudflare.com/profile/api-tokens`.
+
+If you reuse the token you minted for `npm run setup`, it already
+carries more than this — see the token-scope table under
+[Shortcut: `npm run setup`](#shortcut-npm-run-setup). That is fine
+for a repo you control, and worth narrowing for one you share.
 
 > Forks created with GitHub's **Fork** button land with Actions
 > **disabled** and no secrets, variables, or environments — GitHub
@@ -1970,6 +2043,20 @@ texture stops the deploy rather than reaching your visitors.
 You skipped `npm install`, or ran it somewhere other than the
 repository root. Every `npm run` command in this guide runs from
 inside your clone, after a successful install. See §0.4.
+
+### Deploy fails: "You need to enable Analytics Engine"
+The product is off on your account, and stays off until somebody
+opens it once. A Pages Function that declares an
+`analytics_engine_datasets` binding cannot publish without it, so
+this fails the whole deploy rather than degrading one route.
+
+Open **Workers & Pages → Analytics Engine** and create a dataset:
+Dataset Name `terraviz_events`, Dataset Binding `ANALYTICS`. Then
+retry the deployment. The error links straight to the page.
+
+Creating the dataset is not strictly what fixes it — AE datasets
+appear on first write regardless. Enabling the product is. The
+dialog is just the shortest path to both.
 
 ### `/api/ingest` returns 204 but nothing lands in Analytics Engine
 The `ANALYTICS` binding is missing in the environment serving

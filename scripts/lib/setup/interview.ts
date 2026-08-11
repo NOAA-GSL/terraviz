@@ -100,10 +100,23 @@ export const QUESTIONS: InterviewQuestion[] = [
     envVar: 'TRUSTED_PUBLISHER_DOMAINS',
     label: 'Auto-approve domains',
     help: [
-      'Optional. Sign-ins from these domains skip the approval queue,',
-      'but land READ-ONLY (role reviewer) — this does not make anyone',
-      'an admin. You become admin by being the first to sign in.',
-      'Comma-separated. Leave blank to approve everyone by hand.',
+      'Optional, and reversible later from the portal Users tab.',
+      '',
+      'This only sorts people Cloudflare Access already admits. A',
+      'domain listed here opens nothing on its own — Access decides',
+      'who reaches the portal at all, this decides what greets them.',
+      '',
+      'Fill it in: anyone with an address at these domains can sign',
+      'in and read the portal straight away. They land READ-ONLY',
+      '(role reviewer) and can publish nothing. This does not make',
+      'anyone an admin — you become admin by being first to sign in.',
+      '',
+      'Leave it blank: every sign-in waits for you, your own team',
+      'included. Nobody is locked out silently — a queued account is',
+      'told it is awaiting approval. Safer for a domain you share;',
+      'tedious for a colleague waiting on you.',
+      '',
+      'Comma-separated. Only worth it for domains you control.',
     ],
     example: 'your-org.org,partner.org',
     optional: true,
@@ -376,24 +389,80 @@ export const MANUAL_STEPS: ManualStep[] = [
     docsUrl: 'https://developers.cloudflare.com/fundamentals/api/get-started/create-token/',
     steps: [
       'Go to My Profile, then API Tokens, then Create Token, and choose Custom token.',
-      'Add the permissions below. Grant only the ones you plan to use — the last four are for optional steps.',
+      'Add these five first. Every node needs them, because Phase 2 creates all five resources.',
       {
         code: [
-          'Account → Cloudflare Pages           Edit   Pages project + bindings',
+          'Account → Cloudflare Pages           Edit   the project and its bindings',
+          'Account → D1                         Edit   creates the database, runs migrations',
+          'Account → Workers KV Storage         Edit   creates both KV namespaces',
+          'Account → Workers R2 Storage         Edit   creates the assets bucket',
+          'Account → Vectorize                  Edit   creates the search index',
+        ].join('\n'),
+      },
+      'Add these three for a publisher node. A viewer node never calls Access, so skip them.',
+      {
+        code: [
           'Account → Access: Apps and Policies  Edit   the publisher application',
           'Account → Access: Service Tokens     Edit   the CLI credential',
           'Account → Access: Organizations      Read   discovers your team domain',
-          'Zone    → Zone                       Read   resolves the zone',
-          'Account → Workers R2 Storage         Edit   only for --only=r2',
-          'Zone    → Zone WAF                   Edit   only for --only=waf',
-          'Account → D1                         Edit   only for CI migrations',
         ].join('\n'),
+      },
+      'Add these two only if you intend to run the step named beside each one.',
+      {
+        code: [
+          'Zone    → Zone                       Read   --only=r2 and --only=waf',
+          'Zone    → Zone WAF                   Edit   --only=waf',
+        ].join('\n'),
+      },
+      {
+        note: 'These two are the ones people cannot find. Each permission row has three dropdowns, and the first one — the scope — starts on Account. Zone permissions are not in the Account list at all. Change that first dropdown to Zone and the middle one refills with `Zone`, `Zone WAF` and the rest.',
+      },
+      {
+        note: 'A zone-scoped row also needs the Zone Resources section below Permissions. Leave it unset and the token carries the permission but reaches no zone. Include the zone your node runs on, or every zone in the account.',
+      },
+      {
+        note: 'Both names above are current. If some other permission is missing from the list, `GET /user/tokens/permission_groups` returns every one with its scope.',
       },
       'Copy the token when it is shown and put it in your shell, where the setup tool will find it.',
       { code: 'export CLOUDFLARE_API_TOKEN=...' },
       { note: 'Cloudflare shows the token once. If you lose it, revoke it and mint another.' },
+      {
+        note: 'That export also outranks wrangler login. Wrangler prefers the token over your browser session, so Phases 2 and 4 run with these scopes rather than your own account access. A token holding only the Pages permission gets through the Pages step and then fails on D1, KV or Vectorize.',
+      },
     ],
     verification: 'detected',
+  },
+  {
+    id: 'analytics-engine',
+    title: 'Turn on Analytics Engine',
+    why:
+      'It is off until someone opens it once, and the Pages deploy then ' +
+      'fails outright rather than degrading: "Failed to publish your ' +
+      'Function. You need to enable Analytics Engine." Nothing earlier ' +
+      'in the install touches it. So the first sign is a deploy that ' +
+      'will not publish, long after the binding was set, reading like a ' +
+      'fault in the code rather than an account setting.',
+    url: 'https://dash.cloudflare.com/?to=/:account/workers/analytics-engine',
+    docsUrl: 'https://developers.cloudflare.com/analytics/analytics-engine/get-started/',
+    steps: [
+      'Open Workers & Pages, then Analytics Engine, and create a dataset.',
+      'Give it these two values. They are the ones Phase 8 binds, and the names have to match.',
+      {
+        code: ['Dataset Name     terraviz_events', 'Dataset Binding  ANALYTICS'].join('\n'),
+      },
+      {
+        note: 'The dialog asks for both. `terraviz_events` is what the Grafana dashboards and the export pipeline read; `ANALYTICS` is what `functions/api/ingest.ts` writes through.',
+      },
+      {
+        note: 'Creating the dataset here is not what makes it real — a dataset appears on first write either way. What this does is enable the product on your account, which is the part the deploy checks for.',
+      },
+    ],
+    // `self`, though the deploy does fail loudly if you skip it. The
+    // badge means "this tool will notice", and this tool never
+    // deploys — Cloudflare does, minutes later, in a different
+    // window. Claiming detection we do not do is the inversion this
+    // field exists to prevent.
+    verification: 'self',
   },
   {
     id: 'zero-trust',
@@ -436,12 +505,30 @@ export const MANUAL_STEPS: ManualStep[] = [
       'this tool creates a Direct Upload project. Cloudflare will not run ' +
       'your build until you connect a remote, which means the VITE_* build ' +
       'variables have to be set wherever the build actually happens.',
+    url: 'https://dash.cloudflare.com/?to=/:account/workers-and-pages',
     docsUrl: 'https://developers.cloudflare.com/pages/configuration/git-integration/',
     steps: [
-      'Either connect the repository: Workers & Pages, your project, Settings, then Builds, then Connect to Git. Set the VITE_* variables in the dashboard afterwards.',
-      'Or keep Direct Upload and deploy from CI instead, setting the VITE_* variables in the CI job.',
+      {
+        note: 'Both options below happen in the Cloudflare dashboard, not on GitHub. Cloudflare asks GitHub for access partway through the first one; you never start from the GitHub side.',
+      },
+      {
+        note: '`VITE_*` is a naming convention, not a product. Vite is the bundler that builds this app, and it copies variables with that prefix into the JavaScript it emits. That is why they belong wherever the build runs — by the time a visitor loads the page, the values are already inside the file being served.',
+      },
+      {
+        note: 'None of them is required — the build succeeds with all of them unset, so this is tuning rather than a gate. §5.2 of the guide lists them with their values. `VITE_API_ORIGIN` is the one most likely to be wanted later: desktop builds and deep-link host recognition read it. The Earth textures need no variable at all — they ship in your own build.',
+      },
+      'Option A — let Cloudflare build. In Workers & Pages, open your project, then Settings, then Builds, then Connect to Git.',
+      {
+        note: 'Set the `VITE_*` variables in the dashboard afterwards, under the same Settings tab. Cloudflare rebuilds on every push to your default branch.',
+      },
+      'Option B — keep Direct Upload and build in CI. Set the `VITE_*` variables in the CI job instead, then deploy the finished directory.',
       { code: 'wrangler pages deploy dist/ --project-name <your-project>' },
-      { note: 'Pick one. Whichever you choose, the VITE_* values are read where the build runs, not where the site is served.' },
+      {
+        note: '`npm run setup` already made you a Direct Upload project, so B is keeping what you have and A is converting it. Take A if you want a push to deploy itself and would rather not maintain a workflow — that is most nodes. Take B if you want deploys gated on the tests your fork already runs, or would rather not grant Cloudflare access to the repository.',
+      },
+      {
+        note: 'Cloudflare moves this menu occasionally. If Builds is not where this says, look for Git repository or Connect to Git anywhere in the project settings — the wording changes, the capability does not.',
+      },
     ],
     verification: 'detected',
   },

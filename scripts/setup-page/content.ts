@@ -179,7 +179,7 @@ npm run dev:functions      # http://localhost:8788`,
     automatedNote: [
       'Creates or adopts the D1 database, both KV namespaces, the R2 bucket, and the Vectorize index with its three metadata indexes — and records every ID for you. Re-running adopts what already exists rather than making a second one.',
     ],
-    gate: 'W4 through W8 hold the IDs Cloudflare just printed, and W9 holds the dataset name you intend to use. Nothing creates W9 — an Analytics Engine dataset appears on first write.',
+    gate: 'W4 through W8 hold the IDs Cloudflare just printed, and W9 holds the dataset name you intend to use. No command creates W9 — an Analytics Engine dataset appears on first write. Turning the product on is a separate one-time click, and Phase 8.8 will not deploy without it.',
     gateShort: 'You have written down the six IDs Cloudflare just gave you.',
     anchor: 'phase-2--create-the-cloudflare-resources',
   },
@@ -653,6 +653,10 @@ export const TROUBLESHOOTING = [
     fix: "Remote node identity is empty — Phase 9 was not run. The local seed and key-gen paths do **not** write remote D1. The 503's own error text tells you to run `gen:node-key`; that hint is wrong. Use `init-node`.",
   },
   {
+    symptom: 'Deploy fails: "You need to enable Analytics Engine"',
+    fix: 'The product is off on your account until somebody opens it once, and a Function declaring the binding cannot publish without it. Open Workers & Pages → Analytics Engine and create a dataset — name `terraviz_events`, binding `ANALYTICS` — then retry the deployment.',
+  },
+  {
     symptom: 'Ingest returns 204 but nothing lands in Analytics Engine',
     fix: "The binding is missing in the environment serving traffic — check *both* Production and Preview. The function silently skips the write when it is undefined. (A 403 instead means the CORS gate rejected it: curl does not send an Origin header unless you pass one.)",
   },
@@ -748,7 +752,7 @@ export const WORKSHEET: WorksheetField[] = [
   { id: 'W1', label: 'Cloudflare account ID', phase: 0, token: '‹account-id›', placeholder: '32-char hex', note: 'Dashboard sidebar, and in every dashboard URL.', origin: 'asked', fromTool: 'accountId', validator: 'accountId', consumedBy: [5, 10, 13], minTier: 1 },
   { id: 'W2', label: 'Node hostname', phase: 0, token: '‹your-hostname›', placeholder: 'terraviz.your-org.org', note: 'Hostname only. No https://, no trailing path.', origin: 'asked', fromTool: 'hostname', validator: 'hostname', consumedBy: [5, 6, 8, 9, 10, 13, 14], minTier: 1 },
   { id: 'W3', label: 'Git remote', phase: 0, token: '‹owner/repo›', placeholder: 'owner/repo', note: 'Where Pages watches for builds.', origin: 'asked', fromTool: 'githubRepo', validator: 'repoSlug', consumedBy: [5, 14], minTier: 1 },
-  { id: 'TRUST', label: 'Auto-approve domains', phase: 0, token: '‹trusted-domains›', placeholder: 'your-org.org,partner.org', note: 'Optional. Sign-ins from these domains skip the approval queue but land READ-ONLY (role reviewer). It grants nobody admin — the first sign-in does that. Blank means you approve everyone by hand.', origin: 'asked', fromTool: 'trustedPublisherDomains', validator: 'emailDomainList', consumedBy: [8, 11], minTier: 2 },
+  { id: 'TRUST', label: 'Auto-approve domains', phase: 0, token: '‹trusted-domains›', placeholder: 'your-org.org,partner.org', note: 'Optional, and reversible from the Users tab later. Sign-ins from these domains skip the approval queue but land READ-ONLY (role reviewer), able to publish nothing. It grants nobody admin — the first sign-in does that. Blank means every sign-in waits for you, your own team included.', origin: 'asked', fromTool: 'trustedPublisherDomains', validator: 'emailDomainList', consumedBy: [8, 11], minTier: 2 },
   { id: 'W4', label: 'D1 database ID', phase: 2, token: '‹d1-id›', placeholder: 'from wrangler d1 create', note: 'The one value you cannot recover from a later error.', origin: 'discovered', consumedBy: [3, 8], minTier: 1 },
   { id: 'W5', label: 'KV — TELEMETRY_KILL_SWITCH', phase: 2, token: '‹kv-killswitch-id›', placeholder: '32-char hex', origin: 'discovered', consumedBy: [3, 8], minTier: 1 },
   { id: 'W6', label: 'KV — CATALOG_KV', phase: 2, token: '‹catalog-kv-id›', placeholder: '32-char hex', origin: 'discovered', consumedBy: [3, 8], minTier: 2 },
