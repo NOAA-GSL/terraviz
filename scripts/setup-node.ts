@@ -580,7 +580,9 @@ export async function runSetup(deps: SetupDeps): Promise<number> {
           `  would ensure R2        ${state.r2Bucket.name}\n` +
           `  would ensure Vectorize ${state.vectorizeIndex.name} (768/cosine)\n` +
           `  would ensure metadata  ${VECTORIZE_METADATA_PROPERTIES.join(', ')}\n` +
-          '  Analytics Engine       no action — the dataset is created on first write\n\n',
+          '  Analytics Engine       no action — the dataset is created on first write\n' +
+          '                         (enable the product once in the dashboard, or\n' +
+          '                          the Phase 8.8 deploy fails to publish)\n\n',
       )
     } else {
       try {

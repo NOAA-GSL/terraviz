@@ -179,7 +179,7 @@ npm run dev:functions      # http://localhost:8788`,
     automatedNote: [
       'Creates or adopts the D1 database, both KV namespaces, the R2 bucket, and the Vectorize index with its three metadata indexes — and records every ID for you. Re-running adopts what already exists rather than making a second one.',
     ],
-    gate: 'W4 through W8 hold the IDs Cloudflare just printed, and W9 holds the dataset name you intend to use. Nothing creates W9 — an Analytics Engine dataset appears on first write.',
+    gate: 'W4 through W8 hold the IDs Cloudflare just printed, and W9 holds the dataset name you intend to use. No command creates W9 — an Analytics Engine dataset appears on first write. Turning the product on is a separate one-time click, and Phase 8.8 will not deploy without it.',
     gateShort: 'You have written down the six IDs Cloudflare just gave you.',
     anchor: 'phase-2--create-the-cloudflare-resources',
   },
@@ -651,6 +651,10 @@ export const TROUBLESHOOTING = [
   {
     symptom: 'well-known 503s, or publishing fails on origin_node',
     fix: "Remote node identity is empty — Phase 9 was not run. The local seed and key-gen paths do **not** write remote D1. The 503's own error text tells you to run `gen:node-key`; that hint is wrong. Use `init-node`.",
+  },
+  {
+    symptom: 'Deploy fails: "You need to enable Analytics Engine"',
+    fix: 'The product is off on your account until somebody opens it once, and a Function declaring the binding cannot publish without it. Open Workers & Pages → Analytics Engine and create a dataset — name `terraviz_events`, binding `ANALYTICS` — then retry the deployment.',
   },
   {
     symptom: 'Ingest returns 204 but nothing lands in Analytics Engine',

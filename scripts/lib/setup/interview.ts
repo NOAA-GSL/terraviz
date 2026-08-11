@@ -417,6 +417,38 @@ export const MANUAL_STEPS: ManualStep[] = [
     verification: 'detected',
   },
   {
+    id: 'analytics-engine',
+    title: 'Turn on Analytics Engine',
+    why:
+      'It is off until someone opens it once, and the Pages deploy then ' +
+      'fails outright rather than degrading: "Failed to publish your ' +
+      'Function. You need to enable Analytics Engine." Nothing earlier ' +
+      'in the install touches it. So the first sign is a deploy that ' +
+      'will not publish, long after the binding was set, reading like a ' +
+      'fault in the code rather than an account setting.',
+    url: 'https://dash.cloudflare.com/?to=/:account/workers/analytics-engine',
+    docsUrl: 'https://developers.cloudflare.com/analytics/analytics-engine/get-started/',
+    steps: [
+      'Open Workers & Pages, then Analytics Engine, and create a dataset.',
+      'Give it these two values. They are the ones Phase 8 binds, and the names have to match.',
+      {
+        code: ['Dataset Name     terraviz_events', 'Dataset Binding  ANALYTICS'].join('\n'),
+      },
+      {
+        note: 'The dialog asks for both. `terraviz_events` is what the Grafana dashboards and the export pipeline read; `ANALYTICS` is what `functions/api/ingest.ts` writes through.',
+      },
+      {
+        note: 'Creating the dataset here is not what makes it real — a dataset appears on first write either way. What this does is enable the product on your account, which is the part the deploy checks for.',
+      },
+    ],
+    // `self`, though the deploy does fail loudly if you skip it. The
+    // badge means "this tool will notice", and this tool never
+    // deploys — Cloudflare does, minutes later, in a different
+    // window. Claiming detection we do not do is the inversion this
+    // field exists to prevent.
+    verification: 'self',
+  },
+  {
     id: 'zero-trust',
     title: 'Complete Zero Trust onboarding',
     why:

@@ -687,11 +687,23 @@ Each `create` prints the ID. **Copy them onto the worksheet now** —
 ID is the one thing you cannot recover from a later error message.
 To re-read them: `wrangler d1 list`, `wrangler kv namespace list`.
 
-**W9 — Analytics Engine.** There is nothing to create. AE datasets
-come into existence the first time something writes to them; you
-name the dataset in the binding (Phase 8) and it appears. Use
-`terraviz_events` unless you have a reason not to — the Grafana
-dashboards and the export pipeline default to that name.
+**W9 — Analytics Engine.** There is no dataset to create. AE
+datasets come into existence the first time something writes to
+them; you name the dataset in the binding (Phase 8) and it
+appears. Use `terraviz_events` unless you have a reason not to —
+the Grafana dashboards and the export pipeline default to that
+name.
+
+> ⚠️ **The product itself does have to be turned on.** Open
+> **Workers & Pages → Analytics Engine** once. Until you do, the
+> Pages deploy in Phase 8.8 fails with `Failed to publish your
+> Function. You need to enable Analytics Engine.` — not a
+> degraded feature, a deploy that will not publish.
+>
+> The dialog asks for two values, and both are fixed by the code:
+> Dataset Name `terraviz_events`, Dataset Binding `ANALYTICS`.
+> Those are the names Phase 8.1 binds and
+> `functions/api/ingest.ts` writes through.
 
 **Tier 1 operators:** you only need `W4` (D1) and `W5` (KV). Skip
 the R2 and Vectorize commands; add them later if you upgrade.
@@ -2003,6 +2015,20 @@ texture stops the deploy rather than reaching your visitors.
 You skipped `npm install`, or ran it somewhere other than the
 repository root. Every `npm run` command in this guide runs from
 inside your clone, after a successful install. See §0.4.
+
+### Deploy fails: "You need to enable Analytics Engine"
+The product is off on your account, and stays off until somebody
+opens it once. A Pages Function that declares an
+`analytics_engine_datasets` binding cannot publish without it, so
+this fails the whole deploy rather than degrading one route.
+
+Open **Workers & Pages → Analytics Engine** and create a dataset:
+Dataset Name `terraviz_events`, Dataset Binding `ANALYTICS`. Then
+retry the deployment. The error links straight to the page.
+
+Creating the dataset is not strictly what fixes it — AE datasets
+appear on first write regardless. Enabling the product is. The
+dialog is just the shortest path to both.
 
 ### `/api/ingest` returns 204 but nothing lands in Analytics Engine
 The `ANALYTICS` binding is missing in the environment serving
