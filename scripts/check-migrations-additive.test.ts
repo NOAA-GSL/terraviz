@@ -93,4 +93,14 @@ describe('findPrefixCollisions', () => {
   it('recognises a frozen pair regardless of listing order', () => {
     expect(findPrefixCollisions('m', ['0036_b.sql', '0036_a.sql'], FROZEN)).toEqual([])
   })
+
+  // …and regardless of the order the freeze itself is written in. The
+  // first version normalized only the directory listing, so a
+  // hand-written set listed out of order would have failed CI over a
+  // file nobody touched. Review catch on #368.
+  it('recognises a frozen set that is itself listed out of order', () => {
+    const unsorted = [['0036_b.sql', '0036_a.sql']]
+    expect(findPrefixCollisions('m', ['0036_a.sql', '0036_b.sql'], unsorted)).toEqual([])
+    expect(findPrefixCollisions('m', ['0036_b.sql', '0036_a.sql'], unsorted)).toEqual([])
+  })
 })

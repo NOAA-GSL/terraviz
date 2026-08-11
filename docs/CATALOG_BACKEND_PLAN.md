@@ -2699,9 +2699,10 @@ contract tests and unit tests.
 - **A migration's filename is permanent once it merges.**
   `d1_migrations.name` records the full filename, not the number, so
   renaming an applied file makes wrangler treat it as new and run it
-  a second time. For an `ALTER TABLE … ADD COLUMN` that fails with
-  `duplicate column name` and aborts every migration behind it. Pick
-  the number carefully in review, while changing it is still free —
+  a second time. An `ALTER TABLE … ADD COLUMN` then fails with
+  `duplicate column name`, and that failure aborts every migration
+  behind it. Pick the number carefully in review, while changing it
+  is still free —
   `npm run check:migrations` fails on a number claimed twice, and the
   one existing collision (two `0036` files, shipped) is frozen there
   for exactly this reason.

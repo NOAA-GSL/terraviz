@@ -118,8 +118,14 @@ export function findPrefixCollisions(
     byPrefix.set(prefix, [...(byPrefix.get(prefix) ?? []), name])
   }
 
+  // Both sides are normalized. `files` comes from readdir, whose order
+  // is not guaranteed, and a frozen set is hand-written — so neither can
+  // be assumed sorted. Comparing a sorted set against an unsorted
+  // literal would fail a freeze that is spelled correctly but listed in
+  // another order, which reads as CI rejecting a file nobody touched.
+  const frozenSorted = frozen.map(set => [...set].sort())
   const isFrozen = (files: string[]): boolean =>
-    frozen.some(set => set.length === files.length && set.every((f, i) => f === files[i]))
+    frozenSorted.some(set => set.length === files.length && set.every((f, i) => f === files[i]))
 
   const collisions: PrefixCollision[] = []
   for (const [prefix, files] of byPrefix) {
@@ -183,9 +189,9 @@ function main(): void {
       '\nWrangler tolerates this — it orders by leading number, then by full\n' +
         'filename, so the sequence stays deterministic. The problem is the repair.\n' +
         '`d1_migrations` records the full filename, so renaming a file that has\n' +
-        'already been applied makes wrangler run it again. For an\n' +
-        '`ALTER TABLE ... ADD COLUMN` that fails with `duplicate column name` and\n' +
-        'aborts every migration after it.\n\n' +
+        'already been applied makes wrangler run it again. An\n' +
+        '`ALTER TABLE ... ADD COLUMN` then fails with `duplicate column name`, and\n' +
+        'that failure aborts every migration after it.\n\n' +
         'So renumber the one that has NOT shipped yet, now, while renaming it is\n' +
         'still free. Once it merges and a node applies it, the number is permanent.\n',
     )
