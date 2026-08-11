@@ -342,8 +342,13 @@ describe('MANUAL_STEPS', () => {
     const text = MANUAL_STEPS.find(s => s.id === 'api-token')!.steps
       .map(lineText)
       .join('\n')
-    expect(text).toMatch(/Zone WAF\s+Edit\s+--only=waf/)
-    expect(text).toMatch(/Zone\s+Read\s+--only=r2/)
+    // The scope column is part of the assertion, not decoration. Both
+    // names live behind a dropdown that opens on Account, so a row
+    // reading `Account → Zone WAF` is the exact mistake this step
+    // exists to prevent — and it would satisfy a pattern that started
+    // matching at the permission name.
+    expect(text).toMatch(/Zone\s+→\s+Zone WAF\s+Edit\s+--only=waf/)
+    expect(text).toMatch(/Zone\s+→\s+Zone\s+Read\s+--only=r2/)
   })
 
   /**
