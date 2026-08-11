@@ -238,7 +238,7 @@ install, guided:
 
 ```bash
 npm run setup -- --manual         # do these in the dashboard first
-export CLOUDFLARE_API_TOKEN=...   # from --manual step 3
+export CLOUDFLARE_API_TOKEN=...   # the "Mint a Cloudflare API token" step
 
 npm run gen:node-key              # Phase 7, the half the tool doesn't own
 npm run setup -- --interactive    # answer 4-5 questions, see the plan
@@ -853,6 +853,14 @@ authorise, pick `W3`, then:
 build. `VITE_*` values are baked into the bundle at build time.
 Changing one later requires a rebuild, not just a redeploy.
 
+> `VITE_*` is a naming convention, not a Cloudflare product. Vite
+> is the bundler that builds this app, and it copies variables
+> carrying that prefix into the JavaScript it emits. So they have
+> to be set wherever the build runs — the Cloudflare dashboard if
+> Cloudflare builds, your CI job if CI builds. By the time a
+> visitor loads the page the values are already inside the file
+> being served.
+
 | Variable | Value | Notes |
 |---|---|---|
 | `VITE_BUILD_CHANNEL` | `public` | or `internal` / `canary` |
@@ -874,16 +882,23 @@ terraviz`. On a fresh fork that job either fails for lack of
 secrets, or — worse, if you've set them — deploys to a project name
 that isn't yours.
 
+Both paths are configured in the **Cloudflare** dashboard, not on
+GitHub. Cloudflare asks GitHub for repository access partway
+through the first one; you never start from the GitHub side.
+
 - **Using the dashboard Git integration (recommended):** delete or
   disable the `deploy` job in `ci.yml` and `poster.yml`. Keep
   `type-check`, `unit-tests`, and `build` — they're fork-safe and
-  need no secrets.
+  need no secrets. Take this one if you want pushes to deploy
+  themselves and would rather not maintain a workflow.
 - **Using GitHub Actions to deploy (Direct Upload):** four things.
   Set repo secrets `CLOUDFLARE_API_TOKEN` (`W11`) and
   `CLOUDFLARE_ACCOUNT_ID` (`W1`). Change every
   `--project-name terraviz` to `W10`. Set the repo **Variable**
   `TERRAVIZ_SERVER` to `https://<W2>`. And do *not* connect the Git
-  integration.
+  integration. Take this one if the build needs a secret you won't
+  put in the Cloudflare dashboard, or if CI already gates deploys
+  on tests.
 
 A token used only by CI needs **Account → Cloudflare Pages → Edit**
 and nothing else. Add **Account → D1 → Edit** if you enable CI

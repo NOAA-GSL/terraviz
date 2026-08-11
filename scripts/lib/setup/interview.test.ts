@@ -346,6 +346,32 @@ describe('MANUAL_STEPS', () => {
     expect(text).toMatch(/Zone\s+Read\s+--only=r2/)
   })
 
+  /**
+   * The guide must cite these steps by name, never by position.
+   *
+   * `MANUAL_STEPS` is numbered at render time from its array index, so
+   * inserting a step renumbers every one after it. The guide carried
+   * `# from --manual step 3` pointing at the API-token step, which had
+   * been sixth for some time — a stale number that reads as authoritative
+   * and sends someone to "Fork the repository" for a token.
+   *
+   * Titles do not drift the way indices do, and a wrong title is
+   * obvious where a wrong number is not. So the reference form is the
+   * name.
+   */
+  it('is cited by name in the guide, never by step number', () => {
+    const guide = readFileSync(
+      resolve(dirname(fileURLToPath(import.meta.url)), '../../../docs/SELF_HOSTING.md'),
+      'utf8',
+    )
+    const numbered = [...guide.matchAll(/--manual step \d+/g)].map(m => m[0])
+    expect(
+      numbered,
+      'cite the step by its title instead — inserting a manual step renumbers ' +
+        'every later one, and nothing recomputes these',
+    ).toEqual([])
+  })
+
   it('renders a step with its heading, rationale and link', () => {
     const text = renderManualStep(MANUAL_STEPS[0], 1)
     expect(text).toContain('1. ')

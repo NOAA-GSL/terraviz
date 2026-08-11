@@ -100,10 +100,18 @@ export const QUESTIONS: InterviewQuestion[] = [
     envVar: 'TRUSTED_PUBLISHER_DOMAINS',
     label: 'Auto-approve domains',
     help: [
-      'Optional. Sign-ins from these domains skip the approval queue,',
-      'but land READ-ONLY (role reviewer) — this does not make anyone',
-      'an admin. You become admin by being the first to sign in.',
-      'Comma-separated. Leave blank to approve everyone by hand.',
+      'Optional, and reversible later from the portal Users tab.',
+      '',
+      'Fill it in: anyone with an address at these domains can sign',
+      'in and read the portal straight away. They land READ-ONLY',
+      '(role reviewer) and can publish nothing. This does not make',
+      'anyone an admin — you become admin by being first to sign in.',
+      '',
+      'Leave it blank: nobody gets in until you approve them by',
+      'hand. Every sign-in queues for you, including your own team.',
+      'Safer for a public domain; tedious for a colleague waiting.',
+      '',
+      'Comma-separated. Only worth it for domains you control.',
     ],
     example: 'your-org.org,partner.org',
     optional: true,
@@ -489,12 +497,27 @@ export const MANUAL_STEPS: ManualStep[] = [
       'this tool creates a Direct Upload project. Cloudflare will not run ' +
       'your build until you connect a remote, which means the VITE_* build ' +
       'variables have to be set wherever the build actually happens.',
+    url: 'https://dash.cloudflare.com/?to=/:account/workers-and-pages',
     docsUrl: 'https://developers.cloudflare.com/pages/configuration/git-integration/',
     steps: [
-      'Either connect the repository: Workers & Pages, your project, Settings, then Builds, then Connect to Git. Set the VITE_* variables in the dashboard afterwards.',
-      'Or keep Direct Upload and deploy from CI instead, setting the VITE_* variables in the CI job.',
+      {
+        note: 'Both options below happen in the Cloudflare dashboard, not on GitHub. Cloudflare asks GitHub for access partway through the first one; you never start from the GitHub side.',
+      },
+      {
+        note: '`VITE_*` is a naming convention, not a product. Vite is the bundler that builds this app, and it copies variables with that prefix into the JavaScript it emits. That is why they belong wherever the build runs — by the time a visitor loads the page, the values are already inside the file being served.',
+      },
+      'Option A — let Cloudflare build. In Workers & Pages, open your project, then Settings, then Builds, then Connect to Git.',
+      {
+        note: 'Set the `VITE_*` variables in the dashboard afterwards, under the same Settings tab. Cloudflare rebuilds on every push to your default branch.',
+      },
+      'Option B — keep Direct Upload and build in CI. Set the `VITE_*` variables in the CI job instead, then deploy the finished directory.',
       { code: 'wrangler pages deploy dist/ --project-name <your-project>' },
-      { note: 'Pick one. Whichever you choose, the VITE_* values are read where the build runs, not where the site is served.' },
+      {
+        note: 'Take A if you want pushes to deploy themselves and would rather not maintain a workflow. Take B if the build needs a secret you will not put in the Cloudflare dashboard, or if CI already gates deploys on tests. A is the shorter path and the one most nodes want.',
+      },
+      {
+        note: 'Cloudflare moves this menu occasionally. If Builds is not where this says, look for Git repository or Connect to Git anywhere in the project settings — the wording changes, the capability does not.',
+      },
     ],
     verification: 'detected',
   },
