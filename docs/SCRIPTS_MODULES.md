@@ -32,6 +32,7 @@ Most of these files carry a substantial header comment explaining the
 
 | File | Responsibility |
 |---|---|
+| `scripts/lib/basemaps.ts` | The eleven Earth basemap textures every node loads, where a build fetches them from, and where they land — behind `npm run fetch:basemaps`. Carries the file list, the pure `referencedBasemaps` scanner a test uses to check that list against the URLs `src/` actually builds, and the magic-byte check that turns an error page saved under a `.jpg` name into a failed fetch |
 | `scripts/lib/catalog-migrations.ts` | Where the migrations live + how to apply them to an in-memory DB, shared so `dump-catalog-schema.ts` and the migrations smoke test cannot disagree about either |
 | `scripts/lib/cf-pages-api.ts` | Cloudflare Pages REST **read** client for the bindings audit — pure mapping from `GET /accounts/{id}/pages/projects/{name}` into binding shapes |
 | `scripts/lib/cli.ts` | Shared CLI helpers for the tsx-based scripts; `isInvokedAsScript()` is the cross-platform "is this file the entry point" check that gates `main()`-style top-level calls |

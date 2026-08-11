@@ -107,6 +107,7 @@ npm run build        # tokens + tsc + vite build
 npm run type-check   # tsc --noEmit (must pass before committing)
 npm run test         # vitest run
 npm run tokens       # regenerate src/styles/tokens.css from tokens/*.json
+npm run fetch:basemaps  # pull the Earth textures into public/assets/basemaps/
 npm run setup        # provision a self-hosted node (plan by default)
 npm run setup -- --interactive   # guided, with instructions + validation
 npm run setup -- --manual        # the prerequisites no API can do for you
@@ -124,6 +125,15 @@ npm run screenshots:smoke   # gating interaction tests (search, Orbit, nav)
 > (gitignored). It is created automatically by `postinstall` after
 > `npm install`, and by `npm run build`. Run `npm run tokens` manually
 > if you edit any file under `tokens/`.
+
+> **Note:** `public/assets/basemaps/` is fetched, not committed —
+> 18.5 MB of Earth textures pulled by `postinstall` via
+> `npm run fetch:basemaps` and served same-origin from the deploy.
+> They are gitignored for the reason LFS handled badly: a clone
+> missing them used to produce text files wearing `.jpg` names and
+> ship them. If the globe renders untextured, run the fetch. Setting
+> `VITE_EARTH_ASSET_BASE` serves them from a CDN instead and skips
+> the fetch entirely. See `scripts/lib/basemaps.ts`.
 
 ### Module map
 
