@@ -479,16 +479,32 @@ mechanically stops a larger frame. What stops it is further downstream.
 
 | target | grid (2:1) | megapixels | vs shipped | fits H.264/HEVC level 6.2 |
 |---|---|---|---|---|
-| 9.78 km — shipped | 4096×2048 | 8.4 | 1× | yes |
-| 4.89 km | 8192×4096 | 33.6 | 4× | yes, barely |
+| 9.78 km — shipped | 4096×2048 | 8.4 | 1× | yes — measured, level 5.1 |
+| 4.89 km | 8192×4096 | 33.6 | 4× | yes — measured, level **6.0** |
 | 3.75 km | 10687×5343 | 57.1 | 6.8× | **no** |
 | 3 km — MPAS mesh scale | 13358×6679 | 89.2 | 10.6× | **no** |
 
 Both codecs cap a frame at **35,651,584 pixels** (8192×4352) at their
 highest defined level. That is a spec ceiling, not a bitrate or flag
-problem: 8192×4096 fits with about 6% to spare, and everything past it is
-unencodable at any quality. Practical decode limits sit lower still —
-plenty of hardware advertises level 6.2 and tops out at 4K.
+problem: everything past it is unencodable at any quality. Practical
+decode limits sit lower still — plenty of hardware advertises a high
+level and tops out at 4K.
+
+The two "yes" rows are measured rather than inferred: an 8192×4096
+encode through this repo's exact settings is accepted by x264 at Main
+profile and stamps **level 6.0**, not 6.2. Levels 6.0/6.1/6.2 share one
+139,264-macroblock frame ceiling and differ only in bitrate, and
+8192×4096 is 131,072 macroblocks — so it clears the lowest of the three,
+which is a better compatibility position than the ceiling figure alone
+suggests. What that encode also showed is that the *frame size* is not
+what bites: holding `maxBitrateKbps` at the shipped 25 000 while
+quadrupling the pixels degrades the value round trip in the tail
+(p99.9 error 2 → 7, worst texel 13 → 152), and the damage clusters in
+high-frequency regions — the storm cores, for a reflectivity field.
+At matched bits-per-pixel the 8K encode is indistinguishable from the
+shipped rung. Full numbers, the device-decode probe that is still
+outstanding, and what building this would take are in
+[`DATA_ENCODED_RESOLUTION_PLAN.md`](DATA_ENCODED_RESOLUTION_PLAN.md).
 
 Four routes past that ceiling get proposed. In rough order of how often:
 
@@ -548,7 +564,11 @@ Four routes past that ceiling get proposed. In rough order of how often:
   8192×4096 is under the codec ceiling, so it needs no new architecture at
   all — no sync, no seams, no rung selection, one decoder. It wants device
   testing rather than design work, and `sos-spec` will warn on the
-  resolution.
+  resolution. One caveat the encode measurement added: it is *not* purely
+  a settings-free bump, because `DATA_ENCODED_RENDITIONS`' 25 Mbps cap
+  corrupts values at four times the pixels and has to scale.
+  [`DATA_ENCODED_RESOLUTION_PLAN.md`](DATA_ENCODED_RESOLUTION_PLAN.md)
+  is the implementation plan.
 
 Note what none of these move. Every route still runs the luma through
 `yuv420p` and the limited-range round trip, so the ~219 distinguishable
