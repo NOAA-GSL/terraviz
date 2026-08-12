@@ -466,3 +466,103 @@ A separate idea the chroma planes *could* legitimately serve — not more
 precision, but a **second variable at quarter resolution** (wind U/V
 alongside a scalar, say) where coarse spatial resolution is acceptable for
 the secondary field. That warrants its own design if a dataset wants it.
+
+### Why the frame is 4096×2048, and what more resolution would cost
+
+The companion question to the one above — not "more bits per texel" but
+"more texels" — and it recurs every time a source is finer than the grid.
+A 4096-wide equirectangular frame is **9.78 km per texel at the equator**
+(40,075 km ÷ 4096), so anything convection-permitting arrives already
+finer than the globe can show. `cli/lib/sos-spec.ts` pins 4096×2048 as the
+ladder top; deviating from it is a **warning**, not a failure, so nothing
+mechanically stops a larger frame. What stops it is further downstream.
+
+| target | grid (2:1) | megapixels | vs shipped | fits H.264/HEVC level 6.2 |
+|---|---|---|---|---|
+| 9.78 km — shipped | 4096×2048 | 8.4 | 1× | yes |
+| 4.89 km | 8192×4096 | 33.6 | 4× | yes, barely |
+| 3.75 km | 10687×5343 | 57.1 | 6.8× | **no** |
+| 3 km — MPAS mesh scale | 13358×6679 | 89.2 | 10.6× | **no** |
+
+Both codecs cap a frame at **35,651,584 pixels** (8192×4352) at their
+highest defined level. That is a spec ceiling, not a bitrate or flag
+problem: 8192×4096 fits with about 6% to spare, and everything past it is
+unencodable at any quality. Practical decode limits sit lower still —
+plenty of hardware advertises level 6.2 and tops out at 4K.
+
+Four routes past that ceiling get proposed. In rough order of how often:
+
+- **A frame sequence instead of a video.** There is no client-side frame
+  animation to fall back on. `src/utils/frames.ts` resolves a frame
+  *query* to a single `ResolvedFrame` — one URL, one timestamp — for deep
+  links and Orbit markers; it picks a frame rather than stepping through
+  them, and `playbackController.ts` contains no reference to frames at
+  all, driving one `hlsService.getVideo()`. Frames are an *upload* format:
+  `cli/transcode-from-dispatch.ts` declares
+  `SourceKind = 'video' | 'frames'` and feeds the frames branch through
+  ffmpeg's `image2` demuxer into the same HLS ladder, capped at
+  `MAX_IMAGE_SEQUENCE_FRAMES = 10_000`. So a frame set does not dodge the
+  transport — it *becomes* it, with the same losses.
+- **Tiles played in lockstep** (four 4K quadrants, say). The arithmetic
+  disappoints first: each quadrant is 180°×90°, itself 2:1, so four
+  4096×2048 tiles compose to 8192×4096 — 4.89 km, not 3.75. Reaching 3.75
+  needs a 3×3 tiling and nine streams. Then the engineering: the 4-globe
+  layout proves four concurrent decodes work, but `viewportManager` syncs
+  **cameras only** (`syncCameras` / `jumpTo` / a `syncLock` re-entry
+  guard) and nothing time-syncs panels. Drift is invisible across four
+  *different* datasets and fatal across four tiles of *one* field —
+  `currentTime` snaps to the nearest decodable point, each element keeps
+  its own clock, and a one-frame skew means the values either side of a
+  seam come from different timesteps. Seams are a data problem
+  independently: bilinear filtering samples across tile edges, so edges
+  need padding and deliberate clamping, and `datasetProbe`,
+  `datasetStats`, and `glLumaSampler.snapshot()` all assume one frame in
+  one context.
+- **A resolution ladder with capability fallback.** The most promising of
+  the four, because the machinery already exists and was deliberately
+  switched off. `cli/lib/ffmpeg-hls.ts` carries a three-rung display
+  ladder (4096×2048, 2160×1080, 1440×720) and a **separate single-rung
+  ladder for data-encoded**, on the grounds recorded there: the lower
+  rungs "would resample a data raster to a quarter scale." `hlsService.ts`
+  already implements exactly the fallback such a scheme wants — mobile
+  caps `autoLevelCapping` to the screen dimension, and a media error caps
+  one level below "to prevent repeatedly hitting the same wall."
+  The gap is that ABR switches on **bandwidth**, not only on capability.
+  For display video those are one feature; here a bandwidth dip would swap
+  the rung mid-session, changing the value under the cursor and making
+  "the displayed frame" that Analyze reduces non-deterministic.
+  **The workable form is to pin, not adapt:** publish both rungs, resolve
+  capability once at load, then set `hls.currentLevel` (which locks a rung)
+  rather than `autoLevelCapping` (which leaves ABR free beneath the cap),
+  keeping the media-error handler as the escape hatch since a decode
+  failure is real capability information. Two costs to price in — the
+  downscale must be `flags=neighbor` per the Encoder section, and
+  neighbour decimation means the rungs genuinely *disagree* about the
+  value at a given lat/lon, so two viewers on different hardware read
+  different numbers and the Analyze caveat line has to say so; and
+  changing ladder settings requires bumping `v: 1` in
+  `segmentDescriptorHash` (`cli/lib/hls-incremental.ts`) or segments
+  cached under the old settings get recycled into a bundle carrying the
+  new ones.
+- **One larger single stream.** Unglamorous and the cheapest real gain:
+  8192×4096 is under the codec ceiling, so it needs no new architecture at
+  all — no sync, no seams, no rung selection, one decoder. It wants device
+  testing rather than design work, and `sos-spec` will warn on the
+  resolution.
+
+Note what none of these move. Every route still runs the luma through
+`yuv420p` and the limited-range round trip, so the ~219 distinguishable
+levels of §Encoder are unchanged however finely space is subdivided.
+**Tiling and laddering buy spatial resolution, never value precision** —
+if a dataset's problem is fidelity rather than sharpness, this whole
+section is the wrong axis and the preceding one is the right one.
+
+So, in order of preference: **accept 9.78 km** (usually correct — the
+globe is a browsable surface, not an analysis grid, and `datasetStats`
+already weights by true cell area rather than pretending texels are
+equal); **test one 8192×4096 stream** if a source genuinely warrants it;
+**pin a two-rung ladder** if that stream proves undecodable somewhere it
+matters; and past ~35 MP, stop trying to make video carry it — the
+grain-aligned answer is a tiled pyramid with zoom-dependent LOD, the way
+GIBS already serves the basemap, which is a different renderer path and
+its own design.
