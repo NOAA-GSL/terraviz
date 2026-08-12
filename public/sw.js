@@ -7,7 +7,11 @@
 //      reject 206 Partial Content from cache writes so a truncated cloud
 //      texture can't poison the cache and persist across normal reloads.
 //      Bumping the name evicts any caches already holding bad bytes.
-const CACHE_NAME = 'gibs-tiles-v3'
+// v4 — reject redirected responses from cache writes, so a node behind
+//      Cloudflare Access can never store a login page under a tile URL.
+//      Bumped for the same reason as v3: it gives an operator debugging
+//      an Access-protected node a floor they can trust.
+const CACHE_NAME = 'gibs-tiles-v4'
 
 // External URLs to cache — scoped to specific paths, not entire hostnames
 const CACHEABLE_EXTERNAL = [
@@ -102,17 +106,45 @@ self.addEventListener('fetch', event => {
         }
       }
 
-      // Not cached (or bypass requested) — fetch from network
+      // Not cached (or bypass requested) — fetch from network.
+      //
+      // The clone carries the caller's own credentials mode, which is
+      // the correct behaviour and must stay that way. Forcing
+      // `credentials: 'include'` here would apply to the cross-origin
+      // rules above too, and both of those origins answer with
+      // `Access-Control-Allow-Origin: *` — a wildcard the browser
+      // rejects outright on a credentialed request. The SOS catalog
+      // (dataService.ts) is one of them, so that "fix" would trade
+      // some missing tiles for an empty dataset list. A same-origin
+      // caller that needs the Access cookie asks for it at the call
+      // site instead; see tilePreloader.ts.
       const response = await fetch(request.clone())
 
-      // Cache only verified-complete 200 responses. Specifically reject
-      // 206 Partial Content (range responses are truncated bodies that
-      // would silently decode to a gray/white band on the globe) and
-      // opaque cross-origin responses (status 0). 'no-store' opts out
-      // of writing too. response.ok would also accept 201-299, but
-      // those don't apply to static assets and aren't safe to cache.
+      // Cache only verified-complete, unredirected 200 responses.
+      // Specifically reject 206 Partial Content (range responses are
+      // truncated bodies that would silently decode to a gray/white
+      // band on the globe) and opaque cross-origin responses (status
+      // 0). 'no-store' opts out of writing too. response.ok would also
+      // accept 201-299, but those don't apply to static assets and
+      // aren't safe to cache.
+      //
+      // `redirected` is the Cloudflare Access guard. If this node's
+      // hostname is behind Access and a request arrives without the
+      // CF_Authorization cookie, Access answers 302 to the login
+      // origin. Following that usually fails the CORS check and
+      // throws before we get here — but an Access configuration that
+      // lands on a same-origin 200 would hand us login HTML wearing a
+      // tile URL, and cache-first would then serve it to everyone
+      // until CACHE_NAME moves. One flag closes that.
+      //
+      // Deliberately not `redirect: 'manual'` on the fetch above:
+      // that yields an opaqueredirect response, which respondWith
+      // refuses for a non-navigation request, turning a legible CORS
+      // error into a confusing TypeError. Follow, then decline to
+      // store.
       const writable =
         response.status === 200 &&
+        !response.redirected &&
         request.cache !== 'no-store'
 
       if (writable) {
