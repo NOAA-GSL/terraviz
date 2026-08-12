@@ -2293,9 +2293,9 @@ at top-level navigation, you sign in, and the next fetch succeeds.
 ### Console fills with CORS errors on `/api/tile/`, but the globe still renders
 Your Access application covers the whole hostname instead of the six
 destinations Phase 6.2 lists. Three request paths in the SPA are
-deliberately uncredentialed, so on a fully-protected host each draws
-a 302 to `<team>.cloudflareaccess.com`, and the redirect fails the
-CORS check because the login origin sends no
+deliberately uncredentialed. On a fully-protected host each one draws
+a 302 to `<team>.cloudflareaccess.com`. The redirect then fails the
+CORS check, because the login origin sends no
 `Access-Control-Allow-Origin`:
 
 | Request | What you see |
@@ -2307,10 +2307,10 @@ CORS check because the login origin sends no
 The globe keeps working throughout, which makes this look like a
 service worker bug. It is not. `sw.js` re-issues
 `fetch(request.clone())`, and a clone carries the caller's own
-credentials mode — so the worker fails exactly the requests that were
-already failing, and it never sees `/site.webmanifest` at all
-(`shouldCache` claims only `/api/tile/`, `/assets/skybox/` and the
-specular map). MapLibre's raster sources set no `transformRequest`,
+credentials mode. So the worker fails exactly the requests that were
+already failing. It never sees `/site.webmanifest` at all:
+`shouldCache` claims only `/api/tile/`, `/assets/skybox/` and the
+specular map. MapLibre's raster sources set no `transformRequest`,
 so its tile fetches use the default `same-origin` credentials and
 succeed. The discriminator is which caller issued the request, not
 the zoom level and not a `clients.claim()` race.
@@ -2320,10 +2320,10 @@ Two fixes, and you want the first:
 1. **Narrow the Access application** to the Phase 6.2 destinations.
    `/api/tile/`, `/api/ingest` and the SPA shell are public surfaces;
    only `/publish*` and `/api/v1/publish` need a policy.
-2. **If whole-host protection is deliberate** — a staging node nobody
-   outside the org should reach — deploy a build new enough to send
-   `credentials: 'same-origin'` on those three paths, and note that
-   anonymous visitors get nothing either way.
+2. **If whole-host protection is deliberate**, deploy a build new
+   enough to send `credentials: 'same-origin'` on those three paths.
+   That is the staging-node case: nobody outside the org should reach
+   it, and anonymous visitors get nothing either way.
 
 Do not reach for `credentials: 'include'` inside `sw.js`. It would
 apply to the cross-origin rules too, and both of those origins answer
