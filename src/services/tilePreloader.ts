@@ -59,7 +59,17 @@ async function fetchWithConcurrency(urls: string[], concurrency: number): Promis
           const tilePath = url.replace('/api/tile/', '')
           await tauriInvoke('get_tile', { tilePath })
         } else {
-          await fetch(url, { mode: 'cors', credentials: 'omit' })
+          // Credentialed on purpose, even though these URLs are
+          // same-origin. On a node whose hostname sits behind
+          // Cloudflare Access, an uncredentialed `/api/tile/` request
+          // carries no `CF_Authorization` cookie, so Access answers
+          // 302 to `<team>.cloudflareaccess.com`. The browser follows
+          // the redirect, the login origin sends no
+          // `Access-Control-Allow-Origin`, and all 170 preloads fail
+          // as CORS errors — silently, because the catch below eats
+          // them. `same-origin` is the fetch default; it is spelled
+          // out so it does not get tidied back to `omit`.
+          await fetch(url, { credentials: 'same-origin' })
         }
       } catch {
         // Non-critical — tile will be fetched on-demand later
