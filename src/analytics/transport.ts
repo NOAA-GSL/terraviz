@@ -134,7 +134,19 @@ export function createFetchTransport(options: TransportOptions = {}): Transport 
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body,
-        credentials: 'omit',
+        // `same-origin`, not `omit`: a node whose hostname sits
+        // behind Cloudflare Access answers an uncredentialed
+        // `/api/ingest` POST with a 302 to the login origin, which
+        // sends no `Access-Control-Allow-Origin` — so the send fails
+        // as a CORS error and retries forever. This does not widen
+        // what the server sees: `functions/api/ingest.ts` reads
+        // `Origin`, `Content-Length`, `CF-Connecting-IP` and
+        // `CF-IPCountry` and never looks at a cookie. Nor does it
+        // leak cross-origin — `same-origin` withholds cookies from
+        // an absolute `endpoint` override exactly as `omit` did,
+        // which is the Tauri case. `sendBeacon()` below has always
+        // sent them; this makes the two paths agree.
+        credentials: 'same-origin',
         keepalive: true,
       })
     } catch {
