@@ -183,9 +183,38 @@ data-encoded datasets:
   explicit alongside the tag, via `scale=in_range=full:out_range=full`.
   `-x264-params` is not needed; the ffmpeg-level flags suffice.
 
-  Still unverified: Safari, iOS Safari, and Firefox. `npm run
-  check:luma-range -- --serve` prints a LAN URL for testing on a real
-  device.
+  **iOS Safari agrees with Chrome to the digit** (Safari 26.6 / iOS
+  18.7, measured 2026-08-13 through the WebGL path). Every row of the
+  table above reproduces: today's settings and `tv`+conversion both fit
+  gain 1.0005, `-color_range pc` alone breaks identically at gain
+  0.8589 / offset 15.99, and the recommended
+  `scale=in_range=full:out_range=full` + `pc` is 256/256 exact. The
+  second decoder family does not change the recommendation.
+
+  Two variants beyond that table narrow *why* it works. Dropping
+  `-color_trc`, and dropping transfer, primaries and matrix together,
+  are both still 256/256 exact — so the full-range **conversion plus
+  the range tag** is doing all of the work, and the other colour tags
+  are documentation rather than mechanism. Worth knowing before anyone
+  "fixes" a future round-trip failure by adding more tags.
+
+  Still unverified: desktop Safari and Firefox. Every preview deploy
+  serves the check at `/luma-check/page.html`, which is the practical
+  way to reach a phone or a headset; `npm run check:luma-range --
+  --serve` prints a LAN URL for a machine on the same network.
+
+  **The 2D-canvas readout cannot be rescued, and this measured it.**
+  On the same device all three `readout*` diagnostics fail identically
+  on every variant — gain ≈1.003, offset ≈+6, up to 11 codes of error,
+  endpoints intact. Pinning `colorSpace: 'srgb'` on both the context
+  and the `getImageData` call changes nothing, and neither does one
+  full-size blit instead of per-texel 1×1 draws. Those two variants
+  existed to isolate the cause so a fix could be chosen by measurement;
+  the measurement says there is no arrangement of the 2D path that
+  avoids the transform. This is what
+  [`glLumaSampler`](../src/services/glLumaSampler.ts) shipping without
+  a 2D fallback buys, and it is now measured on the platform that
+  motivated it rather than assumed.
 
   **The untagged round trip preserves values, not occupancy.** Shipped
   untagged, the encoder contracts to limited range and both decoders
