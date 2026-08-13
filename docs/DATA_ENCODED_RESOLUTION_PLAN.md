@@ -1,26 +1,27 @@
 # Higher-resolution data-encoded video: the 8192×4096 rung
 
 **Status: draft for review.** The encode half is measured; the decode
-half has three devices reported and one inconclusive, and the trend is
-against this plan. Nothing in Phases 1–3 is built. The Phase 0
-*instrument* is built and its 8K bundle is staged in
-`public/luma-check/`.
+half has four devices reported and one inconclusive, and the results
+split by browser *and* by platform with no clean rule joining them.
+Nothing in Phases 1–3 is built. The Phase 0 *instrument* is built and
+its 8K bundle is staged in `public/luma-check/`.
 
-**The matrix so far: every Apple platform refuses the 8192×4096 rung,
-on both engines.** iOS Safari and macOS Chrome on an M2 Ultra both
-fail it with the same `MediaError` 4. Windows Chrome is the single
-device that decoded it — and it is the one row under suspicion of
-having done so in software, because the Intel iGPU it ran on cannot
-decode 8192-wide H.264 in hardware. Firefox on Windows stalled without
-returning anything.
+**The matrix so far: two accepts, two refusals, one stall — and the
+same OS lands on both sides.** macOS Safari decodes the 8192×4096 rung
+at true native resolution; macOS Chrome refuses it. Windows Chrome
+decodes it; iOS Safari refuses it; Windows Firefox stalls without
+returning anything. Neither "Apple platforms can't" nor "Chrome can"
+survives contact with the full set. Two attempts at a generalisation
+were written into this document and each was falsified by the next
+device to report — the per-row records below stand, the rules drawn
+from them did not, and the lesson is to record the (platform, browser)
+pair and wait.
 
-That reads less like the gate's "a population that matters cannot
-decode it" branch (Phase 1 + Phase 2) and more like its third: *if
-almost nothing decodes it, stop.* Android and Quest are still unknown
-and could move it back, but the honest current reading is that the
-only accept in hand may be a software decode nobody would want to
-watch. Settle the Windows decode path before treating any of this as
-a green light.
+That is the gate's middle branch: a population that matters cannot
+decode it, so Phase 1 alone is not enough and Phase 2 is load-bearing
+rather than optional. Both accepts carry the same open question —
+hardware decode, or software at a rate nobody would watch — and
+Android and Quest are unmeasured.
 
 **Last reviewed: 2026-08-13.**
 **Revisit when:** the Phase 0 matrix fills past its first row; a data
@@ -187,9 +188,9 @@ break CI.
 | device / browser | decodes | readyState | decoded size | MAX_TEXTURE_SIZE | texImage2D | native | notes |
 |---|---|---|---|---|---|---|---|
 | desktop Chrome 150 (Win 11, Intel UHD 770, ANGLE/D3D11) | **yes** | 4 | 8192×4096 | 16384 | ok | **yes** — spike 252.0 | Values round-trip at 8K exactly as at 4K. Decode path unconfirmed; see below |
-| desktop Chrome 151 (macOS, M2 Ultra, ANGLE Metal) | **no** | — | — | 16384 | — | — | `MediaError` 4, same refusal as iOS Safari. No software fallback happened here |
+| desktop Chrome 151 (macOS, M2 Ultra, ANGLE Metal) | **no** | — | — | 16384 | — | — | `MediaError` 4, and no software fallback — while Safari on the same OS accepts |
 | desktop Firefox (Win 11) | *stalls* | — | — | — | — | — | Ran 2026-08-13, never returned. Stalling variant unattributed — see below |
-| desktop Safari | | | | | | | |
+| desktop Safari 26.5.2 (macOS, Apple GPU) | **yes** | 4 | 8192×4096 | 16384 | ok | **yes** — spike 252.0 | Decodes what Chrome on the same OS refuses. Decode path unconfirmed |
 | iOS Safari 26.6 (iOS 18.7, Apple GPU) | **no** | — | — | 16384 | — | — | `MediaError` code 4 at `loadeddata`; refused before playback. A–G at 4096×256 all decode and upload on the same device |
 | mid-range Android | | | | | | | |
 | Quest browser | | | | | | | |
@@ -292,38 +293,69 @@ because there is no event to trigger on. If Firefox turns out to
 behave this way on the 8K rung, Phase 2 needs a timeout of its own
 rather than an `error` handler.
 
-**Row 4 — macOS Chrome, and it settles the browser-versus-platform
-question.** Chrome 151 on an M2 Ultra refuses the rung with the same
-`MediaError` 4 as iOS Safari. This is the controlled experiment the
-note below previously had to argue from first principles: Blink and
-WebKit, the same Apple decode path, identical refusal — while the
-*same* engine on Windows accepted the frame. The browser is not the
-variable. The platform's decoder is.
+**Row 4 — macOS Chrome.** Chrome 151 on an M2 Ultra refuses the rung
+with the same `MediaError` 4 as iOS Safari, and does not attempt a
+software fallback despite considerably more CPU headroom than the
+Windows box had.
 
-It also sharpens the suspicion hanging over row 2. Chrome did not fall
-back to software here, on a machine with considerably more CPU to
-spare than the Windows box had. Whatever let Windows Chrome through is
-specific to that platform's decode path rather than a general Chrome
-capability — which is consistent with it having been ffmpeg picking up
-what Intel's Quick Sync would not, and inconsistent with the rung
-being broadly decodable.
+This row was first written up here as settling the
+browser-versus-platform question: Blink and WebKit refusing alike on
+Apple hardware while the same engine accepted on Windows, therefore
+the platform decides. **Row 5 inverts that.** Safari on the same OS
+decodes the frame, so the refusal belongs to Chrome-on-macOS
+specifically rather than to macOS, and neither half of the pair
+generalises on its own.
 
-The 4096×256 variants all pass here, but not in the way the other
-devices pass them; see
+The 4096×256 variants all pass here, but not in the way any other
+device passes them; see
 [`DATA_ENCODED_VIDEO_PLAN.md`](DATA_ENCODED_VIDEO_PLAN.md) §Encoder,
-where this row costs the full-range recommendation its universality.
+where this row alone costs the full-range recommendation its
+universality.
 
-**A different browser does not help on Apple platforms, so the row is
-the platform.** On iOS this is structural: Chrome, Firefox and Edge
-are all WKWebView, since App Store policy requires it and no major
-browser has shipped an alternative engine even after iOS 17.4 opened
-the door in the EU. But the deeper reason holds on macOS too, where
-browsers *are* free to bring their own engine — H.264 decode goes
-through VideoToolbox to a fixed-function block either way, so the
-engine on top does not change which levels exist. Row 4 measures
-exactly that. Software decode is not a way out at ≈33.6 MP per frame
-on a phone, and macOS Chrome declined to attempt it even on a desktop.
-Record Apple results per *device*, not per browser.
+**Row 5 — macOS Safari, which breaks the pattern.** Safari 26.5.2
+decodes the rung: `readyState` 4, decoded size 8192×4096, clean
+`texImage2D`, and a spike mean of **252.0** against the 200 threshold,
+so the frame is genuinely native rather than quietly resampled. Values
+round-trip at 8K exactly as at 4K (220/256, gain 1.0005).
+
+Two conclusions recorded earlier in this section die here, and it is
+worth naming them rather than editing them away:
+
+- *"Every Apple platform refuses the rung, on both engines."* False.
+  macOS Safari is an Apple platform and it accepts.
+- *"The browser is not the variable; the platform's decoder is."*
+  Inverted. On one macOS machine Safari accepts and Chrome refuses,
+  which is the browser being exactly the variable.
+
+What survives is narrower and less quotable: **the (platform, browser)
+pair decides, and neither half predicts the answer alone.** iOS Safari
+refuses what macOS Safari accepts, so WebKit does not carry the
+capability with it. macOS Chrome refuses what macOS Safari accepts, so
+neither does the OS. Both generalisations were written after a single
+new device and both lasted exactly one more device; the matrix is the
+artifact, not the rule someone extracts from it half-full.
+
+**The framerate question applies here too.** Apple's hardware H.264
+block does not reach 8192 wide either, so this accept is most likely
+VideoToolbox software decode — plausible on an M2 Ultra and evidence
+of nothing at all about a MacBook Air or an older Mac. One frame after
+a seek is not playback. This row needs the same watch-it-actually-play
+check row 2 does before it counts as a capability rather than a
+curiosity.
+
+**A different browser does not help on iOS, and that much is
+structural.** Chrome, Firefox and Edge on iOS are all WKWebView, since
+App Store policy requires it and no major browser has shipped an
+alternative engine even after iOS 17.4 opened the door in the EU.
+Below the engine, H.264 decode goes through VideoToolbox, and software
+decode is not a way out at ≈33.6 MP per frame on a phone. One row
+covers every browser on iOS.
+
+**It does not extend to macOS**, which is where an earlier version of
+this note overreached. Browsers there bring their own engine *and*
+their own decode policy, and rows 4 and 5 disagree on the same
+machine — Safari decoding what Chrome refuses. Test each browser on
+macOS; test the device on iOS.
 
 **A green row may still be an unusable one.** The probe seeks to 0.2 s
 and reads a single frame, which answers "does a frame decode" and not
