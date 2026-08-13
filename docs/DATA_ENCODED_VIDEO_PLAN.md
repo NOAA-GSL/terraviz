@@ -191,24 +191,25 @@ data-encoded datasets:
   `scale=in_range=full:out_range=full` + `pc` is 256/256 exact. The
   second decoder family does not change the recommendation.
 
-  **Measured on three platforms, which do not agree.** Two variants
-  past that table were added to narrow *why* the recommendation works.
-  Running everything on a second and third platform found two separate
-  things, and the honest summary is a table rather than a rule:
+  **Measured on four browser/platform pairs, which do not agree.** Two
+  variants past that table were added to narrow *why* the
+  recommendation works. Running everything on three further pairs found
+  two separate things, and the honest summary is a table rather than a
+  rule (values are the WebGL path, the one the globe uses):
 
-  | setting | iOS Safari 26.6 | Chrome 150 / Win 11 | Chrome 151 / macOS M2 |
-  |---|---|---|---|
-  | today (no colour flags) | 220/256 | 220/256 | 220/256 |
-  | `-color_range pc` alone | **fail** 0.859 | **fail** 0.859 | **fail** 0.859 |
-  | `tv` + matching conversion | 220/256 | 220/256 | 220/256 |
-  | full conversion + `pc` (recommended) | **256/256** | **256/256** | 220/256 |
-  | conversion + range tag only | **256/256** | **256/256** | 220/256 |
-  | recommended minus `-color_trc` | **256/256** | **fail** 1.130 | 220/256 |
+  | setting | iOS Safari 26.6 | macOS Safari 26.5.2 | Chrome 150 / Win 11 | Chrome 151 / macOS M2 |
+  |---|---|---|---|---|
+  | today (no colour flags) | 220/256 | 220/256 | 220/256 | 220/256 |
+  | `-color_range pc` alone | **fail** 0.859 | **fail** 0.859 | **fail** 0.859 | **fail** 0.859 |
+  | `tv` + matching conversion | 220/256 | 220/256 | 220/256 | 220/256 |
+  | full conversion + `pc` (recommended) | **256/256** | **256/256** | **256/256** | 220/256 |
+  | conversion + range tag only | **256/256** | **256/256** | **256/256** | 220/256 |
+  | recommended minus `-color_trc` | **256/256** | **256/256** | **fail** 1.130 | 220/256 |
 
   **A partial tag set is worse than no tags at all.** Dropping only
   `-color_trc`, leaving conversion, range tag, primaries and matrix,
-  breaks on Windows Chrome at gain 1.1295 / offset −14.52 while both
-  Apple rows return it clean. The transfer tag is not required in the
+  breaks on Windows Chrome at gain 1.1295 / offset −14.52 while every
+  other pair returns it clean. The transfer tag is not required in the
   abstract — the range-only variant omits transfer, primaries and
   matrix together and is never worse than the recommendation anywhere.
   What breaks is naming *some* colour tags and leaving transfer
@@ -219,21 +220,24 @@ data-encoded datasets:
   line and cannot prove a mechanism. **Tag everything, or tag only the
   range — never something in between.**
 
-  **And the recommendation's payoff is not universal.** macOS Chrome
-  returns the recommended setting at 220/256, gain 1.0007 — identical
-  to the untagged path rather than the 256/256 the other two platforms
-  give. Nothing is wrong with those values: they pass, within one code,
-  exactly as today's settings do. What is missing is the reason to
-  prefer the setting at all. Full-range tagging was chosen for
-  *occupancy* — 256 reachable codes rather than 256 squeezed through
-  219 — and on this platform that benefit does not arrive.
+  **And the recommendation's payoff is not universal — one pair does
+  not honour it.** macOS Chrome returns the recommended setting at
+  220/256, gain 1.0007: identical to the untagged path rather than the
+  256/256 the other three give. Nothing is wrong with those values —
+  they pass, within one code, exactly as today's settings do. What is
+  missing is the reason to prefer the setting at all. Full-range
+  tagging was chosen for *occupancy*, 256 reachable codes rather than
+  256 squeezed through 219, and on that pair the benefit does not
+  arrive. Note it is Chrome-on-macOS specifically: Safari on the same
+  machine returns 256/256, and Chrome on Windows does too, so this is
+  neither an engine nor an OS property but the combination.
 
   The recommendation still stands, because it is never worse than the
-  alternatives: exact on two platforms, equal to untagged on the third,
+  alternatives: exact on three pairs, equal to untagged on the fourth,
   failing nowhere. But nothing downstream may assume a full 256-level
   lattice. The occupancy loss described in the next bullet is a live
-  possibility on a *correctly tagged* stream, not only on a legacy
-  untagged one, and the Analyze histogram will comb on this platform
+  possibility on a *correctly tagged* stream rather than only on a
+  legacy untagged one, and the Analyze histogram will comb on that pair
   either way.
 
   This corrects an earlier entry here which read two variants passing
@@ -256,12 +260,15 @@ data-encoded datasets:
   full-size blit instead of per-texel 1×1 draws. Those two variants
   existed to isolate the cause so a fix could be chosen by measurement;
   the measurement says there is no arrangement of the 2D path that
-  avoids the transform. Two controls place the blame precisely: on
-  Windows Chrome all three readout paths pass and match the WebGL path,
-  and so do all three on **Chrome running on Apple silicon**. Same
-  hardware and same VideoToolbox as the iOS row, different engine, no
-  transform — so this is WebKit's doing rather than a property of 2D
-  canvases or of Apple's colour management. This is what
+  avoids the transform. macOS Safari reproduces the iOS numbers exactly
+  (gain 1.0033, offset +6.10, 12/256), which is the first measurement
+  of the macOS half of that claim rather than an assertion about it.
+  And the controls now isolate it on a single machine: **Chrome on that
+  same Mac passes all three readout paths** and matches its WebGL path,
+  as does Chrome on Windows. Same hardware, same VideoToolbox, one
+  engine transforms and the other does not — so this is WebKit's doing,
+  not a property of 2D canvases and not Apple's colour management. This
+  is what
   [`glLumaSampler`](../src/services/glLumaSampler.ts) shipping without
   a 2D fallback buys, and it is now measured on the platform that
   motivated it rather than assumed.
