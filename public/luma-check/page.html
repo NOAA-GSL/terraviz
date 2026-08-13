@@ -77,6 +77,38 @@ const SPIKE_BG_MAX = 16
 // being read as a decoder result.
 const FULL_BLIT_MAX_TEXELS = 16 * 1024 * 1024
 
+// A media element that can neither decode nor reject leaves the probe
+// awaiting an event that never arrives. Firefox on Windows does exactly
+// this on the 8K rung: no `loadeddata`, no `error`, no `seeked`. Both
+// waits are therefore bounded.
+//
+// A timeout is recorded as its own outcome rather than folded into
+// "failed". A clean `MediaError` (iOS Safari) and a silent stall
+// (Firefox) are different device behaviours — one is a decoder
+// declining, the other is a decoder that accepted the stream and got
+// stuck — and a matrix that cannot tell them apart loses the
+// distinction that would decide whether a fallback can even be
+// triggered.
+//
+// Generous on purpose: an 8K software decode on a slow machine is
+// legitimately slow, and a timeout that fires on a working device
+// records a false negative in a matrix meant to outlive the session
+// that produced it.
+const LOAD_TIMEOUT_MS = 30000
+const SEEK_TIMEOUT_MS = 30000
+
+function withTimeout(promise, ms, what) {
+  let timer
+  return Promise.race([
+    promise.finally(() => clearTimeout(timer)),
+    new Promise((_, rej) => {
+      timer = setTimeout(
+        () => rej(new Error(what + ' timed out after ' + (ms / 1000)
+          + 's — the element never fired an event, success or error')), ms)
+    }),
+  ])
+}
+
 let glCtx
 function gl2() {
   if (glCtx === undefined) {
@@ -188,12 +220,25 @@ async function probe(g) {
   const result = { cap }
 
   v.src = './out/' + g.name + '.mp4'
-  await new Promise((res, rej) => {
-    v.onloadeddata = res
-    v.onerror = () => rej(new Error('load failed (code ' + (v.error && v.error.code)
-      + ') — no H.264 decoder at ' + g.width + 'x' + g.height + '?'))
-  })
-  await new Promise(res => { v.onseeked = res; v.currentTime = 0.2 })
+  try {
+    await withTimeout(new Promise((res, rej) => {
+      v.onloadeddata = res
+      v.onerror = () => rej(new Error('load failed (code ' + (v.error && v.error.code)
+        + ') — no H.264 decoder at ' + g.width + 'x' + g.height + '?'))
+    }), LOAD_TIMEOUT_MS, 'decode of ' + g.width + 'x' + g.height)
+    await withTimeout(
+      new Promise(res => { v.onseeked = res; v.currentTime = 0.2 }),
+      SEEK_TIMEOUT_MS, 'seek of ' + g.width + 'x' + g.height)
+  } catch (e) {
+    // Detach and abort before giving up. A load left pending can fire
+    // its event later, and since each wait installs its handler on the
+    // same shared element, a late `loadeddata` from this variant would
+    // resolve the *next* variant's wait and report one variant's frame
+    // under another's name.
+    v.onloadeddata = null; v.onerror = null; v.onseeked = null
+    v.removeAttribute('src'); v.load()
+    throw e
+  }
 
   cap.decoded = true
   cap.readyState = v.readyState
@@ -374,24 +419,51 @@ window.runCheck = async function (names) {
     ? names.map(n => manifest.find(m => m.name === n)).filter(Boolean)
     : manifest
   const rows = [], caps = []
-  for (const g of wanted) {
-    let r
+  const out = document.getElementById('out')
+
+  // Repaint after every variant. This used to render once, after the
+  // whole loop finished — so a single variant that stalled discarded
+  // the results of every variant that had already passed, and the page
+  // sat there looking dead with nothing to copy. Partial results are
+  // the normal case on the devices this exists to measure, not an
+  // error path.
+  const paint = note => {
+    out.innerHTML = (note ? '<p class="warn">' + note + '</p>' : '')
+      + capTable(caps) + valueTable(rows)
+  }
+
+  for (let i = 0; i < wanted.length; i++) {
+    const g = wanted[i]
+    // Name the variant in flight. A stall then reads as "stuck on
+    // H_ceiling_8k" rather than as a broken page, which is the
+    // difference between a reportable result and an abandoned run.
+    paint('Testing ' + g.name + ' (' + (i + 1) + ' of ' + wanted.length + ') — allowing up to '
+      + ((LOAD_TIMEOUT_MS + SEEK_TIMEOUT_MS) / 1000) + 's for a stall…')
+    // Let that line paint before a decode takes the main thread.
+    await new Promise(res => requestAnimationFrame(() => res()))
+
+    let r = null
     try { r = await probe(g) }
     catch (e) {
       const msg = String(e.message || e)
       caps.push({ name: g.name, expectedWidth: g.width, expectedHeight: g.height, decoded: false, error: msg })
       rows.push({ name: g.name, error: msg })
-      continue
     }
-    caps.push(r.cap)
-    for (const path of ['readout', 'readoutSrgb', 'readoutFull', 'render']) {
-      if (!r[path]) { rows.push({ name: g.name, path, error: r[path + 'Error'] || 'unavailable' }); continue }
-      rows.push({ name: g.name, path, glRenderer: r.glRenderer, ...analyse(r[path]) })
+    if (r) {
+      caps.push(r.cap)
+      for (const path of ['readout', 'readoutSrgb', 'readoutFull', 'render']) {
+        if (!r[path]) { rows.push({ name: g.name, path, error: r[path + 'Error'] || 'unavailable' }); continue }
+        rows.push({ name: g.name, path, glRenderer: r.glRenderer, ...analyse(r[path]) })
+      }
     }
+
+    // Keep the report and the copy button in step with what has been
+    // measured so far, so a tester who gives up part way through still
+    // leaves with everything up to that point.
+    lastReport = buildReport(caps, rows)
+    document.getElementById('copy').hidden = false
+    paint(null)
   }
-  lastReport = buildReport(caps, rows)
-  document.getElementById('out').innerHTML = capTable(caps) + valueTable(rows)
-  document.getElementById('copy').hidden = false
   return { rows, caps }
 }
 // Ask the server which variants exist. Deliberately NO hardcoded
