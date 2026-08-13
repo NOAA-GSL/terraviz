@@ -191,12 +191,35 @@ data-encoded datasets:
   `scale=in_range=full:out_range=full` + `pc` is 256/256 exact. The
   second decoder family does not change the recommendation.
 
-  Two variants beyond that table narrow *why* it works. Dropping
-  `-color_trc`, and dropping transfer, primaries and matrix together,
-  are both still 256/256 exact — so the full-range **conversion plus
-  the range tag** is doing all of the work, and the other colour tags
-  are documentation rather than mechanism. Worth knowing before anyone
-  "fixes" a future round-trip failure by adding more tags.
+  **A partial tag set is worse than no tags at all.** Two variants past
+  that table were added to narrow *why* the recommendation works, and
+  measuring them on a second platform found something sharper. Windows
+  Chrome 150 and iOS Safari agree that the fully tagged setting and the
+  range-only setting (full-range conversion + `-color_range pc`, with
+  no transfer, primaries or matrix) are both 256/256 exact. They
+  disagree on the one in between — the recommended setting with only
+  `-color_trc` removed, leaving conversion, range tag, primaries and
+  matrix. iOS Safari returns it exact; Chrome breaks it badly, at gain
+  1.1295, offset −14.52, 8/256 exact, max|e| 20.
+
+  The transfer tag is therefore not required in the abstract: the
+  range-only variant omits it along with primaries and matrix and is
+  exact on both platforms. What breaks is naming *some* colour tags
+  while leaving transfer unspecified — Chrome then has enough tagging
+  to commit to a colour space and no transfer to go with it, and
+  converts. The error's shape supports that reading (8 exact values
+  with max|e| 20 is a curve, where the range failure above is close to
+  affine), though the check fits a straight line and cannot prove a
+  mechanism.
+
+  So: **tag everything, or tag only the range — never something in
+  between.** The shipped recommendation is unchanged, and the failure
+  mode to avoid is a well-meant partial edit to the argv.
+
+  This corrects an earlier entry here which read the two variants
+  passing on iOS Safari as evidence that the non-range tags were
+  documentation rather than mechanism. That was one platform's result
+  stated as a general conclusion, and the second platform falsified it.
 
   Still unverified: desktop Safari and Firefox. Every preview deploy
   serves the check at `/luma-check/page.html`, which is the practical
@@ -211,7 +234,9 @@ data-encoded datasets:
   full-size blit instead of per-texel 1×1 draws. Those two variants
   existed to isolate the cause so a fix could be chosen by measurement;
   the measurement says there is no arrangement of the 2D path that
-  avoids the transform. This is what
+  avoids the transform. Windows Chrome is the control: there all three
+  readout paths pass and match the WebGL path exactly, so this is a
+  Safari behaviour rather than a property of 2D canvases. This is what
   [`glLumaSampler`](../src/services/glLumaSampler.ts) shipping without
   a 2D fallback buys, and it is now measured on the platform that
   motivated it rather than assumed.
