@@ -177,7 +177,7 @@ break CI.
 | device / browser | decodes | readyState | decoded size | MAX_TEXTURE_SIZE | texImage2D | native | notes |
 |---|---|---|---|---|---|---|---|
 | desktop Chrome 150 (Win 11, Intel UHD 770, ANGLE/D3D11) | **yes** | 4 | 8192×4096 | 16384 | ok | **yes** — spike 252.0 | Values round-trip at 8K exactly as at 4K. Decode path unconfirmed; see below |
-| desktop Firefox | | | | | | | |
+| desktop Firefox (Win 11) | *stalls* | — | — | — | — | — | Ran 2026-08-13, never returned. Stalling variant unattributed — see below |
 | desktop Safari | | | | | | | |
 | iOS Safari 26.6 (iOS 18.7, Apple GPU) | **no** | — | — | 16384 | — | — | `MediaError` code 4 at `loadeddata`; refused before playback. A–G at 4096×256 all decode and upload on the same device |
 | mid-range Android | | | | | | | |
@@ -253,6 +253,33 @@ play and see whether it holds a watchable rate. If it is software at a
 few frames per second, this row does not unblock Phase 1 for desktop
 either, and the honest reading of Phase 0 becomes "nothing in the
 matrix can play this," not "desktop can."
+
+**Row 3 — desktop Firefox, inconclusive, and the probe's fault.**
+Firefox on Windows 11 ran the check and never returned anything at
+all. That is a third distinct behaviour: iOS Safari declines cleanly
+with a `MediaError`, desktop Chrome accepts, and Firefox neither
+fires `loadeddata` nor `error` — it simply stops.
+
+The probe made this worse than it needed to be, in two ways now fixed.
+Its waits on `loadeddata` and `seeked` were unbounded, so an element
+that fires no event either way hangs the run indefinitely; and the
+table rendered only after every variant completed, so the stalled
+variant discarded the results of the seven that had already passed.
+The observation therefore cannot say *which* variant stalled, which is
+the one thing worth knowing. Both waits are now capped at 30 s, a
+timeout is recorded as its own outcome distinct from a load failure,
+and results repaint after each variant with the variant in flight
+named on screen.
+
+Re-running Firefox against the updated page should attribute the stall
+and fill this row. The likely answer is that it stalls on
+`H_ceiling_8k` and the 4096×256 variants were all fine — but that is a
+guess, and the row stays inconclusive until the re-run says so. Worth
+recording either way: a decoder that stalls rather than declines is
+harder for the Phase 2 fallback to detect than one that errors,
+because there is no event to trigger on. If Firefox turns out to
+behave this way on the 8K rung, Phase 2 needs a timeout of its own
+rather than an `error` handler.
 
 **A different browser on iOS does not help, so the row is the
 platform.** Chrome, Firefox and Edge on iOS are WKWebView — App Store
