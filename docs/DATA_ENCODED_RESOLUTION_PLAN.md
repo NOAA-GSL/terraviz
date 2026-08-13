@@ -1,12 +1,16 @@
 # Higher-resolution data-encoded video: the 8192×4096 rung
 
 **Status: draft for review.** The encode half is measured; the decode
-half has its first real device and the news is bad. Nothing in
-Phases 1–3 is built. The Phase 0 *instrument* is built, its 8K bundle
-is staged in `public/luma-check/`, and the matrix it exists to fill now
-has one row: **iOS Safari does not decode the 8192×4096 rung at all.**
-Five rows remain, and one refusal from the population the decision gate
-names is already enough to make Phase 1 alone look unlikely.
+half has two real devices and they disagree, which is the answer the
+decision gate was written for. Nothing in Phases 1–3 is built. The
+Phase 0 *instrument* is built, its 8K bundle is staged in
+`public/luma-check/`, and the matrix now reads: **desktop Chrome
+decodes the 8192×4096 rung at true native resolution; iOS Safari
+refuses it outright.** That is the "a population that matters cannot
+decode it" branch, so the route is Phase 1 **plus** Phase 2 rather
+than Phase 1 alone. Four rows remain, and a live question sits behind
+the green one — whether it decoded in hardware or in software at an
+unwatchable rate.
 
 **Last reviewed: 2026-08-13.**
 **Revisit when:** the Phase 0 matrix fills past its first row; a data
@@ -172,7 +176,7 @@ break CI.
 
 | device / browser | decodes | readyState | decoded size | MAX_TEXTURE_SIZE | texImage2D | native | notes |
 |---|---|---|---|---|---|---|---|
-| desktop Chrome | | | | | | | |
+| desktop Chrome 150 (Win 11, Intel UHD 770, ANGLE/D3D11) | **yes** | 4 | 8192×4096 | 16384 | ok | **yes** — spike 252.0 | Values round-trip at 8K exactly as at 4K. Decode path unconfirmed; see below |
 | desktop Firefox | | | | | | | |
 | desktop Safari | | | | | | | |
 | iOS Safari 26.6 (iOS 18.7, Apple GPU) | **no** | — | — | 16384 | — | — | `MediaError` code 4 at `loadeddata`; refused before playback. A–G at 4096×256 all decode and upload on the same device |
@@ -223,6 +227,33 @@ building: the whole usable headroom below Apple's ceiling is a rounding
 error on the frame we already publish. Recording it here so the option
 is rejected on its size rather than quietly forgotten and re-derived.
 
+**Row 2 — desktop Chrome, 2026-08-13.** The rung decodes, and it
+decodes *properly*. `readyState` 4, decoded size 8192×4096, a clean
+`texImage2D`, and — the measurement this section was built around — a
+spike mean of **252.0** against the 200 threshold, so the frame is
+genuinely native and not a silently halved one wearing the right
+dimensions. Values round-trip at 8K exactly as they do at 4K (220/256
+exact, gain 1.0005, max|e| 1), which is the useful confirmation that
+quadrupling the frame costs nothing in fidelity.
+
+**But the decode path is unconfirmed, and this is the row the
+software-decode caveat was written for.** Intel's Quick Sync H.264
+decoder does not reach 8192 wide — its ceiling is 4096 — so a UHD 770
+almost certainly did not decode this in hardware, which leaves
+Chrome's ffmpeg software fallback. That is consistent with everything
+observed and is still inference: the probe reads one frame after a
+seek and never asks how fast frames arrive, so a decode that took a
+second per frame looks identical here to one that took a millisecond.
+
+Confirming it is cheap and should happen before this row is treated as
+green. Open `chrome://media-internals` while the check runs and read
+the decoder name: `D3D11VideoDecoder` or `MojoVideoDecoder` means
+hardware, `FFmpegVideoDecoder` means software. Then watch the 8K clip
+play and see whether it holds a watchable rate. If it is software at a
+few frames per second, this row does not unblock Phase 1 for desktop
+either, and the honest reading of Phase 0 becomes "nothing in the
+matrix can play this," not "desktop can."
+
 **A different browser on iOS does not help, so the row is the
 platform.** Chrome, Firefox and Edge on iOS are WKWebView — App Store
 policy requires it, and although iOS 17.4 opened alternative engines to
@@ -241,8 +272,9 @@ where hardware declines, and a software decode of a 33.6 MP frame can
 easily succeed once and then sustain nothing like a watchable rate. So
 a desktop row that comes back green is necessary but not sufficient
 evidence, and Phase 1 should not be unblocked by one without a
-framerate observation beside it. On iOS this caveat is moot — nothing
-decoded at all.
+framerate observation beside it. Row 2 is exactly that case and is
+recorded green-with-an-asterisk for it. On iOS the caveat is moot —
+nothing decoded at all.
 
 **Not yet covered by the probe: HLS delivery.** It serves a progressive
 MP4, which isolates the decoder from the delivery layer and is what the
