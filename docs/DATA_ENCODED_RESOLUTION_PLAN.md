@@ -1,7 +1,10 @@
 # Higher-resolution data-encoded video: the 8192×4096 rung
 
 **Status: draft for review.** The encode half is measured; the decode
-half is not. Nothing here is built.
+half is not. Nothing in Phases 1–3 is built. The Phase 0 *instrument*
+is built and its 8K bundle is staged in `public/luma-check/`; the
+matrix it exists to fill is still empty, because that needs real
+devices rather than CI.
 
 **Last reviewed: 2026-08-12.**
 **Revisit when:** the Phase 0 device probe returns; a data source
@@ -120,6 +123,68 @@ mid-range Android; Quest browser. `docs/DATA_ENCODED_VIDEO_PLAN.md`
 colour-range decision, so this probe should close that gap at both
 resolutions while it is set up.
 
+### The probe
+
+Built, as the `H_ceiling_8k` variant of `scripts/luma-range-check`. It
+is the same encoder settings as the shipped data-encoded path, at
+8192×4096 — deliberately not a new encoder question — so what it
+measures is the device rather than the argv.
+
+```bash
+npx tsx scripts/luma-range-check --emit-static   # regenerate + stage
+npx tsx scripts/luma-range-check --serve         # LAN URL for a device
+```
+
+`--emit-static` writes the bundle into `public/luma-check/`, so every
+preview deploy serves it and testing a headset or a phone is a URL
+rather than a network setup. The 8K encode adds **78 KiB** — flat bands
+compress to almost nothing, so hosting it costs effectively nothing.
+"Copy results" puts the whole record on the clipboard, because nobody
+is transcribing a table by hand inside a Quest.
+
+Two measurements were added beyond the four this section asks for.
+
+**`MAX_TEXTURE_SIZE`.** A context whose limit is 4096 cannot hold an
+8192-wide frame at all, so it settles the question for that device
+before any decoding happens. This is a real mobile ceiling, not a
+theoretical one — and the check's own CI renderer (SwiftShader) reports
+exactly 8192, meaning the proposed rung sits *at* the limit with no
+headroom rather than comfortably inside it.
+
+**An isolated-spike region, and it is the one that matters.** The ramp
+bands are 32 texels wide at this size, so they survive a silent 2×
+downscale completely intact — a device that quietly halved the frame
+would pass a ramp-only check while serving averaged values, which is
+precisely the failure this section warns about and the same shape as
+the classified-palette bug. The lower half of the frame therefore
+carries single-texel spikes on a flat background. Measured through the
+encoder: they read **252** at native resolution and **63** through a 2×
+box downscale, so the `native` column separates the two cases by a
+factor of four rather than by a judgement call.
+
+### The matrix
+
+Fill this in as devices report. A failure is a result, not a bug — only
+`D_full_proper` sets the check's exit code, so a red row here does not
+break CI.
+
+| device / browser | decodes | readyState | decoded size | MAX_TEXTURE_SIZE | texImage2D | native | notes |
+|---|---|---|---|---|---|---|---|
+| desktop Chrome | | | | | | | |
+| desktop Firefox | | | | | | | |
+| desktop Safari | | | | | | | |
+| iOS Safari | | | | | | | |
+| mid-range Android | | | | | | | |
+| Quest browser | | | | | | | |
+
+**Not yet covered by the probe: HLS delivery.** It serves a progressive
+MP4, which isolates the decoder from the delivery layer and is what the
+existing check already does. The shipped path is HLS, and
+`MediaSource.isTypeSupported()` is documented as optimistic about level
+— so a device may well decode this MP4 and still refuse the same stream
+through MSE. That is a second question, worth answering before Phase 1
+is built, and it is not answered here.
+
 **Decision gate.** If the matrix is broadly green, Phase 1 alone is
 enough and Phase 2 is never built. If a population that matters cannot
 decode it, Phase 1 plus Phase 2. If almost nothing decodes it, stop —
@@ -189,8 +254,12 @@ Two consequences to carry:
 
 - The Phase 0 matrix, recorded here as a table rather than a verdict,
   including the read-back-a-known-texel result per device.
-- `scripts/luma-range-check` extended with an 8192×4096 variant and
-  passing on every browser it currently covers.
+- `scripts/luma-range-check` extended with an 8192×4096 variant —
+  **done** (`H_ceiling_8k`) — and passing on every browser it currently
+  covers, which is still outstanding: the extension has been verified
+  against a synthetic texture (band addressing exact, 256/256), but no
+  browser has yet decoded the 8K stream, since CI's Chromium ships no
+  H.264 decoder at all.
 - One real 8K dataset published and probed end to end: hover value,
   Analyze statistics, and a contour pass, each compared against the same
   dataset at 4096×2048. The statistics will differ — that is expected
