@@ -1,15 +1,17 @@
 # Higher-resolution data-encoded video: the 8192×4096 rung
 
 **Status: draft for review.** The encode half is measured; the decode
-half is not. Nothing in Phases 1–3 is built. The Phase 0 *instrument*
-is built and its 8K bundle is staged in `public/luma-check/`; the
-matrix it exists to fill is still empty, because that needs real
-devices rather than CI.
+half has its first real device and the news is bad. Nothing in
+Phases 1–3 is built. The Phase 0 *instrument* is built, its 8K bundle
+is staged in `public/luma-check/`, and the matrix it exists to fill now
+has one row: **iOS Safari does not decode the 8192×4096 rung at all.**
+Five rows remain, and one refusal from the population the decision gate
+names is already enough to make Phase 1 alone look unlikely.
 
-**Last reviewed: 2026-08-12.**
-**Revisit when:** the Phase 0 device probe returns; a data source
-arrives that genuinely warrants more than 9.78 km; H.264 level 6.0
-hardware decode becomes uniform enough to skip Phase 0; or
+**Last reviewed: 2026-08-13.**
+**Revisit when:** the Phase 0 matrix fills past its first row; a data
+source arrives that genuinely warrants more than 9.78 km; H.264 level
+6.0 hardware decode becomes uniform enough to skip Phase 0; or
 `DATA_ENCODED_RENDITIONS` changes for any other reason.
 
 This is the implementation plan for the route
@@ -173,9 +175,53 @@ break CI.
 | desktop Chrome | | | | | | | |
 | desktop Firefox | | | | | | | |
 | desktop Safari | | | | | | | |
-| iOS Safari | | | | | | | |
+| iOS Safari 26.6 (iOS 18.7, Apple GPU) | **no** | — | — | 16384 | — | — | `MediaError` code 4 at `loadeddata`; refused before playback. A–G at 4096×256 all decode and upload on the same device |
 | mid-range Android | | | | | | | |
 | Quest browser | | | | | | | |
+
+**Row 1 — iOS Safari, 2026-08-13.** The rung is refused outright:
+`MEDIA_ERR_SRC_NOT_SUPPORTED` fires on load, so `readyState`, decoded
+size, `texImage2D` and `native` never get a value. There is nothing
+ambiguous to interpret and nothing that could be a downscale in
+disguise — the frame never arrives.
+
+Three things this row settles, and one it does not.
+
+**It is not the GL side.** `MAX_TEXTURE_SIZE` is 16384 on this device,
+double what the rung needs — the headroom §The probe worried about
+(SwiftShader reporting exactly 8192) is comfortable here. Had the video
+decoded, WebGL would have held it. The ceiling is the video decoder,
+which is the one layer no amount of our own code routes around.
+
+**It is not a bad encode.** The same file's siblings play on this
+device, and §Context already establishes 8192×4096 is 131,072
+macroblocks against H.264's 139,264 ceiling — legal at level 6.0. The
+most likely reading is that Apple's H.264 decoder implements up to
+level 5.2 (4096×2304, ≈9.4 MP) and this frame is ≈33.6 MP, about 3.6×
+beyond it. That is inference from a well-known platform limit, not
+something this probe measured: `MediaError` 4 does not name a reason,
+and the probe cannot distinguish an unimplemented level from any other
+refusal. It does not change what to build either way.
+
+**It pushes the decision gate toward Phase 2.** The gate says Phase 1
+alone if the matrix is broadly green, Phase 1 + Phase 2 if a
+population that matters cannot decode it. iOS Safari is named
+explicitly in the minimum matrix and is not a population this project
+can serve a broken globe to. One row is not the matrix, and the
+remaining five could still change the shape of the answer — but they
+can only make it worse for Phase-1-alone, since no other device
+decoding it would make iOS decode it.
+
+**What it does not settle: whether a smaller rung would clear.** This
+probe tests one size. The gap between 4096×2048 (shipped, ≈8.4 MP) and
+8192×4096 (≈33.6 MP) is a factor of four, and Apple's ≈9.4 MP limit
+sits inside it — close to the shipped size, not the proposed one. The
+largest **2:1** frame clearing level 5.2 is 4320×2160 (36,450
+macroblocks against the level's 36,864), which is 5% more linear
+resolution than ships today. A middle rung is therefore not worth
+building: the whole usable headroom below Apple's ceiling is a rounding
+error on the frame we already publish. Recording it here so the option
+is rejected on its size rather than quietly forgotten and re-derived.
 
 **Not yet covered by the probe: HLS delivery.** It serves a progressive
 MP4, which isolates the decoder from the delivery layer and is what the
