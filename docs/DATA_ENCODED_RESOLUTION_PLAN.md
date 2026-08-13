@@ -223,6 +223,27 @@ building: the whole usable headroom below Apple's ceiling is a rounding
 error on the frame we already publish. Recording it here so the option
 is rejected on its size rather than quietly forgotten and re-derived.
 
+**A different browser on iOS does not help, so the row is the
+platform.** Chrome, Firefox and Edge on iOS are WKWebView — App Store
+policy requires it, and although iOS 17.4 opened alternative engines to
+EU builds via BrowserEngineKit, no major browser ships one. The
+stronger reason is one layer down: H.264 decode goes through
+VideoToolbox to a fixed-function hardware block, so the engine on top
+does not change which levels exist. A hypothetical Blink-on-iOS would
+be refused the same frame. Software decode is not a way out either at
+≈33.6 MP per frame on a phone. Record iOS results per *device*, not
+per browser; one row covers all of them.
+
+**A green row may still be an unusable one.** The probe seeks to 0.2 s
+and reads a single frame, which answers "does a frame decode" and not
+"does this play." Desktop Chrome falls back to software H.264 decode
+where hardware declines, and a software decode of a 33.6 MP frame can
+easily succeed once and then sustain nothing like a watchable rate. So
+a desktop row that comes back green is necessary but not sufficient
+evidence, and Phase 1 should not be unblocked by one without a
+framerate observation beside it. On iOS this caveat is moot — nothing
+decoded at all.
+
 **Not yet covered by the probe: HLS delivery.** It serves a progressive
 MP4, which isolates the decoder from the delivery layer and is what the
 existing check already does. The shipped path is HLS, and
