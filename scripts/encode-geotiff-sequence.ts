@@ -34,6 +34,27 @@ import { dirname, extname, join, resolve } from 'node:path'
 const OUTPUT_FRAME_RATE = 30
 
 /**
+ * Bitrate ceiling, in kbps, matching `DATA_ENCODED_RENDITIONS` in
+ * `cli/lib/ffmpeg-hls.ts` — which pairs `-crf` with `-maxrate` and a
+ * `-bufsize` of twice that.
+ *
+ * CRF alone is a quality target with no ceiling. On 25-plus-megapixel
+ * frames six hours apart, the inter-frame deltas are enormous and it
+ * will happily spend hundreds of megabits per second: a first run here
+ * produced 816 Mbps, about 33x what the catalog serves. That is the
+ * wrong artifact twice over — far too large to keep, and a heavier
+ * decode than the shipped path would ever ask a device to perform, so
+ * a probe fed by it answers a question nobody asked.
+ *
+ * `docs/DATA_ENCODED_RESOLUTION_PLAN.md` §Context measured value
+ * corruption at this ceiling against 100 Mbps for an 8K frame (max
+ * error 7 vs 2, 0.117% vs 0.012% of pixels). Raise it with
+ * `--max-bitrate` when testing what a higher-fidelity rung would cost;
+ * the default is what ships today.
+ */
+const DEFAULT_MAX_BITRATE_KBPS = 25_000
+
+/**
  * Lowest luma code that carries data; everything below is the reserved
  * no-data band (`ColorScale.dataMinLuma` in `src/types/color-scale.ts`).
  *
@@ -67,6 +88,7 @@ interface Args {
   units?: string
   dataMinLuma: number
   nodata?: number
+  maxBitrateKbps: number
   keepTemp: boolean
 }
 
@@ -92,6 +114,7 @@ function parseArgs(argv: string[]): Args {
     units: get('units'),
     dataMinLuma: num('data-min-luma') ?? DEFAULT_DATA_MIN_LUMA,
     nodata: num('nodata'),
+    maxBitrateKbps: num('max-bitrate') ?? DEFAULT_MAX_BITRATE_KBPS,
     keepTemp: argv.includes('--keep-temp'),
   }
 }
@@ -223,6 +246,9 @@ function main(): void {
   if (vmin === vmax) throw new Error(`vmin equals vmax (${vmin}); nothing to encode`)
   process.stdout.write(`range ${vmin} … ${vmax}${args.units ? ' ' + args.units : ''}`
     + `  (luma ${args.dataMinLuma}…255, 0 = no data)\n`)
+  process.stdout.write(`ceiling ${args.maxBitrateKbps} kbps`
+    + `  → about ${((args.maxBitrateKbps / 8) * (files.length / OUTPUT_FRAME_RATE) / 1024).toFixed(1)} MB`
+    + ` for ${files.length} frames\n`)
 
   mkdirSync(dirname(args.out), { recursive: true })
   const tmp = join(dirname(args.out), '.geotiff-frames')
@@ -240,7 +266,12 @@ function main(): void {
     '-vf', 'scale=in_range=full:out_range=full',
     '-color_range', 'pc',
     '-c:v', 'libx264', '-profile:v', 'main', '-pix_fmt', 'yuv420p',
-    '-preset', 'slow', '-crf', '18', '-an',
+    '-preset', 'slow', '-crf', '18',
+    // The ceiling, without which CRF alone has none. bufsize at 2x
+    // maxrate mirrors `buildFfmpegArgs`.
+    '-maxrate', `${args.maxBitrateKbps}k`,
+    '-bufsize', `${args.maxBitrateKbps * 2}k`,
+    '-an',
     args.out,
   ], { stdio: ['pipe', 'inherit', 'inherit'] })
 
@@ -321,6 +352,9 @@ encode-geotiff-sequence — GeoTIFF sequence -> data-encoded video + color_scale
   --units <s>           unit label carried into the sidecar, e.g. "mg m-2"
   --data-min-luma <n>   lowest luma code carrying data (default ${DEFAULT_DATA_MIN_LUMA})
   --nodata <n>          override the GeoTIFF's own no-data value
+  --max-bitrate <kbps>  ceiling, default ${DEFAULT_MAX_BITRATE_KBPS} (what the catalog ships).
+                        Without it CRF alone is uncapped and will emit
+                        hundreds of Mbps on large frames.
   --keep-temp           leave the intermediate rasters in place
 
 Needs gdalinfo, gdal_translate and ffmpeg on PATH.
