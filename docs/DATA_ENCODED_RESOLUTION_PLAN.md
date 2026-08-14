@@ -404,6 +404,29 @@ framerate observation beside it. Row 2 is exactly that case and is
 recorded green-with-an-asterisk for it. On iOS the caveat is moot —
 nothing decoded at all.
 
+**The playback clip is deliberately not committed.** `play.html` takes
+its clip from `?clip=`, so it carries no asset of its own. The real
+7200×3600 clips measured for this section are ~4.3 MB at the shipped
+25 Mbps ceiling and ~17.3 MB at 100 Mbps, and git history is
+permanent — that is a large one-way cost for a diagnostic that runs a
+handful of times. Reproduce them instead, from
+`scripts/encode-geotiff-sequence.ts`, and serve them locally:
+
+```bash
+# out/ under the check is gitignored, so nothing can be committed by accident
+cp real_7200_25mbps.mp4 scripts/luma-range-check/out/
+npx tsx scripts/luma-range-check --serve      # prints a LAN URL
+# then, on the device:
+#   http://<lan-ip>:8791/play.html?clip=/out/real_7200_25mbps.mp4
+```
+
+The LAN restriction that motivated `--emit-static` does not bite here:
+the devices worth playback-testing are the ones that *accept* the rung,
+and iOS — the browser hardest to reach over a LAN — already refuses it
+at the decode stage. If a future run needs a device off the network,
+committing the 25 Mbps clip alone is the minimal version of that
+decision, not both.
+
 **Not yet covered by the probe: HLS delivery.** It serves a progressive
 MP4, which isolates the decoder from the delivery layer and is what the
 existing check already does. The shipped path is HLS, and
