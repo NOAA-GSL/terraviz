@@ -41,9 +41,9 @@ export function getCatalogSource(): CatalogSource {
  * dropping them.
  *
  * The tours ship in the bundle (`public/assets/test-tour.json`,
- * `climate-futures-tour.json`) and are pushed in client-side, after
- * `/api/v1/catalog` returns, so an empty catalog does not suppress
- * them. Both drive legacy SOS handles (`INTERNAL_SOS_25_VIDEO`,
+ * `public/assets/climate-futures-tour.json`) and are injected
+ * client-side, after `/api/v1/catalog` returns, so an empty catalog
+ * does not suppress them. Both drive legacy SOS handles (`INTERNAL_SOS_25_VIDEO`,
  * `INTERNAL_SOS_SSP_GA_19`, …) that a downstream node has no reason
  * to hold — there the cards launch a tour that can load nothing, and
  * Orbit recommends them besides (it reads the same catalog list).
