@@ -403,6 +403,10 @@ function lanAddress(): string {
 function emitStatic(dest: string): void {
   mkdirSync(join(dest, 'out'), { recursive: true })
   writeFileSync(join(dest, 'page.html'), readFileSync(join(HERE, 'page.html')))
+  // The playback check ships beside the luma check but takes its clip
+  // from `?clip=`, so it carries no asset of its own and costs the
+  // deploy nothing.
+  writeFileSync(join(dest, 'play.html'), readFileSync(join(HERE, 'play.html')))
   writeFileSync(
     join(dest, 'variants.json'),
     JSON.stringify(variantManifest(), null, 2) + '\n')
