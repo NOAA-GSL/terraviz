@@ -45,6 +45,7 @@ single-texel spikes for that reason: they read ~252 at full resolution and
 collapse to ~63 through a 2&times; downscale.</p>
 <button id="run">Run check</button>
 <button id="copy" hidden>Copy results</button>
+<button id="copy-cap" hidden title="Just the Phase 0 capability block — use this if the full report gets truncated on its way off the device">Copy Phase 0 only</button>
 <div id="out"></div>
 
 <video id="v" muted playsinline preload="auto" crossorigin="anonymous"></video>
@@ -339,6 +340,7 @@ function analyse(vals) {
 }
 
 let lastReport = ''
+let lastCapReport = ''
 
 function capTable(caps) {
   const cell = (ok, text) => '<td class="' + (ok ? 'pass' : 'fail') + '">' + text + '</td>'
@@ -380,14 +382,86 @@ function valueTable(rows) {
     + '</table>'
 }
 
-/** A device tester cannot copy a table off a Quest. Build the record as
- *  text so the matrix can be pasted straight into the plan doc. */
-function buildReport(caps, rows) {
+// The three 2D-canvas diagnostics have returned byte-identical numbers
+// on every device measured so far — three lines carrying one fact, and
+// they are two thirds of the longest section of the report. Collapse a
+// consecutive trio when it agrees; print the paths separately the
+// moment they do not, because a divergence between them would be the
+// finding rather than noise.
+const READOUT_PATHS = ['readout', 'readoutSrgb', 'readoutFull']
+
+function describeRow(r) {
+  return r.error ? 'ERROR ' + r.error
+    : r.exact + '/256  MAE ' + r.mae.toFixed(3) + '  max|e| ' + r.maxAbs
+      + '  gain ' + r.gain.toFixed(4) + '  offset ' + r.offset.toFixed(2)
+      + '  ' + (r.pass ? 'PASS' : 'FAIL')
+}
+
+function valueLines(rows) {
   const lines = []
-  lines.push('# luma-range-check')
-  lines.push('ua: ' + navigator.userAgent)
-  lines.push('gl: ' + (caps.find(c => c.glRenderer) || {}).glRenderer)
-  lines.push('')
+  for (let i = 0; i < rows.length; ) {
+    const r = rows[i]
+    if (!r.path) { lines.push('  ' + r.name + '   ' + describeRow(r)); i++; continue }
+    if (r.path === READOUT_PATHS[0]) {
+      const trio = rows.slice(i, i + 3)
+      const aligned = trio.length === 3
+        && trio.every((x, k) => x.name === r.name && x.path === READOUT_PATHS[k])
+      if (aligned) {
+        const texts = trio.map(describeRow)
+        if (texts[0] === texts[1] && texts[1] === texts[2]) {
+          lines.push('  ' + r.name + ' readout(x3 same)  ' + texts[0])
+          i += 3
+          continue
+        }
+      }
+    }
+    lines.push('  ' + r.name + ' ' + r.path + '  ' + describeRow(r))
+    i++
+  }
+  return lines
+}
+
+function reportHeader(caps) {
+  return ['# luma-range-check',
+    'ua: ' + navigator.userAgent,
+    'gl: ' + (caps.find(c => c.glRenderer) || {}).glRenderer,
+    '']
+}
+
+/** The Phase 0 half on its own. Getting text off a headset goes through
+ *  whatever the tester has to hand, and at least one of those paths
+ *  truncated a full report near 2 KB — silently, mid-line, with the
+ *  capability block intact only because it happens to come first. This
+ *  is the half the matrix is made of, and it fits with room to spare. */
+function buildCapabilityReport(caps) {
+  const lines = reportHeader(caps)
+  lines.push('capability:')
+  for (const c of caps) {
+    lines.push('  ' + c.name
+      + '  expected=' + c.expectedWidth + 'x' + c.expectedHeight
+      + '  decoded=' + (c.decoded ? 'yes' : 'NO')
+      + (c.decoded ? '  readyState=' + c.readyState
+          + '  size=' + c.videoWidth + 'x' + c.videoHeight
+          + '  maxTex=' + c.maxTextureSize
+          + '  texImage2D=' + c.texUpload
+          + (c.spikeMean === undefined ? ''
+              : '  spike=' + c.spikeMean.toFixed(1) + '  native=' + (c.spikeNative ? 'yes' : 'NO'))
+        : '  error=' + (c.error || '')))
+  }
+  lines.push(endMarker(caps.length, 0))
+  return lines.join('\n')
+}
+
+/** The last line, and the point of it: a truncated paste is otherwise
+ *  indistinguishable from a short run. One report was cut mid-values
+ *  and only caught by counting rows against the variant list by hand. */
+function endMarker(variants, values) {
+  return '# end — ' + variants + ' variants, ' + values
+    + ' value rows. No "# end" line means the paste was truncated.'
+}
+
+function buildReport(caps, rows) {
+  const lines = reportHeader(caps)
   lines.push('capability:')
   for (const c of caps) {
     lines.push('  ' + c.name
@@ -403,13 +477,10 @@ function buildReport(caps, rows) {
   }
   lines.push('')
   lines.push('values:')
-  for (const r of rows) {
-    lines.push('  ' + r.name + ' ' + (r.path || '') + '  '
-      + (r.error ? 'ERROR ' + r.error
-         : r.exact + '/256  MAE ' + r.mae.toFixed(3) + '  max|e| ' + r.maxAbs
-           + '  gain ' + r.gain.toFixed(4) + '  offset ' + r.offset.toFixed(2)
-           + '  ' + (r.pass ? 'PASS' : 'FAIL')))
-  }
+  const vl = valueLines(rows)
+  for (const l of vl) lines.push(l)
+  lines.push('')
+  lines.push(endMarker(caps.length, vl.length))
   return lines.join('\n')
 }
 
@@ -461,7 +532,9 @@ window.runCheck = async function (names) {
     // measured so far, so a tester who gives up part way through still
     // leaves with everything up to that point.
     lastReport = buildReport(caps, rows)
+    lastCapReport = buildCapabilityReport(caps)
     document.getElementById('copy').hidden = false
+    document.getElementById('copy-cap').hidden = false
     paint(null)
   }
   return { rows, caps }
@@ -490,27 +563,54 @@ document.getElementById('run').onclick = async () => {
       + 'restart the harness with --serve so the list is served.</p>'
     return
   }
+  // ?only=NAME,NAME restricts the run. Getting a report off a headset
+  // goes through whatever the tester has to hand, and at least one of
+  // those paths truncates near 2 KB — running only the variants still
+  // missing is a shorter report than any amount of formatting economy
+  // can produce. An unknown name stops the run rather than being
+  // skipped, for the same reason the variant list is not hardcoded: a
+  // silently smaller run reports a subset as if it were the whole.
+  const only = (new URLSearchParams(location.search).get('only') || '')
+    .split(',').map(s => s.trim()).filter(Boolean)
+  if (only.length) {
+    const known = manifest.map(m => m.name)
+    const unknown = only.filter(n => known.indexOf(n) === -1)
+    if (unknown.length) {
+      out.textContent = 'Unknown variant(s): ' + unknown.join(', ')
+        + '. Known: ' + known.join(', ')
+      return
+    }
+    manifest = manifest.filter(m => only.indexOf(m.name) !== -1)
+  }
   out.textContent = 'Testing ' + manifest.length + ' variants: '
     + manifest.map(m => m.name).join(', ') + '…'
   return window.runCheck(manifest.map(m => m.name))
 }
 
-document.getElementById('copy').onclick = async () => {
-  const btn = document.getElementById('copy')
+async function copyTo(btn, text, label) {
   try {
-    await navigator.clipboard.writeText(lastReport)
-    btn.textContent = 'Copied'
+    await navigator.clipboard.writeText(text)
+    btn.textContent = 'Copied (' + text.length + ' chars)'
   } catch {
     // Clipboard access is refused in plenty of the contexts this page is
     // opened in (insecure LAN origin, in-headset browser). Showing the
     // text is the fallback that always works.
     const pre = document.createElement('pre')
-    pre.textContent = lastReport
+    pre.textContent = text
     document.getElementById('out').appendChild(pre)
     btn.textContent = 'Shown below'
   }
-  setTimeout(() => { btn.textContent = 'Copy results' }, 2000)
+  setTimeout(() => { btn.textContent = label }, 3000)
 }
+
+// The character count is on the button on purpose. Whatever carries the
+// text off the device is the thing that truncates it, and knowing the
+// report was 2.4 KB is what turns "the paste looks short" into a
+// diagnosis instead of a re-run.
+document.getElementById('copy').onclick = e =>
+  copyTo(e.currentTarget, lastReport, 'Copy results')
+document.getElementById('copy-cap').onclick = e =>
+  copyTo(e.currentTarget, lastCapReport, 'Copy Phase 0 only')
 </script>
 </body>
 </html>
