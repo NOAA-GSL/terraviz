@@ -54,6 +54,16 @@ const OUTPUT_FRAME_RATE = 30
  */
 const DEFAULT_MAX_BITRATE_KBPS = 25_000
 
+/** x264's `--vbv-init` default: the fraction of `-bufsize` already
+ *  available at the first frame. */
+const VBV_INIT_FRACTION = 0.9
+
+/** Frames after which average bitrate converges on the ceiling, i.e.
+ *  when the clip outlasts the VBV buffer. `VBV_INIT_FRACTION * 2 *
+ *  OUTPUT_FRAME_RATE`, with the 2 being bufsize's multiple of maxrate —
+ *  so it does not move when the ceiling does. */
+const MIN_FRAMES_FOR_RATE_TO_AMORTISE = Math.ceil(VBV_INIT_FRACTION * 2 * OUTPUT_FRAME_RATE)
+
 /**
  * Lowest luma code that carries data; everything below is the reserved
  * no-data band (`ColorScale.dataMinLuma` in `src/types/color-scale.ts`).
@@ -246,9 +256,35 @@ function main(): void {
   if (vmin === vmax) throw new Error(`vmin equals vmax (${vmin}); nothing to encode`)
   process.stdout.write(`range ${vmin} … ${vmax}${args.units ? ' ' + args.units : ''}`
     + `  (luma ${args.dataMinLuma}…255, 0 = no data)\n`)
-  process.stdout.write(`ceiling ${args.maxBitrateKbps} kbps`
-    + `  → about ${((args.maxBitrateKbps / 8) * (files.length / OUTPUT_FRAME_RATE) / 1024).toFixed(1)} MB`
-    + ` for ${files.length} frames\n`)
+  // An upper bound, not an estimate, and it must account for the VBV
+  // buffer rather than just the drain rate.
+  //
+  // `-maxrate` with `-bufsize` is a leaky-bucket constraint: bits drain
+  // at maxrate from a buffer that x264 starts ~90% full (`--vbv-init`).
+  // A clip spends the initial fullness *plus* whatever drains during
+  // its runtime, so `rate x duration` is only the whole story once the
+  // clip outlasts the buffer. With bufsize pinned at 2x maxrate that
+  // takes ~54 frames at 30 fps, and it is independent of the ceiling —
+  // raising maxrate raises the buffer in step.
+  //
+  // Printing the naive product instead cost a real run: 20 frames came
+  // out at 2.15x the "prediction" and tripped a stop-and-report rule
+  // built on it, when the ceiling had been applied correctly the whole
+  // time. A bound that a correct encode can exceed is worse than no
+  // bound, because it trains people to ignore it.
+  const durationSec = files.length / OUTPUT_FRAME_RATE
+  const boundBytes =
+    (VBV_INIT_FRACTION * args.maxBitrateKbps * 2 * 1000
+      + args.maxBitrateKbps * 1000 * durationSec) / 8
+  process.stdout.write(
+    `ceiling ${args.maxBitrateKbps} kbps (bufsize ${args.maxBitrateKbps * 2}k)`
+    + `  → at most ${(boundBytes / 1e6).toFixed(1)} MB for ${files.length} frames`
+    + ` (${durationSec.toFixed(2)}s)\n`)
+  if (files.length < MIN_FRAMES_FOR_RATE_TO_AMORTISE) {
+    process.stdout.write(
+      `  note: under ${MIN_FRAMES_FOR_RATE_TO_AMORTISE} frames the buffer, not the rate, sets the size —\n`
+      + `        expect an average bitrate above the ceiling, which is correct VBV behaviour\n`)
+  }
 
   mkdirSync(dirname(args.out), { recursive: true })
   const tmp = join(dirname(args.out), '.geotiff-frames')
