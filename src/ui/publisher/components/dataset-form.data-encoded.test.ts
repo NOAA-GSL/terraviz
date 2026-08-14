@@ -1,5 +1,50 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { renderDatasetForm } from './dataset-form'
+import { renderDatasetEditPage } from '../pages/dataset-edit'
+import type { PublisherDatasetDetail } from '../types'
+
+const EDIT_ID = '01EDIT0000000000000000000'
+
+/** Minimal saved row. Mirrors `dataset-edit.test.ts`'s fixture — the
+ *  edit path only reaches the form through the page, which fetches the
+ *  row first, so mounting the form directly cannot exercise it. */
+function savedRow(overrides: Partial<PublisherDatasetDetail> = {}): PublisherDatasetDetail {
+  return {
+    id: EDIT_ID, slug: 'edit-me', title: 'Existing dataset', abstract: null,
+    organization: null, format: 'video/mp4', visibility: 'private',
+    created_at: '2026-04-01T00:00:00Z', updated_at: '2026-04-02T00:00:00Z',
+    published_at: null, retracted_at: null, publisher_id: 'PUB001',
+    legacy_id: null, data_ref: 'vimeo:123', thumbnail_ref: null,
+    legend_ref: null, caption_ref: null, website_link: null,
+    start_time: null, end_time: null, period: null, run_tour_on_load: null,
+    license_spdx: 'CC0-1.0', license_url: null, license_statement: null,
+    attribution_text: null, rights_holder: null, doi: null, citation_text: null,
+    ...overrides,
+  } as PublisherDatasetDetail
+}
+
+function detailResponse(d: PublisherDatasetDetail): Response {
+  return new Response(JSON.stringify({
+    dataset: d, data_url: null, thumbnail_url: null, legend_url: null,
+    keywords: [], tags: [],
+  }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+}
+
+async function mountEdit(row: PublisherDatasetDetail): Promise<{
+  root: HTMLElement
+  fetchFn: ReturnType<typeof vi.fn>
+}> {
+  const root = document.createElement('div')
+  document.body.appendChild(root)
+  const fetchFn = vi.fn()
+    .mockResolvedValueOnce(detailResponse(row))
+    .mockResolvedValue(new Response(JSON.stringify({ dataset: { id: EDIT_ID } }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }))
+  await renderDatasetEditPage(root, EDIT_ID, {
+    fetchFn: fetchFn as unknown as typeof fetch,
+  } as unknown as Parameters<typeof renderDatasetEditPage>[2])
+  return { root, fetchFn }
+}
 
 /**
  * The data-encoded controls, which are the only way to publish a
@@ -118,7 +163,7 @@ describe('dataset form — data-encoded controls', () => {
     // Positive assertion on the thing that should now exist. Matching
     // on absent copy is what went wrong first time: /before uploading/
     // also matches the help text "Choose this before uploading".
-    expect(root.querySelector('.publisher-asset-uploader')).not.toBeNull()
+    expect(root.querySelector('.publisher-form-data-upload .publisher-asset-uploader')).not.toBeNull()
     expect(root.textContent ?? '').not.toMatch(/Add a valid colour scale/i)
   })
 
@@ -134,6 +179,74 @@ describe('dataset form — data-encoded controls', () => {
     area.dispatchEvent(new Event('input'))
     const text = root.textContent ?? ''
     expect(text).toMatch(/dBZ/)
+  })
+
+  it('sends data-luma and the sidecar when enabled', async () => {
+    const { root, fetchFn } = mount()
+    const title = root.querySelector<HTMLInputElement>('#dataset-title')
+    if (title) {
+      title.value = 'Reflectivity'
+      title.dispatchEvent(new Event('change'))
+    }
+    openMedia(root)
+    const box = toggle(root)!
+    box.checked = true
+    box.dispatchEvent(new Event('change'))
+    openMedia(root)
+    const area = scaleBox(root)!
+    area.value = VALID_SCALE
+    area.dispatchEvent(new Event('input'))
+    area.dispatchEvent(new Event('change'))
+    root.querySelector('form')?.dispatchEvent(
+      new Event('submit', { cancelable: true, bubbles: true }))
+    await Promise.resolve()
+    expect(fetchFn).toHaveBeenCalled()
+    const body = JSON.parse(String(fetchFn.mock.calls[0]?.[1]?.body))
+    expect(body.render_encoding).toBe('data-luma')
+    expect(JSON.parse(body.color_scale).units).toBe('dBZ')
+  })
+
+  it('clears both columns with explicit nulls when unticked on a data-encoded row', async () => {
+    // The branch that omission would get wrong: to a PATCH an absent
+    // field means "unchanged", so turning the mode off has to say so.
+    const { root, fetchFn } = await mountEdit(savedRow({
+      render_encoding: 'data-luma',
+      color_scale: VALID_SCALE,
+    } as Partial<PublisherDatasetDetail>))
+    openMedia(root)
+    const box = toggle(root)
+    expect(box?.checked).toBe(true)
+    box!.checked = false
+    box!.dispatchEvent(new Event('change'))
+    root.querySelector('form')?.dispatchEvent(
+      new Event('submit', { cancelable: true, bubbles: true }))
+    await new Promise(r => setTimeout(r, 0))
+    const put = fetchFn.mock.calls.find(c => c[1]?.method === 'PUT')
+    expect(put).toBeDefined()
+    const body = JSON.parse(String(put![1].body))
+    expect(body).toHaveProperty('render_encoding', null)
+    expect(body).toHaveProperty('color_scale', null)
+  })
+
+  it('blocks an edit-mode upload until the encoding change is saved', async () => {
+    // The guard validated the in-memory sidecar, but the transcode
+    // reads the row — and an edit-mode uploader is handed the existing
+    // id without persisting anything on the way there.
+    const { root } = await mountEdit(savedRow())
+    openMedia(root)
+    const box = toggle(root)!
+    box.checked = true
+    box.dispatchEvent(new Event('change'))
+    openMedia(root)
+    const area = scaleBox(root)!
+    area.value = VALID_SCALE
+    area.dispatchEvent(new Event('input'))
+    area.dispatchEvent(new Event('change'))
+    openMedia(root)
+    // The sidecar is valid, so the missing-sidecar block is satisfied —
+    // but the row still says picture, so the uploader must stay away.
+    expect(root.querySelector('.publisher-form-data-upload .publisher-asset-uploader')).toBeNull()
+    expect(root.textContent ?? '').toMatch(/Save the dataset before uploading/i)
   })
 
   it('does not send the encoding pair for an ordinary picture dataset', async () => {

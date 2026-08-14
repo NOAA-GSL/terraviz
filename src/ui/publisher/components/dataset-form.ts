@@ -127,6 +127,11 @@ interface FormState {
    *  columns, and sending one on every create would put a pair of
    *  nulls in the body of every picture dataset ever published. */
   dataEncodedWasSet: boolean
+  /** The sidecar as the row last had it. Paired with
+   *  `dataEncodedWasSet` to tell "the form differs from the row" from
+   *  "the form differs from its defaults" — only the first blocks an
+   *  edit-mode upload. */
+  savedColorScale: string
   /** The `color_scale` JSON sidecar, held as text so an invalid paste
    *  is still visible and editable rather than being silently dropped.
    *  Validated through `parseColorScale` — the same fail-closed parser
@@ -1854,6 +1859,29 @@ function dataEncodingBlocksUpload(state: FormState): boolean {
 }
 
 /**
+ * Whether the encoding choice on screen has yet to reach the row.
+ *
+ * This is the difference that matters, and validating the in-memory
+ * sidecar alone missed it. The transcode reads `render_encoding` from
+ * the *row*, and an edit-mode uploader is handed the existing dataset
+ * id — `ensureId` in `asset-uploader.ts` returns it without ever
+ * calling `ensureDatasetId`, so nothing persists on the way to the
+ * upload. A publisher could therefore tick the box, paste a valid
+ * sidecar, upload before pressing Save, and get the bicubic picture
+ * encode the whole guard exists to prevent. Unticking has the mirror
+ * problem: the row still says data-luma and a picture is scaled with
+ * the nearest-neighbour path.
+ *
+ * Create mode is exempt because `ensureDraftId` calls `persistDataset`
+ * before handing back an id, so the pair is already on the row by the
+ * time the upload starts.
+ */
+function dataEncodingUnsaved(state: FormState): boolean {
+  if (state.dataEncoded !== state.dataEncodedWasSet) return true
+  return state.dataEncoded && state.colorScale.trim() !== state.savedColorScale.trim()
+}
+
+/**
  * Media card — the thumbnail + legend auxiliary images. Both feed
  * the public catalog: `thumbnail_ref` is the browse-card image,
  * `legend_ref` the colour-scale legend shown alongside the loaded
@@ -2185,11 +2213,16 @@ function renderForm(
     // warning would be the wrong shape here: it is dismissable, and
     // the resulting dataset looks correct until someone reads a number
     // off it.
-    const uploadBlocked = dataEncodingBlocksUpload(state)
+    // `scopedId` is the edit-mode marker: in create mode the uploader
+    // mints the row through `ensureDraftId`, which persists first.
+    const encodingUnsaved = Boolean(scopedId) && dataEncodingUnsaved(state)
+    const uploadBlocked = dataEncodingBlocksUpload(state) || encodingUnsaved
     if (uploadBlocked) {
       uploaderWrap.appendChild(el('p', {
         className: 'publisher-form-error',
-        textContent: t('publisher.datasetForm.encoding.uploadBlocked'),
+        textContent: encodingUnsaved && !dataEncodingBlocksUpload(state)
+          ? t('publisher.datasetForm.encoding.uploadNeedsSave')
+          : t('publisher.datasetForm.encoding.uploadBlocked'),
       }))
     }
     // Reuse the previously-mounted uploader DOM across renders when
@@ -2496,6 +2529,10 @@ function renderForm(
 
     if (result.ok) {
       clearWarmupFlag()
+      // The row now carries what the form holds, so an edit-mode upload
+      // is no longer racing an unsaved encoding choice.
+      state.dataEncodedWasSet = state.dataEncoded
+      state.savedColorScale = state.dataEncoded ? state.colorScale : ''
       if (opts.navigateOnSuccess) {
         // On create, send the publisher straight to the edit page
         // (which mounts the asset uploader) rather than the read-only
@@ -2639,6 +2676,7 @@ function initialState(
       legendRef: '',
       dataEncoded: false,
       dataEncodedWasSet: false,
+      savedColorScale: '',
       colorScale: '',
       dataUrl: '',
       overlay: null,
@@ -2696,6 +2734,7 @@ function initialState(
     legendRef: row.legend_ref ?? '',
     dataEncoded: row.render_encoding === RENDER_ENCODING_DATA_LUMA,
     dataEncodedWasSet: row.render_encoding === RENDER_ENCODING_DATA_LUMA,
+    savedColorScale: row.color_scale ?? '',
     colorScale: row.color_scale ?? '',
     dataUrl: dataUrl ?? '',
     overlay: overlayFromRow(row),

@@ -211,14 +211,19 @@ const checks: Check[] = [
       // readable sidecar, the uploader must not be mounted. Bytes
       // uploaded here would transcode as a picture and lose the values
       // the row would then claim to carry.
-      if (await page.locator('.publisher-asset-uploader').count()) {
+      if (await page.locator('.publisher-form-data-upload .publisher-asset-uploader').count()) {
         throw new Error('asset uploader mounted while the colour scale was missing')
       }
       await scale.fill(JSON.stringify({
         stops: [{ t: 0, rgba: [0, 0, 0, 0] }, { t: 1, rgba: [255, 255, 255, 255] }],
         vmin: -35, vmax: 78.025, units: 'dBZ', dataMinLuma: 8,
       }))
-      await page.locator('.publisher-asset-uploader').waitFor({ state: 'visible', timeout: 15_000 })
+      // `fill()` emits `input` but does not blur, and the form
+      // reconciles the upload gate on `change` — re-rendering per
+      // keystroke would move focus out of the field mid-paste. Blur
+      // explicitly, which is what a publisher leaving the field does.
+      await scale.blur()
+      await page.locator('.publisher-form-data-upload .publisher-asset-uploader').waitFor({ state: 'visible', timeout: 15_000 })
     },
   },
   {
