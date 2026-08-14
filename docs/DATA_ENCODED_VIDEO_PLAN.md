@@ -197,19 +197,34 @@ data-encoded datasets:
   two separate things, and the honest summary is a table rather than a
   rule (values are the WebGL path, the one the globe uses):
 
-  | setting | iOS Safari 26.6 | macOS Safari 26.5.2 | Chrome 150 / Win 11 | Chrome 151 / macOS M2 |
-  |---|---|---|---|---|
-  | today (no colour flags) | 220/256 | 220/256 | 220/256 | 220/256 |
-  | `-color_range pc` alone | **fail** 0.859 | **fail** 0.859 | **fail** 0.859 | **fail** 0.859 |
-  | `tv` + matching conversion | 220/256 | 220/256 | 220/256 | 220/256 |
-  | full conversion + `pc` (recommended) | **256/256** | **256/256** | **256/256** | 220/256 |
-  | conversion + range tag only | **256/256** | **256/256** | **256/256** | 220/256 |
-  | recommended minus `-color_trc` | **256/256** | **256/256** | **fail** 1.130 | 220/256 |
+  | setting | iOS Safari 26.6 | macOS Safari 26.5.2 | Chrome 150 / Win 11 | Chrome 151 / macOS M2 | Quest 3 / OculusBrowser 149 |
+  |---|---|---|---|---|---|
+  | today (no colour flags) | 220/256 | 220/256 | 220/256 | 220/256 | 214/256 |
+  | `-color_range pc` alone | **fail** 0.859 | **fail** 0.859 | **fail** 0.859 | **fail** 0.859 | **fail** 0.859 |
+  | `tv` + matching conversion | 220/256 | 220/256 | 220/256 | 220/256 | — |
+  | full conversion + `pc` (recommended) | **256/256** | **256/256** | **256/256** | 220/256 | **256/256** |
+  | conversion + range tag only | **256/256** | **256/256** | **256/256** | 220/256 | **256/256** |
+  | recommended minus `-color_trc` | **256/256** | **256/256** | **fail** 1.130 | 220/256 | **fail** 1.129 |
 
-  **A partial tag set is worse than no tags at all.** Dropping only
-  `-color_trc`, leaving conversion, range tag, primaries and matrix,
-  breaks on Windows Chrome at gain 1.1295 / offset −14.52 while every
-  other pair returns it clean. The transfer tag is not required in the
+  (The Quest `tv`+conversion render row was lost in transit off the
+  headset; its readout row was 220/256 and the setting is not in
+  question on any pair.)
+
+  **A partial tag set is worse than no tags at all, and this is a Blink
+  behaviour rather than one browser's quirk.** Dropping only
+  `-color_trc` — leaving conversion, range tag, primaries and matrix —
+  breaks on *both* Chromium pairs that honour the range tag at all:
+  Windows Chrome at gain 1.1295 / offset −14.52, and the Quest's
+  OculusBrowser at 1.1291 / −14.54. Two independently built Chromiums
+  on entirely unrelated hardware, agreeing to three decimal places.
+  Both WebKit pairs return the same file clean at 256/256. macOS Chrome
+  is not a counterexample: it ignores the range tag on every variant,
+  so it has nothing to half-apply.
+
+  That matters for how seriously to take the rule. A single failing
+  browser invites working around it; a reproducible Blink behaviour is
+  most of the web, and the argv is the only place it can be fixed. The
+  transfer tag is not required in the
   abstract — the range-only variant omits transfer, primaries and
   matrix together and is never worse than the recommendation anywhere.
   What breaks is naming *some* colour tags and leaving transfer
@@ -228,12 +243,14 @@ data-encoded datasets:
   missing is the reason to prefer the setting at all. Full-range
   tagging was chosen for *occupancy*, 256 reachable codes rather than
   256 squeezed through 219, and on that pair the benefit does not
-  arrive. Note it is Chrome-on-macOS specifically: Safari on the same
-  machine returns 256/256, and Chrome on Windows does too, so this is
-  neither an engine nor an OS property but the combination.
+  arrive. It is Chrome-on-macOS specifically, and four of the five
+  pairs measured — including a second Chromium, on the Quest — return
+  the recommended setting at 256/256. Safari on the same Mac returns
+  256/256 too, so this is neither an engine nor an OS property but the
+  one combination.
 
   The recommendation still stands, because it is never worse than the
-  alternatives: exact on three pairs, equal to untagged on the fourth,
+  alternatives: exact on four pairs, equal to untagged on the fifth,
   failing nowhere. But nothing downstream may assume a full 256-level
   lattice. The occupancy loss described in the next bullet is a live
   possibility on a *correctly tagged* stream rather than only on a
@@ -272,6 +289,18 @@ data-encoded datasets:
   [`glLumaSampler`](../src/services/glLumaSampler.ts) shipping without
   a 2D fallback buys, and it is now measured on the platform that
   motivated it rather than assumed.
+
+  **On Adreno the two paths disagree by a code, in the other
+  direction.** The Quest is the only device measured where the WebGL
+  and 2D readings are not identical, and there the GL path is the
+  marginally noisier one: 214/256 against the readout's 220/256 on the
+  untagged settings, 220/256 against 217/256 on the 8K frame. Every
+  reading stays within `max|e|` 1 and passes, and one code is well
+  under the quantisation step any physical value carries anyway
+  (`docs/DATA_ANALYSIS_PLAN.md` §A2), so this changes nothing about
+  what the hover readout may claim. Recorded so that a ±1 discrepancy
+  seen on Adreno later is recognised as texture-sampling rounding
+  rather than chased as a decode bug.
 
   **The untagged round trip preserves values, not occupancy.** Shipped
   untagged, the encoder contracts to limited range and both decoders
