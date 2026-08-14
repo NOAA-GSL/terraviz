@@ -45,6 +45,17 @@ for free — running this against them measures the harness, not the device.</p>
 // allocation, thermal headroom on a cold device) do not dominate the
 // mean, short enough that nobody abandons the run wearing a headset.
 const MEASURE_MS = 12000
+// The catalog encodes everything at 30 fps and expresses a dataset's
+// display rate as `playbackRate = requestedFps / 30`
+// (`cli/lib/ffmpeg-hls.ts` OUTPUT_FRAME_RATE, `tourEngine`
+// execDatasetAnimation). A data-encoded dataset is typically shown at
+// 1-2 fps, so measuring at 1x tests a load roughly sixteen times
+// heavier than anything the app asks for. Mirrors the app's own clamp
+// in `src/utils/time.ts`: below 0.0625x browsers ignore the value, so
+// 1.875 fps is the real floor no matter what a caller requests.
+const SOURCE_FPS = 30
+const MIN_PLAYBACK_RATE = 0.0625
+const MAX_PLAYBACK_RATE = 16
 // The first frames of any stream are the cheapest and least
 // representative — allocation happens once and the I-frame is already
 // decoded by the time playback starts. Discard them.
@@ -131,7 +142,7 @@ function safeClipUrl(raw) {
 
 let report = ''
 
-async function run(clipUrl) {
+async function run(clipUrl, rate) {
   const out = document.getElementById('out')
   const v = document.getElementById('v')
   const rec = { clip: clipUrl, ua: navigator.userAgent }
@@ -190,7 +201,11 @@ async function run(clipUrl) {
     prevMedia = t
   }
 
-  out.textContent = 'Playing for ' + MEASURE_MS / 1000 + 's…'
+  v.playbackRate = rate
+  rec.rate = rate
+  rec.targetFps = SOURCE_FPS * rate
+  out.textContent = 'Playing for ' + MEASURE_MS / 1000 + 's at ' + rate + 'x ('
+    + rec.targetFps.toFixed(2) + ' fps)…'
   await v.play().catch(() => {})
 
   await new Promise(done => {
@@ -234,7 +249,10 @@ async function run(clipUrl) {
   // The honest headline. mediaTime is the clip's own clock; wall clock
   // is the viewer's. A ratio below 1 means playback fell behind real
   // time no matter how many frames were counted.
-  rec.realtimeRatio = wallMs > 0 ? mediaAccum / (wallMs / 1000) : 0
+  // Normalised by the requested rate. At 0.0625x the clip's clock is
+  // *meant* to advance at a sixteenth of wall time, so an unnormalised
+  // ratio would report every correct slow-playback run as a stall.
+  rec.realtimeRatio = wallMs > 0 ? mediaAccum / ((wallMs / 1000) * rate) : 0
   rec.presentedFps = rec.wallSeconds > 0 ? rec.measuredFrames / rec.wallSeconds : 0
 
   const q = typeof v.getVideoPlaybackQuality === 'function' ? v.getVideoPlaybackQuality() : null
@@ -261,6 +279,9 @@ function finish(rec, out) {
   } else {
     lines.push('size=' + rec.size + '  duration=' + (rec.duration || 0).toFixed(2) + 's'
       + '  maxTex=' + rec.maxTex + '  rVFC=' + (rec.rvfc ? 'yes' : 'NO'))
+    lines.push('rate=' + rec.rate + 'x  target=' + rec.targetFps.toFixed(2) + 'fps'
+      + '  (catalog encodes at ' + SOURCE_FPS + 'fps; app floor is '
+      + (SOURCE_FPS * MIN_PLAYBACK_RATE).toFixed(3) + 'fps)')
     lines.push('realtime=' + rec.realtimeRatio.toFixed(3) + 'x'
       + '  presented=' + rec.presentedFps.toFixed(1) + 'fps'
       + '  frames=' + rec.measuredFrames + ' over ' + rec.wallSeconds.toFixed(1) + 's'
@@ -313,8 +334,18 @@ document.getElementById('run').onclick = () => {
     out.textContent = 'Refusing that ?clip= value — only http(s) URLs are accepted.'
     return
   }
+  // ?rate= mirrors the app's playbackRate, so the default measures the
+  // load the app actually asks for rather than a 16x-heavier one. A
+  // caller wanting the stress case passes rate=1 explicitly.
+  const raw2 = new URLSearchParams(location.search).get('rate')
+  let rate = raw2 === null ? MIN_PLAYBACK_RATE : Number(raw2)
+  if (!isFinite(rate) || rate <= 0) {
+    out.textContent = 'Refusing that ?rate= value — expected a positive number.'
+    return
+  }
+  rate = Math.min(MAX_PLAYBACK_RATE, Math.max(MIN_PLAYBACK_RATE, rate))
   document.getElementById('run').disabled = true
-  return run(clip)
+  return run(clip, rate)
 }
 
 document.getElementById('copy').onclick = async e => {
