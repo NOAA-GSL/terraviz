@@ -6,22 +6,31 @@ split by browser *and* by platform with no clean rule joining them.
 Nothing in Phases 1–3 is built. The Phase 0 *instrument* is built and
 its 8K bundle is staged in `public/luma-check/`.
 
-**The matrix so far: two accepts, two refusals, one stall — and the
-same OS lands on both sides.** macOS Safari decodes the 8192×4096 rung
-at true native resolution; macOS Chrome refuses it. Windows Chrome
-decodes it; iOS Safari refuses it; Windows Firefox stalls without
-returning anything. Neither "Apple platforms can't" nor "Chrome can"
-survives contact with the full set. Two attempts at a generalisation
-were written into this document and each was falsified by the next
-device to report — the per-row records below stand, the rules drawn
-from them did not, and the lesson is to record the (platform, browser)
-pair and wait.
+**The matrix so far: three accepts, two refusals, one stall — and the
+same OS lands on both sides.** Windows Chrome, macOS Safari and a
+Quest 3 all decode the 8192×4096 rung at true native resolution. macOS
+Chrome refuses it on the same machine Safari accepts it on, iOS Safari
+refuses it, and Windows Firefox stalls without returning anything.
+Neither "Apple platforms can't" nor "Chrome can" survives contact with
+the full set. Two attempts at a generalisation were written into this
+document and each was falsified by the next device to report — the
+per-row records stand, the rules drawn from them did not, and the
+lesson is to record the (platform, browser) pair and wait for the
+matrix rather than extract a rule from half of it.
 
-That is the gate's middle branch: a population that matters cannot
-decode it, so Phase 1 alone is not enough and Phase 2 is load-bearing
-rather than optional. Both accepts carry the same open question —
-hardware decode, or software at a rate nobody would watch — and
-Android and Quest are unmeasured.
+**What the accepts have changed:** they now span x86 desktop, Apple
+silicon and a mobile ARM headset, so the rung is decodable rather than
+merely survivable by workstations, and the doubt hanging over the
+desktop rows is no longer about whether the frame can be decoded at
+all. **What they have not changed:** the gate still sits on its middle
+branch, because iOS Safari cannot decode it and is not a population
+this project can serve a broken globe to. Phase 1 alone is not enough;
+Phase 2 is load-bearing rather than optional.
+
+The one open question is now uniform across all three accepts and is
+no longer about decoding: does it *play*. Nothing here has watched a
+frame arrive after the first. Mid-range Android is the only unmeasured
+row.
 
 **Last reviewed: 2026-08-13.**
 **Revisit when:** the Phase 0 matrix fills past its first row; a data
@@ -193,7 +202,7 @@ break CI.
 | desktop Safari 26.5.2 (macOS, Apple GPU) | **yes** | 4 | 8192×4096 | 16384 | ok | **yes** — spike 252.0 | Decodes what Chrome on the same OS refuses. Decode path unconfirmed |
 | iOS Safari 26.6 (iOS 18.7, Apple GPU) | **no** | — | — | 16384 | — | — | `MediaError` code 4 at `loadeddata`; refused before playback. A–G at 4096×256 all decode and upload on the same device |
 | mid-range Android | | | | | | | |
-| Quest browser | | | | | | | |
+| Quest 3 (OculusBrowser 149, Adreno 740) | **yes** | 4 | 8192×4096 | **8192** | ok | **yes** — spike 251.0 | Texture limit *equals* the frame width: fits with zero headroom |
 
 **Row 1 — iOS Safari, 2026-08-13.** The rung is refused outright:
 `MEDIA_ERR_SRC_NOT_SUPPORTED` fires on load, so `readyState`, decoded
@@ -342,6 +351,33 @@ of nothing at all about a MacBook Air or an older Mac. One frame after
 a seek is not playback. This row needs the same watch-it-actually-play
 check row 2 does before it counts as a capability rather than a
 curiosity.
+
+**Row 6 — Quest 3, the accept that changes the reading.** The rung
+decodes: `readyState` 4, 8192×4096, clean `texImage2D`, spike mean
+**251.0**, native. The two desktop accepts could both be explained away
+as workstations brute-forcing a software decode. An Adreno 740 in a
+headset cannot be explained that way, and it is the first evidence
+that the rung is decodable rather than merely survivable on hardware
+with room to spare.
+
+**`MAX_TEXTURE_SIZE` is 8192 — exactly the frame width.** §The probe
+flagged this as a worry when CI's SwiftShader reported 8192; it is now
+confirmed on the real device class most likely to want the rung. The
+frame fits with **zero headroom**: a single texel wider and this device
+could not hold it at all, no matter what the decoder managed. Two
+consequences worth writing down. Nothing above 8192 wide is available
+on this hardware, so the ladder in Phase 3 has a hard ceiling here
+rather than a soft one. And the margin between "works" and "cannot be
+uploaded" is one texel, so the 8192×4096 geometry is not a starting
+point to be nudged later — it is the terminal rung for this device
+class.
+
+**And this is where the framerate question is sharpest.** A headset
+must hold 72–90 Hz or it is unusable in a way a stuttering desktop
+video is not, and this is simultaneously the device where the rung's
+angular resolution would matter most. A decode that lands one frame
+after a seek says nothing about that. Play the 8K clip in the headset
+and watch it before this row counts as a capability.
 
 **A different browser does not help on iOS, and that much is
 structural.** Chrome, Firefox and Edge on iOS are all WKWebView, since
