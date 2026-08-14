@@ -1807,12 +1807,26 @@ function dataEncodingFieldset(state: FormState, update: () => void): HTMLElement
       stops: String(parsed.stops.length),
     })
   }
+  // Validity at render time. The upload gate was decided against this
+  // value, so when editing flips it the form has to re-render or the
+  // uploader stays hidden after a *valid* sidecar is pasted — visible
+  // as "I fixed it and nothing happened".
+  const blockedAtRender = dataEncodingBlocksUpload(state)
   textarea.addEventListener('input', () => {
     state.colorScale = textarea.value
+    // Paint only: a re-render on every keystroke moves focus out of the
+    // textarea mid-paste.
     paint()
   })
   textarea.addEventListener('change', () => {
     state.colorScale = textarea.value
+    // On blur, reconcile. Re-rendering here is safe — focus has already
+    // left the field — and it is the point at which the uploader should
+    // appear or disappear.
+    if (dataEncodingBlocksUpload(state) !== blockedAtRender) {
+      update()
+      return
+    }
     paint()
   })
   paint()

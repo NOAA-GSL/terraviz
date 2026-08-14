@@ -99,6 +99,29 @@ describe('dataset form — data-encoded controls', () => {
     expect(root.textContent ?? '').toMatch(/not a valid colour scale/i)
   })
 
+  it('reveals the uploader once a valid sidecar lands', () => {
+    // The gate is evaluated at render time while the textarea
+    // deliberately does not re-render on input, so the blur handler has
+    // to reconcile. Without it a publisher pastes a correct sidecar and
+    // nothing appears to happen.
+    const { root } = mount()
+    openMedia(root)
+    const box = toggle(root)!
+    box.checked = true
+    box.dispatchEvent(new Event('change'))
+    openMedia(root)
+    const area = scaleBox(root)!
+    area.value = VALID_SCALE
+    area.dispatchEvent(new Event('input'))
+    area.dispatchEvent(new Event('change'))
+    openMedia(root)
+    // Positive assertion on the thing that should now exist. Matching
+    // on absent copy is what went wrong first time: /before uploading/
+    // also matches the help text "Choose this before uploading".
+    expect(root.querySelector('.publisher-asset-uploader')).not.toBeNull()
+    expect(root.textContent ?? '').not.toMatch(/Add a valid colour scale/i)
+  })
+
   it('accepts a valid sidecar', () => {
     const { root } = mount()
     openMedia(root)
