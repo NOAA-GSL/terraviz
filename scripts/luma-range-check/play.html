@@ -111,6 +111,24 @@ function uploadAndDraw(v) {
 
 function pct(n, d) { return d ? (100 * n / d).toFixed(2) + '%' : '—' }
 
+/** Resolve `?clip=` to an http(s) URL, or null.
+ *
+ *  The parameter is attacker-controllable in a shared link, `video.src`
+ *  accepts `javascript:` and `data:` URLs, and this page ships on every
+ *  preview deploy — so the sink is reachable rather than theoretical.
+ *  Parse-then-allowlist rather than pattern-match the string: the URL
+ *  parser is the thing that decides what the protocol actually is, and
+ *  a regex over the raw text is how `java\nscript:` gets through.
+ *
+ *  Cross-origin stays deliberately allowed. The clip this page exists
+ *  to measure is far too large for the repo and will usually be hosted
+ *  elsewhere; the protocol is the part that matters, not the host. */
+function safeClipUrl(raw) {
+  let u
+  try { u = new URL(raw, location.href) } catch (e) { return null }
+  return (u.protocol === 'http:' || u.protocol === 'https:') ? u.href : null
+}
+
 let report = ''
 
 async function run(clipUrl) {
@@ -148,8 +166,29 @@ async function run(clipUrl) {
   rec.rvfc = hasRvfc
 
   const uploads = []
-  let frames = 0, firstMediaTime = null, lastMediaTime = null
+  let frames = 0, mediaAccum = 0, prevMedia = null, loops = 0
   let startWall = null
+
+  // Loop rather than require a long clip. A representative 8K encode is
+  // expensive to produce and the useful ones tend to be short — 20
+  // frames of real data is a better test than 300 frames of anything
+  // synthetic. Replaying it costs a keyframe per loop, which makes the
+  // measurement slightly *harder* than a continuous stream rather than
+  // easier, so a short clip cannot flatter the device.
+  v.loop = true
+
+  // mediaTime restarts at each wrap, so the clip's own clock has to be
+  // accumulated across loops. Comparing first to last would otherwise
+  // report a near-zero advance and call a device that kept up perfectly
+  // a device that stalled.
+  const advance = t => {
+    if (prevMedia !== null) {
+      let d = t - prevMedia
+      if (d < 0) { d += (v.duration || 0); loops++ }
+      if (d >= 0 && isFinite(d)) mediaAccum += d
+    }
+    prevMedia = t
+  }
 
   out.textContent = 'Playing for ' + MEASURE_MS / 1000 + 's…'
   await v.play().catch(() => {})
@@ -159,9 +198,9 @@ async function run(clipUrl) {
     if (hasRvfc) {
       const onFrame = (now, meta) => {
         frames++
-        if (frames === WARMUP_FRAMES) { startWall = now; firstMediaTime = meta.mediaTime }
-        if (frames > WARMUP_FRAMES) {
-          lastMediaTime = meta.mediaTime
+        if (frames === WARMUP_FRAMES) { startWall = now; prevMedia = meta.mediaTime }
+        else if (frames > WARMUP_FRAMES) {
+          advance(meta.mediaTime)
           const ms = uploadAndDraw(v)
           if (ms >= 0) uploads.push(ms)
           if (now - startWall >= MEASURE_MS) return stop()
@@ -171,10 +210,10 @@ async function run(clipUrl) {
       v.requestVideoFrameCallback(onFrame)
     } else {
       startWall = performance.now()
-      firstMediaTime = v.currentTime
+      prevMedia = v.currentTime
       const tick = () => {
         frames++
-        lastMediaTime = v.currentTime
+        advance(v.currentTime)
         const ms = uploadAndDraw(v)
         if (ms >= 0) uploads.push(ms)
         if (performance.now() - startWall >= MEASURE_MS) return stop()
@@ -182,21 +221,20 @@ async function run(clipUrl) {
       }
       requestAnimationFrame(tick)
     }
-    // A clip that ends before the window closes still yields a result;
-    // a stalled one must not hang the page the way the luma probe did.
-    v.onended = stop
+    // Bounded regardless: a stalled clip must not hang the page the way
+    // the luma probe's unbounded waits did.
     setTimeout(stop, MEASURE_MS + TIMEOUT_MS)
   })
 
-  const wallMs = (hasRvfc ? performance.now() : performance.now()) - startWall
-  const mediaAdvanced = (lastMediaTime ?? 0) - (firstMediaTime ?? 0)
+  const wallMs = performance.now() - startWall
   rec.measuredFrames = Math.max(0, frames - WARMUP_FRAMES)
   rec.wallSeconds = wallMs / 1000
-  rec.mediaSeconds = mediaAdvanced
+  rec.mediaSeconds = mediaAccum
+  rec.loops = loops
   // The honest headline. mediaTime is the clip's own clock; wall clock
   // is the viewer's. A ratio below 1 means playback fell behind real
   // time no matter how many frames were counted.
-  rec.realtimeRatio = wallMs > 0 ? mediaAdvanced / (wallMs / 1000) : 0
+  rec.realtimeRatio = wallMs > 0 ? mediaAccum / (wallMs / 1000) : 0
   rec.presentedFps = rec.wallSeconds > 0 ? rec.measuredFrames / rec.wallSeconds : 0
 
   const q = typeof v.getVideoPlaybackQuality === 'function' ? v.getVideoPlaybackQuality() : null
@@ -225,7 +263,8 @@ function finish(rec, out) {
       + '  maxTex=' + rec.maxTex + '  rVFC=' + (rec.rvfc ? 'yes' : 'NO'))
     lines.push('realtime=' + rec.realtimeRatio.toFixed(3) + 'x'
       + '  presented=' + rec.presentedFps.toFixed(1) + 'fps'
-      + '  frames=' + rec.measuredFrames + ' over ' + rec.wallSeconds.toFixed(1) + 's')
+      + '  frames=' + rec.measuredFrames + ' over ' + rec.wallSeconds.toFixed(1) + 's'
+      + '  loops=' + rec.loops)
     if (rec.totalFrames !== undefined) {
       lines.push('dropped=' + rec.droppedFrames + '/' + rec.totalFrames
         + ' (' + pct(rec.droppedFrames, rec.totalFrames) + ')')
@@ -256,13 +295,22 @@ function finish(rec, out) {
 }
 
 document.getElementById('run').onclick = () => {
-  const clip = new URLSearchParams(location.search).get('clip')
-  if (!clip) {
-    document.getElementById('out').innerHTML =
+  const out = document.getElementById('out')
+  const raw = new URLSearchParams(location.search).get('clip')
+  if (!raw) {
+    out.innerHTML =
       '<p class="fail">No ?clip=&lt;url&gt; given. This check deliberately has no '
       + 'default: the only clips shipped beside it are 0.4s of identical flat frames, '
       + 'and running against those would report a device as fine on content that '
       + 'costs nothing to decode.</p>'
+    return
+  }
+  const clip = safeClipUrl(raw)
+  if (!clip) {
+    // textContent, not innerHTML: the rejected value is the untrusted
+    // one, and echoing it into markup would reintroduce the sink this
+    // check exists to close.
+    out.textContent = 'Refusing that ?clip= value — only http(s) URLs are accepted.'
     return
   }
   document.getElementById('run').disabled = true
