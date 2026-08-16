@@ -218,7 +218,7 @@ break CI.
 | desktop Safari 26.5.2 (macOS, Apple GPU) | **yes** | 4 | 8192×4096 | 16384 | ok | **yes** — spike 252.0 | Decodes what Chrome on the same OS refuses. Decode path unconfirmed |
 | iOS Safari 26.6 (iOS 18.7, Apple GPU) | **no** — H.264; **yes** — HEVC | 4 (HEVC) | 8192×4096 (HEVC) | 16384 | ok (HEVC) | **yes** — spike 253 (HEVC) | H.264 gives `MediaError` code 4 at `loadeddata`, refused before playback, re-confirmed 2026-08-16. **The same device decodes the same frame size in HEVC** — see §iOS Safari accepts the full rung in HEVC |
 | mid-range Android | | | | | | | |
-| Quest 3 (OculusBrowser 149, Adreno 740) | **yes** | 4 | 8192×4096 | **8192** | ok | **yes** — spike 251.0 | Texture limit *equals* the frame width: fits with zero headroom |
+| Quest 3 (OculusBrowser 149, Adreno 740) | **yes** | 4 | 8192×4096 | **8192** | ok | **yes** — spike 251.0 | Texture limit *equals* the frame width: fits with zero headroom, confirmed uploading in both codecs. **Also accepts the 8K HEVC variant, spike 253** — see §The Quest allocates a texture at exactly its own limit |
 
 **Row 1 — iOS Safari, 2026-08-13.** The rung is refused outright:
 `MEDIA_ERR_SRC_NOT_SUPPORTED` fires on load, so `readyState`, decoded
@@ -1079,12 +1079,46 @@ shape identifies a class, not a culprit.
 iOS version; Apple's HEVC ceiling may differ on older silicon. Playback
 at 8192×4096 on iOS is unmeasured — the 7200×3600 run passed, but that
 is 29% fewer pixels and it already carried a 96 ms first-frame cost, the
-worst in the matrix. The Quest has not run these variants, and its
-`MAX_TEXTURE_SIZE` of exactly 8192 leaves no headroom. And **macOS
-Chrome and Firefox remain untested on HEVC** — Chrome's HEVC support
-depends on hardware and build, so §Phase 0b's warning that this could
-trade one set of refusals for a different set is still live for those
-two.
+worst in the matrix. And **macOS Chrome and Firefox remain untested on
+HEVC** — Chrome's HEVC support depends on hardware and build, so §Phase
+0b's warning that this could trade one set of refusals for a different
+set is still live for those two.
+
+### The Quest allocates a texture at exactly its own limit
+
+**Quest 3 (OculusBrowser 149, Adreno 740), both 8K variants,
+2026-08-16.**
+
+| variant | decoded | ready | decoded size | MAX_TEXTURE_SIZE | texImage2D | spike | native |
+|---|---|---|---|---|---|---|---|
+| `H_ceiling_8k` (H.264) | yes | 4 | 8192×4096 | **8192** | ok | 251 | **yes** |
+| `I_ceiling_8k_hevc` (HEVC) | yes | 4 | 8192×4096 | **8192** | ok | **253** | **yes** |
+
+**Both of the stacked questions answer yes.** The decoder takes
+8192×4096 HEVC, and — the one this device was uniquely placed to settle
+— **a texture whose width is exactly `MAX_TEXTURE_SIZE` allocates and
+uploads**. Zero headroom is enough headroom. That had been flagged since
+the first Quest row as a plausible way for the rung to fail on the
+device where the resolution would matter most, and it does not.
+
+**All four value paths pass here, including the two that failed on
+iOS.** The Quest's 2D-canvas readout returns 217/256 with MAE 0.152 and
+max |e| 1 — marginally lossier than its own WebGL path but comfortably
+passing. That is the counterpart the iOS row needed: the 2D-canvas
+failure is Safari colour-managing a canvas, not something an 8K frame
+does to a 2D readback in general.
+
+**Three platforms, one file, identical numbers on the shipped path.**
+
+| device | render exact | MAE | max \|e\| | spike (H.264 / HEVC) |
+|---|---|---|---|---|
+| Windows Chrome 150 | 220/256 | 0.141 | 1 | 251 / 253 |
+| iOS Safari 26.6 | 220/256 | 0.141 | 1 | — / 253 |
+| Quest 3 | 220/256 | 0.141 | 1 | 251 / 253 |
+
+Identical to the digit across x86 Windows, Apple silicon and mobile ARM.
+Whatever the transport lattice costs, it costs the same everywhere, and
+the codec change does not move it.
 
 ---
 
