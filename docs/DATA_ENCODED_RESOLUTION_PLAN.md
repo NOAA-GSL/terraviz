@@ -27,10 +27,17 @@ branch, because iOS Safari cannot decode it and is not a population
 this project can serve a broken globe to. Phase 1 alone is not enough;
 Phase 2 is load-bearing rather than optional.
 
-The one open question is now uniform across all three accepts and is
-no longer about decoding: does it *play*. Nothing here has watched a
-frame arrive after the first. Mid-range Android is the only unmeasured
-row.
+**Playback is now measured, and it passes on the device that mattered
+most.** The Quest 3 holds 0.994× of real time with zero dropped frames
+and a 4.69 ms mean texture upload against its 11.1 ms budget at 90 Hz —
+better than either desktop, because a software-decoded frame is already
+in memory its unified-memory GPU can address, while a discrete card has
+to pull it across PCIe first. Desktop Chrome also keeps up, with an
+occasional p95 hitch at 60 Hz.
+
+So the remaining blockers are the two refusals, not performance: iOS
+Safari and macOS Chrome still cannot decode the rung at all. Mid-range
+Android is the only unmeasured row.
 
 **Last reviewed: 2026-08-13.**
 **Revisit when:** the Phase 0 matrix fills past its first row; a data
@@ -432,6 +439,55 @@ displayed" was the wrong reading of it.
 90 Hz budget and still 1.17× the 60 Hz one. So the hitch is real but
 occasional, and it arrives roughly twice a second at this playback
 rate.
+
+**Row 2 — Quest 3, and it beats both desktops.** The device with the
+tightest frame budget, the narrowest memory bus, and no texture
+headroom is the fastest of the three by a wide margin:
+
+| device | mean | p95 | budget | mean | p95 |
+|---|---|---|---|---|---|
+| Intel UHD 770 | 11.47 ms | 30.20 ms | 60 Hz | 0.69× | 1.81× |
+| RTX 4090 Laptop | 9.89 ms | 19.60 ms | 60 Hz | 0.59× | 1.17× |
+| **Quest 3 / Adreno 740** | **4.69 ms** | **5.10 ms** | **90 Hz** | **0.42×** | **0.46×** |
+
+Playback held **0.994×** with **zero dropped frames** — better than
+either desktop on every metric, and 2.1× the 4090 on mean upload, 3.8×
+on p95. Implied throughput is 22.1 GB/s against the 4090's 10.5.
+
+**The likely reason is that a discrete GPU is a handicap here.** The
+frame is software-decoded into system memory; on the laptop it must
+then cross PCIe to VRAM, and the card's enormous local bandwidth never
+comes into play because the bottleneck is upstream of it. The Quest has
+unified memory and, on Android, Chromium can hand a decoded video frame
+to GL through `SurfaceTexture`/`EGLImage` with little or no copy. The
+frame is already where the GPU can see it. That also explains why the
+Intel part — unified memory but no such fast path in the Windows media
+stack — is the slowest of the three.
+
+**Read the budgets by device, which the earlier rows did not.** 90 Hz
+only applies to VR. A desktop globe renders at 60 Hz, where the 4090's
+mean is 0.59× of budget and only its p95 slightly exceeds it. The
+device that genuinely needs 90 Hz is the Quest, and it comes in at
+0.42× and 0.46×. Both pass; the desktop's occasional p95 hitch is the
+only wart, and it lands on the platform where a dropped frame costs
+least.
+
+**This reverses what this section predicted.** It called the Quest
+decisive and expected it to fail — "if the upload cost there is
+anything like this row's, the rung is not viable in VR at 7200×3600."
+It is not like it. It is twice as good, and the prediction was drawn
+from a measurement taken on the wrong GPU and generalised to hardware
+with a different memory architecture.
+
+**One caveat worth keeping.** The Adreno is a tile-based renderer, and
+this probe's own comment notes that a tiler can report near-zero for
+work it has merely queued. `gl.finish()` after a `texelFetch` draw
+should force the upload to resolve, but a result that inverts the
+expected ordering deserves more scrutiny than one that confirms it. If
+Phase 1 is going to rest on this row, it is worth a second measurement
+that does not depend on `finish()` semantics — a sustained render loop
+at 90 Hz with the upload in it, and the frame rate observed rather than
+timed.
 
 **Two limits still apply.** The probe calls `gl.finish()` before
 stopping the clock, deliberately, so these are an upper bound on what a
