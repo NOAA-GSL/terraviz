@@ -217,7 +217,7 @@ break CI.
 | desktop Chrome 150 (Win 11, Intel UHD 770, ANGLE/D3D11) | **yes** | 4 | 8192×4096 | 16384 | ok | **yes** — spike 252.0 | Values round-trip at 8K exactly as at 4K. Decode path unconfirmed; see below. **Also accepts the 8K HEVC variant, spike 253** — see §The 8K HEVC variant has a positive control |
 | desktop Chrome 151 (macOS, M2 Ultra, ANGLE Metal) | **no** | — | — | 16384 | — | — | `MediaError` 4, and no software fallback — while Safari on the same OS accepts |
 | desktop Firefox (Win 11) | **yes** | 4 | 8192×4096 | 16384 | ok | **yes** — spike 251.0 | Stalled 2026-08-13, did **not** reproduce 2026-08-16 — all paths pass. Cause never attributed; see below. **Also accepts the 8K HEVC variant, spike 253**, with a codec-specific 2D-canvas defect — see §Firefox takes both codecs |
-| desktop Safari 26.5.2 (macOS, Apple GPU) | **yes** | 4 | 8192×4096 | 16384 | ok | **yes** — spike 252.0 | Decodes what Chrome on the same OS refuses. Decode path unconfirmed |
+| desktop Safari 26.5.2 (macOS, Apple GPU) | **yes** | 4 | 8192×4096 | 16384 | ok | **yes** — spike 252.0 | Decodes what Chrome on the same OS refuses. Decode path unconfirmed. **Also accepts the 8K HEVC variant, spike 253**, and fails the 2D readout identically on *both* codecs — see §Safari's 2D defect is the engine, not the codec |
 | iOS Safari 26.6 (iOS 18.7, Apple GPU) | **no** — H.264; **yes** — HEVC | 4 (HEVC) | 8192×4096 (HEVC) | 16384 | ok (HEVC) | **yes** — spike 253 (HEVC) | H.264 gives `MediaError` code 4 at `loadeddata`, refused before playback, re-confirmed 2026-08-16. **The same device decodes the same frame size in HEVC** — see §iOS Safari accepts the full rung in HEVC |
 | mid-range Android | | | | | | | |
 | Quest 3 (OculusBrowser 149, Adreno 740) | **yes** | 4 | 8192×4096 | **8192** | ok | **yes** — spike 251.0 | Texture limit *equals* the frame width: fits with zero headroom, confirmed uploading in both codecs. **Also accepts the 8K HEVC variant, spike 253** — see §The Quest allocates a texture at exactly its own limit |
@@ -1193,6 +1193,52 @@ recommends.
 dBZ** — max 2 codes at 0.458 dBZ per code. Small, real, and not on the
 path the app takes. Worth knowing for anyone reading values out of a
 canvas in a future tool.
+
+### Safari's 2D defect is the engine, not the codec
+
+**macOS Safari 26.5.2 (Apple GPU), both 8K variants, 2026-08-16.** Both
+decode at native 8192×4096 with a clean `texImage2D` — spike 252 for
+H.264, 253 for HEVC. Fifth HEVC accept.
+
+| variant | 2D `readout` | WebGL `render` |
+|---|---|---|
+| `H_ceiling_8k` | 12/256, MAE 6.809, max \|e\| 11, offset **+6.10** — FAIL | 220/256, MAE 0.141 — PASS |
+| `I_ceiling_8k_hevc` | 12/256, MAE 6.809, max \|e\| 11, offset **+6.10** — FAIL | 220/256, MAE 0.141 — PASS |
+
+**Byte-identical across the two codecs, and byte-identical to iOS.** Not
+merely similar: the same 12/256, the same 6.809, the same 1.0033 gain
+and +6.10 offset that §iOS Safari accepts the full rung in HEVC
+recorded, and the same 1.0005 / −0.07 on the render path. One WebKit
+defect, expressed the same way on desktop and mobile, indifferent to
+what produced the frame.
+
+**This closes an ambiguity the iOS row could not close on its own.** The
+argument there ran through three devices and still had a hole:
+
+| evidence | rules out | leaves open |
+|---|---|---|
+| iOS Safari — HEVC 2D fails, H.264 unavailable | — | cause: engine or codec? |
+| Quest — both 2D paths pass | "8K frames break 2D readback generally" | either remaining cause |
+| Firefox — H.264 2D passes, HEVC 2D **fails** | — | makes "HEVC breaks 2D" a live hypothesis |
+| **macOS Safari — both fail identically** | **codec** | engine, alone |
+
+Firefox is what made this worth running rather than assuming. Until it
+reported, "the 2D path dislikes HEVC" was a perfectly good explanation
+of the iOS row, and it happens to be the right explanation *for
+Firefox*. Safari with both codecs in hand is the only configuration
+that separates them, and it says the two browsers are failing for
+different reasons that happen to land in the same table cell.
+
+**So there are three distinct 2D behaviours across the matrix**, and
+`glLumaSampler`'s no-2D-fallback rule covers all three: Safari
+transforms regardless of codec, Firefox misreads an untagged HEVC
+stream specifically, and Chrome and the Quest are clean on both.
+
+**The H.264 spike varies slightly by platform — 251, 252 — while HEVC
+reads 253 everywhere.** Five devices, one file, one number. Not load
+-bearing, but it is the sort of consistency worth noticing in an
+isolated single-texel feature, since that is the measurement most
+sensitive to whatever each decoder does differently.
 
 ---
 
