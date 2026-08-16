@@ -216,7 +216,7 @@ break CI.
 | desktop Chrome 151 (macOS, M2 Ultra, ANGLE Metal) | **no** | — | — | 16384 | — | — | `MediaError` 4, and no software fallback — while Safari on the same OS accepts |
 | desktop Firefox (Win 11) | *stalls* | — | — | — | — | — | Ran 2026-08-13, never returned. Stalling variant unattributed — see below |
 | desktop Safari 26.5.2 (macOS, Apple GPU) | **yes** | 4 | 8192×4096 | 16384 | ok | **yes** — spike 252.0 | Decodes what Chrome on the same OS refuses. Decode path unconfirmed |
-| iOS Safari 26.6 (iOS 18.7, Apple GPU) | **no** | — | — | 16384 | — | — | `MediaError` code 4 at `loadeddata`; refused before playback. A–G at 4096×256 all decode and upload on the same device. **The same device accepts 7200×3600 HEVC** — see §iOS Safari accepts HEVC |
+| iOS Safari 26.6 (iOS 18.7, Apple GPU) | **no** — H.264; **yes** — HEVC | 4 (HEVC) | 8192×4096 (HEVC) | 16384 | ok (HEVC) | **yes** — spike 253 (HEVC) | H.264 gives `MediaError` code 4 at `loadeddata`, refused before playback, re-confirmed 2026-08-16. **The same device decodes the same frame size in HEVC** — see §iOS Safari accepts the full rung in HEVC |
 | mid-range Android | | | | | | | |
 | Quest 3 (OculusBrowser 149, Adreno 740) | **yes** | 4 | 8192×4096 | **8192** | ok | **yes** — spike 251.0 | Texture limit *equals* the frame width: fits with zero headroom |
 
@@ -1022,6 +1022,69 @@ twice.
 **`readoutFull` is skipped on both** — 8192×4096 exceeds what a 2D
 canvas will hold. Known, and why the WebGL `readout` path is the one
 that carries these rows.
+
+### iOS Safari accepts the full rung in HEVC
+
+**iOS Safari 26.6 (iOS 18.7, iPhone, Apple GPU), both 8K variants,
+2026-08-16.**
+
+| variant | decoded | ready | decoded size | MAX_TEXTURE_SIZE | texImage2D | spike | native |
+|---|---|---|---|---|---|---|---|
+| `H_ceiling_8k` (H.264) | **load failed, code 4** | — | — | 16384 | — | — | — |
+| `I_ceiling_8k_hevc` (HEVC) | **yes** | 4 | **8192×4096** | 16384 | ok | **253** | **yes** |
+
+**This is the answer the plan was gated on.** iOS Safari decodes the
+full 8192×4096 rung in HEVC, at native resolution, and hands it to
+WebGL intact. Not the 7200×3600 stand-in — the rung itself. The refusal
+that put the gate on its middle branch and made Phase 2 load-bearing is
+codec-specific, and the codec clears it.
+
+**The control refused in the same run.** `H_ceiling_8k` failed with
+`MediaError` code 4 on the same device, same day, same harness, minutes
+apart. So this is a codec difference measured against a live refusal
+rather than against a record from three days earlier — which is what
+the paired run was for.
+
+**Two of the four value paths report FAIL, and neither is the one the
+app uses.**
+
+| path | mechanism | exact | MAE | max \|e\| | |
+|---|---|---|---|---|---|
+| `readout` | 1×1 `drawImage` into a 2D canvas | 12/256 | 6.809 | 11 | FAIL |
+| `readoutSrgb` | same, `colorSpace: 'srgb'` | 12/256 | 6.809 | 11 | FAIL |
+| `readoutFull` | whole frame via 2D canvas | skipped — too large | | | |
+| **`render`** | **`texImage2D` + readback, WebGL** | **220/256** | **0.141** | **1** | **PASS** |
+
+The failing pair are the 2D-canvas paths, and Safari colour-transforming
+a 2D canvas is the documented reason `src/services/glLumaSampler.ts`
+exists at all: the shipped `LumaSampler` reads its texel through WebGL2
+*because* a 1×1 `drawImage` is wrong on Safari, macOS and iOS alike,
+with no 2D fallback and deliberately so. This reproduces a known defect
+on a path the app does not take, at a new frame size.
+
+**The path the app does take matches desktop to the digit** — 220/256
+exact, MAE 0.141, max |e| 1, endpoints clean at 0 → 0 and 255 → 255,
+the same figures §The 8K HEVC variant has a positive control recorded
+on Windows Chrome. The spike reads **253 on both devices**. Two
+different platforms, one file, identical numbers.
+
+**The failure signature is the transfer-mismatch shape, worth recording
+for the next person who meets it**: endpoints pinned with the midtones
+bowed, gain 1.0033 and offset +6.10. Same shape §E/F bisected on
+Firefox, different cause — there it was the bt709 tags, here it is
+Safari's 2D canvas, and these variants carry no colour flags at all. The
+shape identifies a class, not a culprit.
+
+**What is still open, and it is not nothing.** This is one iPhone on one
+iOS version; Apple's HEVC ceiling may differ on older silicon. Playback
+at 8192×4096 on iOS is unmeasured — the 7200×3600 run passed, but that
+is 29% fewer pixels and it already carried a 96 ms first-frame cost, the
+worst in the matrix. The Quest has not run these variants, and its
+`MAX_TEXTURE_SIZE` of exactly 8192 leaves no headroom. And **macOS
+Chrome and Firefox remain untested on HEVC** — Chrome's HEVC support
+depends on hardware and build, so §Phase 0b's warning that this could
+trade one set of refusals for a different set is still live for those
+two.
 
 ---
 
