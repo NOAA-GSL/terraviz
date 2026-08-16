@@ -726,8 +726,36 @@ confirmed as the right container rather than merely the incumbent one.
 **Encoding cost is worth watching too.** x265 at `-preset slow` on
 25-megapixel frames is markedly slower than x264. If HEVC wins on the
 decode side, the transcode budget in Phase 1 needs revisiting with real
-numbers rather than the H.264 ones. First real number: **0.22 fps** —
-20 frames of 7200×3600 in 92.65 s on a laptop CPU.
+numbers rather than the H.264 ones. Measured on a laptop CPU: **0.22
+fps** at the 25 Mbps ceiling (92.65 s for 20 frames), **0.15 fps** at 77
+Mbps (134.19 s).
+
+**The four probe clips, encoder side.** All 20 frames of 7200×3600,
+0.667 s, from the same GeoTIFFs.
+
+| clip | MiB | delivered | × ceiling |
+|---|---|---|---|
+| H.264, 25 Mbps ceiling | 4.31 | 54.2 Mbps | 2.17 |
+| HEVC, 25 Mbps ceiling | 3.30 | 41.5 Mbps | 1.66 |
+| HEVC, 77 Mbps ceiling | 10.37 | 130.5 Mbps | 1.69 |
+| H.264, 100 Mbps ceiling | 17.31 | 217.8 Mbps | 2.18 |
+
+**The overshoot is a stable property of the codec, not noise** — 2.17×
+and 2.18× for x264, 1.66× and 1.69× for x265, across a 3–4× change in
+ceiling. Both sit well under the 3.70× the VBV window actually permits
+over a clip this short, so neither is hitting the cumulative wall.
+
+**But the ceiling still binds at 77 Mbps, which sets a Phase 1 number.**
+Raising it 3.08× raised HEVC's delivered rate 3.14× — near-exact
+proportionality, which only happens if VBV is still governing per frame.
+CRF 18 is therefore *still* unsatisfied at 77 Mbps, so a genuinely
+fidelity-grade 7200×3600 rung costs **north of 130 Mbps**. The 77 Mbps
+figure was chosen for parity with the shipped 4096×2048 rung's bits per
+pixel, and it delivers exactly that and no more.
+
+**HEVC lands 23% below H.264 at a matched ceiling** — 3.30 MiB against
+4.31. That is one pair, not a trend: the 77 and 100 Mbps rows are not
+matched to each other.
 
 ### First result — the desktop prediction holds, on one device
 
@@ -766,13 +794,12 @@ the same card returns 3.95 ms — faster than the Quest's H.264 figure,
 an implied 26.2 GB/s against 10.5. Nothing about the GPU changed
 between the two runs; only where the decoded frame lives.
 
-**One confound, and its control is already queued.** The HEVC clip is
-41.5 Mbps against the H.264 clip's 54.2 — 23% fewer bits. A texture
-upload should not care, since the decoded frame is 103.7 MB either way,
-but `texImage2D` can stall on an in-flight decode and a cheaper stream
-decodes sooner. The higher-bitrate re-encode settles it: if the upload
-stays near 4 ms at a bitrate *above* the H.264 clip's, bitrate is
-excluded and the codec accounts for the whole effect.
+**One confound, since closed.** The HEVC clip is 41.5 Mbps against the
+H.264 clip's 54.2 — 23% fewer bits. A texture upload should not care,
+since the decoded frame is 103.7 MB either way, but `texImage2D` can
+stall on an in-flight decode and a cheaper stream decodes sooner. The
+higher-bitrate re-encode settles it, and did: see §The bitrate confound
+is closed below.
 
 **The dropped-frame count is now confirmed as a startup artifact.**
 Every run has reported exactly **5** dropped frames — across two GPUs,
@@ -793,6 +820,48 @@ and is the sole reason the gate sits on its middle branch; nothing here
 speaks to it. Nor does it speak to the Quest, where the budget is
 tightest, or to Firefox, or to whether HEVC trades these refusals for
 different ones. The prediction held where it was cheapest to hold.
+
+### The bitrate confound is closed
+
+**Windows Chrome 150, RTX 4090 Laptop, 7200×3600 HEVC at 130.5 Mbps,
+2026-08-16.** Same machine, same GPU, same probe; only the bitrate moved.
+
+```
+realtime=0.999x  presented=1.9fps  frames=23 over 12.3s  loops=1
+dropped=5/32 (15.63%)
+texImage2D mean=3.36ms  p95=9.90ms  max=48.80ms
+```
+
+| RTX 4090 Laptop, 7200×3600 | delivered | mean | p95 |
+|---|---|---|---|
+| H.264, 25 Mbps ceiling | 54.2 Mbps | 9.89 ms | 19.60 ms |
+| HEVC, 25 Mbps ceiling | 41.5 Mbps | 3.95 ms | 7.60 ms |
+| **HEVC, 77 Mbps ceiling** | **130.5 Mbps** | **3.36 ms** | 9.90 ms |
+
+**Tripling the bitrate inside HEVC cost nothing.** 41.5 → 130.5 Mbps is
+3.14× the bits and the mean upload went *down*, 3.95 → 3.36 ms. The HEVC
+clip now carries **2.4× the bits of the H.264 one and uploads 2.9×
+faster**. Bitrate is excluded as the mechanism and the codec accounts
+for the whole effect, which is exactly what this run was named to
+settle. Implied throughput is 30.9 GB/s against H.264's 10.5 on the
+same card.
+
+**Read the mean on these runs, not the p95.** Twenty frames at 1.88 fps
+gives 23 samples, so the p95 is the second-worst of 23 — nearly the max,
+and not a stable statistic. The p95 moving 7.60 → 9.90 ms across two
+runs is well inside what that sample size produces by chance; the mean,
+over the same 23, is the comparable number. Both p95 figures sit under
+the 11.1 ms budget regardless. A longer clip would fix this, and is
+worth having before any of these numbers are quoted as thresholds.
+
+**Sixth run, still exactly 5 dropped frames** — now across two GPUs, two
+codecs and three bitrates. The startup-artifact reading is the
+best-attested claim in this section.
+
+**What is still open on the desktop.** Whether H.264's cost rises with
+bitrate: the 100 Mbps H.264 clip exists and is unmeasured. If it also
+lands near 9.9 ms, both codecs are bitrate-independent and the gap is
+purely the decode path — the cleanest form of the result.
 
 ---
 
