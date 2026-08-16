@@ -1512,6 +1512,9 @@ interface RenderContext {
     disposed: boolean
     uploader?: HTMLElement
     uploaderFormat?: string
+    /** Data-encoding flag the cached uploader was built with — part
+     *  of the cache key for the reason `uploaderFormat` is. */
+    uploaderDataEncoded?: boolean
     /** Cached auxiliary-asset uploader subtrees (thumbnail /
      *  legend), preserved across parent re-renders so an in-flight
      *  image upload isn't torn down when an unrelated field change
@@ -1611,10 +1614,6 @@ function auxAssetField(
         kind: opts.kind,
         format: state.format,
         currentDataRef: opts.refValue || null,
-        // Safe to read the live toggle: `dataEncodingUnsaved` already
-        // blocks uploading until it matches the saved row, and the
-        // mint route gates on the saved `render_encoding`.
-        dataEncoded: state.dataEncoded,
         dataAssetUrl: opts.dataAssetUrl ?? null,
         dataAssetOverlay: opts.dataAssetOverlay ?? null,
         navigate: ctx.navigate,
@@ -2246,7 +2245,11 @@ function renderForm(
     } else if (
       scopedId &&
       ctx.lifecycle.uploader &&
-      ctx.lifecycle.uploaderFormat === state.format
+      ctx.lifecycle.uploaderFormat === state.format &&
+      // Keyed on the encoding too: the uploader bakes its transcode
+      // default in at construction, so a subtree cached before the row
+      // became data-encoded would keep offering the wrong one.
+      ctx.lifecycle.uploaderDataEncoded === state.dataEncoded
     ) {
       uploaderWrap.appendChild(ctx.lifecycle.uploader)
     } else {
@@ -2256,6 +2259,10 @@ function renderForm(
         ensureDatasetId: scopedId ? undefined : ctx.ensureDraftId,
         format: state.format,
         currentDataRef: state.dataRef || null,
+        // Safe to read the live toggle: `dataEncodingUnsaved` keeps the
+        // uploader unmounted until it matches the saved row, and the
+        // mint route gates on the saved `render_encoding` regardless.
+        dataEncoded: state.dataEncoded,
         navigate: ctx.navigate,
         fetchFn: ctx.fetchFn,
         sleep: ctx.sleep,
@@ -2264,6 +2271,7 @@ function renderForm(
       if (scopedId) {
         ctx.lifecycle.uploader = uploaderEl
         ctx.lifecycle.uploaderFormat = state.format
+        ctx.lifecycle.uploaderDataEncoded = state.dataEncoded
       }
       uploaderWrap.appendChild(uploaderEl)
     }

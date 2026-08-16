@@ -480,6 +480,17 @@ export async function detectVideoFps(
     video.muted = true
     video.playsInline = true
     video.preload = 'auto'
+    // `createObjectURL` mints a `blob:<origin>/<uuid>` string. The
+    // file's bytes and its name never reach it, so there is nothing
+    // here a `javascript:` URL could come from. CodeQL models
+    // `createObjectURL` as propagating taint from its argument, and the
+    // argument is a DOM-sourced File, which is why the flow lands here.
+    //
+    // Suppressed rather than guarded on purpose: a
+    // `startsWith('blob:')` check on a value the browser minted two
+    // lines earlier can never fail, and a branch written only to
+    // satisfy a scanner is worse than a sentence saying why it is safe.
+    // codeql[js/xss-through-dom]
     video.src = url
     const times: number[] = []
     const done = new Promise<void>(resolve => {
