@@ -537,8 +537,19 @@ window.runCheck = async function (names) {
     // difference between a reportable result and an abandoned run.
     paint('Testing ' + g.name + ' (' + (i + 1) + ' of ' + wanted.length + ') — allowing up to '
       + ((LOAD_TIMEOUT_MS + SEEK_TIMEOUT_MS) / 1000) + 's for a stall…')
-    // Let that line paint before a decode takes the main thread.
-    await new Promise(res => requestAnimationFrame(() => res()))
+    // Let that line paint before a decode takes the main thread — raced
+    // against a timer, because `requestAnimationFrame` does not fire in a
+    // background tab. A tester who switches away during a run measured in
+    // minutes would otherwise stall here indefinitely, on a page reading
+    // "Testing <name>", which is indistinguishable from the device stall
+    // this harness exists to tell apart from a working device. It is the
+    // one wait the commit that bounded every other wait left unbounded.
+    // Nothing else in this probe needs a frame callback, so with this
+    // raced the whole decode path survives a backgrounded tab.
+    await Promise.race([
+      new Promise(res => requestAnimationFrame(() => res())),
+      new Promise(res => setTimeout(res, 100)),
+    ])
 
     let r = null
     try { r = await probe(g) }
