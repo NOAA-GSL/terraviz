@@ -726,7 +726,73 @@ confirmed as the right container rather than merely the incumbent one.
 **Encoding cost is worth watching too.** x265 at `-preset slow` on
 25-megapixel frames is markedly slower than x264. If HEVC wins on the
 decode side, the transcode budget in Phase 1 needs revisiting with real
-numbers rather than the H.264 ones.
+numbers rather than the H.264 ones. First real number: **0.22 fps** —
+20 frames of 7200×3600 in 92.65 s on a laptop CPU.
+
+### First result — the desktop prediction holds, on one device
+
+**Windows Chrome 150, RTX 4090 Laptop (discrete), 7200×3600 HEVC,
+2026-08-16.** Same machine, same GPU, same resolution, same probe as the
+RTX 4090 row in §Does it play?, so the codec is the only variable.
+
+```
+gl: ANGLE (NVIDIA, NVIDIA GeForce RTX 4090 Laptop GPU, D3D11)
+size=7200x3600  duration=0.67s  maxTex=16384  rVFC=yes
+realtime=0.998x  presented=1.9fps  frames=23 over 12.3s  loops=1
+dropped=5/32 (15.63%)
+texImage2D mean=3.95ms  p95=7.60ms  max=60.80ms
+verdict: playback KEEPS UP; upload fits 90Hz
+```
+
+**The upload cost falls by 2.5×, and the desktop p95 hitch disappears.**
+
+| RTX 4090 Laptop, 7200×3600 | mean | p95 | max |
+|---|---|---|---|
+| H.264, 25 Mbps ceiling | 9.89 ms | 19.60 ms | 37.40 ms |
+| **HEVC, same ceiling** | **3.95 ms** | **7.60 ms** | 60.80 ms |
+| change | 2.50× faster | 2.58× faster | 1.63× worse |
+
+That is the specific thing this section predicted — "the upload becomes
+a GPU-side copy rather than a bus transfer, which would remove the
+desktop p95 hitch entirely". Against the 90 Hz budget the H.264 p95 was
+1.77× over; the HEVC p95 is 0.68× of it. The desktop now fits 90 Hz on
+mean *and* p95, where before it fitted only 60 Hz and hitched about
+twice a second.
+
+**The discrete-GPU handicap is gone, and that is the real evidence.** On
+H.264 the 4090 lost to a Quest 3 (9.89 ms against 4.69 ms), which only
+made sense if the cost was moving a CPU-side frame across PCIe. On HEVC
+the same card returns 3.95 ms — faster than the Quest's H.264 figure,
+an implied 26.2 GB/s against 10.5. Nothing about the GPU changed
+between the two runs; only where the decoded frame lives.
+
+**One confound, and its control is already queued.** The HEVC clip is
+41.5 Mbps against the H.264 clip's 54.2 — 23% fewer bits. A texture
+upload should not care, since the decoded frame is 103.7 MB either way,
+but `texImage2D` can stall on an in-flight decode and a cheaper stream
+decodes sooner. The higher-bitrate re-encode settles it: if the upload
+stays near 4 ms at a bitrate *above* the H.264 clip's, bitrate is
+excluded and the codec accounts for the whole effect.
+
+**The dropped-frame count is now confirmed as a startup artifact.**
+Every run has reported exactly **5** dropped frames — across two GPUs,
+two codecs and four runs, while the denominator moved 31 → 32. A
+constant that survives a codec change is deterministic startup cost,
+not sustained loss. §Does it play? read this correctly.
+
+**`max` is the one number that got worse**, 60.80 ms against 37.40. A
+7200×3600 RGBA texture is a 103.7 MB allocation and a hardware decode
+session has its own first-frame setup; either lands on the first upload.
+It is paid once per dataset load — tolerable on the desktop globe, and
+roughly five dropped frames on entering a VR session. Worth watching,
+not worth acting on from one sample.
+
+**What this does not settle.** One device, and the desktop half of the
+question at that. The prize is iOS Safari, which refuses the H.264 rung
+and is the sole reason the gate sits on its middle branch; nothing here
+speaks to it. Nor does it speak to the Quest, where the budget is
+tightest, or to Firefox, or to whether HEVC trades these refusals for
+different ones. The prediction held where it was cheapest to hold.
 
 ---
 
