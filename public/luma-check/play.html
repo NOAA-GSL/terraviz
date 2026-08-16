@@ -163,6 +163,36 @@ async function run(clipUrl, rate) {
   rec.gl = ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER)
   rec.maxTex = gl.getParameter(gl.MAX_TEXTURE_SIZE)
 
+  // Pre-flight the URL before handing it to the media element.
+  //
+  // A 404 arrives at `<video>` as `MediaError` code 4 —
+  // MEDIA_ERR_SRC_NOT_SUPPORTED — exactly like a decoder refusing the
+  // stream, because what came back was an error page rather than a
+  // video. On a device that has already decoded a *larger* frame, a
+  // mistyped path would otherwise read as a decode ceiling: a confident
+  // wrong answer, and the worst thing a probe can produce.
+  //
+  // Non-fatal by design. A cross-origin clip without CORS headers fails
+  // this fetch while the element may still load, so a failure here is
+  // reported and the run continues.
+  out.textContent = 'Checking ' + clipUrl + '…'
+  try {
+    const head = await fetch(clipUrl, { method: 'HEAD', cache: 'no-store' })
+    rec.httpStatus = head.status
+    rec.httpType = head.headers.get('content-type') || '(none)'
+    if (!head.ok) {
+      rec.error = 'HTTP ' + head.status + ' fetching the clip — the file is not there. '
+        + 'This is a path problem, not a decoder result.'
+      out.innerHTML = '<p class="fail">' + rec.error + '</p>'
+      finish(rec, null)
+      return
+    }
+  } catch (e) {
+    // Reachable but unreadable from script (typically CORS), or the host
+    // is down. Record it; the element gets its own attempt below.
+    rec.httpStatus = 'unreachable by fetch (' + String(e.message || e) + ')'
+  }
+
   out.textContent = 'Loading ' + clipUrl + '…'
   v.src = clipUrl
   try {
@@ -285,8 +315,12 @@ function finish(rec, out) {
   const lines = ['# playback-check', 'ua: ' + rec.ua, 'gl: ' + (rec.gl || '—'),
     'clip: ' + rec.clip, '']
   if (rec.error) {
+    if (rec.httpStatus !== undefined) {
+      lines.push('http=' + rec.httpStatus + '  type=' + (rec.httpType || '—'))
+    }
     lines.push('ERROR ' + rec.error)
   } else {
+    lines.push('http=' + rec.httpStatus + '  type=' + (rec.httpType || '—'))
     lines.push('size=' + rec.size + '  duration=' + (rec.duration || 0).toFixed(2) + 's'
       + '  maxTex=' + rec.maxTex + '  rVFC=' + (rec.rvfc ? 'yes' : 'NO'))
     // Requested high-performance; the `gl:` line above says what was
