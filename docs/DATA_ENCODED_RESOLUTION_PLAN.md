@@ -1146,6 +1146,54 @@ Identical to the digit across x86 Windows, Apple silicon and mobile ARM.
 Whatever the transport lattice costs, it costs the same everywhere, and
 the codec change does not move it.
 
+### Firefox takes both codecs, and breaks the 2D path on only one
+
+**Windows Firefox (Win 11), both 8K variants, 2026-08-16.** Both decode
+at native 8192×4096 with `MAX_TEXTURE_SIZE` 16384, a clean
+`texImage2D`, and spikes of 251 for H.264 and 253 for HEVC — the same
+pair every other accepting device returns.
+
+| variant | path | exact | MAE | max \|e\| | offset | 255 → | |
+|---|---|---|---|---|---|---|---|
+| `H_ceiling_8k` | 2D `readout` | 220/256 | 0.141 | 1 | −0.05 | 255 | PASS |
+| `H_ceiling_8k` | WebGL `render` | 220/256 | 0.141 | 1 | −0.05 | 255 | PASS |
+| `I_ceiling_8k_hevc` | 2D `readout` | **39/256** | **0.852** | **2** | **−0.81** | **254** | **FAIL** |
+| `I_ceiling_8k_hevc` | WebGL `render` | 220/256 | 0.141 | 1 | −0.05 | 255 | PASS |
+
+**Same browser, same frame size, same day — only the codec differs.**
+Firefox reads an untagged HEVC stream about one code low through a 2D
+canvas and an untagged H.264 stream exactly right, with the top
+endpoint landing on 254 instead of 255. Since these variants carry no
+colour flags at all, what this exposes is that an *untagged* stream is
+interpreted per-codec: the decoder has to guess, and Firefox guesses
+differently for HEVC than for H.264.
+
+**It is a different defect from the iOS one, despite the same table
+cell failing.**
+
+| | exact | MAE | max \|e\| | offset | 255 → |
+|---|---|---|---|---|---|
+| iOS Safari, HEVC | 12/256 | 6.809 | 11 | **+6.10** | 255 |
+| Windows Firefox, HEVC | 39/256 | 0.852 | 2 | **−0.81** | **254** |
+
+Safari's is large, positive, and pins both endpoints — its 2D canvas
+colour-transform. Firefox's is small, negative, and lets the top
+endpoint slip. Two browsers, two mechanisms, one shared property: the
+WebGL path is untouched on both.
+
+**This retroactively strengthens a decision made for a different
+reason.** `src/services/glLumaSampler.ts` reads through WebGL2 with **no
+2D fallback, deliberately**, and that was chosen because Safari
+colour-transforms a 2D canvas. It now also covers a Firefox-plus-HEVC
+case that did not exist when the choice was made. A 2D fallback would
+have been a latent bug waiting for the codec change this section
+recommends.
+
+**In physical terms, on the MPAS clip, the Firefox error is under a
+dBZ** — max 2 codes at 0.458 dBZ per code. Small, real, and not on the
+path the app takes. Worth knowing for anyone reading values out of a
+canvas in a future tool.
+
 ---
 
 ## Phase 1 — the 8192×4096 rung
