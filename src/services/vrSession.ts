@@ -533,6 +533,29 @@ export async function enterImmersive(mode: VrMode, ctx: VrSessionContext): Promi
     // transparent and reveal the camera feed; VR keeps it disabled
     // for a slight performance edge (one less blend pass per pixel).
     alpha: isAr,
+    // Ask for the discrete GPU up front on a hybrid-graphics machine.
+    // Three.js defaults to `'default'`, which on a desktop with both an
+    // iGPU and a discrete card hands WebGL the low-power one — measured
+    // on a Windows box with an RTX 4090, where an unhinted context came
+    // back as `ANGLE (Intel, Intel(R) UHD Graphics …)`. MapLibre already
+    // asks for `'high-performance'`, so without this the 2D globe and
+    // the immersive globe can end up on different adapters.
+    //
+    // Not strictly required for correctness: `WebXRManager.setSession`
+    // awaits `gl.makeXRCompatible()`, which migrates the context to the
+    // adapter driving the headset. But that migration can force a
+    // context loss and restore — every texture, including the dataset
+    // video and the whole photoreal Earth stack, destroyed and
+    // re-uploaded — and it would land inside the session-start ordering
+    // this file documents as already delicate (see the
+    // `XRControllerModelFactory` note above). Starting on the right
+    // adapter means there is nothing to migrate.
+    //
+    // Deliberately *not* applied to the Orbit character page: that scene
+    // never enters XR, so it gains nothing here, and forcing a laptop
+    // onto its discrete GPU for a decorative idle animation is a real
+    // battery cost for no user-visible benefit.
+    powerPreference: 'high-performance',
   })
   renderer.setPixelRatio(window.devicePixelRatio)
   renderer.setSize(window.innerWidth, window.innerHeight)
