@@ -734,9 +734,23 @@ Two consequences to carry:
    but it widens the export schema.
 2. **What bitrate does real 8K content actually want?** See Phase 1.
    Nobody should pick a cap from the synthetic measurement above.
-3. **Is 4.89 km worth it at all?** The honest possibility is that
-   quadrupled transcode cost, quadrupled storage, and a device-support
-   cliff buy a resolution nobody asked for. The scoping section ranks
-   "accept 9.78 km" first for a reason. This plan should not be built
-   speculatively — it wants a dataset whose value is visibly limited by
-   the grid.
+3. ~~**Is 4.89 km worth it at all?**~~ **Answered, 2026-08-16.** The
+   question asked for a dataset whose value is visibly limited by the
+   grid, and MPAS 3 km reflectivity is one. Published at the shipped
+   4096×2048 rung it lands at **9.78 km per texel — 3.3× coarser than
+   its own source grid** — and at storm-scale zoom the texels are
+   plainly visible as blocks, with individual convective cells a
+   handful of texels across.
+
+   That is the justification this plan was missing, and it is worth
+   being precise about what it does and does not establish. It shows
+   the grid is the binding limit *for this dataset*, not that 4.89 km
+   is worth quadrupled transcode and storage for the catalog at large —
+   the scoping section still ranks "accept 9.78 km" first, correctly,
+   for the overwhelming majority of rows. What changes is that Phase 1
+   would no longer be built speculatively: there is now a real dataset,
+   already published, that it visibly improves.
+
+   Note the arithmetic does not stop at 4.89 km. Even an 8192-wide
+   rung leaves MPAS 1.6× coarser than native, so this buys a
+   substantial improvement rather than parity.
