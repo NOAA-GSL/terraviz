@@ -215,7 +215,7 @@ break CI.
 | device / browser | decodes | readyState | decoded size | MAX_TEXTURE_SIZE | texImage2D | native | notes |
 |---|---|---|---|---|---|---|---|
 | desktop Chrome 150 (Win 11, Intel UHD 770, ANGLE/D3D11) | **yes** | 4 | 8192×4096 | 16384 | ok | **yes** — spike 252.0 | Values round-trip at 8K exactly as at 4K. Decode path unconfirmed; see below. **Also accepts the 8K HEVC variant, spike 253** — see §The 8K HEVC variant has a positive control |
-| desktop Chrome 151 (macOS, M2 Ultra, ANGLE Metal) | **no** | — | — | 16384 | — | — | `MediaError` 4, and no software fallback — while Safari on the same OS accepts |
+| desktop Chrome 151 (macOS, M2 Ultra, ANGLE Metal) | **no** (2026-08-13) → **yes** (2026-08-16) | 4 | 8192×4096 | 16384 | ok | **yes** — spike 252 | `MediaError` 4 with no software fallback on the first run; the re-run three days later decoded it and passed every path. Same-machine unconfirmed. **Also accepts the 8K HEVC variant, spike 253** — see §macOS Chrome accepts both |
 | desktop Firefox (Win 11) | **yes** | 4 | 8192×4096 | 16384 | ok | **yes** — spike 251.0 | Stalled 2026-08-13, did **not** reproduce 2026-08-16 — all paths pass. Cause never attributed; see below. **Also accepts the 8K HEVC variant, spike 253**, with a codec-specific 2D-canvas defect — see §Firefox takes both codecs |
 | desktop Safari 26.5.2 (macOS, Apple GPU) | **yes** | 4 | 8192×4096 | 16384 | ok | **yes** — spike 252.0 | Decodes what Chrome on the same OS refuses. Decode path unconfirmed. **Also accepts the 8K HEVC variant, spike 253**, and fails the 2D readout identically on *both* codecs — see §Safari's 2D defect is the engine, not the codec |
 | iOS Safari 26.6 (iOS 18.7, Apple GPU) | **no** — H.264; **yes** — HEVC | 4 (HEVC) | 8192×4096 (HEVC) | 16384 | ok (HEVC) | **yes** — spike 253 (HEVC) | H.264 gives `MediaError` code 4 at `loadeddata`, refused before playback, re-confirmed 2026-08-16. **The same device decodes the same frame size in HEVC** — see §iOS Safari accepts the full rung in HEVC |
@@ -362,6 +362,16 @@ device passes them; see
 [`DATA_ENCODED_VIDEO_PLAN.md`](DATA_ENCODED_VIDEO_PLAN.md) §Encoder,
 where this row alone costs the full-range recommendation its
 universality.
+
+**Re-run 2026-08-16: the refusal did not reproduce.** macOS Chrome
+decoded `H_ceiling_8k` at native 8192×4096, `readyState` 4, clean
+`texImage2D`, spike 252 — and passed every value path including the 2D
+readout. See §macOS Chrome accepts both, and the H.264 refusal did not
+reproduce. **Whether this is the same M2 Ultra is unconfirmed**, and it
+matters: a second machine agreeing would narrow the refusal to a
+configuration, while the same machine reversing points at the browser
+having changed underneath it. The row above stands as measured on
+2026-08-13 either way.
 
 **Row 5 — macOS Safari, which breaks the pattern.** Safari 26.5.2
 decodes the rung: `readyState` 4, decoded size 8192×4096, clean
@@ -1239,6 +1249,55 @@ reads 253 everywhere.** Five devices, one file, one number. Not load
 -bearing, but it is the sort of consistency worth noticing in an
 isolated single-texel feature, since that is the measurement most
 sensitive to whatever each decoder does differently.
+
+### macOS Chrome accepts both, and the H.264 refusal did not reproduce
+
+**macOS Chrome, both 8K variants, 2026-08-16.** Both decode at native
+8192×4096 with a clean `texImage2D` — spike 252 for H.264, 253 for
+HEVC — and **all four value paths pass on both**, 220/256 exact, MAE
+0.141, gain 1.0005, offset −0.07.
+
+**Sixth HEVC accept. The matrix is complete and HEVC has no refusals.**
+
+| device / browser | H.264 at 8192×4096 | HEVC at 8192×4096 |
+|---|---|---|
+| Windows Chrome 150 | accepts | **accepts** |
+| Windows Firefox | accepts (stall did not reproduce) | **accepts** |
+| macOS Safari 26.5.2 | accepts | **accepts** |
+| macOS Chrome | accepts (refusal did not reproduce) | **accepts** |
+| iOS Safari 26.6 | **`MediaError` 4** | **accepts** |
+| Quest 3 (Adreno 740) | accepts | **accepts** |
+
+**The unplanned result is the H.264 column.** This row was recorded on
+2026-08-13 as a refusal — `MediaError` 4, no software fallback — and it
+now decodes. **The same-machine question is unconfirmed and material.**
+A different Mac agreeing would narrow the original refusal to a
+configuration, and a public catalog would still have to serve that
+configuration. The same Mac reversing points at Chrome having changed
+underneath the measurement, and retires the refusal outright.
+
+**Two of the three negative results in the original matrix have now
+failed to reproduce**, and that is a methodological finding rather than
+a coincidence. Firefox's stall and macOS Chrome's refusal were each a
+single run against a self-updating browser, three days before a re-run
+contradicted them. Accepts have held everywhere on re-test; refusals
+have not. **A negative result from one run on a browser that updates
+itself is the weakest row in any matrix**, and this document leaned on
+two of them to argue Phase 2 was load-bearing. Future rows should be
+dated, versioned, and re-run before a refusal is allowed to shape what
+gets built.
+
+**The gain and offset are identical across all three Apple-platform
+browsers** — 1.0005 and −0.07 on macOS Chrome, macOS Safari and iOS
+Safari alike, against 1.0002 / −0.08 on Windows Chrome, 0.9998 / −0.05
+on Firefox and 0.9998 / −0.06 on the Quest. The platform sets those
+digits, not the browser, which is what a shared VideoToolbox decode
+path underneath both engines would look like.
+
+**And macOS Chrome is clean on the 2D readout for both codecs**, which
+sharpens §Safari's 2D defect is the engine, not the codec: two browsers
+on the same OS, one transforming the canvas and one not, so the
+transform belongs to WebKit rather than to macOS.
 
 ---
 
