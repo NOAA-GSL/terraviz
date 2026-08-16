@@ -1308,6 +1308,121 @@ Two consequences to carry:
 
 ---
 
+## The ladder as a relative shape (raised 2026-08-16)
+
+**Status: raised, not decided.** Nothing here gates Phase 1, and none of
+it should be built before the Phase 0b matrix closes. It is recorded
+because Phase 0b's first non-SOS dataset broke an assumption the ladder
+had been resting on unexamined, and because two of the questions have
+cheap first steps worth knowing about while the shape is settled.
+
+### The ladder is absolute where it means to be relative
+
+`cli/lib/ffmpeg-hls.test.ts` names its assertion
+**`DATA_ENCODED_RENDITIONS publishes the source rung only`** and then
+pins `height` to `2048`. Both were true at once for as long as every
+dataset in the catalog was 4096×2048: "the source rung" and "the
+constant" were the same number, and nothing distinguished intent from
+implementation. MPAS at 7200×3600 is the first row where they come
+apart, and it comes apart in both directions.
+
+**Above the constant, the decimation is non-integer.** 7200 → 4096 is a
+factor of 1.758. `flags=neighbor` selects rather than interpolates, so
+every output texel remains a value that was actually measured — the
+property the neighbour rule exists to protect, and it holds. What does
+not hold is *evenness*: an irregular subset of source columns survives,
+and the sampling is lumpy in a way nothing in the asset declares. Phase
+2's two rungs are a clean 2:1 and do not have this problem. A
+source-relative ladder must not acquire it.
+
+**Below the constant, the pipeline upscales.** A 1° global model is
+360×180, and `scale=4096:2048` replicates it to 129× the texels. Being
+precise about that cost matters, because most of the obvious objections
+to it are wrong:
+
+- *File size barely moves.* Uniformly replicated blocks compress to
+  almost nothing in either codec.
+- *Statistic values survive.* Area weighting is scale-invariant under
+  uniform replication, so the mean, the percentiles and the histogram
+  shape are unchanged.
+- **Counts do not survive, and counts are exported on purpose.** The
+  zonal CSV carries a per-band texel count precisely so a reader knows
+  what a number is worth — "a mean over four texels does not deserve the
+  weight of one over four thousand". Upscaling turns that column into
+  fiction, reporting thousands of samples where there were dozens.
+- *Decode and memory are real.* Every device decodes 8.4 MP and holds
+  33 MB of texture for 0.065 MP of information.
+
+So the case for a source-relative ladder is not mainly bandwidth. **It
+is that the export stops overstating its own precision.**
+
+### The rule that falls out
+
+Top rung is the source resolution. Any rung beneath it is an **integer
+-factor decimation** — 1/2, 1/4 — never an arbitrary height. That is the
+only form in which every output texel is a real source texel *and* the
+sampling stays even. Two constraints come with it: `yuv420p` needs even
+dimensions, so an odd source wants a stated policy rather than a silent
+round; and a source whose halving lands below anything useful simply
+publishes one rung.
+
+### The warning needs provenance that does not currently travel
+
+Phase 2 records that a resolution caveat has to sit beside Analyze's
+quantisation one. The gap underneath that is that **the client cannot
+presently detect the condition it would be warning about.** It knows the
+decoded frame size from the video element and has nothing to compare it
+against: `ColorScale` carries value provenance — `vmin`, `vmax`,
+`dataMinLuma`, the stops — and no spatial provenance at all.
+
+The first step is therefore smaller than the warning: carry the source
+dimensions on the sidecar or the dataset row. Everything else is
+downstream of being able to compare two numbers, and with both in hand
+the caveat can say *by how much* and whether the factor was integer,
+rather than only that something happened.
+
+### A rung the viewer picked is not what determinism forbade
+
+§Part 2 of [`DATA_ENCODED_VIDEO_PLAN.md`](DATA_ENCODED_VIDEO_PLAN.md)
+rules out an ABR ladder because a bandwidth dip would swap the rung
+mid-session, change the value under the cursor, and make the frame
+Analyze reduces non-deterministic. That objection is to **silent,
+bandwidth-driven** switching. It does not reach a control the viewer
+operated deliberately from a label saying what it costs: they know they
+did it, and they can re-run the measurement.
+
+So a manual quality selector is compatible with the argument that killed
+automatic ABR, and it is the natural user-facing form of Phase 2's
+pinning — the same `hls.currentLevel` mechanism, resolved by choice as
+well as by capability. One requirement travels with it: switching rungs
+must invalidate any Analyze result on screen, because those statistics
+describe a frame that no longer exists. `playbackSettle` is already the
+"recompute when the displayed frame changes" seam and is where that
+belongs.
+
+### The unresolved tension, stated rather than settled
+
+**One rung and two rungs pull in opposite directions, and Phase 0b does
+not settle which wins.**
+
+- **One rung is the cheap path to 8K.** With no adaptation to perform,
+  HLS provides segmentation rather than its actual purpose, and the
+  fMP4-and-dedup problem in §HEVC over HLS is not a codec swap can be
+  routed around entirely by serving a progressive MP4 — which is what
+  every measurement in Phase 0b was taken against.
+- **Two rungs buy the slow-connection story** and the accuracy/speed
+  trade above, and in doing so make HLS earn its place — which drags the
+  fMP4 migration and the init-segment problem in the content-addressed
+  cache back onto the critical path.
+
+macOS Chrome's result decides whether a **capability** fallback is
+needed. It says nothing about whether a **bandwidth** one is wanted.
+That second question is about who the catalog is serving, it deserves a
+deliberate answer, and the risk worth naming is that a demo deadline
+answers it by default.
+
+---
+
 ## Verification
 
 - The Phase 0 matrix, recorded here as a table rather than a verdict,
