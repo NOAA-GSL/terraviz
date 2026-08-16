@@ -1200,6 +1200,58 @@ canvas in a future tool.
 
 Assumes Phase 0 passed.
 
+### HEVC over HLS is not a codec swap — scoped 2026-08-16
+
+Phase 0b's result makes an HEVC rung the obvious next step, and the
+encoder side really is one field: `HlsRendition` already carries
+`height`, `crf` and `maxBitrateKbps`, and `buildFfmpegArgs` hardcodes
+`-c:v:${i} libx264` next to them. **The delivery side is where the work
+is**, and it was under-scoped when this section was written.
+
+**Apple will not play HEVC in MPEG-TS.** HLS carries HEVC only in fMP4
+(CMAF) segments, and this pipeline is TS end to end —
+`-hls_segment_filename … segment_%03d.ts`. Adding a codec field alone
+produces a stream ffmpeg muxes happily and iOS refuses, which would
+manufacture in the publish pipeline exactly the refusal Phase 0b just
+removed from the probe. That failure would look like a device
+limitation and would not be one.
+
+**And `-hls_segment_type` is a global muxer option, not per-variant**,
+so a two-rung HEVC + H.264 ladder cannot mix formats. Either outcome
+tomorrow moves the whole ladder to fMP4; only the rung count is still
+open. The migration is outcome-independent, which is the one piece of
+good news here.
+
+**What assumes `.ts` today**, all of which moves together:
+
+| site | what it does |
+|---|---|
+| `cli/lib/ffmpeg-hls.ts` | emits `segment_%03d.ts`; the documented layout names it |
+| `cli/lib/r2-upload.ts` | MIME map has `.ts → video/mp2t`, nothing for `.m4s` |
+| `cli/transcode-from-dispatch.ts` | probes `segment_001.ts`, reads `segment_000.ts`, filters keys on `.endsWith('.ts')` and slices the extension by length |
+| `cli/lib/hls-incremental.ts` | content-addressed storage at `segments/sha256/{hex}.ts`, with variant-playlist URIs built from the same shape |
+
+**The last row is the real cost, and it is not a rename.** Incremental
+transcode dedups by hashing each segment and storing it once — a model
+that works because a TS segment is independently decodable. An fMP4
+segment is not: it is meaningless without its rendition's `init.mp4`.
+So the content-addressed cache needs a concept it does not have, and
+resume/append semantics need re-thinking rather than re-pathing. This
+is the reason Phase 1 is not a day's work, and the reason it should not
+be started the evening before the last Phase 0b row reports.
+
+**A cheaper route may exist and is worth checking first.** The
+data-encoded path publishes **exactly one rung** by design — §Part 2 of
+`DATA_ENCODED_VIDEO_PLAN.md` argues an ABR ladder is incoherent when
+luma is the measurement. With one rung there is no adaptation to do, so
+HLS is buying segmentation and seeking, not its actual purpose. Every
+Phase 0b measurement was taken against a **progressive MP4** served
+over plain HTTP, and it decoded and played on all four platforms at
+8192×4096. If `datasetLoader` can be taught to take a progressive
+source for data-encoded rows, the entire fMP4-and-dedup problem is
+sidestepped. That is a question about the client, not the encoder, and
+it should be answered before the fMP4 migration is costed.
+
 | change | file | note |
 |---|---|---|
 | Add the rung | `cli/lib/ffmpeg-hls.ts` | `DATA_ENCODED_RENDITIONS` is a single-element `readonly` tuple at `height: 2048`. Needs to become per-dataset rather than a module constant. |
