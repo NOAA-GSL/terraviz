@@ -265,9 +265,53 @@ function mapToLuma(
   }
 }
 
+/**
+ * Check every external binary before doing any work.
+ *
+ * Without this the run fails at first use: `gdalinfo` on file one, or —
+ * far worse — `ffmpeg` only once the statistics pass has read every
+ * raster, which on twenty 55 MB GeoTIFFs is minutes of work discarded.
+ * The HEVC case is nastier still, because a perfectly good ffmpeg can
+ * lack libx265: that failure would land *after* the frames were
+ * generated and piped, at the point where the encoder is asked to
+ * exist.
+ */
+function requireTools(codec: string): void {
+  const missing: string[] = []
+  for (const [bin, probe] of [
+    ['gdalinfo', '--version'],
+    ['gdal_translate', '--version'],
+    ['ffmpeg', '-version'],
+  ] as const) {
+    const r = spawnSync(bin, [probe], { encoding: 'utf8' })
+    if (r.error) missing.push(bin)
+  }
+  if (missing.length) {
+    throw new Error(
+      `not on PATH: ${missing.join(', ')}\n`
+      + `  GDAL ships inside QGIS and OSGeo4W but neither adds it to PATH. On Windows,\n`
+      + `  find it with:\n`
+      + `    Get-ChildItem 'C:\\Program Files' -Recurse -Filter gdalinfo.exe -EA SilentlyContinue\n`
+      + `  then prepend that directory to $env:PATH, or use the "OSGeo4W Shell",\n`
+      + `  which sets it up for you.`)
+  }
+  // A build without the encoder is the failure this function exists to
+  // move forward: ffmpeg is present, so nothing above catches it, and
+  // libx265 is the one people are missing.
+  const enc = codec === 'hevc' ? 'libx265' : 'libx264'
+  const r = spawnSync('ffmpeg', ['-hide_banner', '-encoders'], { encoding: 'utf8' })
+  if (!(r.stdout ?? '').includes(enc)) {
+    throw new Error(
+      `this ffmpeg has no ${enc} encoder, which --codec ${codec} needs.\n`
+      + `  Check with: ffmpeg -hide_banner -encoders | findstr ${enc.slice(3)}\n`
+      + `  Full builds (gyan.dev or BtbN on Windows) carry it; minimal ones may not.`)
+  }
+}
+
 function main(): void {
   const args = parseArgs(process.argv.slice(2))
   if (!existsSync(args.in)) throw new Error(`--in ${args.in} does not exist`)
+  requireTools(args.codec)
 
   const files = readdirSync(args.in)
     .filter(f => ['.tif', '.tiff'].includes(extname(f).toLowerCase()))
