@@ -116,13 +116,24 @@ function parseArgs(argv: string[]): Args {
   }
   const inDir = get('in')
   if (!inDir) throw new Error('--in <dir> is required')
+  // `dataMinLuma` goes straight into the sidecar, and `parseColorScale`
+  // is fail-closed about it. A fractional or out-of-range value is
+  // accepted happily by `mapToLuma`, encodes a whole sequence, and then
+  // yields a sidecar the server and the renderer both reject — an
+  // unpublishable artifact produced silently, an hour after the mistake.
+  // 254 rather than 255 because at least one code must remain above the
+  // no-data band for data to occupy.
+  const lumaLo = num('data-min-luma') ?? DEFAULT_DATA_MIN_LUMA
+  if (!Number.isInteger(lumaLo) || lumaLo < 0 || lumaLo > 254) {
+    throw new Error(`--data-min-luma must be an integer in 0..254, got ${lumaLo}`)
+  }
   return {
     in: resolve(inDir),
     out: resolve(get('out') ?? 'out/data-encoded.mp4'),
     vmin: num('vmin'),
     vmax: num('vmax'),
     units: get('units'),
-    dataMinLuma: num('data-min-luma') ?? DEFAULT_DATA_MIN_LUMA,
+    dataMinLuma: lumaLo,
     nodata: num('nodata'),
     maxBitrateKbps: num('max-bitrate') ?? DEFAULT_MAX_BITRATE_KBPS,
     keepTemp: argv.includes('--keep-temp'),

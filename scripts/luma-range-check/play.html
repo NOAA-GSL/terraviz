@@ -180,7 +180,12 @@ async function run(clipUrl, rate) {
     const head = await fetch(clipUrl, { method: 'HEAD', cache: 'no-store' })
     rec.httpStatus = head.status
     rec.httpType = head.headers.get('content-type') || '(none)'
-    if (!head.ok) {
+    // Only a definitive absence stops the run. Plenty of hosts serve GET
+    // happily while answering HEAD with 405 or 501, and aborting on those
+    // would label a perfectly good clip "not there" without ever testing
+    // playback — the same false-negative this pre-flight was added to
+    // prevent, pointing the other way.
+    if (head.status === 404 || head.status === 410) {
       rec.error = 'HTTP ' + head.status + ' fetching the clip — the file is not there. '
         + 'This is a path problem, not a decoder result.'
       out.innerHTML = '<p class="fail">' + rec.error + '</p>'
@@ -218,7 +223,7 @@ async function run(clipUrl, rate) {
 
   const uploads = []
   let frames = 0, mediaAccum = 0, prevMedia = null, loops = 0
-  let startWall = null
+  let startWall = null, timedOut = false
 
   // Loop rather than require a long clip. A representative 8K encode is
   // expensive to produce and the useful ones tend to be short — 20
@@ -246,7 +251,18 @@ async function run(clipUrl, rate) {
   rec.targetFps = SOURCE_FPS * rate
   out.textContent = 'Playing for ' + MEASURE_MS / 1000 + 's at ' + rate + 'x ('
     + rec.targetFps.toFixed(2) + ' fps)…'
-  await v.play().catch(() => {})
+  // A rejected play() is autoplay policy or a bad media state, not a
+  // performance result. Swallowing it let the run continue into the
+  // frame wait and report "FALLS BEHIND" for a video that never began.
+  try {
+    await v.play()
+  } catch (e) {
+    rec.error = 'play() was refused: ' + String((e && e.message) || e)
+      + ' — playback never started, so nothing below was measured.'
+    out.innerHTML = '<p class="fail">' + rec.error + '</p>'
+    finish(rec, null)
+    return
+  }
 
   await new Promise(done => {
     const stop = () => { v.pause(); done() }
@@ -277,10 +293,26 @@ async function run(clipUrl, rate) {
       requestAnimationFrame(tick)
     }
     // Bounded regardless: a stalled clip must not hang the page the way
-    // the luma probe's unbounded waits did.
-    setTimeout(stop, MEASURE_MS + TIMEOUT_MS)
+    // the luma probe's unbounded waits did. Record that the bound fired,
+    // because a decoder that stalls and a decoder that merely runs slow
+    // are different device findings and the ratio alone cannot separate
+    // them — a clip that never reaches the warm-up count leaves
+    // `startWall` null and would otherwise report as NaN or as an
+    // ordinary low ratio.
+    setTimeout(() => { timedOut = true; stop() }, MEASURE_MS + TIMEOUT_MS)
   })
 
+  if (timedOut || startWall === null) {
+    rec.error = startWall === null
+      ? 'timed out before ' + WARMUP_FRAMES + ' warm-up frames arrived — the decoder '
+        + 'produced ' + frames + ' frame(s) in ' + ((MEASURE_MS + TIMEOUT_MS) / 1000)
+        + 's. This is a stall, not a playback rate.'
+      : 'timed out after ' + ((MEASURE_MS + TIMEOUT_MS) / 1000) + 's — playback stalled '
+        + 'part way through. Metrics below the warm-up are not reported.'
+    out.innerHTML = '<p class="fail">' + rec.error + '</p>'
+    finish(rec, null)
+    return
+  }
   const wallMs = performance.now() - startWall
   rec.measuredFrames = Math.max(0, frames - WARMUP_FRAMES)
   rec.wallSeconds = wallMs / 1000
@@ -346,11 +378,20 @@ function finish(rec, out) {
     }
     const realtime = rec.realtimeRatio >= 0.95
     lines.push('')
-    lines.push('verdict: playback ' + (realtime ? 'KEEPS UP' : 'FALLS BEHIND')
-      + (rec.uploadMeanMs !== undefined
-          ? '; upload ' + (rec.uploadP95Ms <= 11.1 ? 'fits 90Hz'
-              : rec.uploadP95Ms <= 16.7 ? 'fits 60Hz only' : 'EXCEEDS 60Hz budget')
-          : ''))
+    // No successful upload is a failure, not an absent column. Every
+    // texImage2D returning an error — a frame past MAX_TEXTURE_SIZE, say
+    // — leaves no samples, and reporting "KEEPS UP" on the strength of
+    // the playback ratio alone would be a green verdict for a device
+    // that could not hold the frame at all.
+    if (rec.uploadMeanMs === undefined) {
+      lines.push('verdict: NO SUCCESSFUL TEXTURE UPLOAD — texImage2D failed for every '
+        + 'sampled frame (maxTex=' + rec.maxTex + ' against a ' + rec.size + ' frame). '
+        + 'Playback ratio was ' + rec.realtimeRatio.toFixed(3) + 'x but nothing was drawn.')
+    } else {
+      lines.push('verdict: playback ' + (realtime ? 'KEEPS UP' : 'FALLS BEHIND')
+        + '; upload ' + (rec.uploadP95Ms <= 11.1 ? 'fits 90Hz'
+            : rec.uploadP95Ms <= 16.7 ? 'fits 60Hz only' : 'EXCEEDS 60Hz budget'))
+    }
   }
   lines.push('# end — playback-check. No "# end" line means the paste was truncated.')
   report = lines.join('\n')

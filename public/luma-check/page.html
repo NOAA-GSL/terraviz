@@ -110,6 +110,28 @@ function withTimeout(promise, ms, what) {
   ])
 }
 
+/** `MAX_TEXTURE_SIZE` and the renderer string, readable without a video.
+ *
+ *  These used to be filled in by `renderSamples`, which only runs after a
+ *  successful decode — so precisely the rows where they matter most, a
+ *  refusal or a stall, reported neither. §The probe argues a context
+ *  capped below the frame width settles the question *before* anything
+ *  decodes; that argument needs the number present on a failed row.
+ *  Cached, because a second `getContext` on the same canvas returns the
+ *  same context anyway. */
+let glCapsCache
+function glCapabilities() {
+  if (glCapsCache !== undefined) return glCapsCache
+  const gl = gl2()
+  if (!gl) { glCapsCache = {}; return glCapsCache }
+  const ext = gl.getExtension('WEBGL_debug_renderer_info')
+  glCapsCache = {
+    maxTextureSize: gl.getParameter(gl.MAX_TEXTURE_SIZE),
+    glRenderer: ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER),
+  }
+  return glCapsCache
+}
+
 let glCtx
 function gl2() {
   if (glCtx === undefined) {
@@ -217,7 +239,11 @@ function renderSamples(v, g, cap) {
 
 async function probe(g) {
   const v = document.getElementById('v')
-  const cap = { name: g.name, expectedWidth: g.width, expectedHeight: g.height, decoded: false }
+  const cap = {
+    name: g.name, expectedWidth: g.width, expectedHeight: g.height, decoded: false,
+    // Seeded up front so a refusal or a stall still carries them.
+    ...glCapabilities(),
+  }
   const result = { cap }
 
   v.src = './out/' + g.name + '.mp4'
@@ -446,7 +472,8 @@ function buildCapabilityReport(caps) {
           + '  texImage2D=' + c.texUpload
           + (c.spikeMean === undefined ? ''
               : '  spike=' + c.spikeMean.toFixed(1) + '  native=' + (c.spikeNative ? 'yes' : 'NO'))
-        : '  error=' + (c.error || '')))
+        : '  maxTex=' + (c.maxTextureSize ?? '-')
+          + '  error=' + (c.error || '')))
   }
   lines.push(endMarker(caps.length, 0))
   return lines.join('\n')
@@ -517,7 +544,13 @@ window.runCheck = async function (names) {
     try { r = await probe(g) }
     catch (e) {
       const msg = String(e.message || e)
-      caps.push({ name: g.name, expectedWidth: g.width, expectedHeight: g.height, decoded: false, error: msg })
+      caps.push({
+        name: g.name, expectedWidth: g.width, expectedHeight: g.height,
+        decoded: false, error: msg,
+        // Same reasoning as the seed above: a device that cannot hold the
+        // frame is a Phase 0 finding, and this is the row it lands on.
+        ...glCapabilities(),
+      })
       rows.push({ name: g.name, error: msg })
     }
     if (r) {

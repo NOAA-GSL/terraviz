@@ -191,7 +191,7 @@ data-encoded datasets:
   `scale=in_range=full:out_range=full` + `pc` is 256/256 exact. The
   second decoder family does not change the recommendation.
 
-  **Measured on four browser/platform pairs, which do not agree.** Two
+  **Measured on five browser/platform pairs, which do not agree.** Two
   variants past that table were added to narrow *why* the
   recommendation works. Running everything on three further pairs found
   two separate things, and the honest summary is a table rather than a
@@ -264,7 +264,9 @@ data-encoded datasets:
   claim about `-color_trc`, and the third falsified the assumption that
   the recommended setting delivers 256/256 everywhere.
 
-  Still unverified: desktop Safari and Firefox. Every preview deploy
+  Still unverified: Firefox. macOS Safari 26.5.2 is in the table above
+  and analysed below, so the only engine left unmeasured on this
+  question is Gecko. Every preview deploy
   serves the check at `/luma-check/page.html`, which is the practical
   way to reach a phone or a headset; `npm run check:luma-range --
   --serve` prints a LAN URL for a machine on the same network.

@@ -1,7 +1,7 @@
 # Higher-resolution data-encoded video: the 8192×4096 rung
 
 **Status: draft for review.** The encode half is measured; the decode
-half has four devices reported and one inconclusive, and the results
+half has five conclusive devices and one inconclusive, and the results
 split by browser *and* by platform with no clean rule joining them.
 Nothing in Phases 1–3 is built. The Phase 0 *instrument* is built and
 its 8K bundle is staged in `public/luma-check/`.
@@ -27,8 +27,14 @@ branch, because iOS Safari cannot decode it and is not a population
 this project can serve a broken globe to. Phase 1 alone is not enough;
 Phase 2 is load-bearing rather than optional.
 
-**Playback is now measured, and it passes on the device that mattered
-most.** The Quest 3 holds 0.994× of real time with zero dropped frames
+**Playback is now measured on a 7200×3600 stand-in, and it passes on
+the device that mattered most.** The clip is 25.9 MP against the rung's
+33.6 MP — **23% fewer pixels** — so read the margins, not just the
+verdicts: upload cost scales with pixel count, which would put the
+Quest's 4.69 ms mean nearer 6.1 ms at the full rung. Still inside the
+11.1 ms budget, but with less room than the number below suggests, and
+the full rung's sustained cost is an open check rather than a measured
+one. The Quest 3 holds 0.994× of real time with zero dropped frames
 and a 4.69 ms mean texture upload against its 11.1 ms budget at 90 Hz —
 better than either desktop, because a software-decoded frame is already
 in memory its unified-memory GPU can address, while a discrete card has
@@ -39,11 +45,12 @@ So the remaining blockers are the two refusals, not performance: iOS
 Safari and macOS Chrome still cannot decode the rung at all. Mid-range
 Android is the only unmeasured row.
 
-**Last reviewed: 2026-08-13.**
-**Revisit when:** the Phase 0 matrix fills past its first row; a data
-source arrives that genuinely warrants more than 9.78 km; H.264 level
-6.0 hardware decode becomes uniform enough to skip Phase 0; or
-`DATA_ENCODED_RENDITIONS` changes for any other reason.
+**Last reviewed: 2026-08-16.**
+**Revisit when:** mid-range Android reports, or Firefox is re-run
+against the fixed harness; an HEVC/AV1 rung is measured, since H.264
+caps hardware decode at 4096 wide and that may matter more than the
+frame size; `DATA_ENCODED_RENDITIONS` changes; or the full 8192×4096
+rung is played rather than the 7200×3600 stand-in.
 
 This is the implementation plan for the route
 [`DATA_ENCODED_VIDEO_PLAN.md`](DATA_ENCODED_VIDEO_PLAN.md) §Why the
@@ -103,11 +110,13 @@ hurts value precision, exactly as the scoping section predicted.
 
 ### What has *not* been measured
 
-**Whether anything decodes it.** This is the gating unknown and Phase 0
-exists for it. An encoder accepting a frame size says nothing about an
-iPhone, a Quest, or a mid-range Android accepting it, and the scoping
-section's own warning — that hardware often advertises a level and tops
-out at 4K — is unaddressed by any of the above.
+**~~Whether anything decodes it.~~ Answered — see §Phase 0.** This was
+the gating unknown when the section was written; the matrix now records
+three native decodes, two refusals and one stall. What remains
+unmeasured is narrower and listed there: mid-range Android, a Firefox
+re-run, HEVC/AV1 as an alternative to H.264, and the full 8192×4096
+rung under playback rather than the 7200×3600 clip that stood in for
+it.
 
 Two lesser gaps. The test clip was 10 frames, so VBV never reached
 steady state and the reported bitrates (40.5 / 69.7 / 160.8 Mbps) are
@@ -712,11 +721,12 @@ Two consequences to carry:
 - The Phase 0 matrix, recorded here as a table rather than a verdict,
   including the read-back-a-known-texel result per device.
 - `scripts/luma-range-check` extended with an 8192×4096 variant —
-  **done** (`H_ceiling_8k`) — and passing on every browser it currently
-  covers, which is still outstanding: the extension has been verified
-  against a synthetic texture (band addressing exact, 256/256), but no
-  browser has yet decoded the 8K stream, since CI's Chromium ships no
-  H.264 decoder at all.
+  **done** (`H_ceiling_8k`), and **run on six real devices**: three
+  native decodes (Windows Chrome, macOS Safari, Quest 3), two refusals
+  (iOS Safari, macOS Chrome), one stall (Windows Firefox, inconclusive
+  and awaiting a re-run against the fixed harness). CI still cannot
+  contribute a row — Playwright's Chromium ships no H.264 decoder at
+  all — which is why `--serve` and the static bundle exist.
 - One real 8K dataset published and probed end to end: hover value,
   Analyze statistics, and a contour pass, each compared against the same
   dataset at 4096×2048. The statistics will differ — that is expected
