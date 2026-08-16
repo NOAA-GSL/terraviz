@@ -379,6 +379,70 @@ angular resolution would matter most. A decode that lands one frame
 after a seek says nothing about that. Play the 8K clip in the headset
 and watch it before this row counts as a capability.
 
+### Does it play? — measured, and the GPU barely matters
+
+**Windows Chrome 150, 7200×3600 at 25 Mbps, 2026-08-16.** The same clip,
+same machine, on both of its GPUs:
+
+| device | mean | implied | p95 | max |
+|---|---|---|---|---|
+| Intel UHD 770 (integrated) | 11.47 ms | 9.0 GB/s | 30.20 ms | 40.40 ms |
+| RTX 4090 Laptop (discrete) | **9.89 ms** | 10.5 GB/s | 19.60 ms | 37.40 ms |
+
+**A 4090 is 1.16× faster than an integrated Intel part at this, and it
+has on the order of fifty times the memory bandwidth.** That single
+comparison is worth more than either number on its own: whatever
+`texImage2D` is spending its time on here, it is not GPU memory
+bandwidth, or the discrete card would have walked away with it.
+
+The likely explanation is that the frame never gets near the GPU until
+the very last step. **H.264 hardware decode is capped at 4096×4096 on
+essentially all consumer silicon** — Intel Quick Sync, NVIDIA NVDEC and
+Apple VideoToolbox alike; the 8K decode those parts advertise is for
+HEVC and AV1, not H.264. A 7200-wide H.264 stream is therefore
+software-decoded on the CPU *whichever* GPU is active, lands in system
+memory, and the per-frame cost is the CPU-side colour conversion and
+copy — which scales with pixel count and is indifferent to the card it
+is eventually handed to. 10 GB/s is an entirely ordinary figure for
+that path.
+
+**This reframes Phase 1: the lever is the codec, not the resolution.**
+The plan has assumed H.264 throughout because that is what the shipped
+ladder emits. But an HEVC or AV1 rung could get *hardware* decode at
+8K where H.264 structurally cannot, keeping the frame in GPU memory and
+turning the upload into a GPU-side copy rather than a bus transfer.
+That is a different and much more promising question than "can we make
+the H.264 frame bigger", and it should be answered before Phase 1 is
+built. It is inference from a well-known hardware limit plus this
+measurement, not something the probe verified directly.
+
+**Playback itself is fine, and consistently so.** All three runs held
+0.973–0.975× of real time at the app's own 1.88 fps. Decode is not the
+constraint at the rate a data-encoded dataset actually plays.
+
+**The dropped-frame count is a startup artifact, not sustained loss.**
+Every run reported exactly **5 of 31**, unchanged across two different
+GPUs and three runs. A figure that identical is deterministic — the
+first frames as playback starts — rather than 16% of timesteps being
+lost throughout. Worth correcting, because "16% of forecast hours never
+displayed" was the wrong reading of it.
+
+**Against the frame budget**, on the better of the two GPUs: the mean
+(9.89 ms) fits 90 Hz with little room; the p95 (19.60 ms) is 1.77× the
+90 Hz budget and still 1.17× the 60 Hz one. So the hitch is real but
+occasional, and it arrives roughly twice a second at this playback
+rate.
+
+**Two limits still apply.** The probe calls `gl.finish()` before
+stopping the clock, deliberately, so these are an upper bound on what a
+pipelined renderer pays. And this is a laptop 4090: upload crosses PCIe
+from system RAM, so a desktop card with the same silicon would not
+necessarily do better, since the bottleneck appears to be upstream of
+the bus anyway.
+
+<details>
+<summary>Superseded first run — measured on the wrong GPU</summary>
+
 ### Does it play? — first measurement (superseded, wrong GPU)
 
 **Retracted before it was acted on.** The numbers below were measured on
@@ -463,6 +527,8 @@ device where the extra resolution would matter most. If the upload cost
 there is anything like this row's, the rung is not viable in VR at
 7200×3600 regardless of the decode result — and that, not decoding,
 becomes the reason to stop.
+
+</details>
 
 **A different browser does not help on iOS, and that much is
 structural.** Chrome, Firefox and Edge on iOS are all WKWebView, since
