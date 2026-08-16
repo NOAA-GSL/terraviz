@@ -289,11 +289,12 @@ function requireTools(codec: string): void {
   if (missing.length) {
     throw new Error(
       `not on PATH: ${missing.join(', ')}\n`
-      + `  GDAL ships inside QGIS and OSGeo4W but neither adds it to PATH. On Windows,\n`
-      + `  find it with:\n`
+      + `  GDAL ships inside QGIS, OSGeo4W and ArcGIS Pro, and none of the three put\n`
+      + `  it on PATH. On Windows, find it with:\n`
       + `    Get-ChildItem 'C:\\Program Files' -Recurse -Filter gdalinfo.exe -EA SilentlyContinue\n`
-      + `  then prepend that directory to $env:PATH, or use the "OSGeo4W Shell",\n`
-      + `  which sets it up for you.`)
+      + `  then APPEND that directory to $env:PATH, not prepend: those are whole\n`
+      + `  bundled environments, and a conda ffmpeg built without libx264/libx265\n`
+      + `  would otherwise shadow a working one.`)
   }
   // A build without the encoder is the failure this function exists to
   // move forward: ffmpeg is present, so nothing above catches it, and
