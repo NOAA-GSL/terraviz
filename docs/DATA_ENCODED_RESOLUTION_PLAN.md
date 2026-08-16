@@ -855,8 +855,10 @@ the 11.1 ms budget regardless. A longer clip would fix this, and is
 worth having before any of these numbers are quoted as thresholds.
 
 **Sixth run, still exactly 5 dropped frames** — now across two GPUs, two
-codecs and three bitrates. The startup-artifact reading is the
-best-attested claim in this section.
+codecs and three bitrates, though every one of those runs is Chrome on
+Windows. The Quest reports 0 on both codecs and iOS reports nothing at
+all, so this is a startup artifact of one browser/platform pair rather
+than a property of the clip.
 
 **What is still open on the desktop.** Whether H.264's cost rises with
 bitrate: the 100 Mbps H.264 clip exists and is unmeasured. If it also
@@ -923,6 +925,58 @@ blocker.
 too: WebKit returned nothing useful from `getVideoPlaybackQuality()`,
 so the count is unmeasured on this platform rather than perfect. The
 0.986× realtime figure is what carries the "it kept up" claim here.
+
+### The Quest gains nothing, and that is the mechanism confirming itself
+
+**Quest 3 (OculusBrowser 149, Adreno 740), 7200×3600 HEVC at 130.5
+Mbps, 2026-08-16.**
+
+```
+size=7200x3600  maxTex=8192  rVFC=yes
+realtime=0.980x  presented=1.8fps  frames=23 over 12.5s  loops=1
+dropped=0/32 (0.00%)
+texImage2D mean=4.46ms  p95=5.70ms  max=15.80ms
+```
+
+| Quest 3, 7200×3600 | mean | p95 | max | realtime |
+|---|---|---|---|---|
+| H.264, 54.2 Mbps | 4.69 ms | 5.10 ms | — | 0.994× |
+| HEVC, 130.5 Mbps | 4.46 ms | 5.70 ms | 15.80 ms | 0.980× |
+
+**Unchanged, and that is the point.** Mean 5% better, p95 12% worse,
+both inside what 23 samples produce by chance. The codec that bought
+the 4090 a 2.94× improvement buys the Quest nothing at all.
+
+**Which is exactly what the explanation predicts.** HEVC's benefit on
+the desktop is the removal of a PCIe crossing: a hardware-decoded frame
+stays in VRAM instead of being copied from system memory. The Quest has
+unified memory, so a software-decoded frame was already somewhere its
+GPU could address and there was no crossing to remove. A mechanism that
+only helps where its bottleneck exists is a mechanism, not a
+coincidence — and this is the third angle on the same one:
+
+| device | memory | H.264 | HEVC | change |
+|---|---|---|---|---|
+| RTX 4090 Laptop | discrete, over PCIe | 9.89 ms | **3.36 ms** | 2.94× faster |
+| Quest 3 / Adreno 740 | unified | 4.69 ms | 4.46 ms | unchanged |
+| iPhone / Apple GPU | unified | **refused** | ~4.95 ms | nothing → everything |
+
+**HEVC costs the Quest nothing either, which is what matters for the
+decision.** A codec change that helps desktops enormously, unlocks iOS
+entirely and leaves the tightest-budget device where it found it has no
+constituency arguing against it.
+
+**The Quest's tail is the best in the matrix**: a 15.80 ms maximum
+against 48.80 ms on the 4090 and 96.00 ms on iOS. Its worst single
+upload barely exceeds a 90 Hz frame, where the other two overrun one by
+4× and 8×. Zero dropped frames of 32, genuinely measured this time.
+
+**`maxTex=8192` is still the thing to watch.** At 7200 wide there are
+992 texels of headroom. At the rung's 8192 there are none — the limit
+*equals* the frame width. So the Quest's 8192×4096 question is two
+questions stacked: whether the decoder takes it, and whether a texture
+at exactly `MAX_TEXTURE_SIZE` allocates. Both are unanswered, and both
+land on the same variant iOS needs.
 
 ---
 
