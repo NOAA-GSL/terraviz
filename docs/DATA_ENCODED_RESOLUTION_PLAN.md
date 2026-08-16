@@ -2,8 +2,12 @@
 
 **Status: Phase 0 and Phase 0b closed. Phase 2 superseded.** Seven
 browser/platform pairs have run the 8192×4096 rung in both codecs.
-Nothing in Phases 1–3 is built. The Phase 0 *instrument* is built and
-its 8K bundle is staged in `public/luma-check/`.
+Nothing in Phases 1–3 is built. The Phase 0 *instrument* is built;
+`public/luma-check/` carries the static bundle through `H_ceiling_8k`,
+but **not `I_ceiling_8k_hevc`** — every HEVC row was collected against
+`--serve`, which builds its manifest live. One `--emit-static` run on a
+machine with libx265 stages the HEVC variant for later re-runs; until
+then the deployed copy offers the H.264 rung only.
 
 **HEVC decodes the rung everywhere tested: seven of seven, no
 refusals.** Windows Chrome, Windows Firefox, macOS Chrome, macOS
