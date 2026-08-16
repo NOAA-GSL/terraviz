@@ -1611,6 +1611,10 @@ function auxAssetField(
         kind: opts.kind,
         format: state.format,
         currentDataRef: opts.refValue || null,
+        // Safe to read the live toggle: `dataEncodingUnsaved` already
+        // blocks uploading until it matches the saved row, and the
+        // mint route gates on the saved `render_encoding`.
+        dataEncoded: state.dataEncoded,
         dataAssetUrl: opts.dataAssetUrl ?? null,
         dataAssetOverlay: opts.dataAssetOverlay ?? null,
         navigate: ctx.navigate,
