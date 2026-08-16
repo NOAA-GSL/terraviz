@@ -212,7 +212,7 @@ break CI.
 
 | device / browser | decodes | readyState | decoded size | MAX_TEXTURE_SIZE | texImage2D | native | notes |
 |---|---|---|---|---|---|---|---|
-| desktop Chrome 150 (Win 11, Intel UHD 770, ANGLE/D3D11) | **yes** | 4 | 8192×4096 | 16384 | ok | **yes** — spike 252.0 | Values round-trip at 8K exactly as at 4K. Decode path unconfirmed; see below |
+| desktop Chrome 150 (Win 11, Intel UHD 770, ANGLE/D3D11) | **yes** | 4 | 8192×4096 | 16384 | ok | **yes** — spike 252.0 | Values round-trip at 8K exactly as at 4K. Decode path unconfirmed; see below. **Also accepts the 8K HEVC variant, spike 253** — see §The 8K HEVC variant has a positive control |
 | desktop Chrome 151 (macOS, M2 Ultra, ANGLE Metal) | **no** | — | — | 16384 | — | — | `MediaError` 4, and no software fallback — while Safari on the same OS accepts |
 | desktop Firefox (Win 11) | *stalls* | — | — | — | — | — | Ran 2026-08-13, never returned. Stalling variant unattributed — see below |
 | desktop Safari 26.5.2 (macOS, Apple GPU) | **yes** | 4 | 8192×4096 | 16384 | ok | **yes** — spike 252.0 | Decodes what Chrome on the same OS refuses. Decode path unconfirmed |
@@ -977,6 +977,51 @@ upload barely exceeds a 90 Hz frame, where the other two overrun one by
 questions stacked: whether the decoder takes it, and whether a texture
 at exactly `MAX_TEXTURE_SIZE` allocates. Both are unanswered, and both
 land on the same variant iOS needs.
+
+### The 8K HEVC variant has a positive control
+
+**Windows Chrome 150 (Win 11), `H_ceiling_8k` and `I_ceiling_8k_hevc`
+side by side, 2026-08-16.** Both 8192×4096, one variable apart.
+
+| variant | decoded | ready | decoded size | texImage2D | spike | native |
+|---|---|---|---|---|---|---|
+| `H_ceiling_8k` (H.264) | yes | 4 | 8192×4096 | ok | 251 | **yes** |
+| `I_ceiling_8k_hevc` (HEVC) | yes | 4 | 8192×4096 | ok | **253** | **yes** |
+
+**This row answers nothing about the gate, and that is what makes it
+worth having.** Windows Chrome already accepted the H.264 rung, so an
+HEVC accept here moves no decision. What it establishes is that the new
+variant is a working instrument: it encodes, it decodes at native
+resolution, and it round-trips values. A refusal on iOS or the Quest
+can now be attributed to the device rather than to a probe input added
+two commits ago — which is the difference between a Phase 0b result and
+a bug hunt.
+
+**The value round trip is identical to the digit across both codecs**:
+220/256 exact, MAE 0.141, max |e| 1, gain 1.0002, offset −0.08, and both
+endpoints clean at 0 → 0 and 255 → 255. Switching codec costs the data
+nothing.
+
+**Identical is the expected answer, not a suspicious one.** The residual
+error at 8 bits is the transport lattice — a property of `yuv420p` and
+the untagged range round trip, which both files share — rather than
+anything the codec does. Compression loss at CRF 18 on a smooth ramp is
+far below one code, so what survives to be measured is the lattice, and
+the lattice does not care which encoder produced the frame.
+
+**The one place they differ is the one place they should.** The spike
+region is an isolated single texel, the highest-frequency feature in
+the frame and the only part a codec can plausibly damage differently:
+HEVC returns **253** against H.264's **251**, against 255 for a perfect
+read and about 63 through a 2× downscale. Marginally better preservation
+from the more efficient codec, and — more to the point — both are
+unambiguously native. That the two differ at all is also the proof the
+files are genuinely different encodes rather than one file measured
+twice.
+
+**`readoutFull` is skipped on both** — 8192×4096 exceeds what a 2D
+canvas will hold. Known, and why the WebGL `readout` path is the one
+that carries these rows.
 
 ---
 
