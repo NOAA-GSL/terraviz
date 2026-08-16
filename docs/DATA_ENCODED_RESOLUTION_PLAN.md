@@ -216,7 +216,7 @@ break CI.
 | desktop Chrome 151 (macOS, M2 Ultra, ANGLE Metal) | **no** | — | — | 16384 | — | — | `MediaError` 4, and no software fallback — while Safari on the same OS accepts |
 | desktop Firefox (Win 11) | *stalls* | — | — | — | — | — | Ran 2026-08-13, never returned. Stalling variant unattributed — see below |
 | desktop Safari 26.5.2 (macOS, Apple GPU) | **yes** | 4 | 8192×4096 | 16384 | ok | **yes** — spike 252.0 | Decodes what Chrome on the same OS refuses. Decode path unconfirmed |
-| iOS Safari 26.6 (iOS 18.7, Apple GPU) | **no** | — | — | 16384 | — | — | `MediaError` code 4 at `loadeddata`; refused before playback. A–G at 4096×256 all decode and upload on the same device |
+| iOS Safari 26.6 (iOS 18.7, Apple GPU) | **no** | — | — | 16384 | — | — | `MediaError` code 4 at `loadeddata`; refused before playback. A–G at 4096×256 all decode and upload on the same device. **The same device accepts 7200×3600 HEVC** — see §iOS Safari accepts HEVC |
 | mid-range Android | | | | | | | |
 | Quest 3 (OculusBrowser 149, Adreno 740) | **yes** | 4 | 8192×4096 | **8192** | ok | **yes** — spike 251.0 | Texture limit *equals* the frame width: fits with zero headroom |
 
@@ -862,6 +862,67 @@ best-attested claim in this section.
 bitrate: the 100 Mbps H.264 clip exists and is unmeasured. If it also
 lands near 9.9 ms, both codecs are bitrate-independent and the gap is
 purely the decode path — the cleanest form of the result.
+
+### iOS Safari accepts HEVC
+
+**iOS Safari 26.6 (iOS 18.7, iPhone, Apple GPU), 7200×3600 HEVC at
+130.5 Mbps, 2026-08-16.** The same browser version, on the same OS
+version, that refuses the 8192×4096 H.264 rung with `MediaError` 4
+before playback begins.
+
+```
+size=7200x3600  maxTex=16384  rVFC=yes
+realtime=0.986x  presented=1.8fps  frames=23 over 12.4s  loops=1
+dropped=0/0 (—)
+texImage2D mean=8.91ms  p95=6.00ms  max=96.00ms
+verdict: playback KEEPS UP; upload fits 90Hz
+```
+
+**It decodes at native resolution and keeps up.** `size` is 7200×3600,
+not a quiet downscale, and playback holds 0.986× of real time at the
+app's own 1.88 fps. This is the fidelity-grade clip, not the cheap one:
+iOS took the 130.5 Mbps stream.
+
+**Two variables moved, so state the finding narrowly.** The refusal on
+record is 8192×4096 **H.264**; this accept is 7200×3600 **HEVC**. Codec
+*and* resolution changed together. H.264 hardware decode caps at
+4096×4096 on VideoToolbox and iOS ships no software fallback, so the
+codec fully explains the old refusal — but that is not the same as
+proving iOS takes HEVC at the rung's 33.6 MP. 25.9 → 33.6 MP is **29%
+more pixels**, and 8192×4096 sits just above 8K UHD's own count. The
+decisive test is an 8192×4096 HEVC variant, and it has not been run.
+
+**What it does establish, which is a great deal.** iOS Safari will
+decode a data-encoded frame **3.09× larger than the shipped 4096×2048
+rung**, at native resolution, at a bitrate above anything the ladder
+would ship, and hand it to WebGL intact. If 8192 turns out to be past
+Apple's decoder, a ~7200-wide HEVC rung is a viable target on its own
+and still captures most of the resolution win.
+
+**So Phase 2's justification is now conditional rather than settled.**
+It exists because iOS Safari refused the rung and iOS is not a
+population this project can serve a broken globe to. That refusal is
+now known to be codec-specific up to 25.9 MP at least. Phase 2 should
+not be built until the 8192×4096 HEVC variant reports.
+
+**Read the p95 here, not the mean — the reverse of the desktop rows.**
+`p95` (6.00 ms) coming in *below* `mean` (8.91 ms) is arithmetically
+only possible with a heavy right tail, and the tail is visible: 22
+samples near 4.95 ms plus the single 96.00 ms maximum average to 8.91
+exactly. So the steady-state upload is **roughly 5 ms**, an implied
+20.9 GB/s, and the mean is an artifact of one frame.
+
+**That one frame is the first, and 96 ms is the largest first-frame
+cost in the matrix** — against 60.80 ms on the 4090 and 48.80 ms at
+higher bitrate. It is paid once per dataset load, so on the globe it is
+a load hitch rather than a playback one; at 60 Hz it is about six
+frames. Worth a second look before an iOS-facing rung ships, not a
+blocker.
+
+**`dropped=0/0` is not zero dropped frames.** The denominator is zero
+too: WebKit returned nothing useful from `getVideoPlaybackQuality()`,
+so the count is unmeasured on this platform rather than perfect. The
+0.986× realtime figure is what carries the "it kept up" claim here.
 
 ---
 
