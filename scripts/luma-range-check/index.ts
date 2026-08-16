@@ -37,7 +37,7 @@
 import { spawnSync } from 'node:child_process'
 import { createServer } from 'node:http'
 import { deflateSync } from 'node:zlib'
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, extname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { networkInterfaces } from 'node:os'
@@ -363,8 +363,24 @@ function serve(port: number): Promise<{ port: number; close: () => void }> {
     }
     const p = join(HERE, rel === '/' ? 'page.html' : rel)
     if (!p.startsWith(HERE) || !existsSync(p)) {
-      res.writeHead(404)
-      return res.end('not found')
+      // Say what *is* there. A bare "not found" sends the tester back to
+      // the machine to run `ls`, and on a headset that is a real
+      // errand — while the same 404 reaches `<video>` as MediaError 4,
+      // indistinguishable from a decoder refusing the stream. Listing
+      // the directory turns "did I mistype it, or can this device not
+      // decode it?" into something the response answers on its own.
+      const dir = dirname(p)
+      let hint = ''
+      if (dir.startsWith(HERE) && existsSync(dir)) {
+        const names = readdirSync(dir).sort()
+        hint = names.length
+          ? `\n\nfiles in ${dir.slice(HERE.length) || '/'}:\n  ${names.join('\n  ')}`
+          : `\n\n${dir.slice(HERE.length) || '/'} is empty`
+      } else {
+        hint = `\n\nno such directory: ${dir.slice(HERE.length) || '/'}`
+      }
+      res.writeHead(404, { 'Content-Type': 'text/plain' })
+      return res.end(`not found: ${rel}\nserving from: ${HERE}${hint}\n`)
     }
     const body = readFileSync(p)
     res.writeHead(200, {
