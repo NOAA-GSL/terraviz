@@ -77,6 +77,46 @@ const MIN_FRAMES_FOR_RATE_TO_AMORTISE = Math.ceil(VBV_INIT_FRACTION * 2 * OUTPUT
  */
 const DEFAULT_DATA_MIN_LUMA = 8
 
+/**
+ * Codec-specific arguments. Everything else about the encode is shared,
+ * so what differs here is exactly what a codec comparison is allowed to
+ * vary.
+ *
+ * **Why HEVC is worth an option at all.** H.264 hardware decode is
+ * capped at 4096x4096 on essentially all consumer silicon — Intel Quick
+ * Sync, NVIDIA NVDEC and Apple VideoToolbox alike. The 8K decode those
+ * parts advertise is HEVC and AV1. `DATA_ENCODED_RESOLUTION_PLAN.md`
+ * measured a 7200-wide H.264 clip costing the same per-frame upload on
+ * an RTX 4090 as on an Intel iGPU — a card with ~50x the memory
+ * bandwidth — which is what a software-decoded frame crossing the bus
+ * looks like. If HEVC gets hardware decode at this size, the frame
+ * stays in GPU memory and the whole cost profile changes. More
+ * importantly, iOS Safari refuses the H.264 rung outright, and iOS
+ * decodes HEVC natively: if it accepts an HEVC rung, the refusal that
+ * makes Phase 2 necessary disappears.
+ *
+ * `-tag:v hvc1` is not optional. ffmpeg defaults HEVC in MP4 to the
+ * `hev1` sample entry, which Safari and QuickTime will not play — so
+ * omitting it would produce a false refusal on the exact platform this
+ * option exists to test, which is the worst outcome a probe can deliver.
+ *
+ * Range signalling is deliberately left at the ffmpeg level
+ * (`-color_range pc`) for both, matching the "tag the range and nothing
+ * else" form that `DATA_ENCODED_VIDEO_PLAN.md` measured as the one that
+ * survives everywhere. Adding codec-private colour params would confound
+ * the comparison with a second variable.
+ */
+const CODECS: Record<string, { args: string[]; note: string }> = {
+  h264: {
+    args: ['-c:v', 'libx264', '-profile:v', 'main'],
+    note: 'what the catalog ships today',
+  },
+  hevc: {
+    args: ['-c:v', 'libx265', '-profile:v', 'main', '-tag:v', 'hvc1'],
+    note: 'hardware decode above 4096 wide; required for an iOS accept',
+  },
+}
+
 /** Default palette: a viridis-like ramp with the bottom of the range
  *  fading to transparent, matching the published smoke pipeline's habit
  *  of not drawing a haze over the whole globe for values that are
@@ -99,6 +139,7 @@ interface Args {
   dataMinLuma: number
   nodata?: number
   maxBitrateKbps: number
+  codec: string
   keepTemp: boolean
 }
 
@@ -127,6 +168,13 @@ function parseArgs(argv: string[]): Args {
   if (!Number.isInteger(lumaLo) || lumaLo < 0 || lumaLo > 254) {
     throw new Error(`--data-min-luma must be an integer in 0..254, got ${lumaLo}`)
   }
+  // Validated up front for the same reason as the luma floor: an
+  // unrecognised codec would otherwise reach ffmpeg as a missing
+  // encoder, minutes into a run, as a wall of stderr.
+  const codec = (get('codec') ?? 'h264').toLowerCase()
+  if (!(codec in CODECS)) {
+    throw new Error(`--codec must be one of ${Object.keys(CODECS).join(', ')}, got ${codec}`)
+  }
   return {
     in: resolve(inDir),
     out: resolve(get('out') ?? 'out/data-encoded.mp4'),
@@ -136,6 +184,7 @@ function parseArgs(argv: string[]): Args {
     dataMinLuma: lumaLo,
     nodata: num('nodata'),
     maxBitrateKbps: num('max-bitrate') ?? DEFAULT_MAX_BITRATE_KBPS,
+    codec,
     keepTemp: argv.includes('--keep-temp'),
   }
 }
@@ -287,6 +336,7 @@ function main(): void {
   const boundBytes =
     (VBV_INIT_FRACTION * args.maxBitrateKbps * 2 * 1000
       + args.maxBitrateKbps * 1000 * durationSec) / 8
+  process.stdout.write(`codec ${args.codec} — ${CODECS[args.codec].note}\n`)
   process.stdout.write(
     `ceiling ${args.maxBitrateKbps} kbps (bufsize ${args.maxBitrateKbps * 2}k)`
     + `  → at most ${(boundBytes / 1e6).toFixed(1)} MB for ${files.length} frames`
@@ -312,7 +362,14 @@ function main(): void {
     '-framerate', String(OUTPUT_FRAME_RATE), '-i', 'pipe:0',
     '-vf', 'scale=in_range=full:out_range=full',
     '-color_range', 'pc',
-    '-c:v', 'libx264', '-profile:v', 'main', '-pix_fmt', 'yuv420p',
+    ...CODECS[args.codec].args,
+    '-pix_fmt', 'yuv420p',
+    // CRF is not comparable across codecs — x265 needs a higher number
+    // for the same quality — but the bitrate ceiling below binds well
+    // before CRF does on frames this large, so the two encodes are
+    // compared at matched *bitrate* rather than matched CRF. That is the
+    // right axis anyway: the question is what a device does with a given
+    // stream, not which encoder is more efficient.
     '-preset', 'slow', '-crf', '18',
     // The ceiling, without which CRF alone has none. bufsize at 2x
     // maxrate mirrors `buildFfmpegArgs`.
@@ -399,6 +456,9 @@ encode-geotiff-sequence — GeoTIFF sequence -> data-encoded video + color_scale
   --units <s>           unit label carried into the sidecar, e.g. "mg m-2"
   --data-min-luma <n>   lowest luma code carrying data (default ${DEFAULT_DATA_MIN_LUMA})
   --nodata <n>          override the GeoTIFF's own no-data value
+  --codec <h264|hevc>   default h264. hevc unlocks hardware decode above
+                        4096 wide and is the one Apple decodes natively,
+                        so it is the lever for an iOS accept.
   --max-bitrate <kbps>  ceiling, default ${DEFAULT_MAX_BITRATE_KBPS} (what the catalog ships).
                         Without it CRF alone is uncapped and will emit
                         hundreds of Mbps on large frames.

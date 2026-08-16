@@ -656,6 +656,80 @@ enough and Phase 2 is never built. If a population that matters cannot
 decode it, Phase 1 plus Phase 2. If almost nothing decodes it, stop —
 and record the result here so the question is not reopened from scratch.
 
+## Phase 0b — is H.264 even the right codec? (before Phase 1)
+
+**Cheap, and it may delete Phase 2.** Everything measured so far assumed
+H.264, because that is what `DATA_ENCODED_RENDITIONS` emits. That
+assumption now looks like the binding constraint rather than a detail.
+
+**The evidence that it matters.** H.264 hardware decode is capped at
+**4096×4096** on essentially all consumer silicon — Intel Quick Sync,
+NVIDIA NVDEC, Apple VideoToolbox. The 8K decode those parts advertise is
+for HEVC and AV1. Two measurements are consistent with a 7200-wide H.264
+stream being software-decoded everywhere:
+
+- The per-frame upload cost was **the same on an RTX 4090 as on an Intel
+  iGPU** (9.89 ms vs 11.47 ms) — a 1.16× difference from a card with
+  roughly fifty times the memory bandwidth. That is what a
+  software-decoded frame crossing PCIe looks like, not a GPU-bound
+  operation.
+- The Quest, with unified memory, was **twice as fast as the 4090**. The
+  ordering only makes sense if the cost is getting a CPU-side frame to
+  the GPU rather than anything the GPU does with it.
+
+**What an HEVC rung could change.** If the frame is hardware-decoded it
+stays in GPU memory, and the upload becomes a GPU-side copy rather than
+a bus transfer — which would remove the desktop p95 hitch entirely. But
+the bigger prize is on Apple: **iOS Safari refuses the H.264 rung and
+decodes HEVC natively.** If it accepts an HEVC rung, the refusal that
+puts the gate on its middle branch disappears, and **Phase 2 may not
+need to be built at all.** That is a change to what gets built, not a
+performance tweak, which is why this belongs before Phase 1 rather than
+after.
+
+**The measurement.** `scripts/encode-geotiff-sequence.ts --codec hevc`
+re-encodes the same GeoTIFFs at the same resolution and the same bitrate
+ceiling; every other encoder argument is unchanged, so the codec is the
+only variable. Then run the *unchanged* probes:
+
+```bash
+npx tsx scripts/encode-geotiff-sequence.ts \
+  --in <tifs> --out scripts/luma-range-check/out/real_7200_hevc.mp4 \
+  --codec hevc --vmin -35 --vmax 78.025 --units dBZ
+npx tsx scripts/luma-range-check --serve
+#   …/play.html?clip=/out/real_7200_hevc.mp4
+```
+
+Record the same row per device: decodes, decoded size, `texImage2D`,
+realtime ratio, upload mean/p95. The comparison that matters is against
+the H.264 row for the same clip on the same device.
+
+**Two encoder details that are not incidental.** `-tag:v hvc1` is set
+rather than ffmpeg's default `hev1`: Safari and QuickTime will not play
+the latter, so omitting it would manufacture a refusal on the one
+platform this test exists to interrogate. And range signalling stays at
+the ffmpeg level (`-color_range pc`) for both codecs, matching the "tag
+the range and nothing else" form §Encoder measured as surviving
+everywhere — adding codec-private colour parameters would confound the
+comparison with a second variable.
+
+**What could go wrong, stated up front.** HEVC browser support is
+patchier than H.264, not better: Chrome requires hardware support and
+the right build, Firefox largely lacks it, and MSE/HLS delivery adds a
+compatibility layer beyond progressive MP4. So this could trade one set
+of refusals for a different set — a Firefox that currently stalls might
+refuse outright, and a mid-range Android might lose a decode it has
+today. **A negative result is as useful as a positive one**: it closes
+the codec question and Phase 1 proceeds as designed, with H.264
+confirmed as the right container rather than merely the incumbent one.
+
+**Encoding cost is worth watching too.** x265 at `-preset slow` on
+25-megapixel frames is markedly slower than x264. If HEVC wins on the
+decode side, the transcode budget in Phase 1 needs revisiting with real
+numbers rather than the H.264 ones.
+
+---
+
 ## Phase 1 — the 8192×4096 rung
 
 Assumes Phase 0 passed.
