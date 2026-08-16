@@ -6,11 +6,12 @@ split by browser *and* by platform with no clean rule joining them.
 Nothing in Phases 1–3 is built. The Phase 0 *instrument* is built and
 its 8K bundle is staged in `public/luma-check/`.
 
-**The matrix so far: three accepts, two refusals, one stall — and the
-same OS lands on both sides.** Windows Chrome, macOS Safari and a
-Quest 3 all decode the 8192×4096 rung at true native resolution. macOS
-Chrome refuses it on the same machine Safari accepts it on, iOS Safari
-refuses it, and Windows Firefox stalls without returning anything.
+**The matrix so far: four accepts, two refusals, no stall — and the
+same OS lands on both sides.** Windows Chrome, macOS Safari, a Quest 3
+and Windows Firefox all decode the 8192×4096 rung at true native
+resolution. macOS Chrome refuses it on the same machine Safari accepts
+it on, and iOS Safari refuses it. Firefox's earlier stall did not
+reproduce and its row is now an accept; the cause was never attributed.
 Neither "Apple platforms can't" nor "Chrome can" survives contact with
 the full set. Two attempts at a generalisation were written into this
 document and each was falsified by the next device to report — the
@@ -46,8 +47,9 @@ Safari and macOS Chrome still cannot decode the rung at all. Mid-range
 Android is the only unmeasured row.
 
 **Last reviewed: 2026-08-16.**
-**Revisit when:** mid-range Android reports, or Firefox is re-run
-against the fixed harness; an HEVC/AV1 rung is measured, since H.264
+**Revisit when:** mid-range Android reports, or macOS Chrome is run
+against the HEVC variant — the last platform that could still refuse
+it; an AV1 rung is measured, since H.264
 caps hardware decode at 4096 wide and that may matter more than the
 frame size; `DATA_ENCODED_RENDITIONS` changes; or the full 8192×4096
 rung is played rather than the 7200×3600 stand-in.
@@ -214,7 +216,7 @@ break CI.
 |---|---|---|---|---|---|---|---|
 | desktop Chrome 150 (Win 11, Intel UHD 770, ANGLE/D3D11) | **yes** | 4 | 8192×4096 | 16384 | ok | **yes** — spike 252.0 | Values round-trip at 8K exactly as at 4K. Decode path unconfirmed; see below. **Also accepts the 8K HEVC variant, spike 253** — see §The 8K HEVC variant has a positive control |
 | desktop Chrome 151 (macOS, M2 Ultra, ANGLE Metal) | **no** | — | — | 16384 | — | — | `MediaError` 4, and no software fallback — while Safari on the same OS accepts |
-| desktop Firefox (Win 11) | *stalls* | — | — | — | — | — | Ran 2026-08-13, never returned. Stalling variant unattributed — see below |
+| desktop Firefox (Win 11) | **yes** | 4 | 8192×4096 | 16384 | ok | **yes** — spike 251.0 | Stalled 2026-08-13, did **not** reproduce 2026-08-16 — all paths pass. Cause never attributed; see below. **Also accepts the 8K HEVC variant, spike 253**, with a codec-specific 2D-canvas defect — see §Firefox takes both codecs |
 | desktop Safari 26.5.2 (macOS, Apple GPU) | **yes** | 4 | 8192×4096 | 16384 | ok | **yes** — spike 252.0 | Decodes what Chrome on the same OS refuses. Decode path unconfirmed |
 | iOS Safari 26.6 (iOS 18.7, Apple GPU) | **no** — H.264; **yes** — HEVC | 4 (HEVC) | 8192×4096 (HEVC) | 16384 | ok (HEVC) | **yes** — spike 253 (HEVC) | H.264 gives `MediaError` code 4 at `loadeddata`, refused before playback, re-confirmed 2026-08-16. **The same device decodes the same frame size in HEVC** — see §iOS Safari accepts the full rung in HEVC |
 | mid-range Android | | | | | | | |
@@ -317,6 +319,30 @@ harder for the Phase 2 fallback to detect than one that errors,
 because there is no event to trigger on. If Firefox turns out to
 behave this way on the 8K rung, Phase 2 needs a timeout of its own
 rather than an `error` handler.
+
+**The re-run happened on 2026-08-16, and that guess was wrong.**
+`H_ceiling_8k` is exactly what Firefox handles cleanest: it decodes at
+native 8192×4096, uploads, and passes all three value paths at 220/256
+with MAE 0.141 — the same numbers every other accepting device
+reports. The stall did not reproduce at all, on either variant.
+
+**The cause is unattributed and now probably unattributable.** Three
+things changed between the runs: the probe's waits were bounded, its
+table began repainting per variant, and three days passed on a browser
+that updates itself. The stall is also consistent with a backgrounded
+tab against the *unbounded* waits of the original harness, since
+Firefox throttles background tabs hard and a media element that never
+fires an event would then hang forever — but nothing in the record
+distinguishes that from a transient or from a since-fixed Firefox bug.
+Recording it as resolved-cause-unknown, because a stall that cannot be
+reproduced should not keep a row open, and inventing an explanation for
+it would be worse than admitting there isn't one.
+
+**What survives from this row is the design note, and it still
+applies.** A decoder that stalls rather than declines is harder for a
+Phase 2 fallback to detect than one that errors, because there is no
+event to trigger on. That was true when written and remains true; it
+simply no longer has a device demonstrating it.
 
 **Row 4 — macOS Chrome.** Chrome 151 on an M2 Ultra refuses the rung
 with the same `MediaError` 4 as iOS Safari, and does not attempt a
@@ -1187,10 +1213,10 @@ Two consequences to carry:
 - The Phase 0 matrix, recorded here as a table rather than a verdict,
   including the read-back-a-known-texel result per device.
 - `scripts/luma-range-check` extended with an 8192×4096 variant —
-  **done** (`H_ceiling_8k`), and **run on six real devices**: three
-  native decodes (Windows Chrome, macOS Safari, Quest 3), two refusals
-  (iOS Safari, macOS Chrome), one stall (Windows Firefox, inconclusive
-  and awaiting a re-run against the fixed harness). CI still cannot
+  **done** (`H_ceiling_8k`), and **run on six real devices**: four
+  native decodes (Windows Chrome, macOS Safari, Quest 3, Windows
+  Firefox) and two refusals (iOS Safari, macOS Chrome). Firefox's
+  original stall did not reproduce on re-run. CI still cannot
   contribute a row — Playwright's Chromium ships no H.264 decoder at
   all — which is why `--serve` and the static bundle exist.
 - One real 8K dataset published and probed end to end: hover value,
