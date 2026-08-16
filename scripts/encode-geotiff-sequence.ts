@@ -172,7 +172,11 @@ function parseArgs(argv: string[]): Args {
   // unrecognised codec would otherwise reach ffmpeg as a missing
   // encoder, minutes into a run, as a wall of stderr.
   const codec = (get('codec') ?? 'h264').toLowerCase()
-  if (!(codec in CODECS)) {
+  // `hasOwn`, not `in`: `in` walks the prototype chain, so `--codec
+  // toString` would pass and then fail later at `CODECS[codec].args`
+  // with a message about the wrong thing. The point of validating here
+  // is that an unrecognised codec says so immediately.
+  if (!Object.hasOwn(CODECS, codec)) {
     throw new Error(`--codec must be one of ${Object.keys(CODECS).join(', ')}, got ${codec}`)
   }
   return {

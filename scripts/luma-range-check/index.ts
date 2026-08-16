@@ -325,6 +325,37 @@ function ffmpegBin(): string {
   return process.env.FFMPEG_BIN ?? 'ffmpeg'
 }
 
+function ffprobeBin(): string {
+  return process.env.FFPROBE_BIN ?? 'ffprobe'
+}
+
+/**
+ * Check the external binaries before generating a single frame.
+ *
+ * `ffprobe` is only needed by variants that name a codec, and it is
+ * invoked *after* that variant encodes — which on `I_ceiling_8k_hevc`
+ * means after an 8192x4096 x265 encode and every variant before it. A
+ * missing ffprobe would therefore discard minutes of work and a rerun
+ * would redo all of it. This is the same failure `requireTools` exists
+ * to prevent in `scripts/encode-geotiff-sequence.ts`, reintroduced here
+ * by the commit that added the codec check; found in review.
+ */
+function requireProbeTools(): void {
+  const needed: string[] = [ffmpegBin()]
+  if (VARIANTS.some(v => v.codec)) needed.push(ffprobeBin())
+  const missing = needed.filter(bin => {
+    const r = spawnSync(bin, ['-version'], { encoding: 'utf8' })
+    return Boolean(r.error) || r.status !== 0
+  })
+  if (missing.length) {
+    throw new Error(
+      `not on PATH, or present but not runnable: ${missing.join(', ')}\n`
+      + `  ffprobe is required because a variant names its own codec, and the\n`
+      + `  encode is verified against the stream it actually produced. Override\n`
+      + `  the binary names with FFMPEG_BIN / FFPROBE_BIN if they differ here.`)
+  }
+}
+
 /** Ladder settings copied from `buildFfmpegArgs` in `cli/lib/ffmpeg-hls.ts`,
  *  split so a variant can replace the codec without disturbing anything
  *  else about the encode. */
@@ -343,7 +374,7 @@ const ENCODER_STREAM_NAME: Record<string, string> = {
  *  input is how a false negative gets recorded as a device limitation. */
 function encodedCodec(file: string): string | undefined {
   const r = spawnSync(
-    process.env.FFPROBE_BIN ?? 'ffprobe',
+    ffprobeBin(),
     ['-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=codec_name',
      '-of', 'default=nw=1:nk=1', file],
     { encoding: 'utf8' })
@@ -388,7 +419,14 @@ function encodeAll(): void {
     let codecNote = ''
     if (v.codec) {
       const encoder = codecArgs[codecArgs.indexOf('-c:v') + 1] ?? ''
-      const want = ENCODER_STREAM_NAME[encoder]
+      // `hasOwn` for the same reason `parseArgs` uses it in
+      // `encode-geotiff-sequence.ts`: a plain lookup inherits
+      // `Object.prototype`, so an encoder named `toString` would
+      // resolve to a truthy function, clear the guard below, and then
+      // fail the comparison with a message about codecs.
+      const want = Object.hasOwn(ENCODER_STREAM_NAME, encoder)
+        ? ENCODER_STREAM_NAME[encoder]
+        : undefined
       if (!want) {
         throw new Error(
           `${v.name} names encoder "${encoder}", which is not in ENCODER_STREAM_NAME.\n` +
@@ -570,6 +608,8 @@ async function main(): Promise<void> {
   const emitStaticTo = process.argv.includes('--emit-static')
     ? join(HERE, '..', '..', 'public', 'luma-check')
     : null
+
+  requireProbeTools()
 
   process.stdout.write('Generating ramp frames…\n')
   writeAllFrames()
