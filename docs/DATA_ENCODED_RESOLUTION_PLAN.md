@@ -379,6 +379,69 @@ angular resolution would matter most. A decode that lands one frame
 after a seek says nothing about that. Play the 8K clip in the headset
 and watch it before this row counts as a capability.
 
+### Does it play? — first measurement
+
+**Windows Chrome 150, Intel UHD 770, 7200×3600 at 25 Mbps, 2026-08-15.**
+
+```
+realtime=0.975x  presented=1.8fps  frames=22 over 12.0s  loops=1
+dropped=5/31 (16.13%)
+texImage2D mean=11.47ms  p95=30.20ms  max=40.40ms
+```
+
+**Decode is not the bottleneck, and that reverses the assumption this
+plan was built on.** At the rate the app actually plays a data-encoded
+dataset — `MIN_PLAYBACK_RATE` 0.0625×, i.e. 1.88 fps — the clip held
+0.975× of real time. The decoder is asked for roughly two frames a
+second and delivers them. Every worry in §Context about sustained
+decode throughput was aimed at the wrong layer.
+
+**The texture upload is the constraint.** A 7200×3600 RGBA upload moves
+**103.7 MB per frame**, and the measured times imply 9.0 GB/s at the
+mean falling to 2.6 GB/s at the worst — plausible for an integrated GPU
+on shared memory, and not something a faster decoder or a lower bitrate
+improves. Against a render frame budget:
+
+| | mean 11.47 ms | p95 30.20 ms |
+|---|---|---|
+| 90 Hz (11.1 ms) | 1.03× over | **2.72× over** |
+| 72 Hz (13.9 ms) | 0.83× | **2.17× over** |
+| 60 Hz (16.7 ms) | 0.69× | **1.81× over** |
+
+Aggregate cost is small — 1.88 uploads/s × 11.47 ms is **22 ms per
+second**, about 2% of the main thread. The problem is not the total but
+the *distribution*: it arrives in one lump roughly twice a second, and
+each lump overruns a 90 Hz frame. That is a visible hitch on a cadence
+slow enough to notice individually rather than a uniform slowdown.
+
+**Dropped frames matter more here than for ordinary video.** 5 of 31 is
+16%, and each dropped frame of a data-encoded dataset is a *skipped
+timestep* — a forecast hour the viewer never sees — rather than a
+skipped picture nobody misses.
+
+Two limits on how far to read this row.
+
+**The probe's own stall inflates the number.** `uploadAndDraw` calls
+`gl.finish()` before stopping the clock, deliberately, so the time lands
+on the frame that caused it rather than measuring how fast the driver
+accepts work. That makes these an *upper* bound on what a pipelined
+renderer pays, and it may be causing some of the dropped frames itself.
+For a transfer-bound operation the bound is fairly tight — 103.7 MB has
+to cross the bus whenever it is attributed — but the p95 in particular
+should not be read as a number the app would necessarily hit.
+
+**This is the weakest GPU in the matrix.** An Intel UHD 770 on shared
+memory is the floor, not the median; a discrete GPU or Apple silicon
+should do considerably better.
+
+**What it makes decisive: the Quest.** It has the tightest budget
+(72–90 Hz, where the mean already fails), the narrowest memory bus, and
+`MAX_TEXTURE_SIZE` exactly equal to the frame width. It is also the
+device where the extra resolution would matter most. If the upload cost
+there is anything like this row's, the rung is not viable in VR at
+7200×3600 regardless of the decode result — and that, not decoding,
+becomes the reason to stop.
+
 **A different browser does not help on iOS, and that much is
 structural.** Chrome, Firefox and Edge on iOS are all WKWebView, since
 App Store policy requires it and no major browser has shipped an
