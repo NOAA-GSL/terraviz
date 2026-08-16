@@ -1,32 +1,45 @@
 # Higher-resolution data-encoded video: the 8192×4096 rung
 
-**Status: draft for review.** The encode half is measured; the decode
-half has five conclusive devices and one inconclusive, and the results
-split by browser *and* by platform with no clean rule joining them.
+**Status: Phase 0 and Phase 0b closed. Phase 2 superseded.** Seven
+browser/platform pairs have run the 8192×4096 rung in both codecs.
 Nothing in Phases 1–3 is built. The Phase 0 *instrument* is built and
 its 8K bundle is staged in `public/luma-check/`.
 
-**The matrix so far: four accepts, two refusals, no stall — and the
-same OS lands on both sides.** Windows Chrome, macOS Safari, a Quest 3
-and Windows Firefox all decode the 8192×4096 rung at true native
-resolution. macOS Chrome refuses it on the same machine Safari accepts
-it on, and iOS Safari refuses it. Firefox's earlier stall did not
-reproduce and its row is now an accept; the cause was never attributed.
-Neither "Apple platforms can't" nor "Chrome can" survives contact with
-the full set. Two attempts at a generalisation were written into this
-document and each was falsified by the next device to report — the
-per-row records stand, the rules drawn from them did not, and the
-lesson is to record the (platform, browser) pair and wait for the
-matrix rather than extract a rule from half of it.
+**HEVC decodes the rung everywhere tested: seven of seven, no
+refusals.** Windows Chrome, Windows Firefox, macOS Chrome, macOS
+Safari, macOS Firefox, iOS Safari and a Quest 3 all decode
+`I_ceiling_8k_hevc` at true native resolution, hand it to WebGL intact,
+and round-trip values identically on the path the app uses — 220/256
+exact, MAE 0.141, max |e| 1, across x86, Apple silicon and mobile ARM.
 
-**What the accepts have changed:** they now span x86 desktop, Apple
-silicon and a mobile ARM headset, so the rung is decodable rather than
-merely survivable by workstations, and the doubt hanging over the
-desktop rows is no longer about whether the frame can be decoded at
-all. **What they have not changed:** the gate still sits on its middle
-branch, because iOS Safari cannot decode it and is not a population
-this project can serve a broken globe to. Phase 1 alone is not enough;
-Phase 2 is load-bearing rather than optional.
+**In H.264, only iOS Safari refuses**, and that is the sole negative
+result in this document that has ever reproduced. The other two —
+Windows Firefox stalling, macOS Chrome refusing — each came from a
+single run and each was contradicted three days later, macOS Chrome on
+the very same M2 Ultra. **Accepts have held on every re-test; refusals
+have not.** A one-run refusal against a self-updating browser is the
+weakest row a matrix can carry, and this plan leaned on two of them.
+
+**So Phase 2 is superseded rather than merely unnecessary.** It existed
+to serve a population that could not decode the rung, and iOS Safari
+was that population. HEVC clears iOS at the full frame size, so there
+is no capability fallback left to build. Phase 1 is the whole of the
+remaining work, and it should target an **HEVC** rung rather than the
+H.264 one it was written for. §HEVC over HLS is not a codec swap is the
+scoping that follows from that, and it is where the real cost now sits.
+
+**One hard ceiling did emerge, and it is not about decoding.**
+`MAX_TEXTURE_SIZE` is exactly 8192 on both the Quest and macOS Firefox
+— two independent device families sitting at precisely the frame width.
+Both upload fine at 8192×4096. But a rung any wider loses both, and no
+decode capability recovers a texture that will not allocate. **8192 is
+the top of this road**, not a waypoint on it.
+
+**Three generalisations in this document were falsified by the next
+device to report** — including one written a single commit before the
+row that killed it. The per-row records stand; the rules drawn from
+them did not. Record the (platform, browser) pair, date it, and wait
+for the matrix.
 
 **Playback is now measured on a 7200×3600 stand-in, and it passes on
 the device that mattered most.** The clip is 25.9 MP against the rung's
@@ -42,17 +55,16 @@ in memory its unified-memory GPU can address, while a discrete card has
 to pull it across PCIe first. Desktop Chrome also keeps up, with an
 occasional p95 hitch at 60 Hz.
 
-So the remaining blockers are the two refusals, not performance: iOS
-Safari and macOS Chrome still cannot decode the rung at all. Mid-range
-Android is the only unmeasured row.
+Nothing now blocks the rung on capability. Mid-range Android is the
+only unmeasured row, and the remaining work is delivery — see §HEVC
+over HLS is not a codec swap — rather than decode.
 
 **Last reviewed: 2026-08-16.**
-**Revisit when:** mid-range Android reports, or macOS Chrome is run
-against the HEVC variant — the last platform that could still refuse
-it; an AV1 rung is measured, since H.264
-caps hardware decode at 4096 wide and that may matter more than the
-frame size; `DATA_ENCODED_RENDITIONS` changes; or the full 8192×4096
-rung is played rather than the 7200×3600 stand-in.
+**Revisit when:** mid-range Android reports; an AV1 rung is measured;
+`DATA_ENCODED_RENDITIONS` changes; the full 8192×4096 rung is *played*
+rather than the 7200×3600 stand-in; or any device reports a
+`MAX_TEXTURE_SIZE` below 8192, which would put the rung itself back in
+question.
 
 This is the implementation plan for the route
 [`DATA_ENCODED_VIDEO_PLAN.md`](DATA_ENCODED_VIDEO_PLAN.md) §Why the
@@ -1424,11 +1436,25 @@ demanded ~160 Mbps and is not representative. Before picking a number,
 encode one real 8K reflectivity or aerosol frame set and see what it
 actually wants.
 
-## Phase 2 — pinned two-rung ladder (only if Phase 0 says so)
+## Phase 2 — pinned two-rung ladder (superseded 2026-08-16)
 
-Build this only if a population that matters fails Phase 0. It is
-strictly more complexity than Phase 1 and buys nothing if 8K decodes
-everywhere.
+**Do not build this as a capability fallback. Phase 0b removed its
+reason to exist.** It was conditioned on a population that matters
+failing Phase 0, and iOS Safari was that population: it refuses the
+8192×4096 rung in H.264 and accepts it in HEVC, at the full frame size.
+Every other device accepts both. There is no capability gap left to
+bridge, so an HEVC Phase 1 is the whole of the work.
+
+The section is kept rather than deleted because **its mechanism is
+still wanted for a different reason**. §The ladder as a relative shape
+argues for a viewer-operated quality control — a bandwidth choice
+rather than a capability fallback — and that is the same pinning
+machinery described below, resolved by user choice instead of by
+feature detection. Read what follows as the design for that, and read
+"resolve capability once at load" as "resolve the viewer's choice once
+at load, capability being one input to it".
+
+The original framing follows, unedited.
 
 Publish 8192×4096 and 4096×2048, resolve capability once at load, then
 **pin** — `hls.currentLevel`, which locks a rung — rather than
@@ -1580,10 +1606,11 @@ answers it by default.
 - The Phase 0 matrix, recorded here as a table rather than a verdict,
   including the read-back-a-known-texel result per device.
 - `scripts/luma-range-check` extended with an 8192×4096 variant —
-  **done** (`H_ceiling_8k`), and **run on six real devices**: four
-  native decodes (Windows Chrome, macOS Safari, Quest 3, Windows
-  Firefox) and two refusals (iOS Safari, macOS Chrome). Firefox's
-  original stall did not reproduce on re-run. CI still cannot
+  **done** (`H_ceiling_8k`), plus an HEVC twin (`I_ceiling_8k_hevc`),
+  **run on seven browser/platform pairs**. HEVC: seven accepts, no
+  refusals. H.264: six accepts and one refusal (iOS Safari) — the
+  Firefox stall and the macOS Chrome refusal both failed to reproduce.
+  CI still cannot
   contribute a row — Playwright's Chromium ships no H.264 decoder at
   all — which is why `--serve` and the static bundle exist.
 - One real 8K dataset published and probed end to end: hover value,
