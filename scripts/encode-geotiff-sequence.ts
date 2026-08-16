@@ -278,13 +278,36 @@ function mapToLuma(
  */
 function requireTools(codec: string): void {
   const missing: string[] = []
+  const broken: string[] = []
   for (const [bin, probe] of [
     ['gdalinfo', '--version'],
     ['gdal_translate', '--version'],
     ['ffmpeg', '-version'],
   ] as const) {
     const r = spawnSync(bin, [probe], { encoding: 'utf8' })
-    if (r.error) missing.push(bin)
+    if (r.error) { missing.push(bin); continue }
+    // Found is not the same as runnable. A bundled GDAL invoked outside
+    // its own environment spawns cleanly and then dies loading its DLLs:
+    // no stdout, no stderr, and an exit status Windows reports as
+    // 0xC0000135. Counting that as present just moves the failure into
+    // the first real call, which is what this function exists to stop.
+    // Output on either stream counts, since a tool that prints its
+    // version to stderr is still a working tool.
+    const said = `${r.stdout ?? ''}${r.stderr ?? ''}`.trim()
+    if (r.status !== 0 || !said) {
+      broken.push(`${bin} (exit ${r.status ?? r.signal ?? 'unknown'})`)
+    }
+  }
+  if (broken.length && !missing.length) {
+    throw new Error(
+      `on PATH but not runnable: ${broken.join(', ')}\n`
+      + `  The binary was found and started, then exited without saying anything.\n`
+      + `  On Windows exit 3221225781 (0xC0000135) is a missing DLL, which is what\n`
+      + `  a bundled GDAL does when it runs outside the environment it belongs to —\n`
+      + `  putting one directory on PATH is not always enough to satisfy it.\n`
+      + `  Start ArcGIS Pro's "Python Command Prompt" (bin\\Python\\Scripts\\proenv.bat)\n`
+      + `  or the OSGeo4W Shell, which activate the whole environment, and run this\n`
+      + `  from there instead.`)
   }
   if (missing.length) {
     throw new Error(
