@@ -379,9 +379,31 @@ angular resolution would matter most. A decode that lands one frame
 after a seek says nothing about that. Play the 8K clip in the headset
 and watch it before this row counts as a capability.
 
-### Does it play? — first measurement
+### Does it play? — first measurement (superseded, wrong GPU)
 
-**Windows Chrome 150, Intel UHD 770, 7200×3600 at 25 Mbps, 2026-08-15.**
+**Retracted before it was acted on.** The numbers below were measured on
+an **Intel UHD 770**, on a machine that has an RTX 4090. The probe
+created its WebGL context without a `powerPreference`, so the browser
+handed it the integrated GPU — while MapLibre asks for
+`powerPreference: "high-performance"` and gets the discrete one. The row
+therefore measured upload bandwidth on a device the 2D globe never uses.
+
+The probe now requests `high-performance` to match MapLibre and prints
+what was granted alongside what was asked for. The reasoning below about
+*where* the constraint lies still holds — decode keeps up, the upload is
+what costs — but every absolute number is from the wrong hardware and
+must be re-measured.
+
+**One thing this did surface, and it is not a probe bug.** MapLibre asks
+for the discrete GPU; **Three.js does not** — its `WebGLRenderer` default
+is `powerPreference: 'default'`, and nothing under `src/` overrides it.
+So on a hybrid-graphics desktop the VR/AR globe and the Orbit character
+page may be rendering on integrated graphics while the 2D globe uses the
+discrete card. That deserves checking on its own account, independent of
+this plan: a PCVR session on an iGPU would be far more damaging than a
+slow texture upload. It does not affect the Quest, which has one GPU.
+
+**Windows Chrome 150, Intel UHD 770 (unintended), 7200×3600 at 25 Mbps, 2026-08-15.**
 
 ```
 realtime=0.975x  presented=1.8fps  frames=22 over 12.0s  loops=1

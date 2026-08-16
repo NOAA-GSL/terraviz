@@ -73,7 +73,17 @@ void main(){ o = vec4(texelFetch(t, ivec2(int(gl_FragCoord.x), 0), 0).rgb, 1.); 
 
 let gl, prog, tex
 function initGl() {
-  gl = document.getElementById('cgl').getContext('webgl2', { antialias: false })
+  // `powerPreference` matters more than it looks on a hybrid-graphics
+  // machine. MapLibre asks for 'high-performance', so the 2D globe gets
+  // the discrete GPU; a probe that asks for nothing gets whichever the
+  // browser prefers, which on a desktop with a 4090 was the Intel iGPU.
+  // The first playback row was measured that way and reported an upload
+  // cost from the wrong device entirely. Match the app, and print the
+  // renderer so the next reader can check rather than assume.
+  gl = document.getElementById('cgl').getContext('webgl2', {
+    antialias: false,
+    powerPreference: 'high-performance',
+  })
   if (!gl) return 'no webgl2'
   const mk = (type, src) => {
     const sh = gl.createShader(type)
@@ -279,6 +289,10 @@ function finish(rec, out) {
   } else {
     lines.push('size=' + rec.size + '  duration=' + (rec.duration || 0).toFixed(2) + 's'
       + '  maxTex=' + rec.maxTex + '  rVFC=' + (rec.rvfc ? 'yes' : 'NO'))
+    // Requested high-performance; the `gl:` line above says what was
+    // actually granted. On a hybrid machine those differ, and the
+    // difference invalidated a measurement once already.
+    lines.push('powerPreference=high-performance (check the gl: line for what was granted)')
     lines.push('rate=' + rec.rate + 'x  target=' + rec.targetFps.toFixed(2) + 'fps'
       + '  (catalog encodes at ' + SOURCE_FPS + 'fps; app floor is '
       + (SOURCE_FPS * MIN_PLAYBACK_RATE).toFixed(3) + 'fps)')
