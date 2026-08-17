@@ -32,6 +32,7 @@
  */
 
 import { t, type MessageKey } from '../../../i18n'
+import { detectVideoFrameRate } from './mp4-frame-rate'
 import { MAX_IMAGE_SEQUENCE_FRAMES as MAX_FRAMES } from '../../../types/image-sequence-constants'
 import {
   generateGlobeThumbnail,
@@ -220,8 +221,9 @@ export interface AssetUploaderOptions {
   /** Injected SHA-256 — tests pass a deterministic hash so
    *  fixture digests round-trip without computing. */
   hashFn?: (file: File) => Promise<string>
-  /** Injected frame-rate probe — tests supply a value rather than
-   *  decoding a real video, which jsdom cannot do. */
+  /** Injected frame-rate probe — tests supply a value directly rather
+   *  than building a synthetic MP4 for every uploader case. The probe
+   *  itself is covered in `mp4-frame-rate.test.ts`. */
   detectFpsFn?: (file: File) => Promise<number | null>
   /** Injected sleep used by the API helpers' retry loops. */
   sleep?: (ms: number) => Promise<void>
@@ -456,71 +458,6 @@ const HASH_CHUNK_BYTES = 8 * 1024 * 1024
 /** What the catalog encodes at, and what `tourEngine` divides by. */
 const EXPECTED_FPS = 30
 
-/**
- * Best-effort frame rate of a picked video, or null.
- *
- * There is no metadata API for this, so it is measured: play the file
- * muted and take the median gap between `requestVideoFrameCallback`
- * media times. Median rather than mean because the first gaps after a
- * play() are irregular while the decoder settles.
- *
- * Bounded and failure-tolerant on purpose — it exists to raise a
- * warning, so a browser without `rVFC`, a codec it will not decode, or
- * a file too slow to start simply yields null and the warning is
- * skipped. Never blocks the upload.
- */
-export async function detectVideoFps(
-  file: File,
-  timeoutMs = 4000,
-): Promise<number | null> {
-  const video = document.createElement('video')
-  if (typeof (video as any).requestVideoFrameCallback !== 'function') return null
-  const url = URL.createObjectURL(file)
-  try {
-    video.muted = true
-    video.playsInline = true
-    video.preload = 'auto'
-    // CodeQL reports `js/xss-through-dom` here and it is a false
-    // positive: `createObjectURL` mints a `blob:<origin>/<uuid>`
-    // string, the file's bytes and its name never reach it, and there
-    // is nothing a `javascript:` URL could come from. The flow lands
-    // because CodeQL models `createObjectURL` as propagating taint from
-    // its argument, and the argument is a DOM-sourced File.
-    //
-    // Not guarded, because a `startsWith('blob:')` check on a value the
-    // browser minted two lines earlier can never fail, and a branch
-    // written only to satisfy a scanner is worse than a sentence saying
-    // why the line is safe. An inline `codeql[...]` suppression was
-    // tried and does not work either — the CLI honours those, GitHub's
-    // code-scanning PR gate does not — so the alert is dismissed in the
-    // Security tab and this comment is the record of why.
-    video.src = url
-    const times: number[] = []
-    const done = new Promise<void>(resolve => {
-      const onFrame = (_now: number, meta: { mediaTime: number }) => {
-        times.push(meta.mediaTime)
-        if (times.length >= 12) { resolve(); return }
-        ;(video as any).requestVideoFrameCallback(onFrame)
-      }
-      ;(video as any).requestVideoFrameCallback(onFrame)
-    })
-    await video.play().catch(() => undefined)
-    await Promise.race([done, new Promise<void>(r => setTimeout(r, timeoutMs))])
-    video.pause()
-    const gaps = times.slice(1).map((t, i) => t - times[i]).filter(g => g > 0)
-    if (gaps.length < 3) return null
-    gaps.sort((a, b) => a - b)
-    const median = gaps[Math.floor(gaps.length / 2)]
-    return median > 0 ? 1 / median : null
-  } catch {
-    return null
-  } finally {
-    video.removeAttribute('src')
-    video.load()
-    URL.revokeObjectURL(url)
-  }
-}
-
 export async function hashFileSha256(file: File): Promise<string> {
   // Dynamic import keeps `@noble/hashes` out of the main SPA
   // bundle — only loaded when the publisher actually opens the
@@ -616,13 +553,13 @@ export function renderAssetUploader(options: AssetUploaderOptions): HTMLElement 
   let publishAsIs = true
 
   /**
-   * Frames per second read off the picked file, or null when it could
-   * not be determined. The transcode normally forces 30 fps, which
-   * `tourEngine` assumes when it computes `requestedFps / 30`;
-   * publishing as-is means nothing normalises it, so a 25 fps file
-   * would play every tour at the wrong speed. Warned about rather than
-   * refused — it is the publisher's file and a non-tour dataset does
-   * not care.
+   * Frames per second read out of the picked file's MP4 container, or
+   * null when it could not be determined. The transcode normally forces
+   * 30 fps, which `tourEngine` assumes when it computes
+   * `requestedFps / 30`; publishing as-is means nothing normalises it,
+   * so a 25 fps file would play every tour at the wrong speed. Warned
+   * about rather than refused — it is the publisher's file and a
+   * non-tour dataset does not care.
    */
   let pickedFps: number | null = null
   const tabsEnabled = kind === 'data' && options.format === 'video/mp4'
@@ -823,12 +760,12 @@ export function renderAssetUploader(options: AssetUploaderOptions): HTMLElement 
     input.addEventListener('change', () => {
       const file = input.files?.[0]
       if (!file) return
-      // Measure the frame rate alongside the upload rather than before
-      // it. The warning is advisory and the upload is the slow part,
-      // so gating one on the other would cost seconds to tell the
-      // publisher something they can act on afterwards either way.
+      // Read the frame rate alongside the upload rather than before it.
+      // The container read is fast — a few small slices, no decode —
+      // but the warning is advisory either way, and the publisher can
+      // act on it after the bytes have landed as easily as before.
       if (publishAsIsApplies()) {
-        void (options.detectFpsFn ?? detectVideoFps)(file).then(fps => {
+        void (options.detectFpsFn ?? detectVideoFrameRate)(file).then(fps => {
           pickedFps = fps
           paint()
         })
