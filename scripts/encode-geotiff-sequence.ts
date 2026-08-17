@@ -508,6 +508,16 @@ function main(): void {
     '-maxrate', `${args.maxBitrateKbps}k`,
     '-bufsize', `${args.maxBitrateKbps * 2}k`,
     '-an',
+    // Move `moov` to the front. ffmpeg writes it last in a single-pass
+    // encode, because it cannot know the sample table until every frame
+    // is written — which is fine for a local file and wrong for one
+    // served over HTTP. A progressive player cannot parse a thing until
+    // it has the movie header, so with `moov` at the tail it must
+    // range-request the end of the file before it can begin, and on a
+    // phone those extra round trips are the difference between playing
+    // and timing out. HLS hid this by segmenting; publishing a file as
+    // uploaded does not.
+    '-movflags', '+faststart',
     args.out,
   ], { stdio: ['pipe', 'inherit', 'inherit'] })
 
