@@ -2,6 +2,7 @@ import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { renderDatasetForm } from './dataset-form'
 import { renderDatasetEditPage } from '../pages/dataset-edit'
 import type { PublisherDatasetDetail } from '../types'
+import { until } from '../../../test-utils'
 
 const EDIT_ID = '01EDIT0000000000000000000'
 
@@ -269,5 +270,48 @@ describe('dataset form — data-encoded controls', () => {
     expect(typeof body).toBe('string')
     expect(body as string).not.toContain('render_encoding')
     expect(body as string).not.toContain('color_scale')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The uploader wiring
+// ---------------------------------------------------------------------------
+
+describe('dataset form — publish-as-uploaded wiring', () => {
+  /**
+   * Regression: the flag was first passed to the *auxiliary* uploader
+   * factory (thumbnail / legend) rather than to the primary data
+   * uploader, so the control never rendered where it matters. The
+   * component's own tests passed throughout, because they call
+   * `renderAssetUploader` directly — only a test that goes through the
+   * form catches a mis-wired call site.
+   */
+  it('offers publish-as-uploaded on the data uploader of a saved data-encoded row', async () => {
+    const { root } = await mountEdit(
+      savedRow({
+        format: 'video/mp4',
+        render_encoding: 'data-luma',
+        color_scale: VALID_SCALE,
+      } as Partial<PublisherDatasetDetail>),
+    )
+    openMedia(root)
+    await until(
+      () => root.querySelector('.publisher-asset-uploader-asis') !== null,
+      'the publish-as-uploaded control to mount',
+    )
+    const box = root.querySelector<HTMLInputElement>('.publisher-asset-uploader-asis input')
+    // Defaulted on: for these rows the transcode decimates to the
+    // single 4096x2048 rung and re-encodes the values themselves.
+    expect(box?.checked).toBe(true)
+  })
+
+  it('does not offer it on a row that is not data-encoded', async () => {
+    const { root } = await mountEdit(savedRow({ format: 'video/mp4' }))
+    openMedia(root)
+    await until(
+      () => root.querySelector('.publisher-asset-uploader-input-row') !== null,
+      'the uploader to mount',
+    )
+    expect(root.querySelector('.publisher-asset-uploader-asis')).toBeNull()
   })
 })

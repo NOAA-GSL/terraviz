@@ -127,6 +127,13 @@ interface Variant {
   height: number
   /** Set to add the isolated-spike region — see `writeFrames`. */
   spikeStep?: number
+  /** Replaces `LADDER`'s codec args. Appending `-c:v` to `extra` would
+   *  also work, since ffmpeg takes the last occurrence — but a variant
+   *  that silently encoded H.264 while labelled HEVC would manufacture a
+   *  refusal on the platform this exists to interrogate, which is the
+   *  worst result a probe can produce. Naming it here lets `encodeAll`
+   *  verify the stream it actually got. */
+  codec?: string[]
 }
 
 const VARIANTS: ReadonlyArray<Variant> = [
@@ -203,6 +210,28 @@ const VARIANTS: ReadonlyArray<Variant> = [
     name: 'H_ceiling_8k', vf: 'scale={W}:{H}:flags=neighbor',
     extra: [],
     note: 'Phase 0 — 8192x4096 at the shipped data-encoded settings',
+    width: CEIL_W, height: CEIL_H, spikeStep: 64,
+  },
+  // Phase 0b of `docs/DATA_ENCODED_RESOLUTION_PLAN.md`. H's twin with one
+  // variable changed, so a difference between the two rows is the codec
+  // and nothing else.
+  //
+  // Two devices converged on this exact question. iOS Safari refuses H at
+  // 8192x4096 H.264 and accepts 7200x3600 HEVC — codec and resolution both
+  // moved, so what it does at 8192 wide in HEVC is unknown, and Phase 2
+  // exists or does not exist depending on the answer. The Quest decodes
+  // 7200x3600 HEVC comfortably but has `MAX_TEXTURE_SIZE` of exactly 8192,
+  // so this row asks it two things at once: whether the decoder takes the
+  // frame, and whether a texture at precisely the limit allocates.
+  //
+  // `-tag:v hvc1` for the same reason `encode-geotiff-sequence` sets it:
+  // ffmpeg's default `hev1` sample entry is refused by Safari and
+  // QuickTime, which would fabricate exactly the refusal being tested.
+  {
+    name: 'I_ceiling_8k_hevc', vf: 'scale={W}:{H}:flags=neighbor',
+    codec: ['-c:v', 'libx265', '-profile:v', 'main', '-tag:v', 'hvc1'],
+    extra: [],
+    note: 'Phase 0b — H with HEVC instead of H.264, the only variable',
     width: CEIL_W, height: CEIL_H, spikeStep: 64,
   },
 ]
@@ -296,9 +325,62 @@ function ffmpegBin(): string {
   return process.env.FFMPEG_BIN ?? 'ffmpeg'
 }
 
-/** Ladder settings copied from `buildFfmpegArgs` in `cli/lib/ffmpeg-hls.ts`. */
-const LADDER = ['-c:v', 'libx264', '-profile:v', 'main', '-pix_fmt', 'yuv420p',
-                '-preset', 'slow', '-crf', '18', '-an']
+function ffprobeBin(): string {
+  return process.env.FFPROBE_BIN ?? 'ffprobe'
+}
+
+/**
+ * Check the external binaries before generating a single frame.
+ *
+ * `ffprobe` is only needed by variants that name a codec, and it is
+ * invoked *after* that variant encodes — which on `I_ceiling_8k_hevc`
+ * means after an 8192x4096 x265 encode and every variant before it. A
+ * missing ffprobe would therefore discard minutes of work and a rerun
+ * would redo all of it. This is the same failure `requireTools` exists
+ * to prevent in `scripts/encode-geotiff-sequence.ts`, reintroduced here
+ * by the commit that added the codec check; found in review.
+ */
+function requireProbeTools(): void {
+  const needed: string[] = [ffmpegBin()]
+  if (VARIANTS.some(v => v.codec)) needed.push(ffprobeBin())
+  const missing = needed.filter(bin => {
+    const r = spawnSync(bin, ['-version'], { encoding: 'utf8' })
+    return Boolean(r.error) || r.status !== 0
+  })
+  if (missing.length) {
+    throw new Error(
+      `not on PATH, or present but not runnable: ${missing.join(', ')}\n`
+      + `  ffprobe is required because a variant names its own codec, and the\n`
+      + `  encode is verified against the stream it actually produced. Override\n`
+      + `  the binary names with FFMPEG_BIN / FFPROBE_BIN if they differ here.`)
+  }
+}
+
+/** Ladder settings copied from `buildFfmpegArgs` in `cli/lib/ffmpeg-hls.ts`,
+ *  split so a variant can replace the codec without disturbing anything
+ *  else about the encode. */
+const LADDER_CODEC = ['-c:v', 'libx264', '-profile:v', 'main']
+const LADDER_REST = ['-pix_fmt', 'yuv420p', '-preset', 'slow', '-crf', '18', '-an']
+
+/** ffmpeg's encoder name -> the codec name ffprobe reports for it. Used
+ *  to check that the file on disk is the codec the variant asked for. */
+const ENCODER_STREAM_NAME: Record<string, string> = {
+  libx264: 'h264',
+  libx265: 'hevc',
+}
+
+/** Read back the encoded stream's codec. A variant naming a codec is
+ *  making a claim about the file, and an unverified claim about a probe
+ *  input is how a false negative gets recorded as a device limitation. */
+function encodedCodec(file: string): string | undefined {
+  const r = spawnSync(
+    ffprobeBin(),
+    ['-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=codec_name',
+     '-of', 'default=nw=1:nk=1', file],
+    { encoding: 'utf8' })
+  if (r.error || r.status !== 0) return undefined
+  return (r.stdout ?? '').trim() || undefined
+}
 
 /** One frame set per distinct geometry, not per variant — the seven
  *  colour-range variants all share the same 4096x256 frames, and
@@ -326,15 +408,51 @@ function encodeAll(): void {
     if (v.vf) {
       args.push('-vf', v.vf.replaceAll('{W}', String(g.width)).replaceAll('{H}', String(g.height)))
     }
-    args.push(...LADDER, ...v.extra, join(OUT, `${v.name}.mp4`))
+    const codecArgs = v.codec ?? LADDER_CODEC
+    args.push(...codecArgs, ...LADDER_REST, ...v.extra, join(OUT, `${v.name}.mp4`))
     const r = spawnSync(ffmpegBin(), args, { encoding: 'utf8' })
     if (r.status !== 0) {
       throw new Error(`ffmpeg failed for ${v.name}:\n${r.stderr?.slice(-2000) ?? r.error}`)
     }
+    // Only checked when the variant named a codec, so the seven original
+    // rows never acquire an ffprobe dependency they did not have.
+    let codecNote = ''
+    if (v.codec) {
+      const encoder = codecArgs[codecArgs.indexOf('-c:v') + 1] ?? ''
+      // `hasOwn` for the same reason `parseArgs` uses it in
+      // `encode-geotiff-sequence.ts`: a plain lookup inherits
+      // `Object.prototype`, so an encoder named `toString` would
+      // resolve to a truthy function, clear the guard below, and then
+      // fail the comparison with a message about codecs.
+      const want = Object.hasOwn(ENCODER_STREAM_NAME, encoder)
+        ? ENCODER_STREAM_NAME[encoder]
+        : undefined
+      if (!want) {
+        throw new Error(
+          `${v.name} names encoder "${encoder}", which is not in ENCODER_STREAM_NAME.\n` +
+          `  Add it there rather than skipping the check — an unverified codec is the\n` +
+          `  one thing this field exists to prevent.`)
+      }
+      const got = encodedCodec(join(OUT, `${v.name}.mp4`))
+      if (got === undefined) {
+        throw new Error(
+          `${v.name} asked for a specific codec but ffprobe could not read the result.\n` +
+          `  This variant's whole purpose is the codec, so an unverified file is not usable.\n` +
+          `  Set FFPROBE_BIN if ffprobe is installed under another name.`)
+      }
+      if (got !== want) {
+        throw new Error(
+          `${v.name} encoded as ${got}, not ${want}.\n` +
+          `  A probe input mislabelled by codec would record a device limitation that\n` +
+          `  is really an encoder one. Check that this ffmpeg has the encoder:\n` +
+          `    ffmpeg -hide_banner -encoders | grep ${encoder}`)
+      }
+      codecNote = `${got}  `
+    }
     const kib = statSync(join(OUT, `${v.name}.mp4`)).size / 1024
     process.stdout.write(
-      `  encoded ${v.name.padEnd(16)}${`${g.width}x${g.height}`.padEnd(11)}` +
-      `${kib.toFixed(0).padStart(6)} KiB  ${v.note}\n`)
+      `  encoded ${v.name.padEnd(18)}${`${g.width}x${g.height}`.padEnd(11)}` +
+      `${kib.toFixed(0).padStart(6)} KiB  ${codecNote}${v.note}\n`)
   }
 }
 
@@ -490,6 +608,8 @@ async function main(): Promise<void> {
   const emitStaticTo = process.argv.includes('--emit-static')
     ? join(HERE, '..', '..', 'public', 'luma-check')
     : null
+
+  requireProbeTools()
 
   process.stdout.write('Generating ramp frames…\n')
   writeAllFrames()

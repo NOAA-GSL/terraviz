@@ -1,31 +1,49 @@
 # Higher-resolution data-encoded video: the 8192×4096 rung
 
-**Status: draft for review.** The encode half is measured; the decode
-half has five conclusive devices and one inconclusive, and the results
-split by browser *and* by platform with no clean rule joining them.
-Nothing in Phases 1–3 is built. The Phase 0 *instrument* is built and
-its 8K bundle is staged in `public/luma-check/`.
+**Status: Phase 0 and Phase 0b closed. Phase 2 superseded.** Seven
+browser/platform pairs have run the 8192×4096 rung in both codecs.
+Nothing in Phases 1–3 is built. The Phase 0 *instrument* is built;
+`public/luma-check/` carries the static bundle through `H_ceiling_8k`,
+but **not `I_ceiling_8k_hevc`** — every HEVC row was collected against
+`--serve`, which builds its manifest live. One `--emit-static` run on a
+machine with libx265 stages the HEVC variant for later re-runs; until
+then the deployed copy offers the H.264 rung only.
 
-**The matrix so far: three accepts, two refusals, one stall — and the
-same OS lands on both sides.** Windows Chrome, macOS Safari and a
-Quest 3 all decode the 8192×4096 rung at true native resolution. macOS
-Chrome refuses it on the same machine Safari accepts it on, iOS Safari
-refuses it, and Windows Firefox stalls without returning anything.
-Neither "Apple platforms can't" nor "Chrome can" survives contact with
-the full set. Two attempts at a generalisation were written into this
-document and each was falsified by the next device to report — the
-per-row records stand, the rules drawn from them did not, and the
-lesson is to record the (platform, browser) pair and wait for the
-matrix rather than extract a rule from half of it.
+**HEVC decodes the rung everywhere tested: seven of seven, no
+refusals.** Windows Chrome, Windows Firefox, macOS Chrome, macOS
+Safari, macOS Firefox, iOS Safari and a Quest 3 all decode
+`I_ceiling_8k_hevc` at true native resolution, hand it to WebGL intact,
+and round-trip values identically on the path the app uses — 220/256
+exact, MAE 0.141, max |e| 1, across x86, Apple silicon and mobile ARM.
 
-**What the accepts have changed:** they now span x86 desktop, Apple
-silicon and a mobile ARM headset, so the rung is decodable rather than
-merely survivable by workstations, and the doubt hanging over the
-desktop rows is no longer about whether the frame can be decoded at
-all. **What they have not changed:** the gate still sits on its middle
-branch, because iOS Safari cannot decode it and is not a population
-this project can serve a broken globe to. Phase 1 alone is not enough;
-Phase 2 is load-bearing rather than optional.
+**In H.264, only iOS Safari refuses**, and that is the sole negative
+result in this document that has ever reproduced. The other two —
+Windows Firefox stalling, macOS Chrome refusing — each came from a
+single run and each was contradicted three days later, macOS Chrome on
+the very same M2 Ultra. **Accepts have held on every re-test; refusals
+have not.** A one-run refusal against a self-updating browser is the
+weakest row a matrix can carry, and this plan leaned on two of them.
+
+**So Phase 2 is superseded rather than merely unnecessary.** It existed
+to serve a population that could not decode the rung, and iOS Safari
+was that population. HEVC clears iOS at the full frame size, so there
+is no capability fallback left to build. Phase 1 is the whole of the
+remaining work, and it should target an **HEVC** rung rather than the
+H.264 one it was written for. §HEVC over HLS is not a codec swap is the
+scoping that follows from that, and it is where the real cost now sits.
+
+**One hard ceiling did emerge, and it is not about decoding.**
+`MAX_TEXTURE_SIZE` is exactly 8192 on both the Quest and macOS Firefox
+— two independent device families sitting at precisely the frame width.
+Both upload fine at 8192×4096. But a rung any wider loses both, and no
+decode capability recovers a texture that will not allocate. **8192 is
+the top of this road**, not a waypoint on it.
+
+**Three generalisations in this document were falsified by the next
+device to report** — including one written a single commit before the
+row that killed it. The per-row records stand; the rules drawn from
+them did not. Record the (platform, browser) pair, date it, and wait
+for the matrix.
 
 **Playback is now measured on a 7200×3600 stand-in, and it passes on
 the device that mattered most.** The clip is 25.9 MP against the rung's
@@ -41,16 +59,16 @@ in memory its unified-memory GPU can address, while a discrete card has
 to pull it across PCIe first. Desktop Chrome also keeps up, with an
 occasional p95 hitch at 60 Hz.
 
-So the remaining blockers are the two refusals, not performance: iOS
-Safari and macOS Chrome still cannot decode the rung at all. Mid-range
-Android is the only unmeasured row.
+Nothing now blocks the rung on capability. Mid-range Android is the
+only unmeasured row, and the remaining work is delivery — see §HEVC
+over HLS is not a codec swap — rather than decode.
 
 **Last reviewed: 2026-08-16.**
-**Revisit when:** mid-range Android reports, or Firefox is re-run
-against the fixed harness; an HEVC/AV1 rung is measured, since H.264
-caps hardware decode at 4096 wide and that may matter more than the
-frame size; `DATA_ENCODED_RENDITIONS` changes; or the full 8192×4096
-rung is played rather than the 7200×3600 stand-in.
+**Revisit when:** mid-range Android reports; an AV1 rung is measured;
+`DATA_ENCODED_RENDITIONS` changes; the full 8192×4096 rung is *played*
+rather than the 7200×3600 stand-in; or any device reports a
+`MAX_TEXTURE_SIZE` below 8192, which would put the rung itself back in
+question.
 
 This is the implementation plan for the route
 [`DATA_ENCODED_VIDEO_PLAN.md`](DATA_ENCODED_VIDEO_PLAN.md) §Why the
@@ -212,13 +230,14 @@ break CI.
 
 | device / browser | decodes | readyState | decoded size | MAX_TEXTURE_SIZE | texImage2D | native | notes |
 |---|---|---|---|---|---|---|---|
-| desktop Chrome 150 (Win 11, Intel UHD 770, ANGLE/D3D11) | **yes** | 4 | 8192×4096 | 16384 | ok | **yes** — spike 252.0 | Values round-trip at 8K exactly as at 4K. Decode path unconfirmed; see below |
-| desktop Chrome 151 (macOS, M2 Ultra, ANGLE Metal) | **no** | — | — | 16384 | — | — | `MediaError` 4, and no software fallback — while Safari on the same OS accepts |
-| desktop Firefox (Win 11) | *stalls* | — | — | — | — | — | Ran 2026-08-13, never returned. Stalling variant unattributed — see below |
-| desktop Safari 26.5.2 (macOS, Apple GPU) | **yes** | 4 | 8192×4096 | 16384 | ok | **yes** — spike 252.0 | Decodes what Chrome on the same OS refuses. Decode path unconfirmed |
-| iOS Safari 26.6 (iOS 18.7, Apple GPU) | **no** | — | — | 16384 | — | — | `MediaError` code 4 at `loadeddata`; refused before playback. A–G at 4096×256 all decode and upload on the same device |
+| desktop Chrome 150 (Win 11, Intel UHD 770, ANGLE/D3D11) | **yes** | 4 | 8192×4096 | 16384 | ok | **yes** — spike 252.0 | Values round-trip at 8K exactly as at 4K. Decode path unconfirmed; see below. **Also accepts the 8K HEVC variant, spike 253** — see §The 8K HEVC variant has a positive control |
+| desktop Chrome 151 (macOS, M2 Ultra, ANGLE Metal) | ~~no~~ → **yes** | 4 | 8192×4096 | 16384 | ok | **yes** — spike 252 | `MediaError` 4 with no software fallback on 2026-08-13; **the same machine** decoded it and passed every path on 2026-08-16. Refusal retired — the browser changed, not the hardware. **Also accepts the 8K HEVC variant, spike 253** — see §macOS Chrome accepts both |
+| desktop Firefox (Win 11) | **yes** | 4 | 8192×4096 | 16384 | ok | **yes** — spike 251.0 | Stalled 2026-08-13, did **not** reproduce 2026-08-16 — all paths pass. Cause never attributed; see below. **Also accepts the 8K HEVC variant, spike 253**, with a codec-specific 2D-canvas defect — see §Firefox takes both codecs |
+| desktop Firefox (macOS) | **yes** | 4 | 8192×4096 | **8192** | ok | **yes** — spike 251 | Passes every path on **both** codecs, so the Windows HEVC 2D defect is platform-specific. Texture limit equals the frame width, as on the Quest — see §macOS Firefox, which narrows two claims |
+| desktop Safari 26.5.2 (macOS, Apple GPU) | **yes** | 4 | 8192×4096 | 16384 | ok | **yes** — spike 252.0 | Decodes what Chrome on the same OS refuses. Decode path unconfirmed. **Also accepts the 8K HEVC variant, spike 253**, and fails the 2D readout identically on *both* codecs — see §Safari's 2D defect is the engine, not the codec |
+| iOS Safari 26.6 (iOS 18.7, Apple GPU) | **no** — H.264; **yes** — HEVC | 4 (HEVC) | 8192×4096 (HEVC) | 16384 | ok (HEVC) | **yes** — spike 253 (HEVC) | H.264 gives `MediaError` code 4 at `loadeddata`, refused before playback, re-confirmed 2026-08-16. **The same device decodes the same frame size in HEVC** — see §iOS Safari accepts the full rung in HEVC |
 | mid-range Android | | | | | | | |
-| Quest 3 (OculusBrowser 149, Adreno 740) | **yes** | 4 | 8192×4096 | **8192** | ok | **yes** — spike 251.0 | Texture limit *equals* the frame width: fits with zero headroom |
+| Quest 3 (OculusBrowser 149, Adreno 740) | **yes** | 4 | 8192×4096 | **8192** | ok | **yes** — spike 251.0 | Texture limit *equals* the frame width: fits with zero headroom, confirmed uploading in both codecs. **Also accepts the 8K HEVC variant, spike 253** — see §The Quest allocates a texture at exactly its own limit |
 
 **Row 1 — iOS Safari, 2026-08-13.** The rung is refused outright:
 `MEDIA_ERR_SRC_NOT_SUPPORTED` fires on load, so `readyState`, decoded
@@ -318,6 +337,30 @@ because there is no event to trigger on. If Firefox turns out to
 behave this way on the 8K rung, Phase 2 needs a timeout of its own
 rather than an `error` handler.
 
+**The re-run happened on 2026-08-16, and that guess was wrong.**
+`H_ceiling_8k` is exactly what Firefox handles cleanest: it decodes at
+native 8192×4096, uploads, and passes all three value paths at 220/256
+with MAE 0.141 — the same numbers every other accepting device
+reports. The stall did not reproduce at all, on either variant.
+
+**The cause is unattributed and now probably unattributable.** Three
+things changed between the runs: the probe's waits were bounded, its
+table began repainting per variant, and three days passed on a browser
+that updates itself. The stall is also consistent with a backgrounded
+tab against the *unbounded* waits of the original harness, since
+Firefox throttles background tabs hard and a media element that never
+fires an event would then hang forever — but nothing in the record
+distinguishes that from a transient or from a since-fixed Firefox bug.
+Recording it as resolved-cause-unknown, because a stall that cannot be
+reproduced should not keep a row open, and inventing an explanation for
+it would be worse than admitting there isn't one.
+
+**What survives from this row is the design note, and it still
+applies.** A decoder that stalls rather than declines is harder for a
+Phase 2 fallback to detect than one that errors, because there is no
+event to trigger on. That was true when written and remains true; it
+simply no longer has a device demonstrating it.
+
 **Row 4 — macOS Chrome.** Chrome 151 on an M2 Ultra refuses the rung
 with the same `MediaError` 4 as iOS Safari, and does not attempt a
 software fallback despite considerably more CPU headroom than the
@@ -336,6 +379,16 @@ device passes them; see
 [`DATA_ENCODED_VIDEO_PLAN.md`](DATA_ENCODED_VIDEO_PLAN.md) §Encoder,
 where this row alone costs the full-range recommendation its
 universality.
+
+**Re-run 2026-08-16: the refusal did not reproduce.** macOS Chrome
+decoded `H_ceiling_8k` at native 8192×4096, `readyState` 4, clean
+`texImage2D`, spike 252 — and passed every value path including the 2D
+readout. See §macOS Chrome accepts both, and the H.264 refusal did not
+reproduce. **Confirmed same machine**, the same M2 Ultra, three days
+apart. So this is not a configuration difference between two Macs: the
+browser changed underneath the measurement. The refusal is retired
+rather than narrowed, and the row above stands only as a record of what
+Chrome did on 2026-08-13.
 
 **Row 5 — macOS Safari, which breaks the pattern.** Safari 26.5.2
 decodes the rung: `readyState` 4, decoded size 8192×4096, clean
@@ -656,9 +709,716 @@ enough and Phase 2 is never built. If a population that matters cannot
 decode it, Phase 1 plus Phase 2. If almost nothing decodes it, stop —
 and record the result here so the question is not reopened from scratch.
 
-## Phase 1 — the 8192×4096 rung
+## Phase 0b — is H.264 even the right codec? (before Phase 1)
+
+**Cheap, and it may delete Phase 2.** Everything measured so far assumed
+H.264, because that is what `DATA_ENCODED_RENDITIONS` emits. That
+assumption now looks like the binding constraint rather than a detail.
+
+**The evidence that it matters.** H.264 hardware decode is capped at
+**4096×4096** on essentially all consumer silicon — Intel Quick Sync,
+NVIDIA NVDEC, Apple VideoToolbox. The 8K decode those parts advertise is
+for HEVC and AV1. Two measurements are consistent with a 7200-wide H.264
+stream being software-decoded everywhere:
+
+- The per-frame upload cost was **the same on an RTX 4090 as on an Intel
+  iGPU** (9.89 ms vs 11.47 ms) — a 1.16× difference from a card with
+  roughly fifty times the memory bandwidth. That is what a
+  software-decoded frame crossing PCIe looks like, not a GPU-bound
+  operation.
+- The Quest, with unified memory, was **twice as fast as the 4090**. The
+  ordering only makes sense if the cost is getting a CPU-side frame to
+  the GPU rather than anything the GPU does with it.
+
+**What an HEVC rung could change.** If the frame is hardware-decoded it
+stays in GPU memory, and the upload becomes a GPU-side copy rather than
+a bus transfer — which would remove the desktop p95 hitch entirely. But
+the bigger prize is on Apple: **iOS Safari refuses the H.264 rung and
+decodes HEVC natively.** If it accepts an HEVC rung, the refusal that
+puts the gate on its middle branch disappears, and **Phase 2 may not
+need to be built at all.** That is a change to what gets built, not a
+performance tweak, which is why this belongs before Phase 1 rather than
+after.
+
+**The measurement.** `scripts/encode-geotiff-sequence.ts --codec hevc`
+re-encodes the same GeoTIFFs at the same resolution and the same bitrate
+ceiling; every other encoder argument is unchanged, so the codec is the
+only variable. Then run the *unchanged* probes:
+
+```bash
+npx tsx scripts/encode-geotiff-sequence.ts \
+  --in <tifs> --out scripts/luma-range-check/out/real_7200_hevc.mp4 \
+  --codec hevc --vmin -35 --vmax 78.025 --units dBZ
+npx tsx scripts/luma-range-check --serve
+#   …/play.html?clip=/out/real_7200_hevc.mp4
+```
+
+Record the same row per device: decodes, decoded size, `texImage2D`,
+realtime ratio, upload mean/p95. The comparison that matters is against
+the H.264 row for the same clip on the same device.
+
+**Two encoder details that are not incidental.** `-tag:v hvc1` is set
+rather than ffmpeg's default `hev1`: Safari and QuickTime will not play
+the latter, so omitting it would manufacture a refusal on the one
+platform this test exists to interrogate. And range signalling stays at
+the ffmpeg level (`-color_range pc`) for both codecs, matching the "tag
+the range and nothing else" form §Encoder measured as surviving
+everywhere — adding codec-private colour parameters would confound the
+comparison with a second variable.
+
+**What could go wrong, stated up front.** HEVC browser support is
+patchier than H.264, not better: Chrome requires hardware support and
+the right build, Firefox largely lacks it, and MSE/HLS delivery adds a
+compatibility layer beyond progressive MP4. So this could trade one set
+of refusals for a different set — a Firefox that currently stalls might
+refuse outright, and a mid-range Android might lose a decode it has
+today. **A negative result is as useful as a positive one**: it closes
+the codec question and Phase 1 proceeds as designed, with H.264
+confirmed as the right container rather than merely the incumbent one.
+
+**Encoding cost is worth watching too.** x265 at `-preset slow` on
+25-megapixel frames is markedly slower than x264. If HEVC wins on the
+decode side, the transcode budget in Phase 1 needs revisiting with real
+numbers rather than the H.264 ones. Measured on a laptop CPU: **0.22
+fps** at the 25 Mbps ceiling (92.65 s for 20 frames), **0.15 fps** at 77
+Mbps (134.19 s).
+
+**The four probe clips, encoder side.** All 20 frames of 7200×3600,
+0.667 s, from the same GeoTIFFs.
+
+| clip | MiB | delivered | × ceiling |
+|---|---|---|---|
+| H.264, 25 Mbps ceiling | 4.31 | 54.2 Mbps | 2.17 |
+| HEVC, 25 Mbps ceiling | 3.30 | 41.5 Mbps | 1.66 |
+| HEVC, 77 Mbps ceiling | 10.37 | 130.5 Mbps | 1.69 |
+| H.264, 100 Mbps ceiling | 17.31 | 217.8 Mbps | 2.18 |
+
+**The overshoot is a stable property of the codec, not noise** — 2.17×
+and 2.18× for x264, 1.66× and 1.69× for x265, across a 3–4× change in
+ceiling. Both sit well under the 3.70× the VBV window actually permits
+over a clip this short, so neither is hitting the cumulative wall.
+
+**But the ceiling still binds at 77 Mbps, which sets a Phase 1 number.**
+Raising it 3.08× raised HEVC's delivered rate 3.14× — near-exact
+proportionality, which only happens if VBV is still governing per frame.
+CRF 18 is therefore *still* unsatisfied at 77 Mbps, so a genuinely
+fidelity-grade 7200×3600 rung costs **north of 130 Mbps**. The 77 Mbps
+figure was chosen for parity with the shipped 4096×2048 rung's bits per
+pixel, and it delivers exactly that and no more.
+
+**HEVC lands 23% below H.264 at a matched ceiling** — 3.30 MiB against
+4.31. That is one pair, not a trend: the 77 and 100 Mbps rows are not
+matched to each other.
+
+### First result — the desktop prediction holds, on one device
+
+**Windows Chrome 150, RTX 4090 Laptop (discrete), 7200×3600 HEVC,
+2026-08-16.** Same machine, same GPU, same resolution, same probe as the
+RTX 4090 row in §Does it play?, so the codec is the only variable.
+
+```
+gl: ANGLE (NVIDIA, NVIDIA GeForce RTX 4090 Laptop GPU, D3D11)
+size=7200x3600  duration=0.67s  maxTex=16384  rVFC=yes
+realtime=0.998x  presented=1.9fps  frames=23 over 12.3s  loops=1
+dropped=5/32 (15.63%)
+texImage2D mean=3.95ms  p95=7.60ms  max=60.80ms
+verdict: playback KEEPS UP; upload fits 90Hz
+```
+
+**The upload cost falls by 2.5×, and the desktop p95 hitch disappears.**
+
+| RTX 4090 Laptop, 7200×3600 | mean | p95 | max |
+|---|---|---|---|
+| H.264, 25 Mbps ceiling | 9.89 ms | 19.60 ms | 37.40 ms |
+| **HEVC, same ceiling** | **3.95 ms** | **7.60 ms** | 60.80 ms |
+| change | 2.50× faster | 2.58× faster | 1.63× worse |
+
+That is the specific thing this section predicted — "the upload becomes
+a GPU-side copy rather than a bus transfer, which would remove the
+desktop p95 hitch entirely". Against the 90 Hz budget the H.264 p95 was
+1.77× over; the HEVC p95 is 0.68× of it. The desktop now fits 90 Hz on
+mean *and* p95, where before it fitted only 60 Hz and hitched about
+twice a second.
+
+**The discrete-GPU handicap is gone, and that is the real evidence.** On
+H.264 the 4090 lost to a Quest 3 (9.89 ms against 4.69 ms), which only
+made sense if the cost was moving a CPU-side frame across PCIe. On HEVC
+the same card returns 3.95 ms — faster than the Quest's H.264 figure,
+an implied 26.2 GB/s against 10.5. Nothing about the GPU changed
+between the two runs; only where the decoded frame lives.
+
+**One confound, since closed.** The HEVC clip is 41.5 Mbps against the
+H.264 clip's 54.2 — 23% fewer bits. A texture upload should not care,
+since the decoded frame is 103.7 MB either way, but `texImage2D` can
+stall on an in-flight decode and a cheaper stream decodes sooner. The
+higher-bitrate re-encode settles it, and did: see §The bitrate confound
+is closed below.
+
+**The dropped-frame count is now confirmed as a startup artifact.**
+Every run has reported exactly **5** dropped frames — across two GPUs,
+two codecs and four runs, while the denominator moved 31 → 32. A
+constant that survives a codec change is deterministic startup cost,
+not sustained loss. §Does it play? read this correctly.
+
+**`max` is the one number that got worse**, 60.80 ms against 37.40. A
+7200×3600 RGBA texture is a 103.7 MB allocation and a hardware decode
+session has its own first-frame setup; either lands on the first upload.
+It is paid once per dataset load — tolerable on the desktop globe, and
+roughly five dropped frames on entering a VR session. Worth watching,
+not worth acting on from one sample.
+
+**What this does not settle.** One device, and the desktop half of the
+question at that. The prize is iOS Safari, which refuses the H.264 rung
+and is the sole reason the gate sits on its middle branch; nothing here
+speaks to it. Nor does it speak to the Quest, where the budget is
+tightest, or to Firefox, or to whether HEVC trades these refusals for
+different ones. The prediction held where it was cheapest to hold.
+
+### The bitrate confound is closed
+
+**Windows Chrome 150, RTX 4090 Laptop, 7200×3600 HEVC at 130.5 Mbps,
+2026-08-16.** Same machine, same GPU, same probe; only the bitrate moved.
+
+```
+realtime=0.999x  presented=1.9fps  frames=23 over 12.3s  loops=1
+dropped=5/32 (15.63%)
+texImage2D mean=3.36ms  p95=9.90ms  max=48.80ms
+```
+
+| RTX 4090 Laptop, 7200×3600 | delivered | mean | p95 |
+|---|---|---|---|
+| H.264, 25 Mbps ceiling | 54.2 Mbps | 9.89 ms | 19.60 ms |
+| HEVC, 25 Mbps ceiling | 41.5 Mbps | 3.95 ms | 7.60 ms |
+| **HEVC, 77 Mbps ceiling** | **130.5 Mbps** | **3.36 ms** | 9.90 ms |
+
+**Tripling the bitrate inside HEVC cost nothing.** 41.5 → 130.5 Mbps is
+3.14× the bits and the mean upload went *down*, 3.95 → 3.36 ms. The HEVC
+clip now carries **2.4× the bits of the H.264 one and uploads 2.9×
+faster**. Bitrate is excluded as the mechanism and the codec accounts
+for the whole effect, which is exactly what this run was named to
+settle. Implied throughput is 30.9 GB/s against H.264's 10.5 on the
+same card.
+
+**Read the mean on these runs, not the p95.** Twenty frames at 1.88 fps
+gives 23 samples, so the p95 is the second-worst of 23 — nearly the max,
+and not a stable statistic. The p95 moving 7.60 → 9.90 ms across two
+runs is well inside what that sample size produces by chance; the mean,
+over the same 23, is the comparable number. Both p95 figures sit under
+the 11.1 ms budget regardless. A longer clip would fix this, and is
+worth having before any of these numbers are quoted as thresholds.
+
+**Sixth run, still exactly 5 dropped frames** — now across two GPUs, two
+codecs and three bitrates, though every one of those runs is Chrome on
+Windows. The Quest reports 0 on both codecs and iOS reports nothing at
+all, so this is a startup artifact of one browser/platform pair rather
+than a property of the clip.
+
+**What is still open on the desktop.** Whether H.264's cost rises with
+bitrate: the 100 Mbps H.264 clip exists and is unmeasured. If it also
+lands near 9.9 ms, both codecs are bitrate-independent and the gap is
+purely the decode path — the cleanest form of the result.
+
+### iOS Safari accepts HEVC
+
+**iOS Safari 26.6 (iOS 18.7, iPhone, Apple GPU), 7200×3600 HEVC at
+130.5 Mbps, 2026-08-16.** The same browser version, on the same OS
+version, that refuses the 8192×4096 H.264 rung with `MediaError` 4
+before playback begins.
+
+```
+size=7200x3600  maxTex=16384  rVFC=yes
+realtime=0.986x  presented=1.8fps  frames=23 over 12.4s  loops=1
+dropped=0/0 (—)
+texImage2D mean=8.91ms  p95=6.00ms  max=96.00ms
+verdict: playback KEEPS UP; upload fits 90Hz
+```
+
+**It decodes at native resolution and keeps up.** `size` is 7200×3600,
+not a quiet downscale, and playback holds 0.986× of real time at the
+app's own 1.88 fps. This is the fidelity-grade clip, not the cheap one:
+iOS took the 130.5 Mbps stream.
+
+**Two variables moved, so state the finding narrowly.** The refusal on
+record is 8192×4096 **H.264**; this accept is 7200×3600 **HEVC**. Codec
+*and* resolution changed together. H.264 hardware decode caps at
+4096×4096 on VideoToolbox and iOS ships no software fallback, so the
+codec fully explains the old refusal — but that is not the same as
+proving iOS takes HEVC at the rung's 33.6 MP. 25.9 → 33.6 MP is **29%
+more pixels**, and 8192×4096 sits just above 8K UHD's own count. The
+decisive test is an 8192×4096 HEVC variant, and it has not been run.
+
+**What it does establish, which is a great deal.** iOS Safari will
+decode a data-encoded frame **3.09× larger than the shipped 4096×2048
+rung**, at native resolution, at a bitrate above anything the ladder
+would ship, and hand it to WebGL intact. If 8192 turns out to be past
+Apple's decoder, a ~7200-wide HEVC rung is a viable target on its own
+and still captures most of the resolution win.
+
+**So Phase 2's justification is now conditional rather than settled.**
+It exists because iOS Safari refused the rung and iOS is not a
+population this project can serve a broken globe to. That refusal is
+now known to be codec-specific up to 25.9 MP at least. Phase 2 should
+not be built until the 8192×4096 HEVC variant reports.
+
+**Read the p95 here, not the mean — the reverse of the desktop rows.**
+`p95` (6.00 ms) coming in *below* `mean` (8.91 ms) is arithmetically
+only possible with a heavy right tail, and the tail is visible: 22
+samples near 4.95 ms plus the single 96.00 ms maximum average to 8.91
+exactly. So the steady-state upload is **roughly 5 ms**, an implied
+20.9 GB/s, and the mean is an artifact of one frame.
+
+**That one frame is the first, and 96 ms is the largest first-frame
+cost in the matrix** — against 60.80 ms on the 4090 and 48.80 ms at
+higher bitrate. It is paid once per dataset load, so on the globe it is
+a load hitch rather than a playback one; at 60 Hz it is about six
+frames. Worth a second look before an iOS-facing rung ships, not a
+blocker.
+
+**`dropped=0/0` is not zero dropped frames.** The denominator is zero
+too: WebKit returned nothing useful from `getVideoPlaybackQuality()`,
+so the count is unmeasured on this platform rather than perfect. The
+0.986× realtime figure is what carries the "it kept up" claim here.
+
+### The Quest gains nothing, and that is the mechanism confirming itself
+
+**Quest 3 (OculusBrowser 149, Adreno 740), 7200×3600 HEVC at 130.5
+Mbps, 2026-08-16.**
+
+```
+size=7200x3600  maxTex=8192  rVFC=yes
+realtime=0.980x  presented=1.8fps  frames=23 over 12.5s  loops=1
+dropped=0/32 (0.00%)
+texImage2D mean=4.46ms  p95=5.70ms  max=15.80ms
+```
+
+| Quest 3, 7200×3600 | mean | p95 | max | realtime |
+|---|---|---|---|---|
+| H.264, 54.2 Mbps | 4.69 ms | 5.10 ms | — | 0.994× |
+| HEVC, 130.5 Mbps | 4.46 ms | 5.70 ms | 15.80 ms | 0.980× |
+
+**Unchanged, and that is the point.** Mean 5% better, p95 12% worse,
+both inside what 23 samples produce by chance. The codec that bought
+the 4090 a 2.94× improvement buys the Quest nothing at all.
+
+**Which is exactly what the explanation predicts.** HEVC's benefit on
+the desktop is the removal of a PCIe crossing: a hardware-decoded frame
+stays in VRAM instead of being copied from system memory. The Quest has
+unified memory, so a software-decoded frame was already somewhere its
+GPU could address and there was no crossing to remove. A mechanism that
+only helps where its bottleneck exists is a mechanism, not a
+coincidence — and this is the third angle on the same one:
+
+| device | memory | H.264 | HEVC | change |
+|---|---|---|---|---|
+| RTX 4090 Laptop | discrete, over PCIe | 9.89 ms | **3.36 ms** | 2.94× faster |
+| Quest 3 / Adreno 740 | unified | 4.69 ms | 4.46 ms | unchanged |
+| iPhone / Apple GPU | unified | **refused** | ~4.95 ms | nothing → everything |
+
+**HEVC costs the Quest nothing either, which is what matters for the
+decision.** A codec change that helps desktops enormously, unlocks iOS
+entirely and leaves the tightest-budget device where it found it has no
+constituency arguing against it.
+
+**The Quest's tail is the best in the matrix**: a 15.80 ms maximum
+against 48.80 ms on the 4090 and 96.00 ms on iOS. Its worst single
+upload barely exceeds a 90 Hz frame, where the other two overrun one by
+4× and 8×. Zero dropped frames of 32, genuinely measured this time.
+
+**`maxTex=8192` is still the thing to watch.** At 7200 wide there are
+992 texels of headroom. At the rung's 8192 there are none — the limit
+*equals* the frame width. So the Quest's 8192×4096 question is two
+questions stacked: whether the decoder takes it, and whether a texture
+at exactly `MAX_TEXTURE_SIZE` allocates. Both are unanswered, and both
+land on the same variant iOS needs.
+
+### The 8K HEVC variant has a positive control
+
+**Windows Chrome 150 (Win 11), `H_ceiling_8k` and `I_ceiling_8k_hevc`
+side by side, 2026-08-16.** Both 8192×4096, one variable apart.
+
+| variant | decoded | ready | decoded size | texImage2D | spike | native |
+|---|---|---|---|---|---|---|
+| `H_ceiling_8k` (H.264) | yes | 4 | 8192×4096 | ok | 251 | **yes** |
+| `I_ceiling_8k_hevc` (HEVC) | yes | 4 | 8192×4096 | ok | **253** | **yes** |
+
+**This row answers nothing about the gate, and that is what makes it
+worth having.** Windows Chrome already accepted the H.264 rung, so an
+HEVC accept here moves no decision. What it establishes is that the new
+variant is a working instrument: it encodes, it decodes at native
+resolution, and it round-trips values. A refusal on iOS or the Quest
+can now be attributed to the device rather than to a probe input added
+two commits ago — which is the difference between a Phase 0b result and
+a bug hunt.
+
+**The value round trip is identical to the digit across both codecs**:
+220/256 exact, MAE 0.141, max |e| 1, gain 1.0002, offset −0.08, and both
+endpoints clean at 0 → 0 and 255 → 255. Switching codec costs the data
+nothing.
+
+**Identical is the expected answer, not a suspicious one.** The residual
+error at 8 bits is the transport lattice — a property of `yuv420p` and
+the untagged range round trip, which both files share — rather than
+anything the codec does. Compression loss at CRF 18 on a smooth ramp is
+far below one code, so what survives to be measured is the lattice, and
+the lattice does not care which encoder produced the frame.
+
+**The one place they differ is the one place they should.** The spike
+region is an isolated single texel, the highest-frequency feature in
+the frame and the only part a codec can plausibly damage differently:
+HEVC returns **253** against H.264's **251**, against 255 for a perfect
+read and about 63 through a 2× downscale. Marginally better preservation
+from the more efficient codec, and — more to the point — both are
+unambiguously native. That the two differ at all is also the proof the
+files are genuinely different encodes rather than one file measured
+twice.
+
+**`readoutFull` is skipped on both** — 8192×4096 exceeds what a 2D
+canvas will hold. Known, and why the WebGL `readout` path is the one
+that carries these rows.
+
+### iOS Safari accepts the full rung in HEVC
+
+**iOS Safari 26.6 (iOS 18.7, iPhone, Apple GPU), both 8K variants,
+2026-08-16.**
+
+| variant | decoded | ready | decoded size | MAX_TEXTURE_SIZE | texImage2D | spike | native |
+|---|---|---|---|---|---|---|---|
+| `H_ceiling_8k` (H.264) | **load failed, code 4** | — | — | 16384 | — | — | — |
+| `I_ceiling_8k_hevc` (HEVC) | **yes** | 4 | **8192×4096** | 16384 | ok | **253** | **yes** |
+
+**This is the answer the plan was gated on.** iOS Safari decodes the
+full 8192×4096 rung in HEVC, at native resolution, and hands it to
+WebGL intact. Not the 7200×3600 stand-in — the rung itself. The refusal
+that put the gate on its middle branch and made Phase 2 load-bearing is
+codec-specific, and the codec clears it.
+
+**The control refused in the same run.** `H_ceiling_8k` failed with
+`MediaError` code 4 on the same device, same day, same harness, minutes
+apart. So this is a codec difference measured against a live refusal
+rather than against a record from three days earlier — which is what
+the paired run was for.
+
+**Two of the four value paths report FAIL, and neither is the one the
+app uses.**
+
+| path | mechanism | exact | MAE | max \|e\| | |
+|---|---|---|---|---|---|
+| `readout` | 1×1 `drawImage` into a 2D canvas | 12/256 | 6.809 | 11 | FAIL |
+| `readoutSrgb` | same, `colorSpace: 'srgb'` | 12/256 | 6.809 | 11 | FAIL |
+| `readoutFull` | whole frame via 2D canvas | skipped — too large | | | |
+| **`render`** | **`texImage2D` + readback, WebGL** | **220/256** | **0.141** | **1** | **PASS** |
+
+The failing pair are the 2D-canvas paths, and Safari colour-transforming
+a 2D canvas is the documented reason `src/services/glLumaSampler.ts`
+exists at all: the shipped `LumaSampler` reads its texel through WebGL2
+*because* a 1×1 `drawImage` is wrong on Safari, macOS and iOS alike,
+with no 2D fallback and deliberately so. This reproduces a known defect
+on a path the app does not take, at a new frame size.
+
+**The path the app does take matches desktop to the digit** — 220/256
+exact, MAE 0.141, max |e| 1, endpoints clean at 0 → 0 and 255 → 255,
+the same figures §The 8K HEVC variant has a positive control recorded
+on Windows Chrome. The spike reads **253 on both devices**. Two
+different platforms, one file, identical numbers.
+
+**The failure signature is the transfer-mismatch shape, worth recording
+for the next person who meets it**: endpoints pinned with the midtones
+bowed, gain 1.0033 and offset +6.10. Same shape §E/F bisected on
+Firefox, different cause — there it was the bt709 tags, here it is
+Safari's 2D canvas, and these variants carry no colour flags at all. The
+shape identifies a class, not a culprit.
+
+**What is still open, and it is not nothing.** This is one iPhone on one
+iOS version; Apple's HEVC ceiling may differ on older silicon. Playback
+at 8192×4096 on iOS is unmeasured — the 7200×3600 run passed, but that
+is 29% fewer pixels and it already carried a 96 ms first-frame cost, the
+worst in the matrix. And **macOS Chrome and Firefox remain untested on
+HEVC** — Chrome's HEVC support depends on hardware and build, so §Phase
+0b's warning that this could trade one set of refusals for a different
+set is still live for those two.
+
+### The Quest allocates a texture at exactly its own limit
+
+**Quest 3 (OculusBrowser 149, Adreno 740), both 8K variants,
+2026-08-16.**
+
+| variant | decoded | ready | decoded size | MAX_TEXTURE_SIZE | texImage2D | spike | native |
+|---|---|---|---|---|---|---|---|
+| `H_ceiling_8k` (H.264) | yes | 4 | 8192×4096 | **8192** | ok | 251 | **yes** |
+| `I_ceiling_8k_hevc` (HEVC) | yes | 4 | 8192×4096 | **8192** | ok | **253** | **yes** |
+
+**Both of the stacked questions answer yes.** The decoder takes
+8192×4096 HEVC, and — the one this device was uniquely placed to settle
+— **a texture whose width is exactly `MAX_TEXTURE_SIZE` allocates and
+uploads**. Zero headroom is enough headroom. That had been flagged since
+the first Quest row as a plausible way for the rung to fail on the
+device where the resolution would matter most, and it does not.
+
+**All four value paths pass here, including the two that failed on
+iOS.** The Quest's 2D-canvas readout returns 217/256 with MAE 0.152 and
+max |e| 1 — marginally lossier than its own WebGL path but comfortably
+passing. That is the counterpart the iOS row needed: the 2D-canvas
+failure is Safari colour-managing a canvas, not something an 8K frame
+does to a 2D readback in general.
+
+**Three platforms, one file, identical numbers on the shipped path.**
+
+| device | render exact | MAE | max \|e\| | spike (H.264 / HEVC) |
+|---|---|---|---|---|
+| Windows Chrome 150 | 220/256 | 0.141 | 1 | 251 / 253 |
+| iOS Safari 26.6 | 220/256 | 0.141 | 1 | — / 253 |
+| Quest 3 | 220/256 | 0.141 | 1 | 251 / 253 |
+
+Identical to the digit across x86 Windows, Apple silicon and mobile ARM.
+Whatever the transport lattice costs, it costs the same everywhere, and
+the codec change does not move it.
+
+### Firefox takes both codecs, and breaks the 2D path on only one
+
+**Windows Firefox (Win 11), both 8K variants, 2026-08-16.** Both decode
+at native 8192×4096 with `MAX_TEXTURE_SIZE` 16384, a clean
+`texImage2D`, and spikes of 251 for H.264 and 253 for HEVC — the same
+pair every other accepting device returns.
+
+| variant | path | exact | MAE | max \|e\| | offset | 255 → | |
+|---|---|---|---|---|---|---|---|
+| `H_ceiling_8k` | 2D `readout` | 220/256 | 0.141 | 1 | −0.05 | 255 | PASS |
+| `H_ceiling_8k` | WebGL `render` | 220/256 | 0.141 | 1 | −0.05 | 255 | PASS |
+| `I_ceiling_8k_hevc` | 2D `readout` | **39/256** | **0.852** | **2** | **−0.81** | **254** | **FAIL** |
+| `I_ceiling_8k_hevc` | WebGL `render` | 220/256 | 0.141 | 1 | −0.05 | 255 | PASS |
+
+**Same browser, same frame size, same day — only the codec differs.**
+Firefox reads an untagged HEVC stream about one code low through a 2D
+canvas and an untagged H.264 stream exactly right, with the top
+endpoint landing on 254 instead of 255. Since these variants carry no
+colour flags at all, what this exposes is that an *untagged* stream is
+interpreted per-codec: the decoder has to guess, and Firefox guesses
+differently for HEVC than for H.264.
+
+**It is a different defect from the iOS one, despite the same table
+cell failing.**
+
+| | exact | MAE | max \|e\| | offset | 255 → |
+|---|---|---|---|---|---|
+| iOS Safari, HEVC | 12/256 | 6.809 | 11 | **+6.10** | 255 |
+| Windows Firefox, HEVC | 39/256 | 0.852 | 2 | **−0.81** | **254** |
+
+Safari's is large, positive, and pins both endpoints — its 2D canvas
+colour-transform. Firefox's is small, negative, and lets the top
+endpoint slip. Two browsers, two mechanisms, one shared property: the
+WebGL path is untouched on both.
+
+**This retroactively strengthens a decision made for a different
+reason.** `src/services/glLumaSampler.ts` reads through WebGL2 with **no
+2D fallback, deliberately**, and that was chosen because Safari
+colour-transforms a 2D canvas. It now also covers a Firefox-plus-HEVC
+case that did not exist when the choice was made. A 2D fallback would
+have been a latent bug waiting for the codec change this section
+recommends.
+
+**In physical terms, on the MPAS clip, the Firefox error is under a
+dBZ** — max 2 codes at 0.458 dBZ per code. Small, real, and not on the
+path the app takes. Worth knowing for anyone reading values out of a
+canvas in a future tool.
+
+### Safari's 2D defect is the engine, not the codec
+
+**macOS Safari 26.5.2 (Apple GPU), both 8K variants, 2026-08-16.** Both
+decode at native 8192×4096 with a clean `texImage2D` — spike 252 for
+H.264, 253 for HEVC. Fifth HEVC accept.
+
+| variant | 2D `readout` | WebGL `render` |
+|---|---|---|
+| `H_ceiling_8k` | 12/256, MAE 6.809, max \|e\| 11, offset **+6.10** — FAIL | 220/256, MAE 0.141 — PASS |
+| `I_ceiling_8k_hevc` | 12/256, MAE 6.809, max \|e\| 11, offset **+6.10** — FAIL | 220/256, MAE 0.141 — PASS |
+
+**Byte-identical across the two codecs, and byte-identical to iOS.** Not
+merely similar: the same 12/256, the same 6.809, the same 1.0033 gain
+and +6.10 offset that §iOS Safari accepts the full rung in HEVC
+recorded, and the same 1.0005 / −0.07 on the render path. One WebKit
+defect, expressed the same way on desktop and mobile, indifferent to
+what produced the frame.
+
+**This closes an ambiguity the iOS row could not close on its own.** The
+argument there ran through three devices and still had a hole:
+
+| evidence | rules out | leaves open |
+|---|---|---|
+| iOS Safari — HEVC 2D fails, H.264 unavailable | — | cause: engine or codec? |
+| Quest — both 2D paths pass | "8K frames break 2D readback generally" | either remaining cause |
+| Firefox — H.264 2D passes, HEVC 2D **fails** | — | makes "HEVC breaks 2D" a live hypothesis |
+| **macOS Safari — both fail identically** | **codec** | engine, alone |
+
+Firefox is what made this worth running rather than assuming. Until it
+reported, "the 2D path dislikes HEVC" was a perfectly good explanation
+of the iOS row, and it happens to be the right explanation *for
+Firefox*. Safari with both codecs in hand is the only configuration
+that separates them, and it says the two browsers are failing for
+different reasons that happen to land in the same table cell.
+
+**So there are three distinct 2D behaviours across the matrix**, and
+`glLumaSampler`'s no-2D-fallback rule covers all three: Safari
+transforms regardless of codec, Firefox misreads an untagged HEVC
+stream specifically, and Chrome and the Quest are clean on both.
+(**Narrowed 2026-08-16:** macOS Firefox passes both, so the Firefox
+clause is Windows-only and the count is four — see §macOS Firefox.)
+
+**The H.264 spike varies slightly by platform — 251, 252 — while HEVC
+reads 253 everywhere.** Five devices, one file, one number. Not load
+-bearing, but it is the sort of consistency worth noticing in an
+isolated single-texel feature, since that is the measurement most
+sensitive to whatever each decoder does differently.
+
+### macOS Chrome accepts both, and the H.264 refusal did not reproduce
+
+**macOS Chrome, both 8K variants, 2026-08-16.** Both decode at native
+8192×4096 with a clean `texImage2D` — spike 252 for H.264, 253 for
+HEVC — and **all four value paths pass on both**, 220/256 exact, MAE
+0.141, gain 1.0005, offset −0.07.
+
+**Sixth HEVC accept. The matrix is complete and HEVC has no refusals.**
+
+| device / browser | H.264 at 8192×4096 | HEVC at 8192×4096 |
+|---|---|---|
+| Windows Chrome 150 | accepts | **accepts** |
+| Windows Firefox | accepts (stall did not reproduce) | **accepts** |
+| macOS Safari 26.5.2 | accepts | **accepts** |
+| macOS Chrome | accepts (refusal did not reproduce) | **accepts** |
+| iOS Safari 26.6 | **`MediaError` 4** | **accepts** |
+| Quest 3 (Adreno 740) | accepts | **accepts** |
+
+**The unplanned result is the H.264 column.** This row was recorded on
+2026-08-13 as a refusal — `MediaError` 4, no software fallback — and it
+now decodes. **Confirmed to be the same M2 Ultra**, three days apart,
+so there is no second configuration to blame: Chrome changed underneath
+the measurement. The refusal is retired, not narrowed.
+
+**Which leaves iOS Safari as the only H.264 refusal in the entire
+matrix** — and the only one that has ever reproduced.
+
+**Two of the three negative results in the original matrix have now
+failed to reproduce**, and that is a methodological finding rather than
+a coincidence. Firefox's stall and macOS Chrome's refusal were each a
+single run against a self-updating browser, three days before a re-run
+contradicted them — and the macOS Chrome re-run was on **the same
+machine**, so nothing about the hardware explains it. Accepts have held
+everywhere on re-test; refusals have not. **A negative result from one run on a browser that updates
+itself is the weakest row in any matrix**, and this document leaned on
+two of them to argue Phase 2 was load-bearing. Future rows should be
+dated, versioned, and re-run before a refusal is allowed to shape what
+gets built.
+
+**The gain and offset are identical across all three Apple-platform
+browsers** — 1.0005 and −0.07 on macOS Chrome, macOS Safari and iOS
+Safari alike, against 1.0002 / −0.08 on Windows Chrome, 0.9998 / −0.05
+on Windows Firefox and 0.9998 / −0.06 on the Quest. ~~The platform sets
+those digits, not the browser, which is what a shared VideoToolbox
+decode path underneath both engines would look like.~~
+
+**Falsified by the next device to report, 2026-08-16.** macOS Firefox
+returns 0.9998 / −0.05 — Firefox's *Windows* numbers, on Apple hardware.
+The correct statement is narrower: Chrome and Safari agree exactly on
+Apple platforms, consistent with both sitting on VideoToolbox, and
+Firefox does not join them because it brings its own conversion. See
+§macOS Firefox, which narrows two claims. **This is the third
+generalisation in this document to be falsified by the next row**, and
+it was written on three data points one commit before a fourth arrived.
+
+**And macOS Chrome is clean on the 2D readout for both codecs**, which
+sharpens §Safari's 2D defect is the engine, not the codec: two browsers
+on the same OS, one transforming the canvas and one not, so the
+transform belongs to WebKit rather than to macOS.
+
+### macOS Firefox, which narrows two claims
+
+**macOS Firefox, both 8K variants, 2026-08-16.** Both decode at native
+8192×4096 — spike 251 for H.264, 253 for HEVC — and **every value path
+passes on both**, 220/256 exact, MAE 0.141, gain 0.9998, offset −0.05.
+Seventh row, seventh HEVC accept, still no refusals anywhere.
+
+**Firefox's HEVC 2D defect is Windows-only.** §Firefox takes both codecs
+recorded a 2D readout that passed H.264 and failed HEVC, and concluded
+Firefox "misreads an untagged HEVC stream specifically". On macOS the
+same browser passes both, so that sentence needs its platform: it is
+**Firefox on Windows**. The explanation survives narrowing — an untagged
+stream is interpreted by whatever decodes it, and Firefox uses different
+backends per platform — but the claim as written was one row too broad.
+
+**So the 2D picture across the full matrix is four behaviours, not
+three:**
+
+| browser / platform | H.264 2D | HEVC 2D |
+|---|---|---|
+| Safari (macOS **and** iOS) | fail | fail — identical numbers |
+| Firefox (Windows) | pass | **fail** |
+| Firefox (macOS) | pass | pass |
+| Chrome (Windows, macOS), Quest | pass | pass |
+
+`glLumaSampler`'s no-2D-fallback rule still covers every one of them,
+which is the practical point and is unchanged by the narrowing.
+
+**`MAX_TEXTURE_SIZE` is 8192 here, and that is new for a desktop
+browser.** Chrome and Safari on the same OS report 16384. Firefox on
+macOS sits at exactly the frame width — the same zero-headroom position
+as the Quest, which had been treated as a headset peculiarity. It
+uploads fine, as the Quest does. **The consequence is for Phase 1
+rather than for this row: 8192 is a hard ceiling on two independent
+device families, so a rung wider than 8192 loses both**, and no amount
+of decode capability recovers a texture that will not allocate.
 
 Assumes Phase 0 passed.
+
+### HEVC over HLS is not a codec swap — scoped 2026-08-16
+
+Phase 0b's result makes an HEVC rung the obvious next step, and the
+encoder side really is one field: `HlsRendition` already carries
+`height`, `crf` and `maxBitrateKbps`, and `buildFfmpegArgs` hardcodes
+`-c:v:${i} libx264` next to them. **The delivery side is where the work
+is**, and it was under-scoped when this section was written.
+
+**Apple will not play HEVC in MPEG-TS.** HLS carries HEVC only in fMP4
+(CMAF) segments, and this pipeline is TS end to end —
+`-hls_segment_filename … segment_%03d.ts`. Adding a codec field alone
+produces a stream ffmpeg muxes happily and iOS refuses, which would
+manufacture in the publish pipeline exactly the refusal Phase 0b just
+removed from the probe. That failure would look like a device
+limitation and would not be one.
+
+**And `-hls_segment_type` is a global muxer option, not per-variant**,
+so a two-rung HEVC + H.264 ladder cannot mix formats. Either outcome
+tomorrow moves the whole ladder to fMP4; only the rung count is still
+open. The migration is outcome-independent, which is the one piece of
+good news here.
+
+**What assumes `.ts` today**, all of which moves together:
+
+| site | what it does |
+|---|---|
+| `cli/lib/ffmpeg-hls.ts` | emits `segment_%03d.ts`; the documented layout names it |
+| `cli/lib/r2-upload.ts` | MIME map has `.ts → video/mp2t`, nothing for `.m4s` |
+| `cli/transcode-from-dispatch.ts` | probes `segment_001.ts`, reads `segment_000.ts`, filters keys on `.endsWith('.ts')` and slices the extension by length |
+| `cli/lib/hls-incremental.ts` | content-addressed storage at `segments/sha256/{hex}.ts`, with variant-playlist URIs built from the same shape |
+
+**The last row is the real cost, and it is not a rename.** Incremental
+transcode dedups by hashing each segment and storing it once — a model
+that works because a TS segment is independently decodable. An fMP4
+segment is not: it is meaningless without its rendition's `init.mp4`.
+So the content-addressed cache needs a concept it does not have, and
+resume/append semantics need re-thinking rather than re-pathing. This
+is the reason Phase 1 is not a day's work, and the reason it should not
+be started the evening before the last Phase 0b row reports.
+
+**A cheaper route may exist and is worth checking first.** The
+data-encoded path publishes **exactly one rung** by design — §Part 2 of
+`DATA_ENCODED_VIDEO_PLAN.md` argues an ABR ladder is incoherent when
+luma is the measurement. With one rung there is no adaptation to do, so
+HLS is buying segmentation and seeking, not its actual purpose. Every
+Phase 0b measurement was taken against a **progressive MP4** served
+over plain HTTP, and it decoded and played on all four platforms at
+8192×4096. If `datasetLoader` can be taught to take a progressive
+source for data-encoded rows, the entire fMP4-and-dedup problem is
+sidestepped. That is a question about the client, not the encoder, and
+it should be answered before the fMP4 migration is costed.
 
 | change | file | note |
 |---|---|---|
@@ -680,11 +1440,25 @@ demanded ~160 Mbps and is not representative. Before picking a number,
 encode one real 8K reflectivity or aerosol frame set and see what it
 actually wants.
 
-## Phase 2 — pinned two-rung ladder (only if Phase 0 says so)
+## Phase 2 — pinned two-rung ladder (superseded 2026-08-16)
 
-Build this only if a population that matters fails Phase 0. It is
-strictly more complexity than Phase 1 and buys nothing if 8K decodes
-everywhere.
+**Do not build this as a capability fallback. Phase 0b removed its
+reason to exist.** It was conditioned on a population that matters
+failing Phase 0, and iOS Safari was that population: it refuses the
+8192×4096 rung in H.264 and accepts it in HEVC, at the full frame size.
+Every other device accepts both. There is no capability gap left to
+bridge, so an HEVC Phase 1 is the whole of the work.
+
+The section is kept rather than deleted because **its mechanism is
+still wanted for a different reason**. §The ladder as a relative shape
+argues for a viewer-operated quality control — a bandwidth choice
+rather than a capability fallback — and that is the same pinning
+machinery described below, resolved by user choice instead of by
+feature detection. Read what follows as the design for that, and read
+"resolve capability once at load" as "resolve the viewer's choice once
+at load, capability being one input to it".
+
+The original framing follows, unedited.
 
 Publish 8192×4096 and 4096×2048, resolve capability once at load, then
 **pin** — `hls.currentLevel`, which locks a rung — rather than
@@ -716,15 +1490,131 @@ Two consequences to carry:
 
 ---
 
+## The ladder as a relative shape (raised 2026-08-16)
+
+**Status: raised, not decided.** Nothing here gates Phase 1, and none of
+it should be built before the Phase 0b matrix closes. It is recorded
+because Phase 0b's first non-SOS dataset broke an assumption the ladder
+had been resting on unexamined, and because two of the questions have
+cheap first steps worth knowing about while the shape is settled.
+
+### The ladder is absolute where it means to be relative
+
+`cli/lib/ffmpeg-hls.test.ts` names its assertion
+**`DATA_ENCODED_RENDITIONS publishes the source rung only`** and then
+pins `height` to `2048`. Both were true at once for as long as every
+dataset in the catalog was 4096×2048: "the source rung" and "the
+constant" were the same number, and nothing distinguished intent from
+implementation. MPAS at 7200×3600 is the first row where they come
+apart, and it comes apart in both directions.
+
+**Above the constant, the decimation is non-integer.** 7200 → 4096 is a
+factor of 1.758. `flags=neighbor` selects rather than interpolates, so
+every output texel remains a value that was actually measured — the
+property the neighbour rule exists to protect, and it holds. What does
+not hold is *evenness*: an irregular subset of source columns survives,
+and the sampling is lumpy in a way nothing in the asset declares. Phase
+2's two rungs are a clean 2:1 and do not have this problem. A
+source-relative ladder must not acquire it.
+
+**Below the constant, the pipeline upscales.** A 1° global model is
+360×180, and `scale=4096:2048` replicates it to 129× the texels. Being
+precise about that cost matters, because most of the obvious objections
+to it are wrong:
+
+- *File size barely moves.* Uniformly replicated blocks compress to
+  almost nothing in either codec.
+- *Statistic values survive.* Area weighting is scale-invariant under
+  uniform replication, so the mean, the percentiles and the histogram
+  shape are unchanged.
+- **Counts do not survive, and counts are exported on purpose.** The
+  zonal CSV carries a per-band texel count precisely so a reader knows
+  what a number is worth — "a mean over four texels does not deserve the
+  weight of one over four thousand". Upscaling turns that column into
+  fiction, reporting thousands of samples where there were dozens.
+- *Decode and memory are real.* Every device decodes 8.4 MP and holds
+  33 MB of texture for 0.065 MP of information.
+
+So the case for a source-relative ladder is not mainly bandwidth. **It
+is that the export stops overstating its own precision.**
+
+### The rule that falls out
+
+Top rung is the source resolution. Any rung beneath it is an **integer
+-factor decimation** — 1/2, 1/4 — never an arbitrary height. That is the
+only form in which every output texel is a real source texel *and* the
+sampling stays even. Two constraints come with it: `yuv420p` needs even
+dimensions, so an odd source wants a stated policy rather than a silent
+round; and a source whose halving lands below anything useful simply
+publishes one rung.
+
+### The warning needs provenance that does not currently travel
+
+Phase 2 records that a resolution caveat has to sit beside Analyze's
+quantisation one. The gap underneath that is that **the client cannot
+presently detect the condition it would be warning about.** It knows the
+decoded frame size from the video element and has nothing to compare it
+against: `ColorScale` carries value provenance — `vmin`, `vmax`,
+`dataMinLuma`, the stops — and no spatial provenance at all.
+
+The first step is therefore smaller than the warning: carry the source
+dimensions on the sidecar or the dataset row. Everything else is
+downstream of being able to compare two numbers, and with both in hand
+the caveat can say *by how much* and whether the factor was integer,
+rather than only that something happened.
+
+### A rung the viewer picked is not what determinism forbade
+
+§Part 2 of [`DATA_ENCODED_VIDEO_PLAN.md`](DATA_ENCODED_VIDEO_PLAN.md)
+rules out an ABR ladder because a bandwidth dip would swap the rung
+mid-session, change the value under the cursor, and make the frame
+Analyze reduces non-deterministic. That objection is to **silent,
+bandwidth-driven** switching. It does not reach a control the viewer
+operated deliberately from a label saying what it costs: they know they
+did it, and they can re-run the measurement.
+
+So a manual quality selector is compatible with the argument that killed
+automatic ABR, and it is the natural user-facing form of Phase 2's
+pinning — the same `hls.currentLevel` mechanism, resolved by choice as
+well as by capability. One requirement travels with it: switching rungs
+must invalidate any Analyze result on screen, because those statistics
+describe a frame that no longer exists. `playbackSettle` is already the
+"recompute when the displayed frame changes" seam and is where that
+belongs.
+
+### The unresolved tension, stated rather than settled
+
+**One rung and two rungs pull in opposite directions, and Phase 0b does
+not settle which wins.**
+
+- **One rung is the cheap path to 8K.** With no adaptation to perform,
+  HLS provides segmentation rather than its actual purpose, and the
+  fMP4-and-dedup problem in §HEVC over HLS is not a codec swap can be
+  routed around entirely by serving a progressive MP4 — which is what
+  every measurement in Phase 0b was taken against.
+- **Two rungs buy the slow-connection story** and the accuracy/speed
+  trade above, and in doing so make HLS earn its place — which drags the
+  fMP4 migration and the init-segment problem in the content-addressed
+  cache back onto the critical path.
+
+macOS Chrome's result decides whether a **capability** fallback is
+needed. It says nothing about whether a **bandwidth** one is wanted.
+That second question is about who the catalog is serving, it deserves a
+deliberate answer, and the risk worth naming is that a demo deadline
+answers it by default.
+
+---
+
 ## Verification
 
 - The Phase 0 matrix, recorded here as a table rather than a verdict,
   including the read-back-a-known-texel result per device.
 - `scripts/luma-range-check` extended with an 8192×4096 variant —
-  **done** (`H_ceiling_8k`), and **run on six real devices**: three
-  native decodes (Windows Chrome, macOS Safari, Quest 3), two refusals
-  (iOS Safari, macOS Chrome), one stall (Windows Firefox, inconclusive
-  and awaiting a re-run against the fixed harness). CI still cannot
+  **done** (`H_ceiling_8k`), plus an HEVC twin (`I_ceiling_8k_hevc`),
+  **run on seven browser/platform pairs**. HEVC: seven accepts, no
+  refusals. H.264: six accepts and one refusal (iOS Safari) — the
+  Firefox stall and the macOS Chrome refusal both failed to reproduce.
+  CI still cannot
   contribute a row — Playwright's Chromium ships no H.264 decoder at
   all — which is why `--serve` and the static bundle exist.
 - One real 8K dataset published and probed end to end: hover value,
