@@ -136,6 +136,12 @@ function handlerType(b: Uint8Array, hdlr: Box): string | null {
 function timescale(b: Uint8Array, mdhd: Box): number | null {
   if (mdhd.start + 4 > mdhd.end) return null
   const version = b[mdhd.start]
+  // ISO BMFF defines versions 0 and 1 for this box and nothing else.
+  // Treating an unknown version as 0 would read whatever happens to sit
+  // at that offset and could return a perfectly plausible frame rate
+  // from an unrelated field — the one outcome this module is built to
+  // avoid, since a wrong number is worse than none.
+  if (version !== 0 && version !== 1) return null
   // version(1) flags(3), then creation/modification (4 or 8 each).
   const at = mdhd.start + 4 + (version === 1 ? 16 : 8)
   if (at + 4 > mdhd.end) return null

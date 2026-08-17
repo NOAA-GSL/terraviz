@@ -1624,3 +1624,97 @@ describe('asset uploader — publish as uploaded', () => {
     expect(plain.querySelector('.publisher-asset-uploader-asis')).toBeNull()
   })
 })
+
+describe('asset uploader — the frame-rate advisory is actually visible', () => {
+  it('shows the warning after the probe resolves, which is after idle has gone', async () => {
+    // Regression: the warning was rendered only inside `s.stage ===
+    // 'idle'`. The probe awaits a Blob read and `run()` advances the
+    // stage immediately, so a result always arrived after that block
+    // stopped rendering — the advisory existed and no publisher could
+    // ever see it. Resolving the probe on a later microtask is the
+    // whole point of this test.
+    const mount = document.createElement('div')
+    document.body.appendChild(mount)
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse(
+          {
+            upload_id: 'UP-1',
+            kind: 'data',
+            target: 'r2',
+            r2: { method: 'PUT', url: 'https://r2.example/put', headers: {}, key: 'datasets/x/by-digest/aa.mp4' },
+            expires_at: 'soon',
+            mock: false,
+          },
+          201,
+        ),
+      )
+      .mockResolvedValueOnce(jsonResponse({ dataset: { data_ref: 'r2:datasets/x' } }, 200))
+
+    mount.appendChild(
+      renderAssetUploader({
+        datasetId: '01AAAAAAAAAAAAAAAAAAAAAAAA',
+        format: 'video/mp4',
+        dataEncoded: true,
+        onUploaded: vi.fn(),
+        hashFn: async () => 'sha256:' + 'a'.repeat(64),
+        fetchFn: fetchFn as unknown as typeof fetch,
+        xhrFactory: fakeXhrFactory(),
+        // 25 fps: tours compute playbackRate as requestedFps / 30, so
+        // publishing this as-is plays every tour on it at the wrong
+        // speed, and nothing downstream would say so.
+        detectFpsFn: async () => 25,
+      }),
+    )
+
+    pickFile(mount, 'video/mp4', 'mock-mp4-bytes')
+    await until(
+      () => mount.querySelector('.publisher-asset-uploader-warning') !== null,
+      'the frame-rate advisory to appear',
+    )
+    expect(mount.textContent).toContain('25')
+  })
+
+  it('stays silent at 30 fps, which is what the catalog expects', async () => {
+    const mount = document.createElement('div')
+    document.body.appendChild(mount)
+    const onUploaded = vi.fn()
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse(
+          {
+            upload_id: 'UP-1',
+            kind: 'data',
+            target: 'r2',
+            r2: { method: 'PUT', url: 'https://r2.example/put', headers: {}, key: 'datasets/x/by-digest/aa.mp4' },
+            expires_at: 'soon',
+            mock: false,
+          },
+          201,
+        ),
+      )
+      .mockResolvedValueOnce(jsonResponse({ dataset: { data_ref: 'r2:datasets/x' } }, 200))
+
+    mount.appendChild(
+      renderAssetUploader({
+        datasetId: '01AAAAAAAAAAAAAAAAAAAAAAAA',
+        format: 'video/mp4',
+        dataEncoded: true,
+        onUploaded,
+        hashFn: async () => 'sha256:' + 'a'.repeat(64),
+        fetchFn: fetchFn as unknown as typeof fetch,
+        xhrFactory: fakeXhrFactory(),
+        detectFpsFn: async () => 30,
+      }),
+    )
+
+    pickFile(mount, 'video/mp4', 'mock-mp4-bytes')
+    // Anchor on the upload finishing, which is strictly later than the
+    // probe resolving — a bare "not present" assertion would pass
+    // before the probe had a chance to render anything.
+    await until(() => onUploaded.mock.calls.length > 0, 'the upload to report back')
+    expect(mount.querySelector('.publisher-asset-uploader-warning')).toBeNull()
+  })
+})

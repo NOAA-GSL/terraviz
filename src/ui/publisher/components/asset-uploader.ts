@@ -706,17 +706,29 @@ export function renderAssetUploader(options: AssetUploaderOptions): HTMLElement 
       help.textContent = t('publisher.assetUploader.publishAsIs.help')
       frag.appendChild(help)
 
-      // Only while publishing as-is: the transcode would fix the fps,
-      // so the warning would be false when it is going to run.
-      if (publishAsIs && pickedFps !== null && Math.round(pickedFps) !== EXPECTED_FPS) {
-        const warn = document.createElement('p')
-        warn.className = 'publisher-asset-uploader-warning'
-        warn.textContent = t('publisher.assetUploader.publishAsIs.fpsWarning', {
-          fps: String(Math.round(pickedFps)),
-          expected: String(EXPECTED_FPS),
-        })
-        frag.appendChild(warn)
-      }
+    }
+
+    // Outside the idle gate, deliberately. The probe has to await a
+    // `Blob` read, and `run()` moves the stage on immediately, so a
+    // result always lands *after* idle has gone — a warning rendered
+    // only while idle is a warning nobody ever sees. It also belongs
+    // there on its own merits: this describes the file, not the picker,
+    // and it matters at least as much once the upload has finished as
+    // it does before one starts.
+    //
+    // Still only while publishing as-is, because the transcode would
+    // normalise the rate and the warning would be false when it runs.
+    if (
+      publishAsIsApplies() && publishAsIs
+      && pickedFps !== null && Math.round(pickedFps) !== EXPECTED_FPS
+    ) {
+      const warn = document.createElement('p')
+      warn.className = 'publisher-asset-uploader-warning'
+      warn.textContent = t('publisher.assetUploader.publishAsIs.fpsWarning', {
+        fps: String(Math.round(pickedFps)),
+        expected: String(EXPECTED_FPS),
+      })
+      frag.appendChild(warn)
     }
 
     // File picker. The label is mounted alongside the input
