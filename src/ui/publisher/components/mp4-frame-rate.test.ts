@@ -50,6 +50,16 @@ function hdlr(kind: string): Uint8Array {
 
 /** `mdhd` v0: version+flags, creation, modification, timescale, duration. */
 function mdhd(scale: number, duration = 0, version = 0): Uint8Array {
+  if (version !== 0 && version !== 1) {
+    // Same layout as v0, but carrying an unknown version byte — the
+    // parser should refuse rather than read it as v0.
+    return box('mdhd', concat(
+      new Uint8Array([version, 0, 0, 0]),
+      u32(0, 0),
+      u32(scale),
+      u32(duration),
+    ))
+  }
   if (version === 1) {
     // version(1)+flags(3), creation(8), modification(8), timescale(4), duration(8)
     return box('mdhd', concat(
@@ -147,6 +157,13 @@ describe('frameRateFromMoov', () => {
     const stbl = box('stbl', truncated)
     const mdia = box('mdia', concat(mdhd(30000), hdlr('vide'), box('minf', stbl)))
     expect(frameRateFromMoov(moovPayload(box('trak', mdia)))).toBeNull()
+  })
+
+  it('returns null on an mdhd version it does not know', () => {
+    // ISO BMFF defines 0 and 1. Treating anything else as version 0
+    // reads whatever sits at that offset, which can be a perfectly
+    // plausible timescale from an unrelated field.
+    expect(frameRateFromMoov(moovPayload(videoTrak({ mdhdVersion: 7 })))).toBeNull()
   })
 
   it('returns null on a zero timescale rather than dividing by it', () => {
