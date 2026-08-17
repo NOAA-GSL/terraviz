@@ -347,19 +347,43 @@ export function colorbarTicks(
     // Re-derive from the multiple rather than accumulating, so a long
     // run does not drift off the round numbers this function exists to
     // produce.
-    const value = Math.round(v / step) * step
+    // `Math.ceil` of a fraction in (−1, 0) returns *negative* zero, which
+    // survives the multiplication and renders as "-0" through
+    // `toFixed` — the one formatter that keeps the sign. Normalise it,
+    // or a bar whose range straddles zero labels its own origin "-0".
+    const raw = Math.round(v / step) * step
+    const value = Object.is(raw, -0) ? 0 : raw
     ticks.push({ position: (value - lo) / (hi - lo), value })
   }
   return ticks
 }
 
-/** The 1/2/5 × 10ⁿ step closest to dividing `range` into `count`. */
+/**
+ * The 1/2/5 × 10ⁿ step closest to dividing `range` into `count`.
+ *
+ * Closest in the geometric sense, which is what the thresholds are: √2,
+ * √10 and √50 are the midpoints of 1→2, 2→5 and 5→10 on a log scale, so
+ * a rough step snaps to whichever candidate it is nearer to as a
+ * *ratio*.
+ *
+ * The previous form took the first candidate at or above the rough
+ * step, which only ever rounded up — and 2→5 is a factor of 2.5, so
+ * overshooting there halves the count. A dBZ field spanning −35..78
+ * asked for five and got two: rough 23.3 snapped to 50 instead of 20.
+ * Visible twice over, because this feeds both the colorbar's labels and
+ * the Analyze panel's contour levels, and two isolines across a whole
+ * field is not a contour plot.
+ */
 function niceStep(range: number, count: number): number {
   if (!(range > 0)) return NaN
   const rough = range / count
   const magnitude = 10 ** Math.floor(Math.log10(rough))
   const normalised = rough / magnitude
-  const snapped = normalised <= 1 ? 1 : normalised <= 2 ? 2 : normalised <= 5 ? 5 : 10
+  const snapped =
+    normalised >= Math.sqrt(50) ? 10
+      : normalised >= Math.sqrt(10) ? 5
+        : normalised >= Math.SQRT2 ? 2
+          : 1
   return snapped * magnitude
 }
 

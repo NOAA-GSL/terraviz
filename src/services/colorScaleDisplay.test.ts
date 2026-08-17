@@ -304,6 +304,51 @@ describe('colorbarTicks', () => {
     }
   })
 
+  it('gets near the requested count instead of overshooting the step', () => {
+    // Regression: the MPAS reflectivity field, −35..78.025 dBZ. The step
+    // snapper took the first 1/2/5 candidate at or *above* the rough
+    // step, so a rough 23.3 became 50 rather than 20 — and 2→5 is a
+    // factor of 2.5, so the count halved. Asking for five gave two.
+    const dbz: ColorScale = {
+      stops: [
+        { t: 0, rgba: [0, 0, 0, 0] },
+        { t: 1, rgba: [255, 255, 255, 255] },
+      ],
+      vmin: -35,
+      vmax: 78.025,
+      units: 'dBZ',
+      dataMinLuma: 8,
+    }
+    for (const target of [4, 5]) {
+      const ticks = colorbarTicks(dbz, DEFAULT_DISPLAY, target)
+      // Two isolines across a whole field is not a contour plot; the
+      // Analyze panel reads its levels from exactly this function.
+      expect(ticks.length).toBeGreaterThanOrEqual(target - 1)
+      expect(ticks.length).toBeLessThanOrEqual(target + 1)
+    }
+  })
+
+  it('never labels a tick negative zero', () => {
+    // `Math.ceil` of a fraction in (−1, 0) returns −0, which survives
+    // the multiplication and renders as "-0" through `toFixed` — so a
+    // bar straddling zero labelled its own origin "-0".
+    const straddling: ColorScale = {
+      stops: [
+        { t: 0, rgba: [0, 0, 0, 0] },
+        { t: 1, rgba: [255, 255, 255, 255] },
+      ],
+      vmin: -35,
+      vmax: 78.025,
+      units: 'dBZ',
+      dataMinLuma: 8,
+    }
+    for (const target of [2, 3, 4, 5, 6, 8]) {
+      for (const t of colorbarTicks(straddling, DEFAULT_DISPLAY, target)) {
+        expect(Object.is(t.value, -0)).toBe(false)
+      }
+    }
+  })
+
   it('keeps every tick inside the bar', () => {
     for (const d of [DEFAULT_DISPLAY, display({ stretch: { lo: 0.37, hi: 0.62 } })]) {
       for (const t of colorbarTicks(SCALE, d, 5)) {
