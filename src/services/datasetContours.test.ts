@@ -31,7 +31,7 @@ import {
   type ContourPoint,
 } from './datasetContours'
 import type { LumaSnapshot } from './glLumaSampler'
-import { lumaToValue } from '../types/color-scale'
+import { isTransparentLuma, lumaToValue } from '../types/color-scale'
 import type { ColorScale, DatasetOverlayOptions } from '../types'
 
 /** vmin 0 / vmax 255, so luma and value are numerically equal and an
@@ -562,12 +562,38 @@ describe('decimation', () => {
   })
 
   it('keeps a mostly-absent box absent instead of reporting its minority', () => {
-    // One present texel in each 2x2 box, everywhere. Decimation must not
-    // promote a quarter-full box into a solid value and paint the whole
-    // frame; the no-data footprint may erode by half a box, never grow a
-    // field out of nothing.
-    const frame = snap(4096, 2048, (x, y) => (x % 2 === 0 && y % 2 === 0 ? 200 : 0))
+    // The left half is solid 50 — present, and below the level. The
+    // right half has one present texel per 2x2 box and is otherwise
+    // absent, so every box there is a quarter full.
+    //
+    // The left half is load-bearing. A frame that is *only* speckle
+    // cannot detect this bug: promote every quarter-full box to 200 and
+    // the field comes out uniformly high, which traces exactly as
+    // nothing as a uniformly absent one does. Against a present
+    // neighbour below the level, a promotion puts a crossing at the seam.
+    const width = 4096
+    const height = 2048
+    const frame = snap(width, height, (x, y) =>
+      (x < width / 2 ? 50 : (x % 2 === 0 && y % 2 === 0 ? 200 : 0)))
     expect(extractContours(frame, SCALE, 100, GLOBAL)).toEqual([])
+  })
+
+  it('does not let data outside the window into an edge box', () => {
+    // A window edge rarely lands on a box boundary. If the box
+    // straddling it averages the texels the caller excluded, values from
+    // outside the picked region move an isoline inside it — and the
+    // statistics beside it, which reduce exactly the window, would
+    // disagree with the drawn line for no visible reason.
+    //
+    // Everything inside the window is 50, everything outside is 250, and
+    // the edge is odd so the boundary box straddles it.
+    const width = 4096
+    const height = 2048
+    const edge = 1001
+    const frame = snap(width, height, x => (x < edge ? 50 : 250))
+    const lines = extractContours(frame, DENSE, 100, GLOBAL,
+      { x0: 0, y0: 0, x1: edge, y1: height })
+    expect(lines).toEqual([])
   })
 
   it('scales the window with the stride', () => {
@@ -593,25 +619,38 @@ describe('decimation', () => {
     expect(left).toEqual([])
   })
 
-  it('walks at full resolution when absence is not a low band', () => {
-    // A scale whose absent codes are not a contiguous run at the bottom
-    // breaks both of decimation's assumptions — "skip what is absent"
-    // and "write 0 to mean absent". It must fall back rather than
-    // average across the gap.
-    const holed: ColorScale = {
-      ...SCALE,
-      stops: [
-        { t: 0, rgba: [0, 0, 0, 255] },
-        { t: 0.5, rgba: [128, 128, 128, 0] },
-        { t: 1, rgba: [255, 255, 255, 255] },
-      ],
-      transparentRange: undefined,
+  it('rests on absence being a low band, which the sidecar guarantees', () => {
+    // `downsample` decides presence with `code >= absentBelow`, which is
+    // only sound if every absent code sits below every present one.
+    //
+    // That holds for *every* expressible scale, because
+    // `isTransparentLuma` is "below a cutoff" in both its forms —
+    // `luma < dataMinLuma` and `luma / 255 < transparentRange`. So the
+    // `absentIsLowBand` guard in `extractContourSet` cannot currently
+    // fire, and an earlier version of this test that tried to trigger it
+    // was really constructing a scale with no absent codes at all and
+    // asserting nothing.
+    //
+    // Pinned rather than trusted: the day a sentinel in the middle of
+    // the range means "no data", decimation would average across the gap
+    // and invent values that were never measured. This is the test that
+    // should fail first, and it names the file to go and look at.
+    const scales: ColorScale[] = [
+      SCALE,
+      DENSE,
+      { ...SCALE, dataMinLuma: 40 },
+      { ...SCALE, transparentRange: 0.5 },
+    ]
+    for (const scale of scales) {
+      let seenPresent = false
+      for (let luma = 0; luma < 256; luma++) {
+        if (isTransparentLuma(luma, scale)) {
+          expect(seenPresent, `luma ${luma} is absent above a present code`).toBe(false)
+        } else {
+          seenPresent = true
+        }
+      }
     }
-    const frame = snap(4096, 2048, x => (x < 2048 ? 20 : 200))
-    // The assertion is that it does something sane rather than throwing
-    // or emptying: the mid-range hole means the ramp is not monotone, so
-    // the general path runs and still finds the step.
-    expect(() => extractContours(frame, holed, 100, GLOBAL)).not.toThrow()
   })
 })
 

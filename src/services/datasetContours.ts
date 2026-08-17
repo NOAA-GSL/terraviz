@@ -67,18 +67,25 @@
  *     discrete storm cells a few texels across, and marching squares
  *     traces a faithful closed ring around every one. Measured at
  *     7200x3600, six levels: **424,855 lines averaging 8.0 points
- *     each**, 17.5 seconds — against 117 lines and 480 ms for a smoke
- *     field of the same size and *higher* coverage. Cost follows the
- *     number of boundaries, and a thousand small cells have far more
- *     boundary than one large one.
+ *     each** — against **117 lines averaging 744** for a smoke field of
+ *     the same size and *higher* coverage. Cost follows the number of
+ *     boundaries, and a thousand small cells have far more boundary
+ *     than one large one.
  *
  *     Eight points is a ring two or three texels wide: real data, and
  *     smaller than the stroke that would draw it at any zoom this app
  *     offers. So the frame is box-averaged down to `CONTOUR_TARGET_EDGE`
  *     before it is walked, and runs below `MIN_RING_EXTENT_FRACTION` of
- *     the frame are dropped. Together: **827 ms and 2,713 lines**, with
- *     the mean rising to 10.6 points — fewer lines, each of them more
- *     line.
+ *     the frame are dropped: **2,713 lines**, the mean rising to 10.6
+ *     points — fewer lines, each of them more line. On one machine, both
+ *     ends measured back to back, **12.8 s to 0.37 s**; at 24 levels,
+ *     39.3 s to 1.1 s.
+ *
+ *     Quote those two together or neither. An earlier draft of this
+ *     comment paired a "before" taken while the machine was busy with an
+ *     "after" taken while it was idle, and reported a ratio a third too
+ *     flattering. The line counts are the load-independent half and were
+ *     right all along.
  *
  *     Both bounds are set by the *display*, which is what makes them
  *     safe. Nothing here changes a reported value: `datasetStats` reduces
@@ -170,6 +177,14 @@ interface CodeTable {
    * (the mapping is still affine), but it is *not* sound if a present
    * code can sit below an absent one, because then neither "skip what
    * is absent" nor "write 0 to mean absent" is true.
+   *
+   * With today's sidecar this is always true, and deliberately still
+   * computed: `isTransparentLuma` is "below a cutoff" in both its forms,
+   * so no expressible scale can falsify it and the fallback below is
+   * unreachable. It is here for the day a sentinel in the middle of the
+   * range means "no data", when averaging across the gap would invent
+   * values nobody measured. `datasetContours.test.ts` pins the contract
+   * so that day fails a test rather than shipping.
    */
   absentIsLowBand: boolean
   /**
@@ -305,32 +320,65 @@ export function chooseStride(
  * mostly absent stays absent rather than reporting the mean of its
  * minority, so the no-data footprint erodes by at most half a box
  * instead of growing a fringe.
+ *
+ * **Texels outside `win` are excluded the same way.** A window edge
+ * rarely lands on a box boundary, and a box straddling one would
+ * otherwise average in source texels the caller excluded — letting
+ * values from outside the picked region create or move an isoline
+ * inside it. That is worse than it sounds, because `datasetStats`
+ * reduces exactly the window: the panel would report statistics for one
+ * region while drawing contours for a slightly larger one, and the two
+ * would disagree at the edge for no visible reason. The majority test
+ * counts in-window texels rather than the whole box, so an edge box
+ * holding one in-window texel is judged on that texel instead of being
+ * ruled absent by the neighbours it is not allowed to see.
+ *
+ * Only the boxes the walk will read are filled. The rest keep their
+ * zeroes and are never looked at, which also means a small picked
+ * region costs a small downsample rather than a whole-frame one.
  */
-function downsample(snapshot: LumaSnapshot, table: CodeTable, stride: number): LumaSnapshot {
+function downsample(
+  snapshot: LumaSnapshot,
+  table: CodeTable,
+  stride: number,
+  win: TexelWindow,
+): LumaSnapshot {
   const { data, width, height } = snapshot
   const w = width / stride
   const h = height / stride
   const out = new Uint8Array(w * h)
-  const perBox = stride * stride
   const { absentBelow } = table
 
-  for (let y = 0; y < h; y++) {
+  const bx0 = Math.max(0, Math.floor(win.x0 / stride))
+  const by0 = Math.max(0, Math.floor(win.y0 / stride))
+  const bx1 = Math.min(w, Math.ceil(win.x1 / stride))
+  const by1 = Math.min(h, Math.ceil(win.y1 / stride))
+
+  for (let y = by0; y < by1; y++) {
     const top = y * stride
-    for (let x = 0; x < w; x++) {
+    const sy0 = Math.max(top, win.y0)
+    const sy1 = Math.min(top + stride, win.y1)
+    for (let x = bx0; x < bx1; x++) {
       const left = x * stride
+      const sx0 = Math.max(left, win.x0)
+      const sx1 = Math.min(left + stride, win.x1)
       let sum = 0
       let present = 0
-      for (let dy = 0; dy < stride; dy++) {
-        const row = (top + dy) * width + left
-        for (let dx = 0; dx < stride; dx++) {
-          const code = data[row + dx]
+      let inWindow = 0
+      for (let sy = sy0; sy < sy1; sy++) {
+        const row = sy * width
+        for (let sx = sx0; sx < sx1; sx++) {
+          inWindow++
+          const code = data[row + sx]
           if (code >= absentBelow) { sum += code; present++ }
         }
       }
       // Ties go to present: a box split evenly between data and no-data
       // has measured something, and the alternative erodes a coastline
       // by a box wherever the split happens to land at exactly half.
-      out[y * w + x] = present * 2 >= perBox ? Math.round(sum / present) : 0
+      out[y * w + x] = inWindow > 0 && present * 2 >= inWindow
+        ? Math.round(sum / present)
+        : 0
     }
   }
   return { data: out, width: w, height: h }
@@ -449,23 +497,33 @@ export function extractContourSet(
 
   const table = buildCodeTable(scale)
 
-  // Decimate before anything reads a texel. The window is expressed in
-  // the *caller's* coordinates, so it is scaled by the same stride
-  // rather than clamped afterwards — a window measured against the
-  // original frame and applied to the decimated one would select a
-  // region four times too large, which is the kind of bug that produces
-  // a plausible picture of the wrong place.
+  // The caller's window, in the caller's coordinates, clamped to the
+  // frame. Resolved before decimation because decimation has to respect
+  // it: see `downsample`.
+  const win = window ?? fullWindow(snapshot)
+  const nx0 = Math.max(0, Math.floor(win.x0))
+  const ny0 = Math.max(0, Math.floor(win.y0))
+  const nx1 = Math.min(snapshot.width, Math.ceil(win.x1))
+  const ny1 = Math.min(snapshot.height, Math.ceil(win.y1))
+  if (nx1 - nx0 < 2 || ny1 - ny0 < 2) return empty()
+
   const stride = table.absentIsLowBand
     ? chooseStride(snapshot.width, snapshot.height)
     : 1
-  const frame = stride > 1 ? downsample(snapshot, table, stride) : snapshot
+  const frame = stride > 1
+    ? downsample(snapshot, table, stride, { x0: nx0, y0: ny0, x1: nx1, y1: ny1 })
+    : snapshot
   const { data, width, height } = frame
 
-  const win = window ?? fullWindow(snapshot)
-  const x0 = Math.max(0, Math.floor(win.x0 / stride))
-  const y0 = Math.max(0, Math.floor(win.y0 / stride))
-  const x1 = Math.min(width, Math.ceil(win.x1 / stride))
-  const y1 = Math.min(height, Math.ceil(win.y1 / stride))
+  // The same window in the decimated grid. Scaled rather than reused: a
+  // window measured against the original frame and applied to the
+  // decimated one would select a region `stride` times too large, which
+  // is the kind of bug that produces a plausible picture of the wrong
+  // place.
+  const x0 = Math.max(0, Math.floor(nx0 / stride))
+  const y0 = Math.max(0, Math.floor(ny0 / stride))
+  const x1 = Math.min(width, Math.ceil(nx1 / stride))
+  const y1 = Math.min(height, Math.ceil(ny1 / stride))
   if (x1 - x0 < 2 || y1 - y0 < 2) return empty()
   const nodesPerLevel = wanted.map(() => new Map<EdgeKey, Node>())
   const lowest = wanted[0]
