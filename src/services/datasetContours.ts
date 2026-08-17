@@ -17,7 +17,7 @@
  * matters — the arithmetic that is easiest to get quietly wrong is the
  * arithmetic that has to be testable on its own.
  *
- * Four things this module is careful about:
+ * Five things this module is careful about:
  *
  *  1. **Absent data breaks the cell, it does not bound it.** A texel the
  *     sidecar calls "nothing measured here" is not a low value, and a
@@ -57,6 +57,41 @@
  *     2.7 extractions per second against 30 fps playback, so contours
  *     cannot track a playing video and the Analyze panel drops them when
  *     the frame moves rather than pretending they are still current.
+ *  5. **The output is bounded by what can be drawn, not by what can be
+ *     traced.** Everything above tunes the cost of *one* cell. It says
+ *     nothing about how many cells there are, or how many of them emit,
+ *     and both assumptions broke on real data at once.
+ *
+ *     A plume field is a handful of connected regions with long smooth
+ *     boundaries. A convective reflectivity field is thousands of
+ *     discrete storm cells a few texels across, and marching squares
+ *     traces a faithful closed ring around every one. Measured at
+ *     7200x3600, six levels: **424,855 lines averaging 8.0 points
+ *     each** — against **117 lines averaging 744** for a smoke field of
+ *     the same size and *higher* coverage. Cost follows the number of
+ *     boundaries, and a thousand small cells have far more boundary
+ *     than one large one.
+ *
+ *     Eight points is a ring two or three texels wide: real data, and
+ *     smaller than the stroke that would draw it at any zoom this app
+ *     offers. So the frame is box-averaged down to `CONTOUR_TARGET_EDGE`
+ *     before it is walked, and runs below `MIN_RING_EXTENT_FRACTION` of
+ *     the frame are dropped: **2,713 lines**, the mean rising to 10.6
+ *     points — fewer lines, each of them more line. On one machine, both
+ *     ends measured back to back, **12.8 s to 0.37 s**; at 24 levels,
+ *     39.3 s to 1.1 s.
+ *
+ *     Quote those two together or neither. An earlier draft of this
+ *     comment paired a "before" taken while the machine was busy with an
+ *     "after" taken while it was idle, and reported a ratio a third too
+ *     flattering. The line counts are the load-independent half and were
+ *     right all along.
+ *
+ *     Both bounds are set by the *display*, which is what makes them
+ *     safe. Nothing here changes a reported value: `datasetStats` reduces
+ *     the full-resolution snapshot and is untouched, so the panel's
+ *     numbers stay exact while its lines move by up to half a decimated
+ *     texel. If those two ever pull apart, the statistics win.
  *  4. **The antimeridian splits a line rather than crossing it.** A
  *     polyline whose longitudes jump from +179 to −179 is drawn by
  *     MapLibre as a stripe straight back across the globe. Lines are cut
@@ -134,6 +169,25 @@ interface CodeTable {
    */
   absentBelow: number
   /**
+   * Every absent code is below `absentBelow` — i.e. absence really is
+   * the contiguous low band that field assumes.
+   *
+   * Separate from `monotone` because decimation needs exactly this and
+   * not the ordering half: averaging codes is sound on an inverted ramp
+   * (the mapping is still affine), but it is *not* sound if a present
+   * code can sit below an absent one, because then neither "skip what
+   * is absent" nor "write 0 to mean absent" is true.
+   *
+   * With today's sidecar this is always true, and deliberately still
+   * computed: `isTransparentLuma` is "below a cutoff" in both its forms,
+   * so no expressible scale can falsify it and the fallback below is
+   * unreachable. It is here for the day a sentinel in the middle of the
+   * range means "no data", when averaging across the gap would invent
+   * values nobody measured. `datasetContours.test.ts` pins the contract
+   * so that day fails a test rather than shipping.
+   */
+  absentIsLowBand: boolean
+  /**
    * Absence is that low band *and* values rise with the code, so a
    * cell's value range can be read off its code range. False sends the
    * walk down the general path: the fast tests are an optimisation, not
@@ -157,10 +211,11 @@ function buildCodeTable(scale: ColorScale): CodeTable {
   // by a side door. 256 iterations to rule it out is free.
   let absentBelow = 0
   while (absentBelow < LUMA_LEVELS && absent[absentBelow] === 1) absentBelow++
-  let monotone = true
+  let absentIsLowBand = true
   for (let luma = absentBelow; luma < LUMA_LEVELS; luma++) {
-    if (absent[luma] === 1) { monotone = false; break }
+    if (absent[luma] === 1) { absentIsLowBand = false; break }
   }
+  let monotone = absentIsLowBand
   // `lumaToValue` is affine and increasing for vmax > vmin, but an
   // inverted scale is expressible and would flip which corner is the
   // cell minimum. Read the direction off the table rather than trusting
@@ -171,7 +226,162 @@ function buildCodeTable(scale: ColorScale): CodeTable {
     }
   }
 
-  return { value, absent, absentBelow, monotone }
+  return { value, absent, absentBelow, absentIsLowBand, monotone }
+}
+
+/**
+ * Longest edge the cell walk runs at.
+ *
+ * A frame arriving above this is box-averaged down before it is
+ * marched. The number is a *display* bound rather than a performance
+ * one, which is why it is a fixed edge length and not a cell budget:
+ * the globe never occupies more than a couple of thousand pixels
+ * across, so an isoline resolved finer than this cannot be drawn
+ * distinctly at any camera the app offers. Everything below that limit
+ * is detail nobody can see, paid for at full price.
+ *
+ * It happens to be the difference between the panel working and the
+ * panel locking the tab, on a 7200x3600 reflectivity frame: 16.8 s to
+ * 0.6 s at six levels. But if the display bound and the performance
+ * bound ever disagree, this one follows the display.
+ */
+export const CONTOUR_TARGET_EDGE = 2048
+
+/**
+ * How much of the frame a line must span, in its longer axis, to be
+ * worth emitting — as a fraction of the frame's smaller dimension.
+ *
+ * The speckle problem in one number. A convective field is thousands of
+ * discrete storm cells a few texels across, and marching squares
+ * faithfully traces a closed ring around every one of them: measured on
+ * a 7200x3600 reflectivity frame at six levels, 424,855 separate lines
+ * averaging **8 points each**. Eight points is a ring two or three
+ * texels wide. It is a real feature of the data and it is also, at
+ * every zoom this app has, comfortably smaller than the stroke used to
+ * draw it — so it arrives as a dot of noise, having cost a full share
+ * of the extraction and of MapLibre's tessellation.
+ *
+ * Expressed as a fraction rather than a point count so it means the
+ * same thing at every frame size. A count would be a different policy
+ * on a 256-wide test frame than on a 7200-wide one, and the small end
+ * is where it would quietly delete everything.
+ *
+ * Deliberately measured as *extent*, not perimeter or point count: a
+ * long thin filament is a real feature with few points and a large
+ * extent, and would be the first casualty of a perimeter rule.
+ */
+export const MIN_RING_EXTENT_FRACTION = 0.004
+
+/**
+ * The factor to walk a frame of `width` x `height` down by.
+ *
+ * Only strides that divide *both* dimensions exactly are considered.
+ * The decimated grid has to cover the same geographic extent as the
+ * original, because `assemble` maps texel coordinates to lat/lon
+ * through a normalised UV and has no idea decimation happened. A stride
+ * leaving a partial column at the edge would shrink the covered extent
+ * while the UV mapping kept assuming the full one — every contour on
+ * the frame stretched slightly east, from a rounding decision.
+ *
+ * The search gives up at twice the ideal stride rather than accepting
+ * any divisor: a frame whose dimensions factor awkwardly is better
+ * walked at full resolution than quartered again to suit the
+ * arithmetic. Returning 1 is always correct, just slower.
+ */
+export function chooseStride(
+  width: number,
+  height: number,
+  targetEdge: number = CONTOUR_TARGET_EDGE,
+): number {
+  const longest = Math.max(width, height)
+  if (!(targetEdge > 0) || longest <= targetEdge) return 1
+  const ideal = Math.ceil(longest / targetEdge)
+  for (let s = ideal; s <= ideal * 2; s++) {
+    if (width % s === 0 && height % s === 0) return s
+  }
+  return 1
+}
+
+/**
+ * Box-average a frame down by `stride`, in luma.
+ *
+ * Averaging codes rather than values is exact here, not an
+ * approximation: `lumaToValue` is affine, so the mean of the codes maps
+ * to the mean of the values. The only loss is the rounding back to an
+ * integer code, which is a quarter of one quantisation step and far
+ * below the step itself.
+ *
+ * **Absent texels are excluded from the mean, not averaged into it.**
+ * This is rule 1 from the module docstring wearing different clothes.
+ * A box holding three texels of 50 dBZ and one of "nothing measured"
+ * has a mean of 50 over the data present; treating the absent one as a
+ * zero would report 37.5 and paint a gradient down the edge of every
+ * echo — a smooth, plausible, entirely manufactured one. A box that is
+ * mostly absent stays absent rather than reporting the mean of its
+ * minority, so the no-data footprint erodes by at most half a box
+ * instead of growing a fringe.
+ *
+ * **Texels outside `win` are excluded the same way.** A window edge
+ * rarely lands on a box boundary, and a box straddling one would
+ * otherwise average in source texels the caller excluded — letting
+ * values from outside the picked region create or move an isoline
+ * inside it. That is worse than it sounds, because `datasetStats`
+ * reduces exactly the window: the panel would report statistics for one
+ * region while drawing contours for a slightly larger one, and the two
+ * would disagree at the edge for no visible reason. The majority test
+ * counts in-window texels rather than the whole box, so an edge box
+ * holding one in-window texel is judged on that texel instead of being
+ * ruled absent by the neighbours it is not allowed to see.
+ *
+ * Only the boxes the walk will read are filled. The rest keep their
+ * zeroes and are never looked at, which also means a small picked
+ * region costs a small downsample rather than a whole-frame one.
+ */
+function downsample(
+  snapshot: LumaSnapshot,
+  table: CodeTable,
+  stride: number,
+  win: TexelWindow,
+): LumaSnapshot {
+  const { data, width, height } = snapshot
+  const w = width / stride
+  const h = height / stride
+  const out = new Uint8Array(w * h)
+  const { absentBelow } = table
+
+  const bx0 = Math.max(0, Math.floor(win.x0 / stride))
+  const by0 = Math.max(0, Math.floor(win.y0 / stride))
+  const bx1 = Math.min(w, Math.ceil(win.x1 / stride))
+  const by1 = Math.min(h, Math.ceil(win.y1 / stride))
+
+  for (let y = by0; y < by1; y++) {
+    const top = y * stride
+    const sy0 = Math.max(top, win.y0)
+    const sy1 = Math.min(top + stride, win.y1)
+    for (let x = bx0; x < bx1; x++) {
+      const left = x * stride
+      const sx0 = Math.max(left, win.x0)
+      const sx1 = Math.min(left + stride, win.x1)
+      let sum = 0
+      let present = 0
+      let inWindow = 0
+      for (let sy = sy0; sy < sy1; sy++) {
+        const row = sy * width
+        for (let sx = sx0; sx < sx1; sx++) {
+          inWindow++
+          const code = data[row + sx]
+          if (code >= absentBelow) { sum += code; present++ }
+        }
+      }
+      // Ties go to present: a box split evenly between data and no-data
+      // has measured something, and the alternative erodes a coastline
+      // by a box wherever the split happens to land at exactly half.
+      out[y * w + x] = inWindow > 0 && present * 2 >= inWindow
+        ? Math.round(sum / present)
+        : 0
+    }
+  }
+  return { data: out, width: w, height: h }
 }
 
 /**
@@ -277,23 +487,44 @@ export function extractContourSet(
   options?: DatasetOverlayOptions,
   window?: TexelWindow,
 ): ContourLevel[] {
-  const { data, width, height } = snapshot
   const wanted = [...new Set(levels.filter(v => Number.isFinite(v)))]
     .sort((a, b) => a - b)
     .slice(0, MAX_CONTOUR_LEVELS)
   if (!wanted.length) return []
 
   const empty = (): ContourLevel[] => wanted.map(value => ({ value, lines: [] }))
-  if (width < 2 || height < 2) return empty()
-
-  const win = window ?? fullWindow(snapshot)
-  const x0 = Math.max(0, Math.floor(win.x0))
-  const y0 = Math.max(0, Math.floor(win.y0))
-  const x1 = Math.min(width, Math.ceil(win.x1))
-  const y1 = Math.min(height, Math.ceil(win.y1))
-  if (x1 - x0 < 2 || y1 - y0 < 2) return empty()
+  if (snapshot.width < 2 || snapshot.height < 2) return empty()
 
   const table = buildCodeTable(scale)
+
+  // The caller's window, in the caller's coordinates, clamped to the
+  // frame. Resolved before decimation because decimation has to respect
+  // it: see `downsample`.
+  const win = window ?? fullWindow(snapshot)
+  const nx0 = Math.max(0, Math.floor(win.x0))
+  const ny0 = Math.max(0, Math.floor(win.y0))
+  const nx1 = Math.min(snapshot.width, Math.ceil(win.x1))
+  const ny1 = Math.min(snapshot.height, Math.ceil(win.y1))
+  if (nx1 - nx0 < 2 || ny1 - ny0 < 2) return empty()
+
+  const stride = table.absentIsLowBand
+    ? chooseStride(snapshot.width, snapshot.height)
+    : 1
+  const frame = stride > 1
+    ? downsample(snapshot, table, stride, { x0: nx0, y0: ny0, x1: nx1, y1: ny1 })
+    : snapshot
+  const { data, width, height } = frame
+
+  // The same window in the decimated grid. Scaled rather than reused: a
+  // window measured against the original frame and applied to the
+  // decimated one would select a region `stride` times too large, which
+  // is the kind of bug that produces a plausible picture of the wrong
+  // place.
+  const x0 = Math.max(0, Math.floor(nx0 / stride))
+  const y0 = Math.max(0, Math.floor(ny0 / stride))
+  const x1 = Math.min(width, Math.ceil(nx1 / stride))
+  const y1 = Math.min(height, Math.ceil(ny1 / stride))
+  if (x1 - x0 < 2 || y1 - y0 < 2) return empty()
   const nodesPerLevel = wanted.map(() => new Map<EdgeKey, Node>())
   const lowest = wanted[0]
   const highest = wanted[wanted.length - 1]
@@ -431,9 +662,10 @@ export function extractContourSet(
     }
   }
 
+  const minExtent = MIN_RING_EXTENT_FRACTION * Math.min(width, height)
   return wanted.map((value, li) => ({
     value,
-    lines: assemble(nodesPerLevel[li], snapshot, options),
+    lines: assemble(nodesPerLevel[li], frame, options, minExtent),
   }))
 }
 
@@ -466,6 +698,7 @@ function assemble(
   nodes: Map<EdgeKey, Node>,
   snapshot: LumaSnapshot,
   options?: DatasetOverlayOptions,
+  minExtent = 0,
 ): ContourLine[] {
   if (!nodes.size) return []
   const visited = new Set<EdgeKey>()
@@ -499,6 +732,12 @@ function assemble(
 
   const lines: ContourLine[] = []
   for (const run of runs) {
+    // Measured in texel space, before the projection, for two reasons.
+    // It is the space the threshold is defined in — a fraction of the
+    // frame — and it is the cheap one: rejecting here skips the
+    // `texelUvToLatLon` call per point on exactly the runs there are
+    // most of.
+    if (minExtent > 0 && !spansAtLeast(nodes, run, minExtent)) continue
     const points = run.map((key): ContourPoint => {
       const node = nodes.get(key) as Node
       return texelUvToLatLon(
@@ -512,6 +751,41 @@ function assemble(
     lines.push(...splitAtSeam(points))
   }
   return lines
+}
+
+/**
+ * Does this run reach `minExtent` texels across, in either axis?
+ *
+ * The longer axis decides, so a filament that is a hundred texels long
+ * and one wide is kept — it is a real feature, and a rule reading area
+ * or perimeter would discard it first. Only a run that is small in
+ * *both* directions is a speckle ring.
+ *
+ * Exits as soon as the answer is yes, which on a real frame is usually
+ * within a few points for the lines worth keeping, and never for the
+ * ones being rejected.
+ */
+function spansAtLeast(
+  nodes: Map<EdgeKey, Node>,
+  run: EdgeKey[],
+  minExtent: number,
+): boolean {
+  const first = nodes.get(run[0])
+  if (!first) return false
+  let minX = first.x
+  let maxX = first.x
+  let minY = first.y
+  let maxY = first.y
+  for (let i = 1; i < run.length; i++) {
+    const node = nodes.get(run[i])
+    if (!node) continue
+    if (node.x < minX) minX = node.x
+    else if (node.x > maxX) maxX = node.x
+    if (node.y < minY) minY = node.y
+    else if (node.y > maxY) maxY = node.y
+    if (maxX - minX >= minExtent || maxY - minY >= minExtent) return true
+  }
+  return false
 }
 
 /**
