@@ -183,6 +183,82 @@ function turbulentFrame(): Uint8Array {
   return data
 }
 
+/**
+ * Convective reflectivity: the pessimistic end, and a different shape of
+ * cost entirely.
+ *
+ * The two fields above are *plumes* — a handful of connected regions with
+ * long smooth boundaries. Reflectivity is not that. A composite
+ * reflectivity frame is thousands of discrete storm cells, most of them a
+ * few texels across, scattered through a domain that is otherwise empty.
+ * The coverage can be lower than the smoke frame's while the contour
+ * output is an order of magnitude larger, because cost follows the number
+ * of *boundaries* and a thousand small cells have far more boundary than
+ * one large one.
+ *
+ * That distinction is the whole reason this field exists. A frame can be
+ * 90% absent and still produce a quarter of a million separate closed
+ * rings, and the count of rings — not the count of texels, and not even
+ * the count of vertices — is what the map has to tessellate.
+ *
+ * Built as high-frequency noise gated by a large-scale envelope, which is
+ * roughly how convection organises: synoptic forcing says *where* storms
+ * are possible, and the cells themselves are much smaller than that.
+ */
+function speckleFrame(): Uint8Array {
+  const data = new Uint8Array(N)
+  const hash = (x: number, y: number, seed: number): number => {
+    let h = Math.imul(x, 374761393) ^ Math.imul(y, 668265263) ^ Math.imul(seed, 2246822519)
+    h = Math.imul(h ^ (h >>> 13), 1274126177)
+    return ((h ^ (h >>> 16)) >>> 0) / 4294967296
+  }
+  const lerp = (a: number, b: number, t: number): number => a + (b - a) * t
+  const ease = (t: number): number => t * t * (3 - 2 * t)
+  const noise = (x: number, y: number, seed: number): number => {
+    const xi = Math.floor(x)
+    const yi = Math.floor(y)
+    const xf = ease(x - xi)
+    const yf = ease(y - yi)
+    return lerp(
+      lerp(hash(xi, yi, seed), hash(xi + 1, yi, seed), xf),
+      lerp(hash(xi, yi + 1, seed), hash(xi + 1, yi + 1, seed), xf),
+      yf,
+    )
+  }
+
+  // Cell size in texels sets everything. At 3 km grid spacing a storm
+  // core is a handful of texels across, so the noise that carves cells
+  // has to run near the sampling limit — an envelope-scale noise would
+  // produce blobs and measure the plume case over again.
+  const CELL_TEXELS = 6
+  const fx = W / CELL_TEXELS
+  const fy = H / CELL_TEXELS
+
+  for (let y = 0; y < H; y++) {
+    const v = y / H
+    for (let x = 0; x < W; x++) {
+      const u = x / W
+      // Synoptic envelope: a few broad regions where convection is
+      // possible at all. Two octaves, deliberately smooth.
+      const env = 0.65 * noise(u * 3, v * 3, 1) + 0.35 * noise(u * 7, v * 7, 2)
+      if (env < 0.45) { data[y * W + x] = 0; continue }
+      const forcing = Math.min(1, (env - 0.45) / 0.35)
+
+      // Storm-scale structure, near the texel limit.
+      const cell = 0.6 * noise(u * fx, v * fy, 3)
+        + 0.3 * noise(u * fx * 2, v * fy * 2, 4)
+        + 0.1 * noise(u * fx * 4, v * fy * 4, 5)
+
+      // The gate is what makes cells discrete rather than a continuous
+      // field: below it there is no echo at all, which is what leaves
+      // thousands of separate boundaries instead of one.
+      const t = cell * forcing
+      data[y * W + x] = t < 0.42 ? 0 : Math.min(255, FIRST_DATA_CODE + Math.round(((t - 0.42) / 0.58) * 243))
+    }
+  }
+  return data
+}
+
 // --- harness ---------------------------------------------------------
 
 /** Median of `runs` timed calls, after one warm-up. Median rather than
@@ -212,20 +288,27 @@ function main(): void {
   console.log(`\nFrame ${W}×${H} = ${(N / 1e6).toFixed(1)}M texels`)
   console.log('Absolutes are this machine; read the ratios.\n')
 
-  const smooth = { data: smoothFrame(), width: W, height: H } satisfies LumaSnapshot
-  const turbulent = { data: turbulentFrame(), width: W, height: H } satisfies LumaSnapshot
-
   const wanted: [string, LumaSnapshot][] = []
-  if (FIELDS === 'both' || FIELDS === 'smooth') wanted.push(['SMOOTH plumes', smooth])
-  if (FIELDS === 'both' || FIELDS === 'turbulent') wanted.push(['TURBULENT field', turbulent])
+  const want = (name: string): boolean => FIELDS === 'both' || FIELDS === 'all' || FIELDS === name
+  if (want('smooth')) {
+    wanted.push(['SMOOTH plumes', { data: smoothFrame(), width: W, height: H }])
+  }
+  if (want('turbulent')) {
+    wanted.push(['TURBULENT field', { data: turbulentFrame(), width: W, height: H }])
+  }
+  // Not in `both`, which is the smoke bracket the reducers were tuned
+  // against. Ask for it by name or with `--field all`.
+  if (FIELDS === 'all' || FIELDS === 'speckle') {
+    wanted.push(['SPECKLE (convective reflectivity)', { data: speckleFrame(), width: W, height: H }])
+  }
   if (!wanted.length) {
-    console.error('--field must be one of: both, smooth, turbulent')
+    console.error('--field must be one of: both, all, smooth, turbulent, speckle')
     process.exit(1)
   }
+  const primary = wanted[wanted.length - 1][1]
 
   // Reducers are O(texels) and visit every one regardless of structure,
   // so a single field settles them.
-  const [, primary] = wanted[wanted.length - 1]
   console.log(`REDUCERS — whole frame (${absentPercent(primary.data).toFixed(1)}% absent)`)
   bench('buildHistogram', 5, () => buildHistogram(primary, SCALE, OPTIONS))
   bench('summarize (builds its own histogram)', 5, () => summarize(primary, SCALE, OPTIONS))
@@ -239,17 +322,28 @@ function main(): void {
   const levelsFor = (n: number): number[] =>
     Array.from({ length: n }, (_, i) => SCALE.vmin + ((i + 1) / (n + 1)) * span)
 
+  // Lines alongside vertices, because they are different costs paid by
+  // different code. Vertices are what the extractor allocates; *lines*
+  // are what MapLibre tessellates, and a field of small rings can carry
+  // a modest vertex count as a hundred thousand separate ones.
   for (const [name, snap] of wanted) {
     console.log(`\nCONTOURS — ${name} (${absentPercent(snap.data).toFixed(1)}% absent)`)
     for (const n of [1, 6, 12, 24]) {
       const levels = levelsFor(n)
       const result = extractContourSet(snap, SCALE, levels, OPTIONS)
-      const verts = result.reduce(
-        (a, lvl) => a + lvl.lines.reduce((b, line) => b + line.length, 0),
-        0,
+      let verts = 0
+      let lines = 0
+      for (const lvl of result) {
+        lines += lvl.lines.length
+        for (const line of lvl.lines) verts += line.length
+      }
+      const mean = lines ? (verts / lines).toFixed(1) : '—'
+      bench(
+        `${String(n).padStart(2)} level(s)  [${String(verts).padStart(8)} verts, `
+          + `${String(lines).padStart(7)} lines, ${String(mean).padStart(5)} pts/line]`,
+        3,
+        () => extractContourSet(snap, SCALE, levels, OPTIONS),
       )
-      bench(`${String(n).padStart(2)} level(s)  [${String(verts).padStart(7)} verts]`, 3, () =>
-        extractContourSet(snap, SCALE, levels, OPTIONS))
     }
   }
 

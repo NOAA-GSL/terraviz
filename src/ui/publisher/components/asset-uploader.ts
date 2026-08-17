@@ -32,6 +32,7 @@
  */
 
 import { t, type MessageKey } from '../../../i18n'
+import { detectVideoFrameRate } from './mp4-frame-rate'
 import { MAX_IMAGE_SEQUENCE_FRAMES as MAX_FRAMES } from '../../../types/image-sequence-constants'
 import {
   generateGlobeThumbnail,
@@ -185,6 +186,15 @@ export interface AssetUploaderOptions {
    *  any. Surfaced read-only above the picker so the publisher
    *  sees what they'd be replacing. */
   currentDataRef?: string | null
+  /** Whether the row is data-encoded (`render_encoding = data-luma`).
+   *  Drives the transcode default for a `video/mp4` data upload: the
+   *  catalog's single 4096x2048 rung would decimate a larger frame and
+   *  re-encode values that *are* the measurement, so these datasets
+   *  default to publishing the file as uploaded. Safe to read from the
+   *  form's own toggle because the parent already blocks uploading
+   *  while the encoding fields are unsaved — the server gates on the
+   *  saved `render_encoding`, so an unsaved toggle would 422. */
+  dataEncoded?: boolean
   /** Fired when the upload finishes successfully. */
   onUploaded: (outcome: AssetUploadOutcome) => void
   /** Fired when the publisher's draft hasn't been saved yet (the
@@ -211,6 +221,10 @@ export interface AssetUploaderOptions {
   /** Injected SHA-256 — tests pass a deterministic hash so
    *  fixture digests round-trip without computing. */
   hashFn?: (file: File) => Promise<string>
+  /** Injected frame-rate probe — tests supply a value directly rather
+   *  than building a synthetic MP4 for every uploader case. The probe
+   *  itself is covered in `mp4-frame-rate.test.ts`. */
+  detectFpsFn?: (file: File) => Promise<number | null>
   /** Injected sleep used by the API helpers' retry loops. */
   sleep?: (ms: number) => Promise<void>
   /** Navigation for the session-expired flow. */
@@ -441,6 +455,9 @@ const HASH_CHUNK_BYTES = 8 * 1024 * 1024
  *
  * Returns the `sha256:<hex>` form the publisher API expects.
  */
+/** What the catalog encodes at, and what `tourEngine` divides by. */
+const EXPECTED_FPS = 30
+
 export async function hashFileSha256(file: File): Promise<string> {
   // Dynamic import keeps `@noble/hashes` out of the main SPA
   // bundle — only loaded when the publisher actually opens the
@@ -515,6 +532,36 @@ export function renderAssetUploader(options: AssetUploaderOptions): HTMLElement 
   // HLS bundle). Image / tour datasets and the auxiliary
   // thumbnail / legend uploaders see the single-file picker.
   let activeTab: UploaderTab = 'video'
+
+  /**
+   * Does the publish-as-is choice apply to this uploader at all? Only
+   * a data-encoded row's primary `video/mp4` asset — which is exactly
+   * what the mint route enforces server-side.
+   */
+  function publishAsIsApplies(): boolean {
+    return kind === 'data' && options.dataEncoded === true && options.format === 'video/mp4'
+  }
+
+  /**
+   * Default on, because for a data-encoded row the transcode is
+   * destructive rather than redundant: `DATA_ENCODED_RENDITIONS` pins
+   * one rung at 4096x2048, so a larger frame is decimated, and the
+   * re-encode moves values rather than softening a picture. Unticking
+   * it opts back into the standard pipeline, which is occasionally
+   * what you want — a source that isn't 30 fps, or isn't 2:1.
+   */
+  let publishAsIs = true
+
+  /**
+   * Frames per second read out of the picked file's MP4 container, or
+   * null when it could not be determined. The transcode normally forces
+   * 30 fps, which `tourEngine` assumes when it computes
+   * `requestedFps / 30`; publishing as-is means nothing normalises it,
+   * so a 25 fps file would play every tour at the wrong speed. Warned
+   * about rather than refused — it is the publisher's file and a
+   * non-tour dataset does not care.
+   */
+  let pickedFps: number | null = null
   const tabsEnabled = kind === 'data' && options.format === 'video/mp4'
 
   // Stable ids used to wire the tab buttons to their tabpanel via
@@ -632,6 +679,58 @@ export function renderAssetUploader(options: AssetUploaderOptions): HTMLElement 
       frag.appendChild(current)
     }
 
+    // Publish-as-is control. Only for a data-encoded row's primary
+    // video, which is the one case where the transcode destroys rather
+    // than normalises — and exactly what the mint route enforces, so
+    // this is an affordance rather than the check.
+    if (publishAsIsApplies() && s.stage === 'idle') {
+      const row = document.createElement('div')
+      row.className = 'publisher-asset-uploader-asis'
+
+      const box = document.createElement('input')
+      box.type = 'checkbox'
+      box.id = 'publisher-asset-uploader-asis'
+      box.checked = publishAsIs
+      box.addEventListener('change', () => { publishAsIs = box.checked; paint() })
+
+      const boxLabel = document.createElement('label')
+      boxLabel.setAttribute('for', box.id)
+      boxLabel.textContent = t('publisher.assetUploader.publishAsIs.label')
+
+      row.appendChild(box)
+      row.appendChild(boxLabel)
+      frag.appendChild(row)
+
+      const help = document.createElement('p')
+      help.className = 'publisher-asset-uploader-help'
+      help.textContent = t('publisher.assetUploader.publishAsIs.help')
+      frag.appendChild(help)
+
+    }
+
+    // Outside the idle gate, deliberately. The probe has to await a
+    // `Blob` read, and `run()` moves the stage on immediately, so a
+    // result always lands *after* idle has gone — a warning rendered
+    // only while idle is a warning nobody ever sees. It also belongs
+    // there on its own merits: this describes the file, not the picker,
+    // and it matters at least as much once the upload has finished as
+    // it does before one starts.
+    //
+    // Still only while publishing as-is, because the transcode would
+    // normalise the rate and the warning would be false when it runs.
+    if (
+      publishAsIsApplies() && publishAsIs
+      && pickedFps !== null && Math.round(pickedFps) !== EXPECTED_FPS
+    ) {
+      const warn = document.createElement('p')
+      warn.className = 'publisher-asset-uploader-warning'
+      warn.textContent = t('publisher.assetUploader.publishAsIs.fpsWarning', {
+        fps: String(Math.round(pickedFps)),
+        expected: String(EXPECTED_FPS),
+      })
+      frag.appendChild(warn)
+    }
+
     // File picker. The label is mounted alongside the input
     // (and explicitly bound via `for` / `id`) so screen readers
     // announce "Pick a file, file picker" rather than leaving
@@ -673,6 +772,16 @@ export function renderAssetUploader(options: AssetUploaderOptions): HTMLElement 
     input.addEventListener('change', () => {
       const file = input.files?.[0]
       if (!file) return
+      // Read the frame rate alongside the upload rather than before it.
+      // The container read is fast — a few small slices, no decode —
+      // but the warning is advisory either way, and the publisher can
+      // act on it after the bytes have landed as easily as before.
+      if (publishAsIsApplies()) {
+        void (options.detectFpsFn ?? detectVideoFrameRate)(file).then(fps => {
+          pickedFps = fps
+          paint()
+        })
+      }
       void run(file)
     })
     inputRow.appendChild(input)
@@ -1759,6 +1868,10 @@ export function renderAssetUploader(options: AssetUploaderOptions): HTMLElement 
           mime: effectiveMime,
           size: file.size,
           content_digest: digest,
+          // Only meaningful for a video data upload; the route refuses
+          // it on anything else, so it is omitted rather than sent as a
+          // no-op the server would have to forgive.
+          ...(publishAsIsApplies() ? { transcode: !publishAsIs } : {}),
         },
         { fetchFn: options.fetchFn, sleep: options.sleep },
       )

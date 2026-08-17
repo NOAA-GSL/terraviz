@@ -1521,3 +1521,200 @@ describe('hashFileSha256', () => {
     expect(digest).toBe(`sha256:${refHex}`)
   })
 })
+
+// ---------------------------------------------------------------------------
+// Publish as uploaded (transcode: false)
+// ---------------------------------------------------------------------------
+
+describe('asset uploader — publish as uploaded', () => {
+  /** The two responses a video upload consumes: mint, then complete. */
+  function videoFetch(completeBody: unknown = { dataset: { data_ref: 'r2:datasets/x' } }) {
+    return vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse(
+          {
+            upload_id: 'UP-1',
+            kind: 'data',
+            target: 'r2',
+            r2: { method: 'PUT', url: 'https://r2.example/put', headers: {}, key: 'datasets/x/by-digest/aa.mp4' },
+            expires_at: 'soon',
+            mock: false,
+          },
+          201,
+        ),
+      )
+      .mockResolvedValueOnce(jsonResponse(completeBody, 200))
+  }
+
+  function mintBody(fetchFn: ReturnType<typeof vi.fn>): Record<string, unknown> {
+    return JSON.parse((fetchFn.mock.calls[0][1] as RequestInit).body as string)
+  }
+
+  it('defaults a data-encoded video to transcode: false', async () => {
+    const mount = document.createElement('div')
+    document.body.appendChild(mount)
+    const onUploaded = vi.fn()
+    const fetchFn = videoFetch()
+    mount.appendChild(
+      renderAssetUploader({
+        datasetId: '01AAAAAAAAAAAAAAAAAAAAAAAA',
+        format: 'video/mp4',
+        dataEncoded: true,
+        onUploaded,
+        hashFn: async () => 'sha256:' + 'a'.repeat(64),
+        fetchFn: fetchFn as unknown as typeof fetch,
+        xhrFactory: fakeXhrFactory(),
+        detectFpsFn: async () => 30,
+      }),
+    )
+    pickFile(mount, 'video/mp4', 'mock-mp4-bytes')
+    await until(() => fetchFn.mock.calls.length > 0, 'the /asset mint')
+    // The transcode decimates a data-encoded frame to the single
+    // 4096x2048 rung and re-encodes values that *are* the measurement,
+    // so preserving the file is the safe default rather than the
+    // opt-in.
+    expect(mintBody(fetchFn).transcode).toBe(false)
+  })
+
+  it('omits the flag entirely when the row is not data-encoded', async () => {
+    // The mint route refuses `transcode` on an ordinary video, so
+    // sending it as a no-op would be an error the server has to
+    // forgive.
+    const mount = document.createElement('div')
+    document.body.appendChild(mount)
+    const fetchFn = videoFetch({ dataset: { data_ref: '' }, transcoding: true })
+    mount.appendChild(
+      renderAssetUploader({
+        datasetId: '01AAAAAAAAAAAAAAAAAAAAAAAA',
+        format: 'video/mp4',
+        dataEncoded: false,
+        onUploaded: vi.fn(),
+        hashFn: async () => 'sha256:' + 'a'.repeat(64),
+        fetchFn: fetchFn as unknown as typeof fetch,
+        xhrFactory: fakeXhrFactory(),
+      }),
+    )
+    pickFile(mount, 'video/mp4', 'mock-mp4-bytes')
+    await until(() => fetchFn.mock.calls.length > 0, 'the /asset mint')
+    expect('transcode' in mintBody(fetchFn)).toBe(false)
+  })
+
+  it('offers the opt-out only on a data-encoded video', () => {
+    const withEncoding = document.createElement('div')
+    withEncoding.appendChild(
+      renderAssetUploader({
+        datasetId: '01AAAAAAAAAAAAAAAAAAAAAAAA',
+        format: 'video/mp4',
+        dataEncoded: true,
+        onUploaded: vi.fn(),
+      }),
+    )
+    expect(withEncoding.querySelector('.publisher-asset-uploader-asis')).not.toBeNull()
+
+    const plain = document.createElement('div')
+    plain.appendChild(
+      renderAssetUploader({
+        datasetId: '01AAAAAAAAAAAAAAAAAAAAAAAA',
+        format: 'video/mp4',
+        dataEncoded: false,
+        onUploaded: vi.fn(),
+      }),
+    )
+    expect(plain.querySelector('.publisher-asset-uploader-asis')).toBeNull()
+  })
+})
+
+describe('asset uploader — the frame-rate advisory is actually visible', () => {
+  it('shows the warning after the probe resolves, which is after idle has gone', async () => {
+    // Regression: the warning was rendered only inside `s.stage ===
+    // 'idle'`. The probe awaits a Blob read and `run()` advances the
+    // stage immediately, so a result always arrived after that block
+    // stopped rendering — the advisory existed and no publisher could
+    // ever see it. Resolving the probe on a later microtask is the
+    // whole point of this test.
+    const mount = document.createElement('div')
+    document.body.appendChild(mount)
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse(
+          {
+            upload_id: 'UP-1',
+            kind: 'data',
+            target: 'r2',
+            r2: { method: 'PUT', url: 'https://r2.example/put', headers: {}, key: 'datasets/x/by-digest/aa.mp4' },
+            expires_at: 'soon',
+            mock: false,
+          },
+          201,
+        ),
+      )
+      .mockResolvedValueOnce(jsonResponse({ dataset: { data_ref: 'r2:datasets/x' } }, 200))
+
+    mount.appendChild(
+      renderAssetUploader({
+        datasetId: '01AAAAAAAAAAAAAAAAAAAAAAAA',
+        format: 'video/mp4',
+        dataEncoded: true,
+        onUploaded: vi.fn(),
+        hashFn: async () => 'sha256:' + 'a'.repeat(64),
+        fetchFn: fetchFn as unknown as typeof fetch,
+        xhrFactory: fakeXhrFactory(),
+        // 25 fps: tours compute playbackRate as requestedFps / 30, so
+        // publishing this as-is plays every tour on it at the wrong
+        // speed, and nothing downstream would say so.
+        detectFpsFn: async () => 25,
+      }),
+    )
+
+    pickFile(mount, 'video/mp4', 'mock-mp4-bytes')
+    await until(
+      () => mount.querySelector('.publisher-asset-uploader-warning') !== null,
+      'the frame-rate advisory to appear',
+    )
+    expect(mount.textContent).toContain('25')
+  })
+
+  it('stays silent at 30 fps, which is what the catalog expects', async () => {
+    const mount = document.createElement('div')
+    document.body.appendChild(mount)
+    const onUploaded = vi.fn()
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse(
+          {
+            upload_id: 'UP-1',
+            kind: 'data',
+            target: 'r2',
+            r2: { method: 'PUT', url: 'https://r2.example/put', headers: {}, key: 'datasets/x/by-digest/aa.mp4' },
+            expires_at: 'soon',
+            mock: false,
+          },
+          201,
+        ),
+      )
+      .mockResolvedValueOnce(jsonResponse({ dataset: { data_ref: 'r2:datasets/x' } }, 200))
+
+    mount.appendChild(
+      renderAssetUploader({
+        datasetId: '01AAAAAAAAAAAAAAAAAAAAAAAA',
+        format: 'video/mp4',
+        dataEncoded: true,
+        onUploaded,
+        hashFn: async () => 'sha256:' + 'a'.repeat(64),
+        fetchFn: fetchFn as unknown as typeof fetch,
+        xhrFactory: fakeXhrFactory(),
+        detectFpsFn: async () => 30,
+      }),
+    )
+
+    pickFile(mount, 'video/mp4', 'mock-mp4-bytes')
+    // Anchor on the upload finishing, which is strictly later than the
+    // probe resolving — a bare "not present" assertion would pass
+    // before the probe had a chance to render anything.
+    await until(() => onUploaded.mock.calls.length > 0, 'the upload to report back')
+    expect(mount.querySelector('.publisher-asset-uploader-warning')).toBeNull()
+  })
+})
