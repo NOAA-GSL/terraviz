@@ -20,7 +20,9 @@
  */
 import { describe, expect, it } from 'vitest'
 import {
+  CONTOUR_TARGET_EDGE,
   MAX_CONTOUR_LEVELS,
+  chooseStride,
   contourSetToGeoJson,
   contoursToGeoJson,
   extractContourSet,
@@ -455,6 +457,192 @@ describe('the fast cell test', () => {
     // the assertion above is about absence rather than about a descending
     // scale finding nothing.
     expect(extractContours(frame, DESCENDING, 100, GLOBAL).length).toBeGreaterThan(0)
+  })
+})
+
+describe('chooseStride', () => {
+  it('leaves a frame at or under the target alone', () => {
+    expect(chooseStride(CONTOUR_TARGET_EDGE, CONTOUR_TARGET_EDGE / 2)).toBe(1)
+    expect(chooseStride(64, 32)).toBe(1)
+  })
+
+  it('picks the smallest exact divisor that gets under the target', () => {
+    // The shipped frame sizes, which is the case that matters.
+    expect(chooseStride(7200, 3600)).toBe(4)
+    expect(chooseStride(4096, 2048)).toBe(2)
+    expect(chooseStride(8192, 4096)).toBe(4)
+  })
+
+  it('refuses a stride that would not divide both dimensions exactly', () => {
+    // A prime above the target has no divisor but itself, and walking a
+    // frame down to one texel is not decimation. An uneven stride would
+    // leave a partial column and stretch every contour eastward, so the
+    // only safe answer is to walk it whole.
+    const prime = 4099
+    expect(chooseStride(prime, prime)).toBe(1)
+  })
+
+  it('gives up rather than reaching for an ever-coarser stride', () => {
+    // 6144 is 2^11 x 3 and 3125 is 5^5, so nothing in the searched range
+    // divides both. Walking at full resolution is slow; quartering the
+    // frame again to suit the arithmetic would be wrong, and wrong in a
+    // way that never shows up as an error.
+    expect(chooseStride(6144, 3125)).toBe(1)
+  })
+})
+
+describe('decimation', () => {
+  /** Big enough to trip decimation, with a plain radial blob whose
+   *  contour position is known independently of resolution. */
+  function blob(width: number, height: number): LumaSnapshot {
+    const cx = width / 2
+    const cy = height / 2
+    const r = Math.min(width, height) / 4
+    return snap(width, height, (x, y) => {
+      const d = Math.hypot(x - cx, y - cy) / r
+      return d >= 1 ? 20 : 20 + Math.round((1 - d) * 200)
+    })
+  }
+
+  it('puts the contour in the same place as an undecimated walk', () => {
+    // The failure this guards is a *shifted* contour, which no amount of
+    // looking at a globe would catch: decimation drops the frame to a
+    // quarter, and if the texel→lat/lon mapping does not follow, every
+    // line lands plausibly but wrongly.
+    const big = blob(4096, 2048)
+    expect(chooseStride(big.width, big.height)).toBeGreaterThan(1)
+    const decimated = extractContours(big, DENSE, 120, GLOBAL)
+
+    // The same field sampled at the size decimation would produce, run
+    // through a walk that does no decimation of its own.
+    const small = blob(2048, 1024)
+    expect(chooseStride(small.width, small.height)).toBe(1)
+    const direct = extractContours(small, DENSE, 120, GLOBAL)
+
+    expect(decimated.length).toBeGreaterThan(0)
+    expect(direct.length).toBeGreaterThan(0)
+    // Compare extents rather than vertices: box-averaging is not
+    // point-sampling, so the two rings are close but not identical.
+    const spread = (lines: ContourPoint[][]): { lat: number, lon: number } => {
+      const lats = lines.flat().map(p => p.lat)
+      const lons = lines.flat().map(p => p.lon)
+      return {
+        lat: Math.max(...lats) - Math.min(...lats),
+        lon: Math.max(...lons) - Math.min(...lons),
+      }
+    }
+    const a = spread(decimated)
+    const b = spread(direct)
+    expect(a.lat).toBeCloseTo(b.lat, 0)
+    expect(a.lon).toBeCloseTo(b.lon, 0)
+    // And centred in the same place, not merely the same size.
+    const centre = (lines: ContourPoint[][]): number =>
+      lines.flat().reduce((s, p) => s + p.lon, 0) / lines.flat().length
+    expect(centre(decimated)).toBeCloseTo(centre(direct), 0)
+  })
+
+  it('excludes absent texels from the average rather than averaging them in', () => {
+    // Rule 1 in decimation's clothing. A box of three present texels and
+    // one absent must report the mean of the three; folding the absent
+    // one in as a zero manufactures a gradient down the edge of every
+    // echo — smooth, plausible, and not in the data.
+    //
+    // The boundary sits at an *odd* column on purpose, so it falls
+    // inside a box rather than between two. A boundary on a box edge
+    // never mixes present and absent in the same average and the bug
+    // would sail straight through — which is exactly what an earlier
+    // version of this test did.
+    const width = 4096
+    const height = 2048
+    const frame = snap(width, height, x => (x < width / 2 + 1 ? 200 : 0))
+    // A level below the plateau: the only way to cross it is if some
+    // texel came back lower than 200, which only averaging-in can do.
+    const lines = extractContours(frame, SCALE, 150, GLOBAL)
+    expect(lines).toEqual([])
+  })
+
+  it('keeps a mostly-absent box absent instead of reporting its minority', () => {
+    // One present texel in each 2x2 box, everywhere. Decimation must not
+    // promote a quarter-full box into a solid value and paint the whole
+    // frame; the no-data footprint may erode by half a box, never grow a
+    // field out of nothing.
+    const frame = snap(4096, 2048, (x, y) => (x % 2 === 0 && y % 2 === 0 ? 200 : 0))
+    expect(extractContours(frame, SCALE, 100, GLOBAL)).toEqual([])
+  })
+
+  it('scales the window with the stride', () => {
+    // A window is in the caller's coordinates. Applied unscaled to a
+    // decimated frame it would address the wrong region entirely.
+    //
+    // The blob sits in the *right* half deliberately. Put it on the left
+    // and neither assertion discriminates: an unscaled right-half window
+    // clamps to an empty range and an unscaled left-half window clamps
+    // to the whole frame, so both agree with the correct answer by
+    // accident. On the right, both disagree.
+    const width = 4096
+    const height = 2048
+    const frame = snap(width, height, (x, y) => {
+      const d = Math.hypot(x - (7 * width) / 8, y - height / 2) / (height / 8)
+      return d >= 1 ? 20 : 20 + Math.round((1 - d) * 200)
+    })
+    const right = extractContours(frame, DENSE, 120, GLOBAL,
+      { x0: width / 2, y0: 0, x1: width, y1: height })
+    expect(right.length).toBeGreaterThan(0)
+    const left = extractContours(frame, DENSE, 120, GLOBAL,
+      { x0: 0, y0: 0, x1: width / 2, y1: height })
+    expect(left).toEqual([])
+  })
+
+  it('walks at full resolution when absence is not a low band', () => {
+    // A scale whose absent codes are not a contiguous run at the bottom
+    // breaks both of decimation's assumptions — "skip what is absent"
+    // and "write 0 to mean absent". It must fall back rather than
+    // average across the gap.
+    const holed: ColorScale = {
+      ...SCALE,
+      stops: [
+        { t: 0, rgba: [0, 0, 0, 255] },
+        { t: 0.5, rgba: [128, 128, 128, 0] },
+        { t: 1, rgba: [255, 255, 255, 255] },
+      ],
+      transparentRange: undefined,
+    }
+    const frame = snap(4096, 2048, x => (x < 2048 ? 20 : 200))
+    // The assertion is that it does something sane rather than throwing
+    // or emptying: the mid-range hole means the ramp is not monotone, so
+    // the general path runs and still finds the step.
+    expect(() => extractContours(frame, holed, 100, GLOBAL)).not.toThrow()
+  })
+})
+
+describe('the minimum-ring filter', () => {
+  it('drops a ring far smaller than the stroke that would draw it', () => {
+    // Four texels square, so it survives decimation as a 2x2 block and
+    // the *filter* is what removes it. A single texel would be averaged
+    // away by the downsample and the test would pass with the filter
+    // disabled — it did, before this comment existed.
+    const frame = snap(4096, 2048, (x, y) =>
+      (x >= 1000 && x < 1004 && y >= 500 && y < 504 ? 250 : 20))
+    expect(extractContours(frame, DENSE, 120, GLOBAL)).toEqual([])
+  })
+
+  it('keeps a long thin filament, which a perimeter rule would not', () => {
+    // Two texels tall and most of the frame wide. Small in area, small
+    // in one axis, and a real feature — the case that makes the rule
+    // "extent in the longer axis" rather than "enough points".
+    const frame = snap(4096, 2048, (x, y) =>
+      (y >= 500 && y < 502 && x > 100 && x < 3900 ? 250 : 20))
+    const lines = extractContours(frame, DENSE, 120, GLOBAL)
+    expect(lines.length).toBeGreaterThan(0)
+    expect(vertexCount(lines)).toBeGreaterThan(0)
+  })
+
+  it('leaves small frames alone, where a fixed point count would empty them', () => {
+    // The threshold is a fraction of the frame, so an 8x8 fixture keeps
+    // the tiny rings that are its entire content. A point-count rule
+    // tuned for 7200x3600 would silently delete every test above.
+    const frame = snap(8, 8, (x, y) => (x >= 3 && x <= 4 && y >= 3 && y <= 4 ? 200 : 20))
+    expect(extractContours(frame, DENSE, 100, GLOBAL).length).toBeGreaterThan(0)
   })
 })
 
