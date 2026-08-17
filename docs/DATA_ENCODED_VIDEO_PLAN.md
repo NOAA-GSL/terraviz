@@ -324,6 +324,11 @@ data-encoded datasets:
   measured.
 - **Single rendition.** The 720p rung would resample a data raster to a quarter
   scale. Data-encoded datasets should publish the 4096×2048 rung only.
+  **Revisited 2026-08-16:** "the 4096×2048 rung" and "the source rung" were the
+  same number while every dataset was 4096×2048, and a 7200×3600 source
+  separates them — the constant now decimates by a non-integer factor above it
+  and upscales beneath it. See §The ladder as a relative shape in
+  [`DATA_ENCODED_RESOLUTION_PLAN.md`](DATA_ENCODED_RESOLUTION_PLAN.md).
 
 **`segmentDescriptorHash` in `cli/lib/hls-incremental.ts:212-224` must have its
 `v: 1` bumped.** Its own docstring warns that ladder-wide codec settings are not

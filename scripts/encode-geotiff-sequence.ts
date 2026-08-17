@@ -77,6 +77,46 @@ const MIN_FRAMES_FOR_RATE_TO_AMORTISE = Math.ceil(VBV_INIT_FRACTION * 2 * OUTPUT
  */
 const DEFAULT_DATA_MIN_LUMA = 8
 
+/**
+ * Codec-specific arguments. Everything else about the encode is shared,
+ * so what differs here is exactly what a codec comparison is allowed to
+ * vary.
+ *
+ * **Why HEVC is worth an option at all.** H.264 hardware decode is
+ * capped at 4096x4096 on essentially all consumer silicon — Intel Quick
+ * Sync, NVIDIA NVDEC and Apple VideoToolbox alike. The 8K decode those
+ * parts advertise is HEVC and AV1. `DATA_ENCODED_RESOLUTION_PLAN.md`
+ * measured a 7200-wide H.264 clip costing the same per-frame upload on
+ * an RTX 4090 as on an Intel iGPU — a card with ~50x the memory
+ * bandwidth — which is what a software-decoded frame crossing the bus
+ * looks like. If HEVC gets hardware decode at this size, the frame
+ * stays in GPU memory and the whole cost profile changes. More
+ * importantly, iOS Safari refuses the H.264 rung outright, and iOS
+ * decodes HEVC natively: if it accepts an HEVC rung, the refusal that
+ * makes Phase 2 necessary disappears.
+ *
+ * `-tag:v hvc1` is not optional. ffmpeg defaults HEVC in MP4 to the
+ * `hev1` sample entry, which Safari and QuickTime will not play — so
+ * omitting it would produce a false refusal on the exact platform this
+ * option exists to test, which is the worst outcome a probe can deliver.
+ *
+ * Range signalling is deliberately left at the ffmpeg level
+ * (`-color_range pc`) for both, matching the "tag the range and nothing
+ * else" form that `DATA_ENCODED_VIDEO_PLAN.md` measured as the one that
+ * survives everywhere. Adding codec-private colour params would confound
+ * the comparison with a second variable.
+ */
+const CODECS: Record<string, { args: string[]; note: string }> = {
+  h264: {
+    args: ['-c:v', 'libx264', '-profile:v', 'main'],
+    note: 'what the catalog ships today',
+  },
+  hevc: {
+    args: ['-c:v', 'libx265', '-profile:v', 'main', '-tag:v', 'hvc1'],
+    note: 'hardware decode above 4096 wide; required for an iOS accept',
+  },
+}
+
 /** Default palette: a viridis-like ramp with the bottom of the range
  *  fading to transparent, matching the published smoke pipeline's habit
  *  of not drawing a haze over the whole globe for values that are
@@ -99,6 +139,7 @@ interface Args {
   dataMinLuma: number
   nodata?: number
   maxBitrateKbps: number
+  codec: string
   keepTemp: boolean
 }
 
@@ -127,6 +168,17 @@ function parseArgs(argv: string[]): Args {
   if (!Number.isInteger(lumaLo) || lumaLo < 0 || lumaLo > 254) {
     throw new Error(`--data-min-luma must be an integer in 0..254, got ${lumaLo}`)
   }
+  // Validated up front for the same reason as the luma floor: an
+  // unrecognised codec would otherwise reach ffmpeg as a missing
+  // encoder, minutes into a run, as a wall of stderr.
+  const codec = (get('codec') ?? 'h264').toLowerCase()
+  // `hasOwn`, not `in`: `in` walks the prototype chain, so `--codec
+  // toString` would pass and then fail later at `CODECS[codec].args`
+  // with a message about the wrong thing. The point of validating here
+  // is that an unrecognised codec says so immediately.
+  if (!Object.hasOwn(CODECS, codec)) {
+    throw new Error(`--codec must be one of ${Object.keys(CODECS).join(', ')}, got ${codec}`)
+  }
   return {
     in: resolve(inDir),
     out: resolve(get('out') ?? 'out/data-encoded.mp4'),
@@ -136,6 +188,7 @@ function parseArgs(argv: string[]): Args {
     dataMinLuma: lumaLo,
     nodata: num('nodata'),
     maxBitrateKbps: num('max-bitrate') ?? DEFAULT_MAX_BITRATE_KBPS,
+    codec,
     keepTemp: argv.includes('--keep-temp'),
   }
 }
@@ -216,9 +269,77 @@ function mapToLuma(
   }
 }
 
+/**
+ * Check every external binary before doing any work.
+ *
+ * Without this the run fails at first use: `gdalinfo` on file one, or —
+ * far worse — `ffmpeg` only once the statistics pass has read every
+ * raster, which on twenty 55 MB GeoTIFFs is minutes of work discarded.
+ * The HEVC case is nastier still, because a perfectly good ffmpeg can
+ * lack libx265: that failure would land *after* the frames were
+ * generated and piped, at the point where the encoder is asked to
+ * exist.
+ */
+function requireTools(codec: string): void {
+  const missing: string[] = []
+  const broken: string[] = []
+  for (const [bin, probe] of [
+    ['gdalinfo', '--version'],
+    ['gdal_translate', '--version'],
+    ['ffmpeg', '-version'],
+  ] as const) {
+    const r = spawnSync(bin, [probe], { encoding: 'utf8' })
+    if (r.error) { missing.push(bin); continue }
+    // Found is not the same as runnable. A bundled GDAL invoked outside
+    // its own environment spawns cleanly and then dies loading its DLLs:
+    // no stdout, no stderr, and an exit status Windows reports as
+    // 0xC0000135. Counting that as present just moves the failure into
+    // the first real call, which is what this function exists to stop.
+    // Output on either stream counts, since a tool that prints its
+    // version to stderr is still a working tool.
+    const said = `${r.stdout ?? ''}${r.stderr ?? ''}`.trim()
+    if (r.status !== 0 || !said) {
+      broken.push(`${bin} (exit ${r.status ?? r.signal ?? 'unknown'})`)
+    }
+  }
+  if (broken.length && !missing.length) {
+    throw new Error(
+      `on PATH but not runnable: ${broken.join(', ')}\n`
+      + `  The binary was found and started, then exited without saying anything.\n`
+      + `  On Windows exit 3221225781 (0xC0000135) is a missing DLL, which is what\n`
+      + `  a bundled GDAL does when it runs outside the environment it belongs to —\n`
+      + `  putting one directory on PATH is not always enough to satisfy it.\n`
+      + `  Start ArcGIS Pro's "Python Command Prompt" (bin\\Python\\Scripts\\proenv.bat)\n`
+      + `  or the OSGeo4W Shell, which activate the whole environment, and run this\n`
+      + `  from there instead.`)
+  }
+  if (missing.length) {
+    throw new Error(
+      `not on PATH: ${missing.join(', ')}\n`
+      + `  GDAL ships inside QGIS, OSGeo4W and ArcGIS Pro, and none of the three put\n`
+      + `  it on PATH. On Windows, find it with:\n`
+      + `    Get-ChildItem 'C:\\Program Files' -Recurse -Filter gdalinfo.exe -EA SilentlyContinue\n`
+      + `  then APPEND that directory to $env:PATH, not prepend: those are whole\n`
+      + `  bundled environments, and a conda ffmpeg built without libx264/libx265\n`
+      + `  would otherwise shadow a working one.`)
+  }
+  // A build without the encoder is the failure this function exists to
+  // move forward: ffmpeg is present, so nothing above catches it, and
+  // libx265 is the one people are missing.
+  const enc = codec === 'hevc' ? 'libx265' : 'libx264'
+  const r = spawnSync('ffmpeg', ['-hide_banner', '-encoders'], { encoding: 'utf8' })
+  if (!(r.stdout ?? '').includes(enc)) {
+    throw new Error(
+      `this ffmpeg has no ${enc} encoder, which --codec ${codec} needs.\n`
+      + `  Check with: ffmpeg -hide_banner -encoders | findstr ${enc.slice(3)}\n`
+      + `  Full builds (gyan.dev or BtbN on Windows) carry it; minimal ones may not.`)
+  }
+}
+
 function main(): void {
   const args = parseArgs(process.argv.slice(2))
   if (!existsSync(args.in)) throw new Error(`--in ${args.in} does not exist`)
+  requireTools(args.codec)
 
   const files = readdirSync(args.in)
     .filter(f => ['.tif', '.tiff'].includes(extname(f).toLowerCase()))
@@ -287,6 +408,7 @@ function main(): void {
   const boundBytes =
     (VBV_INIT_FRACTION * args.maxBitrateKbps * 2 * 1000
       + args.maxBitrateKbps * 1000 * durationSec) / 8
+  process.stdout.write(`codec ${args.codec} — ${CODECS[args.codec].note}\n`)
   process.stdout.write(
     `ceiling ${args.maxBitrateKbps} kbps (bufsize ${args.maxBitrateKbps * 2}k)`
     + `  → at most ${(boundBytes / 1e6).toFixed(1)} MB for ${files.length} frames`
@@ -312,7 +434,14 @@ function main(): void {
     '-framerate', String(OUTPUT_FRAME_RATE), '-i', 'pipe:0',
     '-vf', 'scale=in_range=full:out_range=full',
     '-color_range', 'pc',
-    '-c:v', 'libx264', '-profile:v', 'main', '-pix_fmt', 'yuv420p',
+    ...CODECS[args.codec].args,
+    '-pix_fmt', 'yuv420p',
+    // CRF is not comparable across codecs — x265 needs a higher number
+    // for the same quality — but the bitrate ceiling below binds well
+    // before CRF does on frames this large, so the two encodes are
+    // compared at matched *bitrate* rather than matched CRF. That is the
+    // right axis anyway: the question is what a device does with a given
+    // stream, not which encoder is more efficient.
     '-preset', 'slow', '-crf', '18',
     // The ceiling, without which CRF alone has none. bufsize at 2x
     // maxrate mirrors `buildFfmpegArgs`.
@@ -399,6 +528,9 @@ encode-geotiff-sequence — GeoTIFF sequence -> data-encoded video + color_scale
   --units <s>           unit label carried into the sidecar, e.g. "mg m-2"
   --data-min-luma <n>   lowest luma code carrying data (default ${DEFAULT_DATA_MIN_LUMA})
   --nodata <n>          override the GeoTIFF's own no-data value
+  --codec <h264|hevc>   default h264. hevc unlocks hardware decode above
+                        4096 wide and is the one Apple decodes natively,
+                        so it is the lever for an iOS accept.
   --max-bitrate <kbps>  ceiling, default ${DEFAULT_MAX_BITRATE_KBPS} (what the catalog ships).
                         Without it CRF alone is uncapped and will emit
                         hundreds of Mbps on large frames.
