@@ -58,11 +58,28 @@ const DEFAULT_MAX_BITRATE_KBPS = 25_000
  *  available at the first frame. */
 const VBV_INIT_FRACTION = 0.9
 
-/** Frames after which average bitrate converges on the ceiling, i.e.
- *  when the clip outlasts the VBV buffer. `VBV_INIT_FRACTION * 2 *
- *  OUTPUT_FRAME_RATE`, with the 2 being bufsize's multiple of maxrate —
- *  so it does not move when the ceiling does. */
-const MIN_FRAMES_FOR_RATE_TO_AMORTISE = Math.ceil(VBV_INIT_FRACTION * 2 * OUTPUT_FRAME_RATE)
+/** How many times `-maxrate` the VBV buffer is set to. */
+const BUFSIZE_MULTIPLE = 2
+
+/**
+ * Seconds after which average bitrate converges on the ceiling, i.e.
+ * when the clip outlasts the VBV buffer.
+ *
+ * The buffer holds `BUFSIZE_MULTIPLE` seconds of bits at the ceiling and
+ * starts `VBV_INIT_FRACTION` full, so their product is the runtime the
+ * initial fullness covers on its own — and it does not move when the
+ * ceiling does, because bufsize is pinned to a multiple of it.
+ *
+ * A *duration*, deliberately, though it was a frame count until
+ * `--playback-fps` existed. While every clip was read at 30 fps the two
+ * were the same statement and the frame count was the easier one to
+ * print. They are not the same statement any more: twenty frames read at
+ * 2 fps is a ten-second clip that comfortably outlasts the buffer, and a
+ * frame-count test would announce the opposite while the encoder did the
+ * right thing. The buffer drains in seconds; it has never had an opinion
+ * about frames.
+ */
+const SECONDS_FOR_RATE_TO_AMORTISE = VBV_INIT_FRACTION * BUFSIZE_MULTIPLE
 
 /**
  * Lowest luma code that carries data; everything below is the reserved
@@ -308,7 +325,7 @@ function mapToLuma(
  * I-frame. Measured on a five-unique-frame chunk at 7200x3600: the five
  * I-frames were 22.5 MB of a 26.2 MB file, averaging 4.5 MB each, while
  * the 44 duplicate B-frames cost 4 KB apiece. Extrapolated to twenty
- * frames that is ~105 MB against ~10 MB undulicated — the duplicates
+ * frames that is ~105 MB against ~10 MB unduplicated — the duplicates
  * are free and the transitions are ruinous.
  *
  * `scenecut=0` codes those transitions as P-frames instead. It is safe
@@ -316,7 +333,7 @@ function mapToLuma(
  * the clip's duration by `30 / sourceFps`, so the same `-maxrate`
  * ceiling buys that many times more total bits for the same twenty
  * unique frames. The transitions are not being starved to save space —
- * they have more budget than the undulicated encode gave them.
+ * they have more budget than the unduplicated encode gave them.
  *
  * Not exposed as a flag. It is not an independent choice: duplication
  * is what manufactures the scene cuts, so anyone using one wants the
@@ -444,8 +461,8 @@ function main(): void {
   // at maxrate from a buffer that x264 starts ~90% full (`--vbv-init`).
   // A clip spends the initial fullness *plus* whatever drains during
   // its runtime, so `rate x duration` is only the whole story once the
-  // clip outlasts the buffer. With bufsize pinned at 2x maxrate that
-  // takes ~54 frames at 30 fps, and it is independent of the ceiling —
+  // clip outlasts the buffer, which takes
+  // `SECONDS_FOR_RATE_TO_AMORTISE` and is independent of the ceiling —
   // raising maxrate raises the buffer in step.
   //
   // Printing the naive product instead cost a real run: 20 frames came
@@ -460,16 +477,17 @@ function main(): void {
   const sourceFps = args.playbackFps ?? OUTPUT_FRAME_RATE
   const durationSec = files.length / sourceFps
   const boundBytes =
-    (VBV_INIT_FRACTION * args.maxBitrateKbps * 2 * 1000
+    (VBV_INIT_FRACTION * args.maxBitrateKbps * BUFSIZE_MULTIPLE * 1000
       + args.maxBitrateKbps * 1000 * durationSec) / 8
   process.stdout.write(`codec ${args.codec} — ${CODECS[args.codec].note}\n`)
   process.stdout.write(
-    `ceiling ${args.maxBitrateKbps} kbps (bufsize ${args.maxBitrateKbps * 2}k)`
+    `ceiling ${args.maxBitrateKbps} kbps `
+    + `(bufsize ${args.maxBitrateKbps * BUFSIZE_MULTIPLE}k)`
     + `  → at most ${(boundBytes / 1e6).toFixed(1)} MB for ${files.length} frames`
     + ` (${durationSec.toFixed(2)}s)\n`)
-  if (files.length < MIN_FRAMES_FOR_RATE_TO_AMORTISE) {
+  if (durationSec < SECONDS_FOR_RATE_TO_AMORTISE) {
     process.stdout.write(
-      `  note: under ${MIN_FRAMES_FOR_RATE_TO_AMORTISE} frames the buffer, not the rate, sets the size —\n`
+      `  note: under ${SECONDS_FOR_RATE_TO_AMORTISE.toFixed(1)}s the buffer, not the rate, sets the size —\n`
       + `        expect an average bitrate above the ceiling, which is correct VBV behaviour\n`)
   }
 
@@ -503,10 +521,12 @@ function main(): void {
     // right axis anyway: the question is what a device does with a given
     // stream, not which encoder is more efficient.
     '-preset', 'slow', '-crf', '18',
-    // The ceiling, without which CRF alone has none. bufsize at 2x
-    // maxrate mirrors `buildFfmpegArgs`.
+    // The ceiling, without which CRF alone has none. bufsize at
+    // `BUFSIZE_MULTIPLE` x maxrate mirrors `buildFfmpegArgs` — and the
+    // amortisation threshold is derived from the same constant, so the
+    // reported bound cannot drift from the encode it describes.
     '-maxrate', `${args.maxBitrateKbps}k`,
-    '-bufsize', `${args.maxBitrateKbps * 2}k`,
+    '-bufsize', `${args.maxBitrateKbps * BUFSIZE_MULTIPLE}k`,
     '-an',
     // Move `moov` to the front. ffmpeg writes it last in a single-pass
     // encode, because it cannot know the sample table until every frame
