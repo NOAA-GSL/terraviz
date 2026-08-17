@@ -58,11 +58,28 @@ const DEFAULT_MAX_BITRATE_KBPS = 25_000
  *  available at the first frame. */
 const VBV_INIT_FRACTION = 0.9
 
-/** Frames after which average bitrate converges on the ceiling, i.e.
- *  when the clip outlasts the VBV buffer. `VBV_INIT_FRACTION * 2 *
- *  OUTPUT_FRAME_RATE`, with the 2 being bufsize's multiple of maxrate —
- *  so it does not move when the ceiling does. */
-const MIN_FRAMES_FOR_RATE_TO_AMORTISE = Math.ceil(VBV_INIT_FRACTION * 2 * OUTPUT_FRAME_RATE)
+/** How many times `-maxrate` the VBV buffer is set to. */
+const BUFSIZE_MULTIPLE = 2
+
+/**
+ * Seconds after which average bitrate converges on the ceiling, i.e.
+ * when the clip outlasts the VBV buffer.
+ *
+ * The buffer holds `BUFSIZE_MULTIPLE` seconds of bits at the ceiling and
+ * starts `VBV_INIT_FRACTION` full, so their product is the runtime the
+ * initial fullness covers on its own — and it does not move when the
+ * ceiling does, because bufsize is pinned to a multiple of it.
+ *
+ * A *duration*, deliberately, though it was a frame count until
+ * `--playback-fps` existed. While every clip was read at 30 fps the two
+ * were the same statement and the frame count was the easier one to
+ * print. They are not the same statement any more: twenty frames read at
+ * 2 fps is a ten-second clip that comfortably outlasts the buffer, and a
+ * frame-count test would announce the opposite while the encoder did the
+ * right thing. The buffer drains in seconds; it has never had an opinion
+ * about frames.
+ */
+const SECONDS_FOR_RATE_TO_AMORTISE = VBV_INIT_FRACTION * BUFSIZE_MULTIPLE
 
 /**
  * Lowest luma code that carries data; everything below is the reserved
@@ -139,6 +156,7 @@ interface Args {
   dataMinLuma: number
   nodata?: number
   maxBitrateKbps: number
+  playbackFps?: number
   codec: string
   keepTemp: boolean
 }
@@ -168,6 +186,23 @@ function parseArgs(argv: string[]): Args {
   if (!Number.isInteger(lumaLo) || lumaLo < 0 || lumaLo > 254) {
     throw new Error(`--data-min-luma must be an integer in 0..254, got ${lumaLo}`)
   }
+  // `--playback-fps` is how a dataset that should advance slowly gets
+  // encoded: the frames are *read* at that rate and written at 30, so
+  // each one is held for `30 / fps` output frames. It has to be baked
+  // into the file because nothing in the player applies a dataset's
+  // `playback_fps` — `tourEngine` is the only thing that ever sets
+  // `playbackRate`, and only during a tour. This mirrors
+  // `cli/transcode-from-dispatch.ts`, which does the same with
+  // `-framerate` on the image-sequence input.
+  const playbackFps = num('playback-fps')
+  if (playbackFps !== undefined
+      && (!(playbackFps > 0) || playbackFps > OUTPUT_FRAME_RATE)) {
+    throw new Error(
+      `--playback-fps must be greater than 0 and at most ${OUTPUT_FRAME_RATE}, `
+      + `got ${playbackFps}. Above ${OUTPUT_FRAME_RATE} would drop frames rather `
+      + `than hold them.`)
+  }
+
   // Validated up front for the same reason as the luma floor: an
   // unrecognised codec would otherwise reach ffmpeg as a missing
   // encoder, minutes into a run, as a wall of stderr.
@@ -188,6 +223,7 @@ function parseArgs(argv: string[]): Args {
     dataMinLuma: lumaLo,
     nodata: num('nodata'),
     maxBitrateKbps: num('max-bitrate') ?? DEFAULT_MAX_BITRATE_KBPS,
+    playbackFps: playbackFps,
     codec,
     keepTemp: argv.includes('--keep-temp'),
   }
@@ -280,6 +316,36 @@ function mapToLuma(
  * generated and piped, at the point where the encoder is asked to
  * exist.
  */
+/**
+ * Codec parameters that only make sense when frames are being held.
+ *
+ * Reading at `sourceFps` and writing at 30 means every *unique* frame
+ * arrives after a run of identical ones, which is exactly what a
+ * scene-cut detector is built to notice — so it codes each one as an
+ * I-frame. Measured on a five-unique-frame chunk at 7200x3600: the five
+ * I-frames were 22.5 MB of a 26.2 MB file, averaging 4.5 MB each, while
+ * the 44 duplicate B-frames cost 4 KB apiece. Extrapolated to twenty
+ * frames that is ~105 MB against ~10 MB unduplicated — the duplicates
+ * are free and the transitions are ruinous.
+ *
+ * `scenecut=0` codes those transitions as P-frames instead. It is safe
+ * here for a reason specific to this shape: holding frames multiplies
+ * the clip's duration by `30 / sourceFps`, so the same `-maxrate`
+ * ceiling buys that many times more total bits for the same twenty
+ * unique frames. The transitions are not being starved to save space —
+ * they have more budget than the unduplicated encode gave them.
+ *
+ * Not exposed as a flag. It is not an independent choice: duplication
+ * is what manufactures the scene cuts, so anyone using one wants the
+ * other, and a run without it produces a file too large to publish.
+ */
+function duplicationArgs(codec: string, sourceFps: number): string[] {
+  if (sourceFps >= OUTPUT_FRAME_RATE) return []
+  return codec === 'hevc'
+    ? ['-x265-params', 'scenecut=0']
+    : ['-x264-params', 'scenecut=0']
+}
+
 function requireTools(codec: string): void {
   const missing: string[] = []
   const broken: string[] = []
@@ -395,8 +461,8 @@ function main(): void {
   // at maxrate from a buffer that x264 starts ~90% full (`--vbv-init`).
   // A clip spends the initial fullness *plus* whatever drains during
   // its runtime, so `rate x duration` is only the whole story once the
-  // clip outlasts the buffer. With bufsize pinned at 2x maxrate that
-  // takes ~54 frames at 30 fps, and it is independent of the ceiling —
+  // clip outlasts the buffer, which takes
+  // `SECONDS_FOR_RATE_TO_AMORTISE` and is independent of the ceiling —
   // raising maxrate raises the buffer in step.
   //
   // Printing the naive product instead cost a real run: 20 frames came
@@ -404,18 +470,24 @@ function main(): void {
   // built on it, when the ceiling had been applied correctly the whole
   // time. A bound that a correct encode can exceed is worse than no
   // bound, because it trains people to ignore it.
-  const durationSec = files.length / OUTPUT_FRAME_RATE
+  // Duration is set by how fast the frames are *read*. With
+  // `--playback-fps 2` twenty frames are ten seconds, not two thirds of
+  // one, and every bitrate/size figure below depends on getting this
+  // right.
+  const sourceFps = args.playbackFps ?? OUTPUT_FRAME_RATE
+  const durationSec = files.length / sourceFps
   const boundBytes =
-    (VBV_INIT_FRACTION * args.maxBitrateKbps * 2 * 1000
+    (VBV_INIT_FRACTION * args.maxBitrateKbps * BUFSIZE_MULTIPLE * 1000
       + args.maxBitrateKbps * 1000 * durationSec) / 8
   process.stdout.write(`codec ${args.codec} — ${CODECS[args.codec].note}\n`)
   process.stdout.write(
-    `ceiling ${args.maxBitrateKbps} kbps (bufsize ${args.maxBitrateKbps * 2}k)`
+    `ceiling ${args.maxBitrateKbps} kbps `
+    + `(bufsize ${args.maxBitrateKbps * BUFSIZE_MULTIPLE}k)`
     + `  → at most ${(boundBytes / 1e6).toFixed(1)} MB for ${files.length} frames`
     + ` (${durationSec.toFixed(2)}s)\n`)
-  if (files.length < MIN_FRAMES_FOR_RATE_TO_AMORTISE) {
+  if (durationSec < SECONDS_FOR_RATE_TO_AMORTISE) {
     process.stdout.write(
-      `  note: under ${MIN_FRAMES_FOR_RATE_TO_AMORTISE} frames the buffer, not the rate, sets the size —\n`
+      `  note: under ${SECONDS_FOR_RATE_TO_AMORTISE.toFixed(1)}s the buffer, not the rate, sets the size —\n`
       + `        expect an average bitrate above the ceiling, which is correct VBV behaviour\n`)
   }
 
@@ -431,11 +503,17 @@ function main(): void {
   const ff = spawn('ffmpeg', [
     '-y', '-hide_banner', '-loglevel', 'error',
     '-f', 'rawvideo', '-pix_fmt', 'gray', '-s:v', `${width}x${height}`,
-    '-framerate', String(OUTPUT_FRAME_RATE), '-i', 'pipe:0',
+    '-framerate', String(sourceFps), '-i', 'pipe:0',
     '-vf', 'scale=in_range=full:out_range=full',
     '-color_range', 'pc',
     ...CODECS[args.codec].args,
+    ...duplicationArgs(args.codec, sourceFps),
     '-pix_fmt', 'yuv420p',
+    // Output always 30 fps, whatever the input rate. Reading at
+    // `sourceFps` and writing at 30 is what holds each frame; the two
+    // together are the mechanism, and omitting this would emit a file
+    // at the source rate that every playback-rate consumer misreads.
+    '-r', String(OUTPUT_FRAME_RATE),
     // CRF is not comparable across codecs — x265 needs a higher number
     // for the same quality — but the bitrate ceiling below binds well
     // before CRF does on frames this large, so the two encodes are
@@ -443,11 +521,23 @@ function main(): void {
     // right axis anyway: the question is what a device does with a given
     // stream, not which encoder is more efficient.
     '-preset', 'slow', '-crf', '18',
-    // The ceiling, without which CRF alone has none. bufsize at 2x
-    // maxrate mirrors `buildFfmpegArgs`.
+    // The ceiling, without which CRF alone has none. bufsize at
+    // `BUFSIZE_MULTIPLE` x maxrate mirrors `buildFfmpegArgs` — and the
+    // amortisation threshold is derived from the same constant, so the
+    // reported bound cannot drift from the encode it describes.
     '-maxrate', `${args.maxBitrateKbps}k`,
-    '-bufsize', `${args.maxBitrateKbps * 2}k`,
+    '-bufsize', `${args.maxBitrateKbps * BUFSIZE_MULTIPLE}k`,
     '-an',
+    // Move `moov` to the front. ffmpeg writes it last in a single-pass
+    // encode, because it cannot know the sample table until every frame
+    // is written — which is fine for a local file and wrong for one
+    // served over HTTP. A progressive player cannot parse a thing until
+    // it has the movie header, so with `moov` at the tail it must
+    // range-request the end of the file before it can begin, and on a
+    // phone those extra round trips are the difference between playing
+    // and timing out. HLS hid this by segmenting; publishing a file as
+    // uploaded does not.
+    '-movflags', '+faststart',
     args.out,
   ], { stdio: ['pipe', 'inherit', 'inherit'] })
 
@@ -531,6 +621,12 @@ encode-geotiff-sequence — GeoTIFF sequence -> data-encoded video + color_scale
   --codec <h264|hevc>   default h264. hevc unlocks hardware decode above
                         4096 wide and is the one Apple decodes natively,
                         so it is the lever for an iOS accept.
+  --playback-fps <n>    hold each frame so the dataset advances at <n> fps.
+                        Frames are read at <n> and written at ${OUTPUT_FRAME_RATE}, which is the
+                        only way a slow dataset works: nothing in the player
+                        applies a row's playback_fps outside a tour. Also
+                        disables scene-cut detection, without which every
+                        held frame becomes a multi-megabyte I-frame.
   --max-bitrate <kbps>  ceiling, default ${DEFAULT_MAX_BITRATE_KBPS} (what the catalog ships).
                         Without it CRF alone is uncapped and will emit
                         hundreds of Mbps on large frames.
