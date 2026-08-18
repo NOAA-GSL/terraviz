@@ -168,7 +168,69 @@ interface Args {
   lossless: boolean
 }
 
+/** Flags that consume the following argv entry as their value. */
+const VALUE_FLAGS = [
+  'in', 'out', 'vmin', 'vmax', 'units', 'data-min-luma', 'nodata',
+  'max-bitrate', 'playback-fps', 'codec',
+] as const
+
+/** Flags that are presence-only. */
+const BOOLEAN_FLAGS = ['keep-temp', 'lossless'] as const
+
+/**
+ * Reject anything this script does not understand, before it does work.
+ *
+ * Every flag was previously read by looking for its own name and
+ * ignoring the rest of argv, so a name this script had never heard of
+ * simply did nothing. That is the worst available behaviour for a tool
+ * whose runs take minutes and whose output is uploaded somewhere: a
+ * flag carried over from a newer checkout, or a typo, produces a
+ * complete, plausible, silently wrong artifact.
+ *
+ * It cost exactly that once. `--lossless` was passed to a checkout that
+ * did not have it yet; the run ignored it, emitted a perfectly ordinary
+ * lossy encode, and the file was published and analysed before anyone
+ * noticed the flag had never been implemented in that copy.
+ *
+ * `--flag=value` is rejected explicitly rather than lumped in with
+ * unknown names, because it is not a typo — it is a reasonable guess
+ * about a convention this parser does not implement, and it would
+ * otherwise fail in the same silent way.
+ */
+function rejectUnknownArgs(argv: string[]): void {
+  const known = new Set<string>([...VALUE_FLAGS, ...BOOLEAN_FLAGS])
+  const valued = new Set<string>(VALUE_FLAGS)
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i]
+    if (!arg.startsWith('--')) {
+      throw new Error(
+        `unexpected argument "${arg}". Every input is named — `
+        + `did you mean --in ${arg}?`)
+    }
+    const name = arg.slice(2)
+    if (name.includes('=')) {
+      const [head] = name.split('=')
+      throw new Error(
+        `--${head}=... is not supported; this script takes the value as the `
+        + `next argument.\n  Use: --${head} <value>`)
+    }
+    if (!known.has(name)) {
+      throw new Error(
+        `unknown flag --${name}.\n`
+        + `  Known flags: ${[...VALUE_FLAGS].map(f => '--' + f).join(', ')}, `
+        + `${[...BOOLEAN_FLAGS].map(f => '--' + f).join(', ')}\n`
+        + `  A flag this copy does not implement is ignored no longer: it used `
+        + `to produce a\n  complete, plausible, silently wrong file.`)
+    }
+    // Skip the value so it is not mistaken for a flag. Values may
+    // legitimately look like flags — `--vmin -35` is the case that
+    // matters, and it is the one a naive check would reject.
+    if (valued.has(name)) i++
+  }
+}
+
 function parseArgs(argv: string[]): Args {
+  rejectUnknownArgs(argv)
   const get = (name: string): string | undefined => {
     const i = argv.indexOf('--' + name)
     return i >= 0 && i + 1 < argv.length ? argv[i + 1] : undefined
