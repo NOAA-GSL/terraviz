@@ -26,11 +26,17 @@ import { spawn, spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, extname, join, resolve } from 'node:path'
 
-// The catalog encodes every dataset at 30 fps and expresses a dataset's
-// display rate as `playbackRate = requestedFps / 30`
-// (`cli/lib/ffmpeg-hls.ts` OUTPUT_FRAME_RATE). Emitting anything else
-// silently changes what every consumer's playback-rate maths means, so
-// this is fixed rather than a flag.
+// The catalog's default encode rate (`cli/lib/ffmpeg-hls.ts`
+// OUTPUT_FRAME_RATE), and this script's rate when `--playback-fps` is
+// not given: one coded frame per source frame.
+//
+// It used to be the *only* rate this emitted, because
+// `tourEngine` assumed 30 when converting a tour's requested frame rate
+// into a `playbackRate`. It no longer assumes: it divides by the
+// dataset's own `playback_fps`, so a file encoded at its own rate and
+// one transcoded with held frames behave the same inside a tour. That
+// is what lets `--playback-fps` emit a real frame rate instead of
+// manufacturing duplicates — see `outputFrameRate`.
 const OUTPUT_FRAME_RATE = 30
 
 /**
@@ -159,9 +165,93 @@ interface Args {
   playbackFps?: number
   codec: string
   keepTemp: boolean
+  lossless: boolean
+}
+
+/** Flags that consume the following argv entry as their value. */
+const VALUE_FLAGS = [
+  'in', 'out', 'vmin', 'vmax', 'units', 'data-min-luma', 'nodata',
+  'max-bitrate', 'playback-fps', 'codec',
+] as const
+
+/** Flags that are presence-only. */
+const BOOLEAN_FLAGS = ['keep-temp', 'lossless'] as const
+
+/**
+ * Reject anything this script does not understand, before it does work.
+ *
+ * Every flag was previously read by looking for its own name and
+ * ignoring the rest of argv, so a name this script had never heard of
+ * simply did nothing. That is the worst available behaviour for a tool
+ * whose runs take minutes and whose output is uploaded somewhere: a
+ * flag carried over from a newer checkout, or a typo, produces a
+ * complete, plausible, silently wrong artifact.
+ *
+ * It cost exactly that once. `--lossless` was passed to a checkout that
+ * did not have it yet; the run ignored it, emitted a perfectly ordinary
+ * lossy encode, and the file was published and analysed before anyone
+ * noticed the flag had never been implemented in that copy.
+ *
+ * `--flag=value` is rejected explicitly rather than lumped in with
+ * unknown names, because it is not a typo — it is a reasonable guess
+ * about a convention this parser does not implement, and it would
+ * otherwise fail in the same silent way.
+ */
+function rejectUnknownArgs(argv: string[]): void {
+  const known = new Set<string>([...VALUE_FLAGS, ...BOOLEAN_FLAGS])
+  const valued = new Set<string>(VALUE_FLAGS)
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i]
+    if (!arg.startsWith('--')) {
+      throw new Error(
+        `unexpected argument "${arg}". Every input is named — `
+        + `did you mean --in ${arg}?`)
+    }
+    const name = arg.slice(2)
+    if (name.includes('=')) {
+      const [head] = name.split('=')
+      throw new Error(
+        `--${head}=... is not supported; this script takes the value as the `
+        + `next argument.\n  Use: --${head} <value>`)
+    }
+    if (!known.has(name)) {
+      throw new Error(
+        `unknown flag --${name}.\n`
+        + `  Known flags: ${[...VALUE_FLAGS].map(f => '--' + f).join(', ')}, `
+        + `${[...BOOLEAN_FLAGS].map(f => '--' + f).join(', ')}\n`
+        + `  A flag this copy does not implement is ignored no longer: it used `
+        + `to produce a\n  complete, plausible, silently wrong file.`)
+    }
+    if (valued.has(name)) {
+      // The value is skipped so it is not mistaken for a flag — values
+      // may legitimately look like one, and `--vmin -35` is the case
+      // that matters. But skipping it *unchecked* reopened the hole
+      // this function exists to close: in `--out --losless`, the
+      // misspelling is swallowed as `--out`'s value, never validated,
+      // and the run writes a lossy encode to a file literally named
+      // `--losless`.
+      //
+      // A single dash is what a negative number wears; two is what a
+      // flag wears. Nothing this script accepts as a value begins with
+      // two, so that is the line.
+      const value = argv[i + 1]
+      if (value === undefined) {
+        throw new Error(`--${name} needs a value, and none followed it.`)
+      }
+      if (value.startsWith('--')) {
+        throw new Error(
+          `--${name} needs a value, but the next argument is "${value}".\n`
+          + `  If "${value}" was meant as a flag, --${name} is missing its value.\n`
+          + `  If it was meant as the value, this script cannot express that — `
+          + `values may\n  start with a single dash (--vmin -35) but not two.`)
+      }
+      i++
+    }
+  }
 }
 
 function parseArgs(argv: string[]): Args {
+  rejectUnknownArgs(argv)
   const get = (name: string): string | undefined => {
     const i = argv.indexOf('--' + name)
     return i >= 0 && i + 1 < argv.length ? argv[i + 1] : undefined
@@ -214,6 +304,21 @@ function parseArgs(argv: string[]): Args {
   if (!Object.hasOwn(CODECS, codec)) {
     throw new Error(`--codec must be one of ${Object.keys(CODECS).join(', ')}, got ${codec}`)
   }
+  // `--lossless` is refused here rather than where the ffmpeg arguments
+  // are built, because by that point `requireTools` has run and
+  // `gdalinfo` has read every frame — including the full range scan
+  // when --vmin/--vmax were not given. On twenty 55 MB GeoTIFFs that is
+  // minutes of work before an invocation that could never have
+  // succeeded. Same reasoning as the codec check above it.
+  const lossless = argv.includes('--lossless')
+  if (lossless && codec !== 'hevc') {
+    throw new Error(
+      `--lossless requires --codec hevc, got ${codec}.\n`
+      + '  Lossless H.264 needs the High 4:4:4 Predictive profile, which this\n'
+      + '  script does not emit: it pins Main for device compatibility, and a\n'
+      + '  4:4:4 stream is not what the hardware decoding these datasets wants.\n'
+      + '  HEVC is the codec for data-encoded video above 4096 wide anyway.')
+  }
   return {
     in: resolve(inDir),
     out: resolve(get('out') ?? 'out/data-encoded.mp4'),
@@ -226,6 +331,7 @@ function parseArgs(argv: string[]): Args {
     playbackFps: playbackFps,
     codec,
     keepTemp: argv.includes('--keep-temp'),
+    lossless,
   }
 }
 
@@ -317,33 +423,113 @@ function mapToLuma(
  * exist.
  */
 /**
- * Codec parameters that only make sense when frames are being held.
+ * Why a slow dataset is encoded at its own frame rate rather than held
+ * across a 30 fps one.
  *
- * Reading at `sourceFps` and writing at 30 means every *unique* frame
- * arrives after a run of identical ones, which is exactly what a
- * scene-cut detector is built to notice — so it codes each one as an
- * I-frame. Measured on a five-unique-frame chunk at 7200x3600: the five
- * I-frames were 22.5 MB of a 26.2 MB file, averaging 4.5 MB each, while
- * the 44 duplicate B-frames cost 4 KB apiece. Extrapolated to twenty
- * frames that is ~105 MB against ~10 MB unduplicated — the duplicates
- * are free and the transitions are ruinous.
+ * The first version of this duplicated frames: read at `sourceFps`,
+ * write at 30, so each source frame occupied `30 / sourceFps` output
+ * frames. That produced a file whose container said 30 fps, which the
+ * catalog liked, and which shimmered on screen.
  *
- * `scenecut=0` codes those transitions as P-frames instead. It is safe
- * here for a reason specific to this shape: holding frames multiplies
- * the clip's duration by `30 / sourceFps`, so the same `-maxrate`
- * ceiling buys that many times more total bits for the same twenty
- * unique frames. The transitions are not being starved to save space —
- * they have more budget than the unduplicated encode gave them.
+ * The duplicates are not copies. A held frame's residual is measured
+ * against the *reconstruction* of its reference, not against the
+ * source, so the encoder spends its remaining budget creeping toward
+ * the true value across the run: frame one of a hold is a rough
+ * approximation and frame fifteen is a better one. Measured at
+ * 3600x1800 with the shipped ceiling, **zero of twenty-nine held pairs
+ * decoded bit-identically**, and 28.5% of pixels changed between
+ * consecutive frames of what should have been a still image. On a
+ * palette with hard bands — the NWS reflectivity ramp steps every
+ * 5 dBZ, about eleven luma codes apart — that drift lands as pixels
+ * flipping between adjacent colours, which is what a viewer reported
+ * as shimmering.
  *
- * Not exposed as a flag. It is not an independent choice: duplication
- * is what manufactures the scene cuts, so anyone using one wants the
- * other, and a run without it produces a file too large to publish.
+ * Things that do not fix it, all measured: raising the ceiling four
+ * times over (3/29 identical), `cutree=0` (worse, 0/29), removing the
+ * VBV cap entirely (2/29 at ten times the size). Only `lossless=1`
+ * made holds stable, at a size no one wants. The refinement is
+ * inherent to lossy coding, not a parameter mistake.
+ *
+ * Encoding at the source rate removes the duplicates, and with them
+ * the problem: there is no second frame to refine toward anything.
+ * Each frame is coded once, displayed for `1 / fps` seconds by the
+ * container, and never touched again. It is also strictly better use
+ * of the bitrate, since the budget is spread across the frames that
+ * carry information instead of across fifteen copies of each.
+ *
+ * `scenecut=0` went with the duplicates, and had to. It existed
+ * because duplication *manufactured* scene cuts — the one real frame
+ * arriving after a run of identical ones looks exactly like a cut, and
+ * coding each as an I-frame cost ~105 MB against ~10 MB. Without
+ * duplication those cuts are not manufactured, they are real: two
+ * consecutive frames of a forecast are hours apart and share little.
+ * Forcing a P-frame across a break that genuine buys nothing and
+ * predicts from an uncorrelated reference, so the detector is left to
+ * do its job.
+ *
+ * The cost is that the file's frame rate is no longer the catalog's 30.
+ * That mattered while `tourEngine` assumed 30 when converting a tour's
+ * requested rate into a `playbackRate`; it now divides by the dataset's
+ * own `playback_fps`, so a dataset encoded this way and one transcoded
+ * with held frames behave identically inside a tour. Set the row's
+ * `playback_fps` to the same value passed here.
  */
-function duplicationArgs(codec: string, sourceFps: number): string[] {
-  if (sourceFps >= OUTPUT_FRAME_RATE) return []
-  return codec === 'hevc'
-    ? ['-x265-params', 'scenecut=0']
-    : ['-x264-params', 'scenecut=0']
+function outputFrameRate(sourceFps: number): number {
+  return sourceFps
+}
+
+/**
+ * Rate control: quality-targeted by default, exact under `--lossless`.
+ *
+ * The default pairs CRF with a `-maxrate` ceiling, because CRF alone
+ * has none and will spend hundreds of megabits per second on frames
+ * this large. That is the right shape for a picture. It is a
+ * compromise for a measurement, and the size of the compromise is
+ * easy to under-estimate: at 7200x3600 the shipped ceiling works out
+ * to about 0.03 bits per pixel, which is nowhere near enough to carry
+ * exact sample values.
+ *
+ * `--lossless` says the luma *is* the data and must survive intact.
+ * Every decoded texel then equals the byte that went in, so a hover
+ * readout, a statistic and a contour all describe the source rather
+ * than a reconstruction of it. CRF and the ceiling are dropped rather
+ * than combined: both are quality targets, and a target below
+ * "exact" is what is being refused.
+ *
+ * It is not the default because the files are large — on
+ * incompressible synthetic speckle, roughly an order of magnitude over
+ * the capped encode. Real fields are mostly no-data and highly
+ * structured, so the true cost is a question for the frames in hand,
+ * which is exactly why this is a flag and not a constant.
+ */
+function rateControlArgs(args: Args): string[] {
+  if (!args.lossless) {
+    // CRF is not comparable across codecs — x265 needs a higher number
+    // for the same quality — but the bitrate ceiling binds well before
+    // CRF does on frames this large, so two codecs are compared at
+    // matched *bitrate* rather than matched CRF. That is the right
+    // axis anyway: the question is what a device does with a given
+    // stream, not which encoder is more efficient.
+    //
+    // bufsize at `BUFSIZE_MULTIPLE` x maxrate mirrors
+    // `buildFfmpegArgs`, and the amortisation threshold is derived
+    // from the same constant, so the reported bound cannot drift from
+    // the encode it describes.
+    return [
+      '-crf', '18',
+      '-maxrate', `${args.maxBitrateKbps}k`,
+      '-bufsize', `${args.maxBitrateKbps * BUFSIZE_MULTIPLE}k`,
+    ]
+  }
+  // Unreachable through `parseArgs`, which refuses this pairing before
+  // any frames are read — the message a user sees lives there. Kept
+  // because this function's contract is its arguments, not its one
+  // current caller, and because emitting `-qp 0` alongside the Main
+  // profile produces no output file at all rather than a warning.
+  if (args.codec !== 'hevc') {
+    throw new Error(`--lossless requires --codec hevc, got ${args.codec}`)
+  }
+  return ['-x265-params', 'lossless=1']
 }
 
 function requireTools(codec: string): void {
@@ -480,15 +666,25 @@ function main(): void {
     (VBV_INIT_FRACTION * args.maxBitrateKbps * BUFSIZE_MULTIPLE * 1000
       + args.maxBitrateKbps * 1000 * durationSec) / 8
   process.stdout.write(`codec ${args.codec} — ${CODECS[args.codec].note}\n`)
-  process.stdout.write(
-    `ceiling ${args.maxBitrateKbps} kbps `
-    + `(bufsize ${args.maxBitrateKbps * BUFSIZE_MULTIPLE}k)`
-    + `  → at most ${(boundBytes / 1e6).toFixed(1)} MB for ${files.length} frames`
-    + ` (${durationSec.toFixed(2)}s)\n`)
-  if (durationSec < SECONDS_FOR_RATE_TO_AMORTISE) {
+  if (args.lossless) {
+    // No ceiling, so no bound worth printing: the size is whatever the
+    // data costs to carry exactly. Saying so beats printing a figure
+    // derived from a ceiling that is not in force.
     process.stdout.write(
-      `  note: under ${SECONDS_FOR_RATE_TO_AMORTISE.toFixed(1)}s the buffer, not the rate, sets the size —\n`
-      + `        expect an average bitrate above the ceiling, which is correct VBV behaviour\n`)
+      `lossless — every decoded texel equals the byte that went in.\n`
+      + `  ${files.length} frames (${durationSec.toFixed(2)}s); size is set by the data,\n`
+      + `  not by a ceiling, and --max-bitrate is ignored\n`)
+  } else {
+    process.stdout.write(
+      `ceiling ${args.maxBitrateKbps} kbps `
+      + `(bufsize ${args.maxBitrateKbps * BUFSIZE_MULTIPLE}k)`
+      + `  → at most ${(boundBytes / 1e6).toFixed(1)} MB for ${files.length} frames`
+      + ` (${durationSec.toFixed(2)}s)\n`)
+    if (durationSec < SECONDS_FOR_RATE_TO_AMORTISE) {
+      process.stdout.write(
+        `  note: under ${SECONDS_FOR_RATE_TO_AMORTISE.toFixed(1)}s the buffer, not the rate, sets the size —\n`
+        + `        expect an average bitrate above the ceiling, which is correct VBV behaviour\n`)
+    }
   }
 
   mkdirSync(dirname(args.out), { recursive: true })
@@ -507,26 +703,22 @@ function main(): void {
     '-vf', 'scale=in_range=full:out_range=full',
     '-color_range', 'pc',
     ...CODECS[args.codec].args,
-    ...duplicationArgs(args.codec, sourceFps),
     '-pix_fmt', 'yuv420p',
-    // Output always 30 fps, whatever the input rate. Reading at
-    // `sourceFps` and writing at 30 is what holds each frame; the two
-    // together are the mechanism, and omitting this would emit a file
-    // at the source rate that every playback-rate consumer misreads.
-    '-r', String(OUTPUT_FRAME_RATE),
+    // Output at the source rate: one coded frame per source frame,
+    // displayed for `1 / fps` seconds by the container. See
+    // `outputFrameRate` for why this is not the catalog's 30 — briefly,
+    // holding frames across a faster container makes the encoder refine
+    // each duplicate toward the true value, and that drift is visible
+    // as shimmer on a hard-banded palette.
+    '-r', String(outputFrameRate(sourceFps)),
     // CRF is not comparable across codecs — x265 needs a higher number
     // for the same quality — but the bitrate ceiling below binds well
     // before CRF does on frames this large, so the two encodes are
     // compared at matched *bitrate* rather than matched CRF. That is the
     // right axis anyway: the question is what a device does with a given
     // stream, not which encoder is more efficient.
-    '-preset', 'slow', '-crf', '18',
-    // The ceiling, without which CRF alone has none. bufsize at
-    // `BUFSIZE_MULTIPLE` x maxrate mirrors `buildFfmpegArgs` — and the
-    // amortisation threshold is derived from the same constant, so the
-    // reported bound cannot drift from the encode it describes.
-    '-maxrate', `${args.maxBitrateKbps}k`,
-    '-bufsize', `${args.maxBitrateKbps * BUFSIZE_MULTIPLE}k`,
+    '-preset', 'slow',
+    ...rateControlArgs(args),
     '-an',
     // Move `moov` to the front. ffmpeg writes it last in a single-pass
     // encode, because it cannot know the sample table until every frame
@@ -621,15 +813,22 @@ encode-geotiff-sequence — GeoTIFF sequence -> data-encoded video + color_scale
   --codec <h264|hevc>   default h264. hevc unlocks hardware decode above
                         4096 wide and is the one Apple decodes natively,
                         so it is the lever for an iOS accept.
-  --playback-fps <n>    hold each frame so the dataset advances at <n> fps.
-                        Frames are read at <n> and written at ${OUTPUT_FRAME_RATE}, which is the
-                        only way a slow dataset works: nothing in the player
-                        applies a row's playback_fps outside a tour. Also
-                        disables scene-cut detection, without which every
-                        held frame becomes a multi-megabyte I-frame.
+  --playback-fps <n>    encode at <n> frames per second, so the dataset
+                        advances at that rate. Set the dataset row's
+                        playback_fps to the same value: the player needs it
+                        for tour playback-rate maths, not for ordinary
+                        playback, where the rate is already in the file.
+                        Encoding at the real rate rather than holding each
+                        frame across a 30 fps container is what keeps a
+                        hard-banded palette from shimmering.
   --max-bitrate <kbps>  ceiling, default ${DEFAULT_MAX_BITRATE_KBPS} (what the catalog ships).
                         Without it CRF alone is uncapped and will emit
                         hundreds of Mbps on large frames.
+  --lossless            encode so every decoded texel equals the byte that
+                        went in. For data-encoded video the luma IS the
+                        measurement, and the default CRF+ceiling is a
+                        quality target rather than an exactness one.
+                        Ignores --max-bitrate. Files are much larger.
   --keep-temp           leave the intermediate rasters in place
 
 Needs gdalinfo, gdal_translate and ffmpeg on PATH.

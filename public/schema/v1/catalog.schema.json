@@ -243,6 +243,9 @@
           "isFlippedInY": {
             "type": "boolean"
           },
+          "playbackFps": {
+            "type": "number"
+          },
           "renderEncoding": {
             "type": "string",
             "const": "data-luma"

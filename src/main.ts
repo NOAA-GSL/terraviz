@@ -1420,6 +1420,10 @@ class InteractiveSphere {
       setPlaybackRate: (rate) => {
         if (this.hlsService) this.hlsService.playbackRate = rate
       },
+      // What the loaded dataset advances at, so the `frameRate` task
+      // divides by the right thing. The rate is already baked into the
+      // file — this only tells the tour what it is.
+      getPlaybackFps: () => this.appState.currentDataset?.playbackFps,
       // The `setTime` task — same seek the docent's set_time action and
       // the In-the-news jump use. Best-effort: an unseekable dataset or
       // out-of-range time is a quiet no-op mid-tour.

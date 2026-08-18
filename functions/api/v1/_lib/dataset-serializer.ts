@@ -119,6 +119,12 @@ export interface WireDataset {
   lonOrigin?: number
   /** Image Y-axis flip flag. Omitted when false. */
   isFlippedInY?: boolean
+  /** How many source frames this dataset advances per second. The
+   * rate is already baked into the file, so nothing applies it on
+   * load; it is served because the tour `frameRate` task must divide
+   * a requested rate by what the dataset already does. Omitted means
+   * 30. */
+  playbackFps?: number
   /** How the frames encode their pixels. Omitted means a picture,
    * which is every dataset published before this field existed.
    * `'data-luma'` means luma carries the normalised value and
@@ -422,6 +428,14 @@ export function serializeDataset(
     radiusMi: row.radius_mi != null ? row.radius_mi : undefined,
     lonOrigin: row.lon_origin != null ? row.lon_origin : undefined,
     isFlippedInY: row.is_flipped_in_y === 1 ? true : undefined,
+    // The rate the dataset advances, in source frames per second.
+    // Served because the tour `frameRate` task cannot convert a
+    // requested rate into a `playbackRate` without it: the file is
+    // already playing at this rate, so the divisor is this rather
+    // than the container's 30. NULL stays undefined and the consumer
+    // falls back to 30, which is what every row that never set it
+    // means.
+    playbackFps: row.playback_fps != null ? row.playback_fps : undefined,
     // Data-encoded video. Both surface only as a validated pair —
     // a row carrying one without the other is served as a plain
     // picture, so a half-written row degrades to raw grayscale
