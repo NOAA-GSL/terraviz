@@ -26,11 +26,17 @@ import { spawn, spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, extname, join, resolve } from 'node:path'
 
-// The catalog encodes every dataset at 30 fps and expresses a dataset's
-// display rate as `playbackRate = requestedFps / 30`
-// (`cli/lib/ffmpeg-hls.ts` OUTPUT_FRAME_RATE). Emitting anything else
-// silently changes what every consumer's playback-rate maths means, so
-// this is fixed rather than a flag.
+// The catalog's default encode rate (`cli/lib/ffmpeg-hls.ts`
+// OUTPUT_FRAME_RATE), and this script's rate when `--playback-fps` is
+// not given: one coded frame per source frame.
+//
+// It used to be the *only* rate this emitted, because
+// `tourEngine` assumed 30 when converting a tour's requested frame rate
+// into a `playbackRate`. It no longer assumes: it divides by the
+// dataset's own `playback_fps`, so a file encoded at its own rate and
+// one transcoded with held frames behave the same inside a tour. That
+// is what lets `--playback-fps` emit a real frame rate instead of
+// manufacturing duplicates — see `outputFrameRate`.
 const OUTPUT_FRAME_RATE = 30
 
 /**
@@ -317,33 +323,59 @@ function mapToLuma(
  * exist.
  */
 /**
- * Codec parameters that only make sense when frames are being held.
+ * Why a slow dataset is encoded at its own frame rate rather than held
+ * across a 30 fps one.
  *
- * Reading at `sourceFps` and writing at 30 means every *unique* frame
- * arrives after a run of identical ones, which is exactly what a
- * scene-cut detector is built to notice — so it codes each one as an
- * I-frame. Measured on a five-unique-frame chunk at 7200x3600: the five
- * I-frames were 22.5 MB of a 26.2 MB file, averaging 4.5 MB each, while
- * the 44 duplicate B-frames cost 4 KB apiece. Extrapolated to twenty
- * frames that is ~105 MB against ~10 MB unduplicated — the duplicates
- * are free and the transitions are ruinous.
+ * The first version of this duplicated frames: read at `sourceFps`,
+ * write at 30, so each source frame occupied `30 / sourceFps` output
+ * frames. That produced a file whose container said 30 fps, which the
+ * catalog liked, and which shimmered on screen.
  *
- * `scenecut=0` codes those transitions as P-frames instead. It is safe
- * here for a reason specific to this shape: holding frames multiplies
- * the clip's duration by `30 / sourceFps`, so the same `-maxrate`
- * ceiling buys that many times more total bits for the same twenty
- * unique frames. The transitions are not being starved to save space —
- * they have more budget than the unduplicated encode gave them.
+ * The duplicates are not copies. A held frame's residual is measured
+ * against the *reconstruction* of its reference, not against the
+ * source, so the encoder spends its remaining budget creeping toward
+ * the true value across the run: frame one of a hold is a rough
+ * approximation and frame fifteen is a better one. Measured at
+ * 3600x1800 with the shipped ceiling, **zero of twenty-nine held pairs
+ * decoded bit-identically**, and 28.5% of pixels changed between
+ * consecutive frames of what should have been a still image. On a
+ * palette with hard bands — the NWS reflectivity ramp steps every
+ * 5 dBZ, about eleven luma codes apart — that drift lands as pixels
+ * flipping between adjacent colours, which is what a viewer reported
+ * as shimmering.
  *
- * Not exposed as a flag. It is not an independent choice: duplication
- * is what manufactures the scene cuts, so anyone using one wants the
- * other, and a run without it produces a file too large to publish.
+ * Things that do not fix it, all measured: raising the ceiling four
+ * times over (3/29 identical), `cutree=0` (worse, 0/29), removing the
+ * VBV cap entirely (2/29 at ten times the size). Only `lossless=1`
+ * made holds stable, at a size no one wants. The refinement is
+ * inherent to lossy coding, not a parameter mistake.
+ *
+ * Encoding at the source rate removes the duplicates, and with them
+ * the problem: there is no second frame to refine toward anything.
+ * Each frame is coded once, displayed for `1 / fps` seconds by the
+ * container, and never touched again. It is also strictly better use
+ * of the bitrate, since the budget is spread across the frames that
+ * carry information instead of across fifteen copies of each.
+ *
+ * `scenecut=0` went with the duplicates, and had to. It existed
+ * because duplication *manufactured* scene cuts — the one real frame
+ * arriving after a run of identical ones looks exactly like a cut, and
+ * coding each as an I-frame cost ~105 MB against ~10 MB. Without
+ * duplication those cuts are not manufactured, they are real: two
+ * consecutive frames of a forecast are hours apart and share little.
+ * Forcing a P-frame across a break that genuine buys nothing and
+ * predicts from an uncorrelated reference, so the detector is left to
+ * do its job.
+ *
+ * The cost is that the file's frame rate is no longer the catalog's 30.
+ * That mattered while `tourEngine` assumed 30 when converting a tour's
+ * requested rate into a `playbackRate`; it now divides by the dataset's
+ * own `playback_fps`, so a dataset encoded this way and one transcoded
+ * with held frames behave identically inside a tour. Set the row's
+ * `playback_fps` to the same value passed here.
  */
-function duplicationArgs(codec: string, sourceFps: number): string[] {
-  if (sourceFps >= OUTPUT_FRAME_RATE) return []
-  return codec === 'hevc'
-    ? ['-x265-params', 'scenecut=0']
-    : ['-x264-params', 'scenecut=0']
+function outputFrameRate(sourceFps: number): number {
+  return sourceFps
 }
 
 function requireTools(codec: string): void {
@@ -507,13 +539,14 @@ function main(): void {
     '-vf', 'scale=in_range=full:out_range=full',
     '-color_range', 'pc',
     ...CODECS[args.codec].args,
-    ...duplicationArgs(args.codec, sourceFps),
     '-pix_fmt', 'yuv420p',
-    // Output always 30 fps, whatever the input rate. Reading at
-    // `sourceFps` and writing at 30 is what holds each frame; the two
-    // together are the mechanism, and omitting this would emit a file
-    // at the source rate that every playback-rate consumer misreads.
-    '-r', String(OUTPUT_FRAME_RATE),
+    // Output at the source rate: one coded frame per source frame,
+    // displayed for `1 / fps` seconds by the container. See
+    // `outputFrameRate` for why this is not the catalog's 30 — briefly,
+    // holding frames across a faster container makes the encoder refine
+    // each duplicate toward the true value, and that drift is visible
+    // as shimmer on a hard-banded palette.
+    '-r', String(outputFrameRate(sourceFps)),
     // CRF is not comparable across codecs — x265 needs a higher number
     // for the same quality — but the bitrate ceiling below binds well
     // before CRF does on frames this large, so the two encodes are
@@ -621,12 +654,14 @@ encode-geotiff-sequence — GeoTIFF sequence -> data-encoded video + color_scale
   --codec <h264|hevc>   default h264. hevc unlocks hardware decode above
                         4096 wide and is the one Apple decodes natively,
                         so it is the lever for an iOS accept.
-  --playback-fps <n>    hold each frame so the dataset advances at <n> fps.
-                        Frames are read at <n> and written at ${OUTPUT_FRAME_RATE}, which is the
-                        only way a slow dataset works: nothing in the player
-                        applies a row's playback_fps outside a tour. Also
-                        disables scene-cut detection, without which every
-                        held frame becomes a multi-megabyte I-frame.
+  --playback-fps <n>    encode at <n> frames per second, so the dataset
+                        advances at that rate. Set the dataset row's
+                        playback_fps to the same value: the player needs it
+                        for tour playback-rate maths, not for ordinary
+                        playback, where the rate is already in the file.
+                        Encoding at the real rate rather than holding each
+                        frame across a 30 fps container is what keeps a
+                        hard-banded palette from shimmering.
   --max-bitrate <kbps>  ceiling, default ${DEFAULT_MAX_BITRATE_KBPS} (what the catalog ships).
                         Without it CRF alone is uncapped and will emit
                         hundreds of Mbps on large frames.
