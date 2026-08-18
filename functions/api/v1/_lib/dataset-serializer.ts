@@ -422,6 +422,14 @@ export function serializeDataset(
     radiusMi: row.radius_mi != null ? row.radius_mi : undefined,
     lonOrigin: row.lon_origin != null ? row.lon_origin : undefined,
     isFlippedInY: row.is_flipped_in_y === 1 ? true : undefined,
+    // The rate the dataset advances, in source frames per second.
+    // Served because the tour `frameRate` task cannot convert a
+    // requested rate into a `playbackRate` without it: the file is
+    // already playing at this rate, so the divisor is this rather
+    // than the container's 30. NULL stays undefined and the consumer
+    // falls back to 30, which is what every row that never set it
+    // means.
+    playbackFps: row.playback_fps != null ? row.playback_fps : undefined,
     // Data-encoded video. Both surface only as a validated pair —
     // a row carrying one without the other is served as a plain
     // picture, so a half-written row degrades to raw grayscale

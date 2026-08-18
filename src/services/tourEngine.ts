@@ -51,6 +51,15 @@ export interface TourTelemetryMeta {
 const MI_TO_KM = 1.60934
 
 /**
+ * The advance rate assumed for a dataset that does not declare one.
+ *
+ * Matches `OUTPUT_FRAME_RATE` in `cli/lib/ffmpeg-hls.ts`: one source
+ * frame per output frame at the catalog's encode rate, which is what
+ * every dataset published before `playback_fps` existed does.
+ */
+const DEFAULT_DATASET_FPS = 30
+
+/**
  * Parse a legacy SOS `setEnvView` view-name string into an internal
  * {@link TourViewLayout}. Case-insensitive; tolerates whitespace.
  *
@@ -893,14 +902,28 @@ export class TourEngine {
 
   private execDatasetAnimation(params: DatasetAnimationTaskParams): void {
     // Apply requested frame rate as a playback speed ratio.
-    // Videos are encoded at ~30fps; "5 fps" means playbackRate = 5/30.
+    //
+    // The task asks for a rate in *dataset* frames per second, so the
+    // divisor is what the dataset already advances at — not the
+    // container's frame rate, and not a constant. Those coincide only
+    // for a dataset with one source frame per output frame.
+    //
+    // They stopped coinciding when `playback_fps` arrived. A dataset
+    // published at 2 fps is already advancing at 2, whether the file
+    // holds each frame across a 30 fps container or is encoded at 2 fps
+    // outright; dividing by 30 asked such a tour for 0.167x and got
+    // 0.33 fps out of a request for 5 — wrong by the ratio between the
+    // two rates, silently, and worst on exactly the slow datasets the
+    // field exists to serve.
     if (params.frameRate) {
       const match = params.frameRate.match(/^(\d+(?:\.\d+)?)\s*fps$/i)
       if (match) {
         const requestedFps = parseFloat(match[1])
-        const defaultFps = 30
-        const rate = Math.max(0.03, Math.min(4, requestedFps / defaultFps))
-        logger.info(`[Tour] Setting playback rate: ${requestedFps} fps → ${rate.toFixed(3)}x`)
+        const datasetFps = this.callbacks.getPlaybackFps?.() ?? DEFAULT_DATASET_FPS
+        const rate = Math.max(0.03, Math.min(4, requestedFps / datasetFps))
+        logger.info(
+          `[Tour] Setting playback rate: ${requestedFps} fps of a `
+          + `${datasetFps} fps dataset → ${rate.toFixed(3)}x`)
         this.callbacks.setPlaybackRate(rate)
       }
     }

@@ -409,6 +409,43 @@ describe('TourEngine', () => {
       expect(cb.togglePlayPause).toHaveBeenCalledOnce()
     })
 
+    it('divides by the dataset rate, not by the container rate', () => {
+      // A dataset published at 2 fps is already advancing at 2, so "5
+      // fps" is two and a half times its own rate. Dividing by 30 —
+      // which is what this did until `playback_fps` was served to the
+      // player — asked for 0.167x and delivered 0.33 fps, wrong by a
+      // factor of fifteen and worst on exactly the slow datasets the
+      // field exists for.
+      const cb = makeCallbacks({
+        isPlaying: vi.fn(() => false),
+        getPlaybackFps: vi.fn(() => 2),
+      })
+      const engine = new TourEngine(makeTour([
+        { datasetAnimation: { animation: 'on', frameRate: '5 fps' } },
+      ]), cb)
+
+      return engine.play().then(() => {
+        expect(cb.setPlaybackRate).toHaveBeenCalledWith(expect.closeTo(2.5, 3))
+      })
+    })
+
+    it('falls back to 30 when the host cannot say', () => {
+      // Every dataset published before `playback_fps` existed, and any
+      // host that never wired the callback. The optional-callback shape
+      // is what keeps this a fix rather than a breaking change.
+      const cb = makeCallbacks({
+        isPlaying: vi.fn(() => false),
+        getPlaybackFps: vi.fn(() => undefined),
+      })
+      const engine = new TourEngine(makeTour([
+        { datasetAnimation: { animation: 'on', frameRate: '15 fps' } },
+      ]), cb)
+
+      return engine.play().then(() => {
+        expect(cb.setPlaybackRate).toHaveBeenCalledWith(expect.closeTo(0.5, 3))
+      })
+    })
+
     it('dispatches worldBorder object format', async () => {
       const renderer = makeRenderer()
       const cb = makeCallbacks({ getRenderer: () => renderer })
