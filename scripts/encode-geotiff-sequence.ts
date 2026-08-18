@@ -165,6 +165,7 @@ interface Args {
   playbackFps?: number
   codec: string
   keepTemp: boolean
+  lossless: boolean
 }
 
 function parseArgs(argv: string[]): Args {
@@ -232,6 +233,7 @@ function parseArgs(argv: string[]): Args {
     playbackFps: playbackFps,
     codec,
     keepTemp: argv.includes('--keep-temp'),
+    lossless: argv.includes('--lossless'),
   }
 }
 
@@ -378,6 +380,67 @@ function outputFrameRate(sourceFps: number): number {
   return sourceFps
 }
 
+/**
+ * Rate control: quality-targeted by default, exact under `--lossless`.
+ *
+ * The default pairs CRF with a `-maxrate` ceiling, because CRF alone
+ * has none and will spend hundreds of megabits per second on frames
+ * this large. That is the right shape for a picture. It is a
+ * compromise for a measurement, and the size of the compromise is
+ * easy to under-estimate: at 7200x3600 the shipped ceiling works out
+ * to about 0.03 bits per pixel, which is nowhere near enough to carry
+ * exact sample values.
+ *
+ * `--lossless` says the luma *is* the data and must survive intact.
+ * Every decoded texel then equals the byte that went in, so a hover
+ * readout, a statistic and a contour all describe the source rather
+ * than a reconstruction of it. CRF and the ceiling are dropped rather
+ * than combined: both are quality targets, and a target below
+ * "exact" is what is being refused.
+ *
+ * It is not the default because the files are large — on
+ * incompressible synthetic speckle, roughly an order of magnitude over
+ * the capped encode. Real fields are mostly no-data and highly
+ * structured, so the true cost is a question for the frames in hand,
+ * which is exactly why this is a flag and not a constant.
+ */
+function rateControlArgs(args: Args): string[] {
+  if (!args.lossless) {
+    // CRF is not comparable across codecs — x265 needs a higher number
+    // for the same quality — but the bitrate ceiling binds well before
+    // CRF does on frames this large, so two codecs are compared at
+    // matched *bitrate* rather than matched CRF. That is the right
+    // axis anyway: the question is what a device does with a given
+    // stream, not which encoder is more efficient.
+    //
+    // bufsize at `BUFSIZE_MULTIPLE` x maxrate mirrors
+    // `buildFfmpegArgs`, and the amortisation threshold is derived
+    // from the same constant, so the reported bound cannot drift from
+    // the encode it describes.
+    return [
+      '-crf', '18',
+      '-maxrate', `${args.maxBitrateKbps}k`,
+      '-bufsize', `${args.maxBitrateKbps * BUFSIZE_MULTIPLE}k`,
+    ]
+  }
+  // h264 is refused rather than special-cased. Lossless in H.264 needs
+  // `qpprime_y_zero_transform_bypass`, which lives only in High 4:4:4
+  // Predictive — so honouring the flag would mean silently abandoning
+  // the Main profile this script pins for device compatibility, and
+  // emitting a 4:4:4 stream that much of the hardware decoding these
+  // datasets will not touch. Verified by trying it: `-profile:v main`
+  // with `-qp 0` produces no output file at all.
+  if (args.codec !== 'hevc') {
+    throw new Error(
+      '--lossless requires --codec hevc.\n'
+      + '  Lossless H.264 needs the High 4:4:4 Predictive profile, which this\n'
+      + '  script does not emit: it pins Main for device compatibility, and a\n'
+      + '  4:4:4 stream is not what the hardware decoding these datasets wants.\n'
+      + '  HEVC is the codec for data-encoded video above 4096 wide anyway.')
+  }
+  return ['-x265-params', 'lossless=1']
+}
+
 function requireTools(codec: string): void {
   const missing: string[] = []
   const broken: string[] = []
@@ -512,15 +575,25 @@ function main(): void {
     (VBV_INIT_FRACTION * args.maxBitrateKbps * BUFSIZE_MULTIPLE * 1000
       + args.maxBitrateKbps * 1000 * durationSec) / 8
   process.stdout.write(`codec ${args.codec} — ${CODECS[args.codec].note}\n`)
-  process.stdout.write(
-    `ceiling ${args.maxBitrateKbps} kbps `
-    + `(bufsize ${args.maxBitrateKbps * BUFSIZE_MULTIPLE}k)`
-    + `  → at most ${(boundBytes / 1e6).toFixed(1)} MB for ${files.length} frames`
-    + ` (${durationSec.toFixed(2)}s)\n`)
-  if (durationSec < SECONDS_FOR_RATE_TO_AMORTISE) {
+  if (args.lossless) {
+    // No ceiling, so no bound worth printing: the size is whatever the
+    // data costs to carry exactly. Saying so beats printing a figure
+    // derived from a ceiling that is not in force.
     process.stdout.write(
-      `  note: under ${SECONDS_FOR_RATE_TO_AMORTISE.toFixed(1)}s the buffer, not the rate, sets the size —\n`
-      + `        expect an average bitrate above the ceiling, which is correct VBV behaviour\n`)
+      `lossless — every decoded texel equals the byte that went in.\n`
+      + `  ${files.length} frames (${durationSec.toFixed(2)}s); size is set by the data,\n`
+      + `  not by a ceiling, and --max-bitrate is ignored\n`)
+  } else {
+    process.stdout.write(
+      `ceiling ${args.maxBitrateKbps} kbps `
+      + `(bufsize ${args.maxBitrateKbps * BUFSIZE_MULTIPLE}k)`
+      + `  → at most ${(boundBytes / 1e6).toFixed(1)} MB for ${files.length} frames`
+      + ` (${durationSec.toFixed(2)}s)\n`)
+    if (durationSec < SECONDS_FOR_RATE_TO_AMORTISE) {
+      process.stdout.write(
+        `  note: under ${SECONDS_FOR_RATE_TO_AMORTISE.toFixed(1)}s the buffer, not the rate, sets the size —\n`
+        + `        expect an average bitrate above the ceiling, which is correct VBV behaviour\n`)
+    }
   }
 
   mkdirSync(dirname(args.out), { recursive: true })
@@ -553,13 +626,8 @@ function main(): void {
     // compared at matched *bitrate* rather than matched CRF. That is the
     // right axis anyway: the question is what a device does with a given
     // stream, not which encoder is more efficient.
-    '-preset', 'slow', '-crf', '18',
-    // The ceiling, without which CRF alone has none. bufsize at
-    // `BUFSIZE_MULTIPLE` x maxrate mirrors `buildFfmpegArgs` — and the
-    // amortisation threshold is derived from the same constant, so the
-    // reported bound cannot drift from the encode it describes.
-    '-maxrate', `${args.maxBitrateKbps}k`,
-    '-bufsize', `${args.maxBitrateKbps * BUFSIZE_MULTIPLE}k`,
+    '-preset', 'slow',
+    ...rateControlArgs(args),
     '-an',
     // Move `moov` to the front. ffmpeg writes it last in a single-pass
     // encode, because it cannot know the sample table until every frame
@@ -665,6 +733,11 @@ encode-geotiff-sequence — GeoTIFF sequence -> data-encoded video + color_scale
   --max-bitrate <kbps>  ceiling, default ${DEFAULT_MAX_BITRATE_KBPS} (what the catalog ships).
                         Without it CRF alone is uncapped and will emit
                         hundreds of Mbps on large frames.
+  --lossless            encode so every decoded texel equals the byte that
+                        went in. For data-encoded video the luma IS the
+                        measurement, and the default CRF+ceiling is a
+                        quality target rather than an exactness one.
+                        Ignores --max-bitrate. Files are much larger.
   --keep-temp           leave the intermediate rasters in place
 
 Needs gdalinfo, gdal_translate and ffmpeg on PATH.
