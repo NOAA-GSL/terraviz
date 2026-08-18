@@ -133,6 +133,24 @@ export interface Dataset {
    * inverted Y conventions. Omitted == false. */
   isFlippedInY?: boolean
 
+  /**
+   * How many source frames this dataset advances per second.
+   *
+   * A property of the dataset, not of the file: the rate is already
+   * baked in by the time anything plays it, either by holding each
+   * frame across a 30 fps container (what the transcode does) or by
+   * encoding at this container rate directly (what a hand-encoded
+   * data video does). Both arrive playing correctly at `playbackRate
+   * = 1`, which is why nothing applies this on load.
+   *
+   * What it *is* needed for is the tour `frameRate` task, which asks
+   * for a rate in dataset frames per second and can only convert that
+   * to a `playbackRate` if it knows what the dataset already advances
+   * at. Omitted means 30 — one source frame per output frame, which
+   * is every dataset that never set it.
+   */
+  playbackFps?: number
+
   /** How the frames encode their pixels. Omitted == a picture
    * (colourised upstream, rendered as-is) — the state of every
    * dataset published before this field existed, and the whole of
@@ -1043,6 +1061,24 @@ export interface TourCallbacks {
   togglePlayPause(): void
   isPlaying(): boolean
   setPlaybackRate(rate: number): void
+  /**
+   * The loaded dataset's own advance rate, in source frames per
+   * second, or undefined when the host does not know it.
+   *
+   * The `frameRate` task asks for a rate in *dataset* frames per
+   * second, and turning that into a `playbackRate` means dividing by
+   * what the dataset already advances at. That was hard-coded to 30
+   * — correct only for a dataset with one source frame per output
+   * frame. A dataset carrying `playbackFps` advances at that rate
+   * instead, whether the file achieves it by holding each frame
+   * across a 30 fps container or by being encoded at that container
+   * rate, and dividing by 30 makes such a tour wrong by the ratio
+   * between them.
+   *
+   * Optional, and absent means 30: a host that never wires it keeps
+   * exactly the behaviour it had.
+   */
+  getPlaybackFps?(): number | undefined
   /**
    * Seek the loaded dataset to an ISO time (the `setTime` task).
    * Optional — hosts without seekable playback (or older wiring)

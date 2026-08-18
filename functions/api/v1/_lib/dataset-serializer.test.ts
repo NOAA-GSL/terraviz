@@ -315,6 +315,24 @@ describe('serializeDataset — Phase 3d columns (non-global metadata)', () => {
     const nullCase = serializeDataset(fakeRow({}), emptyDecoration, fakeIdentity)
     expect(nullCase.isFlippedInY).toBeUndefined()
   })
+
+  it('serves playback_fps, which the tour frame-rate maths divides by', () => {
+    // The column existed for a while without being served, so a tour
+    // asking for a rate on a slow dataset divided by 30 and came out
+    // wrong by the ratio between the two. Nothing on the client can
+    // recover a field the wire never carries.
+    const wire = serializeDataset(
+      fakeRow({ playback_fps: 2 }),
+      emptyDecoration,
+      fakeIdentity,
+    )
+    expect(wire.playbackFps).toBe(2)
+  })
+
+  it('omits playbackFps when the column is null (30 is the default)', () => {
+    const wire = serializeDataset(fakeRow({}), emptyDecoration, fakeIdentity)
+    expect(wire.playbackFps).toBeUndefined()
+  })
 })
 
 describe('serializeDataset — asset-ref resolution (3b/N)', () => {

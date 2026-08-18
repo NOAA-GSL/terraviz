@@ -310,6 +310,12 @@ interface WireDataset {
   /** Image Y-axis flip flag for datasets with inverted Y conventions.
    *  Omitted == false. */
   isFlippedInY?: boolean
+  /** How many source frames this dataset advances per second. The
+   * rate is already baked into the file, so nothing applies it on
+   * load; it is served because the tour `frameRate` task must divide
+   * a requested rate by what the dataset already does. Omitted means
+   * 30. */
+  playbackFps?: number
   /**
    * Set by the node-catalog serializer for tour rows: the resolved
    * URL the tour engine fetches the tour document from. Bypasses
@@ -398,6 +404,7 @@ function wireToDataset(d: WireDataset): Dataset {
     celestialBody: d.celestialBody,
     lonOrigin: d.lonOrigin,
     isFlippedInY: d.isFlippedInY,
+    playbackFps: d.playbackFps,
     // Data-encoded video. Re-validated rather than trusted: the
     // catalog can be served from a static snapshot that never went
     // through the write-side validator, and a malformed sidecar

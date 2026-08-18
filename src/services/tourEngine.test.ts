@@ -409,6 +409,70 @@ describe('TourEngine', () => {
       expect(cb.togglePlayPause).toHaveBeenCalledOnce()
     })
 
+    it('divides by the dataset rate, not by the container rate', () => {
+      // A dataset published at 2 fps is already advancing at 2, so "5
+      // fps" is two and a half times its own rate. Dividing by 30 —
+      // which is what this did until `playback_fps` was served to the
+      // player — asked for 0.167x and delivered 0.33 fps, wrong by a
+      // factor of fifteen and worst on exactly the slow datasets the
+      // field exists for.
+      const cb = makeCallbacks({
+        isPlaying: vi.fn(() => false),
+        getPlaybackFps: vi.fn(() => 2),
+      })
+      const engine = new TourEngine(makeTour([
+        { datasetAnimation: { animation: 'on', frameRate: '5 fps' } },
+      ]), cb)
+
+      return engine.play().then(() => {
+        expect(cb.setPlaybackRate).toHaveBeenCalledWith(expect.closeTo(2.5, 3))
+      })
+    })
+
+    it.each([
+      // zero would divide to Infinity and clamp to 4x; a negative would
+      // clamp to 0.03x; both read as an oddly-authored tour rather than
+      // as a value that should have been rejected.
+      ['zero', 0],
+      ['negative', -2],
+      ['above the (0, 30] contract', 45],
+      ['non-finite', Number.NaN],
+    ])('ignores a %s playback_fps (%s)', (_label, bad) => {
+      // `playback_fps` arrives from a catalog response — possibly a
+      // static snapshot, a federated peer, or a node on an older
+      // validator — so it is data rather than a promise, and it lands in
+      // a divisor, where a bad value does not announce itself.
+      const cb = makeCallbacks({
+        isPlaying: vi.fn(() => false),
+        getPlaybackFps: vi.fn(() => bad as number),
+      })
+      const engine = new TourEngine(makeTour([
+        { datasetAnimation: { animation: 'on', frameRate: '15 fps' } },
+      ]), cb)
+
+      return engine.play().then(() => {
+        // Falls back to 30, exactly as a dataset that never set it.
+        expect(cb.setPlaybackRate).toHaveBeenCalledWith(expect.closeTo(0.5, 3))
+      })
+    })
+
+    it('falls back to 30 when the host cannot say', () => {
+      // Every dataset published before `playback_fps` existed, and any
+      // host that never wired the callback. The optional-callback shape
+      // is what keeps this a fix rather than a breaking change.
+      const cb = makeCallbacks({
+        isPlaying: vi.fn(() => false),
+        getPlaybackFps: vi.fn(() => undefined),
+      })
+      const engine = new TourEngine(makeTour([
+        { datasetAnimation: { animation: 'on', frameRate: '15 fps' } },
+      ]), cb)
+
+      return engine.play().then(() => {
+        expect(cb.setPlaybackRate).toHaveBeenCalledWith(expect.closeTo(0.5, 3))
+      })
+    })
+
     it('dispatches worldBorder object format', async () => {
       const renderer = makeRenderer()
       const cb = makeCallbacks({ getRenderer: () => renderer })

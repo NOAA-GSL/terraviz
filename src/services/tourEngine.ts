@@ -51,6 +51,43 @@ export interface TourTelemetryMeta {
 const MI_TO_KM = 1.60934
 
 /**
+ * The advance rate assumed for a dataset that does not declare one.
+ *
+ * Matches `OUTPUT_FRAME_RATE` in `cli/lib/ffmpeg-hls.ts`: one source
+ * frame per output frame at the catalog's encode rate, which is what
+ * every dataset published before `playback_fps` existed does.
+ */
+const DEFAULT_DATASET_FPS = 30
+
+/**
+ * The dataset's advance rate, or 30 when it does not have a usable one.
+ *
+ * The write-side validator holds `playback_fps` to `(0, 30]`, but this
+ * value has travelled: it arrives from a catalog response, which may be
+ * a static snapshot, a federated peer's feed, or a node running an
+ * older validator. It is data, not a promise. And it lands in a
+ * *divisor*, which is the one position where a bad number does not
+ * announce itself — zero yields Infinity and clamps the rate to 4x, a
+ * negative clamps it to 0.03x, and both look like a tour that was
+ * authored strangely rather than like a value that should have been
+ * rejected.
+ *
+ * So anything outside the contract is treated as absent, which is
+ * exactly what a dataset that never set the field means.
+ */
+function usableDatasetFps(value: number | undefined): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return DEFAULT_DATASET_FPS
+  if (value <= 0 || value > MAX_DATASET_FPS) return DEFAULT_DATASET_FPS
+  return value
+}
+
+/** Upper bound the publish-side validator enforces on `playback_fps`
+ *  (`validatePlaybackFps` in `functions/api/v1/_lib/validators.ts`).
+ *  Duplicated rather than imported: the SPA must not depend on
+ *  `functions/`. */
+const MAX_DATASET_FPS = 30
+
+/**
  * Parse a legacy SOS `setEnvView` view-name string into an internal
  * {@link TourViewLayout}. Case-insensitive; tolerates whitespace.
  *
@@ -893,14 +930,28 @@ export class TourEngine {
 
   private execDatasetAnimation(params: DatasetAnimationTaskParams): void {
     // Apply requested frame rate as a playback speed ratio.
-    // Videos are encoded at ~30fps; "5 fps" means playbackRate = 5/30.
+    //
+    // The task asks for a rate in *dataset* frames per second, so the
+    // divisor is what the dataset already advances at — not the
+    // container's frame rate, and not a constant. Those coincide only
+    // for a dataset with one source frame per output frame.
+    //
+    // They stopped coinciding when `playback_fps` arrived. A dataset
+    // published at 2 fps is already advancing at 2, whether the file
+    // holds each frame across a 30 fps container or is encoded at 2 fps
+    // outright; dividing by 30 asked such a tour for 0.167x and got
+    // 0.33 fps out of a request for 5 — wrong by the ratio between the
+    // two rates, silently, and worst on exactly the slow datasets the
+    // field exists to serve.
     if (params.frameRate) {
       const match = params.frameRate.match(/^(\d+(?:\.\d+)?)\s*fps$/i)
       if (match) {
         const requestedFps = parseFloat(match[1])
-        const defaultFps = 30
-        const rate = Math.max(0.03, Math.min(4, requestedFps / defaultFps))
-        logger.info(`[Tour] Setting playback rate: ${requestedFps} fps → ${rate.toFixed(3)}x`)
+        const datasetFps = usableDatasetFps(this.callbacks.getPlaybackFps?.())
+        const rate = Math.max(0.03, Math.min(4, requestedFps / datasetFps))
+        logger.info(
+          `[Tour] Setting playback rate: ${requestedFps} fps of a `
+          + `${datasetFps} fps dataset → ${rate.toFixed(3)}x`)
         this.callbacks.setPlaybackRate(rate)
       }
     }
