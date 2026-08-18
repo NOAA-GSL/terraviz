@@ -119,6 +119,12 @@ export interface WireDataset {
   lonOrigin?: number
   /** Image Y-axis flip flag. Omitted when false. */
   isFlippedInY?: boolean
+  /** How many source frames this dataset advances per second. The
+   * rate is already baked into the file, so nothing applies it on
+   * load; it is served because the tour `frameRate` task must divide
+   * a requested rate by what the dataset already does. Omitted means
+   * 30. */
+  playbackFps?: number
   /** How the frames encode their pixels. Omitted means a picture,
    * which is every dataset published before this field existed.
    * `'data-luma'` means luma carries the normalised value and
