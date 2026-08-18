@@ -222,10 +222,31 @@ function rejectUnknownArgs(argv: string[]): void {
         + `  A flag this copy does not implement is ignored no longer: it used `
         + `to produce a\n  complete, plausible, silently wrong file.`)
     }
-    // Skip the value so it is not mistaken for a flag. Values may
-    // legitimately look like flags — `--vmin -35` is the case that
-    // matters, and it is the one a naive check would reject.
-    if (valued.has(name)) i++
+    if (valued.has(name)) {
+      // The value is skipped so it is not mistaken for a flag — values
+      // may legitimately look like one, and `--vmin -35` is the case
+      // that matters. But skipping it *unchecked* reopened the hole
+      // this function exists to close: in `--out --losless`, the
+      // misspelling is swallowed as `--out`'s value, never validated,
+      // and the run writes a lossy encode to a file literally named
+      // `--losless`.
+      //
+      // A single dash is what a negative number wears; two is what a
+      // flag wears. Nothing this script accepts as a value begins with
+      // two, so that is the line.
+      const value = argv[i + 1]
+      if (value === undefined) {
+        throw new Error(`--${name} needs a value, and none followed it.`)
+      }
+      if (value.startsWith('--')) {
+        throw new Error(
+          `--${name} needs a value, but the next argument is "${value}".\n`
+          + `  If "${value}" was meant as a flag, --${name} is missing its value.\n`
+          + `  If it was meant as the value, this script cannot express that — `
+          + `values may\n  start with a single dash (--vmin -35) but not two.`)
+      }
+      i++
+    }
   }
 }
 
@@ -283,6 +304,21 @@ function parseArgs(argv: string[]): Args {
   if (!Object.hasOwn(CODECS, codec)) {
     throw new Error(`--codec must be one of ${Object.keys(CODECS).join(', ')}, got ${codec}`)
   }
+  // `--lossless` is refused here rather than where the ffmpeg arguments
+  // are built, because by that point `requireTools` has run and
+  // `gdalinfo` has read every frame — including the full range scan
+  // when --vmin/--vmax were not given. On twenty 55 MB GeoTIFFs that is
+  // minutes of work before an invocation that could never have
+  // succeeded. Same reasoning as the codec check above it.
+  const lossless = argv.includes('--lossless')
+  if (lossless && codec !== 'hevc') {
+    throw new Error(
+      `--lossless requires --codec hevc, got ${codec}.\n`
+      + '  Lossless H.264 needs the High 4:4:4 Predictive profile, which this\n'
+      + '  script does not emit: it pins Main for device compatibility, and a\n'
+      + '  4:4:4 stream is not what the hardware decoding these datasets wants.\n'
+      + '  HEVC is the codec for data-encoded video above 4096 wide anyway.')
+  }
   return {
     in: resolve(inDir),
     out: resolve(get('out') ?? 'out/data-encoded.mp4'),
@@ -295,7 +331,7 @@ function parseArgs(argv: string[]): Args {
     playbackFps: playbackFps,
     codec,
     keepTemp: argv.includes('--keep-temp'),
-    lossless: argv.includes('--lossless'),
+    lossless,
   }
 }
 
@@ -485,20 +521,13 @@ function rateControlArgs(args: Args): string[] {
       '-bufsize', `${args.maxBitrateKbps * BUFSIZE_MULTIPLE}k`,
     ]
   }
-  // h264 is refused rather than special-cased. Lossless in H.264 needs
-  // `qpprime_y_zero_transform_bypass`, which lives only in High 4:4:4
-  // Predictive — so honouring the flag would mean silently abandoning
-  // the Main profile this script pins for device compatibility, and
-  // emitting a 4:4:4 stream that much of the hardware decoding these
-  // datasets will not touch. Verified by trying it: `-profile:v main`
-  // with `-qp 0` produces no output file at all.
+  // Unreachable through `parseArgs`, which refuses this pairing before
+  // any frames are read — the message a user sees lives there. Kept
+  // because this function's contract is its arguments, not its one
+  // current caller, and because emitting `-qp 0` alongside the Main
+  // profile produces no output file at all rather than a warning.
   if (args.codec !== 'hevc') {
-    throw new Error(
-      '--lossless requires --codec hevc.\n'
-      + '  Lossless H.264 needs the High 4:4:4 Predictive profile, which this\n'
-      + '  script does not emit: it pins Main for device compatibility, and a\n'
-      + '  4:4:4 stream is not what the hardware decoding these datasets wants.\n'
-      + '  HEVC is the codec for data-encoded video above 4096 wide anyway.')
+    throw new Error(`--lossless requires --codec hevc, got ${args.codec}`)
   }
   return ['-x265-params', 'lossless=1']
 }

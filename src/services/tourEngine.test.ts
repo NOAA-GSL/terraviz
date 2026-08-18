@@ -429,6 +429,33 @@ describe('TourEngine', () => {
       })
     })
 
+    it.each([
+      // zero would divide to Infinity and clamp to 4x; a negative would
+      // clamp to 0.03x; both read as an oddly-authored tour rather than
+      // as a value that should have been rejected.
+      ['zero', 0],
+      ['negative', -2],
+      ['above the (0, 30] contract', 45],
+      ['non-finite', Number.NaN],
+    ])('ignores a %s playback_fps (%s)', (_label, bad) => {
+      // `playback_fps` arrives from a catalog response — possibly a
+      // static snapshot, a federated peer, or a node on an older
+      // validator — so it is data rather than a promise, and it lands in
+      // a divisor, where a bad value does not announce itself.
+      const cb = makeCallbacks({
+        isPlaying: vi.fn(() => false),
+        getPlaybackFps: vi.fn(() => bad as number),
+      })
+      const engine = new TourEngine(makeTour([
+        { datasetAnimation: { animation: 'on', frameRate: '15 fps' } },
+      ]), cb)
+
+      return engine.play().then(() => {
+        // Falls back to 30, exactly as a dataset that never set it.
+        expect(cb.setPlaybackRate).toHaveBeenCalledWith(expect.closeTo(0.5, 3))
+      })
+    })
+
     it('falls back to 30 when the host cannot say', () => {
       // Every dataset published before `playback_fps` existed, and any
       // host that never wired the callback. The optional-callback shape

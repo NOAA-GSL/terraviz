@@ -60,6 +60,34 @@ const MI_TO_KM = 1.60934
 const DEFAULT_DATASET_FPS = 30
 
 /**
+ * The dataset's advance rate, or 30 when it does not have a usable one.
+ *
+ * The write-side validator holds `playback_fps` to `(0, 30]`, but this
+ * value has travelled: it arrives from a catalog response, which may be
+ * a static snapshot, a federated peer's feed, or a node running an
+ * older validator. It is data, not a promise. And it lands in a
+ * *divisor*, which is the one position where a bad number does not
+ * announce itself — zero yields Infinity and clamps the rate to 4x, a
+ * negative clamps it to 0.03x, and both look like a tour that was
+ * authored strangely rather than like a value that should have been
+ * rejected.
+ *
+ * So anything outside the contract is treated as absent, which is
+ * exactly what a dataset that never set the field means.
+ */
+function usableDatasetFps(value: number | undefined): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return DEFAULT_DATASET_FPS
+  if (value <= 0 || value > MAX_DATASET_FPS) return DEFAULT_DATASET_FPS
+  return value
+}
+
+/** Upper bound the publish-side validator enforces on `playback_fps`
+ *  (`validatePlaybackFps` in `functions/api/v1/_lib/validators.ts`).
+ *  Duplicated rather than imported: the SPA must not depend on
+ *  `functions/`. */
+const MAX_DATASET_FPS = 30
+
+/**
  * Parse a legacy SOS `setEnvView` view-name string into an internal
  * {@link TourViewLayout}. Case-insensitive; tolerates whitespace.
  *
@@ -919,7 +947,7 @@ export class TourEngine {
       const match = params.frameRate.match(/^(\d+(?:\.\d+)?)\s*fps$/i)
       if (match) {
         const requestedFps = parseFloat(match[1])
-        const datasetFps = this.callbacks.getPlaybackFps?.() ?? DEFAULT_DATASET_FPS
+        const datasetFps = usableDatasetFps(this.callbacks.getPlaybackFps?.())
         const rate = Math.max(0.03, Math.min(4, requestedFps / datasetFps))
         logger.info(
           `[Tour] Setting playback rate: ${requestedFps} fps of a `
