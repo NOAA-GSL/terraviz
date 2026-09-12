@@ -366,6 +366,46 @@ Each phase is independently shippable and independently reversible.
    visual-feature modules rather than reimplement them? Needs a check of Zyra's
    own licence and a view on vendoring a few pure functions (SPDX header intact)
    versus taking a dependency.
+   **Narrowed 2026-09-12.** Probably one module, not the feature stack. Most of
+   tubeviz's per-scene fingerprint describes a *display transform*: on a
+   data-encoded video the palette is a sidecar, so brightness, saturation,
+   dominant hue and palette measure the colormap rather than the field, and
+   would change under a repalette that leaves the data identical. Motion
+   magnitude and direction are the part that survives the transport, and they
+   are what D3 wants. Scope any vendoring to that. **Precondition:** §2's
+   instruction to re-check tubeviz internals against HEAD applies here first.
+   That instruction predates this note and upstream moved ten minor versions in
+   five days; confirm the fingerprint still contains what §2 describes before
+   narrowing on it.
 5. D2a and D3 both want a Zyra stage that reduces the source grid per cycle.
    One stage emitting both a temporal profile and a statistics row, or two?
    Deciding this before either is built avoids a second pass over the data.
+   **Criterion 2026-09-12.** Decide on output shape, not on consumer. A
+   flow-field reduction over consecutive frames is one pass read at two
+   cadences: aggregated per cycle it is a D2a vital sign (advection speed
+   against that dataset's own seasonal baseline), retained per frame it is a D3
+   pacing profile. Where the two features' reductions share a pass like this,
+   one stage emitting both is right. Where D2a's statistics are
+   distribution-only and need no frame-to-frame comparison, they share nothing
+   and two stages is the honest answer. Settle it by listing the reductions
+   each feature actually wants before writing either.
+6. Can curator-ordered tours serve as ground truth for D1's variety weight, in
+   place of or ahead of the blind judging pass? §4 D1 calls `0.45` a defensible
+   guess. The blog companion tour is deliberately not sequenced because a
+   curator already chose the order, which makes every hand-ordered tour a
+   demonstration of a sequence someone stood behind. Fitting the weight to
+   reproduce held-out curator orderings would make it a measurement.
+
+   Three reasons it may not work, in the order they should be checked:
+
+   - **Corpus size.** Count the hand-ordered tours first. A dozen fits noise.
+     This is the cheap falsifier and it settles the question in an afternoon.
+   - **Distribution mismatch.** A curator orders datasets they also *selected*,
+     so variety pressure was already slack. D1 orders a score-ranked pool of up
+     to 80 links inside `resolveStopDatasets`, where it is not.
+   - **Objective mismatch.** A curator's order may encode chronology or
+     causation, which D1's dissimilarity objective does not represent at all. A
+     weight fitted to that would be right for the wrong reason.
+
+   At best this shrinks what the judging pass has to establish. It does not
+   replace it, and D1 stays gated either way.
