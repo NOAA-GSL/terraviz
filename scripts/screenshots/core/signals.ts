@@ -35,6 +35,38 @@ export interface BadResponse {
   status: number
 }
 
+/**
+ * A bad response a scene is *supposed* to get.
+ *
+ * Some scenes exist precisely to capture a failure surface —
+ * `publish-datasets-error` stubs a 500 so the datasets page renders its
+ * error card. Counting that as a problem is not a harmless
+ * over-report: it puts a permanent badge on a scene that is working,
+ * and a badge that is always on is a badge nobody reads. The scene
+ * declares what it expects and the collector drops exactly that.
+ *
+ * Both halves must match. Status alone would hide a *different*
+ * endpoint failing with the same code, which on a page that fetches
+ * several is the likely case rather than the unlikely one.
+ */
+export interface ExpectedBadResponse {
+  /**
+   * Matched against the response URL: a string by `includes`, a RegExp
+   * by `test`.
+   *
+   * **A bare string over-matches a route that has children.** Declaring
+   * `/publish/datasets` suppresses `/publish/datasets/<id>` too, which
+   * is the opposite of the point — use an anchored pattern like
+   * `/\/publish\/datasets(\?|$)/` for any endpoint with sub-routes.
+   */
+  url: string | RegExp
+  status: number
+}
+
+function matchesUrl(pattern: string | RegExp, url: string): boolean {
+  return typeof pattern === 'string' ? url.includes(pattern) : pattern.test(url)
+}
+
 export interface AxeViolation {
   id: string
   /** axe severity: 'minor' | 'moderate' | 'serious' | 'critical' | null. */
@@ -99,9 +131,33 @@ export interface SignalCollector {
  * A fresh, page-less collector. The four `handle*` methods are pure
  * aggregation over the structural views above.
  */
-export function createSignalCollector(): SignalCollector {
+export function createSignalCollector(
+  expected: readonly ExpectedBadResponse[] = [],
+): SignalCollector {
+  // A bad response shows up twice: as a `response` event, and as a
+  // console line the browser writes. The console line carries the
+  // status but **not** the URL, so it cannot be matched as precisely —
+  // and the two events can arrive in either order, so deciding as they
+  // come would make the result depend on timing. Instead every console
+  // error is buffered raw and `consoleErrors` is resolved on read, from
+  // final state: a resource line is dropped only when its status was
+  // expected *and* no unexpected response with that status survived.
+  // That last clause is the conservative half — if a second endpoint
+  // failed with the same code, the line is kept rather than hidden.
+  const rawConsoleErrors: string[] = []
+  const expectedStatuses = new Set(expected.map(e => e.status))
+  const RESOURCE_ERROR = /^Failed to load resource: the server responded with a status of (\d+)/
+
   const signals: SceneSignals = {
-    consoleErrors: [],
+    get consoleErrors(): string[] {
+      const unexplained = new Set(signals.badResponses.map(b => b.status))
+      return rawConsoleErrors.filter(line => {
+        const status = RESOURCE_ERROR.exec(line)?.[1]
+        if (status === undefined) return true
+        const code = Number(status)
+        return !expectedStatuses.has(code) || unexplained.has(code)
+      })
+    },
     consoleWarnings: [],
     pageErrors: [],
     failedRequests: [],
@@ -112,7 +168,7 @@ export function createSignalCollector(): SignalCollector {
     signals,
     handleConsole(msg) {
       const type = msg.type()
-      if (type === 'error') signals.consoleErrors.push(msg.text())
+      if (type === 'error') rawConsoleErrors.push(msg.text())
       else if (type === 'warning') signals.consoleWarnings.push(msg.text())
     },
     handlePageError(err) {
@@ -128,7 +184,10 @@ export function createSignalCollector(): SignalCollector {
     handleResponse(res) {
       const status = res.status()
       // Only client/server errors are problems; 2xx/3xx are normal.
-      if (status >= 400) signals.badResponses.push({ url: res.url(), status })
+      if (status < 400) return
+      const url = res.url()
+      if (expected.some(e => e.status === status && matchesUrl(e.url, url))) return
+      signals.badResponses.push({ url, status })
     },
   }
 }
@@ -137,8 +196,11 @@ export function createSignalCollector(): SignalCollector {
  * Attach a collector to a live page. Returns the collector so the caller
  * can read `.signals` after the scene settles.
  */
-export function attachSignalCollectors(page: Page): SignalCollector {
-  const collector = createSignalCollector()
+export function attachSignalCollectors(
+  page: Page,
+  expected: readonly ExpectedBadResponse[] = [],
+): SignalCollector {
+  const collector = createSignalCollector(expected)
   page.on('console', (msg) => collector.handleConsole(msg))
   page.on('pageerror', (err) => collector.handlePageError(err))
   page.on('requestfailed', (req) => collector.handleRequestFailed(req))

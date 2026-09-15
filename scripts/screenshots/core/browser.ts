@@ -118,6 +118,53 @@ export async function gotoApp(page: Page, path: string): Promise<void> {
     if (!(err instanceof Error) || !/timeout/i.test(err.message)) throw err
     await page.goto(path, { waitUntil: 'domcontentloaded', timeout: GOTO_TIMEOUT_MS })
   }
+  await settleBootSplash(page)
+}
+
+/**
+ * Wait for boot to have finished, so the shot shows the app.
+ *
+ * Determinism is already handled — the context kills the splash's
+ * transition, so no capture can catch a half-faded frame. What is left
+ * is *usefulness*: a scene whose shutter opens before boot completes
+ * photographs a splash screen, which is a stable and entirely useless
+ * picture of the surface it claims to document.
+ *
+ * The signal is the `fade-out` class, not Playwright's `hidden`. With
+ * the transition gone the app's `transitionend` handler never runs, so
+ * the element settles at `opacity: 0` and stays `display: flex` —
+ * invisible, but not `hidden` by Playwright's definition.
+ *
+ * Bounded and swallowed: boot genuinely does not finish offline for
+ * some routes (the smoke suite's embed check stubs `/api/**` and
+ * stalls there), and a splash is then the honest shot. Failing the
+ * capture instead would turn "this page did not boot" into "there is
+ * no screenshot", which is strictly less information.
+ */
+async function settleBootSplash(page: Page): Promise<void> {
+  try {
+    await page.waitForFunction(
+      () => {
+        const el = document.getElementById('loading-screen')
+        if (!el) return true
+        if (getComputedStyle(el).display === 'none') return true
+        return el.classList.contains('fade-out')
+      },
+      undefined,
+      { timeout: 10_000 },
+    )
+  } catch (err) {
+    // **Only a timeout is swallowed.** A bare `catch` here also
+    // swallowed a `TypeError` from calling a method the page object
+    // does not have — which is exactly what `browser.test.ts`'s fake
+    // Page was, so the helper threw on every unit test and the catch
+    // hid it: the tests passed while never exercising this at all.
+    // Caught in review, and it is the second time in this file that a
+    // swallowed programming error looked like a working feature.
+    if (!(err instanceof Error) || !/timeout/i.test(err.message)) throw err
+    // eslint-disable-next-line no-console
+    console.warn('  boot never finished; this shot is of the splash screen')
+  }
 }
 
 /** True when `url` is on the same origin as `baseURL`. Used to scope
@@ -170,6 +217,59 @@ export async function withScenePage<T>(
     } catch {
       // Storage unavailable — nothing to opt out of.
     }
+  })
+  // Remove the boot splash's fade rather than waiting it out.
+  //
+  // `#loading-screen` covers the viewport and leaves on an 0.8 s
+  // opacity transition. `screenshotWithRetry` passes
+  // `animations: 'disabled'`, which *freezes* a transition rather than
+  // completing it — so a capture during that window is not a smear but
+  // a **stable** frame of the whole page dimmed under a half-opaque
+  // splash, pixel-identical every time it lands. That is what made
+  // `browse-search-active` report exactly `2.03% (26340 px)` on
+  // unrelated PRs, and `catalog-landing` 2.99% / 7.88%.
+  //
+  // Waiting for the splash to go was the first attempt and is the
+  // weaker tool: it assumes boot always finishes, which is false
+  // offline, and it cannot be shortened without reintroducing the
+  // race. Deleting the transition removes the unstable state outright
+  // — opacity is 1 or 0, nothing between, whenever the shutter opens.
+  //
+  // Consequence worth knowing: with no transition there is no
+  // `transitionend`, so the app's own `display: none` handler never
+  // runs and the splash finishes at `opacity: 0` while still
+  // displayed. Visually identical, `pointer-events: none` either way —
+  // but it is why `settleBootSplash` waits on the class rather than on
+  // Playwright's `hidden`, which opacity alone does not satisfy.
+  //
+  // Passed as **source text, not a function**, and that is not a style
+  // choice. `addInitScript` serialises a function argument and
+  // evaluates the result in the page — but this file is compiled by
+  // esbuild with `keepNames`, which rewrites a named inner function to
+  // `__name(fn, 'fn')`. That helper exists in the bundle, never in the
+  // page, so the injected script dies on `__name is not defined` and
+  // takes every check in the smoke suite with it. A string cannot be
+  // rewritten. (The telemetry script above survives only because it
+  // declares no inner function.)
+  //
+  // Wrapped in an IIFE so re-injection cannot collide on a top-level
+  // binding, and deferred to `DOMContentLoaded` when the document is
+  // still parsing: an init script runs before the page's own scripts,
+  // early enough that `document.head` *and* `documentElement` are both
+  // null, so appending straight away throws.
+  await context.addInitScript({
+    content: `(() => {
+      const inject = () => {
+        const s = document.createElement('style')
+        s.textContent = '#loading-screen { transition: none !important; }'
+        ;(document.head || document.documentElement).appendChild(s)
+      }
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', inject, { once: true })
+      } else {
+        inject()
+      }
+    })()`,
   })
   const headers = opts.extraHTTPHeaders
   if (headers && Object.keys(headers).length > 0) {

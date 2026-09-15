@@ -1,0 +1,31 @@
+{
+  "$schema": "https://raw.githubusercontent.com/tauri-apps/tauri/dev/crates/tauri-utils/schema.json",
+  "identifier": "output",
+  "description": "Capability scoped to output-* windows. Narrowed for defence in depth: if an output is compromised (an XSS via a malicious dataset URL, a shader bug, a webview vulnerability) the blast radius is network fetch plus the window controls it drives on itself. core:window:allow-destroy is deliberately NOT here, and getting to that took two tries. Registering onCloseRequested makes Tauri's JS complete the close by calling destroy() on the window, ACL-checked against the output, so close alone made every output unclosable except via the task manager — the manager's Remove and the operator's Alt+F4 alike, denied inside Tauri's own callback where nothing in this repo can see it. Granting destroy fixed that and gave away more than it fixed: neither close nor destroy is scoped to the calling window, so an output could tear down the control window or a sibling, and destroy skips the sibling's own onCloseRequested, which is what makes the manager classify that departure as a crash (three of those blocklist a working monitor for the session). The output now preventDefault()s and invokes close_self, an app command that takes no label because Tauri supplies the calling window, so it can only ever destroy itself. NOTE, and this corrects what this field used to assert: withholding core:default does NOT stop an output invoking app commands. Tauri gates plugin commands, and app-defined ones only when the app ships its own permission manifest — this app ships none, so quit_app, the keychain and the download commands are reachable from here today. That is pre-existing, is what close_self relies on, and narrowing it is tracked in docs/MULTI_MONITOR_PLAN.md §6. What still holds: no filesystem, no asset protocol, no shell, no dialog, no clipboard, no updater, no window creation, no localhost HTTP. None of this restrains the manager: Tauri checks window commands against the CALLING window, so the manager's grants live in default.json.",
+  "platforms": ["macOS", "windows", "linux"],
+  "windows": ["output-*"],
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "core:event:allow-emit",
+    "core:event:allow-emit-to",
+
+    "core:window:allow-current-monitor",
+    "core:window:allow-is-decorated",
+    "core:window:allow-is-fullscreen",
+    "core:window:allow-set-fullscreen",
+    "core:window:allow-set-decorations",
+    "core:window:allow-close",
+
+    {
+      "identifier": "http:default",
+      "allow": [
+        { "url": "https://*" }
+      ],
+      "deny": [
+        { "url": "http://localhost:*" },
+        { "url": "http://127.0.0.1:*" }
+      ]
+    }
+  ]
+}

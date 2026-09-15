@@ -133,6 +133,15 @@ or both:
 - **Kill switch.** `/api/ingest` honours a `KILL_TELEMETRY=1` env
   var; the function returns 410 and the client cools down for the
   rest of the session.
+- **Where a batch goes.** Relative `/api/ingest` on the web — the
+  Pages Function answering it belongs to the deploy that served
+  the page, so a fork reports to its own node with no
+  configuration. On **desktop** the webview origin is
+  `tauri://localhost`, so the path is resolved against
+  `getApiOrigin()` (`src/config/endpoints.ts`), the same origin
+  `/api/v1/*` uses, overridable with `VITE_API_ORIGIN`. An
+  un-configured fork's desktop build therefore reports upstream;
+  `docs/SELF_HOSTING.md` §15.3 is where that is spelled out.
 
 `PRIVACY.md` is the user-facing version of this list. If anything in
 this doc drifts from `PRIVACY.md`, **`PRIVACY.md` wins** and this doc
@@ -164,6 +173,7 @@ must be corrected.
 | `vr_interaction` | **B** | `src/services/vrInteraction.ts` (per-gesture, throttled) |
 | `error_detail` | **B** | `src/analytics/errorCapture.ts` (adds sanitized stack) |
 | `tour_question_answered` | **B** | `src/services/tourEngine.ts` |
+| `output_added` / `output_removed` / `output_failure` | A | `src/services/multiOutput/manager.ts` via `src/services/multiOutput/outputTelemetry.ts` — the multi-monitor control window. The **output windows emit nothing**: §3.6 of `MULTI_MONITOR_PLAN.md` keeps them capture-clean, and the two failures an output could report about itself (a crash, an IPC silence) are the two it cannot. Categorical fields only — the framebuffer is a rung name and the monitor an enumeration index, never a display name |
 | `voice_interaction` | **B** | `src/ui/chatUI.ts` (Orbit voice STT/TTS — no transcript or audio, only provider / lang / duration / success; hands-free turns carry `trigger` = `open-mic`/`push-to-talk`/`wake-word`, a `wake-word` turn with `success:false` is a false fire, and a TTS barge-in sets `interrupted` — the §10.4 exhibit-tuning numbers) |
 
 Per-event field documentation lives in the type definitions

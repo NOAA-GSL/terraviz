@@ -3,6 +3,18 @@
 
 import { logger } from '../utils/logger'
 import { reportError } from '../analytics'
+import { getApiOrigin } from '../config/endpoints'
+
+/**
+ * Re-exported so the four call sites that have always imported it from
+ * here (`downloadService`, `deepLinkService`, `shareService`, and this
+ * module's own `apiUrl`) are unchanged. The definition moved to
+ * `config/endpoints.ts` because `analytics/transport.ts` needs the same
+ * origin for `/api/ingest` and cannot import this module without
+ * closing a cycle — see the docstring there.
+ */
+export { getApiOrigin }
+
 
 /**
  * Build-time switch that controls where `dataService.ts` and
@@ -78,20 +90,6 @@ export function isManifestUrl(dataLink: string): boolean {
 }
 
 /**
- * Public origin of the production Pages deployment. Used as the
- * fallback host for `/api/v1/...` requests in Tauri builds, where
- * the webview origin is `tauri://localhost/` (or
- * `http://tauri.localhost/` on Windows) and there is no Pages
- * Functions backend to serve relative API paths — they would
- * otherwise return the bundled `index.html` and fail JSON parse
- * with `Unexpected token '<'`.
- *
- * Override at build time via `VITE_API_ORIGIN` to point a fork's
- * desktop builds at a different deployment.
- */
-const DEFAULT_API_ORIGIN = 'https://terraviz.zyra-project.org'
-
-/**
  * Whether the SPA is currently running inside a Tauri webview.
  * Resolved per call (rather than captured once at module load) so
  * tests can flip `window.__TAURI__` between cases without resorting
@@ -102,28 +100,6 @@ function isTauri(): boolean {
     typeof window !== 'undefined' &&
     !!(window as { __TAURI__?: unknown }).__TAURI__
   )
-}
-
-/**
- * Resolve the active API origin. Reads `VITE_API_ORIGIN` and
- * normalises it to just `<scheme>://<host>[:port]` via the URL
- * constructor — anything past the origin (path, query, fragment)
- * is dropped, which matches the variable's name and prevents a
- * misconfigured `https://staging.example.com/foo` from producing
- * `https://staging.example.com/foo/api/v1/catalog`. Non-URL or
- * non-http(s) values fall back to `DEFAULT_API_ORIGIN` rather
- * than throwing, so a typo can't take desktop builds offline.
- */
-export function getApiOrigin(): string {
-  const override = (import.meta.env.VITE_API_ORIGIN as string | undefined)?.trim()
-  if (!override) return DEFAULT_API_ORIGIN
-  try {
-    const u = new URL(override)
-    if (u.protocol !== 'http:' && u.protocol !== 'https:') return DEFAULT_API_ORIGIN
-    return u.origin
-  } catch {
-    return DEFAULT_API_ORIGIN
-  }
 }
 
 /**

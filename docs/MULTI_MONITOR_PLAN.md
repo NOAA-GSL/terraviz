@@ -10,11 +10,12 @@ similar 2:1-input device.
 Status: **draft for review.** Nothing implemented; this document
 exists to align scope and architecture before any code lands.
 
-**Last reviewed:** 2026-08-28 (reconciled against `main` @ `965d231`
-after ~200 PRs of drift; every `src/` citation below was verified
-against that commit).
+**Last reviewed:** 2026-09-03 (amended from a throwaway platform
+spike — see "What has actually been executed" below. The `src/`
+citations were verified against `main` @ `965d231` on 2026-08-28
+and have not been re-verified since).
 
-> **The line numbers in this doc are pinned to that commit and will
+> **The line numbers in this doc are pinned to `965d231` and will
 > drift.** They already have once: in the nine commits between #395
 > and #404, `SIBLING_HARD_SEEK_THRESHOLD_S` changed file *and* value
 > while every other citation moved between +3 and +40 lines. A pass
@@ -28,10 +29,10 @@ against that commit).
 - Any ladder commit lands. Once code exists, this doc's claims about
   `src/` are checkable against it rather than asserted, and the
   sections describing what "must be added" become history.
-- The spike on Open Question 1 comes back negative — if borderless
+- Open Question 1 comes back negative **on Linux**. Windows is
+  answered; the Linux half was always the risky one. If borderless
   fullscreen on a non-primary monitor does not work on a target
-  Linux compositor, the ladder's shape changes, not just its
-  timeline.
+  compositor, the ladder's shape changes, not just its timeline.
 - `computeSiblingSyncCorrection`, `SIBLING_MIN_READY_STATE`,
   `SIBLING_HARD_SEEK_THRESHOLD_S` or `SIBLING_SEEK_EPS_S` change
   signature or value. §3 delegates to all four rather than
@@ -39,10 +40,42 @@ against that commit).
 - `globeThumbnail.ts` changes shape. The "Prior art" section and the
   rescoping of delivery steps 2-4 both rest on it.
 - Tauri's capability model changes across a major version, or the
-  four permissions §6 asks for stop being the right set.
+  permissions §6 asks for stop being the right set.
 - Six months pass with no implementation started. The `src/`
   citations drift with every release whether or not anyone is
   reading them.
+
+### What has actually been executed
+
+Until 2026-09-03 this document had been rewritten twice without
+a single one of its platform assumptions being run. A throwaway
+spike (Windows 11, Intel Raptor Lake-S + RTX 4090 Laptop, three
+monitors, packaged build) executed the load-bearing ones. It
+shared no code with `src/services`, was wired into nothing, and
+is not part of the delivery ladder.
+
+| Assumption | Where | Verdict |
+|---|---|---|
+| The proposed capability grants are sufficient to spawn a window | §6 | **Confirmed** for the four the spike ran. A fifth (`allow-show`) was added afterwards, from a code reading, and is **untested** |
+| The narrow output capability is sufficient for what an output self-drives | §3 "Output capability spec" | **Confirmed** |
+| `core:window:default` carries no `set-*` and no `allow-close` | §6 | **Confirmed** against Tauri 2.11.2's own tables |
+| Borderless fullscreen lands on a non-primary monitor | Open Question 1 | **Confirmed on Windows.** Linux and macOS untested |
+| Multiple WebGL2 contexts + decoders survive | §3 "Cross-window decoder budget" | **Confirmed, and the budget was wrong** — 16 outputs at 8192×4096 ran at full rate |
+| Logical / physical coordinates place the window correctly | "Monitor geometry and placement" | **Untested** — every monitor was `scaleFactor: 1` |
+
+Four things the spike found that the plan did not predict are
+folded into the sections above: signed monitor origins, GPU
+selection being a driver-level decision the app cannot make,
+an ACL denial presenting as "datasets don't load" (in a window
+running the main app bundle — **not** in v1's outputs, which
+run `datasetMirror` and invoke no commands), and video datasets
+being unloadable in `dev:desktop` at all.
+
+**Everything measured came from one 4090 laptop.** A museum is
+likelier to deploy an Intel-iGPU NUC. Numbers here bound what is
+*possible*, not what is *portable*.
+
+---
 
 The motivating use cases are concrete and somewhat narrow:
 
@@ -137,13 +170,21 @@ Three.js was already chosen for the VR system (`vrSession.ts`
 produces a fully composited Earth sphere (diffuse, night
 lights, specular, atmosphere, clouds, sun) used by both VR and
 the Orbit character page. The output system reuses that
-factory directly. We add:
+factory as a **texture provider** — its progressive 2K → 4K →
+8K base diffuse, and the loader behind it — rather than
+rendering its mesh, because on this path the fragment shader
+*is* the renderer. Which of its effects survive that, and why
+the ones that don't are incoherent on an LED sphere rather
+than merely unported, is "What the equirect path does to the
+Earth decoration" below. We add:
 
-- A dataset-texture overlay layer (already done by `vrScene.ts`
-  on top of `photorealEarth`).
-- A multi-layer stack support for overlapping datasets (new —
-  semi-transparent sphere shells at radii 1.000, 1.001, 1.002,
-  …).
+- A dataset-texture overlay layer (`vrScene.ts` does the
+  equivalent on top of `photorealEarth`'s mesh; here it is one
+  more sampler in the composite).
+- Multi-layer stack support for overlapping datasets (new —
+  layers composite in array order inside the single fragment
+  shader, so there are no stacked shells and no depth buffer
+  to fight over).
 - An equirectangular render-to-texture pass (new — single
   fragment shader; ~80 LOC).
 
@@ -162,8 +203,9 @@ flavors:
   For each output pixel `(u,v) ∈ [0,1]²`, compute the world
   direction `(lon, lat) = (u·2π − π, v·π − π/2)`, raycast that
   direction *from a configurable camera position* (default
-  `(0,0,0)` — the sphere center) against the sphere stack,
-  sample each layer's composited texture at the hit point. One
+  `(0,0,0)` — the sphere center) against the unit sphere,
+  sample every layer at the hit point and composite them in
+  order. One
   pass, native 2:1 output, no pole artifacts. The camera
   position is a shader uniform; v1 pins it to the origin but
   Phase 2+ uses a non-zero offset to implement zoom — see
@@ -273,7 +315,8 @@ What `capabilities/default.json` grants today (lines 7-27):
 `allow-current-monitor` lines are redundant — worth removing
 while editing the file.
 
-So v1 must **add** to `capabilities/default.json`:
+So v1 must **add** five permissions to
+`capabilities/default.json`:
 
 | Permission | Needed for |
 |---|---|
@@ -281,6 +324,7 @@ So v1 must **add** to `capabilities/default.json`:
 | `core:window:allow-close` | Graceful teardown of an output |
 | `core:window:allow-destroy` | Forced teardown after a crash or GPU-loss timeout |
 | `core:window:allow-set-decorations` | Drop the title bar (§3.6 fullscreen toggle) |
+| `core:window:allow-show` | Reveal an output after it has been placed. Outputs are spawned `visible: false` and positioned through the physical setters before being shown, because `WindowOptions` has no physical placement option — see "Monitor geometry and placement" |
 
 `allow-set-fullscreen`, `allow-set-size`, `allow-set-position`,
 `allow-available-monitors`, and `allow-current-monitor` are
@@ -302,7 +346,7 @@ manager-initiated operation on `output-N` to be **denied**.
 
 The split that actually works:
 
-- **`default.json` (the manager)** — gains the four permissions
+- **`default.json` (the manager)** — gains the permissions
   in the table above. This is what makes cross-window control
   possible at all.
 - **`output.json` (the outputs)** — stays narrow, and is about
@@ -310,6 +354,86 @@ The split that actually works:
   restraining the manager. It grants the output only what it
   self-drives: F11 fullscreen on itself, its own graceful
   close, IPC, and HTTPS fetch. See §3 "Output capability spec".
+
+**All of the above is now verified, not just reasoned.** A
+throwaway spike ran it on Windows 11: `WebviewWindow.new()`
+succeeded with the four grants the spike carried and no ACL
+error, and the narrow
+output capability was sufficient for everything an output
+self-drives — every window getter returned a real value and
+`emitTo('main')` reached the control page. All 28 `core:`
+identifiers across both files exist in Tauri 2.11.2's own
+permission tables, which removes a whole class of false
+negative: a spawn failure on someone's machine is not a
+misspelled permission name.
+
+The fifth grant, `core:window:allow-show`, is **not** covered by
+that result — it was added after the spike, from a reading of
+Tauri's `WindowOptions` type, and nothing has executed it. It is
+the one line of §6 still in the state the rest of the section
+was in before the spike ran.
+
+That check also settled the `core:window:default` reading
+against the shipped tables rather than against a code reading.
+Of the twelve `core:window:*` permissions the output file
+enumerates, exactly **one** — `allow-close` — reaches beyond
+the `default` bundle; the other eleven are getters already
+inside it. Keep the enumeration anyway rather than collapsing
+it to the bundle: the point of that file is reviewability, so a
+future Tauri release quietly widening `default` cannot widen
+this file along with it.
+
+**Capabilities are compiled into the binary.** `tauri-build`
+does emit `cargo:rerun-if-changed=capabilities`
+(`tauri-build-2.6.2/src/acl.rs:427`), but that only fires when
+cargo actually runs — so a `dev:desktop` session started
+*before* a capability edit keeps enforcing the old ACL, and the
+edit looks like it did nothing. **Restart `dev:desktop` after
+touching any capability file.** This cost real debugging time
+in the spike, twice.
+
+**A missing grant does not announce itself. It looks like a
+data bug.** `datasetLoader` awaits `getDownload(dataset.id)` as
+the *first* step of both the image and the video load path
+(`src/services/datasetLoader.ts:126`, `:272`). That helper
+guards on `IS_TAURI` but does not catch a rejected invoke
+(`downloadService.ts:719-722`). In any Tauri window whose
+capability is not in effect, `IS_TAURI` is still true, the
+invoke is ACL-denied, the promise rejects, and `loadDataset`
+throws before doing anything else — so the symptom is "datasets
+don't load", with no mention of permissions anywhere in it.
+
+**v1's own outputs do not hit this**, and an earlier draft of
+this section wrongly implied they do. Outputs run
+`src/output/datasetMirror.ts`, not `datasetLoader`, and
+§"Output capability spec" grants them no Tauri commands at all —
+they fetch over the network by design. So the hazard is not
+"this feature walks into it". It is narrower and still worth
+writing down: **any window running the main app bundle walks
+into it**, which is what the spike's own `spike-app-*` preflight
+windows were, and what a Phase 4 mirrored mode reusing the main
+bundle would be.
+
+To be exact about the evidence: this is a code reading, not an
+observed failure. The spike's own "the spawned window won't
+load datasets" turned out to be a dead `VITE_DEV_API_TARGET`
+proxy, and a preflight window proved its capability was live.
+
+The fix landed separately, on `main`, because the bug is not
+multi-window-specific and is reachable today: the read commands
+resolve to their no-downloads value and log the denial once
+rather than rejecting. Three surfaces were affected, not one —
+`datasetLoader`'s two load paths, `downloadUI`'s `renderPanel`
+(which left the panel blank), and `browseUI`'s badge loop. The
+mutating commands still reject, deliberately.
+
+That fix catches every rejection, not only ACL-shaped ones,
+which does mean a genuine index or I/O failure now degrades and
+logs rather than throwing. The trade is deliberate: the caller
+is asking "is there a local copy?", "I cannot tell" is
+operationally the same answer as "no", and the alternative is
+matching on Tauri's denial string, which is not a stable
+contract.
 
 ### 7. Vite multi-entry build
 
@@ -387,9 +511,9 @@ touching the output rendering code. See Phase 5.
 │                                        │    │                                  │
 │ MapLibre canvas + DOM UI               │    │ Three.js WebGLRenderer (headless)│
 │  └─ ViewportManager (1/2/4 globes)     │    │  ┌────────────────────────────┐  │
-│  └─ datasetLoader.{loadImage,loadVideo}│    │  │ photorealEarth sphere      │  │
+│  └─ datasetLoader.{loadImage,loadVideo}│    │  │ photorealEarth base texture│  │
 │                                        │    │  │  + dataset texture overlay │  │
-│ + new MultiOutputManager service       │    │  │  + multi-layer shells      │  │
+│ + new MultiOutputManager service       │    │  │  + layer composite, max 4  │  │
 │  ├─ enumerate monitors                 │ ──>│  └────────────────────────────┘  │
 │  ├─ spawn/destroy WebviewWindow        │evt │             │                    │
 │  ├─ broadcast globe state diff         │    │             ▼                    │
@@ -442,6 +566,312 @@ risk this retires is the boring, expensive kind: UV orientation,
 flip handling, bbox clipping and body-specific shading are all
 places where an independent re-derivation would look right and
 be subtly wrong on a subset of the catalog.
+
+### What the equirect path does to the Earth decoration
+
+> **Asked for, at the first hardware session (2026-09):** "at some
+> point I would want the Earth as realistic as possible." The outputs
+> were showing base diffuse and nothing else.
+>
+> This section is the answer to *how* realistic is coherent: the table
+> below sorts every effect by what it depends on, and the split is not
+> a matter of effort. Three more cross the boundary; four cannot cross
+> at all, because they are properties of *looking at* a sphere from
+> outside and nobody looks at an LED sphere from outside.
+>
+> **Rung 12c has since built all three that cross.** The four that do
+> not are ruled out permanently rather than deferred — the table says
+> why, and it is a statement about the surface, not about the backlog.
+
+Constraint 3 has a consequence the rest of this plan was written
+without. If the equirect pass ray-marches an analytic sphere and
+samples layer textures at the hit point, then **the fragment
+shader is the renderer** — there is no rasterised mesh, no scene
+camera, and no depth buffer. `photorealEarth` is therefore
+consumed as a *texture provider* (its progressive 2K → 4K → 8K
+base diffuse, and the loader that fetches it) rather than as a
+sphere to draw.
+
+That reads at first like a porting cost: reimplement
+`photorealEarth`'s material inside the equirect shader, which is
+exactly the re-derivation the Prior-art section forbids. Sorting
+its effects by *what each one actually depends on* shows it is
+not a porting question at all.
+
+| Effect | Depends on | On an equirect output |
+|---|---|---|
+| Base diffuse | an equirect texture | **Crosses.** Already the sampled layer. |
+| Night lights | an equirect texture, gated by the terminator | **Crosses.** A second sampler and a multiply. |
+| Day/night terminator | `dot(surfaceNormal, sunDir)` | **Crosses, in one line.** In a ray-march the hit point on the unit sphere *is* the normal, so `vNdotL` (`photorealEarth.ts:566`) is `dot(hit, uSunDir)`. |
+| Clouds | an equirect texture on a shell at 1.005 | **Crosses.** Another layer in the composite. |
+| Specular ocean | the **viewer's** position — `rayDir = normalize(fragKm - camKm)` (`:870`) | **Meaningless.** |
+| Atmosphere shells | the **silhouette** — the shell exists "so the shell's silhouette is the limb of the atmosphere proper" (`:148-151`) | **Meaningless as a shell; the disc tint crosses.** The mesh and its limb do not survive an unwrap. But the shell covers the whole visible *disc*, not a ring, and pinned to nadir its integral collapses to a function of sun angle alone — which is meaningful at every point of an unwrap. See §"One real gap this turned up" and `src/output/atmosphereNadir.ts`. Do not read this row as licence to remove that pass. |
+| Ground shadow | a scene to cast onto | **Meaningless.** |
+| Sun sprite | a billboard in world space | **Meaningless.** |
+
+**Two traps this path sets, both sprung on the first build.**
+
+*The sun's frame, not its source.* `photorealEarth`'s
+`sunDirectionFromLatLng` builds its vector for the globe **mesh**,
+and negates Z relative to `equirectRtt`'s `latLonToDirection`.
+Borrowing that handle's `sunDir` therefore mirrors the sun in
+longitude and lights the opposite hemisphere — the Americas went
+dark while the control globe had them in daylight. Sharing
+`getSunPosition` does not fix it and never could; what matters is
+that the sun and the camera are derived through the *same*
+lat/lon-to-direction function, which makes the frames agree by
+construction rather than by coincidence.
+
+*One module's calibration, end to end.* The cloud asset is shared
+but the curve that turns it into coverage is not.
+`earthTileLayer` computes alpha in-shader with a gamma of **1.8**,
+which suppresses haze; `photorealEarth` bakes it onto a canvas at
+**0.55**, which lifts haze, because it is feeding a lit shell seen
+from outside. Splicing that texture into the other's opacity turned
+a light haze into a ~30% white wash over the whole day side, greyed
+the oceans, and — once the night-side alpha boost multiplied it —
+clamped the night to solid black. Take the raw asset and bring the
+whole curve, or take neither.
+
+**One effect crosses, but not as a uniform: the cloud zoom fade.**
+The control globe dissolves its clouds on the way in — full cover
+at zoom 3, none at zoom 6 — because the cloud asset is a single
+global texture and magnifying a patch of it magnifies its blur,
+leaving a fuzzy grey wash over basemap detail that is genuinely
+sharper underneath. Asked for at the second hardware session
+(2026-09): *"clouds should only vanish in the zoomed portion. In
+other words based on camera altitude."*
+
+The qualifier is the whole design. On the control globe the
+viewport is at one zoom, so the fade is one scalar. On an output
+the zoom **is** the warp: the focus is magnified and the antipode
+compressed *in the same frame*, and there is no single number that
+is right for both. A uniform copied across would either keep the
+wash over the magnified part it exists to clear, or strip clouds
+off the three-quarters of the sphere that never zoomed at all.
+
+So it is per fragment, and the quantity is already on hand. The
+ray-march computes a hit distance `t` for every pixel; with the
+camera at `|o| = f` that runs from `1 − f` at the focus to `1 + f`
+at the antipode, and the linear magnification relative to a centred
+camera is `1 / t`. Inverting `cameraOffsetForCamera`'s own mapping
+(`f = 1 − 1/(z+1)`) turns that into a zoom level:
+
+```
+localZoom = 1/t − 1
+```
+
+**Exact at the focus** — the centre of the operator's area of
+interest reports the operator's actual zoom — so feeding it through
+`earthTileLayer`'s *unmodified* curve makes the two surfaces agree
+there by construction, rather than by a second pair of hand-tuned
+anchors. Two imprecisions are deliberate and worth stating rather
+than discovering: the warp is anisotropic (the true linear scale is
+`√(cos θ)/t`, and dropping `cos θ` costs at most ~27% of a
+magnification factor mid-frame, nothing at either pole), and
+`MAX_CAMERA_OFFSET = 0.85` caps the reachable local zoom at ~5.67,
+so clouds bottom out at ~11% of their alpha instead of at zero.
+That residual is **agreement, not a shortfall**: 11% is what the
+control globe has left at zoom 5.67, which is the zoom a capped
+output is in fact showing. Rescaling the curve to end at the cap
+is the tempting fix, and it would put a second cloud calibration in
+the repo — the trap immediately above, in a new place.
+
+**The decoration is idle-only — found on hardware, rung 9 step 13.**
+The first Windows pass reported that a regional dataset rendered
+correctly placed but wrongly lit: *"once a dataset loads the globe
+should revert to a diffuse unlit globe … however, on the generated 2:1
+outputs the data is still shown with day night lighting."* That is
+right, and the control globe already does it — `earthTileLayer` gates
+its entire pass chain on `datasetActive` and returns before pass 0,
+with the comment "no earth effects when dataset is active". So a
+control globe showing a dataset is unlit **and ungraded**, and a
+bbox-clipped dataset `discard`s to raw Blue Marble tiles outside its
+box.
+
+This path had composited the decoration *under* the layers instead, on
+the reasoning recorded in §"What the equirect path does to the Earth
+decoration": under-compositing was supposed to mean day/night could
+never tint a dataset. **That holds only for opaque global coverage.**
+A data-encoded overlay is translucent by construction — its alpha *is*
+the measurement — so the terminator showed through the night-side
+smoke plume the argument used as its own example, and outside the bbox
+the two globes disagreed outright.
+
+The gate is the slot count, decided at build time because the shader
+text is already a function of it: no layers means the idle Earth and
+its full treatment, any layer means the raw sample and nothing on top.
+It costs nothing at runtime, and it is a *tighter* test than the
+control side's — `main.ts` fills a slot only when the mirror holds
+decoded media, whereas `datasetActive` is set when the dataset is
+assigned. Measured through the real composed shader: a lit land sample
+`rgb(181, 150, 103)` renders `rgb(172, 139, 96)` on an idle output and
+`rgb(181, 150, 103)` — byte-identical to the raw tile — once a layer
+exists.
+
+**Verified on a real GL implementation (2026-09-11).** The decoration
+GLSL is a hand transcription of tested TypeScript, which is the
+weakest guard in this module — a transcription error compiles fine and
+fails only on a GPU. It has now been rendered headless in Chromium
+over ANGLE/SwiftShader and the numbers measured back out of the
+pixels. Two harnesses, and the difference between them is worth
+keeping: the first drives `outputScene.setParams` through
+`output.html`, which exercises the real scene and therefore reads
+through the equirect camera's pixel→lat/lon mapping; the second
+compiles `buildOutputFragmentShader` against a **uniform** base
+texture in a bare WebGL context, which removes that mapping from the
+comparison entirely. The second exists because the first produced an
+unresolvable reading on the atmosphere — a lit band that would not
+line up with the subsolar longitude — and the way out was to stop
+measuring two things at once rather than to keep staring at the one
+number.
+
+| Check | Method | Result |
+|---|---|---|
+| Terminator position | render at four frozen UTC instants, divide by the same frame with `dayNight` off to cancel albedo, least-squares fit the subsolar point | fitted longitude within **1.5°** of `getSunPosition`'s at 00/06/12/18 UTC, tracking −15°/h in the correct direction |
+| Terminator frame | 06:00 and 18:00 specifically | fitted **+91°** and **−91°**; the borrowed-vector bug mirrors longitude, so it would read −90 and +90 here — and would agree at 00:00/12:00, which is why it hid at those two hours |
+| Cloud zoom fade | flat cloud field, alpha recovered from a paired render with clouds off, compared against the ray length's own prediction | worst deviation **0.0020** over the frame at zoom 0 and zoom 5 — 8-bit quantisation |
+| Grade + atmosphere | the composed shader compiled against a *uniform* base texture, so the pixel→lat/lon mapping drops out of the comparison, then every sampled fragment checked against `gradeEarthBase`/`decorateEarth`/`applyAtmosphere` run in TypeScript | worst deviation **0.499 of one byte**, mean 0.046, over 176 fragments spanning the whole sun sweep — rounding and nothing else. The measured ocean: raw `rgb(2, 5, 20)` → graded `rgb(0, 0, 12)` → `rgb(2, 5, 29)` at the subsolar point, the +18 blue matching `SUN_INTENSITY`'s own docstring calibration |
+
+**A second gap, found in review: the whole Earth was too dark.** The
+base texture arrives from `photorealEarth` tagged `SRGBColorSpace`,
+which is right for *that* module's material — Three uploads it with an
+sRGB internal format so the sampler decodes to linear for the lighting
+pipeline downstream. This path has no such pipeline: one quad, a
+hand-written `ShaderMaterial`, straight to the default framebuffer with
+no `colorspace_fragment` chunk to re-encode on the way out. And every
+constant in `layerStack` is copied from `earthTileLayer`, which grades
+and composites in sRGB **display** space because it reads the MapLibre
+framebuffer. Decoded-linear input under display-space constants is not
+a subtlety — measured through the real composed shader:
+
+| Base (sRGB) | Decoded-linear (as shipped) | Display space (fixed) |
+|---|---|---|
+| Ocean `rgb(2, 5, 20)` | `rgb(2, 5, 17)` | `rgb(2, 5, 28)` |
+| Land `rgb(181, 150, 103)` | `rgb(112, 68, 30)` | `rgb(172, 139, 96)` |
+| Sahara `rgb(213, 174, 131)` | `rgb(166, 96, 50)` | `rgb(205, 162, 124)` |
+| Vegetation `rgb(27, 47, 19)` | **`rgb(2, 5, 17)`** | `rgb(15, 41, 21)` |
+
+The vegetation row is the one that settles it: dark green land reached
+the framebuffer **byte-identical to ocean**, so forest and sea were the
+same colour on the sphere. Contrast-around-0.5 in linear space treats
+anything below mid-grey as far-below-midtone and crushes it, which is
+the failure `photorealEarth`'s own contrast knob carries a paragraph
+about avoiding.
+
+**It predates the colour grade.** Rung 12c's decoration inherited it
+the same way — its four constants are `earthTileLayer`'s too. The fix
+removes the decode rather than compensating for it (`useDisplaySpace`
+in `outputScene`), so every copied constant is correct by construction
+instead of correct after an offsetting transform, and the cloud
+texture — built here by `new Texture(img)` and left at Three's default
+`NoColorSpace` — stops being the only one that was already right.
+Retagging is safe because `createPhotorealEarth` builds these per call
+and an output window holds its own instance.
+
+**One real gap this turned up: the ocean — and the first diagnosis of
+it was wrong twice.** The output's day-side sea read near-black beside
+a blue one, which is what "the main application window is much more
+blue" was reporting. It was first attributed to scattering, then
+"corrected" to a claim that the control globe's GIBS
+`BlueMarble_NextGeneration` tiles "carry their own blue water" and
+that scattering therefore had nothing to do with it. Measured rather
+than asserted, a BMNG tile's ocean is `rgb(2, 5, 20)` and
+`earth_diffuse_2048.jpg`'s is `rgb(2, 5, 20)` — **byte-identical, the
+same product.** Blue Marble's blue is not in Blue Marble. The second
+claim was the wrong one, and the original instinct was right.
+
+The blue comes from two passes the output was not running, both of
+which cross to an unwrap:
+
+- **Pass 0, the colour grade.** Contrast 1.10 ("a slight S-curve to
+  deepen ocean blues") and saturation 1.20 ("push the Blue Marble
+  greens/blues a touch"), applied to the raw tiles before anything
+  composites on them. Purely per-pixel: no geometry, no viewer, no
+  silhouette, nothing for an unwrap to reinterpret. On the real ocean
+  value it clips red and green to black and leaves blue standing.
+- **Pass 5, atmospheric scattering.** The shell sits at
+  `ATMOSPHERE_RADIUS_FACTOR` (~1.0157), so it covers the whole visible
+  **disc**, not a limb ring, compositing
+  `scattered + background x viewTransmittance`. Rayleigh beta scatters
+  blue ~5.7x harder than red, so over a near-black ocean the
+  in-scattered term *is* the water's colour.
+
+**The table's "atmosphere shells → meaningless" row was right about
+the limb and wrong about the disc tint.** Pin the view to nadir —
+the one choice an unwrap can make without inventing a viewer — and
+every term of `computeAtmosphereScattering` collapses onto a single
+scalar: with the ray from the top of atmosphere at `-P`,
+`normalize(samplePos)` is `P` at every step, so the sun-transmittance
+lookup's `mu` is `dot(P, sunDir)` *constant down the column*; the
+view-side optical depths depend only on altitude; and both phase
+functions key on that same scalar negated. Exact rather than
+approximate, because the shared ray-march is single-scatter with no
+ground-albedo coupling. So it is a **256x1 RGBA LUT** — RGB the
+in-scatter, alpha the transmittance — indexed by the value
+`earthNightFactor` is already handed, and it is *static*: the sun's
+position never enters the table, only its cosine, which the shader
+derives per fragment. Built once, never rebuilt. `src/output/
+atmosphereNadir.ts`.
+
+**This sharpens the table's rule rather than breaking it.** The test
+is not "does the effect depend on a viewer" but *what does it become
+at nadir*: scattering becomes a smooth global function of sun angle,
+meaningful everywhere; specular becomes a fixed bright spot at the
+subsolar point, which is the glare artifact this section rules out,
+reached by another route. Specular, ground shadow and the sun sprite
+stay out on that sharper test, and now for a stated reason rather than
+by category.
+
+Two limits are stated rather than hidden. It is **single-scatter**, so
+it reads dark at high sun-zenith angles — the control globe shares
+that limitation, which is the point: the two agree because they share
+these constants, not because either is right. And **nadir is a
+choice**: the control globe shows one viewer's scattering, so the two
+match near its sub-viewer point and diverge toward its limb. An unwrap
+has no viewer to match. The same reasoning keeps the shared 16-step
+tier even though this table is built once on the CPU and could afford
+any step count — integrating more finely would render an ocean
+measurably bluer than the globe it exists to agree with.
+
+The four that do not cross are not blocked; they are
+**incoherent on this surface**. An equirectangular unwrap shows
+every point of the sphere at once, so it has no limb and no
+silhouette — the "edge" of an LED sphere is wherever a visitor
+happens to be standing, and it moves as they walk. Likewise
+there is no single viewer to compute a specular highlight for.
+Baking either in would paint a fixed ring or glare spot onto the
+physical surface, in a place that is only correct from one
+vantage point. That is worse than omitting them: it is a
+rendering artifact that reads as a data feature.
+
+So the split is not three-cross-four-lose. It is: **everything
+that is a property of the sphere's surface crosses, and
+everything that is a property of looking at a sphere from
+outside does not, because nobody looks at an LED sphere from
+outside.**
+
+Two consequences.
+
+**Open Question 2 is decided by it.** It had the no-dataset
+default rendering "the photoreal Earth with day/night and
+atmosphere — the same scene is already running; just don't add
+a dataset overlay. Free." The scene is not already running as a
+mesh, so it is not free — but what it costs is one dot product
+and two extra samplers, and what it drops, atmosphere, should
+not have been there. The idle state is diffuse + night lights +
+clouds + terminator, and that is the correct picture rather
+than a degraded one. OQ2 is marked DECIDED accordingly.
+
+**Vector overlays are the real constraint this path imposes**,
+and they are not on this list. Borders, graticules and labels
+(Phase 2) are *geometry*, not raster: nothing about them is
+addressable by lat/lon lookup. On the equirect path they must
+either be rasterised into an equirect texture first, or drawn
+analytically in the shader — feasible for a graticule, not for
+coastlines. That is a genuine cost of choosing direct RTT, and
+it is worth naming here rather than discovering it in Phase 2.
+
 
 ### Globe state — what gets mirrored
 
@@ -566,14 +996,15 @@ two-way binding.
 
 | File | Responsibility |
 |---|---|
-| `src/services/multiOutput/manager.ts` | `MultiOutputManager` — singleton: enumerates monitors, spawns/destroys output windows, builds and broadcasts globe-state diffs, persists config, monitors output health (crash detection, IPC heartbeats, monitor-unplug 2 s poll, boot scan for orphaned `output-*` windows after a control-window crash — see "Failure recovery") |
+| `src/services/multiOutput/manager.ts` | `MultiOutputManager` — singleton: enumerates monitors, spawns/destroys output windows, builds and broadcasts globe-state diffs, persists config, monitors output health (crash detection, IPC heartbeats, monitor-unplug 2 s poll, boot scan adopting orphaned `output-*` windows after a control-window **reload** — see "Failure recovery", case 6, which corrects the "crash" framing) |
 | `src/services/multiOutput/protocol.ts` | Shared TS types for control↔output IPC events. Imported by both bundles. Single source of truth for the state schema above. |
 | `src/services/multiOutput/stateAggregator.ts` | Subscribes to dataset / playback / layer / time / view events, builds the state snapshot, emits diffs |
 | `src/ui/outputUI.ts` | Tools → Outputs panel — list current outputs, "Add output" button, per-output config menu (monitor, mode, "Track operator camera" toggle, "Split sphere" toggle, "Rotation offset (°)" numeric + slider, "Calibration" submenu with test-pattern selector, debug overlay), per-output health badge (healthy / stale / stalled / monitor-missing — see "Failure recovery") |
 | `src/output/main.ts` | Output window entry. Creates Three.js renderer, builds `photorealEarth` scene + dataset overlay + layer stack, runs equirect RTT each frame, displays to a full-bleed canvas. Wires `webglcontextlost` / `webglcontextrestored` listeners and an IPC-silence watchdog (5 s tolerance, stale state thereafter — see "Failure recovery") |
 | `src/output/equirectRtt.ts` | Equirectangular render-to-texture pass — single fragment shader. Applies the per-output `uRotationOffsetRad` longitude rotation first (see "Calibration tooling"), then raycasts from a configurable camera offset (`uCameraOffset`, derived from the operator's MapLibre camera by default; see §3.5) at every (lon, lat) of the output framebuffer. Supports split mode (`uSplit`) that mirrors the area of focus to the antipodal hemisphere of the LED sphere. |
-| `src/output/datasetMirror.ts` | Output-side companion to control-window `datasetLoader` — given a `dataset.url` + `dataset.kind` + `dataset.bbox`, builds a Three.js texture (image or HLS-driven VideoTexture) and a UV transform. Owns the playback sync seam (feeds `computeSiblingSyncCorrection` and the read-back verification layer — see "Playback sync algorithm") and the single stream rebuild on a `loadStream()` rejection, freezing the last good frame throughout (see "Failure recovery"; there is deliberately no retry ladder here — `hlsService` owns that). Recognises the `__terraviz_calibration__` sentinel dataset id and renders a procedural test pattern (~80 lines of GLSL) instead of fetching content (see "Calibration tooling") |
-| `src/output/layerStack.ts` | Builds and updates the multi-shell sphere stack from the layers state diff |
+| `src/output/datasetMirror.ts` | Output-side companion to control-window `datasetLoader` — given a `dataset.url` + `dataset.kind` + `dataset.bbox`, builds a Three.js texture (image or HLS-driven VideoTexture) and a UV transform. Owns the playback sync seam (feeds `computeSiblingSyncCorrection` and the read-back verification layer — see "Playback sync algorithm") and the single stream rebuild on a `loadStream()` rejection, freezing the last good frame throughout (see "Failure recovery"; there is deliberately no retry ladder here — `hlsService` owns that). ~~Recognises the `__terraviz_calibration__` sentinel dataset id and renders a procedural test pattern (~80 lines of GLSL) instead of fetching content~~ — superseded: the test pattern is `src/output/calibrationPattern.ts`, a canvas on the render-config channel, and this module knows nothing about it (see "Calibration tooling") |
+| `src/output/calibrationPattern.ts` | The calibration test pattern (rung 14b) — a 2:1 canvas of graticule, colour bars, grayscale ramp, anchor crosshairs, longitude scale, pole letters and a live framebuffer readout, installed in an ordinary overlay slot so it travels the same sampling path a dataset does. Pure geometry in normalised image-space UV plus a thin painter; pinned against `datasetProbe.latLonToTexelUv` (see "Calibration tooling") |
+| `src/output/layerStack.ts` | Builds the dataset overlay and layer stack the equirect pass composites — bbox clipping, the `lonOrigin` shift, `isFlippedInY`, and the data-encoded palette LUT, folded into `equirectRtt`'s fragment shader by `buildOutputFragmentShader`. Layers composite in array order inside that one shader, so there is no shell stack and no depth buffer. Slots are unrolled at build time (GLSL ES 1.00 has no dynamic sampler indexing) and capped at `MAX_OUTPUT_LAYERS` |
 | `src/output/output.html` + `src/output/output.css` | Output window markup and styling — black body, no cursor, full-bleed canvas |
 | `src-tauri/capabilities/output.json` | Narrow capability scoped to `output-*` window labels. Allows: event listen / unlisten / emit / emit-to (IPC with manager); window current-monitor / is-decorated / is-fullscreen / set-fullscreen / set-decorations / close; HTTP fetch on `https://*` only with localhost explicitly denied. Excludes: `core:default`, `core:window:default`, window creation, updater, filesystem, asset protocol, shell, dialog, clipboard, all Tauri command `invoke`. Full enumeration + rationale in §3 "Output capability spec". |
 
@@ -583,13 +1014,14 @@ two-way binding.
 |---|---|
 | `src/main.ts` | Boot `MultiOutputManager`; wire it to dataset / playback / layer / **camera** events |
 | `src/services/datasetLoader.ts` | Emit a `dataset:loaded` event the manager subscribes to |
+| `src/services/downloadService.ts` | **Already landed on `main`, separately from this ladder** — the read commands resolve to their no-downloads value and log a denial once instead of rejecting, so a window without the download grants degrades rather than throwing out of `loadDataset`. Listed here because §6 explains why it matters to multi-window work, not because this feature has to do it. See §6 |
 | `src/services/mapRenderer.ts` | Emit a debounced `camera:moved` event with `{ lng, lat, zoom }` so the manager can derive `view.cameraOffset` for outputs that track operator camera |
 | `src/ui/playbackController.ts` | Forward play / pause / scrubber events to the state aggregator |
 | `src/types/index.ts` | Add `OutputAddedEvent` / `OutputRemovedEvent` / `OutputFailureEvent` interfaces; append to the `TelemetryEvent` union; tier choice is essential — none belong in `TIER_B_EVENT_TYPES` (see "Telemetry" decision in Open Questions §3) |
 | `src/analytics/perfSampler.ts` | When outputs are active, extend the existing 60 s `perf_sample` event with `output_count` and `sync_delta_p95_ms` fields (no new event type) |
 | `src/ui/toolsMenuUI.ts` | Add "Outputs" entry that opens the new Outputs panel; add a "Fullscreen" toggle that calls `getCurrentWindow().setFullscreen()` + `setDecorations()` and persists to localStorage (see §3.6) |
 | `src-tauri/src/lib.rs` | Parse the `--kiosk` argv flag and `TERRAVIZ_KIOSK=1` env var in `setup()`; apply fullscreen + decorationless before first paint when set (see §3.6). **Not `main.rs`** — that is now a 12-line shim (`fn main() { terraviz_lib::run() }`) and all builder/setup logic lives in `lib.rs` so mobile can share it. Must be `#[cfg(desktop)]`-gated so it does not compile into the iOS/Android cdylib |
-| `src-tauri/capabilities/default.json` | Add `core:webview:allow-create-webview-window`, `core:window:allow-close`, `core:window:allow-destroy`, `core:window:allow-set-decorations`. The first three are what make spawning and tearing down an output possible at all; the fourth lets the fullscreen toggle drop the title bar. Optionally drop the redundant `core:window:default` / `allow-available-monitors` / `allow-current-monitor` lines already implied by `core:default`. See §6 |
+| `src-tauri/capabilities/default.json` | Add `core:webview:allow-create-webview-window`, `core:window:allow-close`, `core:window:allow-destroy`, `core:window:allow-set-decorations`, `core:window:allow-show`. The first three are what make spawning and tearing down an output possible at all; the fourth lets the fullscreen toggle drop the title bar; the fifth reveals an output once it has been placed, since placement cannot be expressed at construction time. Optionally drop the redundant `core:window:default` / `allow-available-monitors` / `allow-current-monitor` lines already implied by `core:default`. See §6 |
 | `src-tauri/capabilities/mobile.json` | **No change** — multi-output is desktop-only and must not widen the mobile surface |
 | `vite.config.ts` | **Add** an `output` entry to the existing `rollupOptions.input` object (which already declares `main` and `orbit`) pointing at `src/output/output.html`. Do not author a fresh `rollupOptions.input` — that would drop `orbit`. See §7 |
 | `package.json` | No new runtime deps for v1 (Three.js already a runtime dep for VR) |
@@ -605,14 +1037,21 @@ two-way binding.
    resolution + position diagram). User picks a monitor and a
    mode (v1: only "SOS Equirectangular" available).
 3. Manager calls `WebviewWindow.new('output-1', {...})` with
-   `decorations: false`, `fullscreen: true`,
-   `position: { x, y }` (the chosen monitor's top-left), and a
-   navigation URL pointing at the bundled `output.html`. Tauri
-   creates the window on the target monitor.
+   `decorations: false`, **`visible: false`**, and a navigation
+   URL pointing at the bundled `output.html` — then places it
+   with `setPosition(new PhysicalPosition(...))` +
+   `setSize(new PhysicalSize(...))`, calls `setFullscreen(true)`,
+   and only then `show()`. Neither position nor fullscreen is a
+   constructor option here, and the order matters: see "Monitor
+   geometry and placement" for why, and for the fifth capability
+   grant it costs.
 4. Output window boots `src/output/main.ts`. Page renders a black
-   background. Lazy-imports Three.js. Builds `photorealEarth`
-   into a hidden scene. Allocates a 2:1 framebuffer at the
-   target resolution (e.g. 4096×2048 for an 8K LED sphere).
+   background. Lazy-imports Three.js. Asks `photorealEarth`
+   for its base diffuse texture (progressive 2K → 4K → 8K)
+   rather than for a sphere to draw — see "What the equirect
+   path does to the Earth decoration". Allocates a 2:1
+   framebuffer at the target resolution (e.g. 4096×2048 for an
+   8K LED sphere).
 5. Output emits `output_ready` so the manager knows it's
    listening. Manager replies with a full state snapshot.
 6. Output applies the snapshot: loads the dataset texture via
@@ -624,18 +1063,101 @@ two-way binding.
    frame and presenting it to the canvas.
 7. Done.
 
+### Monitor geometry and placement
+
+Step 3 above says "the chosen monitor's top-left" as though
+that were a single unambiguous number. A throwaway spike that
+spawned real windows across a three-monitor Windows 11 desk
+found two ways it is not.
+
+**Monitor origins are signed.** `\\.\DISPLAY1` on the test
+machine sits at **x = −1680** — the primary is 0,0 and anything
+to its left is negative. That is an ordinary desk, not an edge
+case. Placement itself worked: `outerPosition` came back
+`−1680,383` and `2560,381`, matching both non-primary monitors
+exactly. What it constrains is narrower and easier to get
+wrong — placement arithmetic must not assume a non-negative
+origin, the persisted config must store `x`/`y` **signed**, and
+the picker's position diagram has to translate the whole
+virtual-desktop rectangle rather than treating the primary
+monitor as its own origin.
+
+**`Monitor` positions are physical; window options are
+logical.** `availableMonitors()` reports `position` and `size`
+in **physical** pixels, while `WebviewWindow.new`'s `x` / `y` /
+`width` / `height` are **logical**; the two differ by that
+monitor's `scaleFactor`. On a uniform-scale desk they coincide
+and the obvious code works. On a HiDPI monitor — or, worse, a
+mixed-DPI desk where the scale factor differs *between*
+monitors — passing a physical origin into a logical option puts
+the output window on the wrong monitor, which reads as "the
+feature is broken" rather than as a units bug.
+
+**There is no physical option at construction.** `WindowOptions`
+types `x` / `y` / `width` / `height` as bare `number`, documented
+as logical pixels; only `setPosition` / `setSize` accept
+`PhysicalPosition` / `PhysicalSize`
+(`@tauri-apps/api/window.d.ts`). So the placement cannot be
+expressed in one call, and boot-flow step 3 spawns the window
+and then corrects it:
+
+1. `WebviewWindow.new('output-N', { …, visible: false })` —
+   **hidden**, and without `fullscreen: true`, since fullscreen
+   before placement fullscreens onto whichever monitor the
+   window happened to land on.
+2. `setPosition(new PhysicalPosition(mon.position.x,
+   mon.position.y))` then `setSize(new PhysicalSize(…))` — both
+   already granted (§6), and both take the monitor's numbers
+   unconverted, which is the point: no `scaleFactor` arithmetic
+   means no `scaleFactor` bug.
+3. `setFullscreen(true)`, then `show()`.
+
+That ordering needs a **fifth** capability grant that the table
+in §6 did not have: `core:window:allow-show`. `visible: false`
+is a constructor option and free, but bringing the window back
+is a command, and `core:window:default` is getters only — its
+28 identifiers include `allow-is-visible` but no `allow-show`.
+Verified against Tauri 2.11.2's own permission table.
+
+Creating the window visible and letting it jump is the
+alternative, and it costs the grant but shows the operator a
+window sliding across the desk on every spawn — on a capture
+feed, that is a visible artifact at exactly the moment an
+installation is being set up.
+
+The spike could not test that second case: all three monitors
+reported `scaleFactor: 1`, so the two coordinate spaces were
+numerically identical and a wrong conversion would have passed
+unnoticed. **Mixed-DPI placement is unverified**, and it is the
+likeliest placement bug in v1. It is cheap to get right up
+front and expensive to find later, since the failure needs
+hardware the developer may not have.
+
+Two placement results did come back clean and are worth
+recording, because both were open:
+
+- **Borderless fullscreen lands correctly on a non-primary
+  monitor** — `isDecorated: false`, `isFullscreen: true` on
+  both secondary displays. This is Open Question 1, answered
+  for Windows.
+- **Fullscreen escapes the taskbar.** The primary monitor's
+  `workArea` is 2560×**1392** against a `outerSize` of
+  2560×**1440**: the window covers the taskbar rather than
+  being confined below it, which is exactly what a
+  capture-clean output surface needs.
+
 ### Per-state-change flow
 
 State diffs are broadcast on change, not on a polling clock:
 
 - **Dataset load** → manager broadcasts `{ dataset: { id,
   url, kind, bbox } }`. Output's `datasetMirror` swaps the
-  sphere overlay texture; for video, it tears down the old
-  HLS instance and starts a new one.
+  overlay texture the composite samples; for video, it tears
+  down the old HLS instance and starts a new one.
 - **Layer add / remove / reorder** → manager broadcasts the
   full ordered `layers[]` array (small enough that diffing
-  is overkill). Output's `layerStack` rebuilds the shell
-  stack accordingly.
+  is overkill). Output's `layerStack` rebuilds the shader's
+  slot bindings accordingly.
 - **Play / pause / seek** → manager broadcasts the discrete
   event. Output's video element pipes through.
 - **Per-second timecode** → manager broadcasts
@@ -643,7 +1165,10 @@ State diffs are broadcast on change, not on a polling clock:
   the drift-correction algorithm — see "Playback sync
   algorithm" below.
 - **Day/night toggle** → manager broadcasts the new state.
-  Output flips the photoreal Earth's day/night shader uniform.
+  Output flips the terminator term in the equirect shader —
+  the one line of `photorealEarth`'s day/night shading that
+  survives the unwrap (see "What the equirect path does to the
+  Earth decoration").
 - **Output close** → output emits `output_closed` (or the
   manager observes the WebviewWindow close event). Manager
   drops the record.
@@ -658,10 +1183,13 @@ of truth.
    diffs are coalesced).
 2. If `dataset.kind === 'video'` and a video element exists,
    call `videoTexture.needsUpdate = true`.
-3. Update the photoreal Earth's sun position from
-   `time.simulationDate` (uses existing `getSunPosition()`
-   helper from `utils/time.ts`).
-4. Render the sphere stack to the equirectangular framebuffer
+3. Update the equirect shader's `uSunDir` from
+   `time.simulationDate` (uses the existing `getSunPosition()`
+   helper at `utils/time.ts:646`, the same one
+   `photorealEarth` calls). No mesh normal is needed: the
+   ray-march's hit point on the unit sphere *is* the normal,
+   so the terminator is one dot product against it.
+4. Render the layer composite to the equirect framebuffer
    with the current `uCameraOffset` uniform (derived from the
    operator's MapLibre camera when "Track operator camera" is
    on for this output; `vec3(0)` when off) and `uSplit` flag.
@@ -831,6 +1359,124 @@ capture where a fifth-of-a-frame seek left three siblings at
 `HAVE_METADATA` for five seconds. Import that too rather than
 inventing an epsilon.
 
+#### A seek is not free — found on hardware, rung 9 step 13
+
+The threshold above is the *right* number for a sibling panel,
+and it is not sufficient on its own for an output. A seek stalls
+the element while the primary plays on, so a seek that takes
+`C` seconds of wall clock leaves the output roughly `C x rate`
+behind **the moment it lands**. Seeking to correct an error
+smaller than that is arithmetically guaranteed to end further
+from the target than it started — and the correction runs once
+per rendered frame, so it does it again, and again.
+
+`OUTPUT_SEEK_SETTLE_MS` was the first answer to this and it
+covers only the case it assumed: a seek that finishes inside a
+second and leaves less than `SETTLING_SEEK_THRESHOLD_S` (0.40 s)
+behind. It is a **timeout**, and it expires whether or not the
+seek it was covering has been paid for. A slower seek outlives
+it, the threshold drops back to 150 ms while the error is still
+measured in seconds, and the loop closes.
+
+Simulated at 60 Hz against an element that stalls for the length
+of its seek, twenty seconds per run, starting five seconds out:
+
+| Seek cost | Seeks, settle window only | Frames mid-seek | Seeks, with the floor |
+|---|---|---|---|
+| 20 ms | 1 | 0% | 1 |
+| 200 ms | 1 | 1% | 1 |
+| 300 ms | 20 | 29% | 1 |
+| 500 ms | 40 | **97%** | 1 |
+| 1200 ms | 17 | **99%** | 1 |
+| 3000 ms | 7 | **99%** | 1 |
+
+Two things to read off that table. The loop starts at any cost
+above the 150 ms threshold, not at 400 ms — 300 ms just produces
+a tidier one-seek-per-second version of it. And above ~400 ms
+the element is mid-seek on essentially every frame, which is a
+decoder flushing and re-decoding from a keyframe continuously
+rather than playing. That is the "playback seems to struggle"
+of the first hardware pass; it is also why the debug HUD read a
+permanent dash, since a seeking element has no honest drift to
+report and every 2 Hz sample landed on one.
+
+The fix is to **measure the seek rather than assume it**.
+`createPlayheadSync` already holds when it last seeked; it now
+also notices when `seeking` goes false and records what that
+cost, and `seekCostFloorS` raises the threshold to that cost
+times the primary's rate times a margin. Unlike the settle
+window this floor does not expire, because the cost is a
+standing property of the asset, the decoder and the machine
+rather than an event. It is inert where seeks are cheap: a
+20 ms seek yields a floor below 0.15 s and `Math.max` discards
+it, which is the whole table's first two rows.
+
+The margin exists because the loop re-arms on a single
+under-estimate — one seek running slightly long puts the output
+back outside the threshold and earns another — while an
+over-estimate costs only a slower convergence that the rate trim
+still completes. 1.5 covers ordinary variance between two seeks
+on the same asset.
+
+**Both bounds are lifted while the primary is paused**, and the
+reason is the premise they share rather than a special case.
+Each exists because the target keeps moving during the stall:
+the floor because a seek costing `C` leaves the output `C x rate`
+behind by the time it lands, the settle window because the trim
+needs time to close what the last seek left. Against a
+*stationary* target neither holds — a seek lands exactly where it
+aimed and manufactures no error — and the sentence about the trim
+is worse than unnecessary, because a paused element has no rate
+to trim at all. So a raised bound there is not conservative, it
+is terminal: the paused branch declines the seek, nothing
+converges it, and the sphere holds a frame up to a floor's width
+from the operator's until someone presses play. On a forecast
+that is an hour of model time on the wrong frame, silently, in
+front of an audience.
+
+The thrash that motivated both bounds cannot happen on a
+stationary target either: the seek lands where it aimed, the next
+call measures ~0, and nothing more is issued. One seek,
+converged. This was caught in review rather than on hardware,
+which is worth recording — the floor's own justification names
+the moving target in its first sentence, and the paused path
+still read the value it produced.
+
+The field case was a bbox data-encoded forecast
+(`north-america-smoke`, RRFS smoke over North America).
+Data-encoded video is published **as uploaded** rather than
+transcoded — that is why
+`src/ui/publisher/components/mp4-frame-rate.ts` exists — so
+these assets carry whatever keyframe spacing the producer wrote,
+and every seek decodes from a distant one. Nothing about that is
+wrong; it is simply an asset class whose seeks are expensive,
+and the correction has to be robust to it rather than assume it
+away.
+
+#### A playhead diff is not a frame
+
+Related, and found reading the same report. The output's loop
+paces itself: 30 fps while its own video is advancing, 1 Hz for
+anything static, and immediately whenever something changed.
+`applyState` marked *every* state diff as a change.
+
+`playback` and `primary` change on every frame the operator's
+globe plays, so an output redrew a 4096x2048 ray-marched sphere
+at the control window's frame rate instead of 30 fps — double
+the GPU for an identical picture, on a machine whose webview may
+be on the iGPU (see Risks) and whose control window is decoding
+the same video in the next process. Neither key changes a pixel
+here: the output's own frame advance is what `contentKindFor`
+paces, and a seek is caught by the render loop comparing
+`currentTime` across the steer.
+
+`PICTURE_KEYS` / `PLAYHEAD_KEYS` in `outputLink.ts` partition
+`StateKey` between the two, with compile-time proofs that every
+key is classified and none is classified twice. Keys that are
+composited but not yet published — `layers`, `simulationDate` —
+stay on the picture side, so the 1 Hz floor never holds one back
+once it is wired.
+
 #### The `readyState` gate
 
 Steer from `readyState >= SIBLING_MIN_READY_STATE`, importing
@@ -938,33 +1584,93 @@ that governs here:
 > See terraviz#230.
 
 So four control panels plus four outputs is up to **eight
-concurrent decoders on one machine**, and the failure cannot be
-handled reactively: there is no degraded mode to fall back to
-and no moment in which to notice, just a process that goes
-away. On an installation that is the whole exhibit going dark,
-in front of visitors, with the operator's own window taking it
-down.
+concurrent decoders on one machine**.
 
-v1 therefore gives the manager a single budget spanning every
-window it has spawned:
+##### What a throwaway spike measured, and what it changed
+
+An earlier draft of this section reasoned from the phone
+measurement to a fixed cross-window budget of 4, and described
+the failure as a hard crash boundary on any machine. A
+throwaway spike (Windows 11, Intel Raptor Lake-S + **RTX 4090
+Laptop**, three monitors, packaged desktop build, real
+`HLSService` → hls.js → MSE playback) tested that directly.
+Both runs used 8192×4096 render targets — 128 MiB apiece, the
+top rung of the resolution picker — with only the output count
+differing:
+
+| Live outputs | Render targets held | Steady fps | Δframes / 3 s | Dropped | Media clock |
+|---|---|---|---|---|---|
+| 8 | 1 GB | 30.7 | +92 | 0 | 1.00× realtime |
+| 16 | **2 GB** | **30.7** | **+92** | **0** | **1.00× realtime** |
+
+Sixteen outputs, each holding a WebGL2 context, a 128 MiB
+render target and a live decoder, at **full source frame rate,
+exactly realtime, nothing dropped** — and *identical* to the
+eight-output case, not merely close. Four times the budget this
+section proposed, at four times the default pixels, with no
+measurable sustained cost.
+
+Three corrections follow, and they matter more than the number:
+
+- **A fixed budget of 4 is wrong on this class of hardware.**
+  It is at least 4× too conservative. The phone measurement is
+  sound *about a phone*; it does not transfer.
+- **The failure shape is hardware-dependent, not just the
+  threshold.** The crash-boundary framing above is inherited
+  from a phone. This machine was never taken close enough to
+  find its limit, so whether it fails as a cliff or a gradient
+  is **unknown** here — an honest gap, not a resolved one. A
+  design that assumes a cliff will watch for the wrong symptom
+  on desktop hardware.
+- **The real cost is at spawn time, not in steady state.**
+  Sixteen outputs took ~160 ms longer to reach full rate than
+  eight (five cumulative frames). Every window still got there.
+  A budget sized for sustained capacity solves a problem this
+  hardware does not have.
+
+Two methodological notes worth keeping, because both changed a
+conclusion:
+
+- **A cumulative frame count cannot measure throughput.** A
+  single reading taken a fixed interval after playback *starts*
+  folds in startup latency; it showed a spurious ⅓ drop that
+  vanished once two samples were differenced. Steady-state fps
+  must come from a delta over wall-clock, not from a total.
+- **`droppedVideoFrames` is not a sufficient health signal.**
+  It was 0 in every run, including the one that looked
+  degraded. Frame *production rate* and a media-clock-vs-wall
+  ratio are what actually move.
+
+**These numbers are from one 4090 laptop.** A museum is far
+likelier to deploy an Intel-iGPU NUC, and on that hardware the
+cliff this section originally described may well be real.
+Treating 16 as a new constant would repeat the original mistake
+with a different number.
+
+##### The budget v1 actually ships
+
+v1 gives the manager a single budget spanning every window it
+has spawned. The **mechanism below survives the spike
+unchanged; only its value and its health signal move.**
 
 | | |
 |---|---|
-| **Budget** | `MAX_CONCURRENT_DECODERS`, seeded from the control window's own `maxVideoPanels()` so the existing phone/desktop policy still applies, and lowered per-machine in the Outputs panel for hardware known to be tighter |
-| **Counted** | one per video dataset in the control window's panels, plus one per output currently showing a video dataset. Image datasets and the calibration pattern cost nothing — matching the measurement, which found four image panels fine and three video ones fatal. |
+| **Budget** | `DEFAULT_CONCURRENT_DECODERS`, seeded from the control window's own `maxVideoPanels()` and **raised on hardware that demonstrates headroom**, rather than fixed in source. A constant either cripples a 4090 or crashes an NUC. |
+| **Counted** | ~~one per video dataset in the control window's panels, plus one per output currently showing a video dataset~~ — **revised at rung 11c, when it was implemented.** One per *window that can hold a decoder*: every control-window panel, plus every spawned output. The original rule is true about the present and wrong about the moment that matters. Outputs mirror the primary, so every output flips from free to costing a decoder the instant a video is loaded — and a dataset load is not a place a refusal can happen: it is deep inside a loader, with no control to disable and nothing for the operator to undo. Under the original rule an operator adds eight outputs while an image is up, loads a video, and takes the installation down with the budget never once consulted. Counting windows puts the refusal on **Add Output**, where there is a button to disable and a number to show. The spike above is explicit that the failure *shape* on desktop is unknown; under that uncertainty the enforcement point has to be the one the operator can still act on. The cost is the one the section already names below, and the budget field is its answer. |
 | **Enforced** | at both spawn time and layout change — whichever action would cross the budget is refused, with a message naming what to close first. Enforced *before* the decoder is built, since after is too late. |
+| **Health signal** | steady-state frame rate and media-clock-vs-wall ratio, sampled as a delta. **Not** a dropped-frame counter, which stayed at 0 through every condition the spike could produce. |
+| **Spawn pacing** | outputs restored on boot, or added in a batch, are staggered rather than created simultaneously. Startup contention is the one cost the spike could actually measure. |
 | **Not enforced** | by an output asking `maxVideoPanels()` itself. That reads the output's own viewport and would answer 4 on any monitor worth attaching, which is the bug. The manager owns the count; outputs are told. |
 | **Not enforced** | by killing an existing decoder. Silently tearing down a running output to make room for a control-window layout change is the worse failure. |
 
-The honest cost: on the default budget, an operator running 4
-globes cannot also add a video output, and an operator with an
-output live cannot switch to the 4-globe layout. That is a real
-restriction and it will be the first thing anyone hits. It is
-still the right trade — a refused layout change is recoverable
-in one click, and a decoder-ceiling crash takes the installation
-down mid-session with no recovery at all. Phase 5's
-shared-GPU-texture work is what actually lifts the ceiling
-rather than rationing under it.
+The honest cost, on a machine whose budget really is 4: an
+operator running 4 globes cannot also add a video output. That
+is a real restriction and it will be the first thing anyone
+hits on constrained hardware. It is still the right trade —
+a refused layout change is recoverable in one click, and a
+decoder-ceiling crash takes the installation down mid-session
+with no recovery at all. Phase 5's shared-GPU-texture work is
+what actually lifts the ceiling rather than rationing under it.
 
 #### What's not the algorithm's job
 
@@ -1002,8 +1708,14 @@ import {
 export const VERIFY_INTERVAL_MS = 1000
 /** Consecutive `'off'` verdicts before reporting a stale frame. */
 export const STALE_FRAME_STRIKES = 3
-/** Cross-window ceiling — see "Cross-window decoder budget". */
-export const MAX_CONCURRENT_DECODERS = 4
+/**
+ * Cross-window ceiling — see "Cross-window decoder budget".
+ * A conservative *seed*, not a measured limit: one 4090 laptop ran
+ * sixteen 8192x4096 outputs at full rate. Raised per-machine from the
+ * Outputs panel and persisted with the layout, because a constant here
+ * either cripples that machine or crashes an iGPU NUC.
+ */
+export const DEFAULT_CONCURRENT_DECODERS = 4
 ```
 
 Only the last three are genuinely this feature's to own, and
@@ -1025,6 +1737,44 @@ retries.** Auto-respawn is rejected as a default — it masks
 recurring crashes and obscures installation health.
 
 #### 1. Output webview crashes
+
+> **Landed.** `outputHealth.ts` (classification + crash-storm
+> guard), `OutputWindowHandle.onDestroyed`, the manager's
+> `handleDeparture`, and the output's `output_closing`
+> announcement. What is *not* here yet is the toast — the app has
+> no toast primitive, so the panel learns through
+> `onOutputsChanged` and an open panel repaints; a toast is its
+> own change. The `output_failure` / `output_removed` telemetry
+> below **has** since landed (`outputTelemetry.ts`), so step 31's
+> telemetry half is now checkable: a crash fires exactly one
+> `output_removed` with `reason: 'crash'` and one `output_failure`
+> with `kind: 'crash'`, `retries: 0`, `recovered: false` — zero and
+> false because this case's own row in the summary table gives a
+> crash no auto-recovery at all.
+>
+> One rule this case needs that the plan did not state: a
+> departure is persisted **only when it was deliberate**. A
+> hand-close rewrites the stored config without that output; a
+> crash leaves it in. The operator still wants a crashed output —
+> the display or the driver took it away — so dropping it would
+> turn a four-projector installation into a three-projector one
+> at the next launch, silently. It also bounds what an ordinary
+> quit can cost: `quit_app` is `app.exit(0)`, not a per-window
+> close, so if Tauri delivers each output's destroy to the
+> control window before the process goes, every one reads as a
+> crash (no `output_closing` precedes them). Unverified either
+> way on hardware — **worth a step in the next Appendix B pass:
+> quit with three outputs up, relaunch, confirm all three come
+> back.** With the split the worst that costs is some telemetry.
+>
+> One thing the build clarified about the detection rule. The
+> plan says the absence of a graceful ping distinguishes a crash
+> from an operator close, which is right, but it leaves out that
+> **the manager's own close produces both signals at once**:
+> Remove in the panel calls `close()`, which fires the output's
+> close-requested handler, which emits `output_closing`. So the
+> manager's intent has to be checked *before* the announcement,
+> not after, or every removal is logged as a hand-close.
 
 **Detection.** Manager listens for `WebviewWindow` close
 events. A crash arrives as a `WindowEvent::Destroyed`
@@ -1087,6 +1837,43 @@ handled inside hls.js and never reach either layer.
 
 #### 3. IPC channel goes silent
 
+> **Landed** (`src/output/linkWatchdog.ts`, the composition in
+> `outputLink`, the manager's resync reply, and a `link` field on
+> the debug HUD). The constants below were already in
+> `protocol.ts` and the `output_health_check` event already in the
+> schema — only the detector was missing, so nothing on either
+> side had ever measured silence.
+>
+> Four things the build settled that this section leaves open.
+> The watchdog's clock **starts at connect**, so an output nobody
+> ever broadcasts to goes stale — that is the case most worth
+> catching and a detector armed by the first message never fires
+> in it. **Orphaned is not terminal**: any message returns the
+> link to live, which is what makes the recovery paragraph below
+> work at all. Both thresholds measure from the **last message**
+> rather than from each other, so orphan is 60 s of quiet rather
+> than 65. And the manager answers a ping through the *same* path
+> as `output_ready` — which also means a ping is how an output
+> recovers when its announcement was lost.
+>
+> The **stale badge** has since landed too, and finding out how
+> it should work moved a constant: `LINK_PING_INTERVAL_MS` was in
+> `linkWatchdog.ts` on the argument that only the output sends
+> pings, so no shared timing was implied. That was wrong. Deciding
+> an output has *stopped* complaining means knowing how long a
+> silence must be before the last complaint is out of date — which
+> is the ping cadence — so it now sits with the other agreed
+> timings in `protocol.ts`. The badge itself draws nothing for a
+> healthy output: a row of green chips trains an operator to skip
+> the row that matters. Wiring it also revealed that
+> `onOutputsChanged` had been fired since 13a with **no
+> subscriber**, so a crash stayed on screen until the panel was
+> reopened.
+>
+> Still missing: the **boot scan** the recovery paragraph depends
+> on is case 6 and unbuilt — so today an orphaned output recovers
+> only if the same manager comes back, not a relaunched one.
+
 **Detection.** Output expects a state diff at least every
 2 s during normal operation (the per-second timecode is
 the floor). 5 s with no message → output enters **stale
@@ -1129,23 +1916,59 @@ After 60 s gone, manager surfaces a confirmation in the
 Outputs panel: "Output {label}'s monitor is gone. Close
 output?" — manual action only. On reconnect, manager
 detects the monitor reappearing, moves the window back to
-the persisted `{ x, y }` of that monitor (matched by
-`monitorName`), and clears the toast.
+the persisted `{ x, y }` of that monitor (matched on
+`monitorName` **and** `monitorOrigin` — see §3 "Persistence";
+a reconnect is exactly the event that reshuffles Windows
+display names), and clears the toast.
 
 #### 5. GPU context loss
 
-> **This case is net-new infrastructure, not an incremental
-> addition.** An earlier draft of this plan listed it beside
-> the other five as though it were extending something. There
-> is **no `webglcontextlost` or `webglcontextrestored`
-> handling anywhere in `src/` today** — zero matches across
-> the whole tree. Nothing in the app has ever survived a lost
-> context; it has only ever been a thing that happens and
-> ends the session. Scope commit 13 accordingly, and expect
-> the recovery path to need its own tests and its own manual
+> **Detection has landed for the output; the two paragraphs
+> below are kept because they are the record of how this was
+> mis-scoped twice, in opposite directions.**
+>
+> An earlier draft listed this case beside the other five as
+> though it were extending something, and was corrected to:
+> *"there is no `webglcontextlost` or `webglcontextrestored`
+> handling anywhere in `src/` today — zero matches across the
+> whole tree. Nothing in the app has ever survived a lost
+> context. Scope commit 13 accordingly, and expect the
+> recovery path to need its own tests and its own manual
 > verification (a forced context loss via
 > `WEBGL_lose_context`), because there is no existing
-> behaviour to regress against.
+> behaviour to regress against."*
+>
+> **That is now false twice over, and the second one was
+> always false.** #403 added the control window's listeners in
+> `mapRenderer.ts`. And the grep was over `src/`, which was
+> the wrong place to look for the output: Three's
+> `WebGLRenderer` has always registered both listeners itself,
+> **inside its constructor** — before the context exists, so
+> it catches a creation-time loss — calls the
+> `event.preventDefault()` the Recovery section below
+> prescribes, sets the flag that makes `render()` return
+> immediately, and on restore runs `initGLContext()`, which
+> builds a fresh `WebGLProperties` and with it fresh
+> `textures`, `geometries`, `programCache` and
+> `bindingStates`. Every GL handle is therefore re-uploaded
+> lazily on the next draw.
+>
+> **So for the output the rebuild is largely already there,
+> and for a reason worth stating rather than relying on:**
+> `outputScene` holds no raw GL handles at all — no
+> `WebGLRenderTarget`, no `createTexture`, and the "2:1
+> framebuffer" is the renderer's own drawing buffer via
+> `setSize(w, h, false)`. That is exactly what
+> `earthTileLayer` is not, and its closure-held `datasetTex`
+> is the handle #403 found could never come back. The
+> conclusion follows from Three's source, **not** from having
+> watched a sphere recover — which is why what landed is the
+> observation and not a claim about the picture.
+>
+> **Do not write a parallel restore path for the output on
+> the strength of the Recovery section below.** Read
+> `outputScene`'s `gpuState` block first, and check what
+> Three's `initGLContext` leaves undone before adding to it.
 
 That absence matters more with outputs than without, because
 outputs push against a ceiling the app is already close to.
@@ -1156,27 +1979,77 @@ Context-creating sites on `main` today: one per MapLibre
 page-shared instance via `getSharedLumaSampler()`), and
 `perfSampler.ts:271`. Each output window adds one more. Browsers
 cap live contexts per process and **silently evict the oldest**
-when the cap is crossed — so on a loaded machine the first
-symptom of "too many outputs" is a context-lost event on a
-window nobody touched, which is exactly the path with no
-handling.
+when the cap is crossed — so the first symptom of "too many
+contexts" is a context-lost event on a surface nobody touched,
+which is exactly the path with no handling.
 
-**Detection.** Output's canvas listens for
-`webglcontextlost` and `webglcontextrestored`. Triggers
-include driver crash, OS sleep / wake, GPU hot-reset
-under memory pressure, and eviction as above.
+**Where that cap actually binds is narrower than it reads**,
+and a spike measured the difference. The cap is *per process*.
+On Windows, WebView2 gives every Tauri window its own process,
+so sixteen output windows are sixteen separate context budgets
+of one each — the spike ran exactly that, sixteen live WebGL2
+contexts holding a 128 MiB render target apiece, with no
+eviction. Adding outputs does **not** push the control window
+toward its own cap on that platform.
 
-**Recovery.** On `webglcontextlost`:
-`event.preventDefault()` to allow restoration; mark
-output state as `gpu_context_lost`. The texture and
-framebuffer are gone; output renders nothing until
-restored.
+What does push it is the control window's own list above: four
+`MapRenderer`s plus Orbit plus the shared luma sampler plus the
+perf sampler, all in one process. That is the crowded surface,
+and it is crowded whether or not any output exists. macOS is
+the case to watch, because WKWebView may share a process across
+windows and would then put outputs back inside the control
+window's budget; it is untested. So keep the recovery path —
+eviction is real — but stop attributing it to output count on
+Windows.
 
-On `webglcontextrestored`: rebuild the Three.js scene
-from scratch (textures, framebuffer, sphere stack) using
-the fresh state snapshot the manager re-pushes. Same code
-path as boot, just without recreating the window. Output
-emits `output_gpu_recovered` to the manager for
+**Detection. Landed.** `outputScene` listens on the canvas
+for `webglcontextlost` / `webglcontextrestored` and exposes
+`gpuState()` (`live` / `lost` / `restored`) plus
+`onGpuStateChange`. Triggers include driver crash, OS sleep /
+wake, GPU hot-reset under memory pressure, and eviction as
+above. Three states rather than a healthy/broken pair,
+because the two things worth telling apart on a projector are
+"there was a GPU event and it is still out" and "there was
+one and it came back" — and because neither is a claim that
+the sphere is correct, which this layer cannot see.
+
+Two consequences carry the value, and the second is the one
+that was actually broken. The debug HUD names the state
+beside the renderer string, drawn only when it is not `live`.
+And the render loop **declines to draw while the context is
+lost** — not because `render()` is unsafe (Three returns from
+it immediately) but because the bookkeeping around it was
+lying: ticking the fps meter, clearing `dirty` and advancing
+`lastFrame` for a frame that reached no pixels made the HUD
+report a healthy 30 fps over a black projector.
+
+`dispose()` unhooks its listeners **before**
+`renderer.forceContextLoss()`, because that call fires the
+same event a driver crash does; unhook after it and closing
+four outputs at the end of a show reports four crashes.
+
+**Recovery. Mostly already Three's — read the box above
+before building this.** `event.preventDefault()` is called by
+Three's own listener, so writing a second one buys nothing;
+`render()` is already a no-op while lost; and
+`initGLContext()` is the scene rebuild, running on the same
+objects the boot path built rather than beside them, which is
+the scoping note below satisfied by construction.
+
+~~On `webglcontextrestored`: rebuild the Three.js scene from
+scratch (textures, framebuffer, layer composite) using the fresh
+state snapshot the manager re-pushes. Same code path as boot,
+just without recreating the window.~~ **Superseded — do not
+build this.** It is what the box above is warning against, left
+struck through rather than deleted so the instruction is not
+re-derived from a summary. `initGLContext()` already discards
+every cached GL handle, and the scene owns none of its own, so
+the rebuild happens lazily on the next draw and the manager
+re-pushes nothing. What the output does on restore is flag the
+next frame dirty, so the first good frame does not wait out the
+1 Hz static floor.
+
+The output does emit `output_gpu_recovered` to the manager for
 installation logging.
 
 If `webglcontextrestored` doesn't fire within 30 s (some
@@ -1189,32 +2062,129 @@ Two scoping notes for whoever builds this:
   window already uses, not a parallel "restore" path.
   A second code path that only runs after a rare event is a
   path that silently rots.
-- Work on context-loss detection for the control window is in
-  flight separately. If it lands first, this case becomes a
-  consumer of that infrastructure rather than the place it is
-  invented — check before building, and prefer sharing the
-  detection seam over duplicating it.
+- ~~Work on context-loss detection for the control window is
+  in flight separately. If it lands first, this case becomes
+  a consumer of that infrastructure rather than the place it
+  is invented — check before building, and prefer sharing the
+  detection seam over duplicating it.~~ **Resolved, and the
+  answer was no.** #403 landed, and its seam does not cross:
+  `onContextLost` is an option on `MapRenderer` fired from
+  MapLibre's own event, and an output has no MapLibre — it is
+  a Three renderer on a raw canvas. What crosses is the
+  *policy*, and it is what the detection above follows:
+  report without repairing, never let a restore claim
+  recovery, log above the production filter, and keep the
+  reporting surface out of WebGL.
+
+**Reporting. Landed.** The output tells the manager over the
+shared event channel — `output_gpu_lost` (new) and
+`output_gpu_recovered` (declared from commit 1; §6's capability
+table listed only the recovery until this rung, which is the
+shape of half-list an allowlist tightened against would silence
+the loss and keep the recovery — it names the whole union now)
+— and this is
+the one report that travels *because* the link is healthy. Every
+other failure the manager detects is an **absence**: a destroy
+with no `output_closing`, a window that never answers a poke. A
+lost context defeats all of them, because the window stays up,
+the channel works, the heartbeat is answered, and the sphere is
+black.
+
+The manager latches it on the record, badges it **Display lost**
+in the Outputs panel, and emits the Tier A `output_failure` with
+the `gpu-loss` kind rung 13b had already declared — no schema
+change, the second case to cash that. A **latch, not a
+timestamp**: a stale-link complaint expires because the output
+stops pinging when it recovers, and silence is how the manager
+learns that, but a lost context is announced once and never
+mentioned again, so the same TTL would call a black projector
+healthy five seconds later. Only the matching recovery clears
+it, and `gpu-lost` outranks every other badge — not for urgency,
+but because the others are inferences drawn from silence and
+this one is the output saying so outright.
+
+**Still to build**, and deliberately not in the detection
+commit: the 30 s no-restore timeout and the
+`gpu-loss-timeout` removal it triggers. Both are the
+manager's, both auto-close a window on a projector, and
+neither should be written before a forced
+`WEBGL_lose_context` on real hardware has said whether a
+restore actually arrives — the reporting above is what makes
+that question answerable.
 
 #### 6. Manager / control window crash with outputs alive
 
-**Detection.** Outputs detect this via case 3 (IPC
-silence). When the operator relaunches, the manager runs
-its boot scan path.
+**Landed.** `MultiOutputManager.adoptOrphanedOutputs()`,
+`OUTPUT_REATTACH_EVENT`, and the listener that answers it in
+`outputLink`. Chained ahead of `restoreOutputs()` in
+`bootMultiOutput`. Not exercised on hardware.
 
-**Recovery (manager side at boot).** Before normal init
-finishes, manager calls `WebviewWindow.getAll()` and finds
-any `output-*` labeled windows that survived the control
-window's death. For each:
+**What actually survives, which is not what this section
+first said.** The heading and the smoke step below describe
+killing the control window's *process*. That cannot produce
+the state this case is about: every window belongs to one
+Tauri process, so killing it takes the outputs with it. What
+leaves `output-*` windows alive with a manager that has never
+heard of them is a reload of the control window's **page** —
+a dev reload, a renderer the OS recycled, a webview crash the
+app survived. The recovery is the same either way; only the
+way to reach it differs, and smoke step 35 is wrong as
+written.
 
-- Send `output_reattach_ping`. If response within 5 s:
-  re-establish IPC, send fresh snapshot, output exits
-  stale state.
-- If no response: assume dead, destroy via `webview.close()`,
-  remove any orphaned record.
+**Detection.** Outputs detect their side via case 3 (IPC
+silence). The manager detects its side by looking, because it
+has nothing to detect *with* — an empty `records` map is
+indistinguishable from a first launch.
 
-This makes control-window restart non-destructive for the
-LED-sphere audience: the imagery stays on screen, refreshes
-once the operator's relaunch completes.
+**Recovery (manager side at boot).** `existingOutputs()`
+wraps `getAllWebviewWindows()`, filtered by the `output-*`
+grammar — the same predicate the capability glob encodes. For
+each survivor:
+
+- Match it to a persisted entry by label, and that entry's
+  monitor to a live one. A record is registered **before**
+  the poke, since the reply is an `output_ready` and
+  `handleOutputEvent` drops one whose label has no record.
+- Emit `OUTPUT_REATTACH_EVENT`. Within
+  `OUTPUT_REATTACH_TIMEOUT_MS` the output re-announces, and
+  the *existing* serve path sends its config and then a full
+  snapshot — no second copy of that ordering.
+- No answer: close it, `output_removed` with `crash`,
+  `output_failure` with `ipc-silence`.
+
+**Three things get closed rather than adopted**, and it is
+one judgement three times: the manager will not put a row in
+the panel it cannot describe truthfully. A label with no
+persisted entry (nothing to build a record from, and no
+`mode` to even report a removal with); a monitor no longer
+enumerated (`monitor-gone`, the same rule the restore
+applies); a window that does not answer.
+
+**The poke exists because of `IPC_ORPHAN_MS`.** Inside 60 s a
+disconnected output is still pinging, and a fresh manager
+hears it the moment a record exists — no poke needed. Past
+it the output has stopped talking by design, so nothing would
+ever arrive again unless the manager spoke first.
+
+**Ordering against the restore is load-bearing.** A survivor
+holds its label and the restore spawns from the same
+persisted entries by label, so a restore that ran first would
+ask for a second `output-1` on a monitor that already has
+one. The scan claims those labels into `records`; the restore
+skips them. Unlike the restore it is **not** gated on the
+operator's opt-in — that flag governs whether the manager
+*spawns* windows, and a window already on a projector exists
+regardless.
+
+This makes a control-window reload non-destructive for the
+LED-sphere audience: the imagery stays on screen and
+refreshes once the page is back.
+
+**Telemetry.** A reattached output reports
+`output_failure { kind: 'ipc-silence', retries: 1,
+recovered: true }` and **no** `output_added` — no window was
+created, and counting a reload as new outputs would inflate
+that metric every time a developer saves a file.
 
 #### Summary
 
@@ -1448,7 +2418,8 @@ what an SOS sphere will see" workflows.
 interface PersistedOutputConfig {
   outputs: Array<{
     label: string             // 'output-1' | 'output-2' | …
-    monitorName: string       // OS-reported name; matched on next boot
+    monitorName: string       // OS-reported name; matched WITH monitorOrigin, never alone
+    monitorOrigin: { x: number; y: number } // physical, SIGNED — see "Monitor geometry"
     mode: 'sos-equirect'      // future: 'fisheye' | 'mirrored' | …
     framebufferSize: { width: number; height: number } // e.g. 4096×2048
     trackOperatorCamera: boolean // default true; see §3.5
@@ -1457,15 +2428,50 @@ interface PersistedOutputConfig {
     debugOverlay: boolean
   }>
   autoRestoreOnLaunch: boolean // default false; opt-in
+  /**
+   * This machine's decoder ceiling. Seeded from
+   * DEFAULT_CONCURRENT_DECODERS and raised by the operator once
+   * they have measured the machine — see "Cross-window decoder
+   * budget". Machine-scoped rather than per-output, because it
+   * is a property of the hardware, not of any one window; it is
+   * therefore the one field here that must NOT be copied when a
+   * config is moved between machines.
+   */
+  concurrentDecoderBudget: number
 }
 ```
 
 On launch, if `autoRestoreOnLaunch === true`, the manager waits
 for the OS to report monitors (~50 ms after boot), tries to
-match each persisted output to a current monitor by name, and
-recreates the windows. If the monitor is gone (laptop unplugged
-from a kiosk dock), the entry is logged and the window is
-skipped — not silently moved to a different monitor.
+match each persisted output to a current monitor on **both**
+`monitorName` and `monitorOrigin`, and recreates the windows. If
+no monitor matches on both — it is gone (laptop unplugged from a
+kiosk dock), or only the name matches — the entry is logged and
+the window is skipped, not silently moved to a different
+monitor.
+
+**Monitor names are less stable than that reads.** Windows
+reports `\\.\DISPLAY1`, `\\.\DISPLAY2`, `\\.\DISPLAY3` — names that
+are *positional*, assigned by the OS and reassignable across an
+unplug/replug or a driver update. Matching on the name alone
+can therefore restore an output onto a different physical
+monitor while looking like it worked, which is the failure this
+paragraph was written to avoid. `monitorOrigin` is stored
+alongside the name so a restore can require **both** to agree,
+and treat a name-only match as a monitor it does not recognise:
+skip it, log it, and let the operator re-pick. Restoring the
+wrong monitor silently is worse than restoring nothing.
+
+Store the origin **signed** and as reported — physical pixels,
+negative x included, exactly as `availableMonitors()` gave them.
+A value that has been through a logical conversion cannot be
+compared against a fresh `Monitor.position` on a HiDPI desk, and
+per "Monitor geometry and placement" nothing in the placement
+path needs the converted form anyway.
+
+Restores are also **staggered, not simultaneous** — the one
+cost the decoder-budget spike could actually measure was
+startup contention. See "Cross-window decoder budget".
 
 ### Output capability spec
 
@@ -1529,7 +2535,7 @@ Full enumeration:
 | Permission | Why the output needs it |
 |---|---|
 | `core:event:allow-listen` / `unlisten` | Receive state diffs from the manager |
-| `core:event:allow-emit` / `emit-to` | Send `output_ready`, `output_health_check`, `output_dataset_stalled`, `output_gpu_recovered`, `output_closing` back to the manager |
+| `core:event:allow-emit` / `emit-to` | Send `output_ready`, `output_health_check`, `output_dataset_stalled`, `output_frame_stale`, `output_gpu_lost`, `output_gpu_recovered`, `output_closing` back to the manager — the whole `OutputEvent` union, kept complete here on purpose: the grant is not per-event, so this row is what anyone tightening it would read, and a half-list would silence the failure reports while keeping the recoveries |
 | `core:window:allow-current-monitor` | Output reports its monitor identity at boot so the manager can match it to the persisted config |
 | `core:window:allow-is-decorated` / `is-fullscreen` | F11 toggle reads current state to decide direction |
 | `core:window:allow-set-fullscreen` / `set-decorations` | F11 toggle (per §3.6) writes new state |
@@ -1540,7 +2546,7 @@ Full enumeration:
 
 | Excluded | Reason |
 |---|---|
-| `core:default` | Grants `invoke` to all Tauri commands (download_manager, keychain, tile_cache, asset protocol). Output never invokes commands; all coordination flows through events. |
+| `core:default` | Excluded, but **it is not the boundary this table used to claim**. Tauri's ACL gates *plugin* commands (`plugin:window\|…`, `plugin:http\|…`) and app-defined `#[tauri::command]`s only when the app ships a permission manifest of its own — a `src-tauri/permissions/` directory or `AppManifest::commands` in `build.rs`. This app ships neither, so `has_app_acl_manifest` is false and `tauri::webview`'s gate (`plugin_command.is_some() \|\| has_app_acl_manifest \|\| !is_local`) never fires for a local caller. An output can therefore invoke `quit_app`, `keychain::get_api_key` and the download commands today. Pre-existing, unrelated to multi-monitor, and **open** — see *App commands are not ACL-gated* below. What excluding `core:default` does still buy is the plugin half: no asset protocol, no `plugin:fs`, no `plugin:updater`. |
 | `core:window:default` | Not because it is dangerous — it is read-only (getters + monitor queries), so including it would be harmless. Excluded for reviewability: enumerating the four getters the output actually uses makes the intent auditable, and keeps a future Tauri release quietly widening the `default` bundle from widening this file with it. |
 | `core:webview:allow-create-webview-window` | Output cannot spawn more windows. Only the manager (in the main window) creates output windows. |
 | `updater:default` | Auto-update is a main-window concern — Tauri restarts the app on update, taking outputs down with it. |
@@ -1548,6 +2554,77 @@ Full enumeration:
 | `core:shell:*`, `core:dialog:*`, `core:clipboard:*` | None apply to a render-only surface. |
 | Asset protocol scope (`asset.localhost`) | Output doesn't need to load locally-cached datasets. The control window does (offline downloads → output via the asset protocol on the main window only). For an output window to render a downloaded dataset, the manager broadcasts the `asset.localhost` URL and the output fetches it via HTTP — denied by the explicit deny on localhost below. **Implication: offline downloads are control-window-only in v1; outputs require network.** Phase 5 polish if installations need it. |
 | `http://localhost:*`, `http://127.0.0.1:*` | Explicit deny. The only legitimate localhost use case in `default.json` is local LLM servers (Ollama, LM Studio, llama.cpp), which the output never talks to. The deny is documentation-as-code for security review: outputs cannot phone home to anything on the operator's machine. |
+
+**How an output closes itself.** `core:window:allow-destroy` is
+**not** granted here, and getting to that took two tries worth
+recording, because the first one shipped.
+
+Registering `onCloseRequested` moves completion of the close out of
+Rust and into JS: `@tauri-apps/api`'s helper awaits the handler and
+then calls `destroy()` on the window unless the handler called
+`preventDefault()`. That `destroy()` is ACL-checked against the
+**output**, so granting `allow-close` alone made every output
+unclosable — the manager's Remove, the operator's Alt+F4, all of it —
+with the denial happening inside Tauri's own listener callback, where
+nothing in this repo can observe it: `handle.close()` resolves
+normally on the manager side and `discard()` goes on to drop the
+record, so the panel row disappears and the window stays on the
+projector. Task manager, or nothing. Found on hardware.
+
+Granting `allow-destroy` fixed that and gave away more than it fixed.
+Neither `close` nor `destroy` is scoped to the calling window —
+`windows: ["output-*"]` restricts *callers*, not *targets* — so a
+compromised output could tear down the control window or a sibling.
+And `destroy` skips the target's own `onCloseRequested`, so no
+`output_closing` is emitted, so `classifyDeparture` reads absence and
+calls it a **crash**: three of those blocklist a working monitor for
+the session, which makes "quietly disable the rig's displays one at a
+time" a reachable outcome. Raised in review on the PR that shipped it.
+
+What the output does instead is `preventDefault()` and invoke
+`close_self`, an app command in `lib.rs` that destroys the window
+Tauri hands it:
+
+```rust
+#[tauri::command]
+fn close_self<R: tauri::Runtime>(window: tauri::Window<R>) { /* window.destroy() */ }
+```
+
+There is no target parameter to forge, so an output can only ever
+destroy itself, and the generic grant comes back out of this file.
+`acl_tests` in `lib.rs` pins both halves against the real capability
+files through `tauri::test`'s `MockRuntime`: an `output-1` window can
+invoke `close_self`, cannot invoke `plugin:window|destroy`, and the
+control window has not lost it.
+
+**Open: app commands are not ACL-gated.** `close_self` needs no
+permission entry, and the reason is a hole rather than a convenience.
+Tauri's ACL covers plugin commands; an app-defined
+`#[tauri::command]` is checked only when the app ships a permission
+manifest of its own — a `src-tauri/permissions/` directory, or
+`AppManifest::commands` in `build.rs`. This app ships neither
+(`build.rs` is a bare `tauri_build::build()`), so `has_app_acl_manifest`
+is false and the gate in `tauri::webview`,
+
+```rust
+if (plugin_command.is_some() || has_app_acl_manifest || !is_local)
+  && invoke.acl.is_none() { /* reject */ }
+```
+
+is false for every local caller. So an output window can invoke
+`quit_app`, `keychain::get_api_key` / `set_api_key`, `get_tile` and the
+eight download commands, today — the exposure that matters is the OS
+keychain entry holding the LLM API key, and ending an installation
+mid-show.
+
+This predates multi-monitor and is not caused by it; what multi-monitor
+added is a *second, less trusted* webview that inherits it. Closing it
+means giving the app a manifest and then granting each command
+explicitly — `default.json` gains the full set, `output.json` gains
+`close_self` and nothing else. That is a change whose failure mode is
+every command in the app silently refusing, so it wants a desktop run
+rather than a build-green, and it is deliberately **not** bundled with
+the fix above.
 
 **IPC event direction.** The manager-→output direction uses
 `emit_to('output-N', ...)` from the main window. The
@@ -1612,11 +2689,96 @@ Commissioning an LED-sphere installation requires more than
 "point output at monitor and hope." Two calibration
 primitives ship in v1.
 
-#### 1. Test pattern pseudo-dataset
+#### 1. Test pattern pseudo-dataset — **landed, and built differently**
 
-Selectable from the per-output config menu under a
-"Calibration" submenu, alongside the regular dataset list.
-**Not a fetched asset** — rendered shader-side so it works
+**Two things below are superseded and struck through where
+they appear: the shader implementation, and the sentinel
+dataset id.** Both are recorded here rather than rewritten
+away, so the reasoning is not re-derived from a summary.
+What shipped is `src/output/calibrationPattern.ts`.
+
+**It is a 2:1 canvas, not GLSL,** and the reason is what is
+being calibrated rather than convenience. A pattern drawn
+inside the fragment shader bypasses `layerStack`'s sampling
+entirely — the bbox clipping, the `lonOrigin` shift,
+`isFlippedInY`, the whole path a real dataset's pixels
+travel — so it could land perfectly while the dataset path
+was wrong, which is the one failure a calibration pattern
+exists to rule out. Installed in an ordinary overlay slot
+it travels that path exactly, so a pattern that lands right
+proves a dataset will. Its geometry is pinned in tests
+against `datasetProbe.latLonToTexelUv`, the canonical TS
+mirror of the shader maths. The convenience is real too,
+and the "~80 LOC GLSL" estimate below half-predicted it:
+the pole letters, anchor names, longitude scale and
+resolution readout are **glyphs**.
+
+**It is a per-output switch on the render-config channel,
+not a dataset,** which is the second correction. Calibration
+is done one sphere at a time — a rig with four outputs is
+four differently-mounted spheres — and `dataset` is *shared*
+state, so a sentinel id would have put the pattern on every
+output at once and replaced the control window's own globe,
+which is where the operator is reading the rotation they are
+turning. `OutputRenderConfig.calibration` is per-output and
+last-write-wins, exactly like `debugOverlay` beside it.
+
+It **replaces** the mirrored dataset rather than compositing
+over it: a graticule on top of data leaves neither legible,
+and what is being checked is geometry. The mirror is
+untouched underneath — the decoder keeps running and keeps
+being steered — so turning calibration off puts the dataset
+back *in step* rather than reloading it.
+
+Three details the section below does not cover, each of
+which is a wrong answer avoided:
+
+- **The southern colour bars are reversed.** Two identical
+  bands are invariant under a vertical flip, which is the
+  one orientation error this pattern most needs to expose.
+  The N/S letters say it too; two independent statements of
+  the same fact are cheap here.
+- **The antimeridian is drawn at both edges** and gets its
+  own third colour. An equirectangular image cuts that
+  meridian in half and on a sphere the halves are the same
+  mark — the join an operator is checking for a seam — and
+  a seam artefact and a mis-set rotation look identical if
+  both edges are painted like the grid.
+- **The canvas is capped at 4096 whatever the framebuffer.**
+  8192 is 134 MB of backing store plus as much again once
+  uploaded, on hardware §3 already found can land silently
+  on an iGPU, and it buys nothing: what is calibrated is
+  *where* a line falls, and a bilinear-sampled 4096 pattern
+  places every line within half a framebuffer pixel of its
+  true position at 8192. The readout still names the
+  framebuffer, which is the number the operator is
+  confirming.
+
+**The rotation value is deliberately not in the readout.**
+It would make the pattern a function of a value that changes
+continuously — the panel's slider commits on `input`, so one
+drag is dozens of 4096×2048 redraws — and it is redundant
+and worse than what is already there: the longitude scale
+turns *with* the sphere, so the operator reads the rotation
+off whichever label has reached the physical mark they are
+aligning to.
+
+**And it does not persist**, unlike every other operator
+choice in the panel. The rule is that what you calibrate
+persists and the act of calibrating does not:
+`rotationOffsetDeg` is a property of the room,
+`calibration` is a property of the afternoon. It is worth
+separating from `debugOverlay`, which does persist — that is
+an overlay *on* the content, so an installation restoring
+with it on still shows its data, while this replaces the
+content, and an installation restoring with it on shows
+none.
+
+The original design follows.
+
+~~Selectable from the per-output config menu under a
+"Calibration" submenu, alongside the regular dataset list.~~
+**Not a fetched asset** — built locally so it works
 identically on every output regardless of network state.
 
 The pattern is a single multi-purpose target rendered into
@@ -1649,15 +2811,19 @@ so the operator can verify those primitives by zooming in
 on the control globe and watching how the pattern
 distributes across the LED sphere.
 
-Implementation: `src/output/datasetMirror.ts` recognises a
+~~Implementation: `src/output/datasetMirror.ts` recognises a
 sentinel dataset id (`__terraviz_calibration__`). When that
 id arrives in a state diff, the mirror builds a procedural
 texture in a Three.js `WebGLRenderTarget` driven by a single
-fragment shader (~80 lines of GLSL). No `<video>`, no HLS,
-no network. The pattern recomputes only when
-`framebufferSize` changes.
+fragment shader (~80 lines of GLSL).~~ **Superseded — see
+the correction at the top of this section.** The sentinel id
+survives as `CALIBRATION_OVERLAY.datasetId`, which is what
+the debug HUD reports when the pattern is what is on the
+glass; nothing routes on it. No `<video>`, no HLS, no
+network, and the pattern still recomputes only when the
+framebuffer rung changes.
 
-#### 2. Per-output rotation offset
+#### 2. Per-output rotation offset — **landed**
 
 LED spheres are physical objects. Some installations
 mechanically rotate the sphere relative to canonical 0°
@@ -1671,11 +2837,24 @@ every longitude lookup in the equirect RTT shader before
 the camera-offset math runs. Operationally:
 
 ```glsl
-// In equirectRtt.frag — applied before the cameraOffset ray-march.
-float lon = (uv.x - 0.5) * 6.2831853;          // [-π, π]
-lon = mod(lon + uRotationOffsetRad, 6.2831853); // shift, wrap
-// ...continue with normal cameraOffset ray-march from lon, lat
+// In equirectRtt.frag — after the split fold, before the ray-march.
+float u   = uSplit ? fract(vUv.x * 2.0) : vUv.x;
+float lon = (u - 0.5) * TWO_PI - uRotationOffsetRad;
+// ...continue with the normal cameraOffset ray-march from lon, lat
 ```
+
+**Two corrections to the snippet this replaces**, both found building
+it:
+
+- It rotated `uv.x` **before** the split fold. `foldSplitU` is periodic
+  in U with period ½, so a 180° offset would have been a *no-op* — on
+  exactly the installations most likely to be running split mode. The
+  rotation goes on the longitude the fold produced, which turns both
+  copies together.
+- It ended `mod(lon + offset, TWO_PI)`. That is dead arithmetic: the
+  only consumers are `cos` and `sin`, and the offset is bounded to one
+  turn, so there is no range to normalise and no precision to protect.
+  Dropped, so the GLSL and its TypeScript mirror stay one line each.
 
 UI: a numeric input + slider in the per-output config menu,
 labelled "Rotation offset (°)". 0.1° granularity. Defaults
@@ -1688,10 +2867,28 @@ the desired physical reference (e.g. the museum entrance).
 Save. Once calibrated, leave it alone — it's a per-
 installation constant, not per-session.
 
-The protocol carries the offset in `view.rotationOffsetDeg`
-alongside `cameraOffset` and `split`. It's a per-output
-flag, not a globally-broadcast view field — different
-outputs on different spheres need different offsets.
+It is a per-output flag, not a globally-broadcast view field —
+different outputs on different spheres need different
+offsets — and that part shipped as designed.
+
+**Where it shipped differs from this section in one way.**
+The protocol carries `rotationOffsetRad`, not the
+`view.rotationOffsetDeg` written above: `MirroredEquirectParams`
+*is* `equirectRtt`'s `EquirectParams`, the object a narrowed
+output hands straight to `setParams`, so degrees on the wire
+would need a second conversion inside the output — free to
+disagree with the first. Degrees live where the operator meets
+them, in `OutputViewSettings` and the persisted config, and
+`projectView` is the single conversion. That is the shape
+`camera` → `cameraOffset` already had, and this section predates
+the shared/mirrored view split that introduced it.
+
+A stored value is **wrapped, not rejected**: 370° aims the sphere
+exactly where 10° does, so discarding it would silently
+un-calibrate an installation whose operator nudged past a full
+turn. That is the opposite of the framebuffer rung's rule, and
+deliberately so — a width off the ladder is meaningless, a
+rotation past 360 is not.
 
 ### Tour engine interaction
 
@@ -1770,15 +2967,18 @@ What must work:
 - **Tools → Outputs panel** with a monitor picker and an "Add
   output" button. One mode available: SOS Equirectangular.
 - **Borderless fullscreen output windows** on user-chosen
-  monitors. Multiple simultaneous outputs supported (each on a
-  distinct monitor; cap at 4).
+  monitors. Multiple simultaneous outputs supported, each on a
+  distinct monitor — so the practical v1 ceiling is however
+  many monitors the workstation has, bounded by the decoder
+  budget rather than by a constant of 4.
 - **Equirectangular composite render.** Output runs a parallel
-  Three.js scene with `photorealEarth` + the active dataset
-  overlay + the multi-layer stack, renders to a 2:1
-  framebuffer at the configured resolution.
+  Three.js renderer whose one fragment-shader pass composites
+  `photorealEarth`'s base texture, the active dataset overlay
+  and the layer stack straight into a 2:1 framebuffer at the
+  configured resolution.
 - **Multi-layer stack support.** When the operator stacks
   multiple datasets in the control window's primary panel,
-  the output mirrors the same z-ordered shell stack. (v1
+  the output composites them in the same order. (v1
   reuses the control window's existing layer state — adding
   per-layer opacity controls is out of scope; we surface what
   the operator already configured.)
@@ -1794,6 +2994,14 @@ What must work:
   antipodal LED-sphere hemisphere — see §3.5), toggle debug
   overlay (shows current dataset id, sync delta, fps in the
   corner — useful for installation calibration), close.
+- **Decoder budget (machine-scoped).** A numeric field showing
+  the current ceiling, seeded from `DEFAULT_CONCURRENT_DECODERS`,
+  with the count in use beside it ("3 of 4 decoders"). Raising it
+  is how an operator who has measured their machine stops being
+  rationed at a constant sized for a phone; the field carries the
+  debug overlay's steady-fps reading as the thing to watch while
+  doing so. Persisted per machine, never exported with a config.
+  See "Cross-window decoder budget".
 - **Optional persistence.** A "Restore outputs on launch"
   checkbox. Off by default.
 - **Clean teardown.** Closing an output disposes the Three.js
@@ -1859,23 +3067,36 @@ without rolling the whole feature back.
 | 2 | `multi-output: equirect RTT shader (unit tests + visual fixture)` | `src/output/equirectRtt.ts` and a tiny test page that loads a known sphere texture and verifies the shader produces the expected equirectangular pixels. Lands as a standalone module; not yet wired up. | No |
 | 3 | `multi-output: output window entry + Three.js scene scaffold` | `src/output/main.ts`, `src/output/datasetMirror.ts`, `src/output/output.html`, `src/output/output.css`, Vite multi-entry config. Output bundle builds; loadable as a static page; renders a default photoreal Earth with no dataset, no IPC. **Start from `globeThumbnail.ts`'s scene-building path** rather than a fresh assembly — see "Prior art". | No |
 | 4 | `multi-output: layer stack + dataset overlay` | `src/output/layerStack.ts`. Static fixture page can now load a fake dataset + fake layer stack and render it. The overlay path consumes a whole `DatasetOverlayOptions` (`lonOrigin` / `isFlippedInY` / `boundingBox` / `celestialBody` / `colorScale`) plus a `ColorScaleDisplay`, reusing `globeThumbnail.ts`'s handling rather than re-deriving the UV maths. Still no IPC. | No |
-| 5 | `multi-output: Tauri capabilities for multi-window` | Two halves. **`capabilities/default.json`** gains `core:webview:allow-create-webview-window`, `core:window:allow-close`, `allow-destroy`, `allow-set-decorations` — without these the manager cannot spawn or tear down an output at all (see §6). **`capabilities/output.json`** is new, scoped to `output-*`, granting only IPC + self-driven window controls + HTTPS fetch. `mobile.json` untouched. | No |
+| 5 | `multi-output: Tauri capabilities for multi-window` | Two halves. **`capabilities/default.json`** gains `core:webview:allow-create-webview-window`, `core:window:allow-close`, `allow-destroy`, `allow-set-decorations`, `allow-show` — without these the manager cannot spawn, place, reveal or tear down an output at all (see §6). **`capabilities/output.json`** is new, scoped to `output-*`, granting only IPC + self-driven window controls + HTTPS fetch. `mobile.json` untouched. | No |
 | 6 | `multi-output: state aggregator + protocol implementation` | `multiOutput/manager.ts`, `multiOutput/stateAggregator.ts`. Manager constructible but not yet instantiated. | No |
 | 7 | `multi-output: emit dataset:loaded + layer events from main.ts` | Refactor of `datasetLoader` and `main.ts` to fire events the aggregator can subscribe to. Today's `panelStates` consumers keep working. | No |
 | 8 | `multi-output: wire MultiOutputManager into main.ts boot` | Manager instantiated; subscribes to events. No UI to spawn windows yet, so still invisible. | No |
-| 9 | `multi-output: add Tools → Outputs panel` | `outputUI.ts`, Tools menu entry. **First user-reachable commit.** Operator can add and remove SOS equirectangular outputs. | **Yes** |
-| 10 | `multi-output: persist + restore outputs across launches` | localStorage config, opt-in restore on boot, monitor-name matching. | Yes (additive) |
-| 11 | `multi-output: per-output debug overlay + framebuffer resolution picker` | Resolution picker in panel, debug HUD with dataset id, sync delta, and fps. | Yes (additive) |
-| 12 | `multi-output: fullscreen toggle + kiosk launch + F11 on every window` | `Tools → Fullscreen` toggle in `toolsMenuUI.ts` (persisted), F11 keydown handler on control + output windows, `--kiosk` argv parse and `TERRAVIZ_KIOSK=1` env var read in `src-tauri/src/lib.rs` (**not** `main.rs`, now a 12-line shim) behind `#[cfg(desktop)]`, applying fullscreen + decorationless before first paint, 3-second idle cursor-hide on the control window when fullscreen. See §3.6. | Yes (additive) |
-| 13 | `multi-output: failure recovery — crashes, stalls, GPU loss, monitor unplug` | Manager gains crash detection (no-graceful-close window destroy → toast + record removal), 3-strikes-per-monitor crash storm guard, 2 s `availableMonitors()` poll for unplug detection, `getAll()` boot scan to reattach orphaned `output-*` windows after a control-window crash. Output gains `webglcontextlost` / `webglcontextrestored` listeners with full scene rebuild, IPC-silence watchdog (5 s → stale state, 60 s → orphan), one HLS stream rebuild on a `loadStream()` rejection with frozen last-good-frame (no retry ladder — `hlsService` already spends a 3× budget before rejecting). Outputs panel renders per-output health badges (healthy / stale / stalled / monitor-missing). New Tier A `output_failure` event fired from manager via `analytics/emitter.ts` with `{ kind, retries, recovered }` (Open Question 3 decided). See §3 "Failure recovery". | Yes (additive) |
-| 14 | `multi-output: calibration tooling — test pattern + rotation offset` | `src/output/datasetMirror.ts` recognises the `__terraviz_calibration__` sentinel id and renders a procedural test pattern (8-step grayscale ramp at the equator, RGB color bars at lat ±30°, lat/lon graticule with color-coded equator + prime meridian, named anchor crosshairs, N/S pole labels, live resolution counter — ~80 LOC GLSL). `src/output/equirectRtt.ts` adds the `uRotationOffsetRad` longitude rotation applied before the camera-offset ray-march. `outputUI.ts` adds the per-output "Rotation offset (°)" numeric + slider and a "Calibration" submenu. Persisted config gains `rotationOffsetDeg`. See §3 "Calibration tooling". | Yes (additive) |
+| 9 | `multi-output: add Tools → Outputs panel` | **Landed.** `outputUI.ts`, Tools menu entry. **First user-reachable commit.** Operator can add and remove SOS equirectangular outputs, and set each one's "Track operator camera" / "Split sphere". Mode is *shown*, not picked — v1 has one, and a one-option select is dead UI. The occupied-monitor guard lives in the panel because `addOutput` accepts any index; it keys on name **and** signed origin so rung 10's restore matching reuses the same identity. `manager.start()` is called on the first add and awaited before the spawn (the output emits `output_ready` as it boots), and never stopped on removal. Deferred to their own rungs: rename and persistence (10), framebuffer resolution / decoder budget / debug overlay (11), health badges and reacting to an output the operator closed by hand (13). | **Yes** |
+| 10 | `multi-output: persist + restore outputs across launches` | **Landed.** `outputPersistence.ts` (versioned localStorage config, fail-closed parse, the match rule), `manager.restoreOutputs()`, boot wiring, and the panel's opt-in checkbox. Monitor matching is on **both** name and signed physical origin — a name-only match is a monitor the manager does not recognise, skipped and logged, because Windows display names are positional and reassignable (see §3 "Persistence"). Restore is per-output-fail-safe (a gone monitor or a refused window loses one output, not the set), paced by `OUTPUT_RESTORE_STAGGER_MS` between spawns, starts the IPC link before the first one, reuses persisted labels and advances the counter past them, then rewrites the config with what actually came up. Two departures from the schema above: a `version` field, because without one a future incompatible change cannot tell an old blob from a corrupt one and this blob spawns windows; and `framebufferSize` / `rotationOffsetDeg` / `debugOverlay` / `concurrentDecoderBudget` are **absent** until the rungs that read them (11, 14) — inventing defaults now would guess at what those rungs want. | Yes (additive) |
+| 10.5 | `multi-output: the output's receive side` | **Landed, and it was missing from this ladder.** Rung 3 says "no IPC", rung 4 says "still no IPC", and rungs 5-15 never assign it — so every rung from 5 to 10 built the control window's half of a link whose other end did not exist. No output emitted `output_ready`, `readyRecords()` was empty on every real launch, and an operator who added an output got a window showing a static Earth with nothing to say why. Four pieces: `MirroredDataset` gains `startTime` / `endTime`, without which `computeSiblingSyncCorrection` cannot place a date (`primary.rangeMs` gives the span's length, not its start); `stateEquality.ts` extracts `sameValue` so both ends answer "did this change?" identically, because the idle heartbeat sends a **full snapshot every second** and an output that read one as "everything changed" would rebuild its HLS instance once a second; `outputLink.ts` announces the window and folds messages (a diff applies only if newer, a snapshot applies always — gating snapshots on `seq` breaks the heartbeat resync silently and a manager restart permanently); `outputSync.ts` runs the *same* control law a sibling globe does, with `SIBLING_*` imported rather than restated; `datasetMirror.ts` owns the element, reloading only when `url`/`kind` differ (an overlay change is a palette, not a decoder), swapping load-then-dispose so a projector never flashes black, and generation-guarding so a slow load cannot win. And `outputScene` composites it: the material is rebuilt only when the slot *count* changes (GLSL ES 1.00 has no dynamic sampler indexing, so the shader text is a function of the count), across the **same** uniforms object so the operator's camera survives a rebuild, reusing a slot's map texture when the element is unchanged and disposing the slots that go away. The composite is built from the **mirror** rather than the link, so an incoming dataset's bbox and palette are never drawn over the outgoing dataset's pixels during a load. | Yes |
+| 11 | `multi-output: per-output debug overlay + framebuffer + decoder-budget controls` | **Split into three commits**, because the three controls it names share only a panel section: the config channel and the HUD (11a), the resolution picker (11b), and the decoder budget (11c). Together: resolution picker in panel, the machine-scoped **decoder-budget field** (seeded from `DEFAULT_CONCURRENT_DECODERS`, persisted, shown as "N of M decoders") that makes the per-machine budget in §3 actually settable — without it the budget is a constant wearing a different name — debug HUD with dataset id, sync delta, fps, and the WebGL **renderer string** — the last so an operator can see which GPU the webview actually got, which on a hybrid-graphics machine is decided by the driver rather than by the app (see Risks). | Yes (additive) |
+| 11a | `multi-output: output render config channel + debug overlay` | **Landed.** `src/output/debugOverlay.ts` (the HUD), `OutputRenderConfig` + `OUTPUT_RENDER_CONFIG_EVENT` in `protocol.ts`, the output's `onRenderConfig` half, `manager.setOutputRenderConfig`, two more persisted fields, and the panel's "Debug overlay" switch. The channel is **separate from state** and carries no `seq`: a framebuffer size and a debug flag are last-write-wins window settings, and folding them into `GlobeState` would pay coalescing and sequencing for values that need neither, inside a type whose whole point is that it describes one globe. The config is sent **before** the first snapshot on `output_ready`, so a restored 8K output does not render at the default and then reallocate. The HUD is five fields (dataset, signed sync delta in ms, fps, framebuffer, renderer string), refreshed on its own ~2 Hz timer rather than from the render loop — which drops to 1 Hz for static content and would freeze the fps readout exactly when someone asks why nothing is moving. Persistence gained `framebufferWidth` / `debugOverlay` **without** a version bump, both defaulted when absent, so an existing config restores unchanged. `framebufferWidth` travels and applies end-to-end here; only its *picker* waits for 11b. | Yes (additive) |
+| 11b | `multi-output: framebuffer resolution picker` | **Landed.** The per-output picker in the Outputs panel, over the ladder 11a already carried end to end. Called **Framebuffer**, never Resolution — the row's head line already shows the monitor's own pixel count, so the two read one above the other and step 24's "the picker changes the framebuffer, never the window" needs no explaining. The whole ladder is offered rather than the rungs at or below the monitor, because 1024 (preview a sphere on a desk monitor) and 8192 (drive a sphere from a 1080p preview window) are the two cases it is most for. The ladder reaches the panel through `manager.framebufferWidths()` rather than an import: `outputUI` is eagerly loaded by `main.ts`, so a runtime `multiOutput/` import there would put the IPC contract back into the web entry graph. A persisted width is narrowed to a real rung on parse, so the picker and the window can never be showing two different numbers. | Yes (additive) |
+| 11c | `multi-output: machine-scoped decoder budget` | **Landed.** `PersistedOutputConfig.concurrentDecoderBudget` (machine-scoped, `null` = "nobody has measured this machine, ask it"), `manager.decoderBudget()` / `setDecoderBudget()` / `decoderLoad()`, the refusal inside `spawn()` — so a restore is held to the same rule as an Add — and the panel's number field, "N of M video decoders in use" readout, and disabled Add with a message naming what to close. The count is **windows that can hold a decoder**, not decoders currently decoding; see the revised "Counted" row above for why, since it departs from what this section originally said. The control window's contribution reaches the manager through an injected `controlPanels()` — `main.ts` owns both `viewportManager` and `bootMultiOutput`, and neither of those should learn what the other is. Unset falls back to `maxVideoPanels()` rather than storing it, so an unpinned budget keeps tracking the machine. **Still not enforced at layout change** (plan: "at both spawn time and layout change") — a control window that grows from 1 globe to 4 while outputs are up can still cross the budget. That needs `viewportManager` to consult the manager, which is a cross-cutting change and its own commit. | Yes (additive) |
+| 12a | `multi-output: window chrome — fullscreen, decorations, F11, idle cursor` | **Landed.** `src/services/windowChrome.ts` (shared by both windows), the F11 handler, the idle-cursor rule in `base.css`, and the upgrade of the Tools bar's existing fullscreen button. Two findings worth recording. First, §3.6 mechanism 2 was **already half-built**: a fullscreen button has shipped since §3.3, driving `document.requestFullscreen` directly — which is the whole answer in a browser and half of it in a packaged app, since it fullscreens the *webview* while leaving the native title bar and border in the captured signal. The button was upgraded rather than joined by a second one. Second, that same button read its label off `document.fullscreenElement`, which stays **null** when the native window goes fullscreen — so on desktop it would have offered "Enter fullscreen" over a window already in it, and F11 changes the state without `fullscreenchange` firing at all; the controller is now what it reads. Fullscreen and decorations are one operation because `setFullscreen(true)` alone leaves the title bar on some window managers and removes it on others, and decorations follow rather than lead so a failed fullscreen cannot strand an operator with an unmovable undecorated window. The desktop host is built **synchronously** and imports Tauri on first use, because the Tools menu reads the state while laying out its markup. F11 on an output passes `initial: true` and persists nothing — an output is fullscreen by construction and a title bar borrowed for calibration must not come back next launch. | Yes (additive) |
+| 12b | `multi-output: kiosk launch flag` | **Landed.** `--kiosk` and `TERRAVIZ_KIOSK=1` parsed in `src-tauri/src/lib.rs` (`main.rs` was already the 12-line shim this section predicted), applied in `setup()` behind `#[cfg(desktop)]`. "Before first paint" is **best-effort**, not guaranteed: `setup()` is the earliest point an `AppHandle` exists, and the static alternative in `tauri.conf.json` cannot be conditional on a flag. `TERRAVIZ_KIOSK=0` and an empty value mean *off* — a deployment templating one unit file across several machines sets the variable explicitly to disable kiosk, so the value is matched against an allowlist rather than tested for presence. The flag beats a falsy environment, since an operator adding it to one launch is deciding now while the environment is the installation's default. Decorations drop only after fullscreen succeeds, and every failure is logged and swallowed. One thing this rung had to add on the **TypeScript** side: the kiosk flag makes the native window fullscreen without the JS controller knowing, so `WindowChromeHost` gained an async `queryFullscreen()` seeded once at construction — without it the Tools button offers "Enter fullscreen" over a kiosk window and the first press is a no-op. That needs `core:window:allow-is-fullscreen`, added to `default.json` (`output.json` already had it). | Yes (additive) |
+| 12c | `multi-output: the Earth decoration the equirect path can carry` | The three effects §"What the equirect path does to the Earth decoration" says **cross** — day/night terminator, night lights, clouds — wired into `layerStack`'s fragment shader. **Landed.** Specified here first, then built exactly as specified, which is why the first hardware session's flat diffuse Earth is now day/night-shaded with city lights and cloud cover. Not a research question: the terminator is `dot(hit, uSunDir)` (the ray-march's hit point on the unit sphere *is* the normal), night lights are a second sampler gated by it, clouds are one more layer in a composite that already unrolls slots. The sun direction comes from `getSunPosition` in `src/utils/time.ts`, which the control globe already uses, so the two cannot disagree about where the sun is. **The four that do not cross stay out** — specular, atmosphere *shells*, ground shadow, sun sprite are not deferred, they are incoherent on this surface, and baking one in paints a fixed glare spot or limb ring onto a physical sphere in a place correct from exactly one vantage point. That is a rendering artifact that reads as a data feature, which is worse than its absence. So "as realistic as possible" on a sphere **is** diffuse + night lights + clouds + terminator; this rung is the whole of it. **Amended after this rung shipped:** the atmosphere's *shell* stays out for the reason above, but its **disc tint** was later found to cross — pinned to nadir the scattering integral is a function of sun angle alone, with no silhouette to be wrong about. That is what made the output's ocean black beside a blue one. It is not a fifth effect sneaking back in; it is the sharper test (what does this become at nadir?) applied to a row this table got half right. | Yes (additive) |
+| 13 | `multi-output: failure recovery — crashes, stalls, GPU loss, monitor unplug` | Manager gains crash detection (no-graceful-close window destroy → toast + record removal), 3-strikes-per-monitor crash storm guard, 2 s `availableMonitors()` poll for unplug detection, `getAll()` boot scan to reattach orphaned `output-*` windows after a control-window **page reload or webview failure** — not a crash of the process, which takes every window with it; see case 6, which corrects this. Output gains `webglcontextlost` / `webglcontextrestored` listeners with full scene rebuild, IPC-silence watchdog (5 s → stale state, 60 s → orphan), one HLS stream rebuild on a `loadStream()` rejection with frozen last-good-frame (no retry ladder — `hlsService` already spends a 3× budget before rejecting). Outputs panel renders per-output health badges (healthy / stale / stalled / monitor-missing). New Tier A `output_failure` event fired from manager via `analytics/emitter.ts` with `{ kind, retries, recovered }` (Open Question 3 decided). See §3 "Failure recovery". **Landed so far: 13a** (crash-vs-hand-close classification, the storm guard, record removal, `onOutputsChanged` for the panel), **13b** (all three Tier A events, `outputTelemetry.ts`), **case 3** (the output's `linkWatchdog`, the manager's `output_health_check` resync, the panel's stale badge and its announcement) and **case 6** (`adoptOrphanedOutputs`, `OUTPUT_REATTACH_EVENT`, chained ahead of the restore at boot) and **case 5's detection and reporting** (`outputScene.gpuState()`, `output_gpu_lost` / `output_gpu_recovered`, the `gpu-lost` badge and the `gpu-loss` Tier A failure — much smaller than this row implied, because Three's `WebGLRenderer` already does the `preventDefault()` and the GL rebuild; see case 5). Still open: the unplug poll, the single HLS rebuild, case 5's 30 s no-restore timeout and its `gpu-loss-timeout` removal, the toast (no toast primitive exists), and the `perf_sample` extension (needs an `OutputEvent` arm carrying drift — see Open Question 3). | Yes (additive) |
+| 14 | `multi-output: calibration tooling — test pattern + rotation offset` | `src/output/datasetMirror.ts` recognises the `__terraviz_calibration__` sentinel id and renders a procedural test pattern (8-step grayscale ramp at the equator, RGB color bars at lat ±30°, lat/lon graticule with color-coded equator + prime meridian, named anchor crosshairs, N/S pole labels, live resolution counter — ~80 LOC GLSL). `src/output/equirectRtt.ts` adds the `uRotationOffsetRad` longitude rotation applied before the camera-offset ray-march. `outputUI.ts` adds the per-output "Rotation offset (°)" numeric + slider and a "Calibration" submenu. Persisted config gains `rotationOffsetDeg`. See §3 "Calibration tooling". **Landed, in two slices, and the second is built differently from this row.** **14a** is the rotation offset end to end: `uRotationOffsetRad` and its TS mirror, `rotationOffsetDeg` through `OutputViewSettings` and the persisted config, the degrees→radians conversion in `projectView`, and the panel's slider-plus-number. **14b** is the test pattern, as `src/output/calibrationPattern.ts` — a **2:1 canvas installed in an ordinary overlay slot**, not the ~80 LOC of GLSL this row specifies, and a **per-output switch on the render-config channel**, not the `__terraviz_calibration__` sentinel dataset. Both departures are argued at the top of §3 "Calibration tooling": a shader pattern would bypass the very sampling path it is meant to prove, and a sentinel dataset would put the pattern on every output at once — plus on the control window's own globe, which is where the operator is reading the rotation they are turning. There is no "Calibration submenu"; it is one toggle sitting directly above the rotation control it is used with. The pattern is the one operator choice in the panel that deliberately does **not** persist. | Yes (additive) |
+| 15 | `multi-output: operator runbook` | `docs/MULTI_MONITOR_OPERATIONS.md` — the deployment half this plan has so far deferred, and which a spike showed is not optional. Covers: **checking which GPU the webview actually got** (the renderer string surfaced by commit 11's debug overlay) and the per-OS override for a hybrid-graphics machine, since the app's own `powerPreference` is inert and a silent landing on the iGPU is undiagnosable from logs; **measuring this machine's decoder budget** rather than trusting a constant, and entering it in the Outputs panel's budget field (commit 11); disabling screen savers and display sleep (Open Question 5's documented half); the kiosk autostart entry from §3.6; and what each Outputs-panel health badge means in front of an audience. No code. | **Yes** (docs) |
 
 **Backout plan.** Reverting commit 9 leaves all the plumbing in
 place (manager, output bundle, capability) but removes the
 operator's ability to spawn windows. Control window behaviour
-is unchanged from pre-feature. Reverting commits 6-8 removes
-the manager itself — everything else still type-checks because
-nothing on the hot path imports from `multiOutput/`. Reverting
+is unchanged from pre-feature. Reverting commit 8 alone removes
+the manager's only caller: `main.ts` loses one import, one field,
+one call and one `dispose()` line, and `bootMultiOutput.ts`
+disappears with nothing else referencing it. A full 6-8 revert
+has one more step than this paragraph originally claimed — it
+must also remove rung 7's publish calls, because `main.ts` now
+imports `globeStateEvents` and `mirrorState` and calls
+`publishMirroredDataset()` from three sites. The rest still
+type-checks. Reverting
 commits 2-4 removes the output bundle — the unused build
 artifacts disappear; nothing else changes. Reverting commit 12
 removes the control-window fullscreen toggle, F11 handler, and
@@ -1940,6 +3161,329 @@ automatically. The basic state-mirroring path is unaffected.
 
 ---
 
+## Driving other display geometries
+
+**Status: study, no code. Written after rung 10 shipped, and after
+reading the sister project.** Nothing here changes v1, and none of it
+is scheduled — Phases 2 and 3 below are where it would land, and both
+are amended against it.
+
+The question this answers is one a reader of the delivery ladder will
+have: **is equirectangular assumed?** Partly. It is worth being precise
+about which layers assume it, because the answer decides how much any
+other geometry costs.
+
+| Layer | Equirect-specific? |
+|---|---|
+| `protocol.ts` — `MirroredGlobeState` | **No.** Dataset, playback, palette, layers, date: what the globe *shows*, not how it is projected. `OutputMode` is already a field on `OutputReadyEvent` |
+| `manager.ts` | **No.** Stores `mode`, persists it, passes it to `spawn()`, never branches on it. Every output gets the same `output.html` |
+| `outputPersistence.ts` | **No**, beyond refusing an unrecognised `mode` — deliberately, so a newer build's mode is not spawned as an equirect |
+| `outputUI.ts` | **No.** The mode picker is absent only because a one-option select is dead UI |
+| `layerStack.ts` | **No.** Composites base Earth + overlay + layers to a colour at a surface point. Projection-independent |
+| `outputScene.ts` + `equirectRtt.ts` | **Yes, hard-wired.** Unconditional 2:1 framebuffer, fullscreen quad, ray-march. The scene never reads `mode` — it *reports* one and nothing routes on it inbound |
+| `output.css` — how the frame reaches the monitor | **Yes, by consequence.** The drawing buffer is 2:1; the window is whatever the display is. `object-fit: contain` reconciles them by letterboxing, which is a decision rather than a formatting detail — see the next subsection |
+
+So `OutputMode` is a real extension point that is plumbed everywhere
+except the renderer. The seam is already in the right place:
+`equirectRtt` answers "which surface point is this pixel", `layerStack`
+answers "what colour is that point". Another geometry replaces the
+first and keeps the second.
+
+### Not every monitor is 2:1, and today every framebuffer is
+
+The frame and the monitor are two different rectangles, and everything
+above names only one of them.
+
+**What v1 actually does.** `resolveFramebufferSize` has exactly one
+caller, and that caller passes nothing — `options.framebufferWidth` is
+never supplied, so every output allocates 4096×2048 regardless of the
+display it landed on. Nothing anywhere reads `Monitor.size`. That
+buffer is then presented into a fullscreen window of the monitor's own
+aspect by `output.css`'s `object-fit: contain`, which letterboxes: on a
+16:9 output the signal carries a 1920×960 image with 60 rows of black
+above it and 60 below.
+
+**`contain` is the right default and the wrong thing to leave
+unexamined.** It is correct for a preview on a desk monitor, and
+correct for any downstream device that expects a 2:1 image *inside* a
+frame and finds its own edges. It is wrong for a device that expects
+the whole signal to **be** the equirect: there the bars are not
+padding, and every latitude sits 1.125× closer to the equator than the
+device places it. That error is smooth, symmetric and largest at the
+poles — on a sphere it reads as the map being slightly off rather than
+as a scaling bug, which is the same failure shape as the bottom-left
+origin below. Which behaviour an SOS driver, a warping appliance or a
+projector's own geometry engine has is not known here, and rung 9's
+smoke checklist is the first thing that could find out.
+
+Three ways out, and they are not interchangeable: letterbox (today),
+stretch to the monitor, or size the drawing buffer to the monitor's own
+pixel count. The third is unavailable *in this mode* — an
+equirectangular frame that is not 2:1 is not equirectangular, which is
+why `FRAMEBUFFER_WIDTHS` derives height instead of offering it. The
+choice between the first two belongs to the output, not to the CSS, and
+is therefore a per-output setting nobody has written yet.
+
+**What that constrains for rung 11.** Its resolution picker is framed
+as one ladder. It should be **per mode**: 2:1 rungs are a property of
+this projection, not of outputs in general. Rung 11 is also the first
+thing with a reason to read the monitor's size at all — the
+snap-**down** rule exists precisely for a caller that passes hardware's
+own number, and that caller has never existed.
+
+### Geometry is a per-output configuration, not an enum value
+
+> **Confirmed by the first hardware session (three monitors,
+> 2026-09).** The operator who owns the deployment named the
+> four-projector SOS system as a real target, not a hypothetical: each
+> projector takes a *slice* of the sphere, so its framebuffer is not
+> 2:1 and its content is not an equirectangular frame. That is the case
+> this section was written against — "a warp mesh measured against four
+> projectors in one room" — so nothing below changes. What changes is
+> its status: the mode-plus-geometry-reference shape is now load-bearing
+> for a named deployment rather than insurance against one.
+>
+> Two things follow for whoever builds it. **The framebuffer ladder is
+> `sos-equirect`'s, not the app's.** `FRAMEBUFFER_WIDTHS` keeps height
+> at exactly half the width because an equirectangular frame that is not
+> 2:1 is not equirectangular; a slice mode brings its own rungs, matched
+> to a projector's native resolution, rather than widening these (see
+> §"Not every monitor is 2:1" and smoke step 24a). **And the four
+> projectors are four outputs, not one.** Each needs its own geometry
+> payload — position on the sphere, lens warp, edge-blend zones — which
+> is per-output configuration the manager already spawns and persists
+> per output; what does not exist is the payload's schema or the
+> calibration UI that produces it. Rung 14 is where that starts.
+
+`OutputMode` being a one-value union makes "widen the enum" look like
+the whole extension story. For the flat case below, it is. For
+projection mapping it is not, and the distinction is cheaper to make
+now than after a second value exists.
+
+A **mode** is something the build knows: `sos-equirect`, or a
+hypothetical `flat-perspective`, are shaders this repo ships. A
+**projection mapping** is something the *site* knows — a warp mesh
+measured against four projectors in one room, a normalized viewport
+rect into a shared framebuffer, an arbitrary model's UV layout. That is
+a payload an operator supplies, not a variant a `switch` enumerates. So
+the shape that survives contact with an installation is `mode` plus an
+optional geometry *reference*, and both rules already in the code keep
+working unchanged:
+
+- rung 10's fail-closed parse still refuses a `mode` it does not
+  recognise, so a downgraded build declines to spawn rather than
+  putting a plain equirect on a projector that was calibrated for a
+  warp;
+- the mesh stays out of `localStorage`, per the typed-array finding
+  below — the persisted config holds a path, not a blob.
+
+**`MirroredView` was mode-specific without saying so, and is now a
+union keyed on `OutputMode` — and the shared view is mode-free.**
+`cameraOffset` is bounded by `MAX_CAMERA_OFFSET` because the camera
+must stay inside the sphere; `split` folds U across an equirectangular
+frame. Both were flat fields beside `dayNight`, which *is*
+projection-independent, and all three went to every output with nothing
+in the type marking two of them conditional.
+
+There are now two view types, because the control window and an output
+genuinely hold different things:
+
+| | Holds | Shape |
+|---|---|---|
+| `SharedView` | one globe's facts | `{ dayNight, camera: OperatorCamera }` |
+| `MirroredView` | one output's geometry | `{ mode, dayNight, params }`, one arm per `OutputMode` |
+
+`OperatorCamera` is MapLibre's own lat/lon/zoom, unconverted, and that
+is what makes no geometry privileged: `sos-equirect` turns those three
+numbers into a ray-march origin, a perspective mode would turn the same
+three into an eye position and a field of view, a warped rig would feed
+them to a mesh. Storing `sos-equirect`'s `cameraOffset` as the shared
+value worked and was briefly what shipped, but it made one geometry's
+encoding the thing every other geometry had to derive *through* — and
+that encoding is lossy at the top of its range, since `MAX_CAMERA_OFFSET`
+clamps it, so a zoom past the cap is not recoverable from it at all.
+
+Each arm's payload is `params`, uniformly, because that is what the
+arm's renderer takes. `sos-equirect`'s is `MirroredEquirectParams`,
+declared structurally identical to `equirectRtt`'s own `EquirectParams`
+— what `outputScene.setParams` already accepts — so a narrowed output
+hands `view.params` to the shader with no adapter, and
+`protocol.test.ts` holds the two assignable in both directions.
+
+`GlobeState<V>` and `GlobeStateMessage<S>` are generic over which of
+the two they carry, so `MirroredGlobeState` / `OutputGlobeState` and
+`SharedStateMessage` / `OutputStateMessage` share one structure rather
+than being two hand-written copies that drift on the next added field.
+`MultiOutputManager.broadcast` **is** the boundary: shared in, output
+out.
+
+The discriminant earns itself twice. An output can no longer be handed
+settings it has no meaning for — the type's job now, rather than
+prose's. And because an output already announces its own mode in
+`OutputReadyEvent`, a `view.mode` that disagrees is a detectable fault:
+a window that booted as one geometry being driven as another, which
+before would simply have rendered wrongly.
+
+Three compile-time guards, each verified by making the mistake it
+catches. Two `Exclude` constraints tie the union to `OutputMode` in
+both directions — a mode with no arm would ship as some other mode's
+shape, an arm with no mode could never be selected — and `projectView`'s
+`switch` has a `default` that narrows to `never`. Adding a second mode
+fails at `protocol.ts` and `stateAggregator.ts` together.
+
+`projectView` is the only place the operator's camera becomes a
+geometry's camera, and it takes the output's mode as an argument. The
+shared view has no mode at all now, which is what makes driving an
+output as the wrong geometry impossible rather than merely unlikely.
+The one continuity property worth stating: `DEFAULT_OPERATOR_CAMERA` is
+`zoom: 0`, and `1 − 1/(0 + 1)` is exactly `0`, so a freshly-booted
+output still gets the uniform 1:1 unwrap without that identity being
+written down twice.
+
+The cost is one import edge from the control side into
+`src/output/equirectRtt`, for `cameraOffsetForCamera`. It is taken
+deliberately: that module is pure TS by construction — no Three, no GL,
+no DOM — and the alternative is extracting the derivation and the
+`MAX_CAMERA_OFFSET` it clamps against into a third module, splitting the
+shader's invariant away from the shader mirror that exists to hold it.
+In practice Rollup gives `equirectRtt` its own chunk, shared by the
+`manager` chunk and the output bundle — one copy, fetched only by
+whoever actually imports it. The web entry chunk is unaffected: it names
+that chunk in its dynamic-import preload map, exactly as it already
+names `manager`, `publisher` and `three.module`, and never fires the
+import. Check the **markers**, not the filenames — `sos-equirect` and
+`uCameraOffset` are both absent from `dist/assets/main-*.js`; a chunk
+name appearing in the preload list is what a lazily-loaded chunk is
+supposed to look like.
+
+`OutputViewSettings` — the operator's per-output toggles — stays flat
+on purpose. Only `split` is equirect-only there (`trackCamera` is
+wanted by a flat mode too), and that type is **persisted**: regrouping
+it is a storage-schema change, and rung 10's version field resets a
+mismatched blob rather than migrating it. One boolean's tidier home is
+not worth every operator's saved outputs.
+
+### The flat case: N monitors each showing the globe
+
+A video wall where one window is one monitor, each showing the ordinary
+globe — a cloned or side-by-side view rather than a projection surface.
+
+**Do not ray-march for this.** The ray-march exists because
+equirectangular is not a projection any rasteriser can do natively. A
+perspective view *is*, so this mode uses Three's normal pipeline with a
+camera per output, and the inside/outside question below never arises.
+That means reversing one v1 decision locally: `outputScene` consumes
+`photorealEarth` as a **texture provider** with every mesh-only effect
+switched off at construction, because the equirect pass is the renderer.
+A perspective mode wants the mesh and those effects back, so that
+switch becomes conditional on mode.
+
+Also: `resolveFramebufferSize` snaps to 2:1 rungs, and this is the mode
+that actually wants the monitor's own aspect end to end — buffer,
+window and signal all the same rectangle, so none of the reconciliation
+above applies and there is nothing to letterbox.
+
+Cost: widen `OutputMode`, a per-output camera azimuth, a branch in
+`outputScene`, the two changes above. Manager, protocol, persistence,
+panel and sync are untouched. This is the cheapest non-equirect mode by
+a wide margin and it is **not** what an SOS installation needs.
+
+### The projector case, and the invariant it breaks
+
+A real Science On a Sphere rig is four projectors *outside* the sphere,
+each with a fisheye lens, overlapping and edge-blended.
+
+`equirectRtt` cannot be pointed at that by changing a parameter.
+`MAX_CAMERA_OFFSET = 0.85` exists to keep the camera strictly **inside**
+the sphere, and the shader has no miss branch *because* every ray then
+hits. A projector two or three radii away has rays that miss entirely,
+and rays that hit have two intersections where the near one is wanted.
+That is a change to the module the plan calls "the maths", and it is the
+one place where "swap the projection shader" understates the work.
+
+Related: rung 14's `uRotationOffsetRad` is a longitude offset. A
+projector needs full position, orientation and a lens model.
+
+### The interchange that avoids all of it
+
+v1 already emits equirectangular frames, and **equirectangular is what
+the SOS ecosystem ingests** — it is why this repo's catalog is 2:1 and
+why `layerStack` and `datasetProbe` do equirect UV maths. So the
+existing output can feed SOS software, a warping appliance, or a
+projector's own geometry-correction and edge-blend engine with no new
+code at all. For a real installation that is the first thing to try,
+because per-projector warp is a solved problem sitting in hardware a
+site is likely already buying.
+
+The sister project [`zyra-project/sphere-sim`](https://github.com/zyra-project/sphere-sim)
+makes a second option real: `packages/sim/src/warp.ts` writes Paul
+Bourke warp-and-blend files — per projector, per node `(x, y, u, v, i)`,
+where `u,v` is the texel that belongs at that node and `i` is the blend
+multiplier. Geometry and blend in one file, deliberately. For a sphere
+those `u,v` are equirectangular coordinates, so **the two projects
+already meet at the frame v1 produces.**
+
+Consuming one is small: parse the text format, build a cols×rows mesh
+(positions from `x,y`, UVs from `u,v`, intensity as a vertex attribute),
+draw it with the equirect frame as texture, skip nodes written
+`-1 -1 -1`. terraviz never models the projector, so the miss-branch
+problem above does not arise — the trace happened offline.
+
+The layering also composes: `cameraOffset` and `split` act on the
+equirect **content**, the warp acts on the rig **geometry**. Orthogonal,
+so operator zoom keeps working through a warped output.
+
+**Two findings from reading sphere-sim that a naive integration would
+get wrong:**
+
+1. **SOS is one framebuffer, not N windows.** `RigCalibration` carries a
+   single shared `framebuffer`, and each projector holds a *normalized
+   viewport rect* into it — "SOS drives all projectors from one X screen
+   split 2x2. Origin is bottom-left". Rungs 9-10 built the opposite:
+   N independent fullscreen windows. Both are legitimate and ours is
+   arguably better on a modern OS, but a calibration file is expressed
+   in theirs, so consuming one means mapping viewport rects onto
+   windows. Getting it wrong silently mis-crops every projector — a
+   failure that reads as "calibration is slightly off" rather than "we
+   misread the file". And bottom-left origin against our top-left is one
+   sign from a vertically mirrored rig.
+2. **An arbitrary surface arrives as a binary sidecar, not more JSON.**
+   `packages/calibration/src/mesh.ts` (`sphere-sim/surface-mesh@1`) sits
+   *beside* the sphere field rather than replacing it, and is
+   deliberately typed arrays: a 100k-triangle model is ~5 MB as
+   `Float64Array` and ~40 MB as JSON text. Rung 10 persists config as
+   JSON in `localStorage`, which is the wrong home for that. A rig
+   config would need a file reference, not an embedded blob.
+
+Note also that a warp file for a **non-sphere** carries the model's own
+UV layout, and `buildWarpExport` refuses a mesh with no UV set. So
+"drop a GLB and drive it from terraviz" additionally requires rendering
+into that model's UV space, which is a different job from what the
+output does today. The sphere path has no such gap.
+
+### The risk to design around
+
+Both halves are currently validated against themselves rather than
+against hardware. sphere-sim's recovery figures are solver-vs-simulator
+with injected noise; its `validation/` directory is explicitly
+"plausibility only — no metric, no gate, no score". And nothing in this
+plan has run on a second monitor. Composing two unvalidated halves
+makes a first-light failure hard to attribute between them.
+
+The cheap mitigation is to make an output able to display a warp file's
+own test pattern, so the warp can be judged before the globe is in it —
+which is also what rung 14's calibration tooling wants anyway.
+
+**Interchange, not a code dependency.** sphere-sim's architecture is a
+boundary lint whose whole purpose is stopping two models from sharing
+implementation; importing it would drag a research instrument into a
+display app's render path. The warp file is what it is for. Consuming a
+standard format also keeps terraviz able to take warps from other
+tools — and MPCDI, which `warp.ts` names as the right second target,
+becomes additive rather than a rewrite.
+
+---
+
 ## Roadmap after MVP
 
 ### Phase 2 — fisheye / dome projection + vector overlays + dome camera-tracking polish
@@ -1949,6 +3493,24 @@ composited sphere. Producing fisheye output is a one-shader
 change — swap `equirectRtt.ts` for `fisheyeRtt.ts` with a
 different `(u,v) → direction` mapping. ~50 LOC, no architecture
 change.
+
+**That estimate holds for a dome and not for a projector**, and the
+distinction was missing when it was written. A dome camera sits at the
+sphere's centre like the equirect one, so it inherits `equirectRtt`'s
+standing assumption — the camera is strictly inside, therefore every
+ray hits, therefore the shader has no miss branch. A projector sits
+*outside*: its rays can miss, and the ones that hit have two
+intersections where the near one is wanted. `MAX_CAMERA_OFFSET = 0.85`
+exists to hold that invariant, so a projector mode changes the module
+rather than parameterising it. See §"Driving other display geometries".
+
+**And for a real rig, prefer consuming a warp file to writing the
+shader at all.** The same section records why: v1's equirect output is
+already what the SOS ecosystem ingests, and `zyra-project/sphere-sim`
+emits Bourke warp-and-blend files whose `u,v` are equirect coordinates.
+That path skips the fisheye maths, the calibration and the blending
+together, and is what the effort estimate below should be weighed
+against.
 
 The off-center camera plumbing (§3.5) already exists from v1
 — the LED sphere uses it as its primary mode — so the dome
@@ -1960,16 +3522,29 @@ the lat/lon target, with a configurable cap on angular
 velocity. ~30 LOC.
 
 In the same phase, country borders + gridlines on the sphere.
-Committed approach: pull the existing MapLibre vector borders
-source, build a Three.js `LineSegments` mesh from the resulting
-GeoJSON-equivalent line geometry, drape it on a sphere shell at
-radius 1.0005, render alongside the photoreal Earth. ~300 LOC.
+The approach recorded here was: pull the existing MapLibre
+vector borders source, build a Three.js `LineSegments` mesh
+from the resulting GeoJSON-equivalent line geometry, drape it
+on a sphere shell at radius 1.0005, render alongside the
+photoreal Earth. ~300 LOC. Its rejected alternative was
+pre-rendering borders to an equirectangular raster overlay PNG
+— cheaper at runtime but without zoom-aware label thinning,
+dynamic styling, or per-dataset highlight overlays.
 
-Rejected alternative: pre-rendering borders to an equirectangular
-raster overlay PNG. Cheaper at runtime but doesn't support
-zoom-aware label thinning, dynamic styling, or per-dataset
-highlight overlays — all of which become natural extensions
-once line geometry is in place.
+**That comparison assumed a mesh, and §3 removed it.** There is
+no shell at radius 1.0005 to drape geometry on and nothing to
+render "alongside": the equirect pass composites raster samples
+in one fragment shader. So the two options are not as scored
+above. Raster-first is now the *cheap* option rather than the
+compromised one, because an equirect PNG is simply another
+sampler; and keeping line geometry means either rasterising it
+into an equirect texture each time the styling changes, or
+drawing it analytically in the shader — tractable for a
+graticule, not for coastlines. This is the constraint named in
+"What the equirect path does to the Earth decoration", and it
+is the one place in the plan where choosing direct RTT costs
+something real. Phase 2 re-decides it on those terms; v1 is
+unaffected, since borders were already out of scope.
 
 Place labels (text-along-curve) is harder; ship-conditional on
 demand.
@@ -2006,6 +3581,33 @@ Architecture additions:
 This is genuinely ambitious and overlaps with what purpose-
 built planetarium drivers do. **Gated on real-world demand**,
 not a speculative build.
+
+**Most of the above is now a file format rather than a feature.** A
+Bourke warp mesh carries geometry *and* blend per projector, which
+subsumes `srcRect` / `dstRect` / `blendMask` and removes the reason to
+build a blend-mask authoring tool — the calibration solver in
+`zyra-project/sphere-sim` produces the mesh from camera images, which
+is a better answer than dragging blend curves by hand. What survives
+from the list above is per-output fixed-slot binding (unrelated to
+geometry) and per-output colour correction (a projector-gamma problem a
+warp file does not address).
+
+Two things this rung would have to get right, recorded in §"Driving
+other display geometries" and repeated here because this is where they
+would bite:
+
+- A calibration describes **one shared framebuffer with normalized
+  per-projector viewport rects, bottom-left origin**. Rungs 9-10 spawn
+  N independent windows. Mapping between the two is small and silent
+  when wrong — every projector mis-cropped, reading as a calibration
+  error rather than a parsing one.
+- An arbitrary **surface mesh is a typed-array sidecar**, not JSON.
+  Rung 10's persisted config lives in `localStorage`; a 5 MB mesh does
+  not go there. A rig config needs a file reference.
+
+The honest gate remains real-world demand, but the *shape* of the work
+has changed from "build a projector driver" to "consume an interchange
+format and get two coordinate conventions right".
 
 ### Phase 4 — mirrored / cloned mode
 
@@ -2200,20 +3802,78 @@ renderer somewhere" — which we don't. Direct RTT.
 
 ## Open questions
 
-1. **Tauri window stacking on Linux.** Some compositors
-   (sway, certain GNOME setups) treat fullscreen popups
-   differently than Windows / macOS. Need to test on at
-   least one Wayland and one X11 setup before declaring v1
-   done. The monitor-unplug failure case (§3 "Failure
-   recovery", case 4) also varies by compositor — pin down
-   the actual behavior on the target install platforms as
-   part of the same test pass.
+1. **Tauri window stacking on Linux — narrowed to Linux.**
+   *Windows is answered.* A spike put borderless fullscreen
+   output windows on both non-primary monitors of a
+   three-monitor Windows 11 desk: `isDecorated: false`,
+   `isFullscreen: true`, exact placement including a negative
+   origin, and coverage over the taskbar rather than
+   confinement to the work area. See "Monitor geometry and
+   placement".
+
+   That says nothing about Linux, which was always the risky
+   half. Some compositors (sway, certain GNOME setups) treat
+   fullscreen popups differently from Windows / macOS. Still
+   need at least one Wayland and one X11 setup before
+   declaring v1 done. The monitor-unplug failure case (§3
+   "Failure recovery", case 4) also varies by compositor —
+   pin down the actual behavior on the target install
+   platforms as part of the same test pass. macOS is
+   untested too.
 2. **What to do when the operator opens an output but no
-   dataset is loaded?** Default: render the photoreal Earth
-   with day/night and atmosphere — a "live Earth" idle state.
-   The same scene is already running; just don't add a
-   dataset overlay. Free.
-3. **Telemetry — DECIDED.** The output window itself emits
+   dataset is loaded? — DECIDED.** Default: a "live Earth"
+   idle state of base diffuse + night lights + clouds +
+   terminator, which is what survives the unwrap. Not
+   atmosphere: an equirectangular image has no limb for an
+   atmosphere shell to be the silhouette of, so painting one
+   in would put a fixed ring on the physical sphere. Nor is
+   it free — the scene is not already running as a mesh — but
+   the cost is one dot product and two extra samplers over
+   the pass that has to run anyway. See "What the equirect
+   path does to the Earth decoration".
+3. **Telemetry — DECIDED, and landed** (rung 13b:
+   `src/services/multiOutput/outputTelemetry.ts`, wired from the
+   manager; positional layouts in `docs/ANALYTICS_QUERIES.md`,
+   panels in `grafana/dashboards/product-health.json`). The
+   schema below shipped as written, with three notes the build
+   added rather than changed. `output_added` is emitted from the
+   manager's private `spawn()` rather than from `addOutput`, so a
+   launch-time **restore** reports exactly as an operator's Add
+   does — the event describes an output existing, not a gesture,
+   and one call site is what makes that true by construction.
+   `framebuffer_bucket` snaps **down** to a rung, matching what
+   `outputScene` actually renders, so a `4k` bucket can never
+   stand for a window running 8K. And the reason enum's
+   `rejected-by-storm-guard` is emitted where it reads oddest and
+   means most — a spawn the guard refuses — because on a restore
+   that *is* a configured output that never came back. A spawn
+   the **decoder budget** refuses is deliberately not reported:
+   the panel already shows "N of M in use" and disables Add, and
+   an affordance the operator can see beats a report after the
+   fact. Only `kind: 'crash'` has a detector today; the other
+   four arrive with cases 2-5, one `emit()` each.
+
+   > **Re-identification, considered and accepted.** Review
+   > raised the one thing here that is not settled by the
+   > per-field invariants. `monitor_index` and
+   > `framebuffer_bucket` are each low-entropy and correctly
+   > bucketed, but on a *restore* they are read out of the
+   > persisted config and re-emitted **identically at every
+   > launch** — the output count, their indices and their rungs
+   > form a launch-stable tuple, on a population of
+   > multi-monitor desktop installs that is small. No new
+   > persistent identifier was added, so no escalation trigger
+   > in `ANALYTICS_CONTRIBUTING.md` fires, and the rotating
+   > in-memory session id is unchanged. The decision is that
+   > this is proportionate: it describes an *installation*
+   > rather than a person, and it adds a couple of bits over
+   > `os` / `screen_class` / `country`, which are already
+   > stable across launches for the same machine. Recorded here
+   > rather than left to be inferred from a module header,
+   > because the next person to add a field to these events
+   > should be adding it to a tuple whose shape someone has
+   > already looked at.
+   The output window itself emits
    nothing. Telemetry from a capture-clean LED-sphere
    surface would also be a capture-clean policy violation
    (§3.6) — outputs phone nothing home. Three new events
@@ -2222,8 +3882,21 @@ renderer somewhere" — which we don't. Direct RTT.
    - `output_added` — fields: `mode` (`'sos-equirect'`),
      `framebuffer_bucket` (`'1k' | '2k' | '4k' | '8k'`
      bucketed to avoid identifying exact resolutions),
-     `monitor_index` (0 = primary, 1+ = secondaries — never
-     the OS-reported monitor name).
+     `monitor_index` (the position in the monitor
+     enumeration — never the OS-reported monitor name).
+     **Corrected from "0 = primary, 1+ = secondaries",
+     which is not what shipped and would mislead an
+     analyst.** Index 0 is the first display
+     `availableMonitors()` returns, which is the primary on
+     Windows by definition and usually on macOS, but on X11
+     is whatever the enumeration happens to list first —
+     `xrandr --primary` can mark any of them. `outputUI`
+     asks the platform which is primary rather than
+     inferring it, for exactly that reason, and no
+     telemetry field carries the answer: a "primary vs
+     secondary" slice over this field would be quietly
+     wrong on the installations most likely to be running
+     a sphere.
    - `output_removed` — fields: `mode`, `reason`
      (`'operator-close' | 'crash' | 'monitor-gone' |
      'gpu-loss-timeout' | 'rejected-by-storm-guard'`).
@@ -2241,7 +3914,23 @@ renderer somewhere" — which we don't. Direct RTT.
    sample includes `output_count` and `sync_delta_p95_ms`
    (95th percentile of `local - broadcast` over the sample
    window). No new event type, just additional fields on a
-   tier-A event that already ships. Per
+   tier-A event that already ships.
+
+   > **Not landed with 13b, and it needs a decision first.**
+   > `output_count` is a read off `records`. `sync_delta_p95_ms`
+   > is not: the drift is measured *in the output*, by
+   > `outputSync` against its own decoder's `currentTime`, and
+   > there is no path back — every `OutputEvent` variant reports
+   > a state change, none carries a measurement. The control
+   > window cannot derive it either, since only the output knows
+   > where its own video is. So this needs a new `OutputEvent`
+   > arm carrying the drift `outputSync` already returns and
+   > rung 11's HUD already shows. That is a protocol change and
+   > its own commit, and it does **not** breach "outputs phone
+   > nothing home": the report goes to the manager over IPC, and
+   > the manager is what talks to the network. Landing it with
+   > case 3 (IPC silence) is the natural pairing — that case
+   > adds output→manager traffic anyway. Per
    `docs/ANALYTICS_CONTRIBUTING.md`'s reviewer checklist:
    none of these new fields require hashing (no free-text)
    or sanitisation; tier choice is essential because
@@ -2285,11 +3974,21 @@ renderer somewhere" — which we don't. Direct RTT.
    dataset on the control globe and on the output, verify
    alignment to ≤1 px at 4K. The test fixture for commit 2
    should include a CONUS-bbox reference rendering.
-8. **Multi-layer z-fighting.** Stacked sphere shells at radii
-   1.000 / 1.001 / 1.002 may z-fight on some GPUs at 4K+
-   render targets. Mitigation: render order + `depthWrite:
-   false` on overlays. Verify on at least one Intel iGPU and
-   one AMD discrete GPU.
+8. **Multi-layer z-fighting — DISSOLVED.** The worry was that
+   stacked sphere shells at radii 1.000 / 1.001 / 1.002 would
+   z-fight on some GPUs at 4K+ render targets. There are no
+   shells. The equirect pass has no mesh and no depth buffer,
+   so layers composite in array order inside the single
+   fragment shader (see "What the equirect path does to the
+   Earth decoration") — an array index is not something a
+   driver can disagree about, and there is nothing to verify
+   per-GPU.
+
+   What replaces it as the real ceiling is sampler count.
+   WebGL guarantees only 8 fragment texture units, and the
+   base map plus each layer's texture and its palette LUT all
+   want one; hence `MAX_OUTPUT_LAYERS = 4`, which also happens
+   to match the control window's own 4-globe ceiling.
 
 ---
 
@@ -2305,17 +4004,58 @@ renderer somewhere" — which we don't. Direct RTT.
 - **Tauri webview process limits.** Tauri spins up a webview
   process per window. On Windows with WebView2, each window
   is its own process; macOS with WKWebView may share. Memory
-  scales linearly. Realistic ceiling: 4-6 outputs per
-  workstation. We cap at 4 in v1.
-- **GPU memory pressure.** Each output holds: a 4K sphere
-  texture (or two for multi-layer), a 4K equirect
-  framebuffer, plus Three.js scene resources. At 4 outputs
-  that's ~1 GB of GPU memory. Workstation GPUs handle it;
-  the cap matters.
-- **HLS decode pressure.** 4 simultaneous 4K HLS decodes is a
-  lot. Most discrete GPUs handle it; integrated GPUs might
-  not. The Tools panel should warn if the user adds a 4th
-  output, citing hardware requirements.
+  scales linearly. An earlier draft put the realistic ceiling
+  at 4-6 outputs per workstation; a spike ran **sixteen** on a
+  4090 laptop with no measurable sustained cost, so the number
+  was a guess and is withdrawn rather than replaced. The risk
+  that remains is real but different: the ceiling is
+  **hardware-specific and unknown until measured on the
+  deployment machine**, which is a provisioning question, not
+  a constant. See "Cross-window decoder budget".
+- **GPU memory pressure.** Each output holds a sphere texture
+  (or two for multi-layer), an equirect framebuffer, and
+  Three.js scene resources. Sixteen outputs at 8192×4096 held
+  2 GB of render targets alone and stayed at full rate — on a
+  4090. A museum NUC has an order of magnitude less to give,
+  and the resolution picker multiplies it: the same sixteen
+  outputs at 2048×1024 would be 128 MB. Resolution, not output
+  count, is the lever operators should reach for first.
+- **HLS decode pressure.** Sixteen simultaneous decodes ran at
+  30.7 fps, 1.00× realtime, zero dropped — so "4 is a lot" was
+  wrong on that hardware and may still be right on an iGPU.
+  The Tools panel warning therefore cannot key off a fixed
+  count. Warn against the machine's own budget, and surface
+  the health signal that actually moves under load —
+  steady-state frame rate and media-clock drift, **not** a
+  dropped-frame counter, which stayed at 0 through every
+  condition the spike could produce.
+- **Which GPU the app lands on is not the app's to decide.** A
+  spike on a hybrid-graphics laptop first reported
+  `ANGLE (Intel, Intel(R) UHD Graphics …)` on a machine with an
+  RTX 4090 — a completely different budget for both the
+  equirect render targets and the video decoders (Quick Sync vs
+  NVDEC), which is this section's whole subject. It moved to
+  the 4090 only when the operator changed the NVIDIA Control
+  Panel's preferred adapter.
+
+  `probeGpuSelection()` then settled the confound inside a
+  single run: `high-performance` and `low-power` returned the
+  **same** adapter, `powerPreferenceWorks: false`. The app's
+  request is inert on that machine — the driver decides above
+  it. An earlier note in the spike proposing
+  `additional_browser_args` with `--force-high-performance-gpu`
+  is superseded by that measurement and should **not** be
+  written into this plan as a fix; there is no
+  environment-variable escape hatch either, as neither wry nor
+  tauri reads one.
+
+  The risk this leaves is a deployment one: an unattended
+  installation can silently land on the iGPU, run at a fraction
+  of the capacity it was provisioned for, and be undiagnosable
+  from logs. Mitigations are to surface the renderer string in
+  the Outputs panel's debug overlay so an operator can *see*
+  which GPU is in use, and to document the per-OS override in
+  the runbook (commit 15).
 - **Operator confusion.** "Where did my video go?" is a real
   question if a user accidentally triggers fullscreen on the
   primary monitor. Borderless fullscreen output windows must
@@ -2383,6 +4123,7 @@ const outputs: PersistedOutputConfig = {
     {
       label: 'output-1',
       monitorName: 'DELL-SOS-DRIVER',
+      monitorOrigin: { x: -1680, y: 383 },  // physical, signed
       mode: 'sos-equirect',
       framebufferSize: { width: 4096, height: 2048 },
       trackOperatorCamera: true,   // see §3.5
@@ -2392,6 +4133,7 @@ const outputs: PersistedOutputConfig = {
     },
   ],
   autoRestoreOnLaunch: true,
+  concurrentDecoderBudget: 4,  // seeded; raised per machine
 }
 ```
 
@@ -2418,12 +4160,108 @@ overlay added in commit 11). Failure-recovery actions emit
 exactly one `output_failure` Tier A telemetry event per
 occurrence (verify via `VITE_TELEMETRY_CONSOLE=true`).
 
+> **Any step involving a video dataset needs
+> `npm run build:desktop`, not `npm run dev:desktop`.** A spike
+> hit this and spent real time on it. The CDN serving the HLS
+> assets applies an origin allowlist, and it carries
+> `tauri.localhost` (the packaged build's origin) but **not**
+> `http://localhost:5173` (the dev server's). The shipped path
+> is `HLSService` → hls.js → MSE, which fetches the manifest and
+> every segment over XHR and is therefore fully CORS-gated, so
+> in `dev:desktop` a video dataset cannot load *at all* — not in
+> the control window, not in an output.
+>
+> Two corollaries. **Image datasets do work in dev**, and they
+> cost a WebGL context while creating no decoder, so the dev
+> loop still answers the context half of any ceiling question.
+> And a plain `<video src=…>` pointed at the same URL **will**
+> play in dev, because media elements are not CORS-gated unless
+> `crossOrigin` is set — which makes it a trap, not a
+> workaround: it proves nothing about the pipeline
+> `datasetMirror` actually uses. Nothing client-side changes
+> either fact.
+
+### Results: first pass — Windows, 2026-09-11
+
+**This is not the qualification.** The preamble above says a
+dual-monitor Linux workstation gates it; this pass ran on
+Windows, which is **step 46**, parity. It happened first
+because that is the hardware that existed, which is a
+reasonable thing to do and a bad thing to forget: the Linux
+gate is still open, and nothing below should be read as
+clearing it.
+
+Setup, from step 1: control window on display 3, output
+3840x2160 on display 2, rendered 2:1. Telemetry on Essential.
+Devtools reachable with F12.
+
+**What ran.** Numbered steps 1-4, 7-8, 10-13a, 15-20 and 22-30,
+plus supplementary S1, S2, S6 and S7. Twenty-eight of those
+passed. Five failed: **5**, **13**, **29**, **S1** and **S2**.
+
+**Not run, and why.** Step 6 and step 21 both need the
+secondary physically disconnected, which the session did not
+do. Step 9's health badge and S4's stale-frame reporting are
+rung 13, which is not built. Step 14 is blocked on a control
+window that can stack datasets at all (see 14a). S3, S5 and
+S5b were not reached.
+
+**Measurements worth keeping.** Step 12b read a sync delta
+ranging -1 ms to about -30 ms at 30 fps against a 4096x2048
+framebuffer, on a global video over sixty seconds — comfortably
+inside the 200 ms p95 the acceptance criteria ask for, and the
+number to compare the next pass against. Step 12a passed, so
+`syncByRatio` carries a dataset with no time axis on real
+hardware. Step 13a passed, so a bbox lands where it should:
+the failure in step 13 was lighting and playback, not
+placement.
+
+**The five failures, and what came of them.** All are fixed in
+code and **none is confirmed on hardware** — that is what the
+next pass is for.
+
+| Step | Reported | Cause | Fixed by |
+|---|---|---|---|
+| 5 | No position diagram; nothing marked primary | Never built; the step described an intent | `880ba315` — the diagram, and primary asked of the platform rather than inferred |
+| 13 | Dataset still lit with day/night on the output | The decoration composited *under* the layers, which only hides it for opaque global coverage | `64256a1c` — the Earth treatment is idle-only |
+| 13 | "Playback seems to struggle", sync a permanent dash | Seek loop: a seek slower than the settle window earns another, and the element is mid-seek on ~99% of frames | `fa7a29ee` + `d5516a3e` — the seek-cost floor, and the bounds lifted while paused |
+| 18 | Closing the output restored normal playback on the **control** window | Same loop, plus a playhead diff forcing a redraw at the control window's frame rate | `fa7a29ee`, `9c139d22` |
+| 29 | Ctrl+Q did nothing | Never bound; the step asserted it as if it existed | `e7b021db` |
+| S1, S2 | "Sync seems to break" / shows a dash | The same seek loop, seen through a HUD that could not say why | `fa7a29ee`, plus the HUD naming the reason beside the dash |
+
+Step 18 is worth reading twice. It is recorded as a *pass* —
+the output closed cleanly — and the sentence that matters is
+the aside about the control window recovering. A checklist step
+passing while its note describes a defect is the shape of thing
+to watch for in the next pass.
+
+**S7 and step 13 are the same bug from two sides,** which is
+the most useful thing this pass produced. S7 passed: a Mars
+dataset showed no terminator, no night lights, no clouds. It
+passed for exactly the reason step 13 failed — under-composited
+decoration *is* invisible beneath an opaque global texture, and
+a Mars dataset is one. The rule only broke for the translucent
+bbox overlay in step 13. A pass and a failure agreeing on the
+mechanism is stronger evidence than either alone, and it is why
+`64256a1c` gates on the slot count rather than tuning the
+blend.
+
+**What the next pass has to cover**, beyond re-running 5, 13,
+18, 29, S1 and S2 against the fixes: the steps this one did not
+reach (6, 21, S3), and then the Linux run that actually
+qualifies. Steps 12c and 13b were added afterwards to make the
+sync field and the bbox-video case answerable rather than
+ambiguous; 5a was added because "nothing marked primary" is a
+pass on X11 and a failure on the other two.
+
 ### Commit 9 — Tools → Outputs panel (first user-reachable)
 
 **Pre-flight:**
 
 1. Both monitors connected; `npm run build:desktop` artifact
-   launched (or `npm run dev:desktop` for iteration).
+   launched. `npm run dev:desktop` is fine for iterating on
+   window management and image datasets, but **not** for any
+   video step — see the note above.
 2. Telemetry tier set to Essential (default).
 3. Console open via F12 on the control window for log inspection.
 
@@ -2432,6 +4270,23 @@ occurrence (verify via `VITE_TELEMETRY_CONSOLE=true`).
 4. Tools menu shows an "Outputs" entry.
 5. Outputs panel opens; lists both monitors with name,
    resolution, position diagram. Primary clearly marked.
+   Check all four: the picker's option text carries the name,
+   the pixel size, and `(primary)` on exactly one display; the
+   diagram above it draws one rectangle per display, to scale
+   and in the arrangement the desk has them. Changing the
+   picker must move the diagram's highlight — that is the
+   confirmation the step is really for, since an output opens
+   fullscreen and an operator has one chance to notice it is
+   about to land on the wrong display.
+5a. **Nothing marked primary is a pass, on X11.** The primary
+   is asked of the platform rather than inferred, and X11 can
+   leave no display marked at all; the panel then marks none
+   rather than guessing at the one nearest the origin. On
+   Windows and macOS a missing marker *is* a failure. If the
+   arrangement is primary-left — the spike's secondary sat at
+   `x = -1680` — check the diagram is not drawn with a display
+   hanging off its left edge, which is what an assumed
+   non-negative origin looks like.
 6. **Single-monitor guard.** Disconnect the secondary monitor.
    Add Output button is hidden / disabled. Reconnect:
    the button reappears.
@@ -2441,8 +4296,31 @@ occurrence (verify via `VITE_TELEMETRY_CONSOLE=true`).
 7. Click Add Output → pick the secondary → Confirm. The output
    window appears within ~1 s, fullscreen on the secondary,
    black until ready. No title bar, no menu bar, no cursor.
+7a. **Aspect.** On a secondary that is not 2:1 the frame is
+    letterboxed — a 2:1 image with equal black bands top and
+    bottom, each `(1 - aspect / 2) / 2` of the height, where
+    `aspect` is the *monitor's* own width over height. That is
+    ~5.6% on 16:9 and ~10% on 16:10, so it is not a constant
+    and the number to check against is the one that formula
+    gives for the panel in front of you. Confirm that is what
+    the display shows, and photograph it. This is the first
+    hardware contact with the frame/monitor mismatch in "Not
+    every monitor is 2:1"; whether the bands are correct
+    depends on what the downstream device expects, so record
+    the behaviour rather than judging it here. Bands of *unequal*
+    height, or a full-height image, is a bug — the first says
+    the window is not where the manager put it, the second
+    that something is stretching the projection.
 8. Output renders the photoreal Earth idle state (no dataset
-   loaded yet) with day/night and atmosphere.
+   loaded yet): base diffuse, re-projected, **with** the
+   day/night terminator, night lights and clouds rung 12c
+   wired. Specular, atmosphere, sun and ground shadow never
+   cross to an unwrap at all, so their absence is the pass
+   condition rather than a gap. A black sphere is a failure;
+   so, now, is a flat evenly-lit one — that was the pass
+   condition before 12c and it means the decoration did not
+   reach the shader. The lit hemisphere should match the
+   control globe's, since both read one `getSunPosition`.
 9. The Outputs panel lists the new output with health badge:
    healthy.
 
@@ -2458,6 +4336,49 @@ occurrence (verify via `VITE_TELEMETRY_CONSOLE=true`).
 12. Let the video play for 60 s. Open the output's debug
     overlay (commit 11) — sync delta should remain ≤ 200 ms
     p95 with no visible drift on the LED-sphere mock.
+12b. **Read the sync field for the sign of a seek loop.** A
+    number parked just past the hard-seek threshold — the field
+    case was a steady `-166 ms` against 150 ms — with visibly
+    choppy playback is not a slow output; it is the correction
+    fighting itself. A seek stalls the element while the
+    primary plays on, so a seek that takes longer than the
+    threshold leaves the output far enough behind to earn
+    another one, once per rendered frame. `outputSync` closes
+    that loop three ways: it does not steer a seeking element,
+    it raises the threshold for `OUTPUT_SEEK_SETTLE_MS` after
+    each seek so the trim gets a chance to converge, and it
+    holds the threshold at the *measured* cost of the last seek
+    for as long as that measurement stands (see "A seek is not
+    free"). If the field still parks above the threshold once it
+    is *smooth*, that is a real measurement of an output's floor
+    — a second window, a second decoder, an IPC hop — and the
+    case for an output-specific threshold, which does not exist
+    yet and should not be invented without it.
+12c. **A dash is a reading too.** With no number, the sync field
+    prints why. `— not-ready` against a still image is the
+    correct answer and needs nothing. `— seeking` on most
+    samples is the loop above: the element is mid-seek almost
+    every frame, which is a decoder re-decoding from a keyframe
+    rather than playing, and it reads on the sphere as playback
+    that struggles. Record which one you see — the first pass
+    could only report "sync just shows a dash", and the two want
+    opposite responses.
+12a. **A dataset with no time axis.** Load one of the SOS
+    looping animations — Air Traffic is the canonical case:
+    global video, no `startTime`/`endTime`, a 24-hour loop
+    with the clock and the terminator burnt into the frames.
+    It has to be its own step because it takes its own
+    steering path (`outputSync`'s `syncByRatio`): there is no
+    real-world instant to place, so the output is steered on
+    its position *within the clip*. Press play — the output
+    must start, and the burnt-in clock must read the same
+    number the control globe's does. A frozen output here is
+    the bug this step exists to catch, and its symptom is
+    deceptive: frame zero of a 24-hour animation is a world
+    lit twelve hours away from the operator's, which reads as
+    a **projection** error rather than a playback one. It was
+    first reported from hardware as "the outputs are 180° off
+    in longitude".
 
 **CONUS-bbox image dataset (Open Question 7):**
 
@@ -2466,12 +4387,56 @@ occurrence (verify via `VITE_TELEMETRY_CONSOLE=true`).
     the control globe and on the output sphere align to ≤1 px
     at 4K — verify by visual side-by-side using the test
     fixture from commit 2.
+13a. **Read it with camera tracking off.** A domain wider than
+    CONUS substitutes fine, and is the harder test rather than
+    the easier one — it reaches the latitudes where an
+    equirect's row spacing is most stretched. But *any* bbox
+    check has to be judged with the output's "Track operator
+    camera" toggle off, which hands that output `CENTRED_CAMERA`
+    and makes the unwrap the identity. There a column is
+    longitude linearly (`lon = (x / W) * 360 - 180`) and a bbox
+    error is a rigid shift with a number on it. Under a tracked
+    camera the offset warp magnifies one hemisphere and
+    compresses the antipode, so the same error is many pixels
+    near the centre of focus and almost none at the edges —
+    enough to catch gross misplacement, never enough to support
+    the ≤1 px claim above.
+
+13b. **A bbox *video*, which is the harder case.** Step 13 asks
+    for an image because the bbox alignment is easier to judge
+    on a still. Run a bbox video as well — a data-encoded
+    forecast is the canonical one, since those are published as
+    uploaded rather than transcoded and so carry whatever
+    keyframe spacing the producer wrote. That makes their seeks
+    expensive, which is what the seek-cost floor exists for, and
+    it is what the first hardware pass hit
+    (`north-america-smoke`). Watch for three things together:
+    the picture stuttering rather than playing, the sync field
+    reading `— seeking`, and the **control** window's own
+    playback slowing while the output is up. Those are one
+    symptom, not three.
 
 **Multi-layer:**
 
 14. With the SST base loaded, add a foreground layer (e.g.
     cyclone tracks). Output renders both with the correct
     z-order (cyclone tracks sit on top).
+14a. **Not runnable yet, and not because of the output.** The
+    output half of this is built: `layerStack` unrolls
+    `MAX_OUTPUT_LAYERS` slots that composite in array order
+    inside one fragment shader, and `outputScene.setLayers`
+    binds them. What is missing is the *control* half — the
+    app has no stacked-dataset concept to mirror. `PanelState`
+    holds exactly one `dataset`, and the "what gets mirrored"
+    table above names the source for `layers[]` as a **new**
+    `layerStack` state in `main.ts`, which was never built. So
+    `layers` is not a publisher waiting to be wired: wiring one
+    today would publish an empty array forever. Building it is
+    a control-window feature (stack two datasets on one globe,
+    with an order the operator can change), and this step is
+    blocked on that rather than on anything under
+    `src/output/`. Skip it until then rather than recording a
+    failure.
 
 **Camera tracking + split:**
 
@@ -2513,15 +4478,29 @@ occurrence (verify via `VITE_TELEMETRY_CONSOLE=true`).
 
 22. Toggle "Debug overlay" on for the running output. HUD
     appears in a corner showing dataset id, sync delta (ms),
-    and fps. Numbers update at ~2 Hz.
+    fps, and the WebGL renderer string. Numbers update at
+    ~2 Hz. On a hybrid-graphics machine, check the renderer
+    string names the discrete GPU — a spike found the webview
+    silently on the iGPU of a machine with a 4090, and the
+    app cannot choose for itself (see Risks).
 23. Change the output's framebuffer resolution from
     4096×2048 to 8192×4096 via the panel. The output rebuilds
     its framebuffer; debug overlay reports the new
     resolution; fps may drop (expected on the secondary's
     GPU).
 24. Change back to 1024×512 — for "preview the LED sphere
-    on a 1080p monitor" workflow. Output downsamples cleanly
-    to the 1080p secondary.
+    on a 1080p monitor" workflow. Note the buffer is now
+    *smaller* than the window, so this scales up, not down:
+    the expected result is a soft 1920×960 image with the
+    same bands as step 7a, not a small image in the middle
+    of the screen. The picker changes the framebuffer, never
+    the window.
+24a. **The ladder is this mode's, not every mode's.** Both
+    rungs above keep height at exactly half the width,
+    because an equirectangular frame that is not 2:1 is not
+    equirectangular. Whoever adds a second `OutputMode` gives
+    it its own rungs rather than widening these — see
+    "Geometry is a per-output configuration".
 
 ### Commit 12 — fullscreen + kiosk
 
@@ -2535,10 +4514,38 @@ occurrence (verify via `VITE_TELEMETRY_CONSOLE=true`).
     hatch). F11 again: title bar disappears.
 29. **Kiosk launch.** Quit. Launch with `--kiosk` (or
     `TERRAVIZ_KIOSK=1` env). Control window is fullscreen +
-    decorationless from first paint. Cmd/Ctrl+Q exits cleanly.
+    decorationless from first paint. Ctrl+Q exits cleanly (Cmd+Q
+    on macOS, which the system menu already provides — Ctrl+Q is
+    bound on all three platforms and Cmd+Q is deliberately left
+    to the OS rather than handled twice). The first pass recorded
+    this as a failure — "Ctrl-Q doesn't seem to do anything,
+    Alt-F4 does" — and it was right: the step asserted the
+    shortcut as if it existed and nothing bound it. Alt+F4 is the
+    Windows answer and there is no portable one, which is why a
+    kiosk window with no close button, no title bar and no menu
+    bar needed this.
+    Then open Tools: the fullscreen button must already read
+    "Exit fullscreen" — that is `queryFullscreen()` seeding the
+    controller from a window Rust made fullscreen before any of
+    the TypeScript ran. **This step is the only thing that
+    exercises `apply_kiosk`.** CI compiles `src-tauri/` on all
+    three desktop platforms and the flag's parsing is
+    unit-tested, but nothing has ever *run* those window calls;
+    a launch is the test, not another reading of the code.
+29a. **A set variable is not a true one.** Launch with
+    `TERRAVIZ_KIOSK=0`. The window must come up ordinary —
+    windowed and decorated. This is the case a presence test
+    would get wrong, and the one a deployment templating a
+    single unit file across several machines actually hits.
 30. **Cursor auto-hide.** With control window fullscreen,
-    leave the mouse stationary for 4 s. Cursor disappears.
-    Move the mouse — cursor reappears immediately.
+    leave the mouse stationary for 3 s (`CURSOR_IDLE_MS`).
+    Cursor disappears — over the panels as well as the globe,
+    which is what the `*` selector in `base.css` is for. Move
+    the mouse — cursor reappears immediately. Leave fullscreen
+    with the cursor hidden: it comes straight back, rather than
+    stranding an operator with an invisible pointer over a
+    windowed app. *(This step said 4 s while §3.6 and the
+    ladder row both said 3; the code follows §3.6.)*
 
 ### Commit 13 — failure recovery
 
@@ -2569,13 +4576,18 @@ telemetry event fires (visible in the console batch when
     after 5 s (no audience-visible change; last good content
     keeps rendering). Outputs panel shows the stale badge.
     Resume the debugger: stale badge clears within 5 s.
-35. **Manager crash + reattach.** With an output running,
-    `kill -9` the control window's PID. The output keeps
-    rendering. Relaunch the control window: manager boot
-    scan finds the orphan, reattaches via `output_reattach_
-    ping`, sends fresh state snapshot. Output badge in the
-    re-loaded panel returns to healthy. The audience sees
-    no interruption.
+35. **Control-window reload + reattach.** With an output
+    running, reload the control window's page (Ctrl+R in dev,
+    or `location.reload()` from a console). The output keeps
+    rendering throughout. The reloaded manager's boot scan
+    finds it, pokes it with `OUTPUT_REATTACH_EVENT`, and the
+    output re-announces; the panel lists it again and its
+    badge returns to healthy within a second or two. The
+    audience sees no interruption.
+    **Not `kill -9` on the control window's PID**, which this
+    step used to say: every window is in that one process, so
+    killing it takes the outputs with it and there is nothing
+    left to reattach to. See case 6.
 36. **GPU context loss.** Open Chromium devtools on the
     output (F12 in dev mode), Performance → Settings →
     enable "Disable WebGL". The canvas goes black; output
@@ -2684,6 +4696,17 @@ naming what to close, **not** crash and **not** silently tear
 down a panel. Then close two panels and confirm the output
 spawns. Repeat in the other order (output live, then switch to
 4 globes) — the layout change is the thing refused that time.
+
+**S5b. A raised budget is honoured.** Everything in S5 exercises
+the seeded value of 4, which a constant would also pass — so it
+does not test that the budget is settable at all. In the Outputs
+panel raise the decoder budget to 6, then repeat S5's first
+half: the 4-globe video layout must now accept two video
+outputs rather than refusing the first. Quit and relaunch; the
+budget is still 6 and the same two outputs still spawn. Lower it
+back to 4 with those outputs live — the existing ones are
+**not** torn down (§3 forbids killing a running decoder to make
+room), and the next spawn is refused.
 
 **S6. Palette mirroring.** On a data-encoded dataset, change
 the palette (source → magma), then the contrast stretch, then

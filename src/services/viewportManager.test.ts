@@ -68,8 +68,13 @@ const { FakeMapRenderer, mockState } = vi.hoisted(() => {
 
   class FakeMapRenderer {
     _map = new FakeMap()
-    init(_container: HTMLElement, _options?: { canvasId?: string }) {
-      // no-op
+    /** The context-loss callback the manager wired in, captured so a
+     *  test can fire it the way MapLibre would. Ignoring `options` here
+     *  is what let the whole `onContextLost` bridge go uncovered:
+     *  deleting the manager's wiring left the suite green. */
+    onContextLost: (() => void) | null = null
+    init(_container: HTMLElement, options?: { canvasId?: string; onContextLost?: () => void }) {
+      this.onContextLost = options?.onContextLost ?? null
     }
     getMap(): FakeMap { return this._map }
     dispose() {}
@@ -881,6 +886,111 @@ describe('ViewportManager panel notices', () => {
     const vm = new ViewportManager()
     vm.init(grid, '1')
     expect(() => vm.setPanelStreamNotice(3, true)).not.toThrow()
+    vm.dispose()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// WebGL context loss
+//
+// The notice is DOM rather than WebGL, so it still draws over a canvas
+// whose context is gone — which is the only reason a device with no
+// console can report this at all.
+// ---------------------------------------------------------------------------
+
+describe('ViewportManager display notices', () => {
+  it('shows the display notice', () => {
+    const grid = makeGrid()
+    const vm = new ViewportManager()
+    vm.init(grid, '2h')
+
+    vm.markPanelDisplayLost(1)
+    const notice = grid.querySelectorAll('.map-viewport')[1].querySelector('.panel-time-notice')!
+    expect(notice.classList.contains('hidden')).toBe(false)
+    expect(notice.textContent).toBeTruthy()
+    vm.dispose()
+  })
+
+  it('outranks a failed stream', () => {
+    // A dead context takes the whole globe; a dead stream takes one
+    // layer of it. The larger explanation wins.
+    const grid = makeGrid()
+    const vm = new ViewportManager()
+    vm.init(grid, '2h')
+
+    vm.setPanelStreamNotice(1, true)
+    const notice = grid.querySelectorAll('.map-viewport')[1].querySelector('.panel-time-notice')!
+    const streamText = notice.textContent
+
+    vm.markPanelDisplayLost(1)
+    expect(notice.textContent).not.toBe(streamText)
+    vm.dispose()
+  })
+
+  it('keeps the notice after the context returns, because restore is not repair', () => {
+    // The replaced behaviour cleared here, and it was wrong twice over:
+    // the panel is still broken (nothing rebuilds `earthTileLayer`'s
+    // textures), and the notice the user was reading says "reload to
+    // restore" — withdrawing it without a reload contradicts its own
+    // instruction. There is no API to clear it any more; this asserts
+    // that the restore path has no way back in.
+    const grid = makeGrid()
+    const vm = new ViewportManager()
+    vm.init(grid, '2h')
+    const renderer = vm.getAll()[1] as unknown as { onContextLost: (() => void) | null }
+
+    renderer.onContextLost?.()
+    const notice = grid.querySelectorAll('.map-viewport')[1].querySelector('.panel-time-notice')!
+    const lostText = notice.textContent
+
+    // Everything a restore can still do: log, and re-render the notice
+    // for some other reason. Neither may take the diagnosis away.
+    vm.setPanelStreamNotice(1, true)
+    expect(notice.textContent).toBe(lostText)
+    expect(notice.classList.contains('hidden')).toBe(false)
+    vm.dispose()
+  })
+
+  it('is wired to the renderer, not just callable', () => {
+    // The gap the review caught: every other case here drives the
+    // manager's own method, so deleting `onContextLost:` from the
+    // `renderer.init` call left the suite green with the real panel
+    // notice disconnected. This one goes in through the seam MapLibre
+    // actually fires.
+    const grid = makeGrid()
+    const vm = new ViewportManager()
+    vm.init(grid, '2h')
+
+    const renderer = vm.getAll()[1] as unknown as { onContextLost: (() => void) | null }
+    expect(renderer.onContextLost).toBeTypeOf('function')
+
+    const notice = () =>
+      grid.querySelectorAll('.map-viewport')[1].querySelector('.panel-time-notice')
+    expect(notice()?.classList.contains('hidden') ?? true).toBe(true)
+
+    renderer.onContextLost?.()
+    expect(notice()?.classList.contains('hidden')).toBe(false)
+    vm.dispose()
+  })
+
+  it('outranks a time mismatch too', () => {
+    const grid = makeGrid()
+    const vm = new ViewportManager()
+    vm.init(grid, '2h')
+
+    vm.setPanelTimeNotice(1, 'Aug 5, 2026')
+    vm.markPanelDisplayLost(1)
+
+    const notice = grid.querySelectorAll('.map-viewport')[1].querySelector('.panel-time-notice')!
+    expect(notice.textContent).not.toContain('Aug 5, 2026')
+    vm.dispose()
+  })
+
+  it('is inert for a slot that does not exist', () => {
+    const grid = makeGrid()
+    const vm = new ViewportManager()
+    vm.init(grid, '1')
+    expect(() => vm.markPanelDisplayLost(3)).not.toThrow()
     vm.dispose()
   })
 })

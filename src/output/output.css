@@ -1,0 +1,76 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 The Zyra Project */
+
+/*
+ * The output window is a capture surface. Everything here exists to
+ * make sure nothing but the projection reaches the signal: no chrome,
+ * no cursor, no scrollbars, no flash of any colour but black between
+ * load and first frame.
+ */
+
+html,
+body.output-body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #000;
+  /* A stationary cursor in the corner of a captured signal is exactly
+     the artifact operators are trying to avoid, and an output window
+     is never interacted with. Hidden outright rather than on an idle
+     timer, which is what the control window uses. */
+  cursor: none;
+}
+
+#output-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  /* The drawing buffer is a 2:1 equirectangular framebuffer sized to
+     the target device, independent of this element's size — a 1080p
+     preview monitor can host a 4096x2048 output. `object-fit` keeps
+     the aspect honest while it is being previewed rather than
+     stretching the projection to the window. */
+  object-fit: contain;
+  background: #000;
+}
+
+/*
+ * The debug HUD (`docs/MULTI_MONITOR_PLAN.md` rung 11).
+ *
+ * Deliberately *inside* the capture surface. An operator diagnosing an
+ * installation reads it off the sphere or photographs it — there is no
+ * console on a projector and no devtools on a kiosk — so it has to be
+ * legible from across a room, not merely present in the DOM.
+ */
+#output-debug-overlay {
+  position: fixed;
+  inset-block-start: 1.5vh;
+  inset-inline-start: 1.5vh;
+  z-index: 1;
+  padding: 0.6em 0.9em;
+  border-radius: 0.4em;
+  /* `textContent` carries newlines and the fields are column-aligned
+     with spaces, so both have to survive. */
+  white-space: pre;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  /* Scaled to the monitor: 14px is unreadable across a dome on a 4K
+     panel and oversized on a 1080p preview desk. */
+  font-size: clamp(12px, 1.2vh, 22px);
+  line-height: 1.45;
+  color: #f2f6ff;
+  background: rgb(0 0 0 / 62%);
+  /* The window is never interacted with — `cursor: none` above says so
+     — but a full-bleed canvas underneath should not stop being the
+     hit target just because a debug box is up. */
+  pointer-events: none;
+}
+
+/* Load-bearing. The rule above is an id selector, so it outranks the UA
+   stylesheet's `[hidden] { display: none }` — without this the HUD is
+   painted permanently into the signal and `setVisible(false)` does
+   nothing visible at all. */
+#output-debug-overlay[hidden] {
+  display: none;
+}

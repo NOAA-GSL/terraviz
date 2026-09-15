@@ -2242,8 +2242,15 @@ export function createEarthTileLayer(): EarthTileLayerControl {
 
       const canvas = mapRef.getCanvas()
       const aspect = canvas.width / canvas.height
-      const fov = ((mapRef as any).transform?._fov ?? 0.6435) as number
-      gl2.uniform2f(skyboxAspectFovLoc, aspect, fov)
+      // The render args carry the vertical FOV in radians, which is what
+      // `uAspectFov` wants. This used to read `transform._fov` behind an
+      // `as any` with a 0.6435 fallback — but MapLibre's transform has no
+      // `_fov`, only `_fovInRadians`, so that access resolved to
+      // `undefined` on every frame and the skybox always drew at the
+      // fallback. It matched only because 0.6435 rad is 36.87°, the
+      // default; the moment anything called `setVerticalFieldOfView` the
+      // stars would have stopped agreeing with the globe in front of them.
+      gl2.uniform2f(skyboxAspectFovLoc, aspect, args.fov)
 
       const center = mapRef.getCenter()
       const bearing = mapRef.getBearing() * Math.PI / 180

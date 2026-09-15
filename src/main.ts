@@ -35,6 +35,7 @@ import {
 } from './services/playlistPlayback'
 import { updateMapControlsPosition } from './ui/mapControlsUI'
 import { initToolsMenu, syncToolsMenuState, syncToolsMenuLayout, pulseBrowseButton } from './ui/toolsMenuUI'
+import { closeOutputUI, initOutputUI, openOutputUI } from './ui/outputUI'
 import { openCreditsPanel } from './ui/creditsPanel'
 import { initChatUI, openChat, openChatSettings, notifyDatasetChanged, showChatTrigger, hideChatTrigger, closeChat, flushPendingGlobeActions } from './ui/chatUI'
 import { loadViewPreferences, saveViewPreferences, type ViewPreferences } from './utils/viewPreferences'
@@ -82,6 +83,7 @@ import { TourEngine, type TourTelemetryMeta } from './services/tourEngine'
 import { showTourControls, hideTourControls, hideAllTourTextBoxes, hideAllTourImages, hideAllTourVideos, hideAllTourPopups, hideAllTourQuestions } from './ui/tourUI'
 import { initLegendForDataset, clearLegendCache, loadConfig, readCurrentTime } from './services/docentService'
 import { isMobile, IS_MOBILE_NATIVE, getCloudTextureUrl } from './utils/deviceCapability'
+import { hasWebGL2 } from './utils/webglSupport'
 import { initDeepLinks } from './services/deepLinkService'
 import {
   buildDatasetPath,
@@ -107,6 +109,29 @@ import { initVrButton } from './ui/vrButton'
 import { flyToOnGlobe, isVrActive } from './services/vrSession'
 import type { VrDatasetTexture } from './services/vrScene'
 import { overlayOptionsFromDataset } from './services/datasetOverlayOptions'
+import { publishGlobeState } from './services/multiOutput/globeStateEvents'
+import {
+  displayForMirror,
+  operatorCameraFrom,
+  panelMirrorState,
+  playbackFrom,
+  primaryFrom,
+  sharedViewFrom,
+  toMirroredDataset,
+} from './services/multiOutput/mirrorState'
+import {
+  startMultiOutput,
+  type MultiOutputBootHandle,
+} from './services/multiOutput/bootMultiOutput'
+import {
+  createFullscreenController,
+  createIdleCursor,
+  createQuitHotkey,
+  resolveChromeHost,
+  restoreOnLaunch,
+  type FullscreenController,
+  type IdleCursor,
+} from './services/windowChrome'
 import { resolveFrameQuery } from './utils/frames'
 import { initTourAuthoring } from './ui/tourAuthoring'
 import { bootstrapI18n } from './i18n/bootstrap'
@@ -187,10 +212,28 @@ interface PanelState {
    * loading into this panel. Used to compute `layer_unloaded.dwell_ms`.
    * Null when the panel is empty (default Earth). */
   loadedAt: number | null
+  /**
+   * Which dataset the panel's `image` / `hlsService` actually belongs to.
+   *
+   * Not the same question as `dataset`, which is assigned *before* the
+   * load is attempted and stays set when one fails, when one is still in
+   * flight, and for a `tour/json` row that never paints anything. The
+   * two disagreeing is what lets a mirrored frame carry one dataset's
+   * identity over another's pixels, so anything describing what is on
+   * screen must compare them rather than trusting `dataset` alone.
+   */
+  mediaDatasetId: string | null
 }
 
 function createPanelState(): PanelState {
-  return { dataset: null, hlsService: null, videoTexture: null, image: null, loadedAt: null }
+  return {
+    dataset: null,
+    hlsService: null,
+    videoTexture: null,
+    image: null,
+    loadedAt: null,
+    mediaDatasetId: null,
+  }
 }
 
 /** Map a dataset-load trigger to the analytics tour-source enum.
@@ -317,6 +360,21 @@ class InteractiveSphere {
   private siblingSeekUploads: Array<AbortController | null> = []
   /** Pending re-check after a repair attempt — see `verifySiblingTimes`. */
   private siblingRepairTimer: ReturnType<typeof setTimeout> | null = null
+  /**
+   * The multi-monitor output link (`docs/MULTI_MONITOR_PLAN.md` §3).
+   *
+   * Desktop-only and inert on web — the gate is inside
+   * `startMultiOutput`, which returns a shared no-op handle there.
+   * Held as a field only so `dispose()` can detach it.
+   */
+  private multiOutput: MultiOutputBootHandle | null = null
+
+  /**
+   * Fullscreen + decorations for this window (§3.6). Held so the Tools
+   * menu can read the state and `dispose()` can detach the F11 handler.
+   */
+  private fullscreen: FullscreenController | null = null
+  private idleCursor: IdleCursor | null = null
 
   /**
    * Convenience getter returning the primary viewport's renderer.
@@ -418,15 +476,49 @@ class InteractiveSphere {
       this.panelStates = Array.from({ length: this.viewports.getPanelCount() }, createPanelState)
       const primary = this.viewports.getPrimary()
       if (!primary) throw new Error('Viewport manager failed to create a primary renderer')
+      // Mirror globe state to any multi-monitor outputs. Returns
+      // synchronously, so the subscription is installed before the
+      // first dataset load below can publish; opening the IPC link and
+      // spawning windows wait for the operator to add an output, so
+      // until then this costs a listener and nothing else.
+      //
+      // Ahead of `initToolsMenu` because the menu decides whether to
+      // render its Outputs entry while it builds its markup, and that
+      // decision reads `available` off this handle.
+      this.multiOutput = startMultiOutput({
+        // The control window's own contribution to the machine's
+        // decoder budget. Every panel is a window that can hold a
+        // video, and `maxVideoPanels()` — which the manager seeds from
+        // — answers per window, so nothing but this can tell it that
+        // four globes and an output are five decoders on one GPU.
+        controlPanels: () => this.viewports.getPanelCount(),
+      })
+      initOutputUI({ manager: () => this.multiOutput?.ready ?? Promise.resolve(null) })
+      // Outputs follow the primary globe's camera (§3, rung 7). After
+      // `startMultiOutput` so the subscription that forwards this is
+      // already installed, and before the first dataset load below.
+      this.bindOperatorCamera()
+      // Window chrome (§3.6). Built before the Tools menu because the
+      // menu reads the fullscreen state while it builds its markup —
+      // the same reason `startMultiOutput` runs first, and why the
+      // desktop host defers its Tauri import rather than being awaited.
+      this.initWindowChrome()
       initToolsMenu(this.viewports, {
         onSetLayout: (layout) => this.viewports.setLayout(layout),
         onOpenBrowse: () => this.openBrowsePanel(),
         onOpenOrbitSettings: () => openChatSettings(),
         onOpenCredits: (trigger) => openCreditsPanel(this.viewports, trigger),
+        // Desktop-only: on web `startMultiOutput` hands back the shared
+        // inert handle, this is `undefined`, and the menu renders no
+        // Outputs section at all.
+        onOpenOutputs: this.multiOutput.available
+          ? (trigger) => { openOutputUI(trigger) }
+          : undefined,
         onToggleDatasetInfo: (visible) => this.setDatasetInfoVisible(visible),
         onToggleLegend: (visible) => this.setLegendVisible(visible),
         announce: (msg) => this.announce(msg),
         getCurrentDataset: () => this.appState.currentDataset ?? null,
+        fullscreen: this.fullscreen ?? undefined,
       })
       // Catalog ↔ sphere tab control — only becomes visible when
       // `?catalog=true` is in the URL (see the show/hide calls in
@@ -1118,7 +1210,10 @@ class InteractiveSphere {
       } else if (dataService.isImageDataset(dataset)) {
         const img = await loadImageDataset(dataset, targetRenderer, this.appState, this.isMobile, loaderCallbacks)
         if (gen !== this.loadGeneration) return
-        if (this.panelStates[targetSlot]) this.panelStates[targetSlot].image = img
+        if (this.panelStates[targetSlot]) {
+          this.panelStates[targetSlot].image = img
+          this.panelStates[targetSlot].mediaDatasetId = dataset.id
+        }
         this.emitLayerLoaded(dataset, targetSlot, trigger, 'image', Date.now() - loadStartWall)
       } else if (dataService.isVideoDataset(dataset)) {
         // Clear any previously-cached image element for this slot —
@@ -1136,7 +1231,7 @@ class InteractiveSphere {
           result.hlsService.destroy()
           return
         }
-        this.storePanelVideoResult(targetSlot, result)
+        this.storePanelVideoResult(targetSlot, result, dataset.id)
         this.attachPrimaryVideoSync()
         this.doStartPlaybackLoop()
         this.emitLayerLoaded(dataset, targetSlot, trigger, 'hls', Date.now() - loadStartWall)
@@ -1236,6 +1331,10 @@ class InteractiveSphere {
       // integrates duration-imprecision error into visible drift).
       () => {
         this.correctSiblingDrift()
+        // Beside the drift correction, never inside it: that method
+        // returns early while the primary is paused, and a paused
+        // primary is exactly the state an output must be told about.
+        this.publishPlaybackMirror()
         // Any time notice describes a settled frame; once the playhead
         // is moving again it describes nothing. correctSiblingDrift has
         // already returned above unless the primary is playing.
@@ -1337,7 +1436,10 @@ class InteractiveSphere {
         dataset, targetRenderer, this.appState, this.isMobile, tourLoaderCallbacks,
         { isPrimary: isPrimarySlot },
       )
-      if (this.panelStates[targetSlot]) this.panelStates[targetSlot].image = img
+      if (this.panelStates[targetSlot]) {
+        this.panelStates[targetSlot].image = img
+        this.panelStates[targetSlot].mediaDatasetId = dataset.id
+      }
       this.emitLayerLoaded(dataset, targetSlot, 'tour', 'image', Date.now() - tourLoadStartWall)
     } else if (dataService.isVideoDataset(dataset)) {
       // Clear any previously-cached image element for this slot —
@@ -1349,7 +1451,7 @@ class InteractiveSphere {
         dataset, targetRenderer, this.appState, this.isMobile, this.playback, tourLoaderCallbacks,
         { isPrimary: isPrimarySlot },
       )
-      this.storePanelVideoResult(targetSlot, result)
+      this.storePanelVideoResult(targetSlot, result, dataset.id)
       if (isPrimarySlot) {
         this.attachPrimaryVideoSync()
         this.doStartPlaybackLoop()
@@ -1916,6 +2018,13 @@ class InteractiveSphere {
       onChange: (next) => {
         this.colorScaleDisplay = next
         this.viewports.setColorScaleDisplay(next)
+        // The one place this value changes, so the one place an output
+        // can learn about it. It is deliberately *not* republished on a
+        // dataset load: the transform is app-wide and outlives the
+        // dataset it was set on, exactly as it does on the control
+        // globes, and a picture dataset ignores it anyway because
+        // `paletteTexture` builds no LUT without a `colorScale`.
+        publishGlobeState({ display: displayForMirror(next) })
         // Rebuild the floating bars so they track the globe. Cheap:
         // this is DOM, and the LUT upload has already happened.
         this.refreshPanelLegends()
@@ -2093,20 +2202,21 @@ class InteractiveSphere {
     })
   }
 
-  /** Detect WebGL support. If unavailable, display troubleshooting instructions and return false. */
+  /** Detect WebGL 2 support. If unavailable, display troubleshooting instructions and return false. */
   private checkWebGLSupport(): boolean {
-    const canvas = document.createElement('canvas')
-    const gl = canvas.getContext('webgl2') || canvas.getContext('webgl')
-    if (gl) return true
+    // The predicate, and why it is WebGL 2 with no WebGL 1 fallback, lives
+    // in `utils/webglSupport` — reachable from a test, which this method is
+    // not. What stays here is the screen that follows from a `false`.
+    if (hasWebGL2()) return true
 
     const screen = document.getElementById('loading-screen')
     if (screen) {
       screen.innerHTML = `
         <div style="max-width:480px;padding:2rem;text-align:center;color:#e0e0e0;font-family:system-ui,sans-serif;">
           <div style="font-size:2.5rem;margin-bottom:0.75rem;" aria-hidden="true">&#x1F30D;</div>
-          <h1 style="font-size:1.1rem;margin:0 0 0.75rem;color:#fff;">WebGL is not available</h1>
+          <h1 style="font-size:1.1rem;margin:0 0 0.75rem;color:#fff;">WebGL 2 is not available</h1>
           <p style="font-size:0.8rem;line-height:1.5;color:#aaa;margin:0 0 1.25rem;">
-            This application requires WebGL to render the interactive globe.
+            This application requires WebGL 2 to render the interactive globe.
             Your browser's GPU acceleration appears to be disabled.
           </p>
           <details style="text-align:start;font-size:0.75rem;color:#999;line-height:1.6;">
@@ -2118,7 +2228,7 @@ class InteractiveSphere {
             </ol>
             <p style="margin:0.75rem 0 0.25rem;color:#888;">Alternatively, launch Chrome from the terminal with:</p>
             <code style="display:block;background:#1a1a2e;padding:0.5rem 0.75rem;border-radius:4px;color:#4da6ff;font-size:0.7rem;overflow-x:auto;">
-              google-chrome --enable-webgl --ignore-gpu-blocklist
+              google-chrome --ignore-gpu-blocklist --enable-unsafe-swiftshader
             </code>
             <p style="margin:0.75rem 0 0;color:#888;">
               If the problem persists, check <strong style="color:#fff;">chrome://gpu</strong>
@@ -2198,6 +2308,77 @@ class InteractiveSphere {
     }
   }
 
+  /**
+   * Publish the primary panel's dataset to any multi-monitor outputs
+   * (`docs/MULTI_MONITOR_PLAN.md` §3).
+   *
+   * Reads current state rather than taking the changed slot, and is
+   * called from every path that can change *which dataset the primary
+   * is showing* — a load, an unload, and panel promotion, which changes
+   * it without either. Over-calling is free: the aggregator drops a
+   * patch whose value is structurally identical, so a load into a
+   * non-primary slot costs one comparison and sends nothing. Missing a
+   * call is the only failure with a cost, which is why this reads the
+   * world instead of being told about it.
+   *
+   * The URL is the one *this* window resolved — after offline-cache
+   * lookup and variant probing — because the protocol makes that the
+   * control window's job. It cannot be read back off the media element:
+   * on the hls.js path `video.src` is a `blob:` MediaSource handle.
+   *
+   * **`dataset` alone is not what the panel is showing.** It is assigned
+   * before the load is attempted, so it stays set when a load fails,
+   * while one is in flight, and for a `tour/json` row that paints
+   * nothing at all — in each case the panel still holds the *previous*
+   * dataset's pixels. Publishing from `dataset` and `image` together
+   * without checking they agree is how an output ends up rendering one
+   * dataset's texture under another's bbox, `lonOrigin`, flip and
+   * palette, labelled with the wrong title. `mediaDatasetId` records
+   * which dataset the media actually belongs to, and the three cases
+   * below are what that comparison yields.
+   */
+  private publishMirroredDataset(): void {
+    const panel = this.panelStates[this.viewports.getPrimaryIndex()]
+    const dataset = panel?.dataset ?? null
+    const settled = panelMirrorState(dataset?.id, panel?.mediaDatasetId ?? null)
+
+    // Genuinely empty — the panel is back to the default Earth, and an
+    // output should follow it there.
+    if (!panel || settled === 'empty') {
+      // The playhead goes with it. `publishPlaybackMirror` would
+      // eventually say the same thing, but only while the playback loop
+      // is running — it is stopped on unload, so without this an output
+      // keeps the departed dataset's instant and `outputSync` steers a
+      // clip that is no longer on screen.
+      publishGlobeState({ dataset: null, playback: null, primary: null })
+      return
+    }
+
+    // Row and pixels disagree: a load failed or is still in flight, a
+    // teardown is half-done, or the primary holds a tour row whose
+    // script has not loaded anything yet. Publish NOTHING rather than
+    // guessing. `null` would blank the sphere while the operator is
+    // still looking at the old dataset, and the row would mislabel the
+    // old pixels — so the honest move is to leave the output showing
+    // what it has until the panel settles, which fires this again.
+    if (settled === 'unsettled' || !dataset) return
+
+    const kind = dataService.isVideoDataset(dataset)
+      ? 'video'
+      : dataService.isImageDataset(dataset)
+        ? 'image'
+        : null
+    // Unreachable while `mediaDatasetId` is only set beside real pixels
+    // (a tour row never paints), but a format that mirrors as neither
+    // kind must not be guessed at either.
+    if (kind === null) return
+
+    const url = kind === 'video'
+      ? panel.hlsService?.getSourceUrl() ?? null
+      : panel.image?.src ?? null
+    publishGlobeState({ dataset: toMirroredDataset(dataset, kind, url) })
+  }
+
   /** Emit a `layer_loaded` event and remember when the slot filled so
    * the matching `layer_unloaded` can report dwell_ms. */
   private emitLayerLoaded(
@@ -2219,6 +2400,10 @@ class InteractiveSphere {
       trigger,
       load_ms: Math.max(0, Math.round(loadMs)),
     })
+    // Both load paths funnel through here, after the panel has been
+    // given its image / HLS service — so this is the first point at
+    // which the resolved URL an output needs actually exists.
+    this.publishMirroredDataset()
   }
 
   /** Emit `layer_unloaded` for whatever dataset currently occupies
@@ -2876,6 +3061,10 @@ class InteractiveSphere {
     // Rewire video sync to the new primary's video (if any)
     this.detachPrimaryVideoSync()
     stopPlaybackLoop(this.playback)
+    // And the outputs' camera: a listener left on the demoted panel's
+    // map would keep driving them from a globe the operator is no
+    // longer using.
+    this.bindOperatorCamera()
 
     // Update the shared appState + info panel. Promoting a different
     // panel clears any picker override so the info panel follows the
@@ -2932,6 +3121,11 @@ class InteractiveSphere {
       }
     }
     this.announce(newDataset ? `Active panel: ${newDataset.title}` : `Panel ${newIndex + 1} active`)
+
+    // Promotion changes which dataset the primary is showing without
+    // any load or unload, so an output driven only by those two would
+    // keep showing the demoted panel's row indefinitely.
+    this.publishMirroredDataset()
   }
 
   /**
@@ -2941,11 +3135,15 @@ class InteractiveSphere {
   private storePanelVideoResult(
     slot: number,
     result: { hlsService: HLSService; videoTexture: VideoTextureHandle },
+    datasetId: string,
   ): void {
     const panel = this.panelStates[slot]
     if (!panel) return
     panel.hlsService = result.hlsService
     panel.videoTexture = result.videoTexture
+    // Recorded with the stream, not with the catalog row: this is the
+    // claim "the pixels on this panel are this dataset's".
+    panel.mediaDatasetId = datasetId
 
     // A stream that dies after load used to say nothing at all, which
     // left this panel holding a frame for good while the shared time
@@ -3143,6 +3341,87 @@ class InteractiveSphere {
    * drift — ~2.83 years per second of video on the Climate Futures
    * tour). The threshold-gated seek is the closed loop that bounds it.
    */
+  /**
+   * Detach the camera listener from whichever map it was on.
+   *
+   * Held as a field rather than re-derived, because the primary map is
+   * replaced on promotion and a listener left on the old one keeps
+   * publishing a camera nobody is driving — the outputs would follow a
+   * panel the operator demoted.
+   */
+  private unbindOperatorCamera: (() => void) | null = null
+
+  /**
+   * Publish the primary's camera to any outputs (§3, rung 7).
+   *
+   * MapLibre's `move` fires once per rendered frame during a drag,
+   * which is the rate step 15's "≤30 ms lag" asks for and the reason
+   * this is not additionally throttled. It costs nothing when the globe
+   * is still: `publishGlobeState` hands the patch to the aggregator,
+   * which drops a value structurally identical to the one it holds, so
+   * a parked camera puts nothing on the wire.
+   *
+   * Bound here rather than in `initialize` so promotion rebinds it —
+   * `onViewportPrimaryChange` calls this again with the new primary.
+   */
+  private bindOperatorCamera(): void {
+    this.unbindOperatorCamera?.()
+    this.unbindOperatorCamera = null
+
+    const map = this.viewports.getPrimary()?.getMap()
+    if (!map) return
+
+    const publish = () => {
+      const center = map.getCenter()
+      publishGlobeState({
+        view: sharedViewFrom(operatorCameraFrom(center.lat, center.lng, map.getZoom())),
+      })
+    }
+    map.on('move', publish)
+    this.unbindOperatorCamera = () => map.off('move', publish)
+    // Once immediately: a promotion changes the camera without moving
+    // it, and an output would otherwise keep the demoted panel's view
+    // until the operator next touched the globe.
+    publish()
+  }
+
+  /**
+   * Publish the primary's playhead to any outputs (§3, rung 7).
+   *
+   * Called from the same `onTick` as `correctSiblingDrift`, but
+   * deliberately *not* from inside it: that method returns early while
+   * the primary is paused, and a paused primary is exactly the state an
+   * output most needs told about — it has a position to hold, and
+   * without this it would sit wherever its own element happened to
+   * stop.
+   *
+   * `primary` is published alongside because `outputSync` gates on
+   * both. It changes only on a dataset load, and the aggregator drops
+   * the repeats, so sending it per frame costs one structural compare.
+   */
+  private publishPlaybackMirror(): void {
+    const panel = this.panelStates[this.viewports.getPrimaryIndex()]
+    const video = panel?.hlsService?.getVideo?.() ?? null
+    const dataset = panel?.dataset
+
+    if (!video || !dataset) {
+      publishGlobeState({ playback: null, primary: null })
+      return
+    }
+
+    publishGlobeState({
+      playback: playbackFrom({
+        currentTime: video.currentTime,
+        duration: video.duration,
+        paused: video.paused,
+        playbackRate: video.playbackRate,
+        startTime: dataset.startTime,
+        endTime: dataset.endTime,
+      }),
+      primary: primaryFrom(video.duration, dataset.startTime, dataset.endTime),
+    })
+  }
+
   private correctSiblingDrift(): void {
     if (!this.primaryVideoSyncActive) return
 
@@ -3610,6 +3889,11 @@ class InteractiveSphere {
     // texture.
     panel.dataset = null
     panel.image = null
+    panel.mediaDatasetId = null
+    // After the clear, not before: `emitLayerUnloadedForSlot` runs while
+    // the panel still holds the outgoing row (it reports on it), so
+    // publishing there would restate the dataset being removed.
+    this.publishMirroredDataset()
     const renderer = this.viewports.getRendererAt(slot)
     if (renderer instanceof MapRenderer) {
       // Drop the panel's dataset-credits phantom source so Tools
@@ -3909,6 +4193,7 @@ class InteractiveSphere {
       if (panel.hlsService) { panel.hlsService.destroy(); panel.hlsService = null }
       panel.dataset = null
       panel.image = null
+      panel.mediaDatasetId = null
       const renderer = this.viewports.getRendererAt(i)
       if (renderer instanceof MapRenderer) {
         renderer.setDatasetCredits(null)
@@ -3917,7 +4202,54 @@ class InteractiveSphere {
   }
 
   /** Clean up all resources: video streams, textures, and every viewport renderer. */
+  /**
+   * Fullscreen, F11 and the idle cursor for the control window (§3.6).
+   *
+   * All of this exists because a title bar leaks into the signal: the
+   * common installation captures a monitor over HDMI, so the window's
+   * own chrome arrives on the sphere with the picture.
+   *
+   * The persisted state is restored **only on desktop**, and that is
+   * not a tidiness rule — `requestFullscreen` needs a user gesture, so
+   * restoring on the web throws on every launch and changes nothing.
+   * `restoreOnLaunch` holds both halves of that test.
+   */
+  private initWindowChrome(): void {
+    const host = resolveChromeHost()
+    const fullscreen = createFullscreenController({ host, persist: true })
+    // Ctrl+Q, the control window only. A kiosk launch leaves no close
+    // button, no title bar and no menu bar, so without this the only
+    // way out on Linux is a window-manager binding that may not exist.
+    // Inert on the web by construction: the DOM host implements no
+    // `quit`, which is what stops this swallowing Firefox's own Ctrl+Q.
+    createQuitHotkey({ host })
+    const idleCursor = createIdleCursor()
+    // Only while fullscreen: hiding the pointer of a windowed app the
+    // operator is still driving would be a bug, not a feature.
+    fullscreen.onChange(on => idleCursor.setActive(on))
+    this.fullscreen = fullscreen
+    this.idleCursor = idleCursor
+
+    if (restoreOnLaunch()) {
+      void fullscreen.set(true).catch(err => {
+        // Costs the restored state, never the boot that was applying it.
+        logger.warn('[Main] could not restore fullscreen:', err)
+      })
+    }
+  }
+
   dispose(): void {
+    // Before the handle goes: the panel holds a document-level keydown
+    // listener, and it reads through `this.multiOutput`.
+    closeOutputUI()
+    this.multiOutput?.stop()
+    this.multiOutput = null
+    this.unbindOperatorCamera?.()
+    this.unbindOperatorCamera = null
+    this.fullscreen?.dispose()
+    this.fullscreen = null
+    this.idleCursor?.dispose()
+    this.idleCursor = null
     this.teardownAllPanelResources()
     this.viewports.dispose()
     this.panelStates = []

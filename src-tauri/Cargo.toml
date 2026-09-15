@@ -42,3 +42,10 @@ tauri-plugin-updater = "2"
 # does not get the updater plugin.
 [target.'cfg(target_os = "ios")'.dependencies]
 keyring = { version = "3", features = ["apple-native"] }
+
+# Enables `tauri::test`'s MockRuntime so the ACL tests in `lib.rs` can put a
+# real `InvokeRequest` through the real capability files. Cargo's v2 resolver
+# keeps dev-dependency features out of a normal build, so this does not reach
+# the shipped binary.
+[dev-dependencies]
+tauri = { version = "2", features = ["test"] }

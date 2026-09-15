@@ -28,6 +28,59 @@
  * infrastructure — so they are deliberately not parameterised here.
  */
 
+/**
+ * Public origin of the production Pages deployment, and the fallback
+ * host for **this node's own** `/api/...` calls in Tauri builds.
+ *
+ * A desktop webview is served from `tauri://localhost/` (or
+ * `http://tauri.localhost/` on Windows) with no Pages Functions
+ * backend behind it, so a relative `/api/...` path does not resolve to
+ * anything useful — it either fails to parse as a URL in the Rust HTTP
+ * plugin or returns the bundled `index.html`.
+ *
+ * Override at build time via `VITE_API_ORIGIN` to point a fork's
+ * desktop builds at its own deployment. See `docs/SELF_HOSTING.md`
+ * §15.3, which is also where the consequence of *not* setting it is
+ * spelled out.
+ */
+const DEFAULT_API_ORIGIN = 'https://terraviz.zyra-project.org'
+
+/**
+ * Resolve the active API origin.
+ *
+ * Reads `VITE_API_ORIGIN` and normalises it to just
+ * `<scheme>://<host>[:port]` via the URL constructor — anything past
+ * the origin (path, query, fragment) is dropped, which matches the
+ * variable's name and prevents a misconfigured
+ * `https://staging.example.com/foo` from producing
+ * `https://staging.example.com/foo/api/v1/catalog`. Non-URL or
+ * non-http(s) values fall back to `DEFAULT_API_ORIGIN` rather than
+ * throwing, so a typo cannot take desktop builds offline.
+ *
+ * **This lives here rather than in `catalogSource.ts`, where it was
+ * written, because it has a second consumer that cannot import that
+ * module.** `analytics/transport.ts` needs the same origin for
+ * `/api/ingest`, and `catalogSource` imports `reportError` from the
+ * analytics barrel — so reaching across would close a cycle
+ * (transport → catalogSource → analytics → emitter → transport).
+ * This module imports nothing at all, which is what makes it the safe
+ * home; `catalogSource` re-exports it so its existing callers are
+ * unchanged. Two copies of the fallback rule was the alternative, and
+ * a node whose catalog and telemetry disagreed about where "here" is
+ * would be a genuinely confusing thing to debug.
+ */
+export function getApiOrigin(): string {
+  const override = (import.meta.env.VITE_API_ORIGIN as string | undefined)?.trim()
+  if (!override) return DEFAULT_API_ORIGIN
+  try {
+    const u = new URL(override)
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return DEFAULT_API_ORIGIN
+    return u.origin
+  } catch {
+    return DEFAULT_API_ORIGIN
+  }
+}
+
 /** Trim a single trailing slash so callers can always append `/x`. */
 function normalizeBase(value: string | undefined, fallback: string): string {
   const trimmed = value?.trim()

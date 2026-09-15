@@ -1,0 +1,234 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 The Zyra Project
+
+/**
+ * The output window's debug HUD (`docs/MULTI_MONITOR_PLAN.md` rung 11).
+ *
+ * Five numbers in a corner, for an operator standing in front of a
+ * sphere with no other way to ask it anything. There is no console on a
+ * projector, no devtools on a kiosk, and the control window cannot see
+ * what its outputs are actually doing.
+ *
+ * ## What each field is for
+ *
+ * - **dataset** — which dataset this window has *decoded*, read from
+ *   `datasetMirror`, not from the link. During a load those two differ,
+ *   and the useful answer is what is on the glass.
+ * - **sync** — the drift `outputSync` measured, in milliseconds and
+ *   signed. Positive is ahead. This is the number that says whether an
+ *   installation is in step, and it comes straight from the value that
+ *   *steered*, never recomputed here — a second implementation would be
+ *   free to disagree with the one doing the work. When there is no
+ *   number the reason is printed beside the dash, because the reasons
+ *   are not equivalent: `not-ready` on a still image is the correct
+ *   answer and `seeking` on every sample is a correction fighting
+ *   itself.
+ * - **fps** — measured over a wall-clock window, never a frame counter
+ *   divided by an assumed interval. The spike behind the decoder budget
+ *   found that a cumulative count taken a fixed time after playback
+ *   *starts* folds in startup latency and showed a spurious ⅓ drop that
+ *   vanished once two samples were differenced.
+ * - **gpu** — the unmasked WebGL renderer string. The app cannot choose
+ *   its GPU: a spike found the webview silently on the iGPU of a machine
+ *   with a 4090, `powerPreference` is inert, and neither wry nor tauri
+ *   reads an override. An installation can therefore run at a fraction
+ *   of its provisioned capacity, undiagnosable from logs. Seeing this
+ *   string is the entire mitigation.
+ * - **buffer** — the framebuffer's own dimensions, which is how rung
+ *   11's resolution picker is confirmed to have taken effect. It is
+ *   deliberately *not* the window size: the two differ by design, and
+ *   conflating them is what the plan's "the frame and the monitor are
+ *   two rectangles" section exists to prevent.
+ *
+ * ## Why it is not routed through i18n
+ *
+ * These are field names and machine values for an operator debugging an
+ * installation, in the same category as the report strings
+ * `scripts/screenshots/` emits. `check:i18n-strings` scans `src/ui/` and
+ * the docent services, not `src/output/`, so this is consistent with
+ * that boundary rather than an exception to it. The Outputs panel's
+ * *toggle* — which a curator sees — is translated.
+ *
+ * ## Pacing
+ *
+ * Updated on a ~2 Hz timer of its own rather than per frame. The render
+ * loop drops to 1 Hz for static content by design, so driving the HUD
+ * from it would freeze the fps readout at exactly the moment someone is
+ * asking why nothing is moving; and at 30 fps it would write the DOM
+ * thirty times a second to show numbers a human reads twice.
+ */
+
+import { logger } from '../utils/logger'
+import type { LinkHealth } from './linkWatchdog'
+import type { GpuContextState } from './outputScene'
+import type { SyncKind } from './outputSync'
+
+/** How often the HUD re-reads and repaints. */
+export const OVERLAY_REFRESH_MS = 500
+
+/** Everything the HUD shows, gathered once per refresh. */
+export interface DebugOverlayReading {
+  datasetId: string | null
+  /** Signed seconds; positive means this output is ahead. `null` when
+   *  nothing is steering — an image, or no dataset. */
+  driftS: number | null
+  /** What the correction did on the last steered frame, or `null` when
+   *  it has never run. Shown only when there is no number: a dash on
+   *  its own cannot separate "this is a still image" from "this element
+   *  has been seeking for the last ten seconds", and those want opposite
+   *  responses from whoever is standing in front of the sphere. It was
+   *  a bare dash that made the first hardware pass record a bbox
+   *  forecast as "sync just shows a dash" with no way to tell which. */
+  syncKind: SyncKind | null
+  fps: number
+  /** What the output believes about its link to the control window
+   *  (rung 13, case 3). Shown because it separates the two questions
+   *  an operator in front of a frozen sphere actually has — "is the
+   *  picture wrong?" from "has the control window stopped talking to
+   *  me?" — which every other field on this HUD leaves indistinguish-
+   *  able, since a stale link renders a perfectly good last frame
+   *  forever. */
+  link: LinkHealth
+  gpu: string | null
+  /** What this window has observed about its GPU context (rung 13,
+   *  case 5). Shown beside the renderer name because it is the same
+   *  subject, and shown *only* when it is not `live` — for the reason
+   *  the Outputs panel draws no badge on a healthy output: a line
+   *  decorated in the normal case is a line the reader learns to skip,
+   *  and this one has to be legible at a glance from a few metres
+   *  away. */
+  gpuState: GpuContextState
+  framebuffer: { width: number; height: number }
+}
+
+/**
+ * Render one reading as the HUD's lines.
+ *
+ * Pure, so the formatting is testable without a DOM — which matters
+ * more than it looks: the sign convention on `sync` is the field an
+ * operator acts on, and getting it backwards would send someone
+ * hunting a lead output that is actually late.
+ */
+export function formatOverlay(reading: DebugOverlayReading): string[] {
+  const { datasetId, driftS, fps, gpu, gpuState, framebuffer, syncKind, link } = reading
+  const sync =
+    driftS === null
+      ? `sync  —${syncKind ? ` ${syncKind}` : ''}`
+      : // Signed and in ms: `+` reads as "ahead of the control window".
+        // Rounded to whole ms because the hard-seek threshold is 150 ms
+        // and sub-millisecond precision is noise a reader must ignore.
+        `sync  ${driftS >= 0 ? '+' : '−'}${Math.abs(Math.round(driftS * 1000))} ms`
+  return [
+    `data  ${datasetId ?? '—'}`,
+    sync,
+    // Directly under `sync`, because the two are read together: a
+    // drift the correction cannot fix means something different when
+    // the link that supplies the target went quiet four seconds ago.
+    `link  ${link}`,
+    `fps   ${fps.toFixed(1)}`,
+    `buf   ${framebuffer.width}×${framebuffer.height}`,
+    `gpu   ${gpu ?? 'unreported'}${gpuState === 'live' ? '' : ` — context ${gpuState}`}`,
+  ]
+}
+
+/**
+ * Frames per second over a wall-clock window.
+ *
+ * A delta, never a total: a cumulative count divided by time-since-start
+ * folds in however long the first frame took, which is exactly the
+ * measurement error the decoder-budget spike chased before differencing
+ * two samples made it vanish.
+ */
+export interface FpsMeter {
+  /** Call once per rendered frame. */
+  tick(now: number): void
+  /** Frames per second since the previous `sample()`. */
+  sample(now: number): number
+}
+
+export function createFpsMeter(): FpsMeter {
+  let frames = 0
+  let since: number | null = null
+  let last = 0
+  return {
+    tick(now) {
+      if (since === null) since = now
+      frames++
+    },
+    sample(now) {
+      if (since === null || now <= since) return last
+      last = (frames * 1000) / (now - since)
+      frames = 0
+      since = now
+      return last
+    },
+  }
+}
+
+export interface DebugOverlay {
+  /** Show or hide without tearing down — an operator toggles this while
+   *  looking at the sphere, and a rebuild would blink. */
+  setVisible(visible: boolean): void
+  dispose(): void
+}
+
+/**
+ * Mount the HUD, reading through `read` on its own timer.
+ *
+ * The reader is a callback rather than a set of setters so the HUD
+ * cannot hold a stale copy of anything: every refresh asks the live
+ * objects, and there is no second place for the dataset id or the
+ * drift to be written and forgotten.
+ */
+export function createDebugOverlay(
+  read: () => DebugOverlayReading,
+  deps: {
+    document?: Pick<Document, 'createElement'> & { body: Pick<HTMLElement, 'appendChild'> }
+    setInterval?: (fn: () => void, ms: number) => number
+    clearInterval?: (id: number) => void
+  } = {},
+): DebugOverlay {
+  const doc = deps.document ?? (typeof document !== 'undefined' ? document : null)
+  const setTimer = deps.setInterval ?? ((fn, ms) => globalThis.setInterval(fn, ms) as unknown as number)
+  const clearTimer = deps.clearInterval ?? (id => globalThis.clearInterval(id))
+
+  if (!doc) {
+    // The static fixture page can render this file in a context with no
+    // DOM. Costing the HUD is right; throwing out of the render loop is
+    // not.
+    logger.warn('[output] no document for the debug overlay')
+    return { setVisible: () => {}, dispose: () => {} }
+  }
+
+  const el = doc.createElement('div')
+  el.id = 'output-debug-overlay'
+  el.hidden = true
+  doc.body.appendChild(el)
+
+  const refresh = (): void => {
+    if (el.hidden) return
+    try {
+      el.textContent = formatOverlay(read()).join('\n')
+    } catch (err) {
+      // A HUD that throws must not take down the window it is drawn
+      // over. An operator losing the readout still has the picture.
+      logger.warn('[output] debug overlay read failed:', err)
+    }
+  }
+
+  const timer = setTimer(refresh, OVERLAY_REFRESH_MS)
+
+  return {
+    setVisible(visible) {
+      el.hidden = !visible
+      // Paint immediately rather than waiting out the refresh interval:
+      // an operator who just ticked the box should not see half a
+      // second of empty box and wonder whether it worked.
+      if (visible) refresh()
+    },
+    dispose() {
+      clearTimer(timer)
+      el.remove()
+    },
+  }
+}

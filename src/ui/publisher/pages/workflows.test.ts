@@ -4,6 +4,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { renderWorkflowsPage } from './workflows'
 import type { PublisherWorkflow } from '../workflows-api'
+import { until } from '../../../test-utils'
 
 function workflow(overrides: Partial<PublisherWorkflow> = {}): PublisherWorkflow {
   return {
@@ -84,6 +85,53 @@ describe('renderWorkflowsPage', () => {
     await new Promise(r => setTimeout(r, 0))
     expect(runCalls).toEqual(['wf1'])
     expect(mount.querySelector('.publisher-row-action-status')?.textContent).toBe('Queued ✓')
+  })
+
+  it('survives a runs response whose body is not the shape it expects', async () => {
+    // The bug this replaces: the capture fixtures served the workflows
+    // *list* payload to the per-workflow runs probe (the runs URL has
+    // the list URL as a substring), so `data.runs` was undefined and
+    // `for...of` threw. The call is floated, so that surfaced as an
+    // uncaught page error rather than a missing badge — a last-run badge
+    // is decoration and must not be able to take the page down.
+    //
+    // The rejection is the *only* thing that separates guarded from
+    // unguarded here: both render the same table and both probe every
+    // workflow, because the map callbacks all reach their `await` before
+    // any of them throws. So the assertion has to observe it directly.
+    const rejections: unknown[] = []
+    const onReject = (reason: unknown): void => {
+      rejections.push(reason)
+    }
+    process.on('unhandledRejection', onReject)
+    const probed: string[] = []
+    try {
+      await renderWorkflowsPage(mount, {
+        listFn: async () => ({ ok: true, data: { workflows: [workflow({ id: 'wf1' })] } }),
+        // A well-formed 200 carrying the wrong body.
+        runsFn: async (id: string) => {
+          probed.push(id)
+          return { ok: true, data: { workflows: [] } } as never
+        },
+        navigate: () => {},
+      })
+      // Anchor on the probe firing, not on the DOM: `buildShell` creates
+      // the last-run cell *before* the hydration is floated, so waiting
+      // for that cell is already true on arrival and proves nothing —
+      // which is exactly how the first version of this test passed with
+      // the guard removed.
+      await until(() => probed.length === 1, 'the per-workflow run probe')
+      // Then let the continuation after that await run, and Node deliver
+      // any rejection it produced.
+      await new Promise(resolve => setTimeout(resolve, 0))
+
+      expect(rejections).toEqual([])
+      // Degraded, not broken: the row is there, just with no badge.
+      expect(mount.querySelector('table')).not.toBeNull()
+      expect(mount.querySelector('.publisher-workflows-runstatus')).toBeNull()
+    } finally {
+      process.off('unhandledRejection', onReject)
+    }
   })
 
   it('renders the empty state when no workflows exist', async () => {

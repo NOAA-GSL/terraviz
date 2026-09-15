@@ -34,6 +34,7 @@ Notes:
 - `additionalProperties` is left open so the contract is
   forward-compatible with additive field growth.
 - **Deferred:** the federation `feed.schema.json` — its serializer
-  does not exist yet (Phase 4). STAC-profile fields on the dataset
-  shape are also a planned Phase 4 addition (§7 Directive 3) and will
-  land additively.
+  does not exist yet (Phase 4). STAC Core 1.1.0 uses the separate
+  routes and schemas defined by the
+  [metadata and STAC audit](../metadata/README.md); it does not add
+  fields to the native dataset or federation-feed shapes.

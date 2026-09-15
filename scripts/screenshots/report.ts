@@ -235,7 +235,7 @@ async function captureShot(
     browser,
     { viewport: pass.viewport, baseURL: BASE_URL, extraHTTPHeaders: ACCESS_HEADERS },
     async (page) => {
-      const collector = attachSignalCollectors(page)
+      const collector = attachSignalCollectors(page, scene.expectedBadResponses)
       if (USE_FIXTURES && scene.fixtures) await installFixtures(page, scene.fixtures)
       await scene.setup(page)
       if (axeEnabled()) {

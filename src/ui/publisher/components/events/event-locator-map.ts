@@ -52,7 +52,9 @@ export function mountEventLocator(slot: HTMLElement, point: { lat: number; lon: 
   // CSS on dynamic import), so neither lands in the eager publisher chunk
   // even though this module is imported eagerly by events.ts.
   void Promise.all([import('maplibre-gl'), import('maplibre-gl/dist/maplibre-gl.css')])
-    .then(([{ default: maplibregl }]) => {
+    // The namespace, not `.default`: MapLibre 6 is ESM-only and exports no
+    // default.
+    .then(([maplibregl]) => {
       if (disposed) return
       const canvas = document.createElement('div')
       canvas.className = 'publisher-events-locator-canvas'

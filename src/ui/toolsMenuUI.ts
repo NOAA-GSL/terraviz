@@ -47,6 +47,7 @@ import { openPlaylistManager } from './playlistUI'
 import { emit } from '../analytics'
 import { setBordersVisible } from '../utils/viewPreferences'
 import { maxVideoPanels } from '../utils/deviceCapability'
+import type { FullscreenController } from '../services/windowChrome'
 import {
   loadUiScale,
   nearestPreset,
@@ -87,8 +88,23 @@ function emitSetting(key: string, valueClass: string): void {
  *  test environments leave as `undefined` rather than `null`) so
  *  the rest of the file doesn't have to repeat the falsy check. */
 function isFullscreen(): boolean {
-  return Boolean(document.fullscreenElement)
+  // The controller first, because on desktop it is the only one that
+  // knows: a *native* fullscreen window leaves `document.fullscreenElement`
+  // null, so reading the DOM alone would leave the button showing
+  // "enter fullscreen" over an already-fullscreen window.
+  return controller ? controller.isFullscreen() : Boolean(document.fullscreenElement)
 }
+
+/**
+ * The window-chrome controller, once a host has wired one.
+ *
+ * Module-scoped rather than threaded through, because
+ * `syncFullscreenButton` is called from a `fullscreenchange` listener
+ * registered once for the life of the document — it has no closure to
+ * read from, and giving it one would mean re-registering that listener
+ * on every re-init.
+ */
+let controller: FullscreenController | null = null
 
 /** Toggle the document into / out of fullscreen via the standard
  *  Fullscreen API. Errors (autoplay-policy denial, browser
@@ -96,6 +112,12 @@ function isFullscreen(): boolean {
  *  its current state and the `fullscreenchange` event never fires,
  *  so `syncFullscreenButton` doesn't have anything to do. */
 async function toggleFullscreen(): Promise<void> {
+  // The controller already absorbs a refusal and reports what the
+  // window actually is, so there is nothing to catch around it.
+  if (controller) {
+    await controller.toggle()
+    return
+  }
   try {
     if (isFullscreen()) {
       await document.exitFullscreen()
@@ -152,6 +174,20 @@ export interface ToolsMenuCallbacks {
   onToggleDatasetInfo?: (visible: boolean) => void
   /** User toggled legend visibility. */
   onToggleLegend?: (visible: boolean) => void
+  /**
+   * The window's fullscreen state (`docs/MULTI_MONITOR_PLAN.md` §3.6).
+   *
+   * The toolbar button below predates this and drove
+   * `document.requestFullscreen` directly. That covers a browser and is
+   * half the answer in a packaged app: it makes the *webview*
+   * fullscreen while leaving the native title bar and border in place,
+   * both of which land in the signal when an operator captures the
+   * control display. When a controller is supplied it owns the toggle
+   * instead, pairing fullscreen with `setDecorations` and persisting
+   * the choice; without one the old path stands, which is what the web
+   * build still uses.
+   */
+  fullscreen?: FullscreenController
   /** User clicked Credits — open the credits / attribution
    *  dialog. The Tools menu hands its always-visible toggle
    *  button as `trigger` so the credits panel can restore focus
@@ -159,6 +195,17 @@ export interface ToolsMenuCallbacks {
    *  closePopover() before the dialog opens, so it isn't a
    *  reliable focus target). */
   onOpenCredits?: (trigger: HTMLElement) => void
+  /**
+   * User clicked Outputs — open the multi-monitor Outputs panel
+   * (`docs/MULTI_MONITOR_PLAN.md` rung 9).
+   *
+   * Absent renders no entry at all, which is how the web build stays
+   * unchanged: outputs are desktop-only, and `main.ts` supplies this
+   * only when the boot handle reports itself available. Same shape as
+   * `onOpenCredits` — the callback's presence *is* the feature gate, so
+   * there is no second place for the two to disagree.
+   */
+  onOpenOutputs?: (trigger: HTMLElement) => void
   /** Announce something for screen readers. */
   announce?: (message: string) => void
   /** Get the currently loaded dataset (used by the Share action).
@@ -189,7 +236,7 @@ export function initToolsMenu(
 
   const gateMeetOrbit = isTauri()
 
-  const { onSetLayout, onOpenBrowse, onOpenOrbitSettings, onToggleDatasetInfo, onToggleLegend, onOpenCredits, announce } = callbacks
+  const { onSetLayout, onOpenBrowse, onOpenOrbitSettings, onToggleDatasetInfo, onToggleLegend, onOpenCredits, onOpenOutputs, announce } = callbacks
   const currentLayout = viewports.getLayout()
   // A phone cannot hold four video decoders — the third crashes the tab
   // while still loading (terraviz#230) — so the option is turned off
@@ -338,6 +385,14 @@ export function initToolsMenu(
           <span class="tools-menu-item-label">${tHtml('tools.actions.playlists')}</span>
         </button>
       </section>
+      ${onOpenOutputs ? `
+      <section class="tools-menu-section" aria-label="${tAttr('tools.section.outputs.aria')}">
+        <h4 class="tools-menu-section-title">${tHtml('tools.section.outputs')}</h4>
+        <button type="button" class="tools-menu-item" id="tools-menu-outputs">
+          <span class="tools-menu-item-check" aria-hidden="true"></span>
+          <span class="tools-menu-item-label">${tHtml('tools.actions.outputs')}</span>
+        </button>
+      </section>` : ''}
       <section class="tools-menu-section" aria-label="${tAttr('tools.section.orbit.aria')}">
         <h4 class="tools-menu-section-title">${tHtml('tools.section.orbit')}</h4>
         <button type="button" class="tools-menu-item" id="tools-menu-orbit-settings">
@@ -407,6 +462,14 @@ export function initToolsMenu(
     closePopover()
     void toggleFullscreen()
   })
+  // Adopted before the first sync, so the button's initial label
+  // reflects a window the kiosk flag or a restored preference may
+  // already have made fullscreen.
+  controller = callbacks.fullscreen ?? null
+  // Through the controller when there is one: F11 and the kiosk flag
+  // change the *native* window without firing `fullscreenchange`, so
+  // the DOM event alone would leave the button stale after either.
+  controller?.onChange(syncFullscreenButton)
   if (!document.body.dataset.toolsMenuFullscreenWired) {
     document.body.dataset.toolsMenuFullscreenWired = 'true'
     document.addEventListener('fullscreenchange', syncFullscreenButton)
@@ -635,6 +698,18 @@ export function initToolsMenu(
       // above, so it can't reliably receive focus on close.
       onOpenCredits(toggleBtn)
       announce?.(t('tools.announce.creditsOpened'))
+    })
+  }
+
+  if (onOpenOutputs) {
+    const outputsBtn = document.getElementById('tools-menu-outputs') as HTMLButtonElement | null
+    outputsBtn?.addEventListener('click', () => {
+      closePopover()
+      // The always-visible toggle button, not the menu item: closePopover
+      // has just hidden the item, so it cannot take focus back when the
+      // panel closes. Same reasoning as Credits above.
+      onOpenOutputs(toggleBtn)
+      announce?.(t('tools.announce.outputsOpened'))
     })
   }
 

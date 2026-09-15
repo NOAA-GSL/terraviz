@@ -32,6 +32,7 @@
 import { emit } from '../analytics'
 import { openPrivacyUI } from './privacyUI'
 import { t, tAttr, tHtml } from '../i18n'
+import { announcePolite } from './domUtils'
 
 const STORAGE_KEY = 'sos-disclosure-seen'
 
@@ -89,25 +90,6 @@ export function isSmallViewport(): boolean {
     window.innerWidth <= SMALL_VIEWPORT_WIDTH ||
     window.innerHeight <= SMALL_VIEWPORT_HEIGHT
   )
-}
-
-/** Push a one-time polite announcement to the app-wide ARIA
- *  live region (`#a11y-announcer`) — used to make the badge
- *  discoverable to screen-reader users without the badge itself
- *  needing to be a live region (a button-as-live-region is
- *  unusual and easy for AT to misinterpret). The full banner
- *  carries `aria-live="polite"` directly because it's a region;
- *  the badge defers to the shared announcer instead. */
-function announcePolite(message: string): void {
-  const live = document.getElementById('a11y-announcer')
-  if (!live) return
-  // Clear, then set on next frame — guarantees the announcement
-  // fires even if the announcer happens to already contain the
-  // same string from a prior call.
-  live.textContent = ''
-  requestAnimationFrame(() => {
-    live.textContent = message
-  })
 }
 
 /** Build + attach the full banner DOM. */

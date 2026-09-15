@@ -13,6 +13,8 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
  */
 
 import { initToolsMenu, syncToolsMenuState, isToolsMenuOpen, pulseBrowseButton } from './toolsMenuUI'
+import { createFullscreenController } from '../services/windowChrome'
+import { until } from '../test-utils'
 
 // ---------------------------------------------------------------------------
 // Minimal ViewportManager stand-in
@@ -117,6 +119,68 @@ describe('initToolsMenu', () => {
     // tooltip and screen-reader name agree.
     expect(fullscreenBtn.getAttribute('title')).toBe('Enter fullscreen')
     expect(fullscreenBtn.getAttribute('aria-label')).toBe('Enter fullscreen')
+  })
+
+  it('toggles through the window-chrome controller when one is wired', async () => {
+    const calls: string[] = []
+    const fullscreen = createFullscreenController({
+      host: {
+        setFullscreen: async next => {
+          calls.push(`fullscreen:${next}`)
+        },
+        setDecorations: async shown => {
+          calls.push(`decorations:${shown}`)
+        },
+        isFullscreen: () => null,
+      },
+      target: null,
+    })
+    const requestFullscreen = vi.fn(async () => {})
+    document.documentElement.requestFullscreen = requestFullscreen
+
+    initToolsMenu(makeViewports(1) as any, { fullscreen, getCurrentDataset: () => null })
+    document.getElementById('tools-menu-fullscreen')!.click()
+
+    await until(() => calls.length === 2, 'the chrome change')
+    // The controller pairs fullscreen with the decorations; the raw DOM
+    // path leaves a native title bar in the captured signal.
+    expect(calls).toEqual(['fullscreen:true', 'decorations:false'])
+    expect(requestFullscreen).not.toHaveBeenCalled()
+  })
+
+  it('reads the button label off the controller, not the document', async () => {
+    const fullscreen = createFullscreenController({
+      host: {
+        setFullscreen: async () => {},
+        setDecorations: async () => {},
+        isFullscreen: () => null,
+      },
+      target: null,
+    })
+    initToolsMenu(makeViewports(1) as any, { fullscreen, getCurrentDataset: () => null })
+
+    await fullscreen.set(true)
+
+    // The case that matters on desktop: a *native* fullscreen window
+    // leaves `document.fullscreenElement` null, so a button reading the
+    // DOM would still offer "Enter fullscreen" over a window already in
+    // it — and F11 changes the state without `fullscreenchange` firing
+    // at all.
+    const btn = document.getElementById('tools-menu-fullscreen')!
+    expect(btn.getAttribute('aria-pressed')).toBe('true')
+    expect(btn.getAttribute('title')).toBe('Exit fullscreen')
+  })
+
+  it('keeps the plain Fullscreen API path when no controller is wired', async () => {
+    const requestFullscreen = vi.fn(async () => {})
+    document.documentElement.requestFullscreen = requestFullscreen
+
+    initToolsMenu(makeViewports(1) as any)
+    document.getElementById('tools-menu-fullscreen')!.click()
+
+    // The web build has no Tauri window to decorate, and this is the
+    // path it keeps.
+    await until(() => requestFullscreen.mock.calls.length === 1, 'the fullscreen request')
   })
 
   it('updates the fullscreen button label on fullscreenchange', () => {
@@ -531,6 +595,34 @@ describe('Tools menu callbacks', () => {
 
     expect(onOpenCredits).toHaveBeenCalledTimes(1)
     expect(onOpenCredits.mock.calls[0][0]).toBe(document.getElementById('tools-menu-toggle'))
+    expect(isToolsMenuOpen()).toBe(false)
+  })
+
+  it('renders no Outputs section without onOpenOutputs — the web build sees nothing', () => {
+    const vm = makeViewports(1)
+    initToolsMenu(vm as any, { getCurrentDataset: () => null })
+
+    // The callback's presence *is* the desktop gate, so its absence has
+    // to take the whole section with it, not just leave a dead item.
+    expect(document.getElementById('tools-menu-outputs')).toBeNull()
+    expect(document.body.textContent).not.toContain('Outputs')
+  })
+
+  it('renders the Outputs button and invokes onOpenOutputs with the Tools toggle as trigger', () => {
+    const vm = makeViewports(1)
+    const onOpenOutputs = vi.fn()
+    initToolsMenu(vm as any, { onOpenOutputs, getCurrentDataset: () => null })
+
+    const outputsBtn = document.getElementById('tools-menu-outputs') as HTMLButtonElement | null
+    expect(outputsBtn).not.toBeNull()
+
+    ;(document.getElementById('tools-menu-toggle') as HTMLButtonElement).click()
+    outputsBtn!.click()
+
+    expect(onOpenOutputs).toHaveBeenCalledTimes(1)
+    // The toggle, not the menu item: closePopover has already hidden the
+    // item, so it cannot receive focus back when the panel closes.
+    expect(onOpenOutputs.mock.calls[0][0]).toBe(document.getElementById('tools-menu-toggle'))
     expect(isToolsMenuOpen()).toBe(false)
   })
 })

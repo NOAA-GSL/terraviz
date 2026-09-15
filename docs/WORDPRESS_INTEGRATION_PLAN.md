@@ -642,8 +642,9 @@ Phases are ordered by value-over-risk and by the read/publish seam
   at `https://<node>/schema/v1/`. Prose + versioning policy in
   [`protocol/README.md`](protocol/README.md) and
   [`protocol/CHANGELOG.md`](protocol/CHANGELOG.md). The federation
-  `feed.schema.json` and STAC-profile fields are deferred to Phase 4
-  (their serializer doesn't exist yet).
+  `feed.schema.json` remains deferred to Phase 4 because its serializer
+  does not exist yet. STAC uses the separate routes and schemas defined
+  by the [metadata and STAC audit](metadata/README.md).
 
 **Exit:** an embed URL renders a chromeless globe; the embed grammar
 and wire schema are documented and versioned. **Phase 0 complete.**

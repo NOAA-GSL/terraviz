@@ -140,6 +140,9 @@ interface Viewport {
   noticeDate: string | null
   /** True once this panel's stream has failed terminally. */
   streamFailed: boolean
+  /** True once this panel's WebGL context has been lost. Never unset
+   *  while there is no repair — see `markPanelDisplayLost`. */
+  displayLost: boolean
   /** Floating per-panel colorbar for data-encoded datasets. Replaced
    *  wholesale rather than mutated, because a display change alters the
    *  gradient, the ticks and the accessible name together. */
@@ -368,6 +371,30 @@ export class ViewportManager {
   }
 
   /**
+   * Mark a panel whose WebGL context has been lost. **One-way.**
+   *
+   * There is no clearing counterpart, and its absence is the point.
+   * Restoring the context is not repairing the panel: MapLibre rebuilds
+   * its own resources, `earthTileLayer`'s textures and programs stay
+   * gone, and the globe comes back with tiles and no data. A setter
+   * that took a boolean let the restore withdraw the only diagnosis the
+   * user had, while the thing it diagnosed was still true — and where a
+   * stream had also failed it handed them a notice naming the wrong
+   * subsystem. The notice reads *"reload to restore"*; clearing it
+   * without a reload contradicts it.
+   *
+   * The clear belongs with the repair half, which does not exist yet.
+   * Whoever writes it adds a way to unset this, deliberately, at the
+   * point where it becomes true.
+   */
+  markPanelDisplayLost(slot: number): void {
+    const vp = this.viewports[slot]
+    if (!vp) return
+    vp.displayLost = true
+    this.renderPanelNotice(slot)
+  }
+
+  /**
    * Mark a panel whose stream has failed terminally.
    *
    * Distinct from the time notice because the cause is knowable and
@@ -394,11 +421,16 @@ export class ViewportManager {
     const vp = this.viewports[slot]
     if (!vp) return
 
-    const text = vp.streamFailed
-      ? t('viewport.panel.streamFailed')
-      : vp.noticeDate
-        ? t('viewport.panel.timeMismatch', { date: vp.noticeDate })
-        : null
+    // Ordered by how much of the panel each explains. A dead context
+    // takes the whole globe with it, so it outranks a dead stream,
+    // which in turn outranks a frame that is merely behind the label.
+    const text = vp.displayLost
+      ? t('viewport.panel.displayLost')
+      : vp.streamFailed
+        ? t('viewport.panel.streamFailed')
+        : vp.noticeDate
+          ? t('viewport.panel.timeMismatch', { date: vp.noticeDate })
+          : null
 
     if (!text) {
       if (vp.timeNotice) vp.timeNotice.classList.add('hidden')
@@ -583,7 +615,14 @@ export class ViewportManager {
     const getLayerId = this.callbacks.getLayerIdForSlot
       ? () => this.callbacks.getLayerIdForSlot!(index)
       : undefined
-    renderer.init(container, { canvasId, slotIndex: index, getLayerId })
+    renderer.init(container, {
+      canvasId,
+      slotIndex: index,
+      getLayerId,
+      // The notice is DOM, not WebGL, so it still draws over a dead
+      // canvas — which is the whole reason it can report this at all.
+      onContextLost: () => this.markPanelDisplayLost(index),
+    })
 
     // Primary-indicator pill: shown on every panel, numbered 1-based.
     // Click on a non-primary pill promotes that panel to primary. The
@@ -623,7 +662,7 @@ export class ViewportManager {
     const onMove = () => this.syncCameras(index)
     renderer.getMap()?.on('move', onMove)
 
-    this.viewports.push({ index, container, renderer, indicator, legend: null, colorbar: null, timeNotice: null, noticeDate: null, streamFailed: false, onMove })
+    this.viewports.push({ index, container, renderer, indicator, legend: null, colorbar: null, timeNotice: null, noticeDate: null, streamFailed: false, displayLost: false, onMove })
   }
 
   private destroyViewport(vp: Viewport): void {

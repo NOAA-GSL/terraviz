@@ -17,7 +17,11 @@
 import type { FixtureRule } from '../core/fixtures'
 // Type-only imports — erased at runtime, so this pulls no SPA runtime
 // code (i18n, logger) into the node capture scripts.
-import type { PublisherWorkflow } from '../../../src/ui/publisher/workflows-api'
+import type {
+  PublisherWorkflow,
+  PublisherWorkflowRun,
+} from '../../../src/ui/publisher/workflows-api'
+import type { TourListItem } from '../../../src/ui/tourAuthoring/api'
 import type {
   DatasetDetailResponse,
   ListDatasetsResponse,
@@ -182,6 +186,90 @@ const workflows: { workflows: PublisherWorkflow[] } = {
 }
 
 const workflowsEmpty: { workflows: PublisherWorkflow[] } = { workflows: [] }
+
+/**
+ * The per-workflow last-run probe.
+ *
+ * The workflows list page fires one of these per row to badge its last
+ * run. Without a rule of its own the request falls through to the
+ * `/publish/workflows` list rule — the URL contains it as a substring —
+ * and the page is handed `{ workflows: [...] }`, where `data.runs` is
+ * `undefined`. That threw `res.data.runs is not iterable` on every
+ * capture. Same ordering trap as the dataset detail/list pair below.
+ */
+const workflowRuns: { runs: PublisherWorkflowRun[] } = {
+  runs: [
+    {
+      id: '01HEXAMPLERUN00000000001',
+      workflow_id: '01HEXAMPLEWORKFLOW0000001',
+      status: 'succeeded',
+      trigger: 'schedule',
+      created_at: '2026-04-20T06:00:00.000Z',
+      started_at: '2026-04-20T06:00:05.000Z',
+      finished_at: '2026-04-20T06:05:00.000Z',
+      gha_run_id: '9900112233',
+      upload_id: null,
+      error_summary: null,
+    },
+    {
+      id: '01HEXAMPLERUN00000000002',
+      workflow_id: '01HEXAMPLEWORKFLOW0000001',
+      status: 'failed',
+      trigger: 'manual',
+      created_at: '2026-04-19T06:00:00.000Z',
+      started_at: '2026-04-19T06:00:04.000Z',
+      finished_at: '2026-04-19T06:02:11.000Z',
+      gha_run_id: '9900112200',
+      upload_id: null,
+      error_summary: 'Upstream fetch returned 503',
+    },
+  ],
+}
+
+/** `/publish/tours` — the tour-creator landing list. */
+const tours: { tours: TourListItem[]; next_cursor: string | null } = {
+  next_cursor: null,
+  tours: [
+    {
+      id: '01HEXAMPLETOUR0000000001',
+      slug: 'hurricane-season-2026',
+      title: 'Hurricane season 2026',
+      tour_json_ref: 'tours/01HEXAMPLETOUR0000000001.json',
+      updated_at: '2026-04-18T15:20:00.000Z',
+      description: 'A guided pass through the season\u2019s named storms.',
+      thumbnail_ref: null,
+      visibility: 'published',
+      published_at: '2026-04-18T16:00:00.000Z',
+      retracted_at: null,
+      publisher_id: 'PUB_DEMO',
+    },
+    {
+      id: '01HEXAMPLETOUR0000000002',
+      slug: 'sea-ice-decline',
+      title: 'Sea-ice decline, 1979 to today',
+      tour_json_ref: 'tours/01HEXAMPLETOUR0000000002.json',
+      updated_at: '2026-04-11T09:05:00.000Z',
+      description: null,
+      thumbnail_ref: null,
+      visibility: 'draft',
+      published_at: null,
+      retracted_at: null,
+      publisher_id: 'PUB_DEMO',
+    },
+  ],
+}
+
+/** The **public** hero read (`/api/v1/featured-hero`), which the page
+ *  loads to show the current pin. Distinct from the authed write
+ *  endpoint at `/api/v1/publish/featured-hero`, which a capture never
+ *  hits — and not a substring of it either, so ordering is free. */
+const featuredHero = {
+  hero: {
+    datasetId: '01HEXAMPLEDATASET00000001',
+    window: { start: '2026-04-20T00:00:00.000Z', end: '2026-04-27T00:00:00.000Z' },
+    headline: 'Sea-surface temperature, this week',
+  },
+}
 
 const publisher = (over: Partial<PublisherSummary> = {}): PublisherSummary => ({
   id: 'PUB_DEMO',
@@ -464,7 +552,11 @@ export function publisherFixtures(
     // route is only hit by the detail scene, which stays populated.
     { url: /\/publish\/datasets\/[^/?]+(\?|$)/, json: datasetDetail },
     list(datasetsState, '/api/v1/publish/datasets', datasets, datasetsEmpty),
+    // Runs before the list, for the substring reason above.
+    { url: /\/publish\/workflows\/[^/?]+\/runs(\?|$)/, json: workflowRuns },
     list(opts.workflows ?? 'populated', '/api/v1/publish/workflows', workflows, workflowsEmpty),
+    { url: '/api/v1/publish/tours', json: tours },
+    { url: '/api/v1/featured-hero', json: featuredHero },
     list(opts.publishers ?? 'populated', '/api/v1/publish/publishers', publishers, publishersEmpty),
     list(opts.events ?? 'populated', '/api/v1/publish/events', events, eventsEmpty),
     // Preview before the registry list — rules substring-match in order.

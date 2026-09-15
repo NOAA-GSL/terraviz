@@ -12,6 +12,7 @@ import {
   PERSISTED_QUEUE_KEY,
   __setPersistOverrideForTests,
 } from './transport'
+import { getApiOrigin } from '../config/endpoints'
 
 // --- Fixtures ---
 
@@ -25,6 +26,56 @@ function layerLoaded(id = 'A'): LayerLoadedEvent {
     load_ms: 100,
   }
 }
+
+// --- endpoint resolution ---
+
+describe('transport — endpoint resolution', () => {
+  const tauriWindow = window as unknown as { __TAURI__?: unknown }
+
+  afterEach(() => {
+    delete tauriWindow.__TAURI__
+  })
+
+  it('stays relative on the web, so a deploy reports to itself', () => {
+    // The Pages Function that serves `/api/ingest` is part of the same
+    // deploy that served the page. That is what makes a fork report to
+    // its own node with no configuration at all, and why this must not
+    // become absolute for everyone.
+    expect(createFetchTransport().endpoint).toBe('/api/ingest')
+  })
+
+  it('is absolute on desktop, where a relative path resolves to nothing', () => {
+    // A desktop webview is served from `tauri://localhost/` with no
+    // Pages Functions backend behind it. The relative path either
+    // fails to parse as a URL inside the Rust HTTP plugin — caught,
+    // classified retryable, and retried forever — or returns the
+    // bundled `index.html`. No row ever reached Analytics Engine from
+    // a desktop build before this.
+    tauriWindow.__TAURI__ = {}
+
+    const endpoint = createFetchTransport().endpoint
+
+    expect(endpoint).toMatch(/^https?:\/\//)
+    expect(endpoint.endsWith('/api/ingest')).toBe(true)
+  })
+
+  it('sends telemetry to the same origin the catalog already uses', () => {
+    // One resolution, not two. A node whose catalog and telemetry
+    // disagreed about where "here" is would be a genuinely confusing
+    // thing to debug, which is why this reads `getApiOrigin()` rather
+    // than introducing a second build-time variable meaning the same
+    // thing.
+    tauriWindow.__TAURI__ = {}
+
+    expect(createFetchTransport().endpoint).toBe(`${getApiOrigin()}/api/ingest`)
+  })
+
+  it('still lets a caller override the whole endpoint', () => {
+    expect(
+      createFetchTransport({ endpoint: 'https://example.test/ingest' }).endpoint,
+    ).toBe('https://example.test/ingest')
+  })
+})
 
 // --- classifyResponse ---
 

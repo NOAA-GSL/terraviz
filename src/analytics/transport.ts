@@ -30,17 +30,69 @@
  *   network error → retryable (offline, DNS, TLS, etc.)
  */
 
+import { getApiOrigin } from '../config/endpoints'
 import type { TelemetryEvent } from '../types'
 
 // ---------------------------------------------------------------
 // Config
 // ---------------------------------------------------------------
 
-/** Default ingest endpoint. Relative on web (Vite proxy in dev,
- * same-origin Pages Function in prod); absolute on Tauri because
- * the webview origin is not the Pages deploy. Callers can override
- * via `createFetchTransport({ endpoint })`. */
+/**
+ * Ingest path, relative to whichever origin `defaultEndpoint()` picks.
+ *
+ * Relative is the right answer on the web and only on the web: the
+ * Pages Function that serves it is part of the same deploy that served
+ * the page, so a fork reports to itself with no configuration at all.
+ */
 export const DEFAULT_ENDPOINT = '/api/ingest'
+
+/**
+ * Where a batch actually goes.
+ *
+ * **On desktop this must be absolute, and until this landed it was
+ * not.** The docstring above `DEFAULT_ENDPOINT`
+ * used to claim the endpoint was "absolute on Tauri because the
+ * webview origin is not the Pages deploy. Callers can override via
+ * `createFetchTransport({ endpoint })`" — a true description of a
+ * requirement that nothing implemented and no caller ever met. A
+ * desktop webview is served from `tauri://localhost/`, so the relative
+ * path either fails to parse as a URL inside the Rust HTTP plugin
+ * (caught below, classified retryable, retried forever with backoff
+ * and persisted to localStorage between launches) or resolves to the
+ * bundled `index.html`. Either way no row has ever reached Analytics
+ * Engine from a desktop build.
+ *
+ * The origin comes from `getApiOrigin()` — the same resolution
+ * `/api/v1/*` already uses, rather than a second variable meaning the
+ * same thing. A node that followed `docs/SELF_HOSTING.md` §15.3 and
+ * set `VITE_API_ORIGIN` therefore gets working desktop telemetry with
+ * no further action, and one that did not sends it to the same place
+ * its catalog reads already go. That default is worth being explicit
+ * about: an un-configured fork's desktop build reports to upstream.
+ * It is the existing behaviour of every other `/api/` call rather than
+ * a new exposure, and §15.3 is the one place that tells an operator to
+ * fix it — but it is a default, not a design, and the fix is one
+ * build-time variable.
+ *
+ * Resolved per call rather than captured at module load for
+ * `catalogSource`'s reason: a test needs to flip `window.__TAURI__`
+ * between cases without re-importing the module.
+ *
+ * **This fixes the URL and does not by itself prove a row lands.**
+ * `functions/api/ingest.ts` 403s any request whose `Origin` it does
+ * not recognise, and a 403 is classified non-retryable and dropped.
+ * `tauri://localhost` and its Windows variants are in that allowlist,
+ * so a desktop request is accepted *if* it carries the header — but
+ * this path goes through the Tauri HTTP plugin, which issues from
+ * Rust rather than from the webview, and whether it forwards an
+ * `Origin` has not been checked against a live deploy. That is one
+ * observation away, and if it does not, the fix is one entry in
+ * `ALLOWED_ORIGINS` rather than anything here.
+ */
+function defaultEndpoint(): string {
+  if (!isTauri()) return DEFAULT_ENDPOINT
+  return `${getApiOrigin()}${DEFAULT_ENDPOINT}`
+}
 
 /** localStorage key used by the offline persistence layer. Exposed
  * so tests can clear / inspect it without reaching into internals. */
@@ -52,9 +104,15 @@ export const PERSISTED_QUEUE_KEY = 'sos-telemetry-queue'
  * into a multi-megabyte persisted queue. */
 export const MAX_PERSISTED_EVENTS = 500
 
-const IS_TAURI =
-  typeof window !== 'undefined' &&
-  !!(window as unknown as { __TAURI__?: unknown }).__TAURI__
+/** Resolved per call, not captured at module load, so a test can flip
+ *  `window.__TAURI__` between cases — the same reasoning
+ *  `catalogSource.isTauri()` documents. */
+function isTauri(): boolean {
+  return (
+    typeof window !== 'undefined' &&
+    !!(window as unknown as { __TAURI__?: unknown }).__TAURI__
+  )
+}
 
 // ---------------------------------------------------------------
 // Lazy Tauri fetch — same pattern as llmProvider.ts
@@ -63,7 +121,7 @@ const IS_TAURI =
 let tauriFetcherPromise: Promise<typeof globalThis.fetch | null> | null = null
 
 function getTauriFetcher(): Promise<typeof globalThis.fetch | null> {
-  if (!IS_TAURI) return Promise.resolve(null)
+  if (!isTauri()) return Promise.resolve(null)
   if (!tauriFetcherPromise) {
     tauriFetcherPromise = import('@tauri-apps/plugin-http')
       .then((m) => m.fetch as typeof globalThis.fetch)
@@ -119,7 +177,7 @@ export interface TransportOptions {
  * call, so web builds never touch it.
  */
 export function createFetchTransport(options: TransportOptions = {}): Transport {
-  const endpoint = options.endpoint ?? DEFAULT_ENDPOINT
+  const endpoint = options.endpoint ?? defaultEndpoint()
 
   async function send(
     sessionId: string,
@@ -266,12 +324,12 @@ export function clearPersistedQueue(): void {
 }
 
 /** Exposed for tests to force persistence on / off regardless of
- * the runtime IS_TAURI detection. */
+ * the runtime `isTauri()` detection. */
 let persistOverride: boolean | null = null
 export function __setPersistOverrideForTests(v: boolean | null): void {
   persistOverride = v
 }
 
 function shouldPersist(): boolean {
-  return persistOverride ?? IS_TAURI
+  return persistOverride ?? isTauri()
 }

@@ -129,24 +129,14 @@ function setupDOM(): void {
 // ---------------------------------------------------------------------------
 // WebGL detection
 // ---------------------------------------------------------------------------
-describe('WebGL support check', () => {
-  it('shows error page when WebGL is unavailable', async () => {
-    setupDOM()
-
-    // Override canvas getContext to return null (no WebGL)
-    const origGetContext = HTMLCanvasElement.prototype.getContext
-    HTMLCanvasElement.prototype.getContext = vi.fn().mockReturnValue(null) as any
-
-    // Import fresh module to trigger DOMContentLoaded handler
-    // We can't easily re-trigger DOMContentLoaded, so test the detection
-    // logic by checking the canvas getContext mock.
-    const canvas = document.createElement('canvas')
-    const gl = canvas.getContext('webgl2') || canvas.getContext('webgl')
-    expect(gl).toBeNull()
-
-    HTMLCanvasElement.prototype.getContext = origGetContext
-  })
-})
+// The WebGL preflight is covered in `src/utils/webglSupport.test.ts`,
+// against the shipped predicate. The test that used to live here stubbed
+// `getContext` to null and then asserted that a locally re-written
+// `getContext('webgl2') || getContext('webgl')` returned null — it never
+// called `checkWebGLSupport`, so it passed for any implementation,
+// including the WebGL 1 fallback the MapLibre 6 upgrade removed. It has
+// been replaced rather than moved: the predicate now lives in a module
+// that can be imported without booting the app.
 
 // ---------------------------------------------------------------------------
 // URL parsing

@@ -34,6 +34,7 @@
  * spatial-only filters reload just the heatmap data.
  */
 
+import type { GeoJSONSource } from 'maplibre-gl'
 import { fetchFeatures, renderFeatureDisabledCard } from '../features'
 import { t } from '../../../i18n'
 import { formatDate, formatNumber, formatRegion } from '../../../i18n/format'
@@ -1231,7 +1232,9 @@ function binsToGeoJson(bins: SpatialData['bins']): GeoJSON.FeatureCollection {
 }
 
 async function mountHeatmap(container: HTMLElement, bins: SpatialData['bins']): Promise<HeatmapHandle> {
-  const [{ default: maplibregl }] = await Promise.all([
+  // The module namespace itself, not `.default` — MapLibre 6 is ESM-only
+  // and exports no default.
+  const [maplibregl] = await Promise.all([
     import('maplibre-gl'),
     // Vite injects the stylesheet on dynamic import; the portal CSS
     // bundle stays map-free until this section first renders.
@@ -1288,10 +1291,18 @@ async function mountHeatmap(container: HTMLElement, bins: SpatialData['bins']): 
     setBins(next) {
       latestBins = next
       if (!sourceReady) return
-      const source = map.getSource('attention')
-      if (source && 'setData' in source) {
-        ;(source as { setData(data: GeoJSON.FeatureCollection): void }).setData(binsToGeoJson(next))
-      }
+      // Typed through MapLibre's own generic rather than a hand-written
+      // structural cast. The old cast declared `setData` as returning
+      // `void`; in MapLibre 6 it returns `Promise<void>`, so the cast was
+      // actively describing the wrong shape and would have gone on
+      // absorbing any further change to the signature. The type import is
+      // erased at compile time, so the map still arrives only through the
+      // dynamic import below and the portal chunk stays map-free.
+      const source = map.getSource<GeoJSONSource>('attention')
+      // Deliberately floated: `setBins` is synchronous, and MapLibre
+      // reports worker failures through the map's `error` event rather
+      // than by rejecting here.
+      void source?.setData(binsToGeoJson(next))
     },
     destroy() {
       map.remove()

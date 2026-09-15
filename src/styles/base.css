@@ -309,3 +309,23 @@ canvas {
     font-size: calc(0.8rem * var(--ui-scale));
 }
 
+
+/*
+ * Idle cursor while the control window is fullscreen
+ * (`docs/MULTI_MONITOR_PLAN.md` §3.6, rung 12).
+ *
+ * The class is added by `windowChrome.createIdleCursor` and only ever
+ * while fullscreen — a windowed app the operator is still driving keeps
+ * its pointer.
+ *
+ * The `*` and the `!important` are both load-bearing, not shotgun. A
+ * `cursor: none` on `:root` alone is overridden by every button's own
+ * `cursor: pointer`, and the chrome is mostly buttons — so the rule
+ * would clear the pointer over the globe and leave it over exactly the
+ * panels an operator is capturing. This is the one selector where that
+ * breadth is the intent.
+ */
+:root.cursor-idle,
+:root.cursor-idle * {
+    cursor: none !important;
+}

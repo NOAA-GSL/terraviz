@@ -139,15 +139,41 @@ const checks: Check[] = [
       // Baseline: this chrome is genuinely visible on a bare globe, so
       // asserting embed mode hides it is a real gate (not a no-op that
       // passes because the element was hidden for some other reason).
+      //
+      // **The globe has to actually be bare for that to hold.** The
+      // browse overlay auto-opens on a fresh launch, and
+      // `body.browse-open` hides `#help-trigger` outright — correctly,
+      // since the overlay carries its own (`#help-trigger-browse`). So
+      // the overlay is closed first. Before `gotoApp` waited out the
+      // boot splash this passed anyway, by reading a frame from
+      // *during* boot in which the overlay had not opened yet: a
+      // state no user ever sees, asserted as the baseline for
+      // everything below.
       await gotoApp(page, '/')
+      await page.locator('#browse-close').click()
+      await page.locator('body:not(.browse-open)').waitFor()
       for (const id of ['#map-controls', '#help-trigger']) {
         await page.locator(id).waitFor({ state: 'visible' })
       }
       // Embed mode hides it.
       await gotoApp(page, '/?embed=1')
       await page.locator('body.embed-mode').waitFor()
-      for (const id of ['#map-controls', '#help-trigger']) {
-        assert(!(await page.locator(id).isVisible()), `embed mode should hide ${id}`)
+      // The overlay auto-opens here too, so `body.browse-open` is set
+      // and hides both of these *on its own* — this assertion would
+      // pass with every embed rule deleted, which is the vacuous gate
+      // the baseline above exists to rule out. Drop that one class and
+      // re-read, leaving `embed-mode` as the only cause left standing.
+      // Same technique as the chat-trigger check below, for the same
+      // reason: assert the rule, not a state several rules can produce.
+      const hiddenByEmbedAlone = await page.evaluate(() =>
+        ['#map-controls', '#help-trigger'].map(sel => {
+          document.body.classList.remove('browse-open')
+          const el = document.querySelector(sel)
+          return el ? getComputedStyle(el).display === 'none' : false
+        }),
+      )
+      for (const [i, id] of ['#map-controls', '#help-trigger'].entries()) {
+        assert(hiddenByEmbedAlone[i], `embed mode should hide ${id} on its own`)
       }
       // The ?chat=1 sub-flag (body.embed-show-chat) must stop embed.css from
       // hiding the Orbit chat trigger. The app only adds `.visible` to the

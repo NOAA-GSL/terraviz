@@ -27,7 +27,11 @@ const mapStub = vi.hoisted(() => {
   return { Map, Marker, remove, setLngLat, addTo, instances }
 })
 
-vi.mock('maplibre-gl', () => ({ default: { Map: mapStub.Map, Marker: mapStub.Marker } }))
+// Named exports with no `default`, which is the shape MapLibre 6 actually
+// ships — it is ESM-only. A mock carrying a `default` would keep passing
+// against a consumer that still destructured one, which is the bug this
+// shape exists to catch.
+vi.mock('maplibre-gl', () => ({ Map: mapStub.Map, Marker: mapStub.Marker }))
 vi.mock('maplibre-gl/dist/maplibre-gl.css', () => ({}))
 
 import { mountEventLocator } from './event-locator-map'

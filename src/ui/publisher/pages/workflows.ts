@@ -100,10 +100,18 @@ async function hydrateRunStatuses(
     workflows.map(async wf => {
       const res = await runsFn(wf.id)
       if (!res.ok) return
+      // `ok` says the request succeeded, not that the body has the shape
+      // this expects. The call is floated (`void hydrateRunStatuses`), so
+      // iterating a non-array here does not degrade to a missing badge —
+      // it throws into an unhandled rejection and the whole page reports
+      // an uncaught error. A last-run badge is decoration; it must never
+      // be able to take the workflows list down with it.
+      const runs = res.data?.runs
+      if (!Array.isArray(runs)) return
       // Single pass for the newest run — no need to sort the whole list
       // (listWorkflowRuns can return up to 50) just to take the max.
-      let newest: (typeof res.data.runs)[number] | undefined
-      for (const run of res.data.runs) {
+      let newest: (typeof runs)[number] | undefined
+      for (const run of runs) {
         if (!newest || (Date.parse(run.created_at) || 0) > (Date.parse(newest.created_at) || 0)) {
           newest = run
         }

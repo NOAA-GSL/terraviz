@@ -33,9 +33,50 @@ describe('isSameOrigin', () => {
 })
 
 describe('gotoApp', () => {
+  it('waits for the boot splash before handing back', async () => {
+    // The wait is the whole reason a capture is not of a loading
+    // screen. Asserting it happens is not fussiness: the fake Page in
+    // these tests used to carry only `goto`, so the call threw a
+    // TypeError that `settleBootSplash`'s bare catch swallowed — every
+    // case here passed while the behaviour was never once exercised.
+    const goto = vi.fn().mockResolvedValue(null)
+    const waitForFunction = vi.fn().mockResolvedValue(null)
+
+    await gotoApp({ goto, waitForFunction } as unknown as Page, '/')
+
+    expect(waitForFunction).toHaveBeenCalledTimes(1)
+  })
+
+  it('carries on when the splash never finishes', async () => {
+    // Boot genuinely does not complete offline on some routes, and a
+    // splash is the honest shot there. Failing the capture would turn
+    // "this page did not boot" into "there is no screenshot".
+    const goto = vi.fn().mockResolvedValue(null)
+    const waitForFunction = vi
+      .fn()
+      .mockRejectedValue(new Error('page.waitForFunction: Timeout 10000ms exceeded.'))
+
+    await expect(
+      gotoApp({ goto, waitForFunction } as unknown as Page, '/'),
+    ).resolves.toBeUndefined()
+  })
+
+  it('does not swallow a non-timeout failure', async () => {
+    // The bug this file taught: a bare catch turns a missing method
+    // into a silently inert helper.
+    const goto = vi.fn().mockResolvedValue(null)
+    const waitForFunction = vi.fn().mockRejectedValue(new TypeError('not a function'))
+
+    await expect(
+      gotoApp({ goto, waitForFunction } as unknown as Page, '/'),
+    ).rejects.toThrow(TypeError)
+  })
+
+
   it('uses a 60s ceiling and waits only for domcontentloaded', async () => {
     const goto = vi.fn().mockResolvedValue(null)
-    await gotoApp({ goto } as unknown as Page, '/?catalog=true')
+    const waitForFunction = vi.fn().mockResolvedValue(null)
+    await gotoApp({ goto, waitForFunction } as unknown as Page, '/?catalog=true')
     expect(goto).toHaveBeenCalledTimes(1)
     expect(goto).toHaveBeenCalledWith('/?catalog=true', {
       waitUntil: 'domcontentloaded',
@@ -44,18 +85,20 @@ describe('gotoApp', () => {
   })
 
   it('retries once when the first navigation times out (the catalog flake)', async () => {
+    const waitForFunction = vi.fn().mockResolvedValue(null)
     const goto = vi
       .fn()
       .mockRejectedValueOnce(new Error('page.goto: Timeout 60000ms exceeded.'))
       .mockResolvedValueOnce(null)
-    await gotoApp({ goto } as unknown as Page, '/?catalog=true')
+    await gotoApp({ goto, waitForFunction } as unknown as Page, '/?catalog=true')
     expect(goto).toHaveBeenCalledTimes(2)
   })
 
   it('does not retry — and rethrows — a non-timeout navigation error', async () => {
+    const waitForFunction = vi.fn().mockResolvedValue(null)
     const goto = vi.fn().mockRejectedValue(new Error('net::ERR_CONNECTION_REFUSED'))
     await expect(
-      gotoApp({ goto } as unknown as Page, '/?catalog=true'),
+      gotoApp({ goto, waitForFunction } as unknown as Page, '/?catalog=true'),
     ).rejects.toThrow('ERR_CONNECTION_REFUSED')
     expect(goto).toHaveBeenCalledTimes(1)
   })

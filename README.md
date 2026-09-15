@@ -415,7 +415,7 @@ re-run (step 5). `adb reverse --list` shows active forwards.
 - Open the URL directly in browser to verify
 
 **Sphere not rendering**
-- Check WebGL support (most modern browsers)
+- Check WebGL 2 support (most modern browsers; MapLibre 6 requires it)
 - Check DevTools console for WebGL/MapLibre errors
 - Try a different browser
 

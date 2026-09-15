@@ -8,10 +8,14 @@
  * raster tile sources, day/night custom layer, and vector labels/boundaries.
  */
 
-import maplibregl from 'maplibre-gl'
+// Namespace import, not a default one: MapLibre 6 is ESM-only and ships no
+// default export, so `import maplibregl from` resolves to `undefined` and
+// every `new maplibregl.Map(...)` below fails at construction rather than
+// at build time.
+import * as maplibregl from 'maplibre-gl'
 import 'maplibre-gl/dist/maplibre-gl.css'
 
-import type { Map as MaplibreMap, StyleSpecification, CustomLayerInterface } from 'maplibre-gl'
+import type { Map as MaplibreMap, StyleSpecification, CustomLayerInterface, VisibilitySpecification } from 'maplibre-gl'
 import { createEarthTileLayer, computeSunLightPosition, type EarthTileLayerControl } from './earthTileLayer'
 import { isEarthBody } from './datasetOverlayOptions'
 import type {
@@ -411,6 +415,39 @@ export class MapRenderer implements GlobeRenderer {
       canvasId?: string
       slotIndex?: number
       getLayerId?: () => string | null
+      /**
+       * Fired when this panel's WebGL context is lost. **Once, and
+       * never un-fired.**
+       *
+       * A lost context invalidates every GPU resource behind this
+       * globe. MapLibre rebuilds its own on restore — which is why the
+       * basemap tiles come back — but `earthTileLayer` is a custom
+       * layer holding its textures and programs in closures, and
+       * nothing rebuilds those. The panel therefore comes back with
+       * tiles and no data, permanently.
+       *
+       * That is why there is no restore counterpart. An earlier draft
+       * reported both edges as `onContextChange(lost: boolean)`, and
+       * the panel notice cleared on the restore — withdrawing the only
+       * user-visible diagnosis at the exact moment the globe was still
+       * broken, and, where a stream had also failed, replacing it with
+       * a notice pointing at the wrong subsystem. The notice itself
+       * says *"reload to restore"*: clearing it without a reload
+       * contradicts its own instruction. Raised in review.
+       *
+       * So the signal is one-way by construction, and the clear
+       * belongs to whoever writes the repair half — rebuilding the
+       * custom layer's programs and textures and re-uploading the
+       * dataset — because that is the only event that makes it true.
+       * A restore still logs, because "lost and came back" and "lost
+       * and stayed lost" are different diagnoses.
+       *
+       * MapLibre's own docs say custom layers "should appropriately
+       * handle `MapContextEvent` with `webglcontextlost` and
+       * `webglcontextrestored`" — this is the detection half of doing
+       * that.
+       */
+      onContextLost?: () => void
       /** MapLibre projection. Defaults to `'globe'` for the main
        *  3D globe; the §6.9 catalog Map view passes `'mercator'`
        *  for a flat world map. */
@@ -459,10 +496,19 @@ export class MapRenderer implements GlobeRenderer {
       // attributions, sourced from `map.getStyle().sources[…].attribution`.
       // See src/ui/creditsPanel.ts for the design.
       attributionControl: false,
-      preserveDrawingBuffer: true, // needed for captureViewContext / toDataURL
+      // `preserveDrawingBuffer` lives under `canvasContextAttributes`, not at
+      // the top level. MapLibre moved it there in 5.0 and it was left behind,
+      // so for two majors the map has been running with the WebGL default of
+      // `false` — `getContextAttributes()` on the live canvas confirms it. The
+      // buffer is cleared after compositing, so `toDataURL` reads black, which
+      // is what `captureScreenshot` and `screenshotService` hand to Orbit's
+      // vision flow and the feedback form. It survived only on the timing of
+      // reading inside the `map.once('render')` callback; the 1 s fallback
+      // path captures nothing. Found in review of the MapLibre 6 migration.
+      canvasContextAttributes: { preserveDrawingBuffer: true },
       maxPitch: 85,
       maxTileCacheSize: isMobile() ? 750 : 2000,
-    } as maplibregl.MapOptions)
+    })
 
     // Double-click/double-tap resets to default view instead of zoom in
     this.map.doubleClickZoom.disable()
@@ -475,6 +521,23 @@ export class MapRenderer implements GlobeRenderer {
         duration: 2000,
       })
     }
+    // Loud on purpose, and at a level production does not filter: a
+    // lost context is invisible from inside the app otherwise, and the
+    // symptom a viewer reports — "the globe went black" — names no
+    // cause. There is no console on the device this was found on.
+    this.map.on('webglcontextlost', () => {
+      logger.error(`[Map] WebGL context lost on panel ${this.slotIndex} — every GPU resource for this globe is now invalid`)
+      options?.onContextLost?.()
+    })
+    this.map.on('webglcontextrestored', () => {
+      // A warning rather than info, and deliberately **not** a signal
+      // that anything recovered: the context is back, the custom
+      // layer's textures and programs are not, and this panel is still
+      // broken. The notice stays up for that reason — see
+      // `onContextLost`.
+      logger.warn(`[Map] WebGL context restored on panel ${this.slotIndex} — MapLibre resources only; the dataset layer is not rebuilt, so the panel notice stands`)
+    })
+
     this.map.on('dblclick', resetView)
 
     // Emit `camera_settled` after every user-driven move ends.
@@ -882,7 +945,11 @@ export class MapRenderer implements GlobeRenderer {
   /** Show or hide label layers only (country, city, ocean names). */
   toggleLabels(visible?: boolean): boolean {
     if (!this.map || !this.map.isStyleLoaded()) return false
-    let firstLayer: string | undefined
+    // Not `string`: MapLibre 6 types `getLayoutProperty` as the property's
+    // real type, and `visibility` can be an expression as well as
+    // 'visible' / 'none'. The comparison below is unchanged — an
+    // expression is simply not 'none', which is the existing behaviour.
+    let firstLayer: VisibilitySpecification | undefined
     try { firstLayer = this.map.getLayoutProperty('country-labels', 'visibility') } catch { /* style not ready */ }
     const show = visible ?? (firstLayer === 'none' || firstLayer === undefined)
     const vis = show ? 'visible' : 'none'
@@ -895,7 +962,7 @@ export class MapRenderer implements GlobeRenderer {
   /** Show or hide boundary + coastline lines. */
   toggleBoundaries(visible?: boolean): boolean {
     if (!this.map || !this.map.isStyleLoaded()) return false
-    let current: string | undefined
+    let current: VisibilitySpecification | undefined
     try { current = this.map.getLayoutProperty('boundaries', 'visibility') } catch { /* style not ready */ }
     const show = visible ?? (current === 'none' || current === undefined)
     const vis = show ? 'visible' : 'none'
