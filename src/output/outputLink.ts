@@ -61,30 +61,27 @@ import {
   OUTPUT_REATTACH_EVENT,
   OUTPUT_RENDER_CONFIG_EVENT,
   OUTPUT_STATE_EVENT,
+  DEFAULT_OUTPUT_MODE,
   defaultRenderConfig,
+  isWarpSetId,
   type OutputGlobeState,
   type OutputMode,
   type OutputRenderConfig,
   type OutputStateMessage,
+  type OutputWarpSet,
 } from '../services/multiOutput/protocol'
 import { createLinkWatchdog, type LinkHealth, type LinkWatchdog } from './linkWatchdog'
 import { logger } from '../utils/logger'
 
-/**
- * The geometry this window renders.
- *
- * A constant because v1 ships one mode, and it is deliberately *not*
- * read from the first `view.mode` that arrives: an output that adopted
- * the mode it was sent could never disagree with it, which would make
- * the check below vacuous. The mode has to be known independently for
- * the comparison to mean anything.
- *
- * When a second mode lands, the manager tells the window which it is —
- * the entry URL it is spawned with is the obvious carrier, since
- * `spawn()` already passes one and the output reads it before any IPC
- * exists.
- */
-export const OUTPUT_MODE: OutputMode = 'sos-equirect'
+// The geometry this window renders is an **argument**, never something
+// read off the wire. It arrives from the window's own URL
+// (`outputModeFromQuery`, read by `src/output/main.ts`), which the
+// manager wrote before any IPC existed. It is deliberately *not* adopted
+// from the first `view.mode` that arrives: an output that took its
+// geometry from the messages it was sent could never disagree with them,
+// which would make `acceptView`'s check vacuous. The mode has to be
+// known independently for the comparison to mean anything. The functions
+// below default to `DEFAULT_OUTPUT_MODE`, which is what a bare URL means.
 
 /** Top-level keys of the mirrored state. */
 export type StateKey = keyof OutputGlobeState
@@ -159,7 +156,7 @@ export interface OutputStateStore {
  * call site: no adapter, and no second place for the centred-camera
  * identity to be written down.
  */
-export function outputInitialState(mode: OutputMode = OUTPUT_MODE): OutputGlobeState {
+export function outputInitialState(mode: OutputMode = DEFAULT_OUTPUT_MODE): OutputGlobeState {
   return {
     dataset: null,
     primary: null,
@@ -174,6 +171,7 @@ export function outputInitialState(mode: OutputMode = OUTPUT_MODE): OutputGlobeS
       // later in-place write would edit the shader's own constant.
       params: {
         cameraOffset: { ...IDENTITY_PARAMS.cameraOffset },
+        orientation: [...IDENTITY_PARAMS.orientation],
         split: IDENTITY_PARAMS.split,
         rotationOffsetRad: IDENTITY_PARAMS.rotationOffsetRad,
       },
@@ -266,7 +264,7 @@ export function changesPicture(changed: readonly StateKey[]): boolean {
   return changed.some(key => picture.includes(key))
 }
 
-export function createOutputStateStore(mode: OutputMode = OUTPUT_MODE): OutputStateStore {
+export function createOutputStateStore(mode: OutputMode = DEFAULT_OUTPUT_MODE): OutputStateStore {
   let held = outputInitialState(mode)
   let seq = -1
 
@@ -358,9 +356,14 @@ export function isStateMessage(payload: unknown): payload is OutputStateMessage 
  * Not every payload on the config channel is a config.
  *
  * Same posture as `isStateMessage`: a malformed payload costs one
- * dropped message, never an exception out of the IPC callback. Each
- * field is checked independently so a message carrying one valid half
- * is not thrown away for the other.
+ * dropped message, never an exception out of the IPC callback. Every
+ * field the type names is required, because the listener applies the
+ * whole config and this guard promises all of it. It once checked only
+ * the first two, so a payload without `warp` reached a warp window's
+ * `setWarp` as `undefined` and threw on its id, leaving the rest of the
+ * config unapplied. Shape only: a width off the ladder, a gamma out of
+ * range and a set that will not place are each the scene's to refuse,
+ * and it does.
  */
 export function isRenderConfig(payload: unknown): payload is OutputRenderConfig {
   if (typeof payload !== 'object' || payload === null) return false
@@ -368,7 +371,42 @@ export function isRenderConfig(payload: unknown): payload is OutputRenderConfig 
   return (
     typeof m.framebufferWidth === 'number' &&
     Number.isFinite(m.framebufferWidth) &&
-    typeof m.debugOverlay === 'boolean'
+    typeof m.debugOverlay === 'boolean' &&
+    typeof m.calibration === 'boolean' &&
+    typeof m.blendGamma === 'number' &&
+    Number.isFinite(m.blendGamma) &&
+    (m.warp === null || isWarpSet(m.warp))
+  )
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null
+
+/**
+ * A warp set's shape, down to what the scene hands `placeWarpSet`:
+ * strings and numbers where the contract puts them, since that check
+ * refuses a set it cannot use but reads its fields as it goes. The id
+ * must be a content id, because the scene keys its rebuild on it.
+ */
+function isWarpSet(value: unknown): value is OutputWarpSet {
+  if (!isRecord(value) || !isWarpSetId(value.id) || !Array.isArray(value.meshes)) return false
+  const { texture } = value
+  const textureOk =
+    texture === null ||
+    (isRecord(texture) &&
+      ((texture.surface === 'sphere' &&
+        typeof texture.rotationOffsetDeg === 'number' &&
+        Number.isFinite(texture.rotationOffsetDeg)) ||
+        (texture.surface === 'mesh' && texture.rotationOffsetDeg === null)))
+  return (
+    textureOk &&
+    value.meshes.every(
+      (mesh) =>
+        isRecord(mesh) &&
+        typeof mesh.id === 'string' &&
+        typeof mesh.text === 'string' &&
+        isRecord(mesh.viewport) &&
+        ['x', 'y', 'w', 'h'].every((k) => typeof (mesh.viewport as Record<string, unknown>)[k] === 'number'),
+    )
   )
 }
 
@@ -441,7 +479,7 @@ export interface OutputLink {
  */
 export async function connectOutputLink(
   host: OutputLinkHost,
-  mode: OutputMode = OUTPUT_MODE,
+  mode: OutputMode = DEFAULT_OUTPUT_MODE,
 ): Promise<OutputLink> {
   const store = createOutputStateStore(mode)
   const listeners = new Set<(changed: StateKey[], state: Readonly<OutputGlobeState>) => void>()

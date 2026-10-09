@@ -169,6 +169,10 @@ const SWIFT_TOOLS = /^\/\/[ \t]*swift-tools-version[ \t]*:/
 const XML_DECL = /^[ \t]*<\?xml\b/i
 const DOCTYPE = /^[ \t]*<!doctype\b/i
 
+function splitLines(text: string): string[] {
+  return text.split(/\r?\n/)
+}
+
 /**
  * How many leading lines must stay above the header.
  *
@@ -177,7 +181,7 @@ const DOCTYPE = /^[ \t]*<!doctype\b/i
  * rather than a `startsWith('#!')` at the call site.
  */
 export function prologueLines(file: string, text: string): number {
-  const lines = text.split('\n')
+  const lines = splitLines(text)
   const at = (n: number): string => lines[n] ?? ''
   const isMarkup = /\.html?$/.test(file)
   let i = 0
@@ -245,7 +249,7 @@ export function headerFor(file: string): string[] {
  * in place, at the first index a prologue leaves free.
  */
 export function hasHeader(file: string, text: string, style: CommentStyle): boolean {
-  const lines = text.split('\n')
+  const lines = splitLines(text)
   const skip = prologueLines(file, text)
   return lines[skip] === spdxLine(style) && copyrightRe(style).test(lines[skip + 1] ?? '')
 }
@@ -262,7 +266,7 @@ export function hasHeader(file: string, text: string, style: CommentStyle): bool
  * consumed before the correct block goes in.
  */
 export function addHeader(file: string, text: string, style: CommentStyle): string {
-  const lines = text.split('\n')
+  const lines = splitLines(text)
   const skip = prologueLines(file, text)
   const rest = lines.slice(skip)
 
@@ -291,7 +295,8 @@ export function addHeader(file: string, text: string, style: CommentStyle): stri
   // two, and do not leave zero.
   while (rest.length > 0 && rest[0].trim() === '') rest.shift()
 
-  return [...lines.slice(0, skip), ...headerLines(style), ...rest].join('\n')
+  const newline = text.match(/\r?\n/)?.[0] ?? '\n'
+  return [...lines.slice(0, skip), ...headerLines(style), ...rest].join(newline)
 }
 
 // ---------------------------------------------------------------------------

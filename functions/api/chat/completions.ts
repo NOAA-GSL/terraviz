@@ -9,7 +9,7 @@
  * No external API key needed — uses the AI binding on Cloudflare's edge.
  */
 
-import { isWorkersAiQuotaError } from '../_lib/workers-ai-error'
+import { isWorkersAiQuotaError, workersAiErrorMessage } from '../_lib/workers-ai-error'
 import {
   extractModelText,
   extractModelToolCalls,
@@ -339,11 +339,17 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
     }
     return await nonStreamResponse(context.env.AI, cfModel, textMessages, cors)
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Internal server error'
+    // The one place the upstream-failure contract is built: the
+    // binding's throws, the tool shim and the raw streaming path all
+    // land here. A thrown message can itself be a JSON error body, so
+    // it goes through `workersAiErrorMessage` before the quota
+    // patterns see it — they must match the error, not a request id.
+    const raw = err instanceof Error ? err.message : typeof err === 'string' ? err : ''
+    const message = workersAiErrorMessage(raw) || 'Internal server error'
     // Phase 1f/D — surface Workers AI quota exhaustion as a typed
     // 503 so the SPA can flip its degraded-mode badge instead of
     // showing a generic 502 server_error.
-    if (isWorkersAiQuotaError(err)) {
+    if (isWorkersAiQuotaError(message)) {
       return new Response(
         JSON.stringify({ error: { message, type: 'quota_exhausted', code: 4006 } }),
         { status: 503, headers: { ...cors, 'Content-Type': 'application/json' } },
@@ -478,12 +484,23 @@ async function streamResponse(
     { returnRawResponse: true },
   )) as Response
 
-  if (!response.body) {
-    return new Response(JSON.stringify({ error: 'No response from AI' }), {
-      status: 502,
-      headers: { ...cors, 'Content-Type': 'application/json' },
-    })
+  // A failed upstream arrives as a Response, not a throw: with
+  // `returnRawResponse` Workers AI hands back its own error envelope — a
+  // 4xx/5xx body that is not SSE at all — and the transformer below skips
+  // every line of it and closes an *empty* stream. The client cannot tell
+  // that from a model that answered nothing: it retries twice, falls back
+  // to the local engine, and shows "AI service unavailable — check LLM
+  // settings", which is how an exhausted neuron budget was being
+  // reported. Throw it instead, carrying the error the envelope names
+  // rather than the envelope, so the catch in `onRequestPost` turns it
+  // into the same typed failure the non-streaming paths produce.
+  if (!response.ok) {
+    const detail = workersAiErrorMessage(await response.text().catch(() => ''))
+    throw new Error(detail.slice(0, 300) || `Workers AI request failed (${response.status})`)
   }
+
+  // No body at all is the same silence as a body with nothing in it.
+  if (!response.body) return await failEmptyStream(ai, model)
 
   // Workers AI returns its own SSE format: {"response":"token","p":"..."}
   // Transform it to OpenAI-compatible format: {"choices":[{"delta":{"content":"token"}}]}
@@ -492,49 +509,111 @@ async function streamResponse(
   const decoder = new TextDecoder()
   const encoder = new TextEncoder()
 
-  const transformed = new ReadableStream({
-    async pull(controller) {
-      const { done, value } = await reader.read()
-      if (done) {
-        controller.close()
-        return
+  // Workers AI reports a spent free-tier budget as an *empty* 200
+  // text/event-stream — verified against the production deployment: zero
+  // bytes with `content-type: text/event-stream` — so the status says
+  // nothing and the transformer below would close a stream that never
+  // carried a token. The client reads that as "the model answered
+  // nothing": two retries, the local engine, and a banner telling the
+  // operator to check settings that are fine. Reading up to the first
+  // bytes before committing to a streaming Response keeps the two apart —
+  // an empty upstream still becomes an error the SPA's degraded badge acts
+  // on, and a non-empty one costs nothing beyond the first token the
+  // client was already waiting for.
+  //
+  // "Empty" means no bytes before the upstream closed, not "the first
+  // read was empty": a zero-length chunk can precede a real answer. And a
+  // body that *has* bytes but no `response` tokens — an in-band
+  // `data: {"error":"4006: …"}` — is streamed as is. The budget signal
+  // observed in production is the empty body; classifying in-band shapes
+  // nobody has seen would be guessing, and a guessed "quota" sends the
+  // operator to upgrade a plan that was never the problem.
+  let buffered: Uint8Array | null
+  try {
+    buffered = await readFirstBytes(reader)
+  } catch (err) {
+    await reader.cancel(err).catch(() => {})
+    throw err
+  }
+  if (!buffered) {
+    await reader.cancel().catch(() => {})
+    return await failEmptyStream(ai, model)
+  }
+
+  // Enqueues the OpenAI-format chunk for every complete SSE line; reports
+  // whether it enqueued anything.
+  const emitLines = (
+    lines: string[],
+    controller: ReadableStreamDefaultController<Uint8Array>,
+  ): boolean => {
+    let enqueued = false
+    for (const line of lines) {
+      if (!line.startsWith('data: ')) continue
+      const payload = line.slice(6).trim()
+
+      if (payload === '[DONE]') {
+        controller.enqueue(encoder.encode('data: [DONE]\n\n'))
+        enqueued = true
+        continue
       }
 
-      const text = decoder.decode(value, { stream: true })
-      const lines = text.split('\n')
+      try {
+        const parsed = JSON.parse(payload)
 
-      for (const line of lines) {
-        if (!line.startsWith('data: ')) continue
-        const payload = line.slice(6).trim()
-
-        if (payload === '[DONE]') {
-          controller.enqueue(encoder.encode('data: [DONE]\n\n'))
+        // Skip usage-only chunks (response is null or empty with usage)
+        if (parsed.response === null || (parsed.response === '' && parsed.usage)) {
           continue
         }
 
-        try {
-          const parsed = JSON.parse(payload)
-
-          // Skip usage-only chunks (response is null or empty with usage)
-          if (parsed.response === null || (parsed.response === '' && parsed.usage)) {
-            continue
-          }
-
-          const openAIChunk = {
-            id: chatId,
-            object: 'chat.completion.chunk',
-            created: Math.floor(Date.now() / 1000),
-            model,
-            choices: [{
-              index: 0,
-              delta: { content: parsed.response },
-              finish_reason: null,
-            }],
-          }
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify(openAIChunk)}\n\n`))
-        } catch {
-          // Skip unparseable lines
+        const openAIChunk = {
+          id: chatId,
+          object: 'chat.completion.chunk',
+          created: Math.floor(Date.now() / 1000),
+          model,
+          choices: [{
+            index: 0,
+            delta: { content: parsed.response },
+            finish_reason: null,
+          }],
         }
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify(openAIChunk)}\n\n`))
+        enqueued = true
+      } catch {
+        // Skip unparseable lines
+      }
+    }
+    return enqueued
+  }
+
+  // An SSE event can be split across upstream chunks, so the last,
+  // possibly partial line of each chunk waits for the next one.
+  let partial = ''
+
+  const transformed = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      // Keep reading until something is enqueued or the upstream ends. A
+      // pull that returns having enqueued nothing is not called again for
+      // a read that is already waiting, so a usage-only or keep-alive
+      // chunk would otherwise stall the stream.
+      for (;;) {
+        let value: Uint8Array | undefined
+        if (buffered) {
+          value = buffered
+          buffered = null
+        } else {
+          const next = await reader.read()
+          if (next.done) {
+            emitLines((partial + decoder.decode()).split('\n'), controller)
+            partial = ''
+            controller.close()
+            return
+          }
+          value = next.value
+        }
+
+        const lines = (partial + decoder.decode(value, { stream: true })).split('\n')
+        partial = lines.pop() ?? ''
+        if (emitLines(lines, controller)) return
       }
     },
   })
@@ -547,6 +626,55 @@ async function streamResponse(
       Connection: 'keep-alive',
     },
   })
+}
+
+/** The first non-empty chunk of an upstream body, or null if it closes without one. */
+async function readFirstBytes(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+): Promise<Uint8Array | null> {
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) return null
+    if (value && value.length > 0) return value
+  }
+}
+
+/**
+ * How long the empty-stream probe may take before the proxy stops waiting
+ * and reports the empty stream as it is. A rejected probe — the spent
+ * budget case — comes back before any inference, well inside this; the
+ * bound only matters when the probe would itself hang, and then the
+ * client is still waiting on the same request.
+ */
+export const EMPTY_STREAM_PROBE_TIMEOUT_MS = 4_000
+
+/**
+ * What it means when Workers AI answers 200 and then says nothing.
+ *
+ * A spent free-tier budget is the observed cause — the platform sends an
+ * empty event stream rather than an error — and one 1-token call settles
+ * it: its rejection propagates to the catch in `onRequestPost`, which
+ * classifies it through the same `isWorkersAiQuotaError` the other paths
+ * use. When the budget really is spent that call is rejected before any
+ * inference, so the classification is free; when it succeeds, or does not
+ * answer within `EMPTY_STREAM_PROBE_TIMEOUT_MS`, the honest answer is that
+ * the upstream stream came back empty, which is a 502 and not something to
+ * blame on the operator's settings.
+ */
+async function failEmptyStream(ai: Env['AI'], model: string): Promise<never> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timedOut = new Promise<void>(resolve => {
+    timer = setTimeout(resolve, EMPTY_STREAM_PROBE_TIMEOUT_MS)
+  })
+  try {
+    await Promise.race([
+      ai.run(model, { messages: [{ role: 'user', content: 'ping' }], max_tokens: 1 }),
+      timedOut,
+    ])
+  } finally {
+    clearTimeout(timer)
+  }
+  throw new Error('Workers AI returned an empty stream')
 }
 
 async function nonStreamResponse(
@@ -625,28 +753,12 @@ async function toolStreamShim(
   }
   if (tools?.length) inputs.tools = tools
 
-  let result: unknown
-  try {
-    result = await ai.run(model, inputs)
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : 'Workers AI error'
-    // Phase 1f/D — distinguish quota-exhausted from generic
-    // upstream errors. The SPA reads the type to flip the
-    // "Reduced functionality" badge and route subsequent turns
-    // through the local-engine fallback.
-    if (isWorkersAiQuotaError(err)) {
-      return new Response(
-        JSON.stringify({
-          error: { message: msg, type: 'quota_exhausted', code: 4006 },
-        }),
-        { status: 503, headers: { ...cors, 'Content-Type': 'application/json' } },
-      )
-    }
-    return new Response(
-      JSON.stringify({ error: { message: msg, type: 'workers_ai_error' } }),
-      { status: 502, headers: { ...cors, 'Content-Type': 'application/json' } },
-    )
-  }
+  // A failed call propagates to the catch in `onRequestPost`, which
+  // builds the same 503 `quota_exhausted` / 502 `server_error` bodies
+  // for every path. (This shim used to build its own, and its 502 had
+  // drifted to `type: 'workers_ai_error'`; the SPA only ever reads
+  // `quota_exhausted`, so nothing depended on the difference.)
+  const result: unknown = await ai.run(model, inputs)
 
   const chatId = `chatcmpl-${Date.now()}`
   const created = Math.floor(Date.now() / 1000)

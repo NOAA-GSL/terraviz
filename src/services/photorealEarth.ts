@@ -252,6 +252,27 @@ export type VrDatasetTexture =
       readonly options?: DatasetOverlayOptions
     }
 
+/**
+ * What `setTexture`'s `onReady` is told.
+ *
+ *   `{ ok: true }`  — a texture is live on the globe: the dataset's
+ *                     first frame, or the planet stack for `null`.
+ *   `{ ok: false }` — the video being waited on fired `error`; the
+ *                     globe still shows the monochrome placeholder.
+ *
+ * A failure is not the last word: the waiter stays subscribed, because
+ * an element can recover (hls.js re-attaches media after a decode
+ * error) or be replaced by the next dataset, and either still ends in
+ * one `{ ok: true }`. Callers that only care about "live" can ignore
+ * the argument.
+ */
+export interface TextureReadiness {
+  readonly ok: boolean
+}
+
+const TEXTURE_LIVE: TextureReadiness = Object.freeze({ ok: true })
+const TEXTURE_FAILED: TextureReadiness = Object.freeze({ ok: false })
+
 export interface PhotorealEarthOptions {
   /** Globe radius in world units. Default 0.5 (VR view default). */
   readonly radius?: number
@@ -341,11 +362,23 @@ export interface PhotorealEarthHandle {
    * glint, night lights, clouds, atmosphere) is hidden so the data
    * reads uniformly across the sphere.
    *
-   * Idempotent — repeated calls with an unchanged spec are no-ops
-   * but still fire `onReady` so callers waiting for the "live and
-   * visible" signal can dedupe via their own flag.
+   * `onReady` fires once with `{ ok: true }` when a texture next goes
+   * live — synchronously for images, `null` and already-decoded
+   * video, on the first decoded frame otherwise. It is carried across
+   * swaps: if another spec replaces this one before its first frame
+   * (a per-frame poll that passes no `onReady`, say), it fires for
+   * whichever texture goes live next rather than being dropped. A
+   * video `error` while it waits reports `{ ok: false }` first; see
+   * {@link TextureReadiness}.
+   *
+   * Idempotent — repeated calls with an unchanged spec are no-ops.
+   * One that passes `onReady` gets `{ ok: true }` at once if the
+   * texture is already live, or joins the wait if it is not.
    */
-  setTexture(spec: VrDatasetTexture | null, onReady?: () => void): void
+  setTexture(
+    spec: VrDatasetTexture | null,
+    onReady?: (readiness: TextureReadiness) => void,
+  ): void
   /**
    * Current subsolar unit direction in world space — a reference to
    * the internal uniform's Vector3, refreshed by `update()` every
@@ -1196,11 +1229,36 @@ export function createPhotorealEarth(
     | ImageBitmap
     | null = null
   /**
-   * Cleanup closure for pending video `seeked`/`playing` listeners.
-   * Without this, a dataset swap or session end before the HLS
-   * decoder produces its first frame would leak listeners.
+   * Cleanup closure for the pending video's frame-wait and `error`
+   * listeners. Without this, a dataset swap or session end before the
+   * HLS decoder produces its first frame would leak listeners. Doubles
+   * as the "first frame still pending" flag: non-null exactly while
+   * the active video has not gone live.
    */
   let cancelPendingVideoListeners: (() => void) | null = null
+  /**
+   * `onReady` callbacks waiting for the next live texture. Kept apart
+   * from the video listeners on purpose: a swap cancels the old
+   * element's listeners but carries these to the new spec, so a
+   * readiness wait survives the primary changing underneath it.
+   */
+  let readyWaiters: Array<(readiness: TextureReadiness) => void> = []
+  /** The pending video (if any) has fired `error` since it became active. */
+  let activeVideoFailed = false
+
+  /** A texture just went live — release every waiter with `ok: true`. */
+  function settleLive(): void {
+    activeVideoFailed = false
+    const waiters = readyWaiters
+    readyWaiters = []
+    for (const cb of waiters) cb(TEXTURE_LIVE)
+  }
+
+  /** The pending video errored — tell waiters, but keep them waiting. */
+  function reportFailed(): void {
+    activeVideoFailed = true
+    for (const cb of readyWaiters.slice()) cb(TEXTURE_FAILED)
+  }
 
   /**
    * Base diffuse texture once the CDN fetch lands — kept so we can
@@ -1508,13 +1566,12 @@ export function createPhotorealEarth(
     setTexture(spec, onReady) {
       // Skip texture-swap work if the spec is unchanged — repeated
       // polls from the session loop are a no-op in the steady state.
-      // BUT still fire onReady: callers (vrSession) wait for the
-      // "texture is live and visible" signal to trigger their
-      // loading-scene fade-out, and for the initial null → null
-      // case (user enters VR with no dataset loaded in 2D) the
-      // state transition is trivial but the caller still needs the
-      // readiness ping. Callers dedupe via their own "already
-      // fired" flag so firing on every no-op is harmless.
+      // An `onReady` passed here still gets an answer: callers
+      // (vrSession) wait for the "texture is live and visible" signal
+      // to trigger their loading-scene fade-out, and for the initial
+      // null → null case (user enters VR with no dataset loaded in
+      // 2D) the state transition is trivial but the caller still
+      // needs the readiness ping.
       const nextKey = spec?.kind === 'video' ? spec.element : spec?.kind === 'image' ? spec.element : null
       if (nextKey === activeKey) {
         // Even on an unchanged-element no-op, the overlay options
@@ -1522,9 +1579,25 @@ export function createPhotorealEarth(
         // re-loading the same dataset with new metadata). Re-apply
         // the uniforms so a stale bbox doesn't outlive its config.
         applyOverlayOptions(spec?.options)
-        onReady?.()
+        if (onReady) {
+          if (cancelPendingVideoListeners) {
+            // Same element, but its first frame hasn't landed — the
+            // globe is still on the placeholder. Join the wait
+            // rather than report "live" early.
+            readyWaiters.push(onReady)
+            if (activeVideoFailed) onReady(TEXTURE_FAILED)
+          } else {
+            onReady(TEXTURE_LIVE)
+          }
+        }
         return
       }
+
+      // Queue before the swap: every branch below that makes a
+      // texture live releases the whole queue, including waiters
+      // carried over from a spec this one is replacing.
+      if (onReady) readyWaiters.push(onReady)
+      activeVideoFailed = false
 
       // Dispose any previously-loaded dataset texture. VideoTexture
       // holds a reference to the source <video> element and an
@@ -1535,7 +1608,8 @@ export function createPhotorealEarth(
       }
 
       // Cancel any pending video-frame-wait listeners from a
-      // previous spec.
+      // previous spec. Its readiness waiters stay queued — they are
+      // released by whichever texture goes live next.
       if (cancelPendingVideoListeners) {
         cancelPendingVideoListeners()
         cancelPendingVideoListeners = null
@@ -1563,7 +1637,7 @@ export function createPhotorealEarth(
         if (datasetAmbient) datasetAmbient.intensity = 0
         activeKey = null
         // No dataset to wait for — readiness is immediate.
-        onReady?.()
+        settleLive()
       } else if (spec.kind === 'video') {
         const video = spec.element
         activeKey = video
@@ -1618,7 +1692,7 @@ export function createPhotorealEarth(
           // in the dataset texture in one go, no placeholder phase.
           applyOverlayOptions(spec.options)
           material.map = tex
-          onReady?.()
+          settleLive()
         } else {
           // No frame yet — keep the base Earth visible instead of
           // showing a black ball. We listen across four events
@@ -1634,6 +1708,9 @@ export function createPhotorealEarth(
           //   - 'seeked' — our forced seek to current time landed.
           //   - 'playing' — user (or the play() below) started
           //     playback.
+          //
+          // Plus 'error', which ends the wait the other way — see
+          // `onError` below.
           //
           // We also attempt a `video.play()` to nudge the decoder
           // in case HLS needs an active pull. Autoplay may be
@@ -1656,18 +1733,32 @@ export function createPhotorealEarth(
             applyOverlayOptions(spec.options)
             material.map = tex
             material.needsUpdate = true
-            onReady?.()
+            settleLive()
+          }
+          // `error` is the one event that says no frame is coming, so
+          // waiters hear about it now rather than sitting out their
+          // own timeout. The frame listeners stay armed (and this one
+          // is not `once`): if the element recovers, its first frame
+          // still swaps in and releases the waiters with `ok: true`.
+          const onError = () => {
+            if (activeKey !== video) return
+            reportFailed()
           }
           video.addEventListener('loadeddata', onFrame, { once: true })
           video.addEventListener('canplay', onFrame, { once: true })
           video.addEventListener('seeked', onFrame, { once: true })
           video.addEventListener('playing', onFrame, { once: true })
+          video.addEventListener('error', onError)
           cancelPendingVideoListeners = () => {
             video.removeEventListener('loadeddata', onFrame)
             video.removeEventListener('canplay', onFrame)
             video.removeEventListener('seeked', onFrame)
             video.removeEventListener('playing', onFrame)
+            video.removeEventListener('error', onError)
           }
+          // Already failed before we started listening — its `error`
+          // event has been and gone.
+          if (video.error) reportFailed()
           // Nudge the decoder — the caller's user-gesture (browse
           // panel tap, Enter VR) transitively permits autoplay. If
           // the policy blocks it anyway, no harm done; the listener
@@ -1698,7 +1789,7 @@ export function createPhotorealEarth(
         if (datasetAmbient) datasetAmbient.intensity = 1.6
         material.map = tex
         activeKey = spec.element
-        onReady?.()
+        settleLive()
       }
       material.needsUpdate = true
     },
@@ -1789,6 +1880,9 @@ export function createPhotorealEarth(
       // holding the closure, not the texture, for nothing.
       diffuseSubscribers.clear()
       lightsSubscribers.clear()
+      // Readiness waiters too: a torn-down globe never goes live, and
+      // whoever was waiting is tearing down alongside it.
+      readyWaiters = []
       if (cancelPendingVideoListeners) {
         cancelPendingVideoListeners()
         cancelPendingVideoListeners = null

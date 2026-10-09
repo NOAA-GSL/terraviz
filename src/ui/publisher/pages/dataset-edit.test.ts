@@ -77,6 +77,42 @@ describe('renderDatasetEditPage', () => {
     sessionStorage.clear()
   })
 
+  it.each(['metadata', '_root', 'bbox_provenance', 'temporal_semantics', 'resource_kind', 'bbox_evidence', 'temporal_evidence'])('shows %s conflicts without losing edits or changing sections', async field => {
+    const message = 'Reload and retry <script>untrusted</script>'
+    const fetchFn = vi.fn()
+      .mockResolvedValueOnce(detailResponse(dataset()))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ errors: [{ field, code: 'concurrent_update', message }] }), { status: 409 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ dataset: { id: 'saved-id' } }), { status: 200 }))
+    const routerNavigate = vi.fn()
+    await renderDatasetEditPage(mount, 'dataset-id', { fetchFn: fetchFn as typeof fetch, routerNavigate })
+    const title = mount.querySelector<HTMLInputElement>('#dataset-title')!
+    title.value = 'Unsaved title'
+    title.dispatchEvent(new Event('change'))
+    mount.querySelector<HTMLButtonElement>('[data-section="ds-section-timespace"]')!.click()
+    mount.querySelector<HTMLButtonElement>('.publisher-dataset-form-header-actions .publisher-button-primary')!.click()
+    await vi.waitFor(() => expect(mount.querySelector('.publisher-form-error-summary')?.textContent).toContain(message))
+    const summary = mount.querySelector<HTMLElement>('.publisher-form-error-summary')!
+    expect(summary.getAttribute('role')).toBe('alert')
+    expect(summary.querySelector('script')).toBeNull()
+    expect(document.activeElement).toBe(summary)
+    expect(mount.querySelector('[aria-current="step"]')?.getAttribute('data-section')).toBe('ds-section-timespace')
+    expect(mount.querySelector<HTMLInputElement>('#dataset-title')?.value).toBe('Unsaved title')
+    expect(routerNavigate).not.toHaveBeenCalled()
+    mount.querySelector<HTMLButtonElement>('.publisher-dataset-form-header-actions .publisher-button-primary')!.click()
+    await vi.waitFor(() => expect(routerNavigate).toHaveBeenCalled())
+    expect(mount.querySelector('.publisher-form-error-summary')).toBeNull()
+  })
+
+  it('shows mixed errors and navigates to the first recognized field', async () => {
+    const errors = [{ field: '_root', code: 'invalid', message: 'Review this save.' }, { field: 'start_time', code: 'invalid_iso_date', message: 'Invalid date.' }]
+    const fetchFn = vi.fn().mockResolvedValueOnce(detailResponse(dataset()))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ errors }), { status: 400 }))
+    await renderDatasetEditPage(mount, 'dataset-id', { fetchFn: fetchFn as typeof fetch })
+    mount.querySelector<HTMLButtonElement>('.publisher-dataset-form-header-actions .publisher-button-primary')!.click()
+    await vi.waitFor(() => expect(mount.querySelectorAll('.publisher-form-error-summary li')).toHaveLength(2))
+    expect(mount.querySelector('[aria-current="step"]')?.getAttribute('data-section')).toBe('ds-section-timespace')
+  })
+
   it('fetches /api/v1/publish/datasets/:id with the URL-encoded id', async () => {
     const fetchFn = vi.fn().mockResolvedValue(detailResponse(dataset()))
     await renderDatasetEditPage(mount, 'has/slash', {

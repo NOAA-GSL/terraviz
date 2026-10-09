@@ -30,7 +30,13 @@ import {
   projectState,
   projectView,
 } from './stateAggregator'
-import { MAX_CAMERA_OFFSET } from '../../output/equirectRtt'
+import {
+  FRONT,
+  IDENTITY_ORIENTATION,
+  MAX_CAMERA_OFFSET,
+  applyOrientation,
+  latLonToDirection,
+} from '../../output/equirectRtt'
 
 const DATASET: MirroredDataset = {
   id: 'ds-1',
@@ -114,10 +120,10 @@ describe('apply', () => {
   it('compares regardless of key order', () => {
     const agg = new StateAggregator()
     agg.apply({
-      view: { dayNight: true, camera: { lat: 10, lon: 20, zoom: 3 } },
+      view: { dayNight: true, camera: { lat: 10, lon: 20, zoom: 3, bearing: 15 } },
     })
     const reordered = {
-      camera: { zoom: 3, lon: 20, lat: 10 },
+      camera: { bearing: 15, zoom: 3, lon: 20, lat: 10 },
       dayNight: true,
     }
     expect(agg.apply({ view: reordered })).toBeNull()
@@ -251,31 +257,61 @@ describe('sequence numbers', () => {
 
 describe('per-output view projection', () => {
   /**
-   * `lat: 90` is chosen so the derived offset is order-sensitive:
-   * `latLonToDirection` puts latitude on **Y**, so this camera derives
-   * to `(0, f, 0)`. A `projectView` that passed lat and lon the wrong
-   * way round would produce `(0, 0, f)` and fail — which asserting
-   * against `cameraOffsetForCamera(...)` with the same argument order
+   * `lat: 90` is chosen so the turn is order-sensitive:
+   * `latLonToDirection` puts latitude on **Y**, so the content shown at
+   * the front is `(0, 1, 0)`. A `projectView` that passed lat and lon
+   * the wrong way round would show `(0, 0, 1)` there and fail — which
+   * asserting against `followCamera(...)` with the same argument order
    * could never catch.
    *
    * `zoom: 1` gives `f = 1 − 1/(1 + 1) = 0.5`, under the clamp.
    */
   const shared = {
     dayNight: false,
-    camera: { lat: 90, lon: 0, zoom: 1 },
+    camera: { lat: 90, lon: 0, zoom: 1, bearing: 0 },
   }
+  const TRACKING = { trackCamera: true, split: false, rotationOffsetDeg: 0 }
 
-  it('passes the operator camera through when tracking', () => {
-    const v = projectView(shared, { trackCamera: true, split: false, rotationOffsetDeg: 0 }, 'sos-equirect')
-    expect(v.params.cameraOffset.x).toBeCloseTo(0, 10)
-    expect(v.params.cameraOffset.y).toBeCloseTo(0.5, 10)
-    expect(v.params.cameraOffset.z).toBeCloseTo(0, 10)
+  it('turns the operator’s centre to the front when tracking', () => {
+    // The north pole, which the old projection could only ever magnify
+    // where it sits — the top of the sphere.
+    const v = projectView(shared, TRACKING, 'sos-equirect')
+    const front = applyOrientation(v.params.orientation, latLonToDirection(FRONT.lat, FRONT.lon))
+    expect(front.x).toBeCloseTo(0, 10)
+    expect(front.y).toBeCloseTo(1, 10)
+    expect(front.z).toBeCloseTo(0, 10)
     expect(v.dayNight).toBe(false)
   })
 
-  it('centres the camera when not tracking', () => {
+  it('zooms toward the front, where the turn put the centre', () => {
+    // Not toward `(lat, lon)`: after the turn the centre is no longer
+    // there, and a camera still aimed at it would magnify the top of
+    // the sphere while the pole sat at the front unmagnified.
+    const o = projectView(shared, TRACKING, 'sos-equirect').params.cameraOffset
+    const front = latLonToDirection(FRONT.lat, FRONT.lon)
+    expect(o.x).toBeCloseTo(0.5 * front.x, 10)
+    expect(o.y).toBeCloseTo(0.5 * front.y, 10)
+    expect(o.z).toBeCloseTo(0.5 * front.z, 10)
+  })
+
+  it('turns the way the control globe is turned', () => {
+    // Bearing 90 puts east at the top of the control globe, so the
+    // sphere's up at the front shows the centre's east.
+    const turned = { ...shared, camera: { lat: 0, lon: 0, zoom: 1, bearing: 90 } }
+    const m = projectView(turned, TRACKING, 'sos-equirect').params.orientation
+    const up = applyOrientation(m, { x: 0, y: 1, z: 0 })
+    const east = { x: 0, y: 0, z: 1 }
+    expect(up.x).toBeCloseTo(east.x, 10)
+    expect(up.y).toBeCloseTo(east.y, 10)
+    expect(up.z).toBeCloseTo(east.z, 10)
+  })
+
+  it('neither turns nor zooms when not tracking', () => {
     const v = projectView(shared, { trackCamera: false, split: false, rotationOffsetDeg: 0 }, 'sos-equirect')
     expect(v.params.cameraOffset).toEqual(CENTRED_CAMERA)
+    expect(v.params.orientation).toEqual(IDENTITY_ORIENTATION)
+    // A copy: the constant is module-scoped.
+    expect(v.params.orientation).not.toBe(IDENTITY_ORIENTATION)
   })
 
   it('takes split from the output, never from the shared view', () => {
@@ -316,7 +352,7 @@ describe('per-output view projection', () => {
     expect(projected.view!.params.cameraOffset).toEqual(CENTRED_CAMERA)
     expect(projected.view!.params.split).toBe(true)
     // The input is not mutated — two outputs project the same diff.
-    expect(diff.view.camera).toEqual({ lat: 90, lon: 0, zoom: 1 })
+    expect(diff.view.camera).toEqual({ lat: 90, lon: 0, zoom: 1, bearing: 0 })
   })
 
   it('stamps the arm with the mode the output was given', () => {
@@ -329,6 +365,23 @@ describe('per-output view projection', () => {
     expect(projected.view!.mode).toBe('sos-equirect')
   })
 
+  it('gives a projector-warp output the ray-march it runs behind its meshes', () => {
+    // Same parameters, split and rotation included — a warp changes how
+    // the arm reaches the glass, not what it holds — under its own
+    // discriminant, so the window can still check the arm is meant for it.
+    const settings = { trackCamera: true, split: true, rotationOffsetDeg: 90 }
+    const equirect = projectView(shared, settings, 'sos-equirect')
+    const warp = projectView(shared, settings, 'projector-warp')
+    expect(warp.mode).toBe('projector-warp')
+    expect(warp.params).toEqual(equirect.params)
+    expect(warp.params.rotationOffsetRad).toBeCloseTo(Math.PI / 2, 12)
+    expect(warp.dayNight).toBe(false)
+    expect(projectView(shared, { ...settings, trackCamera: false }, 'projector-warp').params.cameraOffset).toEqual(
+      CENTRED_CAMERA,
+    )
+    expect(projectState({ view: shared }, settings, 'projector-warp').view!.mode).toBe('projector-warp')
+  })
+
   it('derives the default camera to a centred, uniform unwrap', () => {
     // The behavioural continuity the split has to preserve. Before it,
     // `initialState` stored `CENTRED_CAMERA` literally; now it stores
@@ -338,6 +391,10 @@ describe('per-output view projection', () => {
     // loaded and nothing on screen to explain it.
     const v = projectView(initialState().view, DEFAULT_VIEW_SETTINGS, 'sos-equirect')
     expect(v.params.cameraOffset).toEqual(CENTRED_CAMERA)
+    // And unturned: `(0, 0)` north-up is already at the front. Exact
+    // rather than close, because `cos 0` and `sin 0` are.
+    expect(v.params.orientation).toEqual(IDENTITY_ORIENTATION)
+    expect(DEFAULT_OPERATOR_CAMERA.bearing).toBe(0)
   })
 
   it('keeps the derived camera inside the sphere however far the operator zooms', () => {
@@ -345,7 +402,7 @@ describe('per-output view projection', () => {
     // the shared view now holds an *unclamped* operator zoom — so the
     // clamp has to survive the extra hop. A camera at or past the
     // surface smears one texel across most of the sphere.
-    const far = { dayNight: true, camera: { lat: 35, lon: -120, zoom: 1e6 } }
+    const far = { dayNight: true, camera: { lat: 35, lon: -120, zoom: 1e6, bearing: 0 } }
     const o = projectView(far, DEFAULT_VIEW_SETTINGS, 'sos-equirect').params.cameraOffset
     expect(Math.hypot(o.x, o.y, o.z)).toBeLessThanOrEqual(MAX_CAMERA_OFFSET)
   })
@@ -367,7 +424,7 @@ describe('per-output view projection', () => {
 describe('the rotation offset (rung 14)', () => {
   const shared = (): SharedView => ({
     dayNight: true,
-    camera: { lat: 0, lon: 0, zoom: 0 },
+    camera: { lat: 0, lon: 0, zoom: 0, bearing: 0 },
   })
 
   it('converts the operator degrees to shader radians, once', () => {

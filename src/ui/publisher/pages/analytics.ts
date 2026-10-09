@@ -1233,9 +1233,11 @@ function binsToGeoJson(bins: SpatialData['bins']): GeoJSON.FeatureCollection {
 
 async function mountHeatmap(container: HTMLElement, bins: SpatialData['bins']): Promise<HeatmapHandle> {
   // The module namespace itself, not `.default` — MapLibre 6 is ESM-only
-  // and exports no default.
+  // and exports no default. Through `utils/maplibre` so the worker that
+  // parses the GeoJSON sources below actually loads; without it the map
+  // stays blank.
   const [maplibregl] = await Promise.all([
-    import('maplibre-gl'),
+    import('../../../utils/maplibre'),
     // Vite injects the stylesheet on dynamic import; the portal CSS
     // bundle stays map-free until this section first renders.
     import('maplibre-gl/dist/maplibre-gl.css'),

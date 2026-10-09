@@ -28,6 +28,7 @@ import { createVrTimeLabel, type VrTimeLabelHandle } from './vrTimeLabel'
 import { setVrTourOverlaySink } from '../ui/tourUI'
 import { createVrInteraction, type VrInteractionHandle } from './vrInteraction'
 import { createVrLoading, type VrLoadingHandle } from './vrLoading'
+import { createVrLoadingHandover } from './vrLoadingHandover'
 import {
   formatProbeReading,
   probeDatasetValue,
@@ -45,6 +46,7 @@ import {
 } from '../utils/vrPersistence'
 import { getBordersVisible, getGazeFollowOverlays } from '../utils/viewPreferences'
 import { logger } from '../utils/logger'
+import { t } from '../i18n'
 import { emit, emitCameraSettled } from '../analytics'
 import type { VrExitReason } from '../types'
 import {
@@ -856,8 +858,10 @@ export async function enterImmersive(mode: VrMode, ctx: VrSessionContext): Promi
 
   // --- Loading scene ---
   // Visible from the moment the session starts until the dataset
-  // texture has a decoded frame on the globe. Hides the real globe
-  // + HUD initially so the user sees a clean transition.
+  // texture has a decoded frame on the globe — or, failing that, until
+  // the video reports an error or the fallback in vrLoadingHandover
+  // gives up waiting. Hides the real globe + HUD initially so the user
+  // sees a clean transition.
   const loading = createVrLoading(THREE_)
   scene.scene.add(loading.group)
   scene.globe.visible = false
@@ -872,26 +876,32 @@ export async function enterImmersive(mode: VrMode, ctx: VrSessionContext): Promi
   // hiding the loading scene; for video this can take several hundred
   // ms (the forced seek decode). For images / no dataset the
   // callback fires synchronously during setTexture — BEFORE `active`
-  // is assigned below, so we can't reference it directly in the
-  // callback. Work with the captured `loading` handle instead and
-  // defer the lifecycle work to a setTimeout where `active` is
-  // guaranteed to exist.
-  loading.setProgress(0.8, 'Loading dataset\u2026')
-  let loadingFinalized = false
-  /**
-   * True once the loading scene has been removed + disposed — by
-   * either the fade-out path or the session-end teardown path.
-   * Guards against double-disposal if both fire (session ends
-   * during fade-out).
-   */
-  let loadingDisposed = false
-  /**
-   * Handle for the fade-out setTimeout, captured so the session-end
-   * teardown can cancel it if the user exits during the 250 ms
-   * pre-fade pause. Without this the setTimeout would still fire
-   * and call loading.fadeOut() on an already-disposed handle.
-   */
-  let fadeTimeoutId: ReturnType<typeof setTimeout> | null = null
+  // is assigned below, so the handover's effects work with the
+  // captured `loading` / `scene` / `hud` handles rather than `active`,
+  // and the handover defers the fade to a setTimeout. (A previous
+  // version tested `if (!active) return` here and got stuck on first
+  // AR entry when the controller-factory import exceeded the pre-fade
+  // delay.) See vrLoadingHandover for the fallback timer and the
+  // failure outcome.
+  const datasetStageProgress = 0.8
+  loading.setProgress(datasetStageProgress, 'Loading dataset\u2026')
+  const loadingHandover = createVrLoadingHandover({
+    // Failure statuses leave the bar at the dataset stage.
+    setStatus: (status, progress) => loading.setProgress(progress ?? datasetStageProgress, status),
+    fadeOut: () => loading.fadeOut(),
+    removeSplash: () => {
+      scene.scene.remove(loading.group)
+      loading.dispose()
+      if (active) active.loading = null
+    },
+    revealScene: () => {
+      scene.globe.visible = true
+      hud.mesh.visible = true
+    },
+    warn: (message) => logger.warn(message),
+  })
+  /** HUD hint while the globe shows the placeholder instead of the data. */
+  const dataNotLoadedNotice = t('vr.hud.dataNotLoaded')
   // Mirror the 2D app's viewport layout inside VR. Count=1 is the
   // backward-compatible single-globe path; count=2/4 builds the arc
   // with secondary globes. Scene slot 0 always reflects the 2D app's
@@ -905,38 +915,12 @@ export async function enterImmersive(mode: VrMode, ctx: VrSessionContext): Promi
   logger.info(`[VR] Entering with ${initialPanelCount} panel(s), primary: ${ctx.getPrimaryIndex()}`)
   scene.setPanelCount(initialPanelCount)
   syncSecondaryTextures(scene, ctx, initialPanelCount)
-  scene.setTexture(ctx.getDatasetTexture(), () => {
-    // Idempotent — a follow-up texture swap could re-fire this;
-    // we only want to drive the fade once per session.
-    if (loadingFinalized) return
-    loadingFinalized = true
-    loading.setProgress(1.0, 'Ready')
-    // Brief pause at 100% so the user perceives completion, then
-    // fade. Work with the captured `loading` + `scene` + `hud`
-    // references rather than `active` here — those exist from the
-    // moment createVrScene/Hud return, whereas `active` is only
-    // populated later in the function and may not be set yet when
-    // the synchronous onReady path fires. Previous version tested
-    // `if (!active) return` here and got stuck on first AR entry
-    // when the controller-factory import exceeded the 250 ms delay.
-    fadeTimeoutId = setTimeout(() => {
-      fadeTimeoutId = null
-      // If the session ended while we were waiting, the end handler
-      // already disposed loading — skip the fade work entirely.
-      if (loadingDisposed) return
-      void loading.fadeOut().then(() => {
-        // Session-end during fade: same guard, same reason.
-        if (loadingDisposed) return
-        loadingDisposed = true
-        scene.scene.remove(loading.group)
-        loading.dispose()
-        if (active) active.loading = null
-        // Reveal the real scene now that loading has cleared.
-        scene.globe.visible = true
-        hud.mesh.visible = true
-      })
-    }, 250)
-  })
+  // The one call that carries a readiness callback; the per-frame poll
+  // passes none. photorealEarth carries it across a swap of the
+  // primary, so it fires for whichever texture goes live first.
+  scene.setTexture(ctx.getDatasetTexture(), (readiness) => loadingHandover.onReadiness(readiness))
+  // No-op when the callback above already fired synchronously.
+  loadingHandover.armFallback()
   hud.setState({
     datasetTitle: ctx.getDatasetTitle(),
     isPlaying: ctx.isPlaying(),
@@ -1357,6 +1341,7 @@ export async function enterImmersive(mode: VrMode, ctx: VrSessionContext): Promi
       primaryIndex: ctx.getPrimaryIndex(),
       browseOpen: active.browse.isVisible(),
       probeReadout: readVrProbe(active.interaction, ctx, now),
+      notice: loadingHandover.dataMissing ? dataNotLoadedNotice : null,
     })
 
     // Tour strip mirrors the engine state. Always poll; the strip's
@@ -1540,22 +1525,11 @@ export async function enterImmersive(mode: VrMode, ctx: VrSessionContext): Promi
     setVrTourOverlaySink(null)
     a.scene.scene.remove(a.tourOverlay.group)
     a.tourOverlay.dispose()
-    // If the fade-out setTimeout is still pending, cancel it —
-    // otherwise it would fire after the loading handle is disposed
-    // and try to run fade-out on stale state.
-    if (fadeTimeoutId !== null) {
-      clearTimeout(fadeTimeoutId)
-      fadeTimeoutId = null
-    }
-    // Loading scene may still be present if the user exited before
-    // dataset finished loading. Dispose it explicitly so we don't
-    // leak the canvases + textures. Flag handshake with the fade-out
-    // path ensures we never double-dispose.
-    if (a.loading && !loadingDisposed) {
-      loadingDisposed = true
-      a.scene.scene.remove(a.loading.group)
-      a.loading.dispose()
-    }
+    // Cancels the fallback and any pending pre-fade timer (which would
+    // otherwise run the fade on a disposed handle), and disposes the
+    // loading scene if the user exited before it cleared — exactly
+    // once, even when the fade is mid-flight.
+    loadingHandover.end()
     if (a.placement) {
       a.scene.scene.remove(a.placement.reticleGroup)
       a.scene.scene.remove(a.placement.placeButtonMesh)

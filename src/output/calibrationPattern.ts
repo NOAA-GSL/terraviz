@@ -202,6 +202,13 @@ export interface CalibrationPatternOptions {
   /** What the *window* is rendering at. Reported, not drawn at — see
    *  {@link MAX_PATTERN_WIDTH}. */
   framebufferWidth: number
+  /**
+   * The readout, when it is not `framebufferWidth` by half. A
+   * `projector-warp` window (rung 16) has no 2:1 frame to report — its
+   * buffer is the display it spans — so it names that instead, and its
+   * canvas is drawn at the cap.
+   */
+  readout?: string
 }
 
 /**
@@ -385,7 +392,7 @@ export function buildCalibrationPattern(opts: CalibrationPatternOptions): Calibr
   // --- Pole letters and the readout, repeated around ---
   const readoutV = latLonToUv(READOUT_LAT_DEG, 0).v
   const width = Math.max(0, Math.round(opts.framebufferWidth))
-  const readout = `${width} × ${Math.round(width / 2)}`
+  const readout = opts.readout ?? `${width} × ${Math.round(width / 2)}`
   for (const lon of REPEAT_LONS_DEG) {
     const { u } = latLonToUv(0, lon)
     texts.push({ u, v: readoutV, text: readout, fill: COLOR.text, sizeV: 0.026 })
@@ -479,8 +486,9 @@ export function paintCalibrationPattern(
  *  every time something else about the frame changes. */
 export interface CalibrationCache {
   /** The pattern for this framebuffer rung, rebuilding only if the rung
-   *  moved or the last attempt failed. `null` when it cannot be built. */
-  canvasFor(framebufferWidth: number): HTMLCanvasElement | null
+   *  moved or the last attempt failed. `null` when it cannot be built.
+   *  `readout` overrides the reported size, and moving it rebuilds too. */
+  canvasFor(framebufferWidth: number, readout?: string): HTMLCanvasElement | null
 }
 
 /**
@@ -508,12 +516,13 @@ export function createCalibrationCache(
   build: (opts: CalibrationPatternOptions) => HTMLCanvasElement | null = createCalibrationCanvas,
 ): CalibrationCache {
   let canvas: HTMLCanvasElement | null = null
-  let builtFor = 0
+  let builtFor: string | null = null
   return {
-    canvasFor(framebufferWidth) {
-      if (canvas && framebufferWidth === builtFor) return canvas
-      canvas = build({ framebufferWidth })
-      if (canvas) builtFor = framebufferWidth
+    canvasFor(framebufferWidth, readout) {
+      const key = `${framebufferWidth}|${readout ?? ''}`
+      if (canvas && key === builtFor) return canvas
+      canvas = build(readout === undefined ? { framebufferWidth } : { framebufferWidth, readout })
+      if (canvas) builtFor = key
       return canvas
     },
   }

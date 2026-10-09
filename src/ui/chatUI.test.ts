@@ -253,6 +253,44 @@ describe('degraded-mode badge', () => {
     clearDegraded()
     expect(badgeEl()).toBeNull()
   })
+
+  // A quota-exhausted turn ends in the local engine's answer with
+  // `fallback: true`. The badge already says why; the generic "AI service
+  // unavailable — … Check LLM settings." hint would contradict it and send
+  // the operator after settings that are fine.
+  async function sendFallbackTurn(): Promise<string> {
+    const { processMessage } = await import('../services/docentService')
+    vi.mocked(processMessage).mockImplementation(async function* () {
+      yield { type: 'delta' as const, text: 'Offline answer.' }
+      yield { type: 'done' as const, fallback: true }
+    })
+    initChatUI(makeCallbacks())
+    openChat()
+    const input = document.getElementById('chat-input') as HTMLTextAreaElement
+    input.value = 'what is this'
+    ;(document.getElementById('chat-send') as HTMLButtonElement).click()
+    await vi.waitFor(() => {
+      expect(getMessages()[1]?.text).toContain('Offline answer.')
+    })
+    // Let the `done` chunk land; the second test proves this is long
+    // enough for the hint to appear when it should.
+    await flush()
+    return getMessages()[1].text
+  }
+
+  it('shows the badge instead of the settings hint on a degraded fallback', async () => {
+    markDegraded('quota_exhausted')
+    const text = await sendFallbackTurn()
+    expect(badgeEl()).not.toBeNull()
+    expect(text).toBe('Offline answer.')
+    expect(text).not.toMatch(/AI service unavailable/)
+  })
+
+  it('keeps the settings hint on a fallback with no degraded reason', async () => {
+    const text = await sendFallbackTurn()
+    expect(badgeEl()).toBeNull()
+    expect(text).toMatch(/AI service unavailable/)
+  })
 })
 
 describe('openChat / closeChat / toggleChat', () => {

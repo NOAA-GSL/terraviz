@@ -30,7 +30,7 @@ import { gotoApp, launchBrowser, withScenePage } from './core/browser'
 import { installFixtures, type FixtureRule } from './core/fixtures'
 import { attachSignalCollectors } from './core/signals'
 import { catalogFixtures } from './fixtures/catalog'
-import { blogPublicFixtures, publisherFixtures } from './fixtures/publisher'
+import { blogPublicFixtures, publisherConflictFixtures, publisherFixtures } from './fixtures/publisher'
 
 const BASE_URL = process.env.SCREENSHOT_BASE_URL ?? 'http://localhost:4173'
 const VIEWPORT = { width: 1440, height: 900 }
@@ -219,6 +219,23 @@ const checks: Check[] = [
       await page.locator('#browse-view-mode [data-view-mode="timeline"]').click()
       await page.locator('#browse-timeline:not(.hidden)').waitFor()
       await page.locator('.browse-timeline-legend-dot-event').first().waitFor({ timeout: 30_000 })
+    },
+  },
+  {
+    name: 'publisher conflicts stay visible without losing draft edits',
+    fixtures: publisherConflictFixtures(),
+    async run(page) {
+      await gotoApp(page, '/publish/datasets/new')
+      await page.locator('#dataset-title').fill('Unsaved ocean observations')
+      await page.locator('#dataset-title').blur()
+      await page.locator('.publisher-form-nav-link[data-section="ds-section-timespace"]').click()
+      await page.locator('.publisher-dataset-form-header-actions .publisher-button-primary').click()
+      const summary = page.locator('.publisher-form-error-summary')
+      await summary.waitFor({ state: 'visible' })
+      assert((await summary.textContent())?.includes('Reload and retry.'), 'conflict message must be visible')
+      assert(await summary.evaluate(node => document.activeElement === node), 'error summary must receive focus')
+      assert(await page.locator('[aria-current="step"]').getAttribute('data-section') === 'ds-section-timespace', 'unknown errors must not move the stepper')
+      assert(await page.locator('#dataset-title').inputValue() === 'Unsaved ocean observations', 'unsaved edits must survive a conflict')
     },
   },
   {

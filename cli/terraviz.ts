@@ -27,7 +27,8 @@
 
 import { TerravizClient } from './lib/client'
 import { resolveConfig } from './lib/config'
-import { parseArgs, getString, getBool } from './lib/args'
+import { parseArgs, getString, getBool, BOOLEAN_FLAGS } from './lib/args'
+import { runMetadataAudit } from './metadata-audit'
 import {
   HELP_TEXT,
   runFrames,
@@ -62,7 +63,7 @@ async function main(argv: string[]): Promise<number> {
     return 0
   }
 
-  const parsed = parseArgs(argv)
+  const parsed = parseArgs(argv, new Set([...BOOLEAN_FLAGS, 'snapshot', 'strict']))
   const command = parsed.positional[0]
   const remainingPositionals = parsed.positional.slice(1)
 
@@ -74,6 +75,14 @@ async function main(argv: string[]): Promise<number> {
   ) {
     process.stdout.write(HELP_TEXT)
     return 0
+  }
+
+  // Offline audit must dispatch BEFORE reading credentials or creating a client.
+  if (command === 'metadata-audit') {
+    return runMetadataAudit({
+      args: { positional: remainingPositionals, options: parsed.options },
+      stdout: process.stdout,
+    })
   }
 
   const config = resolveConfig({
@@ -141,8 +150,8 @@ async function main(argv: string[]): Promise<number> {
 }
 
 main(process.argv.slice(2))
-  .then(code => process.exit(code))
+  .then(code => { process.exitCode = code })
   .catch(e => {
     process.stderr.write(`Unhandled error: ${e instanceof Error ? e.stack ?? e.message : String(e)}\n`)
-    process.exit(1)
+    process.exitCode = 1
   })

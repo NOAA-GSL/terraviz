@@ -211,7 +211,8 @@
 }
 
 .output-add-btn,
-.output-item-remove {
+.output-item-remove,
+.output-warp-actions button {
   font: inherit;
   font-size: 0.8125rem;
   padding: 0.25rem 0.625rem;
@@ -223,12 +224,14 @@
 }
 
 .output-add-btn:hover:not(:disabled),
-.output-item-remove:hover:not(:disabled) {
+.output-item-remove:hover:not(:disabled),
+.output-warp-actions button:hover:not(:disabled) {
   background: var(--color-surface-hover, rgba(255, 255, 255, 0.14));
 }
 
 .output-add-btn:disabled,
 .output-item-remove:disabled,
+.output-warp-actions button:disabled,
 .output-monitor-select:disabled {
   opacity: 0.5;
   cursor: default;
@@ -385,4 +388,68 @@
   background: var(--color-surface-raised, rgba(255, 255, 255, 0.08));
   border: 1px solid var(--color-border, rgba(255, 255, 255, 0.18));
   border-radius: var(--radius-sm, 0.25rem);
+}
+
+/* A projector-warp output's warp controls (rung 16): what it draws, the
+   import and its layout question, and the blend gamma. Set apart from
+   the row's toggles by a rule, because everything in it is about the
+   rig rather than about the picture. */
+.output-warp {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2, 0.5rem);
+  padding-block-start: var(--space-2, 0.5rem);
+  border-block-start: 1px solid var(--color-border, rgba(255, 255, 255, 0.18));
+  font-size: 0.75rem;
+}
+
+.output-warp-status {
+  margin: 0;
+}
+
+.output-warp-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2, 0.5rem);
+}
+
+.output-warp-pending:empty {
+  display: none;
+}
+
+/* The display a warp set divides, in its own shape (the aspect ratio is
+   set from TypeScript), with each mesh's rect placed where it goes: SOS's
+   quadrants with the meshes that would fill them, or a bundle's own
+   layout. A picture of the screen, like the monitor map above, and for
+   the same reason it must not mirror: the cells are placed with physical
+   left/bottom from TypeScript, and `direction: ltr` keeps their labels
+   where the projectors are under dir="rtl". The text beside it says the
+   same mapping in words. */
+.output-warp-layout {
+  position: relative;
+  direction: ltr;
+  inline-size: min(100%, 12rem);
+  margin-inline: auto;
+  background: var(--color-surface-raised, rgba(255, 255, 255, 0.04));
+  border: 1px solid var(--color-border, rgba(255, 255, 255, 0.18));
+  border-radius: var(--radius-sm, 0.25rem);
+}
+
+.output-warp-cell {
+  position: absolute;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.6875rem;
+  color: var(--color-text-muted, rgba(242, 245, 249, 0.7));
+  border: 1px solid var(--color-border, rgba(255, 255, 255, 0.18));
+}
+
+/* A rect a mesh in this import would take. An empty one stays dim —
+   that projector gets no warp and draws nothing. */
+.output-warp-cell.is-filled {
+  color: var(--color-text, #f2f5f9);
+  background: var(--color-surface-raised, rgba(255, 255, 255, 0.08));
+  border-color: var(--color-accent, #4aa3ff);
 }

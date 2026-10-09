@@ -40,6 +40,8 @@ export const BOOLEAN_FLAGS = new Set<string>([
   'from-stdin',
   'human',
   'update-existing',
+  'clear-description',
+  'clear-contact',
 ])
 
 export function parseArgs(argv: string[], booleans: Set<string> = BOOLEAN_FLAGS): ParsedArgs {

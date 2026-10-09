@@ -1504,7 +1504,11 @@ async function handleSend(): Promise<void> {
             ).trim()
             updateStreamingMessage(docentMsg)
           }
-          if (chunk.fallback && docentMsg.text) {
+          // Not while a degraded reason is set: the badge already says
+          // why the answer is offline (e.g. "quota reached"), and "Check
+          // LLM settings" would send the operator after settings that
+          // are fine.
+          if (chunk.fallback && docentMsg.text && getDegradedReason() === null) {
             const hint = t(isLocalDev ? 'chat.fallback.localDev' : 'chat.fallback.production')
             docentMsg.text += `\n\n*${hint}*`
             updateStreamingMessage(docentMsg)

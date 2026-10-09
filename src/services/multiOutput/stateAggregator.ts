@@ -28,7 +28,7 @@
  *
  * **The view is projected per output, not stored per output.** What is
  * stored is `SharedView` — `dayNight` plus the operator's own
- * `camera` (MapLibre lat/lon/zoom). What an output receives is a
+ * `camera` (MapLibre lat/lon/zoom/bearing). What an output receives is a
  * `MirroredView` arm, built at the send boundary by `projectView` from
  * that shared camera, the output's `OutputViewSettings` and its
  * `OutputMode`.
@@ -48,6 +48,7 @@
  */
 
 import {
+  type MirroredEquirectParams,
   type MirroredGlobeState,
   type MirroredView,
   type OperatorCamera,
@@ -56,8 +57,9 @@ import {
   type SharedStateMessage,
   type SharedView,
 } from './protocol'
-// The one import that crosses from the control side into `src/output/`,
-// and it is deliberate. `equirectRtt` is pure TS by construction — no
+// One of two imports that cross from the control side into
+// `src/output/` — the other is `warpImport`'s, for the warp parser a set
+// is re-read by everywhere — and it is deliberate. `equirectRtt` is pure TS by construction — no
 // Three, no GL, no DOM — precisely so the projection maths is testable
 // without a context, which also makes it importable from here. The
 // alternative is extracting `cameraOffsetForCamera` and the
@@ -70,7 +72,7 @@ import {
 // and `publisher`, and never fires the import. Check the markers
 // (`sos-equirect`, `uCameraOffset` — both absent from
 // `dist/assets/main-*.js`), never chunk filenames.
-import { cameraOffsetForCamera } from '../../output/equirectRtt'
+import { IDENTITY_ORIENTATION, followCamera } from '../../output/equirectRtt'
 // Shared with the output's own store rather than defined here: both
 // ends must give the same answer to "did this change?", and the cost
 // of disagreeing is an output rebuilding its HLS instance on every
@@ -83,18 +85,18 @@ import { hasOwn, sameValue } from './stateEquality'
 export const CENTRED_CAMERA = { x: 0, y: 0, z: 0 } as const
 
 /**
- * The operator camera an app starts with: the whole globe, unzoomed.
+ * The operator camera an app starts with: the whole globe, unzoomed,
+ * north up.
  *
- * `zoom: 0` is load-bearing rather than a placeholder. `sos-equirect`'s
- * derivation is `1 − 1/(zoom + 1)`, which is exactly `0` there, so this
- * camera produces `CENTRED_CAMERA` — the uniform 1:1 unwrap — without
- * that identity being written twice. `lat`/`lon` are then irrelevant to
- * the result, which is why any values will do for them; `0, 0` is
- * simply the least surprising pair to read. A mode added later gets the
- * same guarantee for free if its own derivation is centred at zoom 0,
- * and a test pins the equirect half of it.
+ * Every value is load-bearing rather than a placeholder. `sos-equirect`'s
+ * zoom derivation is `1 − 1/(zoom + 1)`, which is exactly `0` at
+ * `zoom: 0`, so this camera produces `CENTRED_CAMERA`; and the turn that
+ * brings `(0, 0)` to the front north-up is the identity — together, the
+ * uniform 1:1 unwrap, without that identity being written twice. A mode
+ * added later gets the same guarantee for free if its own derivation is
+ * the identity here, and a test pins the equirect half of it.
  */
-export const DEFAULT_OPERATOR_CAMERA: OperatorCamera = { lat: 0, lon: 0, zoom: 0 }
+export const DEFAULT_OPERATOR_CAMERA: OperatorCamera = { lat: 0, lon: 0, zoom: 0, bearing: 0 }
 
 /**
  * The state before anything has loaded.
@@ -131,11 +133,15 @@ export function initialState(): MirroredGlobeState {
  * it is a storage-schema change, and rung 10's version field resets a
  * mismatched blob rather than migrating it. Trading every operator's
  * saved outputs for the tidier home of one boolean is the wrong side
- * of that deal until a second mode actually needs it.
+ * of that deal until a second mode actually needs it — and the second
+ * mode did not: `projector-warp` runs the same ray-march behind its
+ * meshes, so it takes every field here, `split` included.
  */
 export interface OutputViewSettings {
-  /** When false, this output gets `CENTRED_CAMERA` regardless of where
-   *  the operator has panned. */
+  /** When true, this output follows the operator's camera: their centre
+   *  is turned to face the sphere's front, their way up, and their zoom
+   *  magnifies it there. When false it gets `CENTRED_CAMERA` and no
+   *  turn, regardless of where the operator has panned. */
   trackCamera: boolean
   /** Mirror the area of focus to the antipodal hemisphere.
    *  `sos-equirect` only — see `MirroredEquirectParams`. */
@@ -170,10 +176,10 @@ export const DEFAULT_VIEW_SETTINGS: OutputViewSettings = {
  *
  * This is where the operator's camera becomes a *geometry's* camera,
  * and it is the only place that conversion happens. The shared view
- * holds `OperatorCamera` — MapLibre's own lat/lon/zoom — so no mode is
- * privileged: `sos-equirect` derives a ray-march origin from it here,
- * and a mode added later derives its own thing from the same three
- * numbers rather than from equirect's answer.
+ * holds `OperatorCamera` — MapLibre's own lat/lon/zoom/bearing — so no
+ * mode is privileged: `sos-equirect` derives a turn and a ray-march
+ * origin from it here, and a mode added later derives its own thing
+ * from the same four numbers rather than from equirect's answer.
  *
  * **`mode` is an argument, not a property of `shared`.** The arm an
  * output receives is a property of *that output*; the shared state has
@@ -184,11 +190,13 @@ export const DEFAULT_VIEW_SETTINGS: OutputViewSettings = {
  * deciding whether it is shared or per-output — and the wrong answer
  * there is invisible, because it looks like the setting simply working.
  *
- * The `switch` has one arm today. It is a `switch` rather than an `if`
- * because that is where a second mode's derivation goes, and because
- * the exhaustiveness check below turns "you added a mode and forgot to
- * project it" into a compile error rather than a projection that
- * returns the wrong geometry.
+ * `projector-warp`'s arm carries exactly `sos-equirect`'s parameters,
+ * because the same ray-march runs behind the warp — so both are built
+ * by `rayMarchParams` and differ only in the discriminant. It is still
+ * two cases rather than one shared one, so that a mode added later has
+ * to take a side, and the exhaustiveness check below turns "you added a
+ * mode and forgot to project it" into a compile error rather than a
+ * projection that returns the wrong geometry.
  */
 export function projectView(
   shared: SharedView,
@@ -197,33 +205,44 @@ export function projectView(
 ): MirroredView {
   switch (mode) {
     case 'sos-equirect':
-      return {
-        mode: 'sos-equirect',
-        dayNight: shared.dayNight,
-        params: {
-          // Derived here, once per output, from the one shared camera —
-          // rather than derived once and stored, which would be a
-          // second copy of the same fact, or derived by each output,
-          // which would be N copies of the same code.
-          cameraOffset: settings.trackCamera
-            ? cameraOffsetForCamera(shared.camera.lat, shared.camera.lon, shared.camera.zoom)
-            : { ...CENTRED_CAMERA },
-          split: settings.split,
-          // The one place degrees become radians. A non-finite stored
-          // value resolves to no rotation rather than reaching the
-          // shader as a NaN longitude, which would make every ray miss
-          // — the same guard `operatorCameraFrom` applies to a camera
-          // MapLibre reported as NaN.
-          rotationOffsetRad: Number.isFinite(settings.rotationOffsetDeg)
-            ? (settings.rotationOffsetDeg * Math.PI) / 180
-            : 0,
-        },
-      }
+      return { mode: 'sos-equirect', dayNight: shared.dayNight, params: rayMarchParams(shared, settings) }
+    case 'projector-warp':
+      return { mode: 'projector-warp', dayNight: shared.dayNight, params: rayMarchParams(shared, settings) }
     default:
       // `mode` narrows to `never` here while every `OutputMode` has a
       // case above. Adding one without a case makes this assignment
       // fail, which is the whole point of the annotation.
       return assertUnreachableMode(mode)
+  }
+}
+
+/**
+ * The ray-march's parameters for one output, built field by field — the
+ * body both arms of `projectView` share, since a warp only changes how
+ * the ray-march's answer reaches the glass.
+ */
+function rayMarchParams(shared: SharedView, settings: OutputViewSettings): MirroredEquirectParams {
+  // Derived here, once per output, from the one shared camera — rather
+  // than derived once and stored, which would be a second copy of the
+  // same fact, or derived by each output, which would be N copies of the
+  // same code. The turn and the zoom come from one call because they are
+  // one invariant: the zoom must magnify the point the turn put at the
+  // front.
+  const { lat, lon, zoom, bearing } = shared.camera
+  const followed = settings.trackCamera ? followCamera(lat, lon, zoom, bearing) : null
+  return {
+    cameraOffset: followed ? followed.cameraOffset : { ...CENTRED_CAMERA },
+    // Copied for `CENTRED_CAMERA`'s reason: the constant is
+    // module-scoped, and a value handed out is a value someone can write.
+    orientation: followed ? followed.orientation : [...IDENTITY_ORIENTATION],
+    split: settings.split,
+    // The one place degrees become radians. A non-finite stored value
+    // resolves to no rotation rather than reaching the shader as a NaN
+    // longitude, which would make every ray miss — the same guard
+    // `operatorCameraFrom` applies to a camera MapLibre reported as NaN.
+    rotationOffsetRad: Number.isFinite(settings.rotationOffsetDeg)
+      ? (settings.rotationOffsetDeg * Math.PI) / 180
+      : 0,
   }
 }
 

@@ -13,7 +13,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { isWorkersAiQuotaError } from './workers-ai-error'
+import { isWorkersAiQuotaError, workersAiErrorMessage } from './workers-ai-error'
 
 describe('isWorkersAiQuotaError', () => {
   it.each([
@@ -52,5 +52,46 @@ describe('isWorkersAiQuotaError', () => {
     expect(isWorkersAiQuotaError(undefined)).toBe(false)
     expect(isWorkersAiQuotaError(null)).toBe(false)
     expect(isWorkersAiQuotaError({ message: '4006' })).toBe(false)
+  })
+})
+
+describe('workersAiErrorMessage', () => {
+  it('reduces the Cloudflare errors[] envelope to code: message', () => {
+    expect(workersAiErrorMessage(JSON.stringify({
+      errors: [{ code: 4006, message: 'you have used up your daily free allocation' }],
+      success: false,
+    }))).toBe('4006: you have used up your daily free allocation')
+  })
+
+  it('keeps a request_id out of what the classifier sees', () => {
+    // The body that came back as quota_exhausted: `\b4006\b` matched the
+    // standalone "4006" group of the request id, not the error.
+    const body = '{"errors":[{"code":5007,"message":"No such model"}],' +
+      '"request_id":"9f1c2b7a-3e5d-4006-8a1b-2c3d4e5f6a7b"}'
+    expect(isWorkersAiQuotaError(body)).toBe(true)
+    const message = workersAiErrorMessage(body)
+    expect(message).toBe('5007: No such model')
+    expect(isWorkersAiQuotaError(message)).toBe(false)
+  })
+
+  it.each([
+    ['{"error":"4006: neurons exhausted"}', '4006: neurons exhausted'],
+    ['{"error":{"code":3036,"message":"quota exceeded"}}', '3036: quota exceeded'],
+    ['{"internalCode":4006,"description":"daily free allocation used"}', '4006: daily free allocation used'],
+    ['{"code":5007,"message":"No such model"}', '5007: No such model'],
+  ])('reads %s', (body, expected) => {
+    expect(workersAiErrorMessage(body)).toBe(expected)
+  })
+
+  it('yields nothing for a JSON body with no error in it', () => {
+    expect(workersAiErrorMessage('{"request_id":"9f1c2b7a-3e5d-4006-8a1b-2c3d4e5f6a7b"}')).toBe('')
+  })
+
+  it('returns anything that is not a JSON object unchanged', () => {
+    expect(workersAiErrorMessage('Capacity temporarily exceeded for this model'))
+      .toBe('Capacity temporarily exceeded for this model')
+    expect(workersAiErrorMessage('4006')).toBe('4006')
+    expect(workersAiErrorMessage('{not json')).toBe('{not json')
+    expect(workersAiErrorMessage('')).toBe('')
   })
 })

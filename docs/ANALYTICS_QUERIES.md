@@ -425,10 +425,17 @@ never the OS-reported display name.
 
 | Position | Field (output_added) | Field (output_removed) | Field (output_failure) |
 |---|---|---|---|
-| `blob5` | `framebuffer_bucket` (`1k` / `2k` / `4k` / `8k`) | `mode` | `kind` |
-| `blob6` | `mode` (`sos-equirect`) | `reason` | `recovered` (`true` / `false`) |
+| `blob5` | `framebuffer_bucket` (`1k` / `2k` / `4k` / `8k` / `native`) | `mode` | `kind` |
+| `blob6` | `mode` (`sos-equirect` / `projector-warp`) | `reason` | `recovered` (`true` / `false`) |
 | `double1` | `client_offset_ms` | `client_offset_ms` | `client_offset_ms` |
 | `double2` | `monitor_index` | — | `retries` |
+
+`framebuffer_bucket` is `native` for a `projector-warp` output
+(rung 16): that window draws projector rasters rather than an
+equirect frame, so no rung on the ladder describes it, and bucketing
+its stored width would name a 2:1 frame it does not draw. Its real,
+spanned display size is deliberately not reported — that would
+fingerprint a rig.
 
 `output_removed.reason` is one of `operator-close`, `crash`,
 `monitor-gone`, `gpu-loss-timeout`, `rejected-by-storm-guard`.

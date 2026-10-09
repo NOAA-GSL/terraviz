@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest'
 import Database from 'better-sqlite3'
 import { onRequestGet, onRequestPut } from './node-identity'
 import { asD1, makeKV } from '../_lib/test-helpers'
+import { upsertNodeIdentity } from '../_lib/catalog-store'
 import type { PublisherRow } from '../_lib/publisher-store'
 
 // A real ed25519 wire key: 32 raw bytes, standard base64. The route
@@ -136,6 +137,89 @@ describe('PUT /api/v1/publish/node-identity', () => {
     expect(res.status).toBe(400)
     const body = await bodyOf(res)
     expect(body.errors.some((e: any) => e.field === 'base_url')).toBe(true)
+  })
+
+  it.each([
+    { label: 'replace', fields: { description: 'Public ocean-science catalog.' }, expected: 'Public ocean-science catalog.' },
+    { label: 'preserve by omission', fields: {}, expected: 'Internal legacy prose' },
+    { label: 'clear by null', fields: { description: null }, expected: null },
+    { label: 'store an explicitly empty string', fields: { description: '' }, expected: '' },
+  ])('lets an operator $label before public exposure', async ({ fields, expected }) => {
+    const db = freshDb()
+    try {
+      const initial = await onRequestPut(putCtx(db, ADMIN, {
+        display_name: 'Node', base_url: 'https://node.example.org',
+        description: 'Internal legacy prose', contact_email: 'ops@example.org', public_key: VALID_KEY,
+      }))
+      expect(initial.status).toBe(200)
+      const original = (await bodyOf(initial)).identity
+      const kv = makeKV()
+      const updated = await onRequestPut(putCtx(db, SERVICE, {
+        display_name: original.display_name, base_url: original.base_url,
+        contact_email: original.contact_email, ...fields,
+      }, kv))
+      expect(updated.status).toBe(200)
+      expect((await bodyOf(updated)).identity).toMatchObject({
+        description: expected, node_id: original.node_id, created_at: original.created_at,
+        public_key: VALID_KEY, contact_email: original.contact_email,
+      })
+      expect(db.prepare('SELECT description FROM node_identity').get()).toEqual({ description: expected })
+      expect(kv.delete).toHaveBeenCalled()
+
+      // The existing authenticated publisher read is how operators
+      // inspect the stored value; it must never be publicly cached.
+      const read = await onRequestGet({
+        ...putCtx(db, ADMIN, {}),
+        request: new Request('https://node.example.org/api/v1/publish/node-identity'),
+      } as unknown as Parameters<PagesFunction>[0])
+      expect(read.headers.get('cache-control')).toBe('private, no-store')
+      expect((await bodyOf(read)).identity.description).toBe(expected)
+    } finally {
+      db.close()
+    }
+  })
+
+  it('preserves omitted optional fields atomically after a concurrent update', async () => {
+    const sqlite = freshDb()
+    try {
+      await onRequestPut(putCtx(sqlite, ADMIN, { display_name: 'Node', base_url: 'https://node.example.org', public_key: VALID_KEY, description: 'Old', contact_email: 'old@example.org' }))
+      const db = asD1(sqlite)
+      const interleaved = {
+        ...db,
+        prepare(sql: string) {
+          if (sql.startsWith('UPDATE node_identity')) {
+            sqlite.prepare('UPDATE node_identity SET description = ?, contact_email = ?, public_key = ?').run('Newer description', 'new@example.org', 'ed25519:newer')
+          }
+          return db.prepare(sql)
+        },
+      } as unknown as D1Database
+      const result = await upsertNodeIdentity(interleaved, { display_name: 'Renamed', base_url: 'https://new.example.org' })
+      expect(result).toMatchObject({ description: 'Newer description', contact_email: 'new@example.org', public_key: 'ed25519:newer' })
+      const cleared = await onRequestPut(putCtx(sqlite, ADMIN, { display_name: 'Renamed', base_url: 'https://new.example.org', description: null, contact_email: null }))
+      expect((await bodyOf(cleared)).identity).toMatchObject({ description: null, contact_email: null })
+    } finally { sqlite.close() }
+  })
+
+  it('rejects an overlong replacement without erasing the existing description', async () => {
+    const db = freshDb()
+    try {
+      await onRequestPut(putCtx(db, ADMIN, {
+        display_name: 'Node', base_url: 'https://node.example.org',
+        description: 'd'.repeat(2048), public_key: VALID_KEY,
+      }))
+      const kv = makeKV()
+      const res = await onRequestPut(putCtx(db, ADMIN, {
+        display_name: 'Node', base_url: 'https://node.example.org', description: 'd'.repeat(2049),
+      }, kv))
+      expect(res.status).toBe(400)
+      expect((await bodyOf(res)).errors).toContainEqual(expect.objectContaining({
+        field: 'description', code: 'too_long',
+      }))
+      expect(db.prepare('SELECT description FROM node_identity').get()).toEqual({ description: 'd'.repeat(2048) })
+      expect(kv.delete).not.toHaveBeenCalled()
+    } finally {
+      db.close()
+    }
   })
 
   it('caps base_url length like the other string fields', async () => {

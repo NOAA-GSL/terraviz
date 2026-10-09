@@ -59,11 +59,45 @@ export interface Vec3 {
   z: number
 }
 
+/**
+ * A 3×3 matrix, **row-major**: `(M·v).x = m[0]·v.x + m[1]·v.y + m[2]·v.z`.
+ *
+ * Row-major because that is the order `THREE.Matrix3.set` takes its
+ * arguments in, so the output uploads one of these with a spread and no
+ * transpose to get wrong — Three stores and uploads column-major itself,
+ * which is what a GLSL `mat3` expects. A tuple rather than a `Matrix3`
+ * for `Vec3`'s reason: it crosses the IPC boundary.
+ */
+export type Mat3 = readonly [number, number, number, number, number, number, number, number, number]
+
+/** No turn: the content's frame is the sphere's. */
+export const IDENTITY_ORIENTATION: Mat3 = [1, 0, 0, 0, 1, 0, 0, 0, 1]
+
 export interface EquirectParams {
-  /** Camera position inside the unit sphere. `|cameraOffset|` should
-   *  be ≤ `MAX_CAMERA_OFFSET`; the maths stays finite up to but not
+  /** Camera position inside the unit sphere, in the **sphere's** frame —
+   *  the rotation offset below is applied first and the orientation
+   *  after, so neither moves it. `|cameraOffset|` should be
+   *  ≤ `MAX_CAMERA_OFFSET`; the maths stays finite up to but not
    *  including 1. */
   cameraOffset: Vec3
+  /**
+   * The turn from the sphere's frame to the content's: what the
+   * ray-march's landing point *shows*. Row-major (`Mat3`).
+   *
+   * Identity unless the output follows the operator's camera, when it
+   * is `followOrientation`'s — the turn that brings the operator's
+   * centre round to the sphere's front, their way up. That is what puts
+   * a pole where an audience can see it: a longitude turn cannot move
+   * latitude, and the zoom alone only magnifies a pole where it already
+   * sits, at the top or bottom of a sphere, which on a projector rig is
+   * often outside every projector's picture.
+   *
+   * Applied to the landing point, after the march, so the camera offset
+   * and the rotation offset stay in the sphere's frame: the zoom
+   * magnifies the front whatever is turned to face it, and only the
+   * content moves.
+   */
+  orientation: Mat3
   /** Mirror the area of focus to the antipodal hemisphere. */
   split: boolean
   /**
@@ -84,9 +118,11 @@ export interface EquirectParams {
   rotationOffsetRad: number
 }
 
-/** The centred, unsplit, unrotated projection — a uniform 1:1 unwrap. */
+/** The centred, unturned, unsplit, unrotated projection — a uniform
+ *  1:1 unwrap. */
 export const IDENTITY_PARAMS: EquirectParams = {
   cameraOffset: { x: 0, y: 0, z: 0 },
+  orientation: IDENTITY_ORIENTATION,
   split: false,
   rotationOffsetRad: 0,
 }
@@ -217,18 +253,132 @@ export function equirectSourceUv(
   const dir = latLonToDirection(lat, applyRotationOffset(lon, params.rotationOffsetRad))
   const o = params.cameraOffset
   const t = rayUnitSphereT(o, dir)
-  const hit: Vec3 = {
+  const hit = applyOrientation(params.orientation, {
     x: o.x + t * dir.x,
     y: o.y + t * dir.y,
     z: o.z + t * dir.z,
-  }
+  })
   const hitLatLon = directionToLatLon(hit)
   return latLonToSphereUv(hitLatLon.lat, hitLatLon.lon)
 }
 
+/** `M·v`, for a row-major `Mat3`. The TS mirror of the shader's
+ *  `uOrientation * hit`. */
+export function applyOrientation(m: Mat3, v: Vec3): Vec3 {
+  return {
+    x: m[0] * v.x + m[1] * v.y + m[2] * v.z,
+    y: m[3] * v.x + m[4] * v.y + m[5] * v.z,
+    z: m[6] * v.x + m[7] * v.y + m[8] * v.z,
+  }
+}
+
 /**
- * The operator's MapLibre camera → the offset that reproduces its zoom
- * on the sphere (§3.5).
+ * The sphere's front: latitude 0 on the meridian the rotation offset
+ * turns to (the output frame's centre column when that offset is 0).
+ * It is where a following output brings the operator's centre, and
+ * what its zoom magnifies.
+ */
+export const FRONT = { lat: 0, lon: 0 } as const
+
+/**
+ * The turn that shows the operator's view on the sphere's front: the
+ * point `(lat, lon)` the control globe is centred on at `FRONT`, with
+ * the direction that is *up* on the control globe up the sphere.
+ *
+ * SOS does this with a remote — pitch, yaw and roll about a "user
+ * position" — and the control globe is that remote here: drag it to
+ * Antarctica and Antarctica comes round to the front, on the equator,
+ * where the zoom then magnifies it. Up follows the control globe's
+ * `bearing` (MapLibre's, degrees, the compass direction at the top of
+ * the screen), because MapLibre turns on a right-drag or a two-finger
+ * twist and the sphere should not show a different picture from the
+ * one the operator is turning. Pitch has no counterpart and is not
+ * taken: it tilts a viewer, and a sphere is seen from every side.
+ *
+ * Built from frames rather than angles, so neither pole is a special
+ * case: the result is `B_centre · B_frontᵀ`, where each `B` is the
+ * point's own position, north and east as `latLonToDirection` defines
+ * them — which at a pole are still the directions of `lon`'s meridian,
+ * the same way up MapLibre draws there. The front's frame is the axes
+ * (`x` its position, `y` its north, `z` its east), so the columns are
+ * simply the centre's position, then up and right on the control
+ * globe. **A rotation by construction:** both bases are the same
+ * embedding's own (position, north, east), and the bearing turns within
+ * the tangent plane, so the determinant is 1 and no mirror can creep
+ * in — which is worth saying, because `latLonToDirection` is itself the
+ * mirror image of a right-handed Earth (`photorealEarth` negates Z for
+ * that reason), so a hand-written rotation can go wrong silently.
+ *
+ * A non-finite input reads as 0, as `operatorCameraFrom` resolves one:
+ * a `NaN` here would make every ray land nowhere and black the sphere.
+ */
+export function followOrientation(lat: number, lon: number, bearing: number): Mat3 {
+  const latRad = (Number.isFinite(lat) ? lat : 0) * DEG
+  const lonRad = (Number.isFinite(lon) ? lon : 0) * DEG
+  const bearingRad = (Number.isFinite(bearing) ? bearing : 0) * DEG
+  const sinLat = Math.sin(latRad)
+  const cosLat = Math.cos(latRad)
+  const sinLon = Math.sin(lonRad)
+  const cosLon = Math.cos(lonRad)
+  const position: Vec3 = { x: cosLat * cosLon, y: sinLat, z: cosLat * sinLon }
+  const north: Vec3 = { x: -sinLat * cosLon, y: cosLat, z: -sinLat * sinLon }
+  const east: Vec3 = { x: -sinLon, y: 0, z: cosLon }
+  const cb = Math.cos(bearingRad)
+  const sb = Math.sin(bearingRad)
+  // Up on the control globe is the compass direction `bearing`; right
+  // is a quarter-turn clockwise from it, seen from outside.
+  const up: Vec3 = {
+    x: cb * north.x + sb * east.x,
+    y: cb * north.y + sb * east.y,
+    z: cb * north.z + sb * east.z,
+  }
+  const right: Vec3 = {
+    x: cb * east.x - sb * north.x,
+    y: cb * east.y - sb * north.y,
+    z: cb * east.z - sb * north.z,
+  }
+  // `−sin 0` is −0, which `===` ignores and a structural comparison does
+  // not; folded so the default camera derives to `IDENTITY_ORIENTATION`
+  // exactly, as its zoom derives to a centred camera exactly.
+  const z = (n: number): number => (n === 0 ? 0 : n)
+  return [
+    z(position.x), z(up.x), z(right.x),
+    z(position.y), z(up.y), z(right.y),
+    z(position.z), z(up.z), z(right.z),
+  ]
+}
+
+/**
+ * Everything a following output takes from the operator's camera: the
+ * turn that brings their centre to the front, and the zoom, as the
+ * camera moved toward that front.
+ *
+ * One function rather than two call sites, because the two halves are
+ * one invariant — the zoom has to magnify the point the turn put at the
+ * front, and a camera offset still aimed at the centre's own lat/lon
+ * (which is what this replaced) magnifies wherever that point *was*,
+ * which after the turn is nowhere in particular.
+ */
+export function followCamera(
+  lat: number,
+  lon: number,
+  zoom: number,
+  bearing: number,
+): Pick<EquirectParams, 'cameraOffset' | 'orientation'> {
+  return {
+    cameraOffset: cameraOffsetForCamera(FRONT.lat, FRONT.lon, zoom),
+    orientation: followOrientation(lat, lon, bearing),
+  }
+}
+
+/**
+ * The offset that reproduces a MapLibre zoom on the sphere, as the
+ * camera moved toward `(lat, lon)` (§3.5).
+ *
+ * A following output asks for it at `FRONT` (`followCamera`), because
+ * the operator's centre is turned to face the front rather than left
+ * where it lies. The general form stays because the zoom's maths is
+ * the same whichever way the camera moves, and the tests pin it there.
  *
  * The plan's snippet caps only the top of the range. This clamps both
  * ends: `1 − 1/(zoom + 1)` goes *negative* below zoom 0 and diverges as
@@ -251,6 +401,7 @@ export function cameraOffsetForCamera(lat: number, lon: number, zoom: number): V
 export const EQUIRECT_UNIFORMS = {
   sphereTexture: 'uSphereTexture',
   cameraOffset: 'uCameraOffset',
+  orientation: 'uOrientation',
   split: 'uSplit',
   rotationOffset: 'uRotationOffsetRad',
 } as const
@@ -277,6 +428,7 @@ varying vec2 vUv;
 
 uniform sampler2D uSphereTexture;
 uniform vec3 uCameraOffset;
+uniform mat3 uOrientation;
 uniform bool uSplit;
 uniform float uRotationOffsetRad;
 
@@ -304,6 +456,12 @@ void main() {
   float c = dot(uCameraOffset, uCameraOffset) - 1.0;
   float t = -b + sqrt(b * b - c);
   vec3 hit = uCameraOffset + t * dir;
+
+  // Sphere's frame -> content's: identity unless this output follows
+  // the operator's camera, when it brings their centre to the front.
+  // In place, so everything below — and the decoration composited onto
+  // this pass — reads the content's point, where the sun is.
+  hit = uOrientation * hit;
 
   // Hit point -> sphere-texture UV.
   float hitLat = asin(clamp(hit.y, -1.0, 1.0));

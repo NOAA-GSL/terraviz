@@ -57,3 +57,55 @@ export function isWorkersAiQuotaError(err: unknown): boolean {
   if (!message) return false
   return QUOTA_PATTERNS.some(re => re.test(message))
 }
+
+/**
+ * The error text inside a Workers AI error body, for classifying and
+ * reporting it.
+ *
+ * `isWorkersAiQuotaError` is pattern-based, so it must only ever see
+ * the platform's error *message*: run over a whole JSON envelope,
+ * `\b4006\b` also matches a `request_id` such as
+ * `9f1c2b7a-3e5d-4006-…`, and a 400 "No such model" came back as
+ * `quota_exhausted`. A JSON object body is reduced to its error
+ * `code: message` pairs — the Cloudflare `{ errors: [{ code,
+ * message }] }` envelope, `{ error: "…" }`, `{ error: { code,
+ * message } }`, `{ internalCode, description }` and a top-level
+ * `{ code, message }`. A JSON body in none of those shapes yields
+ * `''` (nothing trustworthy to classify, and not worth echoing to
+ * the client); anything that is not a JSON object is returned as
+ * is, since then the text *is* the message.
+ */
+export function workersAiErrorMessage(body: string): string {
+  if (!body.trim().startsWith('{')) return body
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(body)
+  } catch {
+    return body
+  }
+  if (!parsed || typeof parsed !== 'object') return ''
+  const obj = parsed as Record<string, unknown>
+
+  if (Array.isArray(obj.errors)) {
+    const parts = obj.errors
+      .map(e => (e && typeof e === 'object' ? codeAndMessage(e as Record<string, unknown>) : ''))
+      .filter(Boolean)
+    if (parts.length) return parts.join('; ')
+  }
+  if (typeof obj.error === 'string') return obj.error
+  if (obj.error && typeof obj.error === 'object') {
+    const inner = codeAndMessage(obj.error as Record<string, unknown>)
+    if (inner) return inner
+  }
+  if (typeof obj.description === 'string') {
+    return codeAndMessage({ code: obj.internalCode, message: obj.description })
+  }
+  return codeAndMessage(obj)
+}
+
+function codeAndMessage(e: Record<string, unknown>): string {
+  const message = typeof e.message === 'string' ? e.message : ''
+  const code = typeof e.code === 'number' || typeof e.code === 'string' ? String(e.code) : ''
+  if (code && message) return `${code}: ${message}`
+  return message || code
+}

@@ -1,0 +1,77 @@
+[
+  {
+    "uri": "https://geojson.org/schema/Feature.json",
+    "file": "geojson.org-schema-Feature-dcdfef2596db.json",
+    "sha256": "sha256:3957840b2ff19f9450ea97a12f85944d938c68a7a6bf115a2e69b98e007b9922"
+  },
+  {
+    "uri": "https://geojson.org/schema/Geometry.json",
+    "file": "geojson.org-schema-Geometry-f67b736b0d3c.json",
+    "sha256": "sha256:152369d7eb6b3314ffc7deca1d66f9d498ed5b614ca38ed4e2c813fed01024fd"
+  },
+  {
+    "uri": "https://schemas.stacspec.org/v1.1.0/catalog-spec/json-schema/catalog.json",
+    "file": "schemas.stacspec.org-v1.1.0-catalog-spec-json-schema-catalog-0b0c471825db.json",
+    "sha256": "sha256:d82974d084fb600ec0e92d6962ef536157eda6d36bbb4299e8235a6042efbeed"
+  },
+  {
+    "uri": "https://schemas.stacspec.org/v1.1.0/collection-spec/json-schema/collection.json",
+    "file": "schemas.stacspec.org-v1.1.0-collection-spec-json-schema-collection-4735d85ebeb9.json",
+    "sha256": "sha256:c2106427e6b7a7a2c1b6fef980d9df332c4000e8676efa2aba7a1dbcd1914ccf"
+  },
+  {
+    "uri": "https://schemas.stacspec.org/v1.1.0/item-spec/json-schema/bands.json",
+    "file": "schemas.stacspec.org-v1.1.0-item-spec-json-schema-bands-69a440a25132.json",
+    "sha256": "sha256:0a44673eda5cf49ad83247ebf50bffc9eac6cd126d4778c0f17a64b21002818e"
+  },
+  {
+    "uri": "https://schemas.stacspec.org/v1.1.0/item-spec/json-schema/basics.json",
+    "file": "schemas.stacspec.org-v1.1.0-item-spec-json-schema-basics-cff6ce901353.json",
+    "sha256": "sha256:c11193fa08465b53257e93ea4e8c0c671806485ece9b2482447c792f2e9b7809"
+  },
+  {
+    "uri": "https://schemas.stacspec.org/v1.1.0/item-spec/json-schema/common.json",
+    "file": "schemas.stacspec.org-v1.1.0-item-spec-json-schema-common-72d8e8d0061f.json",
+    "sha256": "sha256:9f1bb9d24a94d7f519cc2c478b6581c0d9a66117518376ac1a71ec5643ad3fd7"
+  },
+  {
+    "uri": "https://schemas.stacspec.org/v1.1.0/item-spec/json-schema/data-values.json",
+    "file": "schemas.stacspec.org-v1.1.0-item-spec-json-schema-data-values-17c185a7cb12.json",
+    "sha256": "sha256:5ca5d324272b76188fd70391b6d57fa0438d87fa8dfa5b6f2fd15af57bff9539"
+  },
+  {
+    "uri": "https://schemas.stacspec.org/v1.1.0/item-spec/json-schema/datetime.json",
+    "file": "schemas.stacspec.org-v1.1.0-item-spec-json-schema-datetime-c314f28c29fa.json",
+    "sha256": "sha256:2656b4bec14ee63b0c17c7a68caeba4a10a5ba3bfe018e4d23ebd8b6efb5fd9f"
+  },
+  {
+    "uri": "https://schemas.stacspec.org/v1.1.0/item-spec/json-schema/instrument.json",
+    "file": "schemas.stacspec.org-v1.1.0-item-spec-json-schema-instrument-3264712da137.json",
+    "sha256": "sha256:09cd369e88c2f7c248683d922fd90e3ab2e7e832b86e6130722d8a0bf27cdd78"
+  },
+  {
+    "uri": "https://schemas.stacspec.org/v1.1.0/item-spec/json-schema/item.json",
+    "file": "schemas.stacspec.org-v1.1.0-item-spec-json-schema-item-707c15c85464.json",
+    "sha256": "sha256:d38ed83cda8c93f5f2f4967ba2be398e9d7407aa1c3210f9c27bbbc4e8ba35e2"
+  },
+  {
+    "uri": "https://schemas.stacspec.org/v1.1.0/item-spec/json-schema/licensing.json",
+    "file": "schemas.stacspec.org-v1.1.0-item-spec-json-schema-licensing-d9849b94a763.json",
+    "sha256": "sha256:b4f882c70c6616698fa3c390d1efbdc59816129f36a6173769fbf07655313726"
+  },
+  {
+    "uri": "https://schemas.stacspec.org/v1.1.0/item-spec/json-schema/provider.json",
+    "file": "schemas.stacspec.org-v1.1.0-item-spec-json-schema-provider-1a51c2f2d3a7.json",
+    "sha256": "sha256:2db89bb50a352aaece743173742fa450cbb5fb4583fe3a237968054aeaea86ad"
+  },
+  {
+    "uri": "https://stac-extensions.github.io/file/v2.1.0/schema.json",
+    "file": "stac-extensions.github.io-file-v2.1.0-schema-0653284461a3.json",
+    "sha256": "sha256:03567215bb1402f5104ca9919daaa5bbfe9456a499f185606247b4b2d1f23ad1"
+  },
+  {
+    "uri": "https://stac-extensions.github.io/scientific/v1.0.0/schema.json",
+    "file": "stac-extensions.github.io-scientific-v1.0.0-schema-3dbc4acd0478.json",
+    "sha256": "sha256:fab3f50346dab2cb78c621f633e51b79b64ea894ace085867b28e97745e521bb"
+  }
+]

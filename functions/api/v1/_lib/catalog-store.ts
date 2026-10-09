@@ -20,6 +20,7 @@
  */
 
 import { newUlid } from './ulid'
+import type { BboxProvenance, ResourceKind, TemporalSemantics } from './validators'
 
 export interface DatasetRow {
   id: string
@@ -75,7 +76,8 @@ export interface DatasetRow {
   /** Geographic bounding box (NSWE in degrees) for the dataset's
    * spatial extent. Phase 3d promoted these from the legacy
    * `bounding_variables` JSON column to typed REALs; consumers
-   * MUST read the typed fields. NULL on rows with global extent.
+  * MUST read the typed fields. NULL means unknown extent, NOT
+  * measured or declared global coverage.
    * Validation: n/s in [-90, 90], w/e in [-180, 180], n >= s.
    * The SPA's regional projection feature (Phase 3e) wraps the
    * dataset texture to this bbox; rows with all four NULL get
@@ -84,6 +86,13 @@ export interface DatasetRow {
   bbox_s: number | null
   bbox_w: number | null
   bbox_e: number | null
+  /** Internal annotations, also readable through the authenticated publisher
+   * detail's dataset row. Never added to native WireDataset. */
+  bbox_provenance: BboxProvenance
+  bbox_evidence: string | null
+  temporal_semantics: TemporalSemantics
+  temporal_evidence: string | null
+  resource_kind: ResourceKind
   /** Celestial body the dataset visualises. NULL means Earth (the
    * common case). Non-Earth values surface as a SPA hint to swap
    * the base globe texture (Phase 3e). Verbatim SOS strings —
@@ -277,16 +286,20 @@ export async function upsertNodeIdentity(
     await db
       .prepare(
         `UPDATE node_identity
-           SET display_name = ?, base_url = ?, description = ?,
-               contact_email = ?, public_key = ?
+           SET display_name = ?, base_url = ?,
+             description = CASE WHEN ? THEN ? ELSE description END,
+             contact_email = CASE WHEN ? THEN ? ELSE contact_email END,
+             public_key = COALESCE(?, public_key)
          WHERE node_id = ?`,
       )
       .bind(
         input.display_name,
         input.base_url,
+        input.description !== undefined ? 1 : 0,
         input.description ?? null,
+        input.contact_email !== undefined ? 1 : 0,
         input.contact_email ?? null,
-        input.public_key ?? existing.public_key,
+        input.public_key ?? null,
         existing.node_id,
       )
       .run()
@@ -341,6 +354,8 @@ export async function upsertNodeIdentity(
  * is in place so federation subscribers (Phase 4) and CLI sync
  * jobs can rely on it.
  */
+export const PUBLIC_DATASET_PREDICATE = "visibility = 'public' AND is_hidden = 0 AND retracted_at IS NULL AND published_at IS NOT NULL"
+
 export async function listPublicDatasets(
   db: D1Database,
   options: { since?: string } = {},
@@ -365,13 +380,8 @@ export async function listPublicDatasets(
   // the caller). Found during a production smoke test where a
   // draft "Test 1" appeared alongside published datasets in the
   // SPA's browse panel.
-  const where = [
-    'visibility = ?',
-    'is_hidden = 0',
-    'retracted_at IS NULL',
-    'published_at IS NOT NULL',
-  ]
-  const binds: unknown[] = ['public']
+  const where = [PUBLIC_DATASET_PREDICATE]
+  const binds: unknown[] = []
   if (since) {
     where.push('updated_at > ?')
     binds.push(since)
@@ -394,9 +404,7 @@ export async function getPublicDataset(
   return db
     .prepare(
       `SELECT * FROM datasets
-       WHERE id = ? AND visibility = 'public'
-         AND is_hidden = 0 AND retracted_at IS NULL
-         AND published_at IS NOT NULL
+       WHERE id = ? AND ${PUBLIC_DATASET_PREDICATE}
        LIMIT 1`,
     )
     .bind(id)
@@ -412,7 +420,7 @@ export async function getPublicDataset(
  * real workload that crossed the limit; pre-1d nobody had enough
  * published rows to surface the cliff.
  */
-const D1_BIND_BATCH = 80
+export const D1_BIND_BATCH = 80
 
 /**
  * Fetch every decoration row for a set of dataset ids in batch

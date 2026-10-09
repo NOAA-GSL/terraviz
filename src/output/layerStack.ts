@@ -54,6 +54,7 @@ import type { DatasetOverlayOptions } from '../types'
 import { SHADER_DEFAULTS } from '../services/shaderSettingsService'
 import { NADIR_LUT_SIZE } from './atmosphereNadir'
 import { EQUIRECT_FRAGMENT_SHADER } from './equirectRtt'
+import { WARP_FRAGMENT_GLSL, WARP_UNIFORMS } from './projectorWarp'
 
 /**
  * How many overlay layers one output composites.
@@ -504,6 +505,130 @@ export function overlaySampleUv(
   return { u, v: flipY ? 1 - v : v }
 }
 
+/**
+ * The screen-space gradients every texture fetch on this output samples
+ * with — the fix for a dateline hairline that `docs/MULTI_MONITOR_PLAN.md`
+ * rung 16, convention 1, found and reproduced.
+ *
+ * The shader takes the hit point's longitude with `atan`, which jumps a
+ * whole turn at the antimeridian, and a fetch that picks its own mip
+ * level differentiates that jump: a 2×2 pixel quad straddling it sees
+ * the texture's whole width per pixel and samples the smallest mip,
+ * which is the texture's average colour. On the glass that is a
+ * hairline along the content's dateline wherever something moves the
+ * dateline into the frame — camera tracking, or a rotation offset on
+ * its own. Reproduced with the real scene in headless Chromium: zoomed
+ * towards 90°E, a dashed line of 501 pixels, every one within 1% of the
+ * dateline and reading exactly the test texture's average; camera
+ * centred and rotated 90.13°, a solid line two pixels wide down every
+ * row. At exactly 90° it vanished, because the jump then falls between
+ * quads rather than inside one — as it does for every multiple of 45°
+ * at every width on the ladder, so a check at a round number cannot see
+ * it, while a drag of the panel's 0.1° slider makes it blink. A video
+ * layer escaped it only because a `VideoTexture` has no mips.
+ *
+ * So the gradients are taken once, in straight-line code at the top of
+ * `main()`, where derivatives are defined; `sampleOverlayLayer` returns
+ * early outside a bbox, and a derivative taken after a divergent branch
+ * is not. u's comes from whichever of u and `fract(u + ½)` is continuous
+ * at that pixel (`seamFreeGradientU`), and every fetch then samples with
+ * `texture2DGradEXT`, which Three maps to `textureGrad` for the GLSL ES
+ * 3.00 it compiles. The coordinate itself is untouched, so every mirror
+ * of *where* a texel lands still holds.
+ *
+ * u's gradient is then scaled by the row's length at that latitude
+ * (`rowScaledGradientU`), the same pathology at a pole instead of a
+ * seam: round a pole inside the frame, longitude sweeps a whole turn in
+ * a few pixels, and read raw that chose the pyramid's coarsest levels
+ * and blurred whole bands of latitude into a dot on the pole.
+ */
+export const EQUIRECT_GRADIENT_GLSL = `
+void equirectGradients(vec2 uv, out vec2 gradX, out vec2 gradY) {
+  gradX = dFdx(uv);
+  gradY = dFdy(uv);
+  float alt = fract(uv.x + 0.5);
+  float altX = dFdx(alt);
+  float altY = dFdy(alt);
+  if (abs(altX) + abs(altY) < abs(gradX.x) + abs(gradY.x)) {
+    gradX.x = altX;
+    gradY.x = altY;
+  }
+  float rowLength = sin(uv.y * 3.14159265358979);
+  gradX.x *= rowLength;
+  gradY.x *= rowLength;
+}
+`.trim()
+
+/**
+ * u's gradient at one pixel, given the screen-space derivatives of u and
+ * of `fract(u + ½)` — the choice `EQUIRECT_GRADIENT_GLSL` makes on
+ * `dFdx` / `dFdy`, as a pure function of the same four numbers.
+ *
+ * u jumps a whole turn at the texture's seam and `fract(u + ½)` jumps at
+ * its middle, never both at the same pixel, so whichever changes less
+ * across the pixel is the continuous one (Tarini, "Cylindrical and
+ * Toroidal Parameterizations Without Vertex Seams", 2012). Away from
+ * both jumps they agree exactly and the choice costs nothing.
+ */
+export function seamFreeGradientU(
+  direct: { x: number; y: number },
+  alt: { x: number; y: number },
+): { x: number; y: number } {
+  return Math.abs(alt.x) + Math.abs(alt.y) < Math.abs(direct.x) + Math.abs(direct.y)
+    ? alt
+    : direct
+}
+
+/**
+ * u's gradient as a distance on the sphere rather than a share of a
+ * row: scaled by the row's length at that latitude, `cos(latitude)`,
+ * which is `sin(π·v)` — the second half of `EQUIRECT_GRADIENT_GLSL`,
+ * applied after `seamFreeGradientU` has chosen.
+ *
+ * Every row of an equirectangular texture spans the whole turn, so near
+ * a pole a step in u is a short step on the sphere, and a fetch that
+ * read u's gradient raw took a pole inside the frame for a pixel
+ * covering hundreds of texels. Round the pole longitude sweeps a whole
+ * turn in a few pixels, so the fetch chose the pyramid's coarsest
+ * levels — and a level is a box in both directions, so it averaged
+ * whole bands of *latitude* into a dot at the pole. Measured on WebGL,
+ * the worst pixel at Antarctica's pole read the colour of 35°S.
+ *
+ * Nothing finer is lost by the scaling: a row near a pole is that row's
+ * few degrees of circle stretched across the whole texture width, so a
+ * level chosen for the distance the pixel covers holds everything the
+ * image has there. Where a pixel covers the same distance both ways —
+ * anywhere on an unturned frame, where this changes no level at all —
+ * the two gradients now agree, which is what an isotropic level needs.
+ */
+export function rowScaledGradientU(grad: { x: number; y: number }, v: number): { x: number; y: number } {
+  const rowLength = Math.sin(v * Math.PI)
+  return { x: grad.x * rowLength, y: grad.y * rowLength }
+}
+
+/**
+ * How far a step in sphere UV moves this overlay's own UV, per axis and
+ * signed — what `OVERLAY_SAMPLE_GLSL` scales the sphere's gradients by
+ * before it fetches.
+ *
+ * A regional box stretches its degrees over the whole texture, so its u
+ * moves `360 / span` times as fast as the sphere's and its v
+ * `180 / (n − s)` times; a global layer moves exactly as fast, since
+ * `lonOrigin` only shifts it. A flip reverses v's direction without
+ * changing its rate. Tested against finite differences of
+ * `overlaySampleUv`, so it cannot disagree with where the texel lands.
+ */
+export function overlayGradientScale(overlay?: DatasetOverlayOptions): OverlayUv {
+  const bbox = overlay?.boundingBox
+  const flip = overlay?.isFlippedInY === true ? -1 : 1
+  if (bbox && !isGlobalBbox(bbox)) {
+    const { n, s, w, e } = bbox
+    const span = w <= e ? Math.max(e - w, 1e-6) : 360 - w + e
+    return { u: 360 / span, v: (flip * 180) / Math.max(n - s, 1e-6) }
+  }
+  return { u: 1, v: flip }
+}
+
 /** Uniform names for one overlay slot. A misspelled uniform is
  *  silently ignored by WebGL and reads as "the dataset never loaded". */
 export function overlayUniformNames(slot: number): {
@@ -549,6 +674,8 @@ vec4 sampleOverlayLayer(
   sampler2D lut,
   float lat,
   float lon,
+  vec2 sphereGradX,
+  vec2 sphereGradY,
   vec4 bbox,
   int hasBbox,
   float lonOrigin,
@@ -557,6 +684,8 @@ vec4 sampleOverlayLayer(
   float opacity
 ) {
   vec2 uv;
+  // How far a step in sphere UV moves this layer's UV — overlayGradientScale.
+  vec2 gradScale;
   if (hasBbox == 1) {
     float bn = bbox.x;
     float bs = bbox.y;
@@ -564,31 +693,44 @@ vec4 sampleOverlayLayer(
     float be = bbox.w;
     if (lat > bn || lat < bs) return vec4(0.0);
     float bu;
+    float span;
     if (bw <= be) {
       if (lon < bw || lon > be) return vec4(0.0);
-      bu = (lon - bw) / max(be - bw, 1e-6);
+      span = max(be - bw, 1e-6);
+      bu = (lon - bw) / span;
     } else {
       // Antimeridian-crossing box: inside if east of w OR west of e.
       bool eastSide = lon >= bw;
       bool westSide = lon <= be;
       if (!eastSide && !westSide) return vec4(0.0);
-      float span = (360.0 - bw) + be;
+      span = (360.0 - bw) + be;
       bu = eastSide ? (lon - bw) / span : (lon + 360.0 - bw) / span;
     }
     // v == 1 is the image's TOP row (THREE uploads with flipY), so the
     // box's north edge maps to bv 1, not 0. Inverting this is what put
     // a US bbox over the South Pacific once already.
     float bv = (lat - bs) / max(bn - bs, 1e-6);
-    if (flipY == 1) bv = 1.0 - bv;
+    gradScale = vec2(360.0 / span, 180.0 / max(bn - bs, 1e-6));
+    if (flipY == 1) {
+      bv = 1.0 - bv;
+      gradScale.y = -gradScale.y;
+    }
     uv = vec2(bu, bv);
   } else {
     float fu = fract((lon - lonOrigin) / 360.0 + 0.5);
     float fv = (lat + 90.0) / 180.0;
-    if (flipY == 1) fv = 1.0 - fv;
+    gradScale = vec2(1.0, 1.0);
+    if (flipY == 1) {
+      fv = 1.0 - fv;
+      gradScale.y = -1.0;
+    }
     uv = vec2(fu, fv);
   }
 
-  vec4 texel = texture2D(tex, uv);
+  // Explicit gradients, never this coordinate's own: see
+  // EQUIRECT_GRADIENT_GLSL. They also keep the fetch defined after the
+  // early returns above, which implicit derivatives would not be.
+  vec4 texel = texture2DGradEXT(tex, uv, sphereGradX * gradScale, sphereGradY * gradScale);
   if (dataEncoded == 1) {
     // Luma is a measurement, not a look: no contrast or saturation
     // treatment here, or the sphere reports a different number than
@@ -610,8 +752,17 @@ vec4 sampleOverlayLayer(
  * loop over `uLayer[i]Map` does not compile. Unrolling at build time
  * is the standard way out and keeps the sampler count to what this
  * output actually needs.
+ *
+ * `warp` builds the `projector-warp` variant (rung 16), which differs
+ * in two lines and nothing between them. Its first line recovers the
+ * frame coordinate from the direction the mesh interpolated —
+ * `warpFrameUv`, so `vUv` becomes a local rather than a varying — and
+ * everything after is the pass as it stands: the split fold, the
+ * rotation, the ray-march, the seam-free gradients (still taken from
+ * the recovered `sphereUv`, in straight-line code before any branch) and
+ * every layer. Its last line applies the blend weight in linear light.
  */
-export function buildOutputFragmentShader(layerCount: number): string {
+export function buildOutputFragmentShader(layerCount: number, options: { warp?: boolean } = {}): string {
   const count = Math.max(0, Math.min(layerCount, MAX_OUTPUT_LAYERS))
 
   // **The Earth treatment is for the idle globe only**, and that is a
@@ -668,6 +819,7 @@ export function buildOutputFragmentShader(layerCount: number): string {
     composites.push(
       `  {`,
       `    vec4 layer = sampleOverlayLayer(${n.map}, ${n.lut}, hitLatDeg, hitLonDeg,`,
+      `      sphereGradX, sphereGradY,`,
       `      ${n.bbox}, ${n.hasBbox}, ${n.lonOrigin}, ${n.flipY}, ${n.dataEncoded}, ${n.opacity});`,
       `    colour = mix(colour, layer.rgb, layer.a);`,
       `  }`,
@@ -685,23 +837,35 @@ export function buildOutputFragmentShader(layerCount: number): string {
     )
   }
 
+  // Every fetch of an equirect texture goes through the seam-free
+  // gradients, taken first so they sit in straight-line code — see
+  // EQUIRECT_GRADIENT_GLSL. The palette and atmosphere LUTs keep
+  // `texture2D`: they have no mips, so there is no level to choose.
+  const sphereSample = (sampler: string): string =>
+    `texture2DGradEXT(${sampler}, sphereUv, sphereGradX, sphereGradY)`
+  const gradients = [
+    '  vec2 sphereGradX;',
+    '  vec2 sphereGradY;',
+    '  equirectGradients(sphereUv, sphereGradX, sphereGradY);',
+  ]
+
   // The idle Earth, in `earthTileLayer`'s pass order. None of it is
   // emitted once a layer exists — see the note on `idleEarth` above.
   const earthTreatment = idleEarth
     ? [
         // Pass 0 first, on the raw sample, exactly where the raster path
         // runs it — everything below composites onto the graded base.
-        '  vec3 colour = gradeEarthBase(texture2D(uSphereTexture, sphereUv).rgb);',
+        `  vec3 colour = gradeEarthBase(${sphereSample('uSphereTexture')}.rgb);`,
         // `hit` is the ray-march's landing point on the *unit* sphere, so
         // it is already the surface normal — the one line the plan's
         // decoration table promised the terminator would cost.
         `  float night = earthNightFactor(hit, ${D.sunDir}, ${D.dayNight});`,
         `  vec3 nightLights = ${D.hasLights} == 1`,
-        `    ? texture2D(${D.lightsMap}, sphereUv).rgb : vec3(0.0);`,
+        `    ? ${sphereSample(D.lightsMap)}.rgb : vec3(0.0);`,
         // Raw luminance, the same quantity earthTileLayer's cloud pass
         // reads, so the gamma below is the one that asset was tuned with.
         `  float cloudLuma = ${D.hasCloud} == 1`,
-        `    ? dot(texture2D(${D.cloudMap}, sphereUv).rgb, vec3(0.299, 0.587, 0.114))`,
+        `    ? dot(${sphereSample(D.cloudMap)}.rgb, vec3(0.299, 0.587, 0.114))`,
         '    : 0.0;',
         // `t` is the ray-march's hit distance, so the fade is per fragment:
         // clouds dissolve where the projection magnifies and stay where it
@@ -720,10 +884,11 @@ export function buildOutputFragmentShader(layerCount: number): string {
         // outside its box are ungraded and unlit. Grading only this side
         // would put a contrast curve on one of two globes showing the
         // same field.
-        '  vec3 colour = texture2D(uSphereTexture, sphereUv).rgb;',
+        `  vec3 colour = ${sphereSample('uSphereTexture')}.rgb;`,
       ]
 
   const tail = [
+    ...gradients,
     ...earthTreatment,
     // Emitted only when something samples them, so a zero-layer shader
     // does not declare two unread floats.
@@ -735,7 +900,7 @@ export function buildOutputFragmentShader(layerCount: number): string {
     '}',
   ].join('\n')
 
-  const body = EQUIRECT_FRAGMENT_SHADER.replace(BASE_TAIL, tail)
+  let body = EQUIRECT_FRAGMENT_SHADER.replace(BASE_TAIL, tail)
 
   // GLSL ES 1.00 has no forward declarations: `sampleOverlayLayer` must
   // appear textually before `main()` or the shader fails to compile.
@@ -743,7 +908,23 @@ export function buildOutputFragmentShader(layerCount: number): string {
   // fails only on a GPU, which is nowhere this repo's tests run — so
   // the ordering is asserted in `layerStack.test.ts`.
   const decoration = `${EARTH_DECORATION_GLSL}\n\n${EARTH_ATMOSPHERE_GLSL}`
-  const helpers = idleEarth ? decoration : OVERLAY_SAMPLE_GLSL
+  let helpers = `${EQUIRECT_GRADIENT_GLSL}\n\n${idleEarth ? decoration : OVERLAY_SAMPLE_GLSL}`
+  let opening = 'void main() {'
+  if (options.warp) {
+    // Each edit is checked, as the tail above is: a pass whose text
+    // moved under one of these would otherwise compose into a shader
+    // that compiles and draws the unwarped frame.
+    const swap = (from: string, to: string): void => {
+      if (!body.includes(from)) {
+        throw new Error(`equirect fragment shader changed; the warp variant can no longer replace ${JSON.stringify(from)}`)
+      }
+      body = body.replace(from, to)
+    }
+    swap('varying vec2 vUv;', `varying vec3 vWarpDirection;\nvarying float vWarpWeight;\nuniform float ${WARP_UNIFORMS.blendGamma};`)
+    swap('  gl_FragColor = vec4(colour, 1.0);', `  gl_FragColor = vec4(colour * warpBlend(vWarpWeight, ${WARP_UNIFORMS.blendGamma}), 1.0);`)
+    helpers = `${helpers}\n\n${WARP_FRAGMENT_GLSL}`
+    opening = 'void main() {\n  vec2 vUv = warpFrameUv(vWarpDirection);'
+  }
   const preamble = `${declarations.join('\n')}\n\n${helpers}\n`
-  return body.replace('void main() {', `${preamble}\nvoid main() {`)
+  return body.replace('void main() {', `${preamble}\n${opening}`)
 }

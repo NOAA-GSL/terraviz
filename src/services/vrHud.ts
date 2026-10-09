@@ -100,6 +100,13 @@ export interface VrHudState {
    * which case the title keeps the full width it has today.
    */
   probeReadout?: string | null
+  /**
+   * Short warning under the title — set while the globe shows the
+   * placeholder Earth because the dataset failed to load or the
+   * loading scene gave up waiting, so the grey globe isn't mistaken
+   * for the data. The readout takes the slot when both are set.
+   */
+  notice?: string | null
 }
 
 export interface VrHudHandle {
@@ -250,7 +257,8 @@ function drawCanvas(
   // supplies one, so every existing dataset keeps the centred
   // full-height title it has today.
   const readout = state.probeReadout
-  ctx.fillText(title, titleCenterX, readout ? h / 2 - 26 : h / 2)
+  const notice = readout ? null : state.notice
+  ctx.fillText(title, titleCenterX, readout || notice ? h / 2 - 26 : h / 2)
   if (readout) {
     ctx.fillStyle = '#4da6ff' // --color-accent
     ctx.font = '500 40px ui-monospace, SFMono-Regular, Menlo, monospace'
@@ -259,6 +267,16 @@ function drawCanvas(
       value = value.slice(0, -2) + '…'
     }
     ctx.fillText(value, titleCenterX, h / 2 + 30)
+  } else if (notice) {
+    // Same slot as the readout, in the warning colour and the title's
+    // proportional face — it's prose, not a number.
+    ctx.fillStyle = '#e0a23c' // --color-warning fallback
+    ctx.font = '500 38px system-ui, -apple-system, sans-serif'
+    let text = notice
+    while (ctx.measureText(text).width > titleMaxWidth && text.length > 4) {
+      text = text.slice(0, -2) + '…'
+    }
+    ctx.fillText(text, titleCenterX, h / 2 + 30)
   }
 
   // --- Browse button (three horizontal bars, "list" glyph) ---
@@ -386,7 +404,8 @@ export function createVrHud(THREE_: typeof THREE): VrHudHandle {
         state.isMuted !== currentState.isMuted ||
         state.panelCount !== currentState.panelCount ||
         state.primaryIndex !== currentState.primaryIndex ||
-        state.browseOpen !== currentState.browseOpen
+        state.browseOpen !== currentState.browseOpen ||
+        (state.notice ?? null) !== (currentState.notice ?? null)
       if (!changed) return
       currentState = state
       redraw()

@@ -1914,6 +1914,9 @@ export async function* processMessage(
 
     // Retry once on transient failures (empty stream, network error)
     const MAX_LLM_ATTEMPTS = 2
+    // Set by a `quota_exhausted` error chunk — not a transient failure,
+    // so it ends the attempts rather than retrying.
+    let quotaExhausted = false
     for (let attempt = 1; attempt <= MAX_LLM_ATTEMPTS; attempt++) {
       let llmProducedText = false
       let accumulatedText = ''
@@ -2149,6 +2152,7 @@ export async function* processMessage(
                 // errors leave the existing fallback path untouched.
                 if (chunk.code === 'quota_exhausted') {
                   markDegradedState('quota_exhausted')
+                  quotaExhausted = true
                 }
                 break toolLoop
 
@@ -2386,6 +2390,11 @@ export async function* processMessage(
       } catch (err) {
         logger.warn(`[Docent] LLM stream failed (attempt ${attempt}):`, err)
       }
+
+      // A spent budget is not transient: the retry would spend another
+      // round trip to be told the same thing before the local engine
+      // answers anyway. Go straight to it.
+      if (quotaExhausted) break
 
       // If this was the last attempt, fall through to local engine
       if (attempt < MAX_LLM_ATTEMPTS) {

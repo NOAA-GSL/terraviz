@@ -331,6 +331,24 @@ describe('createCalibrationCache', () => {
     expect(build).toHaveBeenNthCalledWith(2, { framebufferWidth: 4096 })
   })
 
+  it('names a warp window\'s own display in the readout, and rebuilds only when that moves', () => {
+    // A projector-warp window (rung 16) has no 2:1 frame to report: its
+    // buffer is the display it spans, and that is the number an operator
+    // standing at the projectors is confirming.
+    const build = vi.fn(() => fakeCanvas())
+    const cache = createCalibrationCache(build)
+
+    const first = cache.canvasFor(MAX_PATTERN_WIDTH, '3840 × 2160')
+    expect(cache.canvasFor(MAX_PATTERN_WIDTH, '3840 × 2160')).toBe(first)
+    expect(build).toHaveBeenCalledWith({ framebufferWidth: MAX_PATTERN_WIDTH, readout: '3840 × 2160' })
+    cache.canvasFor(MAX_PATTERN_WIDTH, '1920 × 1080')
+    expect(build).toHaveBeenCalledTimes(2)
+
+    const texts = buildCalibrationPattern({ framebufferWidth: MAX_PATTERN_WIDTH, readout: '3840 × 2160' }).texts
+    expect(texts.some(t => t.text === '3840 × 2160')).toBe(true)
+    expect(texts.some(t => t.text === `${MAX_PATTERN_WIDTH} × ${MAX_PATTERN_WIDTH / 2}`)).toBe(false)
+  })
+
   it('retries after a failure rather than caching the null forever', () => {
     // A 2D context that could not be had is a transient condition — a
     // memory ceiling, a browser that dropped its canvas backend. Caching

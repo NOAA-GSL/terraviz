@@ -327,7 +327,7 @@ const FORM_SECTIONS: ReadonlyArray<{
 /** Map a server validation-error field to the section that holds it,
  *  so a failed save can jump the stepper to the offending field
  *  (otherwise an error in a hidden section is invisible). */
-function sectionForField(field: string): string {
+function sectionForField(field: string): string | null {
   if (field === 'abstract') return 'ds-section-abstract'
   if (field === 'thumbnail_ref' || field === 'legend_ref'
       || field === 'render_encoding' || field === 'color_scale') {
@@ -336,12 +336,12 @@ function sectionForField(field: string): string {
   if (field.startsWith('license') || field === 'attribution_text' || field === 'rights_holder' || field === 'doi' || field === 'citation_text') {
     return 'ds-section-licensing'
   }
-  if (field === 'start_time' || field === 'end_time' || field === 'period' || field.startsWith('bounding_box') || field === 'lon_origin' || field === 'celestial_body' || field === 'radius_mi') {
+  if (field === 'start_time' || field === 'end_time' || field === 'period' || field.startsWith('bounding_box') || field === 'lon_origin' || field === 'celestial_body' || field === 'radius_mi' || field === 'playback_fps') {
     return 'ds-section-timespace'
   }
   if (field === 'keywords' || field === 'tags') return 'ds-section-categorization'
-  // title / slug / format / visibility / data_ref / organization.
-  return 'ds-section-identity'
+  if (['title', 'slug', 'format', 'visibility', 'data_ref', 'organization'].includes(field)) return 'ds-section-identity'
+  return null
 }
 
 /** Left-rail section nav. The form is a stepper — clicking a section
@@ -1998,6 +1998,21 @@ function renderForm(
     shell.appendChild(renderTopLevelError(state.topLevelError, state.topLevelErrorDetails))
   }
 
+  if (state.errors.length > 0) {
+    const summary = el('div', { className: 'publisher-form-error publisher-form-error-summary' })
+    summary.setAttribute('role', 'alert')
+    summary.setAttribute('aria-labelledby', 'dataset-validation-heading')
+    summary.tabIndex = -1
+    summary.style.overflowWrap = 'anywhere'
+    const heading = el('strong', { textContent: t('publisher.api.fallbackError.validationFailed') })
+    heading.id = 'dataset-validation-heading'
+    summary.appendChild(heading)
+    const messages = el('ul')
+    for (const error of state.errors) messages.appendChild(el('li', { textContent: error.message }))
+    summary.appendChild(messages)
+    shell.appendChild(summary)
+  }
+
   // Two-column layout: a sticky left rail (section nav + publish
   // readiness) and the form cards on the right.
   const layout = document.createElement('div')
@@ -2588,10 +2603,10 @@ function renderForm(
       state.errors = result.errors
       // Jump the stepper to the first offending field's section so the
       // error isn't hidden in a collapsed section.
-      if (result.errors.length > 0) {
-        state.activeSection = sectionForField(result.errors[0].field)
-      }
+      const section = result.errors.map(error => sectionForField(error.field)).find(section => section !== null)
+      if (section) state.activeSection = section
       update()
+      content.querySelector<HTMLElement>('.publisher-form-error-summary')?.focus()
       return null
     }
     if (result.kind === 'session') {

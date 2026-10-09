@@ -1,0 +1,85 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://terraviz.zyra-project.org/schema/stac/terraviz/v1.0.0/schema.json",
+  "title": "Terraviz STAC Projection",
+  "type": "object",
+  "required": ["type", "stac_extensions"],
+  "properties": {
+    "stac_extensions": { "type": "array", "contains": { "const": "https://terraviz.zyra-project.org/schema/stac/terraviz/v1.0.0/schema.json" } }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "type": { "const": "Feature" } } },
+      "then": { "required": ["properties"], "properties": { "properties": { "$ref": "#/definitions/fields" } }, "patternProperties": { "^terraviz:": false } },
+      "else": { "$ref": "#/definitions/fields" }
+    },
+    { "properties": { "assets": { "type": "object", "additionalProperties": { "$ref": "#/definitions/asset" } } } }
+  ],
+  "definitions": {
+    "fields": {
+      "type": "object",
+      "properties": {
+        "terraviz:origin_node": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" },
+        "terraviz:schema_version": { "type": "integer", "minimum": 1 },
+        "terraviz:legacy_id": { "type": "string", "minLength": 1 },
+        "terraviz:cadence": { "type": "string", "minLength": 1 },
+        "terraviz:longitude_origin": { "type": "number", "minimum": -180, "maximum": 360 },
+        "terraviz:flipped_y": { "type": "boolean" },
+        "terraviz:playback_fps": { "type": "number", "exclusiveMinimum": 0 },
+        "terraviz:rights_holder": { "type": "string", "minLength": 1 },
+        "terraviz:attribution": { "type": "string", "minLength": 1 },
+        "terraviz:render_encoding": { "const": "data-luma" },
+        "terraviz:color_scale": { "$ref": "#/definitions/colorScale" },
+        "terraviz:categories": {
+          "type": "object", "required": ["owner_node", "values", "alignment"], "additionalProperties": false,
+          "properties": {
+            "owner_node": { "type": "string", "minLength": 1 },
+            "alignment": { "const": "unaligned" },
+            "values": { "type": "object", "additionalProperties": { "type": "array", "items": { "type": "string" }, "uniqueItems": true } }
+          }
+        },
+        "terraviz:vocabularies": {
+          "type": "array", "maxItems": 64, "items": {
+            "type": "object", "required": ["vocabularyUri", "ownerNodeId", "revision", "facetId", "termIds"], "additionalProperties": false,
+            "properties": {
+              "vocabularyUri": { "type": "string", "format": "uri" },
+              "ownerNodeId": { "type": "string", "minLength": 1 },
+              "revision": { "type": "integer", "minimum": 1 },
+              "facetId": { "type": "string", "minLength": 1 },
+              "termIds": { "type": "array", "items": { "type": "string" }, "uniqueItems": true }
+            }
+          }
+        }
+      },
+      "dependencies": { "terraviz:render_encoding": ["terraviz:color_scale"], "terraviz:color_scale": ["terraviz:render_encoding"] },
+      "patternProperties": { "^(?!terraviz:)": {} },
+      "additionalProperties": false
+    },
+    "asset": {
+      "type": "object",
+      "properties": {
+        "terraviz:media": {
+          "type": "object", "additionalProperties": false,
+          "properties": {
+            "width": { "type": "integer", "minimum": 1 }, "height": { "type": "integer", "minimum": 1 },
+            "render_width": { "type": "integer", "minimum": 1 }, "render_height": { "type": "integer", "minimum": 1 },
+            "bit_depth": { "type": "integer", "minimum": 1 }, "has_alpha": { "enum": [0, 1] },
+            "color_space": { "type": "string" }, "hdr_transfer": { "type": "string" },
+            "alpha_encoding": { "type": "string" }, "primary_codec": { "type": "string" }
+          }
+        }
+      },
+      "patternProperties": { "^(?!terraviz:)": {} },
+      "additionalProperties": false
+    },
+    "colorScale": {
+      "type": "object", "required": ["vmin", "vmax", "stops"], "additionalProperties": false,
+      "properties": {
+        "vmin": { "type": "number" }, "vmax": { "type": "number" }, "units": { "type": "string" },
+        "dataMinLuma": { "type": "integer", "minimum": 0, "maximum": 254 },
+        "transparentRange": { "type": "number", "minimum": 0, "maximum": 1 },
+        "stops": { "type": "array", "minItems": 2, "items": { "type": "object", "required": ["t", "rgba"], "additionalProperties": false, "properties": { "t": { "type": "number", "minimum": 0, "maximum": 1 }, "rgba": { "type": "array", "minItems": 4, "maxItems": 4, "items": { "type": "number", "minimum": 0, "maximum": 255 } } } } }
+      }
+    }
+  }
+}

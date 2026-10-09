@@ -11,8 +11,10 @@
 // Namespace import, not a default one: MapLibre 6 is ESM-only and ships no
 // default export, so `import maplibregl from` resolves to `undefined` and
 // every `new maplibregl.Map(...)` below fails at construction rather than
-// at build time.
-import * as maplibregl from 'maplibre-gl'
+// at build time. Through `utils/maplibre`, which points the library at its
+// bundled worker — without it every GeoJSON and vector source on this globe
+// silently fails to load.
+import * as maplibregl from '../utils/maplibre'
 import 'maplibre-gl/dist/maplibre-gl.css'
 
 import type { Map as MaplibreMap, StyleSpecification, CustomLayerInterface, VisibilitySpecification } from 'maplibre-gl'

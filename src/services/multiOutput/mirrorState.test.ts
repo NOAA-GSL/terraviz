@@ -137,7 +137,15 @@ describe('panelMirrorState', () => {
 
 describe('operatorCameraFrom', () => {
   it('passes an ordinary camera through', () => {
-    expect(operatorCameraFrom(45, -120, 3)).toEqual({ lat: 45, lon: -120, zoom: 3 })
+    expect(operatorCameraFrom(45, -120, 3, -30)).toEqual({ lat: 45, lon: -120, zoom: 3, bearing: -30 })
+  })
+
+  it('folds the bearing by the longitude’s rule', () => {
+    // MapLibre normalises its own bearing, so this is a guard against a
+    // caller that did not: the same way up as a different number would
+    // re-broadcast for nothing, and 180 and −180 are one way up.
+    expect(operatorCameraFrom(0, 0, 1, 450).bearing).toBeCloseTo(90, 10)
+    expect(operatorCameraFrom(0, 0, 1, -180).bearing).toBe(180)
   })
 
   it('wraps a longitude that has accumulated past a full turn', () => {
@@ -146,41 +154,42 @@ describe('operatorCameraFrom', () => {
     // `cameraOffsetForCamera` builds a *direction* from it, so the
     // output aims somewhere the operator is not, further wrong the
     // longer they pan.
-    expect(operatorCameraFrom(0, 900, 1).lon).toBeCloseTo(180, 10)
-    expect(operatorCameraFrom(0, -190, 1).lon).toBeCloseTo(170, 10)
-    expect(operatorCameraFrom(0, 190, 1).lon).toBeCloseTo(-170, 10)
+    expect(operatorCameraFrom(0, 900, 1, 0).lon).toBeCloseTo(180, 10)
+    expect(operatorCameraFrom(0, -190, 1, 0).lon).toBeCloseTo(170, 10)
+    expect(operatorCameraFrom(0, 190, 1, 0).lon).toBeCloseTo(-170, 10)
   })
 
   it('keeps the antimeridian on one side of itself', () => {
     // −180 and 180 are the same place. Letting it alternate would make
     // a parked camera re-broadcast every frame, since the aggregator
     // compares by value.
-    expect(operatorCameraFrom(0, 180, 1).lon).toBe(180)
-    expect(operatorCameraFrom(0, -180, 1).lon).toBe(180)
+    expect(operatorCameraFrom(0, 180, 1, 0).lon).toBe(180)
+    expect(operatorCameraFrom(0, -180, 1, 0).lon).toBe(180)
   })
 
   it('clamps latitude to the poles', () => {
-    expect(operatorCameraFrom(120, 0, 1).lat).toBe(90)
-    expect(operatorCameraFrom(-120, 0, 1).lat).toBe(-90)
+    expect(operatorCameraFrom(120, 0, 1, 0).lat).toBe(90)
+    expect(operatorCameraFrom(-120, 0, 1, 0).lat).toBe(-90)
   })
 
   it('floors zoom at the whole globe', () => {
     // `cameraOffsetForCamera` is `1 − 1/(z+1)`, which goes negative
     // below zero and inverts the warp — the output would magnify the
     // hemisphere the operator zoomed *away* from.
-    expect(operatorCameraFrom(0, 0, -2).zoom).toBe(0)
+    expect(operatorCameraFrom(0, 0, -2, 0).zoom).toBe(0)
   })
 
   it('falls back to the centred default rather than passing NaN through', () => {
     // A NaN reaches the shader as a NaN offset, every ray misses, and
     // the output goes black — the one failure the 1 Hz floor exists to
     // make visible.
-    expect(operatorCameraFrom(Number.NaN, Number.NaN, Number.NaN)).toEqual({
+    expect(operatorCameraFrom(Number.NaN, Number.NaN, Number.NaN, Number.NaN)).toEqual({
       lat: 0,
       lon: 0,
       zoom: 0,
+      bearing: 0,
     })
-    expect(operatorCameraFrom(0, Number.POSITIVE_INFINITY, 1).lon).toBe(0)
+    expect(operatorCameraFrom(0, Number.POSITIVE_INFINITY, 1, 0).lon).toBe(0)
   })
 })
 

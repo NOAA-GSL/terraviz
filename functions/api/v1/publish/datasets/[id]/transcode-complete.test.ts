@@ -17,10 +17,15 @@
  * manipulate the `transcoding` column directly.
  */
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { onRequestPost as transcodeComplete } from './transcode-complete'
 import { asD1, makeKV, seedFixtures } from '../../../_lib/test-helpers'
 import type { PublisherRow } from '../../../_lib/publisher-store'
+import { publishDataset } from '../../../_lib/dataset-mutations'
+import { readStacPublication } from '../../../_lib/stac-publication'
+import { serveStac } from '../../../_lib/stac-http'
+import { stacRouteFixture } from '../../../_lib/stac-test-helpers'
+import { abandonTranscoding, stampTranscodingForVideoSource, type AssetUploadRow } from '../../../_lib/asset-uploads'
 
 const ADMIN: PublisherRow = {
   id: 'PUB-ADMIN',
@@ -173,6 +178,138 @@ async function readJson<T>(res: Response): Promise<T> {
 }
 
 describe('POST .../transcode-complete — happy path', () => {
+  it.each(['metadata', 'transaction', 'disabled', 'abandoned', 'new-source', 'new-source-failed'] as const)(
+    'withholds old workflow revisions when the next callback skips capture: %s', async scenario => {
+      const { sqlite, ids, env } = stacRouteFixture()
+      const datasetId = ids[0], uploadId = UPLOAD_ID
+      const configured = { ...env, STAC_ENABLED: 'true', STAC_HISTORY_CAPTURE: 'true', R2_PUBLIC_BASE: 'https://data.example' }
+      vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { headers: { 'content-type': 'application/vnd.apple.mpegurl' } })))
+      const warning = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      try {
+        sqlite.exec(`INSERT INTO publishers (id,email,display_name,role,status,created_at)
+          VALUES ('${ADMIN.id}','admin@example.com','Admin','admin','active','2026-01-01');
+          INSERT INTO asset_uploads (id,dataset_id,publisher_id,kind,target,target_ref,mime,declared_size,claimed_digest,status,created_at)
+          VALUES ('${uploadId}','${datasetId}','${ADMIN.id}','data','r2','r2:uploads/${datasetId}/${uploadId}/source.mp4',
+            'video/mp4',1000,'${DEFAULT_SOURCE_DIGEST}','completed','2026-01-01');
+          INSERT INTO workflows (id,publisher_id,name,pipeline_json,metadata_template,schedule,target_dataset_id,created_at,updated_at)
+          VALUES ('WF','${ADMIN.id}','Recurring','{}','{}','P1D','${datasetId}','2026-01-01','2026-01-01');
+          UPDATE datasets SET title='Workflow output', abstract='Measured field', slug='workflow-output', format='video/mp4',
+          visibility='public', is_hidden=0, retracted_at=NULL, transcoding=NULL, active_transcode_upload_id=NULL, thumbnail_ref=NULL,
+          published_at='2026-01-01T00:00:00Z', resource_kind='product', content_digest=NULL, source_digest='${DEFAULT_SOURCE_DIGEST}', license_spdx='CC0-1.0',
+          temporal_semantics='represented', temporal_evidence='Source metadata',
+          bbox_provenance='measured', bbox_evidence='Source metadata', bbox_n=30, bbox_s=-30, bbox_w=-60, bbox_e=60,
+          start_time='2026-01-01T00:00:00Z', end_time='2026-01-02T00:00:00Z',
+          data_ref='r2:videos/${datasetId}/01ARZ3NDEKTSV4RRFFQ69G5FAV/master.m3u8'`)
+        expect((await publishDataset(configured, datasetId)).ok).toBe(true)
+        const first = await readStacPublication(configured)
+        expect(first.report).toEqual([{ id: datasetId, included: true, reasons: [], items_included: 1, items_total: 1 }])
+        expect(first.products).toHaveLength(1)
+        const digest = scenario.startsWith('new-source') ? `sha256:${'b'.repeat(64)}` : DEFAULT_SOURCE_DIGEST
+        sqlite.prepare('UPDATE asset_uploads SET claimed_digest=? WHERE id=?').run(digest, uploadId)
+        const upload = await env.CATALOG_DB.prepare('SELECT * FROM asset_uploads WHERE id=?').bind(uploadId).first<AssetUploadRow>()
+        if (scenario !== 'abandoned') sqlite.exec("UPDATE datasets SET start_time='2026-02-01T00:00:00Z', end_time='2026-02-02T00:00:00Z'")
+        expect(await stampTranscodingForVideoSource(env.CATALOG_DB, datasetId, upload!, '2026-10-02T12:00:00Z')).toBe(1)
+        if (scenario === 'new-source-failed') {
+          expect(await abandonTranscoding(env.CATALOG_DB, datasetId, uploadId, '2026-10-02T12:01:00Z')).toBe(1)
+          expect((await publishDataset(configured, datasetId)).ok).toBe(true)
+          const stale = await readStacPublication(configured, { operatorReport: true })
+          expect(stale.report[0].reasons).toEqual(['history_stale', 'spatial_unknown', 'temporal_unknown'])
+          expect(sqlite.prepare('SELECT count(*) AS total FROM stac_history_publications').get()).toEqual({ total: 1 })
+          sqlite.exec("UPDATE datasets SET start_time='2026-01-01T00:00:00Z', end_time='2026-01-02T00:00:00Z', temporal_semantics='represented', temporal_evidence='Source metadata', bbox_provenance='measured', bbox_evidence='Source metadata'")
+          expect((await publishDataset(configured, datasetId)).ok).toBe(true)
+          expect((await readStacPublication(configured)).products[0].item).toEqual(first.products[0].item)
+          expect(sqlite.prepare('SELECT count(*) AS total FROM stac_history_publications').get()).toEqual({ total: 1 })
+          return
+        }
+        if (scenario === 'abandoned') {
+          expect((await readStacPublication(configured)).products.map(product => product.item!.id)).toEqual([first.products[0].item!.id])
+          expect(await abandonTranscoding(env.CATALOG_DB, datasetId, uploadId, '2026-10-02T12:01:00Z')).toBe(1)
+          expect(sqlite.prepare('SELECT source_digest FROM datasets').get()).toEqual({ source_digest: null })
+          expect((await readStacPublication(configured)).report[0]).toMatchObject({ included: true, reasons: [], items_included: 1, items_total: 1 })
+          expect((await publishDataset(configured, datasetId)).ok).toBe(true)
+          const unchanged = await readStacPublication(configured)
+          expect(unchanged.products[0].item).toEqual(first.products[0].item)
+          expect(sqlite.prepare('SELECT count(*) AS total FROM stac_history_publications').get()).toEqual({ total: 1 })
+          return
+        }
+        const originalBatch = env.CATALOG_DB.batch.bind(env.CATALOG_DB)
+        const batch = vi.spyOn(env.CATALOG_DB, 'batch')
+        if (scenario === 'transaction') batch.mockRejectedValueOnce(new Error('History transaction unavailable'))
+        if (scenario === 'metadata') batch.mockImplementationOnce(async statements => {
+          sqlite.exec("UPDATE datasets SET abstract='Concurrent correction', updated_at='2026-10-01T12:00:00Z'")
+          return originalBatch(statements)
+        })
+        try {
+          const response = await transcodeComplete(ctx({ env: { ...configured,
+            STAC_HISTORY_CAPTURE: scenario === 'disabled' ? undefined : 'true' }, datasetId,
+            body: { upload_id: uploadId, source_digest: digest } }))
+          expect(response.status).toBe(200)
+          expect(await response.json()).toMatchObject({ dataset: { transcoding: null,
+            data_ref: `r2:videos/${datasetId}/${uploadId}/master.m3u8` } })
+          expect(sqlite.prepare('SELECT count(*) AS total FROM stac_history_publications').get()).toEqual({ total: 1 })
+          for (const operatorReport of [false, true]) {
+            const stale = await readStacPublication(configured, { operatorReport })
+            expect(stale.products).toEqual([])
+            expect(stale.report).toEqual([{ id: datasetId, included: false,
+              reasons: scenario === 'new-source' ? ['history_stale', 'spatial_unknown', 'temporal_unknown'] : ['history_stale'],
+              items_included: 0, items_total: 2 }])
+          }
+          expect((await serveStac(new Request(`https://node.example/api/v1/stac/items/${first.products[0].item!.id}`), configured)).status).toBe(404)
+        } finally { batch.mockRestore() }
+        if (scenario === 'new-source') {
+          expect(warning).toHaveBeenCalledWith('[stac-history] capture skipped for published dataset:', datasetId,
+            expect.stringMatching(/spatial_unknown.*temporal_unknown/))
+          warning.mockClear()
+          expect((await publishDataset(configured, datasetId)).ok).toBe(true)
+          expect(sqlite.prepare('SELECT count(*) AS total FROM stac_history_publications').get()).toEqual({ total: 1 })
+          expect((await readStacPublication(configured, { operatorReport: true })).report[0].reasons)
+            .toEqual(['history_stale', 'spatial_unknown', 'temporal_unknown'])
+          expect(warning).toHaveBeenCalledWith('[stac-history] capture skipped for published dataset:', datasetId,
+            expect.stringMatching(/spatial_unknown.*temporal_unknown/))
+          sqlite.exec("UPDATE datasets SET temporal_semantics='represented', temporal_evidence='New source metadata', bbox_provenance='measured', bbox_evidence='New source metadata'")
+        }
+        expect((await publishDataset(configured, datasetId)).ok).toBe(true)
+        const recovered = await readStacPublication(configured)
+        expect(recovered.products).toHaveLength(2)
+        expect(recovered.report[0].reasons).toEqual([])
+      } finally { warning.mockRestore(); vi.unstubAllGlobals(); sqlite.close() }
+    })
+
+  it.each(['superseded', 'metadata', 'missing', 'disabled', 'verified'] as const)(
+    'preserves native completion semantics during history capture: %s', async scenario => {
+      const { sqlite, datasetId, uploadId, env } = setupEnv({ uploadMime: 'image/png', uploadFrameCount: 2,
+        uploadTargetRef: `r2:uploads/${DATASET_ID}/${UPLOAD_ID}/frames/` })
+      const warning = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { headers: { 'content-type': 'image/png' } })))
+      const get = vi.fn(async () => {
+        if (scenario === 'superseded') sqlite.prepare('UPDATE datasets SET active_transcode_upload_id=?').run('NEW00' + 'A'.repeat(21))
+        if (scenario === 'metadata') sqlite.exec("UPDATE datasets SET abstract='Concurrent edit', updated_at='2026-09-29T22:00:00Z'")
+        if (scenario === 'missing') return null
+        return { text: async () => JSON.stringify([0, 1].map(index => ({ index, filename: `${index}.png`,
+          digest: `sha256:${String(index).repeat(64)}` }))) }
+      })
+      try {
+        sqlite.exec(`UPDATE datasets SET visibility='public', is_hidden=0, retracted_at=NULL,
+          published_at='2026-01-01T00:00:00Z', resource_kind='product',
+          temporal_semantics='represented', temporal_evidence='Source metadata', period='P1D',
+          start_time='2026-01-01T00:00:00Z', end_time='2026-01-02T00:00:00Z'`)
+        const configured = { ...env, STAC_HISTORY_CAPTURE: scenario === 'disabled' ? undefined : 'true',
+          R2_PUBLIC_BASE: 'https://data.example', CATALOG_R2: { get } }
+        const response = await transcodeComplete(ctx({ env: configured, datasetId,
+          body: { upload_id: uploadId, source_digest: DEFAULT_SOURCE_DIGEST } }))
+        expect(response.status).toBe(scenario === 'superseded' ? 409 : 200)
+        if (scenario === 'superseded') expect(await response.json()).toMatchObject({ error: 'transcode_upload_mismatch' })
+        else expect(sqlite.prepare('SELECT transcoding FROM datasets').get()).toEqual({ transcoding: null })
+        if (scenario === 'disabled') expect(get).not.toHaveBeenCalled()
+        expect(sqlite.prepare('SELECT count(*) AS total FROM stac_history_publications').get()).toEqual({ total: scenario === 'verified' ? 1 : 0 })
+        if (scenario === 'verified') {
+          expect((await transcodeComplete(ctx({ env: configured, datasetId,
+            body: { upload_id: uploadId, source_digest: DEFAULT_SOURCE_DIGEST } }))).status).toBe(200)
+          expect(sqlite.prepare('SELECT count(*) AS total FROM stac_history_publications').get()).toEqual({ total: 1 })
+        }
+      } finally { warning.mockRestore(); vi.unstubAllGlobals(); sqlite.close() }
+    })
+
   it('clears transcoding, server-constructs data_ref, returns the updated row', async () => {
     const { sqlite, datasetId, uploadId, env } = setupEnv()
     const res = await transcodeComplete(

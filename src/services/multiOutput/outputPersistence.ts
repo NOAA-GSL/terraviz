@@ -37,10 +37,15 @@
 
 import { logger } from '../../utils/logger'
 import {
+  DEFAULT_BLEND_GAMMA,
   DEFAULT_FRAMEBUFFER_WIDTH,
   FRAMEBUFFER_WIDTHS,
+  isBlendGamma,
+  isOutputMode,
+  isWarpSetId,
   type OutputMode,
   type OutputRenderConfig,
+  type OutputWarpSet,
 } from './protocol'
 import type { OutputMonitor, OutputRecord } from './manager'
 import type { OutputViewSettings } from './stateAggregator'
@@ -114,6 +119,21 @@ export interface PersistedOutput {
    */
   framebufferWidth: number
   debugOverlay: boolean
+  /**
+   * The warp set a `projector-warp` output draws (rung 16): its content
+   * id, which is also the key `sos-multi-output-warp:<id>` it is stored
+   * under — or `null`. A **reference, never the meshes**: a set is a few
+   * hundred kilobytes and lives under a key of its own (`warpStorage`),
+   * while this config is rewritten on every toggle.
+   *
+   * It is kept even while the set it names cannot be read. A set a later
+   * build refuses is still the operator's calibration, and dropping the
+   * reference would let the clean-up delete it — so an unreadable set
+   * costs the output its warp for now and nothing it cannot get back.
+   */
+  warpId: string | null
+  /** A `projector-warp` output's blend gamma (rung 16, convention 2). */
+  blendGamma: number
 }
 
 export interface PersistedOutputConfig {
@@ -251,7 +271,13 @@ function parseOutput(entry: unknown): PersistedOutput | null {
   // NaN origin compares unequal to itself, so it would silently never
   // match any monitor.
   if (!Number.isFinite(x) || !Number.isFinite(y)) return null
-  if (mode !== 'sos-equirect') return null
+  // A mode this build does not render drops the entry rather than
+  // coming back as one it does. That refusal is why `projector-warp` is
+  // a mode and not a render-config flag: a build without rung 16
+  // declines to spawn a warped output instead of restoring it as
+  // `sos-equirect` and throwing an unwarped picture across projectors
+  // calibrated for a warp — which would look as though it had worked.
+  if (!isOutputMode(mode)) return null
   return {
     label,
     monitorName,
@@ -278,6 +304,12 @@ function parseOutput(entry: unknown): PersistedOutput | null {
       ? entry.framebufferWidth
       : DEFAULT_FRAMEBUFFER_WIDTH,
     debugOverlay: entry.debugOverlay === true,
+    // Both absent before rung 16, and defaulted for rung 11's reason. A
+    // reference that is not a content id addresses nothing an import
+    // wrote, so it reads as no set — the output then draws nothing and
+    // says so — rather than costing the operator the whole entry.
+    warpId: isWarpSetId(entry.warpId) ? entry.warpId : null,
+    blendGamma: isBlendGamma(entry.blendGamma) ? entry.blendGamma : DEFAULT_BLEND_GAMMA,
   }
 }
 
@@ -355,9 +387,9 @@ export function createOutputConfigStore(
  * flows the other way at runtime.
  */
 export function toPersistedOutput(
-  output: Pick<OutputRecord, 'label' | 'monitor' | 'mode' | 'view' | 'render'>,
+  output: Pick<OutputRecord, 'label' | 'monitor' | 'mode' | 'view' | 'render' | 'warpRef'>,
 ): PersistedOutput {
-  const { label, monitor, mode, view, render } = output
+  const { label, monitor, mode, view, render, warpRef } = output
   return {
     label,
     monitorName: monitor.name,
@@ -371,6 +403,11 @@ export function toPersistedOutput(
     rotationOffsetDeg: view.rotationOffsetDeg,
     framebufferWidth: render.framebufferWidth,
     debugOverlay: render.debugOverlay,
+    // The record's reference, not `render.warp?.id`: the two differ
+    // exactly when the stored set could not be read, and that is when
+    // the reference most needs keeping (see `PersistedOutput.warpId`).
+    warpId: warpRef,
+    blendGamma: render.blendGamma,
   }
 }
 
@@ -392,11 +429,17 @@ export function toPersistedOutput(
  * the difference between a setting that came back and an installation
  * that did not.
  */
-export function renderConfigFrom(output: PersistedOutput): OutputRenderConfig {
+export function renderConfigFrom(output: PersistedOutput, warp: OutputWarpSet | null): OutputRenderConfig {
   return {
     framebufferWidth: output.framebufferWidth,
     debugOverlay: output.debugOverlay,
     calibration: false,
+    // An argument rather than read here, because the set lives under a
+    // key of its own and loading it is the manager's — it owns the store.
+    // A mapping that quietly returned `null` would restore every warped
+    // output without its warp, and nothing would say why.
+    warp,
+    blendGamma: output.blendGamma,
   }
 }
 

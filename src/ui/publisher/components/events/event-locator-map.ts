@@ -51,9 +51,9 @@ export function mountEventLocator(slot: HTMLElement, point: { lat: number; lon: 
   // Lazy-import the JS *and* the stylesheet together (Vite injects the
   // CSS on dynamic import), so neither lands in the eager publisher chunk
   // even though this module is imported eagerly by events.ts.
-  void Promise.all([import('maplibre-gl'), import('maplibre-gl/dist/maplibre-gl.css')])
+  void Promise.all([import('../../../../utils/maplibre'), import('maplibre-gl/dist/maplibre-gl.css')])
     // The namespace, not `.default`: MapLibre 6 is ESM-only and exports no
-    // default.
+    // default. Through `utils/maplibre`, which names the bundled worker.
     .then(([maplibregl]) => {
       if (disposed) return
       const canvas = document.createElement('div')

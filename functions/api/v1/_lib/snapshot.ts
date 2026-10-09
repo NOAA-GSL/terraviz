@@ -49,6 +49,8 @@ export interface SnapshotPayload {
  * shorter form keeps the response header tidy without sacrificing
  * uniqueness.
  */
+export const ETAG_HASH_LENGTH = 22
+
 export async function computeEtag(body: string): Promise<string> {
   const bytes = new TextEncoder().encode(body)
   const digest = await crypto.subtle.digest('SHA-256', bytes)
@@ -57,7 +59,7 @@ export async function computeEtag(body: string): Promise<string> {
   for (const b of view) bin += String.fromCharCode(b)
   // Base64url, no padding.
   const b64 = btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
-  return `"${b64.slice(0, 22)}"`
+  return `"${b64.slice(0, ETAG_HASH_LENGTH)}"`
 }
 
 /** Read-through cache: returns the cached payload, or null on miss. */

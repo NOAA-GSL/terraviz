@@ -13,7 +13,17 @@
 
 import { describe, it, expect } from 'vitest'
 import { latLonToTexelUv } from '../services/datasetProbe'
-import { MAX_CAMERA_OFFSET, cameraOffsetForCamera, rayUnitSphereT, latLonToDirection } from './equirectRtt'
+import {
+  IDENTITY_ORIENTATION,
+  IDENTITY_PARAMS,
+  MAX_CAMERA_OFFSET,
+  cameraOffsetForCamera,
+  equirectSourceUv,
+  followCamera,
+  rayUnitSphereT,
+  latLonToDirection,
+  type EquirectParams,
+} from './equirectRtt'
 import type { DatasetOverlayOptions } from '../types'
 import {
   EARTH_DECORATION_GLSL,
@@ -29,6 +39,10 @@ import {
   overlayUniformNames,
   buildOutputFragmentShader,
   OVERLAY_SAMPLE_GLSL,
+  EQUIRECT_GRADIENT_GLSL,
+  overlayGradientScale,
+  rowScaledGradientU,
+  seamFreeGradientU,
 } from './layerStack'
 
 const CONUS: DatasetOverlayOptions = { boundingBox: { n: 50, s: 24, w: -125, e: -66 } }
@@ -714,8 +728,10 @@ describe('the composed shader runs the passes in earthTileLayer\'s order', () =>
 
   it('grades the base before anything composites onto it', () => {
     // Pass 0 runs first over there, on the raw tiles.
-    expect(body).toContain('gradeEarthBase(texture2D(uSphereTexture, sphereUv).rgb)')
-    expect(body.indexOf('gradeEarthBase(texture2D')).toBeLessThan(
+    expect(body).toContain(
+      'gradeEarthBase(texture2DGradEXT(uSphereTexture, sphereUv, sphereGradX, sphereGradY).rgb)',
+    )
+    expect(body.indexOf('gradeEarthBase(texture2DGradEXT')).toBeLessThan(
       body.indexOf('colour = decorateEarth('),
     )
   })
@@ -765,7 +781,9 @@ describe('the Earth treatment is idle-only', () => {
 
   it('samples the sphere raw, the way the control globe leaves it', () => {
     const body = withLayer.slice(withLayer.indexOf('void main()'))
-    expect(body).toContain('vec3 colour = texture2D(uSphereTexture, sphereUv).rgb;')
+    expect(body).toContain(
+      'vec3 colour = texture2DGradEXT(uSphereTexture, sphereUv, sphereGradX, sphereGradY).rgb;',
+    )
   })
 
   it('declares none of the decoration uniforms it no longer reads', () => {
@@ -801,3 +819,286 @@ describe('the Earth treatment is idle-only', () => {
     }
   })
 })
+
+describe('the fetch has no seam at the dateline', () => {
+  // `atan` hands the fragment a longitude that jumps a whole turn at the
+  // antimeridian. A fetch that took its mip level from that coordinate
+  // sampled the smallest mip across the jump — a hairline of the
+  // texture's average colour along the content's dateline, reproduced in
+  // headless Chromium before this landed: dashed across a zoomed frame,
+  // solid down a centred one that only a rotation offset had turned.
+
+  const fract = (x: number): number => x - Math.floor(x)
+
+  it('takes the gradient through fract(u + ½) across the seam', () => {
+    // Two neighbouring pixels either side of the dateline.
+    const a = 0.9995
+    const b = 0.0003
+    const chosen = seamFreeGradientU(
+      { x: b - a, y: 0 },
+      { x: fract(b + 0.5) - fract(a + 0.5), y: 0 },
+    )
+    expect(Math.abs(chosen.x)).toBeCloseTo(0.0008, 6)
+  })
+
+  it('keeps u itself across the middle, where fract(u + ½) jumps instead', () => {
+    const a = 0.4996
+    const b = 0.5004
+    const chosen = seamFreeGradientU(
+      { x: b - a, y: 0 },
+      { x: fract(b + 0.5) - fract(a + 0.5), y: 0 },
+    )
+    expect(chosen.x).toBeCloseTo(0.0008, 6)
+  })
+
+  it.each([
+    // Camera tracking: zoomed fully towards (0°, 90°E), a little north
+    // of the equator. The dateline slants across the pixel grid here, so
+    // its jump lands inside a quad on some rows and between two on
+    // others — hence a dashed line — and this row is one of the former.
+    ['zoomed towards 90°E', { x: 0, y: 0, z: 0.85 }, 0, 538],
+    // No tracking at all: a rotation offset alone puts the dateline on a
+    // column of a centred frame. At exactly 90° the jump falls between
+    // quads and drew nothing, which is why 90.13° is the case here.
+    ['centred, rotated 90.13°', { x: 0, y: 0, z: 0 }, (90.13 * Math.PI) / 180, 512],
+  ])('matches the neighbouring quad on a frame the hairline was found in: %s', (
+    _name,
+    cameraOffset,
+    rotationOffsetRad,
+    row,
+  ) => {
+    // The reproduction's framebuffer. Find the pixel pair the dateline
+    // falls between, then check the gradient chosen there agrees with
+    // the one a pixel further from it.
+    const W = 2048
+    const H = 1024
+    const params = { cameraOffset, orientation: IDENTITY_ORIENTATION, split: false, rotationOffsetRad }
+    const u = (x: number, r: number): number =>
+      equirectSourceUv((x + 0.5) / W, (r + 0.5) / H, params).u
+    let seam = -1
+    for (let x = 0; x < W - 1 && seam < 0; x++) {
+      if (Math.abs(u(x + 1, row) - u(x, row)) > 0.5) seam = x
+    }
+    expect(seam).toBeGreaterThan(0)
+    // Inside one 2×2 quad, which is the only place the jump drew a line.
+    expect(seam % 2).toBe(0)
+
+    const at = (x: number): { x: number; y: number } =>
+      seamFreeGradientU(
+        { x: u(x + 1, row) - u(x, row), y: u(x, row + 1) - u(x, row) },
+        {
+          x: fract(u(x + 1, row) + 0.5) - fract(u(x, row) + 0.5),
+          y: fract(u(x, row + 1) + 0.5) - fract(u(x, row) + 0.5),
+        },
+      )
+    const across = at(seam)
+    const beside = at(seam - 2)
+    // Without the rule this is a whole texture width per pixel.
+    expect(Math.abs(across.x)).toBeLessThan(0.01)
+    expect(across.x).toBeCloseTo(beside.x, 4)
+  })
+
+  it('scales the sphere gradient into each layer by how fast its UV moves', () => {
+    // Checked against finite differences of overlaySampleUv, the mirror
+    // of where the texel lands, so the rate cannot disagree with it.
+    const h = 1e-4
+    const cases: [string, DatasetOverlayOptions | undefined, number, number][] = [
+      ['global', undefined, 10, 20],
+      ['global, shifted origin', { lonOrigin: 180 }, -30, 40],
+      ['CONUS', CONUS, 37, -95],
+      ['across the dateline, east of it', DATELINE, 0, 170],
+      ['across the dateline, west of it', DATELINE, 0, -170],
+      ['flipped', { ...CONUS, isFlippedInY: true }, 37, -95],
+    ]
+    for (const [name, overlay, lat, lon] of cases) {
+      const scale = overlayGradientScale(overlay)
+      const here = overlaySampleUv(lat, lon, overlay)!
+      const east = overlaySampleUv(lat, lon + h, overlay)!
+      const north = overlaySampleUv(lat + h, lon, overlay)!
+      // A step of h degrees is h / 360 of sphere u and h / 180 of sphere v.
+      expect((east.u - here.u) / (h / 360), name).toBeCloseTo(scale.u, 4)
+      expect((north.v - here.v) / (h / 180), name).toBeCloseTo(scale.v, 4)
+    }
+  })
+
+  it('samples every mipmapped texture with explicit gradients', () => {
+    // What is left on texture2D is the palette and atmosphere LUTs, which
+    // have no mips and so no level to get wrong.
+    for (const src of [buildOutputFragmentShader(0), buildOutputFragmentShader(MAX_OUTPUT_LAYERS)]) {
+      const implicit = src.match(/texture2D\(\s*\w+/g) ?? []
+      for (const call of implicit) expect(call).toBe('texture2D(lut')
+      expect(src).toContain('texture2DGradEXT(')
+    }
+  })
+
+  it('takes the gradients right after sphereUv, before any fetch or branch', () => {
+    // Derivatives are undefined after a divergent branch. The ray-march
+    // above `sphereUv` branches only on the `uSplit` uniform, which every
+    // pixel takes the same way, so the search starts at `sphereUv`.
+    for (const src of [buildOutputFragmentShader(0), buildOutputFragmentShader(2)]) {
+      const tail = src.slice(src.indexOf('vec2 sphereUv ='))
+      const gradients = tail.indexOf('equirectGradients(sphereUv, sphereGradX, sphereGradY);')
+      expect(gradients).toBeGreaterThan(0)
+      expect(gradients).toBeLessThan(tail.indexOf('texture2DGradEXT('))
+      for (const branch of ['if (', ' ? ', 'sampleOverlayLayer(']) {
+        const at = tail.indexOf(branch)
+        if (at >= 0) expect(gradients).toBeLessThan(at)
+      }
+    }
+  })
+
+  it('declares the helper before main(), as GLSL ES 1.00 requires', () => {
+    for (const src of [buildOutputFragmentShader(0), buildOutputFragmentShader(1)]) {
+      expect(src.indexOf('void equirectGradients(')).toBeGreaterThan(-1)
+      expect(src.indexOf('void equirectGradients(')).toBeLessThan(src.indexOf('void main() {'))
+    }
+  })
+
+  it('writes the same choice in GLSL that the mirror makes', () => {
+    expect(EQUIRECT_GRADIENT_GLSL).toContain('float alt = fract(uv.x + 0.5);')
+    expect(EQUIRECT_GRADIENT_GLSL).toContain(
+      'if (abs(altX) + abs(altY) < abs(gradX.x) + abs(gradY.x)) {',
+    )
+    // The row scaling, after the choice: the choice compares raw
+    // gradients, and scaling both sides by one factor first would change
+    // nothing but the order the reader has to check.
+    const choice = EQUIRECT_GRADIENT_GLSL.indexOf('gradY.x = altY;')
+    const scale = EQUIRECT_GRADIENT_GLSL.indexOf('float rowLength = sin(uv.y * 3.14159265358979);')
+    expect(scale).toBeGreaterThan(choice)
+    expect(EQUIRECT_GRADIENT_GLSL.slice(scale)).toContain('gradX.x *= rowLength;')
+    expect(EQUIRECT_GRADIENT_GLSL.slice(scale)).toContain('gradY.x *= rowLength;')
+    expect(OVERLAY_SAMPLE_GLSL).toContain(
+      'gradScale = vec2(360.0 / span, 180.0 / max(bn - bs, 1e-6));',
+    )
+    expect(OVERLAY_SAMPLE_GLSL).toContain('gradScale.y = -gradScale.y;')
+  })
+})
+
+describe('a pole in view is fetched at its own resolution', () => {
+  // Every row of an equirectangular texture spans the whole turn, so
+  // near a pole a step in u is a short step on the sphere. Read raw, u's
+  // gradient took a pole inside the frame for a pixel covering hundreds
+  // of texels — longitude sweeps a whole turn round it in a few pixels —
+  // and the fetch chose the pyramid's coarsest levels, whose boxes span
+  // latitude too. On WebGL the worst pixel at Antarctica's pole read the
+  // colour of 35°S.
+
+  const fract = (x: number): number => x - Math.floor(x)
+  const W = 2048
+  const H = 1024
+
+  it('scales u by the row’s length: whole at the equator, none at a pole', () => {
+    const g = { x: 0.01, y: -0.02 }
+    expect(rowScaledGradientU(g, 0.5)).toEqual(g)
+    // 60° north: the row is half the equator's length.
+    const sixty = rowScaledGradientU(g, 60 / 180 + 0.5)
+    expect(sixty.x).toBeCloseTo(0.005, 12)
+    expect(sixty.y).toBeCloseTo(-0.01, 12)
+    for (const v of [0, 1]) {
+      expect(rowScaledGradientU(g, v).x).toBeCloseTo(0, 12)
+      expect(rowScaledGradientU(g, v).y).toBeCloseTo(0, 12)
+    }
+  })
+
+  /** The level a fetch picks at one pixel of a 2048×1024 frame over a
+   *  texture the same size, as the GPU does: log₂ of the longer gradient
+   *  in texels, with u's taken as the shader takes it. */
+  const levelAt = (params: EquirectParams, x: number, y: number, scaled: boolean): number => {
+    const at = (px: number, py: number) => equirectSourceUv((px + 0.5) / W, (py + 0.5) / H, params)
+    const a = at(x, y)
+    const bx = at(x + 1, y)
+    const by = at(x, y + 1)
+    let gu = seamFreeGradientU(
+      { x: bx.u - a.u, y: by.u - a.u },
+      { x: fract(bx.u + 0.5) - fract(a.u + 0.5), y: fract(by.u + 0.5) - fract(a.u + 0.5) },
+    )
+    if (scaled) gu = rowScaledGradientU(gu, a.v)
+    const gv = { x: bx.v - a.v, y: by.v - a.v }
+    return Math.log2(Math.max(Math.hypot(gu.x * W, gv.x * H), Math.hypot(gu.y * W, gv.y * H)))
+  }
+
+  it.each([
+    // Followed onto Antarctica: the pole sits just below the front.
+    ['Antarctica, zoomed', { ...IDENTITY_PARAMS, ...followCamera(-80, 0, 2, 0) }],
+    // The north pole turned to the front itself, unzoomed.
+    ['the north pole at the front', { ...IDENTITY_PARAMS, ...followCamera(90, 0, 0, 0) }],
+  ])('picks the level of the pixels round it, not the pyramid’s top: %s', (_name, params) => {
+    // Find the pixel the content's pole lands on.
+    let pole = { d: Infinity, x: 0, y: 0 }
+    for (let y = 1; y < H - 2; y++) {
+      for (let x = 960; x < 1088; x++) {
+        const uv = equirectSourceUv((x + 0.5) / W, (y + 0.5) / H, params)
+        const d = Math.min(uv.v, 1 - uv.v)
+        if (d < pole.d) pole = { d, x, y }
+      }
+    }
+    let raw = -Infinity
+    let scaled = -Infinity
+    for (let dy = -4; dy <= 4; dy++) {
+      for (let dx = -4; dx <= 4; dx++) {
+        raw = Math.max(raw, levelAt(params, pole.x + dx, pole.y + dy, false))
+        scaled = Math.max(scaled, levelAt(params, pole.x + dx, pole.y + dy, true))
+      }
+    }
+    const round = Math.max(
+      ...[[-40, 0], [40, 0], [0, -40], [0, 40]].map(([dx, dy]) => levelAt(params, pole.x + dx, pole.y + dy, true)),
+    )
+    // What shipped: within a few levels of a single texel for the whole
+    // texture, which is a hemisphere's average.
+    expect(raw).toBeGreaterThan(round + 5)
+    // Now: the level of a pixel forty away, give or take one.
+    expect(scaled).toBeLessThan(round + 1)
+  })
+
+  it('changes no level on an unturned frame', () => {
+    // Away from the frame's edge rows, a centred, unturned frame puts
+    // every pixel at one texel both ways, scaled or not.
+    for (const [x, y] of [[100, 512], [1500, 100], [700, 950], [2000, 30]]) {
+      expect(levelAt(IDENTITY_PARAMS, x, y, true)).toBeCloseTo(levelAt(IDENTITY_PARAMS, x, y, false), 9)
+    }
+  })
+})
+
+describe('the projector-warp variant (rung 16)', () => {
+  const plain = [0, 1, 2].map((n) => buildOutputFragmentShader(n))
+  const warped = [0, 1, 2].map((n) => buildOutputFragmentShader(n, { warp: true }))
+
+  it('leaves the ordinary shader exactly as it was', () => {
+    expect([0, 1, 2].map((n) => buildOutputFragmentShader(n, { warp: false }))).toEqual(plain)
+    for (const shader of plain) expect(shader).not.toContain('warpFrameUv')
+  })
+
+  it('turns the direction back into the frame coordinate before anything else runs', () => {
+    for (const shader of warped) {
+      expect(shader).not.toContain('varying vec2 vUv;')
+      expect(shader).toContain('varying vec3 vWarpDirection;')
+      const main = shader.indexOf('void main() {')
+      // The helper is defined before `main` — GLSL ES 1.00 has no forward
+      // declarations — and after PI, which it uses.
+      expect(shader.indexOf('vec2 warpFrameUv(vec3 direction)')).toBeLessThan(main)
+      expect(shader.indexOf('const float TWO_PI')).toBeLessThan(shader.indexOf('vec2 warpFrameUv'))
+      const firstStatement = shader.slice(main).split('\n')[1].trim()
+      expect(firstStatement).toBe('vec2 vUv = warpFrameUv(vWarpDirection);')
+    }
+  })
+
+  it('takes the seam-free gradients after the prologue and before any branch, as the plain pass does', () => {
+    for (const [i, shader] of warped.entries()) {
+      const main = shader.slice(shader.indexOf('void main() {'))
+      const gradients = main.indexOf('equirectGradients(sphereUv, sphereGradX, sphereGradY);')
+      expect(main.indexOf('warpFrameUv(vWarpDirection)')).toBeLessThan(gradients)
+      // Everything from the ray-march down is the plain pass unchanged.
+      const plainMain = plain[i].slice(plain[i].indexOf('void main() {'))
+      const from = (text: string) => text.slice(text.indexOf('  // Split folds U'), text.indexOf('  gl_FragColor'))
+      expect(from(main)).toBe(from(plainMain))
+    }
+  })
+
+  it('applies the blend weight on the way out, and only there', () => {
+    for (const shader of warped) {
+      expect(shader).toContain('gl_FragColor = vec4(colour * warpBlend(vWarpWeight, uBlendGamma), 1.0);')
+      expect(shader.match(/gl_FragColor/g)).toHaveLength(1)
+    }
+  })
+})
+

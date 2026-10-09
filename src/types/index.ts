@@ -1204,8 +1204,12 @@ export type ErrorSource =
 // --- Multi-monitor output (docs/MULTI_MONITOR_PLAN.md rung 13) ---
 
 /** A framebuffer rung by name. The exact pixel width is a machine
- *  fingerprint; which rung an installation chose is the question. */
-export type FramebufferBucket = '1k' | '2k' | '4k' | '8k'
+ *  fingerprint; which rung an installation chose is the question.
+ *  `native` is a `projector-warp` output (rung 16), which draws
+ *  projector rasters rather than an equirect frame, so no rung on the
+ *  ladder describes it — bucketing its stored width would name a 2:1
+ *  frame it does not draw. */
+export type FramebufferBucket = '1k' | '2k' | '4k' | '8k' | 'native'
 /** Why an output stopped running — or, for the storm guard, never
  *  started. `gpu-loss-timeout` and `monitor-gone` are declared now and
  *  fire when failure-recovery cases 4 and 5 land, so the enum does not
@@ -1853,8 +1857,8 @@ export interface PublisherActionEvent extends TelemetryEventBase {
  */
 export interface OutputAddedEvent extends TelemetryEventBase {
   event_type: 'output_added'
-  /** Projection geometry the window was spawned as. One value today;
-   *  the field exists for the same reason the wire format's does. */
+  /** Projection geometry the window was spawned as: `sos-equirect`, or
+   *  `projector-warp` for a projector rig's warp meshes (rung 16). */
   mode: OutputMode
   /** Framebuffer width as a rung name rather than a pixel count.
    *  Bucketed because the exact number is a machine fingerprint the

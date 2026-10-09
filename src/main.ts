@@ -3374,7 +3374,9 @@ class InteractiveSphere {
     const publish = () => {
       const center = map.getCenter()
       publishGlobeState({
-        view: sharedViewFrom(operatorCameraFrom(center.lat, center.lng, map.getZoom())),
+        view: sharedViewFrom(
+          operatorCameraFrom(center.lat, center.lng, map.getZoom(), map.getBearing()),
+        ),
       })
     }
     map.on('move', publish)

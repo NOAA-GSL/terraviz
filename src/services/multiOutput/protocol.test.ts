@@ -12,7 +12,16 @@
 
 import { describe, it, expect } from 'vitest'
 import {
+  DEFAULT_BLEND_GAMMA,
+  DEFAULT_OUTPUT_MODE,
   OUTPUT_LABEL_PREFIX,
+  OUTPUT_MODES,
+  defaultRenderConfig,
+  isBlendGamma,
+  isOutputMode,
+  isWarpSetId,
+  outputModeFromQuery,
+  outputModeQuery,
   outputLabel,
   outputLabelIndex,
   isOutputLabel,
@@ -22,9 +31,11 @@ import {
   IPC_ORPHAN_MS,
   type MirroredEquirectParams,
   type OutputGlobeState,
+  type OutputWarpMesh,
   type OutputStateMessage,
 } from './protocol'
-import { IDENTITY_PARAMS, type EquirectParams } from '../../output/equirectRtt'
+import { IDENTITY_ORIENTATION, IDENTITY_PARAMS, type EquirectParams } from '../../output/equirectRtt'
+import { type WarpSetEntry } from '../../output/projectorWarp'
 
 describe('window labels', () => {
   it('mints 1-based labels matching the capability glob', () => {
@@ -70,6 +81,36 @@ describe('window labels', () => {
   })
 })
 
+describe('output modes and the entry URL', () => {
+  it('knows exactly the modes it renders, and nothing that looks like one', () => {
+    expect([...OUTPUT_MODES]).toEqual(['sos-equirect', 'projector-warp'])
+    for (const mode of OUTPUT_MODES) expect(isOutputMode(mode)).toBe(true)
+    for (const other of ['fisheye', 'SOS-EQUIRECT', 'sos-equirect ', '', null, undefined, 0]) {
+      expect(isOutputMode(other)).toBe(false)
+    }
+  })
+
+  it('spawns sos-equirect bare, as every window before rung 16 was', () => {
+    expect(DEFAULT_OUTPUT_MODE).toBe('sos-equirect')
+    expect(outputModeQuery('sos-equirect')).toBe('')
+    expect(outputModeQuery('projector-warp')).toBe('?mode=projector-warp')
+  })
+
+  it('reads back every mode it writes', () => {
+    for (const mode of OUTPUT_MODES) expect(outputModeFromQuery(outputModeQuery(mode))).toBe(mode)
+    expect(outputModeFromQuery('?mode=sos-equirect')).toBe('sos-equirect')
+    expect(outputModeFromQuery('?other=1&mode=projector-warp')).toBe('projector-warp')
+  })
+
+  it('never turns a mode it does not know into one it does', () => {
+    // Least of all into sos-equirect: an unwarped picture across
+    // projectors calibrated for a warp is worse than black.
+    expect(outputModeFromQuery('?mode=fisheye')).toBeNull()
+    expect(outputModeFromQuery('?mode=')).toBeNull()
+    expect(outputModeFromQuery('?mode=projector-warp&mode=sos-equirect')).toBeNull()
+  })
+})
+
 describe('isFullState', () => {
   const state: OutputGlobeState = {
     dataset: null,
@@ -81,7 +122,7 @@ describe('isFullState', () => {
     view: {
       mode: 'sos-equirect',
       dayNight: true,
-      params: { cameraOffset: { x: 0, y: 0, z: 0 }, split: false, rotationOffsetRad: 0 },
+      params: { cameraOffset: { x: 0, y: 0, z: 0 }, orientation: IDENTITY_ORIENTATION, split: false, rotationOffsetRad: 0 },
     },
   }
 
@@ -150,5 +191,33 @@ describe('the equirect view is the shader’s own parameter object', () => {
     expect(view.split).toBe(false)
     expect(view.cameraOffset).toEqual({ x: 0, y: 0, z: 0 })
     expect(_bothWays).toEqual([true, true])
+  })
+})
+
+describe('a warp set crosses as the output\u2019s own set entries (rung 16)', () => {
+  // Both ways, for the reason the equirect params above are: the output
+  // hands `config.warp.meshes` straight to `placeWarpSet`.
+  type _WireIsEntry = OutputWarpMesh extends WarpSetEntry ? true : never
+  type _EntryIsWire = WarpSetEntry extends OutputWarpMesh ? true : never
+  const _bothWays: [_WireIsEntry, _EntryIsWire] = [true, true]
+
+  it('holds the proof, and opens with no set at the default gamma', () => {
+    expect(_bothWays).toEqual([true, true])
+    expect(defaultRenderConfig()).toMatchObject({ warp: null, blendGamma: DEFAULT_BLEND_GAMMA })
+    expect(DEFAULT_BLEND_GAMMA).toBe(2.2)
+  })
+
+  it('knows a content id when it sees one, and nothing else', () => {
+    expect(isWarpSetId('0123456789abcdef')).toBe(true)
+    for (const bad of ['0123456789ABCDEF', '0123456789abcde', '0123456789abcdef0', '../config', '', null, 7]) {
+      expect(isWarpSetId(bad)).toBe(false)
+    }
+  })
+
+  it('takes a blend gamma that can be one, and nothing else', () => {
+    for (const good of [2.2, 1, 0.8, 10]) expect(isBlendGamma(good)).toBe(true)
+    for (const bad of [0, -2.2, 10.5, Number.NaN, Number.POSITIVE_INFINITY, '2.2', null]) {
+      expect(isBlendGamma(bad)).toBe(false)
+    }
   })
 })

@@ -58,6 +58,12 @@ export default defineConfig(({ mode }) => {
         },
       },
     },
+    // MapLibre's worker is bundled through `?worker&url` (see
+    // `src/utils/maplibre.ts`), and MapLibre starts it as a module worker,
+    // so emit it as an ES module rather than Vite's default IIFE.
+    worker: {
+      format: 'es',
+    },
     server: {
       port: process.env.PORT ? parseInt(process.env.PORT) : 5173,
       // VITE_HOST=0.0.0.0 lets dev-container contributors expose the

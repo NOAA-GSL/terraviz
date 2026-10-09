@@ -14,7 +14,6 @@
 import { describe, it, expect, vi } from 'vitest'
 
 import {
-  OUTPUT_MODE,
   PICTURE_KEYS,
   PLAYHEAD_KEYS,
   connectOutputLink,
@@ -27,8 +26,8 @@ import {
   type OutputLinkHost,
   type StateKey,
 } from './outputLink'
-import { IPC_ORPHAN_MS, IPC_STALE_MS } from '../services/multiOutput/protocol'
-import { IDENTITY_PARAMS } from './equirectRtt'
+import { DEFAULT_OUTPUT_MODE, IPC_ORPHAN_MS, IPC_STALE_MS } from '../services/multiOutput/protocol'
+import { IDENTITY_ORIENTATION, IDENTITY_PARAMS } from './equirectRtt'
 import {
   OUTPUT_EVENT,
   OUTPUT_REATTACH_EVENT,
@@ -37,7 +36,9 @@ import {
   defaultRenderConfig,
   type MirroredDataset,
   type OutputGlobeState,
+  type OutputRenderConfig,
   type OutputStateMessage,
+  type OutputWarpSet,
 } from '../services/multiOutput/protocol'
 import { until } from '../test-utils'
 
@@ -58,6 +59,25 @@ function full(seq: number, over: Partial<OutputGlobeState> = {}): OutputStateMes
 
 function diff(seq: number, state: Partial<OutputGlobeState>): OutputStateMessage {
   return { seq, full: false, state }
+}
+
+/** A whole config, as the manager always sends one, with fields replaced by `over`. */
+function config(over: Partial<OutputRenderConfig> = {}): OutputRenderConfig {
+  return { ...defaultRenderConfig(), ...over }
+}
+
+/** `config()` with one field gone — the shape an older or foreign sender would put on the wire. */
+function configWithout(key: keyof OutputRenderConfig): Record<string, unknown> {
+  const c: Record<string, unknown> = { ...config() }
+  delete c[key]
+  return c
+}
+
+/** A set as the manager sends one. The text is opaque here: the scene parses it, not the link. */
+const WARP: OutputWarpSet = {
+  id: '0123456789abcdef',
+  texture: { surface: 'sphere', rotationOffsetDeg: 0 },
+  meshes: [{ id: 'P1', viewport: { x: 0, y: 0, w: 0.5, h: 0.5 }, text: '2\n2 2\n' }],
 }
 
 describe('the store: which messages win', () => {
@@ -216,12 +236,31 @@ describe('the store: the mode check', () => {
     errors.mockRestore()
   })
 
+  it('tells the two real geometries apart, whichever this window is', () => {
+    // Both arms carry the same parameters, so only the discriminant can
+    // say a view was meant for a window of the other kind.
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const params = { cameraOffset: { x: 0.25, y: 0, z: 0 }, orientation: IDENTITY_ORIENTATION, split: false, rotationOffsetRad: 0 }
+    const warpWindow = createOutputStateStore('projector-warp')
+    expect(warpWindow.state().view.mode).toBe('projector-warp')
+    expect(warpWindow.accept(diff(1, { view: { mode: 'sos-equirect', dayNight: true, params } })).changed).toEqual([])
+    expect(warpWindow.accept(diff(2, { view: { mode: 'projector-warp', dayNight: true, params } })).changed).toEqual([
+      'view',
+    ])
+    const equirectWindow = createOutputStateStore('sos-equirect')
+    expect(
+      equirectWindow.accept(diff(1, { view: { mode: 'projector-warp', dayNight: true, params } })).changed,
+    ).toEqual([])
+    expect(errors).toHaveBeenCalledTimes(2)
+    errors.mockRestore()
+  })
+
   it('applies a view for its own geometry', () => {
     const store = createOutputStateStore()
     const view = {
-      mode: OUTPUT_MODE,
+      mode: DEFAULT_OUTPUT_MODE,
       dayNight: false,
-      params: { cameraOffset: { x: 0.5, y: 0, z: 0 }, split: true, rotationOffsetRad: 0 },
+      params: { cameraOffset: { x: 0.5, y: 0, z: 0 }, orientation: IDENTITY_ORIENTATION, split: true, rotationOffsetRad: 0 },
     }
 
     expect(store.accept(diff(1, { view })).changed).toEqual(['view'])
@@ -376,8 +415,16 @@ describe('connectOutputLink', () => {
       type: 'output_ready',
       label: 'output-3',
       monitorName: '\\\\.\\DISPLAY2',
-      mode: OUTPUT_MODE,
+      mode: DEFAULT_OUTPUT_MODE,
     })
+  })
+
+  it('announces the mode it was given, never one it read off the wire', async () => {
+    const host = fakeHost()
+
+    await connectOutputLink(host, 'projector-warp')
+
+    expect(host.emit).toHaveBeenCalledWith(OUTPUT_EVENT, expect.objectContaining({ type: 'output_ready', mode: 'projector-warp' }))
   })
 
   it('listens on the channel the manager targets', async () => {
@@ -468,18 +515,41 @@ describe('connectOutputLink', () => {
 })
 
 describe('isRenderConfig', () => {
-  it('accepts a well-formed config', () => {
-    expect(isRenderConfig({ framebufferWidth: 8192, debugOverlay: true })).toBe(true)
+  it('accepts a well-formed config, with or without a warp set', () => {
+    expect(isRenderConfig(config({ framebufferWidth: 8192, debugOverlay: true }))).toBe(true)
+    expect(isRenderConfig(config({ warp: WARP }))).toBe(true)
+    expect(isRenderConfig(config({ warp: { ...WARP, texture: null } }))).toBe(true)
+    expect(isRenderConfig(config({ warp: { ...WARP, texture: { surface: 'mesh', rotationOffsetDeg: null } } }))).toBe(
+      true,
+    )
   })
 
   it.each([
     ['null', null],
     ['a string', 'output_render_config'],
-    ['a missing width', { debugOverlay: false }],
-    ['a missing flag', { framebufferWidth: 4096 }],
-    ['a non-numeric width', { framebufferWidth: '4096', debugOverlay: false }],
-    ['a NaN width', { framebufferWidth: Number.NaN, debugOverlay: false }],
-    ['a non-boolean flag', { framebufferWidth: 4096, debugOverlay: 1 }],
+    // What rung 11 sent, and what a warp window once took as a whole
+    // config: `setWarp` then received `undefined` and threw on its id.
+    ['the two-field payload from before calibration and the warp', { framebufferWidth: 8192, debugOverlay: true }],
+    ['a missing width', configWithout('framebufferWidth')],
+    ['a missing flag', configWithout('debugOverlay')],
+    ['a missing calibration', configWithout('calibration')],
+    ['a missing warp', configWithout('warp')],
+    ['a missing blend gamma', configWithout('blendGamma')],
+    ['a non-numeric width', { ...config(), framebufferWidth: '4096' }],
+    ['a NaN width', config({ framebufferWidth: Number.NaN })],
+    ['a non-boolean flag', { ...config(), debugOverlay: 1 }],
+    ['a non-boolean calibration', { ...config(), calibration: 'on' }],
+    ['a non-numeric blend gamma', { ...config(), blendGamma: '2.2' }],
+    ['a NaN blend gamma', config({ blendGamma: Number.NaN })],
+    ['a warp that is not a set', { ...config(), warp: 'P1.data' }],
+    ['a warp whose id is not a content id', config({ warp: { ...WARP, id: 'P1' } })],
+    ['a warp whose meshes are not a list', { ...config(), warp: { ...WARP, meshes: {} } }],
+    ['a mesh with no text', { ...config(), warp: { ...WARP, meshes: [{ id: 'P1', viewport: WARP.meshes[0].viewport }] } }],
+    [
+      'a mesh whose viewport is not numbers',
+      { ...config(), warp: { ...WARP, meshes: [{ ...WARP.meshes[0], viewport: { x: '0', y: 0, w: 0.5, h: 0.5 } }] } },
+    ],
+    ['a texture of neither shape', { ...config(), warp: { ...WARP, texture: { surface: 'sphere', rotationOffsetDeg: null } } }],
   ])('rejects %s', (_label, payload) => {
     // Same posture as `isStateMessage`: fail closed, cost one dropped
     // message. The scene clamps an unusable *number* up to its lowest
@@ -506,10 +576,10 @@ describe('the render-config channel', () => {
     const seen = vi.fn()
     link.onRenderConfig(seen)
 
-    host.deliverConfig({ framebufferWidth: 8192, debugOverlay: true })
+    host.deliverConfig(config({ framebufferWidth: 8192, debugOverlay: true }))
 
-    expect(link.renderConfig()).toEqual({ framebufferWidth: 8192, debugOverlay: true })
-    expect(seen).toHaveBeenCalledWith({ framebufferWidth: 8192, debugOverlay: true })
+    expect(link.renderConfig()).toEqual(config({ framebufferWidth: 8192, debugOverlay: true }))
+    expect(seen).toHaveBeenCalledWith(config({ framebufferWidth: 8192, debugOverlay: true }))
   })
 
   it('delivers every config, including one that changed nothing', async () => {
@@ -518,8 +588,8 @@ describe('the render-config channel', () => {
     const seen = vi.fn()
     link.onRenderConfig(seen)
 
-    host.deliverConfig({ framebufferWidth: 8192, debugOverlay: false })
-    host.deliverConfig({ framebufferWidth: 8192, debugOverlay: false })
+    host.deliverConfig(config({ framebufferWidth: 8192 }))
+    host.deliverConfig(config({ framebufferWidth: 8192 }))
 
     // Unlike state, which is diffed because a heartbeat restates it
     // every second. Nothing repeats on this channel unasked, so a
@@ -532,13 +602,31 @@ describe('the render-config channel', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     const host = fakeHost()
     const link = await connectOutputLink(host)
-    host.deliverConfig({ framebufferWidth: 8192, debugOverlay: true })
+    host.deliverConfig(config({ framebufferWidth: 8192, debugOverlay: true }))
 
     host.deliverConfig({ framebufferWidth: 'wide' })
 
     // Dropping the bad message is right; letting it blank the settings
     // would drop an 8K installation to a default nobody chose.
-    expect(link.renderConfig()).toEqual({ framebufferWidth: 8192, debugOverlay: true })
+    expect(link.renderConfig()).toEqual(config({ framebufferWidth: 8192, debugOverlay: true }))
+  })
+
+  it('keeps the warp it holds when a config without one arrives', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const host = fakeHost()
+    const link = await connectOutputLink(host)
+    const seen = vi.fn()
+    link.onRenderConfig(seen)
+    host.deliverConfig(config({ warp: WARP }))
+
+    host.deliverConfig({ framebufferWidth: 8192, debugOverlay: true })
+
+    // Taken as a whole config, this would reach a warp window's
+    // `setWarp` as `undefined`, which throws on its id and leaves the
+    // rest of the config unapplied. Dropped, the projectors keep the
+    // warp they were drawing.
+    expect(seen).toHaveBeenCalledTimes(1)
+    expect(link.renderConfig().warp).toEqual(WARP)
   })
 
   it('does not route state onto the config channel', async () => {
@@ -565,9 +653,7 @@ describe('the render-config channel', () => {
     })
     link.onRenderConfig(good)
 
-    expect(() =>
-      host.deliverConfig({ framebufferWidth: 1024, debugOverlay: false }),
-    ).not.toThrow()
+    expect(() => host.deliverConfig(config({ framebufferWidth: 1024 }))).not.toThrow()
     expect(good).toHaveBeenCalledTimes(1)
   })
 
@@ -578,7 +664,7 @@ describe('the render-config channel', () => {
     link.onRenderConfig(seen)
 
     await link.stop()
-    host.deliverConfig({ framebufferWidth: 1024, debugOverlay: true })
+    host.deliverConfig(config({ framebufferWidth: 1024, debugOverlay: true }))
 
     expect(seen).not.toHaveBeenCalled()
   })
@@ -591,7 +677,7 @@ describe('the render-config channel', () => {
     link.onRenderConfig(stays)
 
     off()
-    host.deliverConfig({ framebufferWidth: 1024, debugOverlay: false })
+    host.deliverConfig(config({ framebufferWidth: 1024 }))
 
     expect(stays).toHaveBeenCalledTimes(1)
   })
@@ -738,7 +824,7 @@ describe('link health (rung 13, case 3)', () => {
     const link = await connectOutputLink(host)
 
     host.advance(IPC_STALE_MS - 1)
-    host.deliverConfig({ framebufferWidth: 2048, debugOverlay: false })
+    host.deliverConfig(config({ framebufferWidth: 2048 }))
     host.advance(IPC_STALE_MS - 1)
 
     expect(link.checkHealth()).toBe('live')

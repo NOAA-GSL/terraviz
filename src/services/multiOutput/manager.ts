@@ -60,17 +60,31 @@ import {
   OUTPUT_RENDER_CONFIG_EVENT,
   OUTPUT_STATE_EVENT,
   STATE_TICK_MS,
+  DEFAULT_OUTPUT_MODE,
   defaultRenderConfig,
   isOutputLabel,
   outputLabel,
   outputLabelIndex,
+  outputModeQuery,
   type MirroredGlobeState,
   type OutputEvent,
   type OutputMode,
   type OutputRenderConfig,
   type OutputStateMessage,
+  type OutputWarpSet,
   type SharedStateMessage,
 } from './protocol'
+import {
+  MAX_WARP_IMPORT_BYTES,
+  assembleWarpSet,
+  readWarpSources,
+  type WarpImportRefusal,
+  type WarpPlacement,
+  type WarpSet,
+  type WarpSource,
+  type WarpSourcesResult,
+} from './warpImport'
+import { createWarpSetStore, type WarpSetStore } from './warpStorage'
 import {
   DEFAULT_VIEW_SETTINGS,
   StateAggregator,
@@ -86,6 +100,7 @@ import {
   toPersistedOutput,
   viewSettingsFrom,
   type OutputConfigStore,
+  type PersistedOutput,
 } from './outputPersistence'
 import {
   OUTPUT_CLOSING_GRACE_MS,
@@ -109,7 +124,9 @@ import type { OutputRemovedReason } from '../../types'
 import { logger } from '../../utils/logger'
 
 /** Where the output bundle lands in the build. `vite.config.ts` roots
- *  at `src/`, so `src/output/output.html` becomes this. */
+ *  at `src/`, so `src/output/output.html` becomes this. A window is
+ *  spawned at this plus `outputModeQuery(mode)` — bare for
+ *  `sos-equirect`, as before rung 16. */
 export const OUTPUT_ENTRY_URL = 'output/output.html'
 
 // --- The platform seam ---
@@ -223,6 +240,43 @@ export interface MultiOutputDeps {
    * of depending on the test environment's viewport size.
    */
   machineDecoderBudget?: () => number
+  /**
+   * Where warp sets are kept (rung 16). Injected for the reason `store`
+   * is: a test drives it without `localStorage`.
+   */
+  warpStore?: WarpSetStore
+}
+
+/**
+ * A file as the panel holds it — `File` satisfies this — so the manager
+ * can refuse an oversized pick by its size before reading a byte.
+ */
+export interface WarpFileLike {
+  readonly name: string
+  readonly size: number
+  arrayBuffer(): Promise<ArrayBuffer>
+}
+
+/** Why a warp set could not be put on an output. The panel words each `code`. */
+export type WarpAssignRefusal =
+  | WarpImportRefusal
+  | { readonly code: 'no-output' }
+  /** Only a `projector-warp` output draws a warp. */
+  | { readonly code: 'not-a-warp-output' }
+  /** Storage refused the set — no room for it, or no storage at all. */
+  | { readonly code: 'storage'; readonly reason: 'unavailable' | 'no-room' }
+
+export type WarpAssignment =
+  | { readonly ok: true; readonly id: string; readonly meshes: number }
+  | { readonly ok: false; readonly refusal: WarpAssignRefusal }
+
+/** The set as it crosses to the output: the meshes without the file names, which it has no use for. */
+function wireWarpSet(id: string, set: WarpSet): OutputWarpSet {
+  return {
+    id,
+    texture: set.texture === null ? null : { ...set.texture },
+    meshes: set.meshes.map(({ id: meshId, viewport, text }) => ({ id: meshId, viewport: { ...viewport }, text })),
+  }
 }
 
 /** What the operator chose when adding an output. */
@@ -314,6 +368,17 @@ export interface OutputRecord {
   /** This output emitted `output_closing` — it is going away and said
    *  so, which is what separates an operator's Alt+F4 from a crash. */
   announcedClosing: boolean
+  /**
+   * The warp set this output names (rung 16) — what is persisted — or
+   * `null`.
+   *
+   * Held apart from `render.warp`, the set as loaded, because the two
+   * differ exactly when a stored set could not be read. The output then
+   * draws nothing, and the reference is kept, so the calibration is
+   * neither dropped from the config nor deleted from storage by the
+   * next save — a set a later build refuses is still the operator's.
+   */
+  warpRef: string | null
 }
 
 export class MultiOutputManager {
@@ -353,6 +418,7 @@ export class MultiOutputManager {
   private readonly nowMs: () => number
   private readonly controlPanels: () => number
   private readonly machineDecoderBudget: () => number
+  private readonly warpStore: WarpSetStore
 
   constructor(host: MultiOutputHost, deps: MultiOutputDeps = {}) {
     this.host = host
@@ -362,6 +428,7 @@ export class MultiOutputManager {
     this.nowMs = deps.nowMs ?? (() => Date.now())
     this.controlPanels = deps.controlPanels ?? (() => 1)
     this.machineDecoderBudget = deps.machineDecoderBudget ?? maxVideoPanels
+    this.warpStore = deps.warpStore ?? createWarpSetStore()
   }
 
   /**
@@ -449,9 +516,10 @@ export class MultiOutputManager {
       outputLabel(this.nextIndex++),
       monitor,
       options.monitorIndex,
-      options.mode ?? 'sos-equirect',
+      options.mode ?? DEFAULT_OUTPUT_MODE,
       { ...DEFAULT_VIEW_SETTINGS, ...definedOnly(options.view) },
       { ...defaultRenderConfig(), ...definedOnly(options.render) },
+      null,
     )
     this.persist()
     return record
@@ -477,6 +545,7 @@ export class MultiOutputManager {
     mode: OutputMode,
     view: OutputViewSettings,
     render: OutputRenderConfig,
+    warpRef: string | null,
   ): Promise<OutputRecord> {
     // Before the window, not after: the plan's rule is that the ceiling
     // is on decoders *existing*, and there is no window in which to
@@ -523,7 +592,10 @@ export class MultiOutputManager {
       )
     }
 
-    const handle = await this.host.createWindow(label, OUTPUT_ENTRY_URL)
+    // The mode rides the URL because that is the one thing a window can
+    // read before any IPC exists (`outputModeQuery`): it has to know
+    // what it is before it can tell a view meant for something else.
+    const handle = await this.host.createWindow(label, `${OUTPUT_ENTRY_URL}${outputModeQuery(mode)}`)
 
     const record: OutputRecord = {
       label,
@@ -538,6 +610,7 @@ export class MultiOutputManager {
       health: 'starting',
       departing: false,
       announcedClosing: false,
+      warpRef,
     }
     // **Before the window can speak, not after it is shown.** The
     // webview starts loading at `createWindow`, so the output's own
@@ -605,9 +678,10 @@ export class MultiOutputManager {
    * Shared by the operator's Remove and by the boot scan's timeout for
    * the reason `spawn()` is shared by Add and restore: the *ordering*
    * is the correctness content, and a second copy is a second place for
-   * it to drift. Only the reported reason differs.
+   * it to drift. Only the reported reason differs. `null` reports
+   * nothing, for a window no reason in the schema is true of.
    */
-  private async discard(label: string, reason: OutputRemovedReason): Promise<void> {
+  private async discard(label: string, reason: OutputRemovedReason | null): Promise<void> {
     const handle = this.handles.get(label)
     // Before the close, not after: `onDestroyed` can fire while the
     // close is still being awaited, and a departure read in that window
@@ -635,7 +709,7 @@ export class MultiOutputManager {
     // calls it would report one `operator-close` per output. Nothing
     // calls it outside tests today; when something does, it wants its
     // own reason rather than this one.
-    if (record) reportOutputRemoved({ mode: record.mode, reason })
+    if (record && reason !== null) reportOutputRemoved({ mode: record.mode, reason })
     // **Persisted only for a deliberate removal**, which is
     // `commitDeparture`'s rule and has to be the same rule here or the
     // two disagree about what a crash costs. An output the operator
@@ -649,7 +723,12 @@ export class MultiOutputManager {
     // `crash`, so it quietly un-configured an output that failed to
     // answer, turning a transient IPC outage into a permanent one.
     // Caught in review.
-    if (reason === 'operator-close') this.persist()
+    if (reason === 'operator-close') {
+      this.persist()
+      // Deliberate, so the set goes too if nothing else names it — the
+      // one kind of departure `warpStorage` deletes on.
+      this.releaseWarp(record?.warpRef ?? null)
+    }
   }
 
   async closeAll(): Promise<void> {
@@ -705,7 +784,10 @@ export class MultiOutputManager {
    */
   async setOutputRenderConfig(
     label: string,
-    render: Partial<OutputRenderConfig>,
+    // Never the warp: a set goes through `importWarpSet`, which stores it
+    // before pointing an output at it — set here, it would be sent and
+    // never kept.
+    render: Partial<Omit<OutputRenderConfig, 'warp'>>,
   ): Promise<void> {
     const record = this.records.get(label)
     if (!record) return
@@ -713,6 +795,92 @@ export class MultiOutputManager {
     this.persist()
     if (!record.ready) return
     await this.emit(record, record.render, OUTPUT_RENDER_CONFIG_EVENT)
+  }
+
+  /**
+   * Read what the operator picked into warp sources (rung 16) — one
+   * sphere-sim bundle, or `.data` files — or say why not.
+   *
+   * Here rather than in the panel because the parser is here: every
+   * `multiOutput/` import in `outputUI` is type-only, and a runtime import
+   * of it there would pull the contract into the web entry graph. Sizes
+   * are checked before a byte is read, so a wrong multi-gigabyte pick is
+   * refused without being loaded. A file that cannot be read at all
+   * rejects, as a failed `addOutput` does.
+   */
+  async readWarpFiles(files: readonly WarpFileLike[]): Promise<WarpSourcesResult> {
+    const bytes = files.reduce((sum, f) => sum + f.size, 0)
+    if (bytes > MAX_WARP_IMPORT_BYTES) return { ok: false, refusal: { code: 'too-large', bytes } }
+    const read = await Promise.all(
+      files.map(async f => ({ name: f.name, bytes: new Uint8Array(await f.arrayBuffer()) })),
+    )
+    return readWarpSources(read)
+  }
+
+  /**
+   * Put a warp set on a `projector-warp` output (rung 16): assemble it by
+   * its bundle's own layout or by the operator's answer, store it under
+   * its own key, point the output at it and send it — or refuse, changing
+   * nothing.
+   *
+   * Stored **before** the output is pointed at it, so a set that does not
+   * fit is refused whole and the output keeps the one it had. The set it
+   * replaces is deleted once nothing names it, which is one of the
+   * deliberate paths `warpStorage` deletes on.
+   */
+  async importWarpSet(
+    label: string,
+    sources: readonly WarpSource[],
+    placement: WarpPlacement,
+  ): Promise<WarpAssignment> {
+    const record = this.records.get(label)
+    if (!record) return { ok: false, refusal: { code: 'no-output' } }
+    if (record.mode !== 'projector-warp') return { ok: false, refusal: { code: 'not-a-warp-output' } }
+    const assembled = assembleWarpSet(sources, placement)
+    if (!assembled.ok) return assembled
+    const { id } = assembled
+    // The id covers the meshes and where they go, not the texture a
+    // layout stated, so the same meshes imported with and without their
+    // layout.json are one set. A stated texture outranks an unstated one:
+    // the meshes were exported with one rotation, and an import that
+    // does not say what it was cannot un-say it.
+    const stated = assembled.set.texture === null ? this.warpStore.read(id) : null
+    const set = stated?.ok && stated.set.texture !== null ? stated.set : assembled.set
+    if (set === assembled.set) {
+      const stored = this.warpStore.write(id, set, new Date(this.nowMs()).toISOString())
+      if (!stored.ok) return { ok: false, refusal: { code: 'storage', reason: stored.reason } }
+    }
+    const previous = record.warpRef
+    record.warpRef = id
+    this.persist()
+    if (previous !== id) this.releaseWarp(previous)
+    // Every output naming this set gets it as now stored, not only this
+    // one. Otherwise another row drawing the same meshes would state a
+    // different rotation from this one until the next launch. Its
+    // geometry is unchanged, and the output compares the id and rebuilds
+    // nothing.
+    for (const holder of this.records.values()) {
+      if (holder.warpRef !== id) continue
+      holder.render = { ...holder.render, warp: wireWarpSet(id, set) }
+      if (holder.ready) await this.emit(holder, holder.render, OUTPUT_RENDER_CONFIG_EVENT)
+    }
+    return { ok: true, id, meshes: set.meshes.length }
+  }
+
+  /**
+   * Take a `projector-warp` output's set away, so it draws nothing. The
+   * set is deleted if no other output names it — the operator asked for
+   * this, and a stored calibration nobody uses is space nobody gets back.
+   */
+  async clearOutputWarp(label: string): Promise<void> {
+    const record = this.records.get(label)
+    if (!record || (record.warpRef === null && record.render.warp === null)) return
+    const previous = record.warpRef
+    record.warpRef = null
+    record.render = { ...record.render, warp: null }
+    this.persist()
+    this.releaseWarp(previous)
+    if (record.ready) await this.emit(record, record.render, OUTPUT_RENDER_CONFIG_EVENT)
   }
 
   /**
@@ -840,7 +1008,7 @@ export class MultiOutputManager {
         label,
         mode: config.mode,
         view: viewSettingsFrom(config),
-        render: renderConfigFrom(config),
+        render: renderConfigFrom(config, this.loadWarp(config)),
         monitor: monitors[index],
         // `false` until it answers, which is what the timeout below
         // reads and what keeps the badge on `starting` meanwhile. An
@@ -852,6 +1020,7 @@ export class MultiOutputManager {
         health: 'starting',
         departing: false,
         announcedClosing: false,
+        warpRef: config.warpId,
       }
       // Registered before the poke for the reason `spawn()` registers
       // before placement: the reply is an `output_ready`, and
@@ -901,9 +1070,11 @@ export class MultiOutputManager {
     for (const record of adopted) {
       // Re-read rather than trusting the captured object: a window can
       // have departed on its own during the wait, in which case
-      // `commitDeparture` has already dealt with it.
+      // `commitDeparture` has already dealt with it. One that answered
+      // as a different geometry is already being closed by the event
+      // handler, and it did answer, so it must not be reported silent.
       const current = this.records.get(record.label)
-      if (!current) continue
+      if (!current || current.departing) continue
       if (current.ready) {
         live.push(current)
         // The failure being reported is case 3's, because that is what
@@ -979,7 +1150,8 @@ export class MultiOutputManager {
             index,
             output.mode,
             viewSettingsFrom(output),
-            renderConfigFrom(output),
+            renderConfigFrom(output, this.loadWarp(output)),
+            output.warpId,
           ),
         )
       } catch (err) {
@@ -1009,6 +1181,38 @@ export class MultiOutputManager {
       ...config,
       outputs: [...this.records.values()].map(r => toPersistedOutput(r)),
     })
+  }
+
+  /**
+   * The set a persisted output names, loaded and checked, or `null` —
+   * which a `projector-warp` window renders as nothing. The caller keeps
+   * the reference either way (`OutputRecord.warpRef`), so a set that
+   * cannot be read costs the output its warp, never the calibration.
+   */
+  private loadWarp(output: PersistedOutput): OutputWarpSet | null {
+    if (output.mode !== 'projector-warp' || output.warpId === null) return null
+    const read = this.warpStore.read(output.warpId)
+    if (!read.ok) {
+      logger.warn(
+        `[multiOutput] ${output.label}'s warp set ${output.warpId} could not be read ` +
+          `(${read.reason}${read.refusal ? `: ${read.refusal.code}` : ''}) — it will draw nothing`,
+      )
+      return null
+    }
+    return wireWarpSet(output.warpId, read.set)
+  }
+
+  /**
+   * Delete a stored set the operator has let go of — unless another
+   * output, live or configured, still names it. Only the deliberate paths
+   * call this; a set orphaned by a failure stays (see `warpStorage`).
+   */
+  private releaseWarp(id: string | null): void {
+    if (id === null) return
+    const named =
+      [...this.records.values()].some(r => r.warpRef === id) ||
+      this.store.read().outputs.some(o => o.warpId === id)
+    if (!named) this.warpStore.remove(id)
   }
 
   /** Whether outputs come back on the next launch. */
@@ -1317,6 +1521,7 @@ export class MultiOutputManager {
       // installation would lose its entire output configuration on
       // every ordinary quit.
       this.persist()
+      this.releaseWarp(record.warpRef)
     }
     this.notifyChange()
   }
@@ -1352,6 +1557,30 @@ export class MultiOutputManager {
     if (!event) return
     const record = this.records.get(event.label)
     if (!record) return
+
+    // A window that booted as a different geometry from its record is
+    // closed, never driven. A projector-warp output driven as the other
+    // mode would put an unwarped globe across projectors calibrated for
+    // a warp, and that picture looks as though it worked. Not serving it
+    // is not enough: an output nobody drives still renders its own idle
+    // Earth. The spawn URL and the record come from one call, so this
+    // should never run; the reachable way in is adoption, where the
+    // record is read from the stored config and the mode from a window
+    // that outlived the page that wrote it.
+    //
+    // The removal is not persisted and not reported. The configuration
+    // is not what is wrong, so the next restore spawns the output again
+    // from the right URL. And no removal reason in the telemetry schema
+    // is true of a build disagreeing with itself, so the error log is
+    // the signal.
+    if (event.type === 'output_ready' && event.mode !== record.mode) {
+      logger.error(
+        `[multiOutput] ${event.label} announced '${event.mode}' but was spawned as '${record.mode}' — ` +
+          'closing it rather than driving it as a geometry it is not',
+      )
+      void this.discard(event.label, null).then(() => this.notifyChange())
+      return
+    }
 
     record.lastEvent = event
     if (event.type === 'output_closing') {
@@ -1415,13 +1644,23 @@ export class MultiOutputManager {
     // the config-before-state ordering below is load-bearing, so a
     // second copy of it is a second place for it to drift.
     //
-    // Serving a ping is also how an output recovers when its
+    // Answering a ping is also how an output recovers when its
     // `output_ready` was missed: a manager restart, or the
     // spawn-ordering race, would otherwise leave it un-served for the
     // life of the window. And a resync is the right reply rather than
     // a bare acknowledgement — whatever cost it the heartbeat may have
     // cost it a diff, and a full snapshot is the same round trip.
-    if (event.type === 'output_ready' || event.type === 'output_health_check') {
+    //
+    // But a ping does not say what geometry the window is, so one from
+    // a window that has never announced is answered with the reattach
+    // poke rather than served. The window replies with an
+    // `output_ready`, which carries the mode checked above. `ready`
+    // therefore means the window has said it is the geometry its record
+    // is, and nothing is sent to one that has not. The recovery costs
+    // one more round trip.
+    if (event.type === 'output_health_check' && !record.ready) {
+      void this.emit(record, {}, OUTPUT_REATTACH_EVENT)
+    } else if (event.type === 'output_ready' || event.type === 'output_health_check') {
       record.ready = true
       // Config first. A restored 8K output that received its state
       // before its resolution would render one or more frames at the

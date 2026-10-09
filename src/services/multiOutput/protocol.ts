@@ -88,9 +88,73 @@ export function isOutputLabel(label: string): boolean {
 
 // --- Mirrored globe state ---
 
-/** Output projection mode. v1 ships one; the field exists so the wire
- *  format does not change when fisheye / mirrored modes land. */
-export type OutputMode = 'sos-equirect'
+/**
+ * Every projection geometry an output can be, and the one list a new
+ * mode is registered in — the type is derived from it, so a mode cannot
+ * be added to one and forgotten in the other.
+ *
+ * - `sos-equirect` — v1's 2:1 unwrap, for an LED sphere, a dome, or
+ *   anything else that takes an equirectangular frame. A persisted
+ *   string, so it keeps its name though an SOS projector rig is now
+ *   `projector-warp`'s: renaming it would reset every operator's saved
+ *   outputs to buy nothing.
+ * - `projector-warp` — a projector rig's warp meshes, each in its
+ *   viewport of one spanned framebuffer (rung 16). Named for what it
+ *   does rather than for SOS, whose four quadrants are one rig among the
+ *   several sphere-sim calibrates.
+ */
+export const OUTPUT_MODES = ['sos-equirect', 'projector-warp'] as const
+
+/** Output projection mode. */
+export type OutputMode = (typeof OUTPUT_MODES)[number]
+
+/**
+ * The mode a window whose URL names none renders — every window a build
+ * before rung 16 spawned, and every `sos-equirect` one since, because
+ * `outputModeQuery` spawns that mode bare.
+ */
+export const DEFAULT_OUTPUT_MODE: OutputMode = 'sos-equirect'
+
+/**
+ * Narrow a value read from outside — a stored config, a URL — to a mode
+ * this build renders. Anything else is `false`, never a guess: a mode
+ * this build does not know must not come back as one it does, least of
+ * all as `sos-equirect`, which thrown across calibrated projectors is an
+ * unwarped picture worse than black.
+ */
+export function isOutputMode(value: unknown): value is OutputMode {
+  return (OUTPUT_MODES as readonly unknown[]).includes(value)
+}
+
+/** The query parameter an output's entry URL carries its mode in. */
+export const OUTPUT_MODE_PARAM = 'mode'
+
+/**
+ * The query an output window is spawned with, which is how it learns its
+ * geometry — **and the only way**. A window must know its mode before it
+ * hears anything, or the check that a `view` arm matches it would be
+ * vacuous (see `acceptView` in `outputLink`), and the URL is the one
+ * carrier that exists before any IPC does.
+ *
+ * `sos-equirect` spawns with no query at all, exactly as every window
+ * before rung 16 did, so the bare URL keeps meaning what it always
+ * meant. Grammar, like `outputLabel`, and beside it for the same reason:
+ * the manager writes it and the output reads it, and the two must agree.
+ */
+export function outputModeQuery(mode: OutputMode): string {
+  return mode === DEFAULT_OUTPUT_MODE ? '' : `?${OUTPUT_MODE_PARAM}=${mode}`
+}
+
+/**
+ * The mode an output's own URL names: `sos-equirect` when it names none,
+ * or `null` when it names one this build does not know, or names more
+ * than one. `null` is the output's cue to draw nothing and say so.
+ */
+export function outputModeFromQuery(search: string): OutputMode | null {
+  const named = new URLSearchParams(search).getAll(OUTPUT_MODE_PARAM)
+  if (named.length === 0) return DEFAULT_OUTPUT_MODE
+  return named.length === 1 && isOutputMode(named[0]) ? named[0] : null
+}
 
 /** What the control window's primary panel currently has loaded. */
 export interface MirroredDataset {
@@ -229,7 +293,7 @@ export interface MirroredLayer {
  * `sos-equirect`'s renderer parameters — the payload of that arm of
  * `MirroredView`.
  *
- * Both fields are properties of *that projection* rather than of
+ * Two of its fields are properties of *that projection* rather than of
  * outputs in general:
  *
  * - `cameraOffset` is bounded by `MAX_CAMERA_OFFSET` because the
@@ -256,16 +320,32 @@ export interface MirroredLayer {
  */
 export interface MirroredEquirectParams {
   /**
-   * Derived from the operator's MapLibre camera, so zooming the control
-   * window concentrates pixels around the area of focus on the sphere.
-   * Pinned to `(0, 0, 0)` when the per-output "Track operator camera"
-   * toggle is off, which produces a uniform 1:1 equirectangular unwrap.
+   * Derived from the operator's MapLibre zoom, so zooming the control
+   * window concentrates pixels around the sphere's **front**, where
+   * `orientation` has brought the area of focus. In the sphere's frame,
+   * so it moves toward the front whatever is turned to face it. Pinned
+   * to `(0, 0, 0)` when the per-output "Track operator camera" toggle is
+   * off, which produces a uniform 1:1 equirectangular unwrap.
    *
    * A plain triple rather than a `THREE.Vector3`: this crosses a
    * structured-clone boundary, and the output bundle owns the only
    * Three.js import.
    */
   cameraOffset: { x: number; y: number; z: number }
+  /**
+   * The turn from the sphere's frame to the content's, row-major, so
+   * the operator's centre faces the sphere's front with the control
+   * globe's way up — how a pole is brought round to where an audience
+   * can see it (`equirectRtt.followOrientation`). Identity when the
+   * output does not track the operator's camera.
+   *
+   * Nine numbers rather than the camera's lat/lon/bearing, because this
+   * object is the renderer's: a narrowed output uploads it as it comes,
+   * and deriving it on the output would put a second implementation of
+   * the turn in every window, free to disagree with the one the tests
+   * pin.
+   */
+  orientation: readonly [number, number, number, number, number, number, number, number, number]
   /** Mirror the area of focus to the antipodal hemisphere — matches
    *  existing SOS sphere-split behaviour. Per-output. */
   split: boolean
@@ -300,6 +380,29 @@ export interface MirroredEquirectView extends MirroredViewCommon {
 }
 
 /**
+ * The `projector-warp` arm (rung 16): a projector rig's warp meshes over
+ * the same ray-march.
+ *
+ * **The same parameters as `sos-equirect`'s, `split` included.** A warp
+ * changes how an arm becomes pixels, not what it holds: the fragment
+ * recovers `(u, v)` from the direction the mesh interpolates, and
+ * everything after that line is the equirect shader — the camera offset
+ * that is operator zoom, SOS's split fold, the rotation. One thing reads
+ * differently: a sphere rig's mechanical rotation is already baked into
+ * the mesh, so here `rotationOffsetRad` is a **content** rotation, a
+ * turn of the picture on top of whatever the warp maps (plan §"Three
+ * conventions that fail silently", 3). The value and the uniform are the
+ * same; the panel's label is not.
+ *
+ * A separate arm rather than a flag on the first, because the mode is
+ * what a window is spawned as and what it checks every view against.
+ */
+export interface MirroredWarpView extends MirroredViewCommon {
+  mode: 'projector-warp'
+  params: MirroredEquirectParams
+}
+
+/**
  * How **one output** should project the globe, discriminated on its
  * mode. Produced by `projectView` at the send boundary; never stored.
  *
@@ -321,13 +424,15 @@ export interface MirroredEquirectView extends MirroredViewCommon {
  * Each arm's payload is `params`, uniformly, because that is what the
  * arm's renderer takes: `sos-equirect`'s is `equirectRtt`'s own
  * `EquirectParams`, which is what `outputScene.setParams` already
- * accepts. A second mode adds an arm whose `params` is *its* renderer's
- * object; nothing else in the union changes.
+ * accepts, and `projector-warp`'s is the same object because the same
+ * ray-march runs behind the warp. A mode with a different renderer adds
+ * an arm whose `params` is *its* renderer's object; nothing else in the
+ * union changes.
  *
  * The two proofs below tie the union to `OutputMode` in both
  * directions, so neither list can gain a member without the other.
  */
-export type MirroredView = MirroredEquirectView
+export type MirroredView = MirroredEquirectView | MirroredWarpView
 
 /**
  * Compile-time proof that `OutputMode` and the union agree.
@@ -352,12 +457,13 @@ type _EveryArmIsAMode = AssertNoneMissing<Exclude<MirroredView['mode'], OutputMo
  *
  * These are MapLibre's numbers, unconverted, and that is the point: the
  * operator drives one globe with one camera, and *every* output
- * geometry is a function of it. `sos-equirect` turns it into a
+ * geometry is a function of it. `sos-equirect` turns it into a turn
+ * that brings the operator's centre to the sphere's front and a
  * ray-march origin inside the unit sphere; a perspective mode would
- * turn the same three numbers into an eye position and a field of
- * view; a warped projector rig would feed it to a mesh. None of those
- * is more canonical than another, so the shared state holds the input
- * rather than any one mode's output.
+ * turn the same numbers into an eye position and a field of view; a
+ * warped projector rig runs `sos-equirect`'s answer behind its meshes.
+ * None of those is more canonical than another, so the shared state
+ * holds the input rather than any one mode's output.
  *
  * This replaced storing `sos-equirect`'s own `cameraOffset` as the
  * shared value. That worked — the offset is invertible, `|o|` recovers
@@ -376,6 +482,14 @@ export interface OperatorCamera {
   /** MapLibre zoom. `0` is the whole globe, and derives to a centred
    *  camera in every mode — see `DEFAULT_OPERATOR_CAMERA`. */
   zoom: number
+  /**
+   * MapLibre bearing, degrees in (−180, 180]: the compass direction at
+   * the top of the control globe. The control globe turns on a
+   * right-drag or a two-finger twist, and an output following it shows
+   * that same way up. Pitch is deliberately absent — it tilts a viewer,
+   * and no output geometry has a viewer to tilt.
+   */
+  bearing: number
 }
 
 /**
@@ -452,7 +566,9 @@ export type OutputGlobeState = GlobeState<MirroredView>
  * not equirectangular. That is a property of *this projection*, not of
  * outputs in general — a second `OutputMode` brings its own ladder
  * rather than widening this one (plan §"Geometry is a per-output
- * configuration").
+ * configuration"). `projector-warp` brings none at all: a projector's
+ * raster is whatever shape the spanned display is, so that window sizes
+ * its buffer from itself and never reads this (rung 16).
  */
 export const FRAMEBUFFER_WIDTHS = [1024, 2048, 4096, 8192] as const
 
@@ -505,6 +621,106 @@ export interface OutputRenderConfig {
    * and a graticule composited over a dataset leaves neither legible.
    */
   calibration: boolean
+  /**
+   * A `projector-warp` window's meshes and where each goes (rung 16), or
+   * `null` — which that window renders as nothing, and says so. Every
+   * other mode ignores it.
+   *
+   * On this channel rather than in `GlobeState` for the channel's own
+   * reason: it belongs to one window, and a rig's calibration is not a
+   * fact about the globe. Resent whole on every `output_ready` and every
+   * health-check resync, never in the heartbeat — so `id` exists, and the
+   * output compares it to decide whether its geometry needs rebuilding.
+   */
+  warp: OutputWarpSet | null
+  /**
+   * The display gamma a warp's blend weight is applied through (rung 16,
+   * convention 2). sphere-sim's weight multiplies radiance in *linear
+   * light*, and this window writes display-space values, so the weight
+   * reaches a pixel as `c · w^(1/γ)` — multiplying the encoded value
+   * instead leaves a band at 44% of target along every seam. Per output
+   * rather than per projector, because one rig's projectors are normally
+   * one model. Every other mode ignores it.
+   */
+  blendGamma: number
+}
+
+/**
+ * One mesh of a warp set as it crosses: the file's own text, and the
+ * rect of the framebuffer it goes in.
+ *
+ * The text rather than a parse, because the output re-reads it through
+ * the same fail-closed parser the import used — one parser, one set of
+ * refusals, wherever a set is read. Structurally identical to
+ * `projectorWarp`'s `WarpSetEntry`, deliberately, so the output hands
+ * these straight to `placeWarpSet`; `protocol.test.ts` proves the two
+ * stay assignable both ways, and it is declared here rather than
+ * imported because a contract must not depend on one of its consumers.
+ */
+export interface OutputWarpMesh {
+  id: string
+  /** Fractions of the framebuffer, origin bottom-left — GL's, and SOS's. */
+  viewport: { x: number; y: number; w: number; h: number }
+  text: string
+}
+
+/**
+ * What a warp set's `u` and `v` address, as a bundle's `layout.json`
+ * states it (sphere-sim#52): the equirectangular map with the sphere's
+ * mechanical rotation already taken off `u`, or a model's own UV set,
+ * which has no rotation. A pair rather than two fields, so the type
+ * admits a sphere with a number and a mesh with `null` and nothing in
+ * between — sphere-sim's own `WarpTexture`, restated.
+ */
+export type WarpTexture =
+  | { readonly surface: 'sphere'; readonly rotationOffsetDeg: number }
+  | { readonly surface: 'mesh'; readonly rotationOffsetDeg: null }
+
+export interface OutputWarpSet {
+  /** The set's content id — `warpImport.warpSetId`, and its storage key. */
+  id: string
+  /**
+   * What the meshes address, when the bundle said; `null` when nothing
+   * did — loose `.data` files, or a bundle exported before its layout.
+   * It changes no pixel, since the rotation is already in the meshes, and
+   * the output ignores it. It rides the set because the set is the one
+   * record of what an output holds, and the panel shows it beside the
+   * content rotation, so an operator can see what was baked in rather
+   * than enter it a second time. Not part of the content id, for the same
+   * reason: two sets that draw the same are the same set.
+   */
+  texture: WarpTexture | null
+  meshes: OutputWarpMesh[]
+}
+
+/**
+ * Whether a string can be a warp set's content id: sixteen lowercase hex
+ * digits, which is what `warpSetId` writes. Checked wherever an id is
+ * read from outside — a stored reference, a storage key — so a hand-edited
+ * value cannot address a key the import never wrote.
+ */
+export function isWarpSetId(value: unknown): value is string {
+  return typeof value === 'string' && /^[0-9a-f]{16}$/.test(value)
+}
+
+/**
+ * The display gamma a warp's blend weight is decoded and re-encoded
+ * through when nobody has said otherwise. Here rather than beside
+ * `blendFactor` because both ends need it: the manager seeds a record
+ * with it and the output applies it. sphere-sim classes its photometry
+ * provisional, which is why this is a field at all.
+ */
+export const DEFAULT_BLEND_GAMMA = 2.2
+
+/**
+ * Whether a value can be a blend gamma: a finite number above zero, and
+ * no more than 10 — past which the weight is all but ignored and the
+ * value is more likely a slip than a calibration. Narrowing, for a value
+ * read from outside; `blendFactor` falls back to the default for
+ * anything else rather than drawing black.
+ */
+export function isBlendGamma(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 && value <= 10
 }
 
 /**
@@ -526,7 +742,13 @@ export interface OutputRenderConfig {
  * indistinguishable from a real failure.
  */
 export function defaultRenderConfig(): OutputRenderConfig {
-  return { framebufferWidth: DEFAULT_FRAMEBUFFER_WIDTH, debugOverlay: false, calibration: false }
+  return {
+    framebufferWidth: DEFAULT_FRAMEBUFFER_WIDTH,
+    debugOverlay: false,
+    calibration: false,
+    warp: null,
+    blendGamma: DEFAULT_BLEND_GAMMA,
+  }
 }
 
 // --- Manager → output ---

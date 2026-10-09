@@ -35,6 +35,7 @@ import type * as THREE from 'three'
 import {
   createPhotorealEarth,
   type PhotorealEarthHandle,
+  type TextureReadiness,
   type VrDatasetTexture,
 } from './photorealEarth'
 import { createVrBorders, type VrBordersHandle } from './vrBorders'
@@ -45,7 +46,7 @@ import {
   type ColorScale,
 } from '../types/color-scale'
 
-export type { VrDatasetTexture } from './photorealEarth'
+export type { TextureReadiness, VrDatasetTexture } from './photorealEarth'
 
 /**
  * Globe placement in the local-floor reference space. Local-floor
@@ -114,12 +115,16 @@ export interface VrSceneHandle {
    *   secondaries, fires immediately for images/null, async for
    *   video with readyState < 2.
    */
-  setSlotTexture(slot: number, spec: VrDatasetTexture | null, onReady?: () => void): void
+  setSlotTexture(
+    slot: number,
+    spec: VrDatasetTexture | null,
+    onReady?: (readiness: TextureReadiness) => void,
+  ): void
   /**
    * Swap the primary globe's texture. Convenience alias for
    * `setSlotTexture(0, spec, onReady)`.
    */
-  setTexture(spec: VrDatasetTexture | null, onReady?: () => void): void
+  setTexture(spec: VrDatasetTexture | null, onReady?: (readiness: TextureReadiness) => void): void
   /**
    * Toggle the country/coastline borders overlay on every globe
    * in the current layout. Shared across all globes so the user
@@ -535,7 +540,7 @@ export function createVrScene(
       }
       const sgIdx = slot - 1
       if (sgIdx >= secondaries.length) {
-        onReady?.()
+        onReady?.({ ok: true })
         return
       }
       const sg = secondaries[sgIdx]
@@ -543,7 +548,7 @@ export function createVrScene(
       // Change detection — same idempotency as primary
       const nextKey = spec?.kind === 'video' ? spec.element : spec?.kind === 'image' ? spec.element : null
       if (nextKey === sg.activeKey) {
-        onReady?.()
+        onReady?.({ ok: true })
         return
       }
       if (sg.cancelPendingVideoListeners) {
@@ -559,7 +564,7 @@ export function createVrScene(
         sg.material.map = earth.baseDiffuseTexture ?? earth.baseEarthTexture
         sg.activeKey = null
         sg.material.needsUpdate = true
-        onReady?.()
+        onReady?.({ ok: true })
       } else if (spec.kind === 'video') {
         sg.activeKey = spec.element
         try { spec.element.currentTime = spec.element.currentTime } catch { /* no-op */ }
@@ -569,7 +574,7 @@ export function createVrScene(
         if (spec.element.readyState >= 2) {
           sg.material.map = tex
           sg.material.needsUpdate = true
-          onReady?.()
+          onReady?.({ ok: true })
         } else {
           sg.material.map = earth.baseDiffuseTexture ?? earth.baseEarthTexture
           const onFrame = () => {
@@ -577,7 +582,7 @@ export function createVrScene(
             if (sg.activeKey !== spec.element) return
             sg.material.map = tex
             sg.material.needsUpdate = true
-            onReady?.()
+            onReady?.({ ok: true })
           }
           spec.element.addEventListener('seeked', onFrame, { once: true })
           spec.element.addEventListener('playing', onFrame, { once: true })
@@ -594,7 +599,7 @@ export function createVrScene(
         sg.material.map = tex
         sg.activeKey = spec.element
         sg.material.needsUpdate = true
-        onReady?.()
+        onReady?.({ ok: true })
       }
     },
 

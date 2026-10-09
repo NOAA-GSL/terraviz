@@ -69,6 +69,32 @@ export interface VrBrowseHandle {
   setCategoryFilter(category: string | null): void
   /** Scroll the list by a delta (positive = down). Called per-frame from vrInteraction. */
   scroll(delta: number): void
+  /**
+   * Whether a press at `uv` can start a touch drag-scroll: the point
+   * is inside the list viewport, left of the scrollbar strip, and the
+   * list is long enough to scroll. vrInteraction asks this on
+   * selectstart so a press that can't move anything (title bar, chip
+   * row, scrollbar strip, or a list shorter than the viewport) stays
+   * a plain tap and never cancels a select.
+   */
+  canDragScrollAt(uv: { x: number; y: number }): boolean
+  /**
+   * Set the drag-scroll baseline to `uv` without scrolling. Called
+   * from vrInteraction when a pending press is promoted to a drag
+   * (baseline = the pointer at promotion, so the list doesn't jump by
+   * the threshold distance), or on release with the press point when
+   * a quick flick is promoted and applied in one step.
+   */
+  beginDrag(uv: { x: number; y: number }): void
+  /**
+   * Feed the live pointer UV during a drag-scroll gesture. Converts
+   * the vertical movement since the last baseline to a canvas-pixel
+   * delta and applies it through the same clamp + redraw path as
+   * {@link scroll}, using natural touch direction (content follows
+   * the finger). Canvas height stays encapsulated here so callers
+   * work in UV space only.
+   */
+  dragTo(uv: { x: number; y: number }): void
   hitTest(uv: { x: number; y: number }): VrBrowseAction | null
   dispose(): void
 }
@@ -424,6 +450,11 @@ export function createVrBrowse(THREE_: typeof THREE): VrBrowseHandle {
   let visibleDatasets: VrDatasetEntry[] = []
   let scrollY = 0
   let highlightIndex = -1
+  /**
+   * Last canvas-Y sampled during a drag-scroll. beginDrag sets it;
+   * dragTo scrolls by the movement since it and then advances it.
+   */
+  let dragBaselineCanvasY = 0
 
   /**
    * Keyed by thumbnail URL. `Image` is the common DOM type that
@@ -484,10 +515,34 @@ export function createVrBrowse(THREE_: typeof THREE): VrBrowseHandle {
     categories = Array.from(seen).sort()
   }
 
-  function clampScroll(): void {
+  function maxScrollY(): number {
     const totalContent = visibleDatasets.length * (CARD_HEIGHT + CARD_GAP)
-    const maxScroll = Math.max(0, totalContent - LIST_HEIGHT)
-    scrollY = Math.max(0, Math.min(maxScroll, scrollY))
+    return Math.max(0, totalContent - LIST_HEIGHT)
+  }
+
+  function clampScroll(): void {
+    scrollY = Math.max(0, Math.min(maxScrollY(), scrollY))
+  }
+
+  /**
+   * Apply a canvas-pixel scroll delta, clamping + redrawing only when
+   * the value actually changes. Shared by the thumbstick scroll()
+   * path and the touch dragTo() path so both behave identically at
+   * the list bounds, including the hidden-panel / empty-list guard.
+   * Kept as a closed-over helper (not a method) so callers can
+   * destructure the handle without losing binding.
+   */
+  function applyScroll(delta: number): void {
+    if (!visible || visibleDatasets.length === 0) return
+    const previousScrollY = scrollY
+    scrollY += delta
+    clampScroll()
+    // If the clamped value didn't actually move (user holding the
+    // thumbstick at end-of-list, or list too short to scroll),
+    // skip the canvas repaint. Matters at XR frame rate —
+    // drawCanvas isn't free, and there's no visual change to
+    // justify it.
+    if (scrollY !== previousScrollY) redraw()
   }
 
   function redraw(): void {
@@ -573,16 +628,35 @@ export function createVrBrowse(THREE_: typeof THREE): VrBrowseHandle {
     },
 
     scroll(delta) {
-      if (!visible || visibleDatasets.length === 0) return
-      const previousScrollY = scrollY
-      scrollY += delta
-      clampScroll()
-      // If the clamped value didn't actually move (user holding the
-      // thumbstick at end-of-list, or list too short to scroll),
-      // skip the canvas repaint. Matters at XR frame rate —
-      // drawCanvas isn't free, and there's no visual change to
-      // justify it.
-      if (scrollY !== previousScrollY) redraw()
+      applyScroll(delta)
+    },
+
+    canDragScrollAt(uv) {
+      if (!visible || maxScrollY() === 0) return false
+      const canvasX = uv.x * CANVAS_WIDTH
+      const canvasY = (1 - uv.y) * CANVAS_HEIGHT
+      if (canvasY < LIST_TOP || canvasY > LIST_BOTTOM) return false
+      // The scrollbar strip (and the margin right of it) is excluded,
+      // with the same bound cardIndexAtUv uses: a drag there would
+      // move the content with the pointer, i.e. the thumb the other
+      // way from the pointer that grabbed it.
+      return canvasX <= CANVAS_WIDTH - LIST_PADDING - SCROLLBAR_WIDTH
+    },
+
+    beginDrag(uv) {
+      // Plane UV maps uv.y=1 to the top of the canvas, so invert to
+      // canvas-pixel Y (which grows downward).
+      dragBaselineCanvasY = (1 - uv.y) * CANVAS_HEIGHT
+    },
+
+    dragTo(uv) {
+      const canvasY = (1 - uv.y) * CANVAS_HEIGHT
+      // Natural touch scroll: content follows the finger. Dragging
+      // the finger up decreases canvasY, so baseline - canvasY is
+      // positive → scroll down (scrollY grows, lower items come
+      // into view). Dragging down does the reverse.
+      applyScroll(dragBaselineCanvasY - canvasY)
+      dragBaselineCanvasY = canvasY
     },
 
     hitTest(uv) {

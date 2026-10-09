@@ -62,6 +62,9 @@ const EXPECTED_TABLES = [
   'node_profile',
   'node_settings',
   'publishers',
+  'stac_history_items',
+  'stac_history_publications',
+  'stac_source_lineage',
   'tour_dataset_refs',
   'tours',
   'video_index',
@@ -104,6 +107,8 @@ const EXPECTED_INDEXES = [
   'idx_workflow_runs_active',
   'idx_workflow_runs_workflow',
   'idx_workflows_due',
+  'stac_history_items_publication',
+  'stac_history_publications_dataset',
 ]
 
 describe('catalog migrations', () => {

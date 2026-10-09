@@ -46,14 +46,18 @@
 import { t } from '../i18n'
 import { logger } from '../utils/logger'
 import { announcePolite } from './domUtils'
+import { buildWarpSection, warpRotationNote, type OutputWarpManager } from './outputWarpUI'
 import type {
   AddOutputOptions,
   OutputMonitor,
   OutputRecord,
 } from '../services/multiOutput/manager'
 import type { OutputHealth } from '../services/multiOutput/outputHealth'
-import type { OutputRenderConfig } from '../services/multiOutput/protocol'
+import type { OutputMode, OutputRenderConfig } from '../services/multiOutput/protocol'
 import type { OutputViewSettings } from '../services/multiOutput/stateAggregator'
+
+/** The one mode this panel names — see the Add picker for why it is only this one. */
+const WARP_MODE: OutputMode = 'projector-warp'
 
 /**
  * What the panel drives.
@@ -65,7 +69,7 @@ import type { OutputViewSettings } from '../services/multiOutput/stateAggregator
  * actually calls keeps the test fake small and states the surface this
  * file depends on, which is the part that must not grow quietly.
  */
-export interface OutputPanelManager {
+export interface OutputPanelManager extends OutputWarpManager {
   start(): Promise<void>
   listMonitors(): Promise<OutputMonitor[]>
   /** Which of those the platform calls primary, or `null` when it will
@@ -85,7 +89,7 @@ export interface OutputPanelManager {
   addOutput(options: AddOutputOptions): Promise<OutputRecord>
   removeOutput(label: string): Promise<void>
   setOutputView(label: string, view: Partial<OutputViewSettings>): Promise<void>
-  setOutputRenderConfig(label: string, render: Partial<OutputRenderConfig>): Promise<void>
+  setOutputRenderConfig(label: string, render: Partial<Omit<OutputRenderConfig, 'warp'>>): Promise<void>
   /** Windows that can hold a video decoder, against the machine's
    *  budget — see `buildDecoderBudget`. */
   decoderLoad(): { used: number; budget: number }
@@ -660,8 +664,35 @@ function buildAdder(
     select.value = String(firstFree)
   }
 
+  // What the output is, chosen here because it is fixed for the life of
+  // the window: it rides the spawn URL, so changing it means a new one.
+  // An LED sphere or a dome takes the equirect frame; a projector rig
+  // takes a warp (rung 16), which it draws nothing without.
+  const modeLabel = document.createElement('label')
+  modeLabel.className = 'output-add-label'
+  modeLabel.htmlFor = 'output-mode-select'
+  modeLabel.textContent = t('outputs.mode.label')
+  const modeSelect = document.createElement('select')
+  modeSelect.id = 'output-mode-select'
+  modeSelect.className = 'output-mode-select'
+  // The default option carries **no mode**: the manager's default is the
+  // equirect geometry, so the panel never has to name it. That is not
+  // tidiness — `sos-equirect` is the string the bundle check greps the web
+  // entry chunk for, as proof the IPC contract has not leaked into it,
+  // and a literal here would make that check pass or fail on this line.
+  for (const [value, key] of [
+    ['', 'outputs.mode.optionSosEquirect'],
+    [WARP_MODE, 'outputs.mode.optionProjectorWarp'],
+  ] as const) {
+    const opt = document.createElement('option')
+    opt.value = value
+    opt.textContent = t(key)
+    modeSelect.appendChild(opt)
+  }
+
   addBtn.addEventListener('click', () => {
-    void add(mgr, Number(select.value), addBtn, section, body)
+    const mode = modeSelect.value === WARP_MODE ? WARP_MODE : undefined
+    void add(mgr, Number(select.value), mode, addBtn, section, body)
   })
 
   // Before the row, not after: the diagram is what the choice is made
@@ -669,8 +700,11 @@ function buildAdder(
   const map = buildMonitorMap(monitors, occupied, primaryKey, select)
   if (map) section.appendChild(map)
 
+  const modeRow = document.createElement('div')
+  modeRow.className = 'output-add-row'
+  modeRow.append(modeLabel, modeSelect)
   row.append(label, select, addBtn)
-  section.appendChild(row)
+  section.append(modeRow, row)
 
   const { used, budget } = mgr.decoderLoad()
   // The manager refuses this too, and would throw. Disabling here is
@@ -754,6 +788,7 @@ function buildDecoderBudget(
 async function add(
   mgr: OutputPanelManager,
   monitorIndex: number,
+  mode: OutputMode | undefined,
   addBtn: HTMLButtonElement,
   section: HTMLElement,
   body: HTMLElement,
@@ -768,7 +803,7 @@ async function add(
     // would race the window it was installed for. Idempotent, so paying
     // it on every add costs nothing after the first.
     await mgr.start()
-    await mgr.addOutput({ monitorIndex })
+    await mgr.addOutput(mode ? { monitorIndex, mode } : { monitorIndex })
   } catch (err) {
     logger.warn('[outputUI] add output failed:', err)
     addBtn.textContent = restore
@@ -974,10 +1009,11 @@ function buildRow(
 
   const meta = document.createElement('span')
   meta.className = 'output-item-meta'
+  const warped = record.mode === WARP_MODE
   meta.textContent = t('outputs.item.meta', {
     width: record.monitor.size.width,
     height: record.monitor.size.height,
-    mode: t('outputs.mode.sosEquirect'),
+    mode: warped ? t('outputs.mode.projectorWarp') : t('outputs.mode.sosEquirect'),
   })
 
   const remove = document.createElement('button')
@@ -1017,7 +1053,17 @@ function buildRow(
       mgr.setOutputRenderConfig(record.label, { debugOverlay: next }),
     ),
   )
-  item.appendChild(buildFramebufferPicker(mgr, record))
+  // A warp window sizes its buffer to the display it spans (rung 16), so
+  // the ladder is not offered; saying what it runs at instead keeps the
+  // "frame and monitor are two rectangles" line honest for both modes.
+  item.appendChild(
+    warped
+      ? message(
+          t('outputs.warp.nativeSize', { width: record.monitor.size.width, height: record.monitor.size.height }),
+          'output-note',
+        )
+      : buildFramebufferPicker(mgr, record),
+  )
   item.appendChild(
     // Directly above the rotation offset, not beside the debug toggle
     // it shares a channel with, because these two are used together:
@@ -1029,6 +1075,20 @@ function buildRow(
     ),
   )
   item.appendChild(buildRotationOffset(mgr, record))
+  if (warped) {
+    // Beside the rotation it qualifies: a sphere rig's own rotation is
+    // baked into the warp, so the field above turns the *content*, and
+    // the operator needs both numbers to know which turned the picture.
+    // It is what the bundle's layout said; a set nothing stated it for
+    // says it does not know rather than guessing from the rig.
+    const rotation = warpRotationNote(record.render.warp)
+    if (rotation !== null) item.appendChild(message(rotation, 'output-note'))
+    item.appendChild(
+      buildWarpSection(mgr, record, record.monitor, displayName, () => {
+        void refresh(body)
+      }),
+    )
+  }
   return item
 }
 
@@ -1074,7 +1134,12 @@ function buildRotationOffset(mgr: OutputPanelManager, record: OutputRecord): HTM
 
   const text = document.createElement('label')
   text.className = 'output-field-label'
-  text.textContent = t('outputs.item.rotationOffset')
+  // Under a warp the same uniform turns the content on top of whatever
+  // the mesh maps — never the rig, whose rotation the mesh already holds
+  // (rung 16, convention 3) — so it is named for what it does there.
+  const rotationLabel =
+    record.mode === WARP_MODE ? t('outputs.warp.contentRotation') : t('outputs.item.rotationOffset')
+  text.textContent = rotationLabel
 
   const slider = document.createElement('input')
   slider.type = 'range'
@@ -1102,7 +1167,7 @@ function buildRotationOffset(mgr: OutputPanelManager, record: OutputRecord): HTM
   const id = `output-rotation-${record.label}`
   slider.id = id
   text.htmlFor = id
-  number.setAttribute('aria-label', t('outputs.item.rotationOffset'))
+  number.setAttribute('aria-label', rotationLabel)
 
   let applied = record.view.rotationOffsetDeg
   /**

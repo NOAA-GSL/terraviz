@@ -4,7 +4,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { OutputMonitor } from './manager'
-import { DEFAULT_FRAMEBUFFER_WIDTH } from './protocol'
+import { DEFAULT_BLEND_GAMMA, DEFAULT_FRAMEBUFFER_WIDTH } from './protocol'
 import {
   createOutputConfigStore,
   defaultOutputConfig,
@@ -41,6 +41,8 @@ function persisted(over: Partial<PersistedOutput> = {}): PersistedOutput {
     rotationOffsetDeg: 0,
     framebufferWidth: DEFAULT_FRAMEBUFFER_WIDTH,
     debugOverlay: false,
+    warpId: null,
+    blendGamma: DEFAULT_BLEND_GAMMA,
     ...over,
   }
 }
@@ -143,6 +145,43 @@ describe('parseOutputConfig', () => {
       concurrentDecoderBudget: 8,
     }
     expect(parseOutputConfig(JSON.stringify(config))).toEqual(config)
+  })
+
+  it('restores a projector-warp output as one, and drops a mode this build does not render', () => {
+    const raw = JSON.stringify({
+      version: OUTPUT_CONFIG_VERSION,
+      outputs: [
+        persisted({ label: 'output-1', mode: 'projector-warp' }),
+        persisted({ label: 'output-2', mode: 'fisheye' as PersistedOutput['mode'] }),
+      ],
+      autoRestoreOnLaunch: true,
+    })
+    // Dropped, never restored as sos-equirect: a mode that comes back as
+    // another is an unwarped picture across projectors calibrated for a
+    // warp, which is exactly what a build without rung 16 now declines.
+    expect(parseOutputConfig(raw).outputs.map((o) => [o.label, o.mode])).toEqual([['output-1', 'projector-warp']])
+  })
+
+  it('keeps a warp reference and a blend gamma, and reads an absent or broken one as none', () => {
+    const id = '0123456789abcdef'
+    const raw = JSON.stringify({
+      version: OUTPUT_CONFIG_VERSION,
+      outputs: [
+        persisted({ label: 'output-1', mode: 'projector-warp', warpId: id, blendGamma: 1.8 }),
+        // Written before rung 16: neither key.
+        { ...persisted({ label: 'output-2' }), warpId: undefined, blendGamma: undefined },
+        // A reference no import could have written, and a gamma that is not one.
+        { ...persisted({ label: 'output-3', mode: 'projector-warp' }), warpId: '../config', blendGamma: -1 },
+      ],
+      autoRestoreOnLaunch: true,
+    })
+
+    const outputs = parseOutputConfig(raw).outputs
+    expect(outputs.map((o) => [o.label, o.warpId, o.blendGamma])).toEqual([
+      ['output-1', id, 1.8],
+      ['output-2', null, DEFAULT_BLEND_GAMMA],
+      ['output-3', null, DEFAULT_BLEND_GAMMA],
+    ])
   })
 
   it('drops one malformed entry and keeps the rest', () => {
@@ -297,6 +336,22 @@ describe('parseOutputConfig', () => {
 })
 
 describe('toPersistedOutput', () => {
+  it('writes the reference the record holds, even while its set could not be loaded', () => {
+    // `render.warp` is null exactly when the stored set was unreadable;
+    // writing that instead of the reference would let the calibration be
+    // forgotten by the next save.
+    const output = toPersistedOutput({
+      label: 'output-1',
+      monitor: monitor({}),
+      mode: 'projector-warp',
+      view: { trackCamera: true, split: false, rotationOffsetDeg: 0 },
+      render: { framebufferWidth: 4096, debugOverlay: false, calibration: false, warp: null, blendGamma: 2.4 },
+      warpRef: 'feedfacecafebeef',
+    })
+    expect(output.warpId).toBe('feedfacecafebeef')
+    expect(output.blendGamma).toBe(2.4)
+  })
+
   it('copies the origin rather than aliasing the live monitor', () => {
     const live = monitor({ position: { x: -1680, y: 0 } })
     const output = toPersistedOutput({
@@ -304,7 +359,8 @@ describe('toPersistedOutput', () => {
       monitor: live,
       mode: 'sos-equirect',
       view: { trackCamera: false, split: true, rotationOffsetDeg: 0 },
-      render: { framebufferWidth: 8192, debugOverlay: true, calibration: true },
+      render: { framebufferWidth: 8192, debugOverlay: true, calibration: true, warp: null, blendGamma: 2.2 },
+      warpRef: null,
     })
 
     live.position.x = 9999
@@ -450,10 +506,12 @@ describe('viewSettingsFrom (rung 14)', () => {
 
 describe('renderConfigFrom (rung 14b)', () => {
   it('restores the window settings that were stored', () => {
-    expect(renderConfigFrom(persisted({ framebufferWidth: 8192, debugOverlay: true }))).toEqual({
+    expect(renderConfigFrom(persisted({ framebufferWidth: 8192, debugOverlay: true, blendGamma: 1.8 }), null)).toEqual({
       framebufferWidth: 8192,
       debugOverlay: true,
       calibration: false,
+      warp: null,
+      blendGamma: 1.8,
     })
   })
 
@@ -472,7 +530,7 @@ describe('renderConfigFrom (rung 14b)', () => {
     const stored = { ...persisted({}), calibration: true } as unknown as Parameters<
       typeof renderConfigFrom
     >[0]
-    expect(renderConfigFrom(stored).calibration).toBe(false)
+    expect(renderConfigFrom(stored, null).calibration).toBe(false)
   })
 
   it('keeps the pattern out of what gets written, too', () => {
@@ -481,7 +539,8 @@ describe('renderConfigFrom (rung 14b)', () => {
       monitor: monitor({}),
       mode: 'sos-equirect',
       view: { trackCamera: true, split: false, rotationOffsetDeg: 0 },
-      render: { framebufferWidth: 4096, debugOverlay: false, calibration: true },
+      render: { framebufferWidth: 4096, debugOverlay: false, calibration: true, warp: null, blendGamma: 2.2 },
+      warpRef: null,
     })
     expect('calibration' in written).toBe(false)
   })

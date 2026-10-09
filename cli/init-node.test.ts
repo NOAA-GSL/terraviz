@@ -3,6 +3,7 @@
 
 import { describe, expect, it, vi } from 'vitest'
 import { runInitNode } from './init-node'
+import { HELP_TEXT } from './commands'
 import type { CommandContext } from './commands'
 import type { TerravizClient } from './lib/client'
 import { parseArgs } from './lib/args'
@@ -56,6 +57,81 @@ function makeCtx(argv: string[], overrides: CtxOverrides = {}) {
 }
 
 describe('terraviz init-node', () => {
+  it('documents publication intent, upgrade review, and omission semantics in help', () => {
+    expect(HELP_TEXT).toContain('--description is intended public metadata')
+    expect(HELP_TEXT).toContain('future STAC Catalog (max 2048 chars)')
+    expect(HELP_TEXT).toContain('does not publish it; review existing values')
+    expect(HELP_TEXT).toContain('Omitting --description or --contact preserves')
+    expect(HELP_TEXT).toContain('--clear-contact to clear explicitly')
+  })
+
+  it.each(['--description', '--no-description'])(
+    'rejects %s without a text value rather than accidentally clearing prose',
+    async flag => {
+      const readFile = vi.fn()
+      const { ctx, stderr, setNodeIdentity } = makeCtx(
+        ['init-node', '--display-name=N', '--base-url=https://n.example.org', flag],
+        { readFile },
+      )
+      expect(await runInitNode(ctx)).toBe(2)
+      expect(stderr.text()).toContain('--description requires a text value')
+      expect(setNodeIdentity).not.toHaveBeenCalled()
+      expect(readFile).not.toHaveBeenCalled()
+    },
+  )
+
+  it.each([
+    { flag: '--description=Public ocean-science catalog.', value: 'Public ocean-science catalog.' },
+    { flag: '--description=', value: '' },
+  ])('sends the explicit description unchanged: $flag', async ({ flag, value }) => {
+    const { ctx, stdout, stderr, setNodeIdentity } = makeCtx([
+      'init-node', '--display-name=N', '--base-url=https://n.example.org',
+      '--public-key=ed25519:abc', flag,
+    ])
+    expect(await runInitNode(ctx)).toBe(0)
+    expect(setNodeIdentity).toHaveBeenCalledWith(expect.objectContaining({ description: value }))
+    expect(stderr.text()).toContain('node descriptions are intended public metadata')
+    expect(stderr.text()).toContain('this release does not publish the field')
+    expect(stderr.text()).not.toContain('omitting --description')
+    if (value) {
+      expect(stderr.text()).not.toContain(value)
+      expect(stdout.text()).not.toContain(value)
+    }
+  })
+
+  it('warns before sending and leaves JSON stdout parseable', async () => {
+    const setNodeIdentity = vi.fn(async () => {
+      expect(stderr.text()).toContain('Review existing values before upgrading')
+      expect(stderr.text()).toContain('omitted description/contact fields are preserved')
+      return { ok: true as const, status: 200, body: { identity: null } }
+    })
+    const { ctx, stdout, stderr } = makeCtx([
+      'init-node', '--display-name=N', '--base-url=https://n.example.org',
+      '--public-key=ed25519:abc', '--json',
+    ], { setNodeIdentity })
+    expect(await runInitNode(ctx)).toBe(0)
+    expect(setNodeIdentity).toHaveBeenCalledWith(expect.objectContaining({ description: undefined, contact_email: undefined }))
+    expect(JSON.parse(stdout.text())).toEqual({ identity: null })
+    expect(stdout.text()).not.toContain('Notice:')
+  })
+
+  it.each(['description', 'contact'])('clears %s only on explicit request', async field => {
+    const { ctx, setNodeIdentity } = makeCtx(['init-node', '--display-name=N', '--base-url=https://n.example.org', `--clear-${field}`], { readFile: () => { throw new Error('ENOENT') } })
+    expect(await runInitNode(ctx)).toBe(0)
+    expect(setNodeIdentity).toHaveBeenCalledWith(expect.objectContaining({ [field === 'contact' ? 'contact_email' : field]: null }))
+  })
+
+  it.each([
+    ['--contact'], ['--no-contact'], ['--clear-contact=true'], ['--no-clear-description'],
+    ['--description=text', '--clear-description'], ['--contact=ops@example.org', '--clear-contact'],
+  ])('rejects ambiguous clearing arguments %j before IO', async (...flags) => {
+    const readFile = vi.fn()
+    const { ctx, setNodeIdentity } = makeCtx(['init-node', '--display-name=N', '--base-url=https://n.example.org', ...flags], { readFile })
+    expect(await runInitNode(ctx)).toBe(2)
+    expect(setNodeIdentity).not.toHaveBeenCalled()
+    expect(readFile).not.toHaveBeenCalled()
+  })
+
   it('requires --display-name and --base-url', async () => {
     const { ctx, stderr } = makeCtx(['init-node', '--display-name=X'])
     const code = await runInitNode(ctx)
@@ -76,7 +152,7 @@ describe('terraviz init-node', () => {
     expect(setNodeIdentity).toHaveBeenCalledWith({
       display_name: 'Terraviz — Acme',
       base_url: 'https://terraviz.acme.org',
-      description: null,
+      description: undefined,
       contact_email: 'ops@acme.org',
       public_key: 'ed25519:abc',
     })

@@ -27,6 +27,11 @@
  * 503 `export_unconfigured` spells out which of the four pieces
  * (CATALOG_DB, ANALYTICS_R2, CF_ACCOUNT_ID, ANALYTICS_SQL_TOKEN) is
  * missing so a fork's first deploy is debuggable from the response.
+ *
+ * 500 `export_failed` names the day that failed and the first line
+ * of its error, and lists in `exported` the days that landed before
+ * it. Never 502 or 504: Cloudflare's edge replaces either with its
+ * own plain-text error page and the JSON never reaches the caller.
  */
 
 import type { CatalogEnv } from '../_lib/env'
@@ -48,6 +53,10 @@ const CONTENT_TYPE = 'application/json; charset=utf-8'
 /** Catch-up cap per invocation. Daily cron means this only matters
  * after an outage; 7 keeps the worst tick bounded. */
 export const MAX_DAYS_PER_RUN = 7
+
+/** Cap on the error line in a failure response, which the GHA tick
+ * prints into a public Actions log. */
+const MAX_MESSAGE_LEN = 256
 
 function jsonError(status: number, error: string, message: string): Response {
   return new Response(JSON.stringify({ error, message }), {
@@ -127,11 +136,13 @@ export const onRequestPost: PagesFunction<CatalogEnv> = async context => {
       if (explicitDay === null) await advanceBookmark(db, day)
     } catch (err) {
       // Log the full error for `wrangler tail`; the wire response
-      // carries only the first line (same posture as the publish
-      // middleware's sanitizer).
+      // carries only the first line. Unlike the publish middleware's
+      // sanitizer, whose output reaches signed-in staff, this line is
+      // printed into a public Actions log by the GHA tick, so the job
+      // core keeps upstream response bodies off the first line.
       console.error(`[analytics-export] day ${day} failed`, err)
       const raw = err instanceof Error ? err.message : String(err)
-      failure = { day, message: raw.split('\n', 1)[0] ?? '' }
+      failure = { day, message: (raw.split('\n', 1)[0] ?? '').slice(0, MAX_MESSAGE_LEN) }
       break
     }
   }
@@ -152,8 +163,14 @@ export const onRequestPost: PagesFunction<CatalogEnv> = async context => {
   }
 
   if (failure) {
+    // 500, never 502 or 504. This response used to be a 502, and
+    // Cloudflare's edge delivered it to the GHA tick as its own
+    // plain-text "error code: 502" page with this JSON gone. For six
+    // weeks the only record of what failed was
+    // `wrangler pages deployment tail`. 500 is the status the publish
+    // middleware already uses for its server-fault JSON errors.
     return new Response(JSON.stringify({ error: 'export_failed', ...failure, exported }), {
-      status: 502,
+      status: 500,
       headers: { 'Content-Type': CONTENT_TYPE },
     })
   }

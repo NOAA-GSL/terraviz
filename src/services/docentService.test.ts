@@ -339,6 +339,87 @@ describe('processMessage — LLM path', () => {
   })
 })
 
+describe('processMessage — quota-exhausted LLM errors', () => {
+  // A spent Workers AI budget comes back as an error chunk with
+  // `code: 'quota_exhausted'`. It is not transient, so the retry that
+  // covers empty streams and network blips must not fire for it: that
+  // was another round trip to hear the same 503 before the local
+  // engine answered anyway.
+  const config: DocentConfig = {
+    apiUrl: 'http://localhost:11434/v1',
+    apiKey: '',
+    model: 'test',
+    enabled: true,
+    readingLevel: 'general',
+    visionEnabled: false,
+  }
+
+  async function run(input: string): Promise<DocentStreamChunk[]> {
+    const chunks: DocentStreamChunk[] = []
+    for await (const chunk of processMessage(input, [], datasets, null, config)) {
+      chunks.push(chunk)
+    }
+    return chunks
+  }
+
+  it('does not retry a quota error, and falls back to the local engine', async () => {
+    const { streamChat } = await import('./llmProvider')
+    const mockedStream = vi.mocked(streamChat)
+    mockedStream.mockImplementation(async function* () {
+      yield { type: 'error' as const, message: 'API error 503: 4006: neurons exhausted', code: 'quota_exhausted' as const }
+    })
+    mockedStream.mockClear()
+
+    const chunks = await run('hello')
+
+    expect(mockedStream).toHaveBeenCalledTimes(1)
+    expect(getDegradedReason()).toBe('quota_exhausted')
+    const done = chunks.find(c => c.type === 'done') as { type: 'done'; fallback: boolean }
+    expect(done.fallback).toBe(true)
+  })
+
+  it('does not retry a quota error that arrives on a tool round', async () => {
+    // The same signal from the tool path: round 1 asks for a catalog
+    // search, round 2 is refused for quota. One attempt, two rounds.
+    const { streamChat } = await import('./llmProvider')
+    const mockedStream = vi.mocked(streamChat)
+    let callCount = 0
+    mockedStream.mockImplementation(async function* () {
+      callCount++
+      if (callCount % 2 === 1) {
+        yield {
+          type: 'tool_call' as const,
+          call: { id: 'call_search_1', name: 'search_catalog', arguments: { query: 'ocean temperature' } },
+        }
+        yield { type: 'done' as const }
+      } else {
+        yield { type: 'error' as const, message: 'API error 503: quota exhausted', code: 'quota_exhausted' as const }
+      }
+    })
+
+    const chunks = await run('ocean temperature')
+
+    expect(callCount).toBe(2)
+    expect(getDegradedReason()).toBe('quota_exhausted')
+    const done = chunks.find(c => c.type === 'done') as { type: 'done'; fallback: boolean }
+    expect(done.fallback).toBe(true)
+  })
+
+  it('still retries an error that is not quota', async () => {
+    const { streamChat } = await import('./llmProvider')
+    const mockedStream = vi.mocked(streamChat)
+    mockedStream.mockImplementation(async function* () {
+      yield { type: 'error' as const, message: 'API error 502: Workers AI returned an empty stream' }
+    })
+    mockedStream.mockClear()
+
+    await run('hello')
+
+    expect(mockedStream).toHaveBeenCalledTimes(2)
+    expect(getDegradedReason()).toBeNull()
+  })
+})
+
 describe('processMessage — pre-search injection (1d/AC)', () => {
   it('injects [RELEVANT DATASETS] from search_datasets results for discovery intents', async () => {
     // The pre-search safety net (1d/F removed it, 1d/AC restored

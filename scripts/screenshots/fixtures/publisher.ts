@@ -526,6 +526,14 @@ export type ListState = 'populated' | 'empty' | 'error'
  * always-populated fixtures never reach). Rules are ordered specific →
  * general (detail before list).
  */
+export function publisherConflictFixtures(): FixtureRule[] {
+  return [{
+    url: /\/api\/v1\/publish\/datasets(?:\/[^/?]+)?(?:\?|$)/,
+    method: 'POST', status: 409,
+    json: { errors: [{ field: 'metadata', code: 'concurrent_update', message: 'Dataset metadata changed during this save. Reload and retry.' }] },
+  }, ...publisherFixtures()]
+}
+
 export function publisherFixtures(
   opts: {
     admin?: boolean

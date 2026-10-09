@@ -29,6 +29,7 @@ import { TIER_B_EVENT_TYPES } from '../../types'
 import { FRAMEBUFFER_WIDTHS } from './protocol'
 import {
   framebufferBucket,
+  framebufferBucketFor,
   removalReasonFor,
   reportOutputAdded,
   reportOutputFailure,
@@ -109,6 +110,21 @@ describe('the reporters', () => {
     })
   })
 
+  it('reports a projector-warp output as native, never as the width it does not read', () => {
+    // That window draws projector rasters, not an equirect frame, so no
+    // rung describes it — bucketing its stored width would name one.
+    expect(framebufferBucketFor('projector-warp', 4096)).toBe('native')
+    expect(framebufferBucketFor('sos-equirect', 4096)).toBe('4k')
+    reportOutputAdded({ mode: 'projector-warp', framebufferWidth: 4096, monitorIndex: 1 })
+
+    expect(emitted).toHaveBeenCalledWith({
+      event_type: 'output_added',
+      mode: 'projector-warp',
+      framebuffer_bucket: 'native',
+      monitor_index: 1,
+    })
+  })
+
   it('reports a removal with its reason', () => {
     reportOutputRemoved({ mode: 'sos-equirect', reason: 'crash' })
 
@@ -135,6 +151,7 @@ describe('the reporters', () => {
     // the three payload tests above: a field added later has to pass
     // this too.
     reportOutputAdded({ mode: 'sos-equirect', framebufferWidth: 8192, monitorIndex: 0 })
+    reportOutputAdded({ mode: 'projector-warp', framebufferWidth: 8192, monitorIndex: 1 })
     reportOutputRemoved({ mode: 'sos-equirect', reason: 'operator-close' })
     reportOutputFailure({ kind: 'crash', retries: 1, recovered: true })
 

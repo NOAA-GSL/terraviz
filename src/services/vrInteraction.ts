@@ -462,6 +462,39 @@ export function createVrInteraction(
   const dragScratchPos = new THREE_.Vector3()
   const dragScratchQuat = new THREE_.Quaternion()
   const dragScratchOffset = new THREE_.Vector3()
+
+  /**
+   * Touch drag-scroll state for the browse panel. Phones have no
+   * thumbstick, so the list is scrolled by pressing on it and
+   * dragging. Three phases:
+   *
+   *   - `idle` — no drag.
+   *   - `pending` — a touch selectstart landed on the list viewport
+   *     of a list that can scroll (`browse.canDragScrollAt`); we wait
+   *     to see if it becomes a drag (movement past the threshold) or
+   *     a clean tap. Pending lets a tap still select a dataset.
+   *   - `scroll` — movement exceeded the threshold; the gesture is a
+   *     drag-scroll. Any armed card select is cancelled so dragging
+   *     on a card scrolls instead of selecting.
+   *
+   * Only inputs without a thumbstick open a pending drag (see
+   * `isTouchInput`). A Quest trigger pull routinely rotates the
+   * controller by ~1°, which at arm's length crosses the threshold,
+   * so letting controllers in would turn ordinary clicks into
+   * zero-length scrolls. Controllers keep thumbstick scroll + click.
+   */
+  type BrowseDragState =
+    | { kind: 'idle' }
+    | { kind: 'pending'; controllerIndex: 0 | 1; startUv: THREE.Vector2 }
+    | { kind: 'scroll'; controllerIndex: 0 | 1 }
+  let browseDrag: BrowseDragState = { kind: 'idle' }
+  /**
+   * Movement (in panel-UV units) before a press is treated as a drag
+   * rather than a tap. ~0.02 ≈ 12 px on a 600-px-tall canvas — small
+   * enough that an intentional drag registers immediately, large
+   * enough that a slightly jittery tap still selects.
+   */
+  const BROWSE_DRAG_THRESHOLD = 0.02
   /** Per-controller "ray is currently on the browse panel" — drives thumbstick scroll. */
   const rayOnBrowse: boolean[] = [false, false]
   /**
@@ -541,8 +574,8 @@ export function createVrInteraction(
 
   function pickHit(controller: THREE.XRTargetRaySpace):
     | { kind: 'hud'; action: VrHudAction }
-    | { kind: 'browse'; action: VrBrowseAction }
-    | { kind: 'browse-scroll' }
+    | { kind: 'browse'; action: VrBrowseAction; uv: THREE.Vector2 }
+    | { kind: 'browse-scroll'; uv: THREE.Vector2 }
     | { kind: 'tour-control'; action: VrTourControlsAction }
     | { kind: 'tour-overlay'; action: VrTourInteractiveAction }
     | { kind: 'overlay-drag'; overlayId: string; mesh: THREE.Mesh }
@@ -561,15 +594,15 @@ export function createVrInteraction(
     // with the panel even when it overlaps the globe from their angle.
     if (ctx.browse.isVisible()) {
       const browseHits = raycaster.intersectObject(ctx.browse.mesh, false)
-      if (browseHits.length > 0 && browseHits[0].uv) {
-        const action = ctx.browse.hitTest({
-          x: browseHits[0].uv.x,
-          y: browseHits[0].uv.y,
-        })
-        if (action) return { kind: 'browse', action }
+      const uv = browseHits[0]?.uv
+      if (uv) {
+        // UV goes back to the caller, like the globe hit below, so a
+        // touch press can open a drag-scroll without re-raycasting.
+        const action = ctx.browse.hitTest(uv)
+        if (action) return { kind: 'browse', action, uv }
         // Ray hit the panel but not a button/card — still counts as
         // a browse hit for scroll purposes.
-        return { kind: 'browse-scroll' }
+        return { kind: 'browse-scroll', uv }
       }
     }
 
@@ -851,6 +884,27 @@ export function createVrInteraction(
     }
   }
 
+  /**
+   * Whether this controller slot is an input with no thumbstick: a
+   * phone's screen touch (`'screen'`) or a transient pointer such as
+   * gaze-and-pinch (`'transient-pointer'`). Only these open a browse
+   * drag-scroll; tracked controllers scroll with the thumbstick.
+   */
+  function isTouchInput(index: 0 | 1): boolean {
+    const mode = inputSources[index]?.targetRayMode
+    return mode === 'screen' || mode === 'transient-pointer'
+  }
+
+  /**
+   * UV under this controller's ray on the browse panel alone, or null
+   * on a miss. Used while a drag-scroll is live, so the gesture keeps
+   * tracking the panel even if the HUD slides in front of it.
+   */
+  function browsePanelUv(index: 0 | 1): THREE.Vector2 | null {
+    setRaycasterFromController(controllers[index])
+    return raycaster.intersectObject(ctx.browse.mesh, false)[0]?.uv ?? null
+  }
+
   function onSelectStart(index: 0 | 1): void {
     const controller = controllers[index]
 
@@ -871,13 +925,18 @@ export function createVrInteraction(
       return
     }
 
-    if (hit.kind === 'browse') {
-      browseArmed[index] = hit.action
-      return
-    }
-
-    if (hit.kind === 'browse-scroll') {
-      // Ray hit the panel body (not a button/card) — no action to arm.
+    if (hit.kind === 'browse' || hit.kind === 'browse-scroll') {
+      // Card / chip / close presses arm here and fire on release. A
+      // hit on the panel body (browse-scroll) has nothing to arm.
+      if (hit.kind === 'browse') browseArmed[index] = hit.action
+      // A touch press on a list that can scroll may turn into a
+      // drag-scroll (phones have no thumbstick). Open a pending drag:
+      // if the pointer moves past the threshold before release, the
+      // gesture becomes a scroll and the armed card select is
+      // cancelled. Controllers never open one — see BrowseDragState.
+      if (isTouchInput(index) && ctx.browse.canDragScrollAt(hit.uv)) {
+        browseDrag = { kind: 'pending', controllerIndex: index, startUv: hit.uv }
+      }
       return
     }
 
@@ -948,6 +1007,24 @@ export function createVrInteraction(
         emitVrInteraction('hud_tap', 1)
       }
       hudArmed[index] = null
+    }
+    // Browse drag-scroll end. update() promotes a pending press at
+    // most once per frame, so a quick flick can start and end between
+    // two frames. Check the release point before the click handling
+    // below: past the threshold, apply the whole movement as a scroll
+    // and drop the armed select. A pending press still under the
+    // threshold was a tap and falls through to the click; a 'scroll'
+    // drag already cancelled its select on promotion.
+    if (browseDrag.kind !== 'idle' && browseDrag.controllerIndex === index) {
+      if (browseDrag.kind === 'pending') {
+        const uv = browsePanelUv(index)
+        if (uv && Math.abs(uv.y - browseDrag.startUv.y) >= BROWSE_DRAG_THRESHOLD) {
+          browseArmed[index] = null
+          ctx.browse.beginDrag(browseDrag.startUv)
+          ctx.browse.dragTo(uv)
+        }
+      }
+      browseDrag = { kind: 'idle' }
     }
     // Browse panel: same click semantics — fire only if still pointing
     // at the same action on release.
@@ -1485,6 +1562,32 @@ export function createVrInteraction(
         // the globe if it moves in AR placement.
         dragScratchOffset.sub(ctx.globe.position)
         ctx.tourOverlay.setOverlayCustomOffset(overlayDrag.overlayId, dragScratchOffset)
+      }
+
+      // Browse panel touch drag-scroll. Pending → scroll transitions
+      // when the pointer moves past the threshold; once scrolling,
+      // feed the live UV to the panel each frame. A touch tap (no
+      // movement) stays pending and resolves as a select on release.
+      // Phones have no thumbstick, so this is their only way to
+      // scroll the list.
+      if (browseDrag.kind !== 'idle') {
+        const uv = browsePanelUv(browseDrag.controllerIndex)
+        if (uv) {
+          if (browseDrag.kind === 'pending') {
+            if (Math.abs(uv.y - browseDrag.startUv.y) >= BROWSE_DRAG_THRESHOLD) {
+              // Promote to a scroll and cancel the armed card select
+              // so dragging on a card scrolls rather than selecting.
+              // The baseline is the pointer now, not the press point,
+              // so the list doesn't jump by the threshold distance.
+              const idx = browseDrag.controllerIndex
+              browseArmed[idx] = null
+              ctx.browse.beginDrag(uv)
+              browseDrag = { kind: 'scroll', controllerIndex: idx }
+            }
+          } else {
+            ctx.browse.dragTo(uv)
+          }
+        }
       }
 
       // Velocity tracker only runs during user-driven rotation;

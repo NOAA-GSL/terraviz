@@ -35,7 +35,7 @@ import type { ExpectedBadResponse } from './core/signals'
 import type { Box } from './core/types'
 import { analyticsFixtures, feedbackFixtures } from './fixtures/admin'
 import { catalogReportFixtures } from './fixtures/catalog'
-import { blogPublicFixtures, publisherFixtures } from './fixtures/publisher'
+import { blogPublicFixtures, publisherConflictFixtures, publisherFixtures } from './fixtures/publisher'
 
 export interface Scene {
   /** Stable id — used as the screenshot filename and Weblate name. */
@@ -626,6 +626,20 @@ export const scenes: Scene[] = [
     fixtures: publisherFixtures(),
     async setup(page) {
       await openPublish(page, '/publish/datasets/new')
+    },
+  },
+  {
+    name: 'publish-dataset-conflict',
+    description: 'Publisher dataset save conflict with a visible, focused validation summary',
+    fixtures: publisherConflictFixtures(),
+    expectedBadResponses: [{ url: /\/api\/v1\/publish\/datasets(?:\?|$)/, status: 409 }],
+    async setup(page) {
+      await openPublish(page, '/publish/datasets/new')
+      await page.locator('#dataset-title').fill('Unsaved ocean observations')
+      await page.locator('#dataset-title').blur()
+      await page.locator('.publisher-form-nav-link[data-section="ds-section-timespace"]').click()
+      await page.locator('.publisher-dataset-form-header-actions .publisher-button-primary').click()
+      await page.locator('.publisher-form-error-summary').waitFor({ state: 'visible' })
     },
   },
   {

@@ -25,15 +25,20 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 vi.mock('../../analytics', () => ({ emit: vi.fn() }))
 
 import { emit } from '../../analytics'
+import { until } from '../../test-utils'
 import {
+  DEFAULT_BLEND_GAMMA,
   DEFAULT_FRAMEBUFFER_WIDTH,
   OUTPUT_REATTACH_EVENT,
   OUTPUT_RENDER_CONFIG_EVENT,
   OUTPUT_STATE_EVENT,
   type OutputEvent,
+  type OutputMode,
   type OutputRenderConfig,
   type OutputStateMessage,
 } from './protocol'
+import { createWarpSetStore, WARP_SET_KEY_PREFIX, type WarpSetStore, type WarpStorageLike } from './warpStorage'
+import { readWarpSources, warpSetId, type WarpSource } from './warpImport'
 import {
   MultiOutputManager,
   OUTPUT_ENTRY_URL,
@@ -140,6 +145,12 @@ interface FakeOptions {
   /** Labels among `existing` that answer the reattach poke. Omit for
    *  "all of them"; pass `[]` for a window that has gone unresponsive. */
   answerReattach?: string[]
+  /** The geometry a window says it is when it answers a poke, as its
+   *  own URL told it. Omit for `sos-equirect`. */
+  modes?: Record<string, OutputMode>
+  /** Hold every `close()` until this settles, as a window slow to tear
+   *  down does. */
+  closeGate?: Promise<unknown>
 }
 
 function createFakeHost(options: FakeOptions = {}) {
@@ -165,6 +176,7 @@ function createFakeHost(options: FakeOptions = {}) {
     show: async () => {},
     close: async () => {
       calls.push(`close:${label}`)
+      await options.closeGate
       if (options.failClose) throw new Error('close rejected')
       closed.push(label)
     },
@@ -219,7 +231,7 @@ function createFakeHost(options: FakeOptions = {}) {
       // inside that window either way.
       if (event === OUTPUT_REATTACH_EVENT) {
         const answers = options.answerReattach ?? options.existing ?? []
-        if (answers.includes(label)) send(ready(label))
+        if (answers.includes(label)) send(ready(label, options.modes?.[label]))
       }
     },
 
@@ -282,9 +294,28 @@ function memoryStore(initial?: Partial<PersistedOutputConfig>): OutputConfigStor
 }
 
 /** Construct a manager with an isolated store and a free stagger. */
+/**
+ * `Storage` over a Map, for the warp store — the same isolation reason
+ * as `memoryStore`: happy-dom's `localStorage` is shared across cases.
+ */
+function memoryWarpStorage(): WarpStorageLike & { map: Map<string, string> } {
+  const map = new Map<string, string>()
+  return {
+    map,
+    getItem: key => map.get(key) ?? null,
+    setItem: (key, value) => void map.set(key, value),
+    removeItem: key => void map.delete(key),
+    get length() {
+      return map.size
+    },
+    key: index => [...map.keys()][index] ?? null,
+  }
+}
+
 function makeManager(host: MultiOutputHost, deps: MultiOutputDeps = {}): MultiOutputManager {
   return new MultiOutputManager(host, {
     store: deps.store ?? memoryStore(),
+    warpStore: deps.warpStore ?? createWarpSetStore(memoryWarpStorage()),
     sleep: deps.sleep ?? (async () => {}),
     // Stated, never inherited. The default reads `maxVideoPanels()`,
     // which answers from happy-dom's viewport size — so a case about
@@ -296,11 +327,11 @@ function makeManager(host: MultiOutputHost, deps: MultiOutputDeps = {}): MultiOu
   })
 }
 
-const ready = (label: string): OutputEvent => ({
+const ready = (label: string, mode: OutputMode = 'sos-equirect'): OutputEvent => ({
   type: 'output_ready',
   label,
   monitorName: null,
-  mode: 'sos-equirect',
+  mode,
 })
 
 describe('spawn sequence', () => {
@@ -317,6 +348,16 @@ describe('spawn sequence', () => {
       'setFullscreen:output-1:true',
       'show:output-1',
     ])
+  })
+
+  it('spawns a projector-warp output with its mode on the URL, the one thing it can read before IPC', async () => {
+    const fake = createFakeHost()
+    const manager = makeManager(fake.host)
+
+    await manager.addOutput({ monitorIndex: 0, mode: 'projector-warp' })
+
+    expect(fake.calls[0]).toBe(`create:output-1:${OUTPUT_ENTRY_URL}?mode=projector-warp`)
+    expect(manager.outputs()[0].mode).toBe('projector-warp')
   })
 
   it('passes a signed origin through unchanged', async () => {
@@ -531,6 +572,47 @@ describe('broadcast', () => {
     })
   })
 
+  it('projects the snapshot into a projector-warp output\'s own arm', async () => {
+    const fake = createFakeHost()
+    const manager = makeManager(fake.host)
+    await manager.start()
+    await manager.addOutput({ monitorIndex: 0, mode: 'projector-warp' })
+
+    fake.send(ready('output-1', 'projector-warp'))
+
+    const states = stateEmits(fake.emitted)
+    expect((states[0].payload.state as { view: { mode: string } }).view.mode).toBe('projector-warp')
+  })
+
+  it('closes a window that announces the wrong geometry, sends it nothing, and keeps its configuration', async () => {
+    // A projector-warp output driven as sos-equirect would put an
+    // unwarped globe across projectors calibrated for a warp. Not
+    // serving it is not enough, since an undriven output draws its own
+    // idle Earth, so it is closed. The configuration is not what is
+    // wrong, so it stays, and nothing in the telemetry schema is true of
+    // a build disagreeing with itself.
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const fake = createFakeHost()
+    const store = memoryStore()
+    const manager = makeManager(fake.host, { store })
+    await manager.start()
+    await manager.addOutput({ monitorIndex: 0, mode: 'projector-warp' })
+    const seen = vi.fn()
+    manager.onOutputsChanged(seen)
+    vi.mocked(emit).mockClear()
+
+    fake.send(ready('output-1'))
+    await until(() => seen.mock.calls.length > 0, 'the panel told')
+
+    expect(fake.closed).toEqual(['output-1'])
+    expect(fake.emitted).toEqual([])
+    expect(manager.outputs()).toEqual([])
+    expect(store.current().outputs.map(o => [o.label, o.mode])).toEqual([['output-1', 'projector-warp']])
+    expect(reported('output_removed')).toEqual([])
+    expect(errors.mock.calls.flat().join(' ')).toMatch(/announced 'sos-equirect' but was spawned as 'projector-warp'/)
+    errors.mockRestore()
+  })
+
   it('sends the render config before the first state, not after', async () => {
     // A restored 8K output that got its state first would render at the
     // default and then reallocate — a resolution pop on a projector at
@@ -584,6 +666,8 @@ describe('broadcast', () => {
           framebufferWidth: DEFAULT_FRAMEBUFFER_WIDTH,
           debugOverlay: true,
           calibration: false,
+          warp: null,
+          blendGamma: DEFAULT_BLEND_GAMMA,
         },
       },
     ])
@@ -691,7 +775,7 @@ describe('the heartbeat', () => {
     await manager.addOutput({ monitorIndex: 0, view: { trackCamera: false } })
     fake.send(ready('output-1'))
     await manager.applyState({
-      view: { dayNight: true, camera: { lat: 0, lon: 0, zoom: 1 } },
+      view: { dayNight: true, camera: { lat: 0, lon: 0, zoom: 1, bearing: 0 } },
     })
     fake.emitted.length = 0
 
@@ -723,7 +807,7 @@ describe('the heartbeat', () => {
     fake.emitted.length = 0
 
     await manager.applyState({
-      view: { dayNight: true, camera: { lat: 0, lon: 0, zoom: 1 } },
+      view: { dayNight: true, camera: { lat: 0, lon: 0, zoom: 1, bearing: 0 } },
     })
 
     const byLabel = Object.fromEntries(fake.emitted.map(e => [e.label, e.payload]))
@@ -756,7 +840,7 @@ describe('the heartbeat', () => {
     await manager.addOutput({ monitorIndex: 0, view: { trackCamera: true } })
     fake.send(ready('output-1'))
     await manager.applyState({
-      view: { dayNight: true, camera: { lat: 0, lon: 0, zoom: 1 } },
+      view: { dayNight: true, camera: { lat: 0, lon: 0, zoom: 1, bearing: 0 } },
     })
     fake.emitted.length = 0
 
@@ -775,7 +859,7 @@ describe('the heartbeat', () => {
     await manager.addOutput({ monitorIndex: 0, view: { trackCamera: true } })
     fake.send(ready('output-1'))
     await manager.applyState({
-      view: { dayNight: true, camera: { lat: 0, lon: 0, zoom: 1 } },
+      view: { dayNight: true, camera: { lat: 0, lon: 0, zoom: 1, bearing: 0 } },
     })
     const lastApplied = fake.emitted[fake.emitted.length - 1].payload.seq
 
@@ -906,12 +990,14 @@ describe('a stale link (rung 13, case 3)', () => {
     ])
   })
 
-  it('serves an output whose announcement was missed', async () => {
+  it('serves an output whose announcement was missed, once it says what it is', async () => {
     // A ping proves the window is up and listening, which is what
     // `output_ready` proves. Without this an output that lost its
     // announcement — a manager restart, or the spawn-ordering race —
-    // stays un-served for the life of the window.
-    const fake = createFakeHost()
+    // stays un-served for the life of the window. A ping does not say
+    // what geometry the window is, so the reply is the reattach poke,
+    // and the window's answer is what gets served.
+    const fake = createFakeHost({ answerReattach: ['output-1'] })
     const manager = makeManager(fake.host)
     await manager.start()
     await manager.addOutput({ monitorIndex: 0 })
@@ -920,9 +1006,37 @@ describe('a stale link (rung 13, case 3)', () => {
     fake.emitted.length = 0
 
     fake.send({ type: 'output_health_check', label: 'output-1', silentMs: 5000 })
+    await until(() => stateEmits(fake.emitted).length > 0, 'the serve')
 
     expect(manager.outputs()[0].ready).toBe(true)
-    expect(stateEmits(fake.emitted)).toHaveLength(1)
+    expect(fake.emitted.map(e => e.event)).toEqual([
+      OUTPUT_REATTACH_EVENT,
+      OUTPUT_RENDER_CONFIG_EVENT,
+      OUTPUT_STATE_EVENT,
+    ])
+  })
+
+  it('sends nothing to a window that pings before announcing, until it says what it is', async () => {
+    // The ping is how a mismatched window would otherwise be driven
+    // before its announcement said what geometry it is.
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const fake = createFakeHost({ answerReattach: [] })
+    const manager = makeManager(fake.host)
+    await manager.start()
+    await manager.addOutput({ monitorIndex: 0, mode: 'projector-warp' })
+    fake.emitted.length = 0
+
+    fake.send({ type: 'output_health_check', label: 'output-1', silentMs: 5000 })
+    fake.send({ type: 'output_health_check', label: 'output-1', silentMs: 6000 })
+    await until(() => fake.emitted.length === 2, 'two pokes')
+
+    expect(fake.emitted.map(e => e.event)).toEqual([OUTPUT_REATTACH_EVENT, OUTPUT_REATTACH_EVENT])
+    expect(manager.outputs()[0].ready).toBe(false)
+
+    fake.send(ready('output-1'))
+    await until(() => fake.closed.length === 1, 'the close')
+    expect(fake.emitted.map(e => e.event)).toEqual([OUTPUT_REATTACH_EVENT, OUTPUT_REATTACH_EVENT])
+    errors.mockRestore()
   })
 
   it('badges an output that reported the link stale, and notifies', async () => {
@@ -1282,6 +1396,8 @@ describe('persistence', () => {
         rotationOffsetDeg: 0,
         framebufferWidth: DEFAULT_FRAMEBUFFER_WIDTH,
         debugOverlay: false,
+        warpId: null,
+        blendGamma: DEFAULT_BLEND_GAMMA,
       },
     ])
   })
@@ -1471,6 +1587,8 @@ const persistedOn = (label: string, monitor: OutputMonitor) => ({
   rotationOffsetDeg: 0,
   framebufferWidth: DEFAULT_FRAMEBUFFER_WIDTH,
   debugOverlay: false,
+  warpId: null,
+  blendGamma: DEFAULT_BLEND_GAMMA,
 })
 
 describe('restoreOutputs', () => {
@@ -1978,6 +2096,28 @@ describe('telemetry', () => {
     ])
   })
 
+  it('reports a projector-warp output as native, added or restored', async () => {
+    // Its stored width names a 2:1 frame it does not draw, and its real
+    // spanned size would fingerprint a rig — so neither goes on the wire.
+    const fake = createFakeHost()
+    const manager = makeManager(fake.host)
+    await manager.addOutput({ monitorIndex: 0, mode: 'projector-warp', render: { framebufferWidth: 8192 } })
+
+    const restoring = createFakeHost()
+    const restorer = makeManager(restoring.host, {
+      store: memoryStore({
+        autoRestoreOnLaunch: true,
+        outputs: [{ ...persistedOn('output-1', MONITORS[1]), mode: 'projector-warp' }],
+      }),
+    })
+    await restorer.restoreOutputs()
+
+    expect(reported('output_added')).toEqual([
+      { event_type: 'output_added', mode: 'projector-warp', framebuffer_bucket: 'native', monitor_index: 0 },
+      { event_type: 'output_added', mode: 'projector-warp', framebuffer_bucket: 'native', monitor_index: 1 },
+    ])
+  })
+
   it('reports a restored output too', async () => {
     // The event describes an output existing rather than an operator
     // gesture, and an installation that brings four back every launch
@@ -1998,6 +2138,8 @@ describe('telemetry', () => {
           rotationOffsetDeg: 0,
           framebufferWidth: 4096,
           debugOverlay: false,
+          warpId: null,
+          blendGamma: DEFAULT_BLEND_GAMMA,
         },
       ],
     })
@@ -2196,6 +2338,45 @@ describe('adoptOrphanedOutputs', () => {
     expect(order[2]).toBe(OUTPUT_STATE_EVENT)
   })
 
+  it('adopts a projector-warp survivor that says it is one', async () => {
+    const fake = createFakeHost({ existing: ['output-1'], modes: { 'output-1': 'projector-warp' } })
+    const store = memoryStore({ outputs: [{ ...persistedOn('output-1', MONITORS[0]), mode: 'projector-warp' }] })
+
+    const adopted = await makeManager(fake.host, { store }).adoptOrphanedOutputs()
+
+    expect(adopted.map(r => [r.label, r.mode])).toEqual([['output-1', 'projector-warp']])
+    expect(fake.closed).toEqual([])
+  })
+
+  it('closes a survivor that booted as a different geometry from its entry, and keeps the entry', async () => {
+    // The one reachable way to a mismatch: the record comes from the
+    // stored config and the mode from a window that outlived the page
+    // that wrote it. Driving it would put an unwarped picture on the
+    // projectors; the entry is kept so the next restore spawns it again
+    // from the right URL.
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    // A close slow enough to outlast the reattach wait: the window did
+    // answer, so it must not be reported silent and closed a second time.
+    let release!: () => void
+    const fake = createFakeHost({ existing: ['output-1'], closeGate: new Promise<void>(r => (release = r)) })
+    const store = memoryStore({ outputs: [{ ...persistedOn('output-1', MONITORS[0]), mode: 'projector-warp' }] })
+    vi.mocked(emit).mockClear()
+
+    const manager = makeManager(fake.host, { store })
+    const adopted = await manager.adoptOrphanedOutputs()
+    release()
+    await until(() => fake.closed.length > 0, 'the close')
+
+    expect(adopted).toEqual([])
+    expect(fake.closed).toEqual(['output-1'])
+    expect(manager.outputs()).toEqual([])
+    expect(fake.emitted.filter(e => e.event !== OUTPUT_REATTACH_EVENT)).toEqual([])
+    expect(store.current().outputs.map(o => o.label)).toEqual(['output-1'])
+    expect(reported('output_removed')).toEqual([])
+    expect(reported('output_failure')).toEqual([])
+    errors.mockRestore()
+  })
+
   it('closes a window no persisted entry describes', async () => {
     const fake = createFakeHost({ existing: ['output-7'] })
     const store = memoryStore({ outputs: [] })
@@ -2356,5 +2537,340 @@ describe('adoptOrphanedOutputs', () => {
     // Costs the scan and nothing else — the restore behind it still has
     // to run, so this must not reject.
     await expect(makeManager(fake.host).adoptOrphanedOutputs()).resolves.toEqual([])
+  })
+})
+
+describe('warp sets (rung 16)', () => {
+  /** The smallest mesh the parser accepts: 2×2, 16:9, every node drawn. */
+  const MESH = ['2', '2 2', '-1.777778 1 0.25 0.75 1', '1.777778 1 0.75 0.75 1', '-1.777778 -1 0.25 0.25 1', '1.777778 -1 0.75 0.25 1', ''].join('\n')
+  const OTHER = MESH.replace('0.25 0.75', '0.3 0.75')
+
+  function sources(files: Record<string, string>): readonly WarpSource[] {
+    const read = readWarpSources(Object.entries(files).map(([name, text]) => ({ name, bytes: new TextEncoder().encode(text) })))
+    if (!read.ok) throw new Error(read.refusal.code)
+    return read.sources
+  }
+
+  async function warpOutput(options: { warpStore?: WarpSetStore; store?: ReturnType<typeof memoryStore> } = {}) {
+    const fake = createFakeHost()
+    const storage = memoryWarpStorage()
+    const warpStore = options.warpStore ?? createWarpSetStore(storage)
+    const store = options.store ?? memoryStore()
+    const manager = makeManager(fake.host, { warpStore, store })
+    await manager.start()
+    await manager.addOutput({ monitorIndex: 0, mode: 'projector-warp' })
+    fake.send(ready('output-1', 'projector-warp'))
+    fake.emitted.length = 0
+    return { fake, manager, storage, warpStore, store }
+  }
+
+  it('stores the set, names it in the config, and sends it to the output', async () => {
+    const { fake, manager, storage, store } = await warpOutput()
+
+    const result = await manager.importWarpSet('output-1', sources({ 'P1.data': MESH, 'P2.data': MESH }), 'sos-quadrants')
+
+    if (!result.ok) throw new Error(JSON.stringify(result.refusal))
+    expect(result.meshes).toBe(2)
+    expect([...storage.map.keys()]).toEqual([`sos-multi-output-warp:${result.id}`])
+    expect(store.current().outputs[0].warpId).toBe(result.id)
+    const sent = configEmits(fake.emitted)[0].config
+    expect(sent.warp?.id).toBe(result.id)
+    expect(sent.warp?.meshes.map(m => [m.id, m.viewport])).toEqual([
+      ['P1', { x: 0, y: 0, w: 0.5, h: 0.5 }],
+      ['P2', { x: 0.5, y: 0, w: 0.5, h: 0.5 }],
+    ])
+    // The file names stay behind: the output has no use for them.
+    expect(sent.warp?.meshes[0]).not.toHaveProperty('sourceName')
+    // Nothing picked said what the meshes address.
+    expect(sent.warp?.texture).toBeNull()
+  })
+
+  it("places by a bundle's own layout, and carries what it says the meshes address", async () => {
+    const { fake, manager, warpStore } = await warpOutput()
+    const layout = {
+      framebuffer: { width: 3840, height: 1080 },
+      texture: { surface: 'sphere', rotationOffsetDeg: 37 } as const,
+      projectors: [
+        { id: 'P1', viewport: { x: 0, y: 0, w: 0.5, h: 1 } },
+        { id: 'P2', viewport: { x: 0.5, y: 0, w: 0.5, h: 1 } },
+      ],
+    }
+
+    const result = await manager.importWarpSet('output-1', sources({ 'P1.data': MESH, 'P2.data': MESH }), layout)
+
+    if (!result.ok) throw new Error(JSON.stringify(result.refusal))
+    const sent = configEmits(fake.emitted)[0].config
+    expect(sent.warp?.meshes.map(m => m.viewport)).toEqual(layout.projectors.map(p => p.viewport))
+    expect(sent.warp?.texture).toEqual({ surface: 'sphere', rotationOffsetDeg: 37 })
+    const stored = warpStore.read(result.id)
+    expect(stored.ok && [stored.set.layoutFrom, stored.set.texture]).toEqual(['bundle', layout.texture])
+  })
+
+  /** SOS's P3 quadrant as a bundle's layout states it, rotation stated. */
+  const P3_LAYOUT = {
+    framebuffer: { width: 7680, height: 4320 },
+    texture: { surface: 'sphere', rotationOffsetDeg: 0 } as const,
+    projectors: [{ id: 'P3', viewport: { x: 0, y: 0.5, w: 0.5, h: 0.5 } }],
+  }
+
+  it('tells every output drawing a set what a later import says about its texture', async () => {
+    // The id leaves the texture out, so the same meshes imported without
+    // their layout.json and then with it are one set. Both rows name it,
+    // so both must state the same rotation.
+    const { fake, manager } = await warpOutput()
+    await manager.addOutput({ monitorIndex: 1, mode: 'projector-warp' })
+    fake.send(ready('output-2', 'projector-warp'))
+    const loose = await manager.importWarpSet('output-1', sources({ 'P3.data': MESH }), 'sos-quadrants')
+    fake.emitted.length = 0
+
+    const bundled = await manager.importWarpSet('output-2', sources({ 'P3.data': MESH }), P3_LAYOUT)
+
+    expect(bundled.ok && bundled.id).toBe(loose.ok && loose.id)
+    expect(manager.outputs().map(o => [o.label, o.render.warp?.texture])).toEqual([
+      ['output-1', P3_LAYOUT.texture],
+      ['output-2', P3_LAYOUT.texture],
+    ])
+    expect(configEmits(fake.emitted).map(e => [e.label, e.config.warp?.texture])).toEqual([
+      ['output-1', P3_LAYOUT.texture],
+      ['output-2', P3_LAYOUT.texture],
+    ])
+  })
+
+  it('keeps what a bundle said about a set when the same meshes arrive without it', async () => {
+    const { manager, warpStore } = await warpOutput()
+    const bundled = await manager.importWarpSet('output-1', sources({ 'P3.data': MESH }), P3_LAYOUT)
+    await manager.addOutput({ monitorIndex: 1, mode: 'projector-warp' })
+
+    const loose = await manager.importWarpSet('output-2', sources({ 'P3.data': MESH }), 'sos-quadrants')
+
+    expect(loose.ok && loose.id).toBe(bundled.ok && bundled.id)
+    expect(manager.outputs().map(o => o.render.warp?.texture)).toEqual([P3_LAYOUT.texture, P3_LAYOUT.texture])
+    const stored = warpStore.read(loose.ok ? loose.id : '')
+    expect(stored.ok && [stored.set.layoutFrom, stored.set.texture]).toEqual(['bundle', P3_LAYOUT.texture])
+  })
+
+  it('refuses, changing nothing, for an output that is not a warp output or does not exist', async () => {
+    const fake = createFakeHost()
+    const store = memoryStore()
+    const manager = makeManager(fake.host, { store })
+    await manager.addOutput({ monitorIndex: 0 })
+
+    const set = sources({ 'P1.data': MESH })
+    expect(await manager.importWarpSet('output-1', set, 'sos-quadrants')).toEqual({
+      ok: false,
+      refusal: { code: 'not-a-warp-output' },
+    })
+    expect(await manager.importWarpSet('output-9', set, 'sos-quadrants')).toEqual({
+      ok: false,
+      refusal: { code: 'no-output' },
+    })
+    expect(store.current().outputs[0].warpId).toBeNull()
+  })
+
+  it('passes a layout refusal through, and keeps the set the output had', async () => {
+    const { manager, store } = await warpOutput()
+    const first = await manager.importWarpSet('output-1', sources({ 'P1.data': MESH }), 'sos-quadrants')
+
+    const second = await manager.importWarpSet('output-1', sources({ 'Projector 1.data': MESH }), 'sos-quadrants')
+
+    expect(second).toEqual({ ok: false, refusal: { code: 'layout', reason: 'unplaceable', ids: ['Projector 1'] } })
+    expect(store.current().outputs[0].warpId).toBe(first.ok && first.id)
+  })
+
+  it('refuses a set storage will not take, whole, and keeps the one the output had', async () => {
+    const storage = memoryWarpStorage()
+    let full = false
+    const warpStore = createWarpSetStore({
+      ...storage,
+      get length() {
+        return storage.length
+      },
+      setItem: (key, value) => {
+        if (full) throw Object.assign(new Error('full'), { name: 'QuotaExceededError' })
+        storage.setItem(key, value)
+      },
+    })
+    const { fake, manager, store } = await warpOutput({ warpStore })
+    const first = await manager.importWarpSet('output-1', sources({ 'P1.data': MESH }), 'sos-quadrants')
+    fake.emitted.length = 0
+    full = true
+
+    const second = await manager.importWarpSet('output-1', sources({ 'P1.data': OTHER }), 'sos-quadrants')
+
+    expect(second).toEqual({ ok: false, refusal: { code: 'storage', reason: 'no-room' } })
+    expect(store.current().outputs[0].warpId).toBe(first.ok && first.id)
+    expect(configEmits(fake.emitted)).toEqual([])
+  })
+
+  it('deletes the set it replaces, unless another output still names it', async () => {
+    const { fake, manager, warpStore } = await warpOutput()
+    await manager.addOutput({ monitorIndex: 1, mode: 'projector-warp' })
+    fake.send(ready('output-2', 'projector-warp'))
+    const shared = sources({ 'P1.data': MESH })
+    const a = await manager.importWarpSet('output-1', shared, 'sos-quadrants')
+    await manager.importWarpSet('output-2', shared, 'sos-quadrants')
+
+    // output-2 still names it, so replacing output-1's keeps it.
+    const b = await manager.importWarpSet('output-1', sources({ 'P1.data': OTHER }), 'sos-quadrants')
+    expect(warpStore.list().sort()).toEqual([a.ok && a.id, b.ok && b.id].sort())
+
+    // Now nothing does.
+    await manager.clearOutputWarp('output-2')
+    expect(warpStore.list()).toEqual([b.ok && b.id])
+  })
+
+  it('clears to nothing: no reference, no stored set, and the output told', async () => {
+    const { fake, manager, warpStore, store } = await warpOutput()
+    await manager.importWarpSet('output-1', sources({ 'P1.data': MESH }), 'sos-quadrants')
+    fake.emitted.length = 0
+
+    await manager.clearOutputWarp('output-1')
+
+    expect(store.current().outputs[0].warpId).toBeNull()
+    expect(warpStore.list()).toEqual([])
+    expect(configEmits(fake.emitted)[0].config.warp).toBeNull()
+  })
+
+  it('lets a set go with a deliberate removal, and keeps it through a crash', async () => {
+    const removed = await warpOutput()
+    await removed.manager.importWarpSet('output-1', sources({ 'P1.data': MESH }), 'sos-quadrants')
+    await removed.manager.removeOutput('output-1')
+    expect(removed.warpStore.list()).toEqual([])
+
+    // A crash is the display taking the output away, not the operator
+    // letting go of it: the calibration stays for the next launch.
+    const crashed = await warpOutput()
+    await crashed.manager.importWarpSet('output-1', sources({ 'P1.data': MESH }), 'sos-quadrants')
+    await crashed.fake.destroy('output-1')
+    expect(crashed.manager.outputs()).toEqual([])
+    expect(crashed.warpStore.list()).toHaveLength(1)
+  })
+
+  it('restores an output with its set loaded, re-read through the same check', async () => {
+    const storage = memoryWarpStorage()
+    const warpStore = createWarpSetStore(storage)
+    const set = sources({ 'P3.data': MESH })
+    const id = warpSetId([{ id: 'P3', viewport: { x: 0, y: 0.5, w: 0.5, h: 0.5 }, text: MESH }])
+    warpStore.write(id, { layoutFrom: 'sos-quadrants', texture: null, meshes: [{ id: 'P3', viewport: { x: 0, y: 0.5, w: 0.5, h: 0.5 }, text: set[0].text, sourceName: 'P3.data' }] }, 'x')
+    const fake = createFakeHost()
+    const manager = makeManager(fake.host, {
+      warpStore,
+      store: memoryStore({
+        autoRestoreOnLaunch: true,
+        outputs: [{ ...persistedOn('output-1', MONITORS[0]), mode: 'projector-warp', warpId: id }],
+      }),
+    })
+
+    await manager.restoreOutputs()
+    fake.send(ready('output-1', 'projector-warp'))
+
+    const sent = configEmits(fake.emitted)[0].config
+    expect(sent.warp?.id).toBe(id)
+    expect(sent.warp?.meshes[0].viewport).toEqual({ x: 0, y: 0.5, w: 0.5, h: 0.5 })
+    expect(sent.warp?.texture).toBeNull()
+  })
+
+  it('restores what a stored set says its meshes address, so the panel can say it again', async () => {
+    const warpStore = createWarpSetStore(memoryWarpStorage())
+    const viewport = { x: 0, y: 0, w: 1, h: 1 }
+    const id = warpSetId([{ id: 'P1', viewport, text: MESH }])
+    const texture = { surface: 'mesh', rotationOffsetDeg: null } as const
+    warpStore.write(id, { layoutFrom: 'bundle', texture, meshes: [{ id: 'P1', viewport, text: MESH, sourceName: 'P1.data' }] }, 'x')
+    const fake = createFakeHost()
+    const manager = makeManager(fake.host, {
+      warpStore,
+      store: memoryStore({
+        autoRestoreOnLaunch: true,
+        outputs: [{ ...persistedOn('output-1', MONITORS[0]), mode: 'projector-warp', warpId: id }],
+      }),
+    })
+
+    const [restored] = await manager.restoreOutputs()
+
+    expect(restored.render.warp?.texture).toEqual(texture)
+  })
+
+  it('restores an output whose set cannot be read as drawing nothing — and keeps the reference', async () => {
+    // A set a later build refuses is still the operator's calibration.
+    // Dropping the reference would let the next save stop naming it, and
+    // a deliberate removal would then delete it.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const missing = 'feedfacecafebeef'
+    const fake = createFakeHost()
+    const store = memoryStore({
+      autoRestoreOnLaunch: true,
+      outputs: [{ ...persistedOn('output-1', MONITORS[0]), mode: 'projector-warp', warpId: missing }],
+    })
+    const manager = makeManager(fake.host, { store })
+
+    await manager.restoreOutputs()
+    fake.send(ready('output-1', 'projector-warp'))
+
+    expect(configEmits(fake.emitted)[0].config.warp).toBeNull()
+    expect(store.current().outputs[0].warpId).toBe(missing)
+    warn.mockRestore()
+  })
+
+  it('costs a damaged set the one output using it, and restores its neighbour untouched', async () => {
+    // Appendix B's W9(b) with no sphere: one key per set is what makes
+    // this true, since no restore ever reads two sets in one parse.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const storage = memoryWarpStorage()
+    const warpStore = createWarpSetStore(storage)
+    const P3 = { x: 0, y: 0.5, w: 0.5, h: 0.5 }
+    const good = warpSetId([{ id: 'P3', viewport: P3, text: MESH }])
+    const damaged = warpSetId([{ id: 'P3', viewport: P3, text: OTHER }])
+    warpStore.write(good, { layoutFrom: 'sos-quadrants', texture: null, meshes: [{ id: 'P3', viewport: P3, text: MESH, sourceName: 'P3.data' }] }, 'x')
+    warpStore.write(damaged, { layoutFrom: 'sos-quadrants', texture: null, meshes: [{ id: 'P3', viewport: P3, text: OTHER, sourceName: 'P3.data' }] }, 'x')
+    // One byte changed after the write, the way a hand edit or a bad
+    // sector would: still JSON, still a plausible mesh, a different set.
+    const key = `${WARP_SET_KEY_PREFIX}${damaged}`
+    storage.map.set(key, storage.map.get(key)!.replace('0.3 0.75', '0.4 0.75'))
+    const fake = createFakeHost()
+    const store = memoryStore({
+      autoRestoreOnLaunch: true,
+      outputs: [
+        { ...persistedOn('output-1', MONITORS[0]), mode: 'projector-warp', warpId: damaged },
+        { ...persistedOn('output-2', MONITORS[1]), mode: 'projector-warp', warpId: good },
+      ],
+    })
+    const manager = makeManager(fake.host, { warpStore, store })
+
+    await manager.restoreOutputs()
+    fake.send(ready('output-1', 'projector-warp'))
+    fake.send(ready('output-2', 'projector-warp'))
+
+    const sent = new Map(configEmits(fake.emitted).map(e => [e.label, e.config]))
+    expect(sent.get('output-1')?.warp).toBeNull()
+    expect(sent.get('output-2')?.warp?.id).toBe(good)
+    // Both still configured, both still naming their sets: the damaged
+    // one is the operator's to re-import, never the restore's to forget.
+    expect(store.current().outputs.map(o => [o.label, o.warpId])).toEqual([
+      ['output-1', damaged],
+      ['output-2', good],
+    ])
+    expect(warn.mock.calls.some(call => String(call[0]).includes('altered'))).toBe(true)
+    warn.mockRestore()
+  })
+
+  it('refuses an oversized pick by its size, without reading a byte of it', async () => {
+    const { manager } = await warpOutput()
+    const arrayBuffer = vi.fn(async () => new ArrayBuffer(0))
+
+    const read = await manager.readWarpFiles([{ name: 'huge.zip', size: 64 * 1024 * 1024, arrayBuffer }])
+
+    expect(read).toMatchObject({ ok: false, refusal: { code: 'too-large' } })
+    expect(arrayBuffer).not.toHaveBeenCalled()
+  })
+
+  it('reads picked files into sources', async () => {
+    const { manager } = await warpOutput()
+    const bytes = new TextEncoder().encode(MESH)
+
+    const read = await manager.readWarpFiles([
+      { name: 'P2.data', size: bytes.length, arrayBuffer: async () => bytes.slice().buffer },
+    ])
+
+    expect(read.ok && read.sources.map(s => s.id)).toEqual(['P2'])
   })
 })

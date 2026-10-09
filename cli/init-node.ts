@@ -20,13 +20,19 @@
  * Usage:
  *   terraviz init-node --display-name="Terraviz — My Org" \
  *     --base-url=https://terraviz.my-org.org \
- *     [--contact=ops@my-org.org] [--description="..."] \
+ *     [--contact=ops@my-org.org | --clear-contact] \
+ *     [--description="..." | --clear-description] \
  *     [--public-key=ed25519:... | --public-key-file=node-public-key.txt]
  *
  * The public key defaults to `node-public-key.txt` (written by
  * `npm run gen:node-key`) when present. It is required the first time
  * a node is provisioned; on a later update it can be omitted to keep
  * the existing key.
+ *
+ * Description is intended public metadata for the future STAC
+ * Catalog, not private authoring context. Until that route ships,
+ * it remains on the authenticated publisher API only. Omitted
+ * description/contact fields are preserved; clearing requires an explicit flag.
  */
 
 import { readFileSync } from 'node:fs'
@@ -68,10 +74,27 @@ export async function runInitNode(ctx: CommandContext): Promise<number> {
   if (!displayName || !baseUrl) {
     ctx.stderr.write(
       'Usage: terraviz init-node --display-name=<name> --base-url=<url> ' +
-        '[--contact=<email>] [--description=<text>] ' +
+        '[--contact=<email> | --clear-contact] [--description=<text> | --clear-description] ' +
         '[--public-key=<ed25519:...> | --public-key-file=<path>]\n',
     )
     return 2
+  }
+
+  for (const field of ['description', 'contact'] as const) {
+    const supplied = ctx.args.options[field]
+    const clear = ctx.args.options[`clear-${field}`]
+    if (supplied !== undefined && typeof supplied !== 'string') {
+      ctx.stderr.write(`--${field} requires a text value; use --clear-${field} to clear it.\n`)
+      return 2
+    }
+    if (clear !== undefined && clear !== true) {
+      ctx.stderr.write(`--clear-${field} is a boolean flag without a value.\n`)
+      return 2
+    }
+    if (clear === true && supplied !== undefined) {
+      ctx.stderr.write(`Use either --${field} or --clear-${field}, not both.\n`)
+      return 2
+    }
   }
 
   // Resolve the public key: explicit flag wins; otherwise read the
@@ -101,11 +124,24 @@ export async function runInitNode(ctx: CommandContext): Promise<number> {
     }
   }
 
+  // Keep notices off stdout so --json remains machine-readable, and
+  // never echo potentially internal legacy prose into the warning.
+  ctx.stderr.write(
+    'Notice: node descriptions are intended public metadata for the future STAC Catalog. ' +
+      'Do not include secrets or internal prose; this release does not publish the field. ' +
+      'Review existing values before upgrading to a release that exposes STAC.\n',
+  )
+  if (description === undefined) {
+    ctx.stderr.write(ctx.args.options['clear-description'] === true
+      ? 'Notice: explicitly clearing the stored node description.\n'
+      : 'Notice: omitted description/contact fields are preserved; use --clear-description or --clear-contact to clear them.\n')
+  }
+
   const result = await ctx.client.setNodeIdentity<IdentityEnvelope>({
     display_name: displayName,
     base_url: baseUrl,
-    description: description ?? null,
-    contact_email: contact ?? null,
+    description: ctx.args.options['clear-description'] === true ? null : description,
+    contact_email: ctx.args.options['clear-contact'] === true ? null : contact,
     public_key: publicKey,
   })
 

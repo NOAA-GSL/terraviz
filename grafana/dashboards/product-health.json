@@ -1271,7 +1271,7 @@
       "id": 23,
       "type": "timeseries",
       "title": "Multi-monitor outputs — windows opened per day by framebuffer bucket",
-      "description": "Rung 13: output_added, one per output window that came up — an operator's Add and a launch-time restore alike, since both go through the manager's single spawn(). Desktop only, and expected to be near-zero except on the handful of installations driving a Science On a Sphere display, a dome, or a projector array; a step change on one of those is worth asking about. blob5 is the framebuffer bucket (1k/2k/4k/8k) rather than a pixel count, snapped DOWN to the rung the window actually renders — a 4k bar never hides an 8k window. AE positional layout: blob1=event_type, blob5=framebuffer_bucket, blob6=mode, double2=monitor_index (framebuffer_bucket < mode < monitor_index alphabetically).",
+      "description": "Rung 13: output_added, one per output window that came up — an operator's Add and a launch-time restore alike, since both go through the manager's single spawn(). Desktop only, and expected to be near-zero except on the handful of installations driving a Science On a Sphere display, a dome, or a projector array; a step change on one of those is worth asking about. blob5 is the framebuffer bucket (1k/2k/4k/8k) rather than a pixel count, snapped DOWN to the rung the window actually renders, or native for a projector-warp output, which draws projector rasters rather than an equirect frame, so no rung describes it — a 4k bar never hides an 8k window. AE positional layout: blob1=event_type, blob5=framebuffer_bucket, blob6=mode, double2=monitor_index (framebuffer_bucket < mode < monitor_index alphabetically).",
       "gridPos": {
         "x": 0,
         "y": 66,

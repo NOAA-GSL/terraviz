@@ -311,7 +311,10 @@ export async function generateGlobeThumbnail(
     // the same tick — but we await it so a future async source path
     // (or a stubbed deferred handle) stays correct.
     await new Promise<void>(resolve => {
-      earth.setTexture({ kind: 'image', element: source, options: options.overlay }, resolve)
+      // Wrapped, not passed bare: `onReady` receives a readiness
+      // outcome that `resolve` must not adopt as its value. An image
+      // never reports `ok: false`, so the outcome itself is moot here.
+      earth.setTexture({ kind: 'image', element: source, options: options.overlay }, () => resolve())
     })
 
     // A regional Earth dataset shows a base Earth outside its bbox,

@@ -143,8 +143,18 @@ export function panelMirrorState(
  * make visible. Falling back to the last good value is not possible
  * here (this is pure), so it falls back to the centred default, which
  * is a picture rather than an absence.
+ *
+ * The bearing is folded into (−180, 180] by the longitude's own rule,
+ * for the same reason: MapLibre normalises it, but a value that
+ * reached here unnormalised would be a different number for the same
+ * way up, re-broadcast for nothing.
  */
-export function operatorCameraFrom(lat: number, lon: number, zoom: number): OperatorCamera {
+export function operatorCameraFrom(
+  lat: number,
+  lon: number,
+  zoom: number,
+  bearing: number,
+): OperatorCamera {
   return {
     lat: Number.isFinite(lat) ? Math.max(-90, Math.min(90, lat)) : 0,
     lon: Number.isFinite(lon) ? wrapLongitude(lon) : 0,
@@ -152,6 +162,7 @@ export function operatorCameraFrom(lat: number, lon: number, zoom: number): Oper
     // `cameraOffsetForCamera`, whose `1 − 1/(z+1)` goes negative below
     // zero and inverts the warp. Floored at the whole-globe view.
     zoom: Number.isFinite(zoom) ? Math.max(0, zoom) : 0,
+    bearing: Number.isFinite(bearing) ? wrapLongitude(bearing) : 0,
   }
 }
 

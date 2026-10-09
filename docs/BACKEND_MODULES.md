@@ -17,6 +17,31 @@ design rationale in the `docs/CATALOG_*` plan docs.
 
 ## Publisher CLI (`cli/`)
 
+Phase 1 internal projection modules (no public routes):
+
+| File | Responsibility |
+|---|---|
+| `functions/api/v1/_lib/stac-types.ts` | Narrow STAC core 1.1 Catalog/Collection/Item contracts, explicit null geometry and complete temporal intervals; no API conformance claim |
+| `functions/api/v1/_lib/stac-read-model.ts` | Internal canonical STAC input: public rows, batched decorations/media/renditions, separate identity context, optional supplied reviewed policy fixtures; never reads private profile drafts |
+| `functions/api/v1/_lib/stac-builders.ts` | Pure STAC Catalog/Collection/Item builders, readiness gates, antimeridian geometry, verified asset resolver contract, attribution, licenses, extension declarations and deterministic ETag input |
+| `functions/api/v1/_lib/stac-policy.ts` | First internal policy consumer: current reviewed profile selection, Markdown-to-text summary, custom-field scope/owner/aggregate gates with local schema validation, and vocabulary reference validation |
+| `functions/api/v1/_lib/stac-schema.ts` | Offline draft-07 schema validator: SHA-256 verified bytes, bounded local references, cycle/unresolved-reference rejection and no network resolver |
+| `functions/api/v1/_lib/stac-test-helpers.ts` | Shared canonical SQLite fixture for projection and schema tests; never imported by production modules |
+
+Phase 2 opt-in public projection:
+
+| File | Responsibility |
+|---|---|
+| `functions/api/v1/_lib/stac-publication.ts` | Public STAC adapters, fresh D1-dependent content-addressed KV snapshots and internal exclusion reasons; richer profile fields remain disabled |
+| `functions/api/v1/_lib/stac-publication-store.ts` | Primary-backed transactional STAC snapshot; dataset-scoped capture mode reads one row with decorations and no history |
+| `functions/api/v1/_lib/stac-assets.ts` | Bounded anonymous HEAD verification on trusted origins; persisted capture-time frame evidence is rechecked against current origin policy and excluded from the public request probe budget |
+| `functions/api/v1/_lib/stac-history.ts` | Opt-in, failure-isolated capture; immutable scientific frame identities, conditional atomic snapshot writes, live access/rights overlays, and Collection extent aggregation |
+| `functions/api/v1/_lib/stac-http.ts` | Core-resource routing, bounded cursor pagination, media types, revalidated ETags and non-cacheable errors; no STAC API conformance claim |
+| `functions/api/v1/stac/[[path]].ts` | Opt-in public STAC route boundary; unavailable inputs fail closed |
+| `functions/api/v1/publish/stac-report.ts` | Authenticated admin/service-only, no-store STAC inclusion/exclusion report over all rows; no private URLs, titles or cached operator data |
+| `functions/api/v1/publish/stac-lineage.ts` | Admin/service-only paginated lineage inventory and immutable, reviewed source-evidence backfill per saved publication; bounded requests, idempotent writes, Processing remains disabled |
+| `functions/schema/stac/terraviz/v1.0.0/schema.json.ts` | Immutable public Terraviz extension schema, sourced directly from the reviewed local schema |
+
 | File | Responsibility |
 |---|---|
 | `cli/commands.ts` | Command implementations for the `terraviz` CLI |
@@ -34,12 +59,14 @@ design rationale in the `docs/CATALOG_*` plan docs.
 | `cli/lib/hls-incremental.ts` | Pure core of incremental HLS re-encoding — absolute-grid chunking, content-addressed segment hashing, reuse-vs-encode diff, playlist assembly (`docs/INCREMENTAL_HLS_PLAN.md`) |
 | `cli/lib/hls-incremental-runner.ts` | Incremental transcode orchestration over an injectable I/O seam — load manifest → diff → encode changed chunks → recycle the rest → publish playlists → persist manifest → mark-and-sweep segment GC (`docs/INCREMENTAL_HLS_PLAN.md` Stages 2-3) |
 | `cli/lib/migration-telemetry.ts` | Operator-side telemetry emitter for the migration CLIs |
+| `cli/lib/metadata-audit.ts` | Pure Phase 0 census over canonical snake_case rows or crosswalk-mapped SOS snapshots; candidate decisions, reason counts, and explicit local-input limitations ([implementation](metadata/PHASE0_IMPLEMENTATION.md)) |
 | `cli/lib/frames-publish.ts` | Publish a runner's padded frame directory as an image-sequence asset (hash → init → PUT frames + `source_filenames.json` → complete) so the Zyra recall path reuses the existing `/frames` surface (`docs/ZYRA_INTEGRATION_PLAN.md` §Real-time frame store). HEAD-skips frames already in the content-addressed store when an `exists` gate is supplied (`docs/INCREMENTAL_FRAME_UPLOAD_PLAN.md`) |
 | `cli/lib/frame-store.ts` | Runner-side content-addressed frame store helpers — `videos/{dataset}/frames/sha256/{hex}.{ext}` key/prefix builders + the pure mark-and-sweep orphan selection; shared by the transcode read path, the publish HEAD-skip, and the frame GC (`docs/INCREMENTAL_FRAME_UPLOAD_PLAN.md`) |
 | `cli/lib/r2-frames.ts` | R2-backed frame cache for real-time Zyra workflow runs — restore/save a dataset's frames under `workflow-frames/{dataset_id}/` with window-only prune (`docs/ZYRA_INTEGRATION_PLAN.md` §Real-time frame store) |
 | `cli/lib/r2-upload.ts` | R2 S3-API bulk uploader for HLS bundles |
 | `cli/lib/realtime-title.ts` | Heuristic to detect "real-time" SOS rows by title — the rows whose Vimeo source is re-uploaded on a recurring (typically daily) cadence by NOAA's automation |
-| `cli/lib/snapshot-import.ts` | Pure row-mapping helpers for the SOS catalog snapshot importer |
+| `cli/lib/snapshot-import.ts` | Pure SOS snapshot-to-draft mapper; explicit stable-ID crosswalk, all duplicate operational rows withheld, conservative imported bounds and unknown represented-time/resource assertions |
+| `cli/lib/snapshot-crosswalk.ts` | Stable operational-ID → exact enrichment-source-URL resolution with collision checks; separate offline title-bootstrap candidate generator, never a runtime import fallback |
 | `cli/lib/sos-spec.ts` | ffprobe wrapper + SOS-spec assertion (4096×2048 2:1, 30 fps, h264) shared by the Z0 spike and the Z1 runner |
 | `cli/lib/srt-to-vtt.ts` | SRT → WebVTT converter |
 | `cli/lib/tour-json-parser.ts` | SOS tour.json parser — discovers every URL-bearing field in a tour file and classifies it for migration |
@@ -48,6 +75,7 @@ design rationale in the `docs/CATALOG_*` plan docs.
 | `cli/lib/workflow-sidecar.ts` | Metadata-sidecar rendering for the Zyra runner — template interpolation, frames-meta range reader, error-summary sanitizer |
 | `cli/lib/zyra-acquire-softpass.ts` | Pure soft-pass decision for a transient NOAA-FTP `acquire` failure in a scheduled Zyra run — classify the `zyra run` log (FTP/network transient vs real failure), assess published-bundle freshness, and decide soft-pass (no-op `succeeded`, GREEN) vs escalate (fail loudly). Consumed by `zyra-publish-from-dispatch.ts --phase=acquire-softpass` |
 | `cli/list-realtime-r2.ts` | `terraviz list-realtime-r2` — find migrated rows whose Vimeo source is on a daily re-upload cadence, and recover the original Vimeo id so they can be rolled back |
+| `cli/metadata-audit.ts` | `terraviz metadata-audit` — offline local-JSON audit, dispatched before config/client setup; canonical export or `--snapshot`, JSON output and strict/invalid-input exit codes, no credentials or network |
 | `cli/migrate-r2-assets.ts` | `terraviz migrate-r2-assets` — migrate auxiliary asset URLs (thumbnail / legend / caption / color-table) from NOAA-hosted CloudFront URLs to R2-hosted URLs under … |
 | `cli/migrate-r2-hls.ts` | `terraviz migrate-r2-hls` — migrate legacy `vimeo:<id>` data_refs to R2-hosted HLS bundles for 4K spherical streaming |
 | `cli/migrate-r2-tours.ts` | `terraviz migrate-r2-tours` — migrate SOS tour.json files (and their sibling assets: overlay images, narrated audio, 360-pano JPGs) from NOAA-hosted CloudFront URLs to R2-hosted … |
@@ -221,6 +249,8 @@ design rationale in the `docs/CATALOG_*` plan docs.
 | `functions/api/v1/_lib/iso-duration.ts` | Minimal ISO 8601 duration parser scoped to the shapes the catalog's `period` column carries |
 | `functions/api/v1/_lib/job-queue.ts` | Asynchronous job queue interface — Phase 1b |
 | `functions/api/v1/_lib/loopback.ts` | Loopback hostname check — shared by the publish middleware's `DEV_BYPASS_ACCESS=true` gate and the asset-complete handler's `MOCK_R2=true` gate |
+| `functions/api/v1/_lib/metadata-readiness.ts` | Pure Phase 0 spatial/represented-time/license/identity readiness and exclusion decisions; strict parsed SPDX separate from native publishing, no STAC builder or publication authorization ([implementation](metadata/PHASE0_IMPLEMENTATION.md)) |
+| `functions/api/v1/_lib/metadata-policy.ts` | Pure Phase 0 operator-capability, extension-registration/field-decision, and plain-JSON vocabulary contracts; no storage, schema fetching/validation, or public exposure; chosen defaults await maintainer merge approval ([policy](metadata/NODE_METADATA_POLICY.md)) |
 | `functions/api/v1/_lib/preview-token.ts` | Short-lived signed preview tokens for unpublished datasets and tours |
 | `functions/api/v1/_lib/publisher-mutations.ts` | Admin user-administration store helper — list / get / update publishers, self-lockout + last-admin guardrails |
 | `functions/api/v1/_lib/publisher-store.ts` | D1 reader / writer for the `publishers` table |
