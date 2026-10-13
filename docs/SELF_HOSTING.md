@@ -2427,16 +2427,17 @@ Two fixes, and you want the first:
    That is the staging-node case: nobody outside the org should reach
    it, and anonymous visitors get nothing either way.
 
-Do not reach for `credentials: 'include'` inside `sw.js`. On a
-same-origin request it changes nothing: `same-origin` already sends
-the `CF_Authorization` cookie, and that is what fix 2 sets at each
-call site. The only requests it changes are the worker's cross-origin
-ones, and there it can only break them, because GIBS answers with
-`Access-Control-Allow-Origin: *` and a browser rejects that outright
-on a credentialed request. The app fetches its tiles through
-`/api/tile/` today, so nothing breaks at once; the next cross-origin
-rule added to the worker is what breaks, far from the change that
-caused it.
+Do not reach for `credentials: 'include'` inside `sw.js`:
+
+- On a same-origin request it changes nothing. `same-origin` already
+  sends the `CF_Authorization` cookie, and fix 2 sets it at each call
+  site.
+- It changes only the worker's cross-origin requests, and there it can
+  only break them. GIBS answers with `Access-Control-Allow-Origin: *`,
+  which a browser rejects outright on a credentialed request.
+- Nothing breaks at once, because the app fetches its tiles through
+  `/api/tile/` today. The next cross-origin rule added to the worker is
+  what breaks, far from the change that caused it.
 
 ### Publisher portal shows `role: service` for a real user
 A pre-3pa middleware bug — the classifier read `claims.type ===
