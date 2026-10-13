@@ -15,23 +15,27 @@ Browser ──> Service Worker ──> Cloudflare Edge ──> GIBS Origin
 
 **File:** `public/sw.js`
 
-A cache-first service worker intercepts tile requests and serves them from the browser's Cache API. On cache miss, it fetches from the network and stores the response for future use. Cache-first has **no expiry**: once a URL is stored, every later request is answered from the cache until the cache name changes. So the worker may only claim URLs whose bytes never change.
+A cache-first service worker intercepts tile requests and serves them from the browser's Cache API. On cache miss, it fetches from the network and stores the response for future use. Cache-first has **no expiry**: once a URL is stored, every later request is answered from the cache until the cache name changes. So the worker may only claim URLs whose bytes never change. Changing the bytes behind a claimed URL needs a release that also bumps the cache name.
 
 **What it caches:**
 - `/api/tile/*` — proxied GIBS tile requests (same-origin)
-- `gibs.earthdata.nasa.gov/wmts/epsg3857/best/*` — direct GIBS requests (if any; the app currently goes through `/api/tile/`)
+- `gibs.earthdata.nasa.gov/wmts/epsg3857/best/{BlueMarble_NextGeneration,VIIRS_Black_Marble}/*` — direct GIBS requests for the two fixed basemap layers, the same two the tile proxy allows (if any; the app currently goes through `/api/tile/`). Through `gibs-tiles-v4` this rule covered every GIBS layer, which would have frozen the daily ones; nothing fetched them, so it never fired
 - `/assets/skybox/*`, `/assets/Earth_Specular_2K.jpg`
 
-**What it deliberately does not cache:** the `metadata.sosexplorer.gov` bucket on S3. Every object the app fetches there changes:
+**What it deliberately does not cache:** `s3.dualstack.us-east-1.amazonaws.com/metadata.sosexplorer.gov/`. Everything the app fetches through that path changes:
 
 | Object | Changes |
 |---|---|
 | `clouds_8192.jpg` / `clouds_4096.jpg` (the cloud texture, via `getCloudTextureUrl()`) | Live feed, rewritten about every 10 minutes |
-| `dataset.json` (the SOS catalog, legacy catalog source only) | On every upstream publish. `dataService.ts` expires it on its own TTL |
+| `dataset.json` (the SOS catalog, legacy catalog source only) | On every upstream publish |
 
-Up to `gibs-tiles-v4` the worker claimed that bucket, so a returning visitor saw the clouds (and, on a legacy-source node, the catalog) from their first visit until they hard-reloaded. These requests now go to the browser's HTTP cache. S3 sends an `ETag` and `Last-Modified` but no `Cache-Control`, so the browser treats a copy as fresh for only a fraction of its age, then revalidates: a `304` when nothing changed, the new bytes when it has. The desktop app never registers the worker, so it was never affected.
+Through `gibs-tiles-v4` the worker claimed that path, so a returning visitor saw the clouds (and, on a legacy-source node, the catalog) from their first visit until the cache name moved. These requests now go to the browser's HTTP cache. S3 sends an `ETag` and `Last-Modified` but no `Cache-Control`, so the browser estimates freshness: about a tenth of the time since `Last-Modified` (RFC 9111 §4.2.2), after which it sends a conditional request that returns `304` or the new bytes. For the clouds that window is well under a minute. For a catalog unchanged for ten days it is about a day, and `dataService.ts`'s in-memory TTL cannot shorten it, so a legacy-source node can still show a catalog up to that stale. The desktop app never registers the worker, so it was never affected.
 
-**Cache name:** `gibs-tiles-v5`. Old versions are deleted on activate. Bump the name whenever cached bytes must be discarded: a rule removed, an asset changed, or a bad response that may already be stored. The changelog is the header comment in `sw.js`.
+Freshness has a cost: whenever the feed has moved on, a load downloads the whole cloud texture again (about 5 MB on desktop, 1 MB on mobile). That is the price of current clouds, not waste to reclaim by moving the texture back into the worker.
+
+The catalog's other assets on a legacy-source node (thumbnails, legends, tour files) come from CloudFront and from `s3.amazonaws.com/metadata.sosexplorer.gov/`, a different hostname. The worker never matched either.
+
+**Cache name:** `gibs-tiles-v5`. On activate the worker deletes every cache on the origin not named `gibs-tiles-v5`, not only its own older versions. Anything else that wants the Cache API on this origin has to change that filter first. Bump the name whenever cached bytes must be discarded: a rule removed, an asset changed, or a bad response that may already be stored. The changelog is the header comment in `sw.js`.
 
 **What gets written:** only a `200` that was not redirected, and only when the request was not `no-store`. That rules out:
 
@@ -42,11 +46,19 @@ Up to `gibs-tiles-v4` the worker claimed that bucket, so a returning visitor saw
 | Opaque (status `0`) | No way to tell a good body from an error page |
 | Any other status, including other `2xx` | Not expected for a static asset, so not trusted |
 
-The worker follows redirects and then declines to store the result. It does not use `redirect: 'manual'`, because that yields an `opaqueredirect`, which `respondWith` refuses for a non-navigation request. The visitor would see a confusing `TypeError` instead of the CORS error that explains the problem.
+The worker follows redirects and then declines to store the result. It does not use `redirect: 'manual'`, because that yields an `opaqueredirect`, which `respondWith` refuses for a non-navigation request. The console would show a confusing `TypeError` instead of the CORS error that explains the problem.
 
-**Hard reload:** a request whose `cache` mode is `reload` (Ctrl+Shift+R / Cmd+Shift+R), `no-cache` (some browsers' normal Reload) or `no-store` skips the cached entry and goes to the network. `reload` and `no-cache` responses are written back, so a hard reload replaces a bad stored copy for later loads; `no-store` responses are not written. This is the visitor's recovery path for a poisoned entry. It does not purge anything the page did not request, so bumping the cache name is still the fix to ship.
+**Hard reload does not repair the cache.** A request whose `cache` mode is `reload`, `no-cache` or `no-store` skips the stored entry, and `reload` / `no-cache` responses are written back. Version 3 added that branch as the visitor's recovery path, but a visitor cannot reach it. Measured in Chromium:
 
-**Credentials:** every network fetch is `fetch(request.clone())`, which keeps the caller's own credentials mode. Do not force `credentials: 'include'` in the worker. GIBS answers with `Access-Control-Allow-Origin: *`, which a browser rejects on a credentialed request. A same-origin caller that needs the Access cookie sets it at the call site (see `tilePreloader.ts`, and `docs/SELF_HOSTING.md` on Access-protected nodes).
+| Visitor action | What the worker sees |
+|---|---|
+| Normal navigation or Reload | The page's images, with cache mode `default`: answered from the stored entry |
+| Ctrl+Shift+R / Cmd+Shift+R | Nothing. The page loads uncontrolled, so that one load gets fresh bytes and the stored entry is untouched |
+| The next normal load | The page's images again, with `default`: the stored entry is served again |
+
+Nothing in the app sets one of those modes on a request either. Other browsers were not measured. Bumping the cache name is the only recovery that reaches every visitor holding a bad entry. Clearing the site's data fixes one browser.
+
+**Credentials:** every network fetch is `fetch(request.clone())`, which keeps the caller's own credentials mode. Do not force `credentials: 'include'` in the worker. It differs from `same-origin` only on cross-origin requests, so it gains nothing: the only requests it changes are the GIBS rule's, and GIBS answers with `Access-Control-Allow-Origin: *`, which a browser rejects on a credentialed request. A same-origin caller that needs the Access cookie sets it at the call site (see `tilePreloader.ts`, and `docs/SELF_HOSTING.md` on Access-protected nodes).
 
 **Registration:** `src/main.ts` registers the SW before `DOMContentLoaded`, on the web only. The Tauri desktop app skips it. The SW uses `skipWaiting()` and `clients.claim()` to activate immediately.
 
@@ -54,7 +66,7 @@ The worker follows redirects and then declines to store the result. It does not 
 
 **Headers:** `public/_headers` sets `Cache-Control: no-cache` on `/sw.js` so the browser always checks for SW updates.
 
-**Tests:** `src/serviceWorker.test.ts` runs `sw.js` against a fake worker global. It checks that tiles are served cache-first, that the cloud texture and SOS catalog are not, and that the previous cache is evicted.
+**Tests:** `src/serviceWorker.test.ts` runs `sw.js` against a fake worker global. It checks that a stored tile is answered without the network, that a missing tile is fetched, that the two GIBS basemap layers are claimed and a daily GIBS layer is not, that the cloud texture and SOS catalog are left to the browser, and that the v4 cache is deleted on activate.
 
 ### 2. Cloudflare Edge Proxy
 

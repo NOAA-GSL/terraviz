@@ -23,13 +23,14 @@ const ORIGIN = 'https://node.example'
 const S3_BUCKET = 'https://s3.dualstack.us-east-1.amazonaws.com/metadata.sosexplorer.gov'
 const TILE_URL =
   `${ORIGIN}/api/tile/BlueMarble_NextGeneration/default/2004-08/GoogleMapsCompatible_Level8/0/0/0.jpg`
+const GIBS_WMTS = 'https://gibs.earthdata.nasa.gov/wmts/epsg3857/best'
 
 type Listener = (event: Record<string, unknown>) => void
 
 function loadWorker(existingCaches: string[] = []) {
   const listeners = new Map<string, Listener>()
   const cache = {
-    match: vi.fn(async () => undefined),
+    match: vi.fn(async (): Promise<Response | undefined> => undefined),
     put: vi.fn(async () => {}),
   }
   const caches = {
@@ -60,24 +61,44 @@ function loadWorker(existingCaches: string[] = []) {
     await Promise.all(pending)
   }
 
-  return { caches, fetchFn, dispatchFetch, dispatchLifecycle }
+  return { cache, caches, fetchFn, dispatchFetch, dispatchLifecycle }
 }
 
 describe('public/sw.js', () => {
-  it('serves a proxied GIBS tile cache-first', async () => {
+  it('fetches and stores a proxied GIBS tile it does not hold', async () => {
     // The positive anchor: without it, a worker that failed to register
     // a fetch listener at all would pass every "not intercepted" case.
-    const { dispatchFetch, fetchFn } = loadWorker()
+    const { cache, dispatchFetch, fetchFn } = loadWorker()
     const respondWith = await dispatchFetch(TILE_URL)
     expect(respondWith).toHaveBeenCalledTimes(1)
     expect(fetchFn).toHaveBeenCalledTimes(1)
+    expect(cache.put).toHaveBeenCalledTimes(1)
+  })
+
+  it('answers a stored tile without the network', async () => {
+    const { cache, dispatchFetch, fetchFn } = loadWorker()
+    const stored = new Response('stored', { status: 200 })
+    cache.match.mockResolvedValueOnce(stored)
+    const respondWith = await dispatchFetch(TILE_URL)
+    expect(await respondWith.mock.calls[0][0]).toBe(stored)
+    expect(fetchFn).not.toHaveBeenCalled()
   })
 
   it.each([
+    ['Blue Marble', `${GIBS_WMTS}/BlueMarble_NextGeneration/default/2004-08/GoogleMapsCompatible_Level8/0/0/0.jpg`],
+    ['Black Marble', `${GIBS_WMTS}/VIIRS_Black_Marble/default/2016-01-01/GoogleMapsCompatible_Level8/0/0/0.png`],
+  ])('intercepts a direct %s tile from GIBS', async (_label, url) => {
+    const { dispatchFetch } = loadWorker()
+    expect(await dispatchFetch(url)).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([
+    // Daily imagery: the same URL shape as the basemaps, different bytes each day.
+    ['a daily GIBS layer', `${GIBS_WMTS}/MODIS_Terra_CorrectedReflectance_TrueColor/default/2026-10-13/GoogleMapsCompatible_Level9/0/0/0.jpg`],
     ['the cloud texture this device loads', getCloudTextureUrl()],
     ['the desktop cloud texture', `${S3_BUCKET}/clouds_8192.jpg`],
     ['the mobile cloud texture', `${S3_BUCKET}/clouds_4096.jpg`],
-    // Expired on its own TTL by dataService.ts; a frozen copy defeats it.
+    // Changes on every upstream publish; a frozen copy defeats dataService's TTL.
     ['the SOS catalog', `${S3_BUCKET}/dataset.json`],
   ])('leaves %s to the browser HTTP cache', async (_label, url) => {
     const { dispatchFetch } = loadWorker()

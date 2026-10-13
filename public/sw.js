@@ -17,24 +17,34 @@
 //      Cloudflare Access can never store a login page under a tile URL.
 //      Bumped for the same reason as v3: it gives an operator debugging
 //      an Access-protected node a floor they can trust.
-// v5 — stopped caching the metadata.sosexplorer.gov bucket on S3. Every
-//      object the app fetches there changes: the cloud texture
-//      (clouds_8192.jpg / clouds_4096.jpg) is a live feed rewritten about
-//      every 10 minutes, and dataset.json is the SOS catalog, which
-//      dataService.ts already expires on its own TTL. Cache-first served a
-//      returning visitor the clouds and catalog from their first visit.
+// v5 — stopped caching s3.dualstack.us-east-1.amazonaws.com
+//      /metadata.sosexplorer.gov/. Everything the app fetches through that
+//      path changes: the cloud texture (clouds_8192.jpg / clouds_4096.jpg)
+//      is a live feed rewritten about every 10 minutes, and dataset.json is
+//      the SOS catalog, which changes on every upstream publish.
+//      Cache-first served a returning visitor the clouds and catalog from
+//      their first visit. Also narrowed the direct-GIBS rule from every
+//      layer to the two the tile proxy allows: daily GIBS layers change.
 //      Bumped so the frozen copies are evicted rather than left as dead
 //      weight in every returning visitor's Cache Storage.
 const CACHE_NAME = 'gibs-tiles-v5'
 
 // External URLs to cache — scoped to specific paths, not entire hostnames.
 //
-// The S3 bucket behind the cloud texture is deliberately absent (see v5).
-// Those requests go to the browser's HTTP cache instead: S3 sends an ETag
-// and Last-Modified with no Cache-Control, so a repeat fetch revalidates
-// and costs a 304 when nothing changed, and the new bytes when it has.
+// The S3 path behind the cloud texture is deliberately absent (see v5).
+// Those requests go to the browser's HTTP cache instead. S3 sends an ETag
+// and Last-Modified with no Cache-Control, so the browser treats a copy as
+// fresh for about a tenth of the time since Last-Modified, then revalidates:
+// a 304 when nothing changed, the new bytes when it has. For the clouds that
+// window is well under a minute.
+//
+// GIBS is scoped to the two fixed basemap layers, the same two the
+// /api/tile/ proxy allows. Most GIBS layers are daily imagery, and a rule
+// for the whole WMTS tree would freeze them. GIBS sends no-store, which
+// this worker does not read.
 const CACHEABLE_EXTERNAL = [
-  { hostname: 'gibs.earthdata.nasa.gov', pathPrefix: '/wmts/epsg3857/best/' },
+  { hostname: 'gibs.earthdata.nasa.gov', pathPrefix: '/wmts/epsg3857/best/BlueMarble_NextGeneration/' },
+  { hostname: 'gibs.earthdata.nasa.gov', pathPrefix: '/wmts/epsg3857/best/VIIRS_Black_Marble/' },
 ]
 
 // Same-origin paths to cache (proxied tiles, skybox, specular map, etc.)
@@ -105,12 +115,17 @@ self.addEventListener('fetch', event => {
         return fetch(request.clone())
       }
 
-      // Honor user-driven cache bypass. Ctrl+Shift+R / Cmd+Shift+R
-      // sets request.cache === 'reload'; a normal Reload may pass
-      // 'no-cache'; some clients use 'no-store'. In all three cases
-      // skip the cached entry and re-populate so later loads get
-      // the fresh copy — that's the recovery path when the cache
-      // holds a poisoned response (a truncated tile, etc.).
+      // Honor a request that asks to bypass caches: skip the stored
+      // entry and, for 'reload' / 'no-cache', write the fresh copy back.
+      //
+      // This is NOT a recovery path a visitor can reach, whatever v3
+      // assumed. Measured in Chromium: a normal Reload sends the page's
+      // subresources here with cache mode 'default', and Ctrl+Shift+R
+      // loads the page uncontrolled, so the worker sees none of its
+      // requests and the stored entry survives to be served on the
+      // next normal load. Nothing in the app sets one of these modes
+      // either. Bumping CACHE_NAME is the only fix that reaches every
+      // visitor holding a bad entry.
       const bypass =
         request.cache === 'reload' ||
         request.cache === 'no-cache' ||
