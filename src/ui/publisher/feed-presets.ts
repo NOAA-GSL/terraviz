@@ -120,7 +120,14 @@ export const FEED_PRESETS: readonly FeedPreset[] = [
     id: 'nasa-earth-observatory',
     kind: 'rss',
     label: 'NASA Earth Observatory', // i18n-exempt: proper name
-    url: 'https://earthobservatory.nasa.gov/feeds/earth-observatory.rss',
+    // Earth Observatory now lives on science.nasa.gov. The old
+    // `earthobservatory.nasa.gov/feeds/earth-observatory.rss` redirects
+    // twice and lands on `?science_org=19791,22453`, which mixes in
+    // Photojournal (Mars rovers, spacecraft art) — noise in an Earth
+    // events queue. 22453 alone is Earth Observatory; the slug forms
+    // (`?science_org=earth-observatory`, `/science-org-term/…/feed/`)
+    // answer 200 with zero items, so the numeric term it is.
+    url: 'https://science.nasa.gov/feed/?science_org=22453',
     category: 'science-news',
     descriptionKey: 'publisher.feeds.preset.nasaEo',
   },
