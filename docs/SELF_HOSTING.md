@@ -2428,10 +2428,12 @@ Two fixes, and you want the first:
    it, and anonymous visitors get nothing either way.
 
 Do not reach for `credentials: 'include'` inside `sw.js`. It would
-apply to the cross-origin rules too, and both of those origins answer
-with `Access-Control-Allow-Origin: *`, which a browser rejects
-outright on a credentialed request. One of them is the SOS catalog,
-so it trades some missing tiles for an empty dataset list.
+apply to the cross-origin GIBS rule too, and GIBS answers with
+`Access-Control-Allow-Origin: *`, which a browser rejects outright on
+a credentialed request. The app fetches its tiles through
+`/api/tile/` today, so nothing breaks at once; the next cross-origin
+rule added to the worker is what breaks, far from the change that
+caused it.
 
 ### Publisher portal shows `role: service` for a real user
 A pre-3pa middleware bug — the classifier read `claims.type ===

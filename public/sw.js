@@ -2,8 +2,11 @@
 // Copyright 2026 The Zyra Project
 
 // Service Worker — cache-first strategy for static GIBS tiles and textures.
-// These assets never change (Blue Marble 2004, Black Marble 2016), so we cache
-// indefinitely and serve from cache on every subsequent request.
+// Everything matched below is fixed imagery (Blue Marble 2004, Black Marble
+// 2016, the skybox, the specular map), so we cache indefinitely and serve
+// from cache on every subsequent request. Cache-first has no expiry: a URL
+// whose bytes change must never be added to the lists below, or each visitor
+// keeps the copy from their first visit until CACHE_NAME moves.
 
 // v2 — dropped Earth_Normal_2K.jpg (dead asset, no longer shipped).
 // v3 — honor user-driven cache bypass (Ctrl+Shift+R) in the fetch handler;
@@ -14,12 +17,24 @@
 //      Cloudflare Access can never store a login page under a tile URL.
 //      Bumped for the same reason as v3: it gives an operator debugging
 //      an Access-protected node a floor they can trust.
-const CACHE_NAME = 'gibs-tiles-v4'
+// v5 — stopped caching the metadata.sosexplorer.gov bucket on S3. Every
+//      object the app fetches there changes: the cloud texture
+//      (clouds_8192.jpg / clouds_4096.jpg) is a live feed rewritten about
+//      every 10 minutes, and dataset.json is the SOS catalog, which
+//      dataService.ts already expires on its own TTL. Cache-first served a
+//      returning visitor the clouds and catalog from their first visit.
+//      Bumped so the frozen copies are evicted rather than left as dead
+//      weight in every returning visitor's Cache Storage.
+const CACHE_NAME = 'gibs-tiles-v5'
 
-// External URLs to cache — scoped to specific paths, not entire hostnames
+// External URLs to cache — scoped to specific paths, not entire hostnames.
+//
+// The S3 bucket behind the cloud texture is deliberately absent (see v5).
+// Those requests go to the browser's HTTP cache instead: S3 sends an ETag
+// and Last-Modified with no Cache-Control, so a repeat fetch revalidates
+// and costs a 304 when nothing changed, and the new bytes when it has.
 const CACHEABLE_EXTERNAL = [
   { hostname: 'gibs.earthdata.nasa.gov', pathPrefix: '/wmts/epsg3857/best/' },
-  { hostname: 's3.dualstack.us-east-1.amazonaws.com', pathPrefix: '/metadata.sosexplorer.gov/' },
 ]
 
 // Same-origin paths to cache (proxied tiles, skybox, specular map, etc.)
@@ -93,10 +108,9 @@ self.addEventListener('fetch', event => {
       // Honor user-driven cache bypass. Ctrl+Shift+R / Cmd+Shift+R
       // sets request.cache === 'reload'; a normal Reload may pass
       // 'no-cache'; some clients use 'no-store'. In all three cases
-      // skip the cached entry and re-populate so the next visitor
-      // benefits from the fresh fetch — that's the recovery path
-      // when the cache holds a poisoned response (truncated cloud
-      // texture, etc.).
+      // skip the cached entry and re-populate so later loads get
+      // the fresh copy — that's the recovery path when the cache
+      // holds a poisoned response (a truncated tile, etc.).
       const bypass =
         request.cache === 'reload' ||
         request.cache === 'no-cache' ||
@@ -114,13 +128,13 @@ self.addEventListener('fetch', event => {
       // The clone carries the caller's own credentials mode, which is
       // the correct behaviour and must stay that way. Forcing
       // `credentials: 'include'` here would apply to the cross-origin
-      // rules above too, and both of those origins answer with
+      // rule above too, and GIBS answers with
       // `Access-Control-Allow-Origin: *` — a wildcard the browser
-      // rejects outright on a credentialed request. The SOS catalog
-      // (dataService.ts) is one of them, so that "fix" would trade
-      // some missing tiles for an empty dataset list. A same-origin
-      // caller that needs the Access cookie asks for it at the call
-      // site instead; see tilePreloader.ts.
+      // rejects outright on a credentialed request — so that "fix"
+      // would fail every direct GIBS fetch, and every cross-origin
+      // rule added after it. A same-origin caller that needs the
+      // Access cookie asks for it at the call site instead; see
+      // tilePreloader.ts.
       const response = await fetch(request.clone())
 
       // Cache only verified-complete, unredirected 200 responses.
