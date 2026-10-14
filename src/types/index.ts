@@ -1944,8 +1944,9 @@ export interface OrbitTurnEvent extends TelemetryEventBase {
    * that can take 2+ rounds for tool-using turns). 0 / unset on
    * the user-side `orbit_turn`, on assistant emits from pre-1d/Y
    * clients, and on turns that never received the LLM's `done`:
-   * those the local engine answered, and those cut off because
-   * the node withdrew Orbit mid-turn.
+   * those the local engine answered, those that ended in a client
+   * exception, and those cut off because the node withdrew Orbit
+   * mid-turn.
    *
    * Field name chosen so it sorts after `turn_index`
    * alphabetically, preserving the existing AE blob/double

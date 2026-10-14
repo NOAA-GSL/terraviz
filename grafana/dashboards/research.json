@@ -482,7 +482,7 @@
       "id": 9,
       "type": "table",
       "title": "Orbit response timing per model",
-      "description": "End-to-end response latency for Orbit. duration_ms is nullable on orbit_interaction — the WHERE clause filters out skipped rows so the average is meaningful.",
+      "description": "End-to-end response latency for Orbit. duration_ms is nullable on orbit_interaction — the WHERE clause filters out skipped rows so the average is meaningful, and keeps to completed replies (subtype stop): an error response stopped early, from an exception or Orbit withdrawn mid-turn. Local-engine fallback answers are still stop and still counted, under the configured model.",
       "gridPos": {
         "x": 0,
         "y": 44,

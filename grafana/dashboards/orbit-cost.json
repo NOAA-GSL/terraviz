@@ -122,7 +122,7 @@
       "id": 2,
       "type": "timeseries",
       "title": "Total LLM rounds per day",
-      "description": "Phase 1f/E. Sum of turn_rounds (double7) across all assistant turns in the window. This is the raw count of Workers AI invocations — the leading indicator for free-tier neuron exhaustion. Pre-1d/Y events have NULL double7 and don't contribute (double7=0 in the SUM).",
+      "description": "Phase 1f/E. Sum of turn_rounds (double7) across all assistant turns in the window. This is the raw count of Workers AI invocations — the leading indicator for free-tier neuron exhaustion. Pre-1d/Y events have NULL double7 and don't contribute (double7=0 in the SUM). Neither do turns that never received the LLM's done: local-engine answers, client exceptions, and turns cut off when the node withdrew Orbit mid-reply, whose rounds may still have run — so a node that turns Orbit off undercounts by the turns in flight at that moment.",
       "gridPos": {
         "x": 12,
         "y": 0,

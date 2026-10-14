@@ -537,7 +537,7 @@ alphabetical layout. Per-event positions:
 | `double4` | `input_tokens` (when present) |
 | `double5` | `output_tokens` (when present) |
 | `double6` | `turn_index` |
-| `double7` | `turn_rounds` (1 = direct reply, ≥2 = tool-calling turn; Phase 1d/Y). 0 on a turn the local engine answered, a turn cut off by an Orbit withdrawal, and from pre-1d/Y clients |
+| `double7` | `turn_rounds` (1 = direct reply, ≥2 = tool-calling turn; Phase 1d/Y). 0 on the user-side turn, on a turn the local engine answered, one that ended in a client exception, one cut off by an Orbit withdrawal, and from pre-1d/Y clients |
 
 #### `orbit_tool_call`
 
@@ -1013,6 +1013,9 @@ ORDER BY occurrences DESC
 > `blob7 = 'stop'` keeps it to replies that completed: an `error`
 > response stopped early — an exception, or Orbit withdrawn
 > mid-turn — and its duration measures that, not the model.
+> Local-engine fallback answers are still `stop` and still counted,
+> under the configured model, with any failed LLM attempt in their
+> duration; `orbit_interaction` has no field to separate them.
 
 ```sql
 SELECT
