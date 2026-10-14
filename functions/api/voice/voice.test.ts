@@ -1,14 +1,18 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 The Zyra Project
 
-import { describe, it, expect, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { defaultFeatures } from '../../../src/types/node-features'
 import { NODE_FEATURES_CACHE_KEY } from '../v1/_lib/node-settings-store'
 import { makeKV } from '../v1/_lib/test-helpers'
 import { onRequestPost as transcribe } from './transcribe'
 import { onRequestPost as synthesize } from './synthesize'
 import { isVoiceKilled, arrayBufferToBase64, isAllowedOrigin, type VoiceEnv } from './_voice-lib'
-import { streamConfigured, buildGatewayUrl } from './stream'
+import { streamConfigured, buildGatewayUrl, streamRefusal, onRequest as stream } from './stream'
+import { resetOrbitGateForTests } from '../_lib/orbit-gate'
+
+// The gate memoises per module instance; each case starts cold.
+beforeEach(resetOrbitGateForTests)
 
 const ORIGIN = 'https://preview.terraviz.pages.dev'
 const URL_T = `${ORIGIN}/api/voice/transcribe`
@@ -182,6 +186,46 @@ describe('the node orbit feature gate', () => {
     const res = await transcribe(ctx(fakeReq({ url: URL_T, origin: 'https://evil.example' }), env))
     expect(res.status).toBe(403)
     expect(env.CATALOG_KV!.get).not.toHaveBeenCalled()
+  })
+})
+
+describe('voice stream refusal order', () => {
+  const CONFIGURED = { CF_ACCOUNT_ID: 'a', CF_AI_GATEWAY: 'g', CF_AIG_TOKEN: 't' }
+  const offKv = () => {
+    const kv = makeKV()
+    kv._store.set(NODE_FEATURES_CACHE_KEY, JSON.stringify({ ...defaultFeatures(), orbit: false }))
+    return kv
+  }
+
+  it('opens for a configured node with Orbit on', async () => {
+    expect(await streamRefusal(CONFIGURED, 'ip', () => false)).toBeNull()
+  })
+
+  it('refuses with feature_disabled and spends no rate allowance while Orbit is off', async () => {
+    const limiter = vi.fn(() => false)
+    expect(await streamRefusal({ ...CONFIGURED, CATALOG_KV: offKv() }, 'ip', limiter)).toBe('feature_disabled')
+    expect(limiter).not.toHaveBeenCalled()
+  })
+
+  it('says feature_disabled rather than unconfigured on a node with neither', async () => {
+    expect(await streamRefusal({ CATALOG_KV: offKv() }, 'ip', () => false)).toBe('feature_disabled')
+  })
+
+  it('leaves KILL_VOICE in charge when both apply', async () => {
+    expect(await streamRefusal({ ...CONFIGURED, KILL_VOICE: '1', CATALOG_KV: offKv() }, 'ip', () => false))
+      .toBe('voice_disabled')
+  })
+
+  it('refuses a foreign origin before reading the feature map', async () => {
+    const kv = offKv()
+    const request = fakeReq({
+      url: `${ORIGIN}/api/voice/stream`,
+      origin: 'https://evil.example',
+      headers: { Upgrade: 'websocket' },
+    })
+    const res = await stream({ request, env: { ...CONFIGURED, CATALOG_KV: kv } } as unknown as Parameters<typeof stream>[0])
+    expect(res.status).toBe(403)
+    expect(kv.get).not.toHaveBeenCalled()
   })
 })
 

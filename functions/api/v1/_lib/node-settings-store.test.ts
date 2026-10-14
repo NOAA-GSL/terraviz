@@ -25,6 +25,7 @@ import {
   disabledKeys,
   featuresFromRow,
   getEffectiveFeatures,
+  readEffectiveFeatures,
   getNodeSettings,
   setNodeFeatures,
   validateFeaturesInput,
@@ -197,6 +198,21 @@ describe('getEffectiveFeatures', () => {
     } as unknown as KVNamespace
     const features = await getEffectiveFeatures({ CATALOG_DB: db, CATALOG_KV: brokenKv })
     expect(features.hero).toBe(false)
+  })
+
+  it('says when its answer was assumed rather than read', async () => {
+    const throwingDb = {
+      prepare() {
+        throw new Error('boom')
+      },
+    } as unknown as D1Database
+    expect(await readEffectiveFeatures({ CATALOG_DB: throwingDb })).toEqual({
+      features: defaultFeatures(),
+      authoritative: false,
+    })
+    // No binding and no row are genuine "everything on", not failures.
+    expect((await readEffectiveFeatures({})).authoritative).toBe(true)
+    expect((await readEffectiveFeatures({ CATALOG_DB: setupDb() })).authoritative).toBe(true)
   })
 
   it('fails open: corrupt cache body → falls through to D1', async () => {

@@ -166,23 +166,34 @@ export function disabledKeys(features: FeatureMap): FeatureKey[] {
   return FEATURE_KEYS.filter(key => !features[key])
 }
 
+/** {@link readEffectiveFeatures}' answer. `authoritative` is false
+ *  only when a storage error forced the fail-open default: a node with
+ *  no catalog binding or no settings row has genuinely enabled
+ *  everything, and says so authoritatively. */
+export interface EffectiveFeaturesRead {
+  features: FeatureMap
+  authoritative: boolean
+}
+
 /**
  * The hot-path read: the effective feature map for this node.
  * One KV hit when warm; on miss reads D1 and fills the cache.
- * FAIL-OPEN — any binding gap, D1/KV error, or corrupt JSON returns
- * all-enabled. Never throws.
+ * FAIL-OPEN — any D1/KV error or corrupt JSON returns all-enabled.
+ * Never throws. Most callers want {@link getEffectiveFeatures}; this
+ * form also says whether the answer was read or assumed, for a caller
+ * that keeps its own last-known-good value (`api/_lib/orbit-gate.ts`).
  */
-export async function getEffectiveFeatures(env: CatalogEnv): Promise<FeatureMap> {
+export async function readEffectiveFeatures(env: CatalogEnv): Promise<EffectiveFeaturesRead> {
   try {
     if (env.CATALOG_KV) {
       try {
         const cached = await env.CATALOG_KV.get(NODE_FEATURES_CACHE_KEY)
-        if (cached) return normalizeFeatures(JSON.parse(cached))
+        if (cached) return { features: normalizeFeatures(JSON.parse(cached)), authoritative: true }
       } catch {
         // KV failure = cache miss; D1 is the source of truth.
       }
     }
-    if (!env.CATALOG_DB) return defaultFeatures()
+    if (!env.CATALOG_DB) return { features: defaultFeatures(), authoritative: true }
     const features = featuresFromRow(await getNodeSettings(env.CATALOG_DB))
     if (env.CATALOG_KV) {
       try {
@@ -193,8 +204,13 @@ export async function getEffectiveFeatures(env: CatalogEnv): Promise<FeatureMap>
         // Best-effort fill.
       }
     }
-    return features
+    return { features, authoritative: true }
   } catch {
-    return defaultFeatures()
+    return { features: defaultFeatures(), authoritative: false }
   }
+}
+
+/** {@link readEffectiveFeatures}, map only. Never throws. */
+export async function getEffectiveFeatures(env: CatalogEnv): Promise<FeatureMap> {
+  return (await readEffectiveFeatures(env)).features
 }

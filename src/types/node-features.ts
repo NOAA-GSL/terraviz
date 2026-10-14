@@ -34,8 +34,10 @@
  *                 mutations); public catalog reads are never gated.
  * - `orbit`     — Orbit, the generative-AI docent: the chat panel and
  *                 every way into it in the public SPA, plus the edge
- *                 endpoints only Orbit calls (`/api/chat/completions`,
- *                 `/api/models`, `/api/voice/*`). Off **hides** Orbit
+ *                 endpoints its chat and voice call
+ *                 (`/api/chat/completions`, `/api/models`,
+ *                 `/api/voice/*`; `/api/legend`, a plain image proxy,
+ *                 is left alone). Off **hides** Orbit
  *                 rather than leaving it on its local keyword engine —
  *                 an operator turning generative AI off is deciding
  *                 visitors should not be offered a chat at all, and a

@@ -6,11 +6,15 @@
  * while the node's `orbit` feature is off.
  */
 
-import { describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it } from 'vitest'
 import { defaultFeatures } from '../../src/types/node-features'
 import { NODE_FEATURES_CACHE_KEY } from './v1/_lib/node-settings-store'
 import { makeKV } from './v1/_lib/test-helpers'
 import { onRequestGet } from './models'
+import { resetOrbitGateForTests } from './_lib/orbit-gate'
+
+// The gate memoises per module instance; each case starts cold.
+beforeEach(resetOrbitGateForTests)
 
 function ctx(env: Record<string, unknown>) {
   // A stub rather than a real Request: `Origin` is a forbidden header

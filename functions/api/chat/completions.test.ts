@@ -13,11 +13,15 @@
  * All paths now go through the shared `workers-ai-text` extractor.
  */
 
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { defaultFeatures } from '../../../src/types/node-features'
 import { NODE_FEATURES_CACHE_KEY } from '../v1/_lib/node-settings-store'
 import { makeKV } from '../v1/_lib/test-helpers'
 import { EMPTY_STREAM_PROBE_TIMEOUT_MS, onRequestPost } from './completions'
+import { resetOrbitGateForTests } from '../_lib/orbit-gate'
+
+// The gate memoises per module instance; each case starts cold.
+beforeEach(resetOrbitGateForTests)
 
 type AiRun = (model: string, inputs: Record<string, unknown>, options?: unknown) => Promise<unknown>
 

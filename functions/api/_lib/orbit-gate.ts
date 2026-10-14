@@ -14,16 +14,37 @@
  * publisher middleware's prefix table, which these routes sit outside.
  *
  * One helper rather than five inline checks so the routes cannot drift
- * on the envelope or on fail-open. `getEffectiveFeatures` never throws
- * and answers all-enabled on any binding gap or storage error — a KV
- * blip must not take Orbit down on a node that never turned it off.
+ * on the envelope or on fail-open.
  *
- * Callers check the origin first, so a cross-origin request is refused
- * without costing a KV read, and leave CORS preflights ungated: a
- * preflight does no inference and must not need storage to answer.
+ * **Memoised per isolate, with a last-known-good answer.** A talking
+ * hands-free session sends one TTS request per sentence, and reading
+ * the feature map on each would put a KV read on every one of them —
+ * on a free-plan node, against the same daily quota the catalog cache
+ * spends. So an answer read from storage is reused for
+ * {@link ORBIT_GATE_MEMO_MS}, which costs no freshness worth having:
+ * the KV entry behind it is already up to 5 minutes old. The same memo
+ * narrows fail-open. `readEffectiveFeatures` answers all-enabled on a
+ * storage error, and here that default is used only by an isolate that
+ * has never read the map; one that has keeps its last real answer, so
+ * a D1 blip on a node that turned Orbit off does not turn it back on.
+ * A cold isolate during an outage still fails open — the toggles'
+ * accepted risk (`docs/FEATURE_TOGGLES_PLAN.md`), and the reason a
+ * KV blip cannot take Orbit down on a node that never turned it off.
+ *
+ * The voice and chat routes check the origin first, so a cross-origin
+ * request is refused without consulting the gate. `/api/models` has
+ * never checked an origin, and the memo is what bounds what anonymous
+ * calls to it cost: one storage read per isolate per minute. CORS
+ * preflights are not gated — they do no inference and must not need
+ * storage to answer. A voice WebSocket already open when Orbit is
+ * turned off is checked only at upgrade; the SPA closes it when it
+ * withdraws Orbit, which it does on its next re-read or refusal.
  */
 
-import { getEffectiveFeatures } from '../v1/_lib/node-settings-store'
+import { readEffectiveFeatures } from '../v1/_lib/node-settings-store'
+
+/** How long one isolate reuses an answer read from storage. */
+export const ORBIT_GATE_MEMO_MS = 60_000
 
 /** The catalog bindings the gate reads. Pages bindings are
  *  project-wide, so these are present on every function. */
@@ -32,9 +53,24 @@ export interface OrbitGateEnv {
   CATALOG_KV?: KVNamespace
 }
 
-/** True unless the node operator turned Orbit off. Fail-open. */
-export async function isOrbitEnabled(env: OrbitGateEnv): Promise<boolean> {
-  return (await getEffectiveFeatures(env)).orbit
+/** This isolate's last answer read from storage, and when. */
+let lastRead: { enabled: boolean; atMs: number } | null = null
+
+/** True unless the node operator turned Orbit off. Never throws. */
+export async function isOrbitEnabled(env: OrbitGateEnv, nowMs: number = Date.now()): Promise<boolean> {
+  if (lastRead && nowMs - lastRead.atMs < ORBIT_GATE_MEMO_MS) return lastRead.enabled
+  const read = await readEffectiveFeatures(env)
+  if (read.authoritative) {
+    lastRead = { enabled: read.features.orbit, atMs: nowMs }
+    return lastRead.enabled
+  }
+  // Storage failed: the last real answer if this isolate has one.
+  return lastRead ? lastRead.enabled : true
+}
+
+/** Forget the memo — tests only; module state outlives a test case. */
+export function resetOrbitGateForTests(): void {
+  lastRead = null
 }
 
 /**

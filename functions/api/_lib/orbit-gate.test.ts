@@ -8,17 +8,30 @@
  * storage failure must all leave Orbit running.
  */
 
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { defaultFeatures } from '../../../src/types/node-features'
 import { NODE_FEATURES_CACHE_KEY } from '../v1/_lib/node-settings-store'
 import { makeKV } from '../v1/_lib/test-helpers'
-import { isOrbitEnabled, orbitDisabledResponse } from './orbit-gate'
+import {
+  ORBIT_GATE_MEMO_MS,
+  isOrbitEnabled,
+  orbitDisabledResponse,
+  resetOrbitGateForTests,
+} from './orbit-gate'
 
 function kvWith(features: Record<string, boolean>) {
   const kv = makeKV()
   kv._store.set(NODE_FEATURES_CACHE_KEY, JSON.stringify(features))
   return kv
 }
+
+const failingDb = {
+  prepare: () => {
+    throw new Error('d1 down')
+  },
+} as unknown as D1Database
+
+beforeEach(resetOrbitGateForTests)
 
 describe('isOrbitEnabled', () => {
   it('is on for a node with no catalog bindings at all', async () => {
@@ -42,15 +55,30 @@ describe('isOrbitEnabled', () => {
     expect(await isOrbitEnabled({ CATALOG_KV: kv })).toBe(true)
   })
 
-  it('is on when storage fails', async () => {
+  it('is on when storage fails on an isolate that has never read the map', async () => {
     const kv = makeKV()
     ;(kv.get as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('kv down'))
-    const db = {
-      prepare: () => {
-        throw new Error('d1 down')
-      },
-    } as unknown as D1Database
-    expect(await isOrbitEnabled({ CATALOG_KV: kv, CATALOG_DB: db })).toBe(true)
+    expect(await isOrbitEnabled({ CATALOG_KV: kv, CATALOG_DB: failingDb })).toBe(true)
+  })
+
+  it('keeps its last real answer through a storage failure', async () => {
+    const off = kvWith({ ...defaultFeatures(), orbit: false })
+    expect(await isOrbitEnabled({ CATALOG_KV: off }, 0)).toBe(false)
+    // Past the memo, storage is down: the default would say "on".
+    const broken = makeKV()
+    ;(broken.get as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('kv down'))
+    expect(await isOrbitEnabled({ CATALOG_KV: broken, CATALOG_DB: failingDb }, ORBIT_GATE_MEMO_MS + 1)).toBe(false)
+  })
+
+  it('reuses a read for the memo window, then reads again', async () => {
+    const kv = kvWith({ ...defaultFeatures(), orbit: false })
+    expect(await isOrbitEnabled({ CATALOG_KV: kv }, 0)).toBe(false)
+    expect(await isOrbitEnabled({ CATALOG_KV: kv }, ORBIT_GATE_MEMO_MS - 1)).toBe(false)
+    expect(kv.get).toHaveBeenCalledTimes(1)
+    // Re-enabled meanwhile: picked up once the memo lapses.
+    kv._store.set(NODE_FEATURES_CACHE_KEY, JSON.stringify(defaultFeatures()))
+    expect(await isOrbitEnabled({ CATALOG_KV: kv }, ORBIT_GATE_MEMO_MS)).toBe(true)
+    expect(kv.get).toHaveBeenCalledTimes(2)
   })
 })
 
