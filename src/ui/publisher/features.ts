@@ -102,6 +102,8 @@ export function featureLabel(feature: FeatureKey): string {
       return t('publisher.feature.feedback')
     case 'datasets':
       return t('publisher.feature.datasets')
+    case 'orbit':
+      return t('publisher.feature.orbit')
   }
 }
 

@@ -8,6 +8,7 @@
  */
 
 import { describe, it, expect, vi } from 'vitest'
+import { FEATURE_KEYS } from '../../../types/node-features'
 import { renderNodeProfilePage } from './node-profile'
 
 interface RouteMap {
@@ -94,7 +95,7 @@ describe('renderNodeProfilePage', () => {
       }),
     })
     const toggles = mount.querySelectorAll<HTMLInputElement>('.publisher-nodeprofile-feature-toggle')
-    expect(toggles).toHaveLength(8)
+    expect(toggles).toHaveLength(FEATURE_KEYS.length)
     const byName = new Map(
       Array.from(mount.querySelectorAll('.publisher-nodeprofile-feature-row')).map(row => [
         row.querySelector('.publisher-nodeprofile-feature-name')?.textContent,
@@ -155,7 +156,7 @@ describe('renderNodeProfilePage', () => {
     expect(body.features.blog).toBe(false)
     expect(body.features.tours).toBe(false)
     expect(body.features.datasets).toBe(true)
-    expect(Object.keys(body.features)).toHaveLength(8)
+    expect(Object.keys(body.features)).toHaveLength(FEATURE_KEYS.length)
     expect(fired).toHaveBeenCalledTimes(1)
   })
 
