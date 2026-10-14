@@ -447,6 +447,10 @@ export async function updateCurrentEventContent(
   await writeEventDecorations(db, id, input.categories, input.keywords)
 }
 
+/** How many rows {@link listCurrentEvents} returns when the caller does
+ *  not say. */
+export const DEFAULT_EVENT_LIST_LIMIT = 100
+
 /** The most rows {@link listCurrentEvents} returns in one call, whatever
  *  the caller asks for. Exported so a caller that wants "as many as
  *  allowed" names this rather than restating it. */
@@ -457,17 +461,19 @@ export const MAX_EVENT_LIST_LIMIT = 500
  *  it. Ordering by `created_at` alone made one refresh run's batch come
  *  out in reverse feed order (feeds list newest articles first, so the
  *  newest got the earliest insert timestamps), which is exactly
- *  backwards for a curator triaging the queue. */
+ *  backwards for a curator triaging the queue. The id breaks ties
+ *  (EONET times often sit on midnight), so which rows fall at a limit
+ *  does not change from one request to the next. */
 export async function listCurrentEvents(
   db: D1Database,
   opts: { status?: CurrentEventStatus; limit?: number } = {},
 ): Promise<CurrentEventRow[]> {
-  const limit = Math.max(1, Math.min(opts.limit ?? 100, MAX_EVENT_LIST_LIMIT))
+  const limit = Math.max(1, Math.min(opts.limit ?? DEFAULT_EVENT_LIST_LIMIT, MAX_EVENT_LIST_LIMIT))
   const where = opts.status ? `WHERE status = ?` : ''
   const stmt = db.prepare(
     `SELECT ${EVENT_COLUMNS} FROM current_events
      ${where}
-     ORDER BY COALESCE(occurred_start, published_at, created_at) DESC
+     ORDER BY COALESCE(occurred_start, published_at, created_at) DESC, id DESC
      LIMIT ?`,
   )
   const bound = opts.status ? stmt.bind(opts.status, limit) : stmt.bind(limit)

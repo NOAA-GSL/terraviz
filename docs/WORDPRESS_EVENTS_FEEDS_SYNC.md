@@ -54,8 +54,8 @@ from the blog quartet. Here are their real shapes.
 
 | Op | Route | Handler | Behaviour |
 |---|---|---|---|
-| List / review queue | `GET /api/v1/publish/events` | `functions/api/v1/publish/events.ts:82` | Privileged-only curator queue (`?status=proposed` default, `all` for every bucket). **Not** a get-by-id. |
-| Create / ingest | `POST /api/v1/publish/events` | `functions/api/v1/publish/events.ts:139` | Born **`proposed`**. Idempotent on `(feedId, externalId)`. Runs the dataset matcher inline. |
+| List / review queue | `GET /api/v1/publish/events` | `functions/api/v1/publish/events.ts:112` | Curator queue, readable by any active publisher (`?status=proposed` default, `all` for every bucket). Newest first by occurrence time; `?limit=` 1–500, default 100; `total` gives the bucket's size whatever the limit, so `?limit=1` is a cheap count. **Not** a get-by-id, and not a way to check whether an event exists: a scan of `?status=all` stops at 500. |
+| Create / ingest | `POST /api/v1/publish/events` | `functions/api/v1/publish/events.ts:189` | Born **`proposed`**. Idempotent on `(feedId, externalId)`. Runs the dataset matcher inline. |
 | Curator review | `POST /api/v1/publish/events/:id` | `functions/api/v1/publish/events/[id].ts:236` | `{ event:'approve'\|'reject', links:[…], addDatasetIds:[…], edits:{…} }` — a **review submission**, not a `publish/unpublish` toggle. |
 
 There is **no `GET /api/v1/publish/events/:id`** and **no

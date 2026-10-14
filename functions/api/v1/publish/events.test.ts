@@ -21,6 +21,7 @@ import {
   getCurrentEvent,
   listLinksForEvent,
   getEventDecorations,
+  DEFAULT_EVENT_LIST_LIMIT,
   MAX_EVENT_LIST_LIMIT,
 } from '../_lib/events-store'
 import type { PublisherRow } from '../_lib/publisher-store'
@@ -208,28 +209,103 @@ describe('GET /api/v1/publish/events', () => {
     })()
   }
 
-  it('returns more than the store default of 100 — a busy queue is not cut short', async () => {
+  const URL_BASE = 'https://localhost/api/v1/publish/events'
+  async function getBody(env: Record<string, unknown>, query = '') {
+    const res = await eventsGet(ctx({ env, url: `${URL_BASE}${query}` }))
+    return { status: res.status, body: JSON.parse(await res.text()) as { events: Array<{ id: string }>; total: number } }
+  }
+
+  it('keeps the default page at 100 and reports the bucket total beside it', async () => {
     const { env, sqlite } = setupEnv()
     insertBareEvents(sqlite, 140)
-    const res = await eventsGet(ctx({ env }))
-    const body = JSON.parse(await res.text()) as { events: unknown[]; total: number }
+    const { body } = await getBody(env)
+    expect(body.events).toHaveLength(DEFAULT_EVENT_LIST_LIMIT)
+    expect(body.total).toBe(140)
+  })
+
+  it('returns up to ?limit= events — the review page asks for the maximum', async () => {
+    const { env, sqlite } = setupEnv()
+    insertBareEvents(sqlite, 140)
+    const { body } = await getBody(env, `?limit=${MAX_EVENT_LIST_LIMIT}`)
     expect(body.events).toHaveLength(140)
     expect(body.total).toBe(140)
   })
 
-  it('reports the bucket total when the list stops at the cap', async () => {
+  it('clamps ?limit= to the maximum and counts the rest', async () => {
     const { env, sqlite } = setupEnv()
     insertBareEvents(sqlite, MAX_EVENT_LIST_LIMIT + 7)
     // A different bucket, so `total` is shown to count one status only.
     insertBareEvents(sqlite, 3, 'approved')
-    const res = await eventsGet(ctx({ env }))
-    const body = JSON.parse(await res.text()) as { events: unknown[]; total: number }
+    const { body } = await getBody(env, '?limit=10000')
     expect(body.events).toHaveLength(MAX_EVENT_LIST_LIMIT)
     expect(body.total).toBe(MAX_EVENT_LIST_LIMIT + 7)
 
-    const all = await eventsGet(ctx({ env, url: 'https://localhost/api/v1/publish/events?status=all' }))
-    const allBody = JSON.parse(await all.text()) as { events: unknown[]; total: number }
-    expect(allBody.total).toBe(MAX_EVENT_LIST_LIMIT + 10)
+    const all = await getBody(env, '?status=all&limit=10000')
+    expect(all.body.total).toBe(MAX_EVENT_LIST_LIMIT + 10)
+  })
+
+  it('?limit=1 is a cheap count', async () => {
+    const { env, sqlite } = setupEnv()
+    insertBareEvents(sqlite, 42)
+    const { body } = await getBody(env, '?limit=1')
+    expect(body.events).toHaveLength(1)
+    expect(body.total).toBe(42)
+  })
+
+  it('400 for a ?limit= that is not a positive integer', async () => {
+    const { env } = setupEnv()
+    for (const bad of ['0', '-3', '2.5', 'abc']) {
+      expect((await getBody(env, `?limit=${bad}`)).status, bad).toBe(400)
+    }
+  })
+
+  it('treats an empty ?status= as omitted, not as every status', async () => {
+    const { env, sqlite } = setupEnv()
+    insertBareEvents(sqlite, 2)
+    insertBareEvents(sqlite, 3, 'approved')
+    const { body } = await getBody(env, '?status=')
+    expect(body.events).toHaveLength(2)
+    expect(body.total).toBe(2)
+  })
+
+  it('never reports fewer in total than it returned', async () => {
+    // The list and the count are separate reads; rows can leave the
+    // bucket between them. Emulate that with a count that comes back low.
+    const sqlite = seedFixtures({ count: 2 })
+    insertBareEvents(sqlite, 5)
+    const db = asD1(sqlite)
+    const prepare = db.prepare.bind(db)
+    db.prepare = (sql: string) => {
+      const stmt = prepare(sql)
+      if (!sql.includes('COUNT(*)')) return stmt
+      const bind = stmt.bind.bind(stmt)
+      stmt.bind = (...values: unknown[]) => {
+        const bound = bind(...values)
+        bound.first = (async () => ({ n: 2 })) as typeof bound.first
+        return bound
+      }
+      return stmt
+    }
+    const { body } = await getBody({ CATALOG_DB: db }, '?limit=5')
+    expect(body.events).toHaveLength(5)
+    expect(body.total).toBe(5)
+  })
+
+  it('answers with null signals for a link whose stored breakdown is unreadable', async () => {
+    const { env, sqlite } = setupEnv()
+    const { id } = await insertCurrentEvent(env.CATALOG_DB, SAMPLE)
+    await upsertEventDatasetLink(env.CATALOG_DB, {
+      eventId: id,
+      datasetId: DS_0,
+      matchScore: 0.9,
+      signals: { geo: 1 },
+      source: 'matcher',
+    })
+    sqlite.prepare(`UPDATE event_dataset_links SET signals_json = '{not json' WHERE event_id = ?`).run(id)
+    const res = await eventsGet(ctx({ env }))
+    expect(res.status).toBe(200)
+    const body = JSON.parse(await res.text()) as { events: Array<{ links: Array<{ signals: unknown }> }> }
+    expect(body.events[0].links[0].signals).toBeNull()
   })
 
   it('looks up linked dataset titles within D1’s 100-parameter limit', async () => {

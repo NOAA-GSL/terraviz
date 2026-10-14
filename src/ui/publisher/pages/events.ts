@@ -6,8 +6,9 @@
  * **Direction A: a master–detail triage queue**
  * (`docs/events-tab-handoff/EVENTS_TAB_IMPLEMENTATION_BRIEF.md`).
  *
- * Privileged-only (admin / service). Fetches the caller's role
- * (`/api/v1/publish/me`) and the events queue (`GET
+ * Readable by any active publisher; writes gate per event on
+ * `can_edit`, and the feed Refresh is admin-only. Fetches the caller's
+ * role (`/api/v1/publish/me`) and the events queue (`GET
  * /api/v1/publish/events`), then renders a top bar (heading + status
  * filter pills + Refresh / New-event actions + the search / source /
  * category / sort controls) over a two-pane body: the **event queue** on
@@ -19,9 +20,6 @@
  * (`event-queue-filters.ts`, matching in `events-model.ts`). The query
  * lives on the page state, so it survives a status switch, a feed
  * refresh and the reload that follows a review decision.
- *
- * Non-privileged callers get a restricted card (the API also enforces
- * 403; gating here avoids a fetch-then-reject round-trip).
  */
 
 import { fetchFeatures, renderFeatureDisabledCard } from '../features'
@@ -54,6 +52,9 @@ interface MeResponse {
 const ME_ENDPOINT = '/api/v1/publish/me'
 const EVENTS_ENDPOINT = '/api/v1/publish/events'
 const REFRESH_ENDPOINT = '/api/v1/publish/events/refresh'
+/** As many events as the server will return (its `MAX_EVENT_LIST_LIMIT`).
+ *  Search runs client-side, so an event not loaded cannot be found. */
+const QUEUE_LIMIT = 500
 
 interface RefreshResult {
   created: number
@@ -157,7 +158,10 @@ async function loadAndRenderQueue(
   // filter/refresh/reload can't orphan its WebGL context.
   state.locator.dispose?.()
   state.locator.dispose = null
-  const res = await publisherGet<EventsResponse>(`${EVENTS_ENDPOINT}?status=${status}`, { fetchFn: state.fetchFn })
+  const res = await publisherGet<EventsResponse>(
+    `${EVENTS_ENDPOINT}?status=${status}&limit=${QUEUE_LIMIT}`,
+    { fetchFn: state.fetchFn },
+  )
   if (!res.ok) {
     if (res.kind === 'session') {
       if (handleSessionError({ navigate: state.navigate }) === 'navigating') return

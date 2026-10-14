@@ -204,6 +204,18 @@ describe('listCurrentEvents', () => {
     }
     expect(await listCurrentEvents(db, { limit: 2 })).toHaveLength(2)
   })
+
+  it('breaks a tie in event time on id, so a limit cuts at the same row every time', async () => {
+    const { db } = freshDb()
+    const same = '2026-06-10T00:00:00.000Z'
+    const ids: string[] = []
+    for (let i = 0; i < 4; i++) {
+      const { id } = await insertCurrentEvent(db, sampleEvent({ title: `t${i}`, occurredStart: same }))
+      ids.push(id)
+    }
+    const listed = await listCurrentEvents(db)
+    expect(listed.map(e => e.id)).toEqual([...ids].sort().reverse())
+  })
 })
 
 describe('countCurrentEvents', () => {

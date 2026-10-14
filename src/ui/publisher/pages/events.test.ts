@@ -357,6 +357,21 @@ describe('renderEventsPage — search, filter and sort', () => {
     expect(queueTitles()).toEqual(['Flooding in Valencia'])
   })
 
+  it('asks the server for as many events as it will return', async () => {
+    const fetchFn = mockFetch(routes())
+    await renderEventsPage(mount, { fetchFn })
+    expect(fetchFn.mock.calls.some(c => String(c[0]) === '/api/v1/publish/events?status=proposed&limit=500')).toBe(true)
+  })
+
+  it('treats a response without a total as the whole bucket', async () => {
+    const r = routes()
+    const { events } = queueBody()
+    r['/api/v1/publish/events'] = { body: { events } }
+    await renderEventsPage(mount, { fetchFn: mockFetch(r) })
+    expect(mount.querySelector('.publisher-events-query-count')?.textContent).toBe('3 events')
+    expect(mount.querySelector('.publisher-events-query-note')).toBeNull()
+  })
+
   it('notes when the server loaded only the newest part of the bucket', async () => {
     const r = routes()
     r['/api/v1/publish/events'] = { body: { ...queueBody(), total: 734 } }
