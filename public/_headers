@@ -16,3 +16,4 @@
 # open to any embedder (docs/WORDPRESS_INTEGRATION_PLAN.md).
 https://terraviz.test.gsl.noaa.gov/*
   Content-Security-Policy: frame-ancestors 'self' https://gsl.noaa.gov file:
+https://*.claudeusercontent.com https://claude.ai
