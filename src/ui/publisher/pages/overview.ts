@@ -103,6 +103,8 @@ interface ReviewEventRow {
 
 interface EventsResponse {
   events: ReviewEventRow[]
+  /** The whole bucket's size; `events` stops at the server's page size. */
+  total?: number
 }
 
 interface FeedRow {
@@ -135,6 +137,9 @@ interface OverviewData {
   hero: HeroResponse['hero']
   heroTitle: string | null
   proposedEvents: ReviewEventRow[]
+  /** How many events await review — the server's `total`, since
+   *  `proposedEvents` stops at the server's page size. */
+  proposedCount: number
   approvedEvents: ReviewEventRow[]
   failedWorkflow: { id: string; name: string; when: string | null } | null
   activeFeeds: number | null
@@ -371,6 +376,7 @@ async function loadOverview(
     hero: hero?.hero ?? null,
     heroTitle,
     proposedEvents: [],
+    proposedCount: 0,
     approvedEvents: [],
     failedWorkflow: null,
     activeFeeds: null,
@@ -400,6 +406,7 @@ async function loadOverview(
   ])
 
   data.proposedEvents = proposed?.events ?? []
+  data.proposedCount = Math.max(proposed?.total ?? 0, data.proposedEvents.length)
   data.approvedEvents = (approved?.events ?? []).filter(e =>
     isOnOrAfter(e.reviewedAt ?? e.createdAt, weekAgo),
   )
@@ -519,7 +526,7 @@ function renderNeedsYou(
 ): HTMLElement | null {
   const cards: HTMLElement[] = []
 
-  if (data.proposedEvents.length > 0) {
+  if (data.proposedCount > 0) {
     const oldest = data.proposedEvents
       .map(e => Date.parse(e.createdAt ?? e.source?.publishedAt ?? ''))
       .filter(n => !Number.isNaN(n))
@@ -530,14 +537,14 @@ function renderNeedsYou(
       needCard(
         {
           accent: 'events',
-          figure: String(data.proposedEvents.length),
+          figure: String(data.proposedCount),
           title: plural(
-            data.proposedEvents.length,
+            data.proposedCount,
             {
               one: 'publisher.overview.needs.events.title.one',
               other: 'publisher.overview.needs.events.title.other',
             },
-            { count: data.proposedEvents.length },
+            { count: data.proposedCount },
           ),
           detail:
             source && age
@@ -730,12 +737,12 @@ function renderPipeline(
         kicker: t('publisher.overview.pipeline.curate.kicker'),
         title: t('publisher.overview.pipeline.curate.title'),
         stat: plural(
-          data.proposedEvents.length,
+          data.proposedCount,
           {
             one: 'publisher.overview.pipeline.curate.stat.one',
             other: 'publisher.overview.pipeline.curate.stat.other',
           },
-          { count: data.proposedEvents.length },
+          { count: data.proposedCount },
         ),
         sub: plural(
           data.approvedEvents.length,

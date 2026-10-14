@@ -2645,6 +2645,125 @@
   gap: calc(0.5rem * var(--ui-scale));
 }
 
+/* Search / source / category / sort over the loaded bucket. The search
+   box takes the slack; the dropdowns size to their content and wrap
+   under it on a narrow screen. */
+.publisher-events-query {
+  display: flex;
+  flex-direction: column;
+  gap: calc(0.35rem * var(--ui-scale));
+}
+.publisher-events-query-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: calc(0.5rem * var(--ui-scale)) calc(0.75rem * var(--ui-scale));
+}
+.publisher-events-query-field {
+  display: flex;
+  flex-direction: column;
+  gap: calc(0.25rem * var(--ui-scale));
+  min-inline-size: 0;
+}
+.publisher-events-query-field-search {
+  flex: 1 1 calc(16rem * var(--ui-scale));
+}
+.publisher-events-query-caption {
+  font-size: calc(0.75rem * var(--ui-scale));
+  color: var(--color-text-muted, #aab2c0);
+}
+.publisher-events-query-input,
+.publisher-events-query-select {
+  box-sizing: border-box;
+  max-inline-size: 100%;
+  padding: calc(0.4rem * var(--ui-scale)) calc(0.6rem * var(--ui-scale));
+  background: var(--white-o05, rgba(255, 255, 255, 0.05));
+  border: 1px solid var(--white-o15, rgba(255, 255, 255, 0.15));
+  border-radius: calc(6px * var(--ui-scale));
+  color: var(--color-text, #e8eaf0);
+  font-size: calc(0.9rem * var(--ui-scale));
+}
+.publisher-events-query-input,
+.publisher-events-query-select {
+  /* One height for the box and the dropdowns, which browsers otherwise
+     draw a few pixels apart. */
+  min-block-size: calc(2.25rem * var(--ui-scale));
+}
+.publisher-events-query-input {
+  inline-size: 100%;
+}
+/* A long connector label would otherwise stretch its dropdown across
+   the row; the chosen value still shows, ellipsized. */
+.publisher-events-query-select {
+  max-inline-size: calc(18rem * var(--ui-scale));
+}
+@media (max-width: 600px) {
+  .publisher-events-query-field {
+    flex: 1 1 100%;
+  }
+  .publisher-events-query-select {
+    inline-size: 100%;
+    max-inline-size: none;
+  }
+}
+.publisher-events-query-input::placeholder {
+  color: var(--color-text-muted, #8a92a0);
+}
+.publisher-events-query-input:focus-visible,
+.publisher-events-query-select:focus-visible {
+  outline: 2px solid var(--color-accent, #4da6ff);
+  outline-offset: 1px;
+}
+.publisher-events-query-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: calc(0.75rem * var(--ui-scale));
+  /* The Clear button's height, held with or without it, so the queue
+     below does not shift when filtering starts. */
+  min-block-size: 24px;
+}
+/* A text button, underlined at rest so it does not rely on colour alone
+   (forced-colors flattens the colour away). `background: none` again on
+   hover, because base.css's `button:hover` out-ranks a lone class and
+   would paint a dark-blue pill under blue text. */
+.publisher-events-query-clear {
+  min-block-size: 24px; /* WCAG 2.5.8 target size */
+  padding: 0 calc(0.25rem * var(--ui-scale));
+  background: none;
+  border: none;
+  color: var(--color-accent, #4da6ff);
+  font-size: calc(0.8rem * var(--ui-scale));
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.publisher-events-query-clear:hover {
+  background: none;
+  text-decoration-thickness: 2px;
+}
+.publisher-events-query-clear:focus-visible {
+  outline: 2px solid var(--color-accent, #4da6ff);
+  outline-offset: 2px;
+}
+.publisher-events-query-count,
+.publisher-events-query-note {
+  margin: 0;
+  font-size: calc(0.8rem * var(--ui-scale));
+  color: var(--color-text-muted, #aab2c0);
+}
+.publisher-events-query-note {
+  color: var(--color-warning, #e0a23c);
+}
+/* The no-match message spans both columns of the queue | detail grid. */
+.publisher-events-nomatch {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: calc(0.5rem * var(--ui-scale));
+}
+
 /* Two-pane body */
 .publisher-events-body {
   display: grid;
@@ -2676,6 +2795,16 @@
   display: flex;
   flex-direction: column;
   gap: calc(0.15rem * var(--ui-scale));
+  /* A few hundred rows scroll inside the queue, so the detail pane stays
+     beside (or, on a phone, just below) the row that was picked. */
+  max-block-size: 70vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+@media (max-width: 768px) {
+  .publisher-events-queue-list {
+    max-block-size: 45vh;
+  }
 }
 .publisher-events-queue-row {
   display: flex;

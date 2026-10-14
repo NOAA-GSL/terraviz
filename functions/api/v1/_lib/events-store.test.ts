@@ -16,6 +16,7 @@ import {
   insertCurrentEvent,
   getCurrentEvent,
   listCurrentEvents,
+  countCurrentEvents,
   updateCurrentEventContent,
   expireStaleProposedEvents,
   setEventStatus,
@@ -202,6 +203,33 @@ describe('listCurrentEvents', () => {
       )
     }
     expect(await listCurrentEvents(db, { limit: 2 })).toHaveLength(2)
+  })
+
+  it('breaks a tie in event time on id, so a limit cuts at the same row every time', async () => {
+    const { db } = freshDb()
+    const same = '2026-06-10T00:00:00.000Z'
+    const ids: string[] = []
+    for (let i = 0; i < 4; i++) {
+      const { id } = await insertCurrentEvent(db, sampleEvent({ title: `t${i}`, occurredStart: same }))
+      ids.push(id)
+    }
+    const listed = await listCurrentEvents(db)
+    expect(listed.map(e => e.id)).toEqual([...ids].sort().reverse())
+  })
+})
+
+describe('countCurrentEvents', () => {
+  it('counts one status, or every status when none is given', async () => {
+    const { db } = freshDb()
+    const a = await insertCurrentEvent(db, sampleEvent({ title: 'a' }), '2026-06-01T00:00:00.000Z')
+    await insertCurrentEvent(db, sampleEvent({ title: 'b' }), '2026-06-02T00:00:00.000Z')
+    await insertCurrentEvent(db, sampleEvent({ title: 'c' }), '2026-06-03T00:00:00.000Z')
+    await setEventStatus(db, a.id, 'approved', 'PUB1')
+
+    expect(await countCurrentEvents(db, { status: 'proposed' })).toBe(2)
+    expect(await countCurrentEvents(db, { status: 'approved' })).toBe(1)
+    expect(await countCurrentEvents(db, { status: 'expired' })).toBe(0)
+    expect(await countCurrentEvents(db)).toBe(3)
   })
 })
 

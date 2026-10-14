@@ -369,8 +369,14 @@ async function resolvePortalChrome(): Promise<PortalChrome> {
   }
   let eventsBadge = 0
   if (isAdmin && features.events) {
-    const ev = await publisherGet<{ events: unknown[] }>('/api/v1/publish/events?status=proposed')
-    if (ev.ok && Array.isArray(ev.data.events)) eventsBadge = ev.data.events.length
+    // One row and the bucket's `total`: the badge needs a count, not the
+    // queue, and the list's length stopped at the server's page size.
+    const ev = await publisherGet<{ events: unknown[]; total?: number }>(
+      '/api/v1/publish/events?status=proposed&limit=1',
+    )
+    if (ev.ok && Array.isArray(ev.data.events)) {
+      eventsBadge = typeof ev.data.total === 'number' ? ev.data.total : ev.data.events.length
+    }
   }
   return { isAdmin, identity, eventsBadge, features }
 }

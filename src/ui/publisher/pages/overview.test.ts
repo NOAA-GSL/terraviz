@@ -191,6 +191,25 @@ describe('renderOverviewPage', () => {
     expect(mount.textContent).toContain('Great')
   })
 
+  it('counts events awaiting review from the server total, not the page it returned', async () => {
+    const fetchFn = adminFetch({
+      '/api/v1/publish/events?status=proposed': {
+        events: [
+          {
+            id: 'e1',
+            title: 'Snake River Wildfire',
+            status: 'proposed',
+            source: { name: 'NASA EONET' },
+            createdAt: '2026-07-05T00:00:00Z',
+          },
+        ],
+        total: 137,
+      },
+    })
+    await renderOverviewPage(mount, { fetchFn, now: () => NOW })
+    expect(mount.textContent).toContain('137 events awaiting review')
+  })
+
   it('hides privileged sections for a non-admin publisher', async () => {
     const fetchFn = adminFetch({
       '/api/v1/publish/me': { email: 'p@b.c', display_name: 'Pub', role: 'publisher', is_admin: false },

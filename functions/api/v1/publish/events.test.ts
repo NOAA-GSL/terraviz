@@ -21,6 +21,8 @@ import {
   getCurrentEvent,
   listLinksForEvent,
   getEventDecorations,
+  DEFAULT_EVENT_LIST_LIMIT,
+  MAX_EVENT_LIST_LIMIT,
 } from '../_lib/events-store'
 import type { PublisherRow } from '../_lib/publisher-store'
 
@@ -189,6 +191,203 @@ describe('GET /api/v1/publish/events', () => {
     expect(res.status).toBe(200)
     const body = JSON.parse(await res.text()) as { events: Array<{ title: string }> }
     expect(body.events.map(e => e.title).sort()).toEqual(['approved one', 'proposed one', 'rejected one'])
+  })
+
+  /** Insert `n` bare proposed events straight into the table — the
+   *  ingest path runs the matcher per row, which is far more than these
+   *  size tests need. */
+  function insertBareEvents(sqlite: ReturnType<typeof setupEnv>['sqlite'], n: number, status = 'proposed') {
+    const stmt = sqlite.prepare(
+      `INSERT INTO current_events (id, origin_node, title, source_name, source_url, status, created_at, updated_at)
+       VALUES (?, 'NODE000', ?, 'NOAA', 'https://example.gov/x', ?, ?, ?)`,
+    )
+    sqlite.transaction(() => {
+      for (let i = 0; i < n; i++) {
+        const ts = new Date(Date.UTC(2026, 0, 1) + i * 60_000).toISOString()
+        stmt.run(`EVT-${status}-${String(i).padStart(4, '0')}`, `event ${i}`, status, ts, ts)
+      }
+    })()
+  }
+
+  const URL_BASE = 'https://localhost/api/v1/publish/events'
+  async function getBody(env: Record<string, unknown>, query = '') {
+    const res = await eventsGet(ctx({ env, url: `${URL_BASE}${query}` }))
+    return { status: res.status, body: JSON.parse(await res.text()) as { events: Array<{ id: string }>; total: number } }
+  }
+
+  it('keeps the default page at 100 and reports the bucket total beside it', async () => {
+    const { env, sqlite } = setupEnv()
+    insertBareEvents(sqlite, 140)
+    const { body } = await getBody(env)
+    expect(body.events).toHaveLength(DEFAULT_EVENT_LIST_LIMIT)
+    expect(body.total).toBe(140)
+  })
+
+  it('returns up to ?limit= events — the review page asks for the maximum', async () => {
+    const { env, sqlite } = setupEnv()
+    insertBareEvents(sqlite, 140)
+    const { body } = await getBody(env, `?limit=${MAX_EVENT_LIST_LIMIT}`)
+    expect(body.events).toHaveLength(140)
+    expect(body.total).toBe(140)
+  })
+
+  it('clamps a ?limit= of any length to the maximum', async () => {
+    const { env, sqlite } = setupEnv()
+    insertBareEvents(sqlite, 3)
+    const { status, body } = await getBody(env, '?limit=99999999999999999999')
+    expect(status).toBe(200)
+    expect(body.events).toHaveLength(3)
+  })
+
+  it('clamps ?limit= to the maximum and counts the rest', async () => {
+    const { env, sqlite } = setupEnv()
+    insertBareEvents(sqlite, MAX_EVENT_LIST_LIMIT + 7)
+    // A different bucket, so `total` is shown to count one status only.
+    insertBareEvents(sqlite, 3, 'approved')
+    const { body } = await getBody(env, '?limit=10000')
+    expect(body.events).toHaveLength(MAX_EVENT_LIST_LIMIT)
+    expect(body.total).toBe(MAX_EVENT_LIST_LIMIT + 7)
+
+    const all = await getBody(env, '?status=all&limit=10000')
+    expect(all.body.total).toBe(MAX_EVENT_LIST_LIMIT + 10)
+  })
+
+  it('?limit=1 is a cheap count', async () => {
+    const { env, sqlite } = setupEnv()
+    insertBareEvents(sqlite, 42)
+    const { body } = await getBody(env, '?limit=1')
+    expect(body.events).toHaveLength(1)
+    expect(body.total).toBe(42)
+  })
+
+  it('treats an empty ?limit= as omitted, like an empty ?status=', async () => {
+    const { env, sqlite } = setupEnv()
+    insertBareEvents(sqlite, 140)
+    const { status, body } = await getBody(env, '?limit=')
+    expect(status).toBe(200)
+    expect(body.events).toHaveLength(DEFAULT_EVENT_LIST_LIMIT)
+  })
+
+  it('issues the same number of statements however many datasets the links reach', async () => {
+    // The statement count must not grow with the catalogue, or a large
+    // node's queue crosses D1's per-invocation query limit.
+    async function statementsFor(linked: number): Promise<number> {
+      const sqlite = seedFixtures({ count: linked })
+      const db = asD1(sqlite)
+      const { id } = await insertCurrentEvent(db, SAMPLE)
+      for (let i = 0; i < linked; i++) {
+        await upsertEventDatasetLink(db, {
+          eventId: id,
+          datasetId: `DS${String(i).padStart(3, '0')}` + 'A'.repeat(21),
+          matchScore: 0.5,
+          signals: null,
+          source: 'matcher',
+        })
+      }
+      let prepared = 0
+      const prepare = db.prepare.bind(db)
+      db.prepare = (sql: string) => {
+        prepared++
+        return prepare(sql)
+      }
+      const res = await eventsGet(ctx({ env: { CATALOG_DB: db } }))
+      expect(res.status).toBe(200)
+      return prepared
+    }
+    expect(await statementsFor(200)).toBe(await statementsFor(1))
+  })
+
+  it('400 for a ?limit= that is not a positive integer', async () => {
+    const { env } = setupEnv()
+    for (const bad of ['0', '-3', '2.5', 'abc', '1e3', '0x10', '5.0', ' 5', '+5', '05']) {
+      expect((await getBody(env, `?limit=${bad}`)).status, bad).toBe(400)
+    }
+  })
+
+  it('treats an empty ?status= as omitted, not as every status', async () => {
+    const { env, sqlite } = setupEnv()
+    insertBareEvents(sqlite, 2)
+    insertBareEvents(sqlite, 3, 'approved')
+    const { body } = await getBody(env, '?status=')
+    expect(body.events).toHaveLength(2)
+    expect(body.total).toBe(2)
+  })
+
+  it('never reports fewer in total than it returned', async () => {
+    // The list and the count are separate reads; rows can leave the
+    // bucket between them. Emulate that with a count that comes back low.
+    const sqlite = seedFixtures({ count: 2 })
+    insertBareEvents(sqlite, 5)
+    const db = asD1(sqlite)
+    const prepare = db.prepare.bind(db)
+    db.prepare = (sql: string) => {
+      const stmt = prepare(sql)
+      if (!sql.includes('COUNT(*)')) return stmt
+      const bind = stmt.bind.bind(stmt)
+      stmt.bind = (...values: unknown[]) => {
+        const bound = bind(...values)
+        bound.first = (async () => ({ n: 2 })) as typeof bound.first
+        return bound
+      }
+      return stmt
+    }
+    const { body } = await getBody({ CATALOG_DB: db }, '?limit=5')
+    expect(body.events).toHaveLength(5)
+    expect(body.total).toBe(5)
+  })
+
+  it('answers with null signals for a link whose stored breakdown is unreadable', async () => {
+    const { env, sqlite } = setupEnv()
+    const { id } = await insertCurrentEvent(env.CATALOG_DB, SAMPLE)
+    await upsertEventDatasetLink(env.CATALOG_DB, {
+      eventId: id,
+      datasetId: DS_0,
+      matchScore: 0.9,
+      signals: { geo: 1 },
+      source: 'matcher',
+    })
+    sqlite.prepare(`UPDATE event_dataset_links SET signals_json = '{not json' WHERE event_id = ?`).run(id)
+    const res = await eventsGet(ctx({ env }))
+    expect(res.status).toBe(200)
+    const body = JSON.parse(await res.text()) as { events: Array<{ links: Array<{ signals: unknown }> }> }
+    expect(body.events[0].links[0].signals).toBeNull()
+  })
+
+  it('looks up linked dataset titles within D1’s 100-parameter limit', async () => {
+    // The local SQLite shim accepts any number of bound values; real D1
+    // refuses a statement with more than 100. Emulate that refusal so a
+    // single IN (…) over every linked dataset fails here as it would in
+    // production.
+    const sqlite = seedFixtures({ count: 120 })
+    const db = asD1(sqlite)
+    const prepare = db.prepare.bind(db)
+    db.prepare = (sql: string) => {
+      const stmt = prepare(sql)
+      const bind = stmt.bind.bind(stmt)
+      stmt.bind = (...values: unknown[]) => {
+        if (values.length > 100) throw new Error(`D1: too many SQL variables (${values.length})`)
+        return bind(...values)
+      }
+      return stmt
+    }
+    const env = { CATALOG_DB: db }
+    const { id } = await insertCurrentEvent(db, SAMPLE)
+    for (let i = 0; i < 120; i++) {
+      await upsertEventDatasetLink(db, {
+        eventId: id,
+        datasetId: `DS${String(i).padStart(3, '0')}` + 'A'.repeat(21),
+        matchScore: 0.5,
+        signals: null,
+        source: 'matcher',
+      })
+    }
+    const res = await eventsGet(ctx({ env }))
+    expect(res.status).toBe(200)
+    const body = JSON.parse(await res.text()) as {
+      events: Array<{ links: Array<{ datasetId: string; datasetTitle: string | null }> }>
+    }
+    expect(body.events[0].links).toHaveLength(120)
+    expect(body.events[0].links.every(l => l.datasetTitle !== null)).toBe(true)
   })
 })
 
