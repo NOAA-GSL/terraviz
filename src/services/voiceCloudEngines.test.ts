@@ -17,6 +17,7 @@ import {
   type VoiceCapabilities,
 } from './voiceService'
 import { createWsStreamingSttEngine, __resetWsStreamingDisabled, type WsLike } from './voiceWsStreaming'
+import { isOrbitWithdrawn, resetOrbitAvailabilityForTests } from './orbitAvailability'
 
 const ALL_CAPS: VoiceCapabilities = {
   webSpeechStt: true,
@@ -107,6 +108,22 @@ describe('cloud TTS', () => {
     // Subsequent speak short-circuits (no second fetch).
     await cloudTtsEngine.speak('Again', { lang: 'en' })
     expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it("withdraws Orbit and goes quiet on the node's orbit refusal", async () => {
+    resetOrbitAvailabilityForTests()
+    const fetchMock = vi.fn(async () => new Response(
+      JSON.stringify({ error: 'feature_disabled', code: 'feature_disabled', feature: 'orbit' }), { status: 403 },
+    ))
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('Audio', FakeAudio as unknown as typeof Audio)
+
+    await cloudTtsEngine.speak('Hi', { lang: 'en' })
+    expect(isOrbitWithdrawn()).toBe(true)
+    expect(cloudTtsEngine.isAvailable(ALL_CAPS)).toBe(false)
+    await cloudTtsEngine.speak('Again', { lang: 'en' })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    resetOrbitAvailabilityForTests()
   })
 })
 

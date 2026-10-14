@@ -14,7 +14,8 @@
  * Config (Pages → Settings → Variables; the token as an encrypted
  * secret): `CF_ACCOUNT_ID`, `CF_AI_GATEWAY` (gateway name),
  * `CF_AIG_TOKEN` (AI Gateway authorization). Absent any of them — or
- * with `KILL_VOICE` set, or over the per-IP rate cap — the proxy
+ * with `KILL_VOICE` set, the node's `orbit` feature off, or over the
+ * per-IP rate cap — the proxy
  * accepts the socket and sends a JSON error frame
  * (`{ type: 'error', code }`) before closing, since a browser
  * WebSocket can't read an HTTP status. The client cools down on that
@@ -25,6 +26,7 @@
  * https://developers.cloudflare.com/ai-gateway/usage/websockets-api/realtime-api/
  */
 
+import { isOrbitEnabled } from '../_lib/orbit-gate'
 import { type VoiceEnv, isVoiceKilled, isAllowedOrigin, makeRateLimiter } from './_voice-lib'
 
 export interface StreamEnv extends VoiceEnv {
@@ -104,6 +106,28 @@ export function buildGatewayUrl(env: StreamEnv, lang: string): string {
   return `wss://gateway.ai.cloudflare.com/v1/${accountId}/${gateway}/workers-ai?${params.toString()}`
 }
 
+/**
+ * Why a same-origin client is refused a socket, or `null` to open one.
+ * Split out because the order is the correctness and the handler
+ * itself needs a `WebSocketPair` to test. `KILL_VOICE` first, so its
+ * cooldown is what the client hears; the node's `orbit` feature next,
+ * so a disabled node never opens the upstream gateway socket and an
+ * unconfigured one still says why; the rate limit last, so a refusal
+ * for any other reason does not spend the caller's allowance.
+ */
+export async function streamRefusal(
+  env: StreamEnv,
+  ip: string,
+  rateLimited: (ip: string) => boolean = isRateLimited,
+): Promise<string | null> {
+  if (isVoiceKilled(env)) return 'voice_disabled'
+  // Orbit turned off for this node — voice only exists to talk to it.
+  if (!(await isOrbitEnabled(env))) return 'feature_disabled'
+  if (!streamConfigured(env)) return 'voice_unavailable'
+  if (rateLimited(ip)) return 'rate_limited'
+  return null
+}
+
 export const onRequest: PagesFunction<StreamEnv> = async (context) => {
   const { request, env } = context
 
@@ -119,10 +143,8 @@ export const onRequest: PagesFunction<StreamEnv> = async (context) => {
   // From here the caller is a real same-origin WS client. Disabled /
   // unconfigured / rate-limited cases are reported as a readable error
   // frame (not an unreadable HTTP status) so the client can fall back.
-  if (isVoiceKilled(env)) return wsError('voice_disabled')
-  if (!streamConfigured(env)) return wsError('voice_unavailable')
-  const ip = request.headers.get('CF-Connecting-IP') ?? 'anon'
-  if (isRateLimited(ip)) return wsError('rate_limited')
+  const refusal = await streamRefusal(env, request.headers.get('CF-Connecting-IP') ?? 'anon')
+  if (refusal) return wsError(refusal)
 
   const lang = new URL(request.url).searchParams.get('lang') ?? 'en'
 

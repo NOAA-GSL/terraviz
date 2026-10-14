@@ -32,6 +32,33 @@
  *                 feedback write endpoints.
  * - `datasets`  — dataset AUTHORING only (portal pages + publisher
  *                 mutations); public catalog reads are never gated.
+ * - `orbit`     — Orbit, the generative-AI docent: the chat panel and
+ *                 every way into it in the public SPA, plus the edge
+ *                 endpoints its chat and voice call
+ *                 (`/api/chat/completions`, `/api/models`,
+ *                 `/api/voice/*`; `/api/legend`, a plain image proxy,
+ *                 is left alone). Off **hides** Orbit
+ *                 rather than leaving it on its local keyword engine —
+ *                 an operator turning generative AI off is deciding
+ *                 visitors should not be offered a chat at all, and a
+ *                 docent that answers from keywords alone still looks
+ *                 like the AI one. Publisher-side drafting (blog
+ *                 generate, events enrichment) is not covered: those
+ *                 are authoring aids behind review, gated by their own
+ *                 features. The `/orbit` character page carries no
+ *                 model and is not gated either; only its Tools-menu
+ *                 link is hidden.
+ *
+ *                 **Desktop follows the toggle, deliberately.** A
+ *                 desktop build reads the node its `VITE_API_ORIGIN`
+ *                 names (default: the flagship node), and hides Orbit
+ *                 when that node says off — even though desktop Orbit
+ *                 by default runs on the user's own provider (Ollama,
+ *                 their own key, Apple Intelligence) rather than the
+ *                 node's Workers AI. The desktop app is how a Science
+ *                 On a Sphere kiosk runs, and that is where an
+ *                 operator's "off" most needs to hold; a quota-only
+ *                 reading of the toggle would leave it running there.
  */
 export const FEATURE_KEYS = [
   'events',
@@ -42,6 +69,7 @@ export const FEATURE_KEYS = [
   'analytics',
   'feedback',
   'datasets',
+  'orbit',
 ] as const
 
 export type FeatureKey = (typeof FEATURE_KEYS)[number]

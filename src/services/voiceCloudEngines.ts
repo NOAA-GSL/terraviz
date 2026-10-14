@@ -28,6 +28,7 @@ import {
   type StreamingSttEngine,
 } from './voiceService'
 import { createWsStreamingSttEngine } from './voiceWsStreaming'
+import { withdrawOrbit } from './orbitAvailability'
 import { logger } from '../utils/logger'
 
 const IS_TAURI = typeof window !== 'undefined' && !!(window as unknown as Record<string, unknown>).__TAURI__
@@ -36,7 +37,8 @@ const SYNTHESIZE_URL = '/api/voice/synthesize'
 /** Cap a single cloud recording so a forgotten session can't run forever. */
 const MAX_RECORD_MS = 15_000
 
-/** Set once the server reports `KILL_VOICE` (503 voice_disabled) — cools down for the session. */
+/** Set once the server reports `KILL_VOICE` (503 voice_disabled) or the
+ *  node's orbit gate refuses (403 feature_disabled) — cools down for the session. */
 let cloudVoiceDisabled = false
 
 /** Test seam. */
@@ -57,6 +59,14 @@ function noteKill(res: Response, code: string | undefined): void {
   if (res.status === 503 && code === 'voice_disabled') {
     cloudVoiceDisabled = true
     logger.info('[voice] cloud voice disabled by server (KILL_VOICE)')
+  }
+  // The node turned Orbit off since this page booted. These URLs are
+  // always the node's own, so the status and code are enough. Withdrawing
+  // tears the voice session down, so no further audio is captured.
+  if (res.status === 403 && code === 'feature_disabled') {
+    cloudVoiceDisabled = true
+    logger.info('[voice] Orbit turned off on this node')
+    withdrawOrbit('voice')
   }
 }
 

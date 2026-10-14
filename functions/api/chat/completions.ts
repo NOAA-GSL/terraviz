@@ -9,6 +9,7 @@
  * No external API key needed — uses the AI binding on Cloudflare's edge.
  */
 
+import { isOrbitEnabled, orbitDisabledResponse, type OrbitGateEnv } from '../_lib/orbit-gate'
 import { isWorkersAiQuotaError, workersAiErrorMessage } from '../_lib/workers-ai-error'
 import {
   extractModelText,
@@ -16,7 +17,7 @@ import {
   type WorkersAiToolCall,
 } from '../_lib/workers-ai-text'
 
-interface Env {
+interface Env extends OrbitGateEnv {
   AI: {
     run(
       model: string,
@@ -196,6 +197,9 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
     return new Response(null, { status: 403 })
   }
   const cors = corsHeaders(origin)
+  // Orbit turned off for this node — refuse before the rate limiter
+  // and the body parse, so a disabled node does no work for it.
+  if (!(await isOrbitEnabled(context.env))) return orbitDisabledResponse(cors)
   const ip = context.request.headers.get('CF-Connecting-IP')
 
   if (ip && isRateLimited(ip)) {

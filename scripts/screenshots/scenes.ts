@@ -431,6 +431,42 @@ export const scenes: Scene[] = [
   },
 
   {
+    name: 'orbit-disabled',
+    description:
+      'A node with Orbit turned off (Node profile → Features) — catalog with no Ask-Orbit button and no Orbit section in Tools',
+    // First match wins, so this rule overrides the all-enabled
+    // node-profile read in the catalog fixtures.
+    fixtures: [
+      { url: '/api/v1/node-profile', json: { profile: null, features: { orbit: false } } },
+      ...catalogReportFixtures(),
+    ],
+    requiresFixtures: true,
+    // Orbit-off renders no strings of its own; Weblate has nothing to gain.
+    skipWeblate: true,
+    // The same landing as `catalog-landing`, whose hero picks a
+    // different dataset on each capture.
+    masks: ['#hero-panel'],
+    async setup(page) {
+      await openCatalog(page)
+      // Set once boot has heard the node's answer and before the browse
+      // panel is shown. Assert the chrome is gone, so a regression that
+      // brings Orbit back fails the capture rather than diffing quietly.
+      // (The floating trigger is not checked: a catalog boot with no
+      // dataset never shows it, Orbit on or off.)
+      await page.locator('body.orbit-disabled').waitFor({ state: 'attached' })
+      await page.locator('#browse-chat-btn').waitFor({ state: 'hidden' })
+      // Catalog mode has no Tools toggle to open, and a section inside a
+      // closed popover reads hidden either way — so ask for the
+      // section's own computed display, which only the Orbit-off rule
+      // sets to none.
+      await page.waitForFunction(() => {
+        const section = document.querySelector('.tools-menu-section-orbit')
+        return !!section && getComputedStyle(section).display === 'none'
+      })
+    },
+  },
+
+  {
     name: 'colorbar-controls',
     description:
       'Colour & range controls for a data-encoded dataset — palette swatches, contrast stretch, and the value threshold, opened from the floating colorbar',

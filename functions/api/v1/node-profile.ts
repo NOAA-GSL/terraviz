@@ -40,6 +40,15 @@ function ok(body: string, xCache: 'HIT' | 'MISS'): Response {
   })
 }
 
+/** A good profile beside an assumed feature map: answered, never
+ *  cached, so the guess cannot outlive the blip that caused it. */
+function uncached(body: string): Response {
+  return new Response(body, {
+    status: 200,
+    headers: { 'Content-Type': CONTENT_TYPE, 'Cache-Control': 'no-store', 'X-Cache': 'BYPASS' },
+  })
+}
+
 function degraded(): Response {
   return new Response(JSON.stringify({ profile: null, features: defaultFeatures() }), {
     status: 200,
@@ -78,12 +87,17 @@ export const onRequestGet: PagesFunction<CatalogEnv> = async context => {
     : null
 
   // Fail-open: a node_settings read problem must not fail the
-  // identity read or disable anything — default to all-enabled.
+  // identity read or disable anything — default to all-enabled. But
+  // never cache that default: the SPA decides from this payload
+  // whether to offer Orbit at all, and one D1 hiccup cached for the
+  // TTL here (and again in every browser) would put Orbit back in
+  // front of visitors for ten minutes on a node that turned it off.
   let features = defaultFeatures()
   try {
     features = featuresFromRow(await getNodeSettings(context.env.CATALOG_DB))
   } catch {
     // Table missing (un-migrated deploy) or read error — all enabled.
+    return uncached(JSON.stringify({ profile, features }))
   }
 
   const body = JSON.stringify({ profile, features })

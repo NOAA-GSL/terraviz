@@ -118,6 +118,33 @@ const checks: Check[] = [
     },
   },
   {
+    name: 'a node with Orbit turned off offers no Orbit',
+    fixtures: [
+      { url: '/api/v1/node-profile', json: { profile: null, features: { orbit: false } } },
+      ...catalogFixtures(),
+    ],
+    async run(page) {
+      // `?labels=on` is the anchor: the poster deep links click it and
+      // then handle `?orbit=open` in the same synchronous pass, so once
+      // labels read pressed, the request to open Orbit has been made.
+      await gotoApp(page, '/?catalog=true&labels=on&orbit=open')
+      await page.locator('#browse-overlay').waitFor({ state: 'visible' })
+      await page.locator('body.orbit-disabled').waitFor({ state: 'attached' })
+      await page.locator('#tools-menu-labels[aria-pressed="true"]').waitFor({ state: 'attached' })
+      assert(!(await page.locator('#chat-panel').isVisible()), '?orbit=open must not open Orbit on a node that turned it off')
+      assert(!(await page.locator('#browse-chat-btn').isVisible()), 'browse must not offer the Ask-Orbit button')
+
+      // A search with no results offers no "ask Orbit" hint at all —
+      // not one that is merely hidden.
+      await page.locator('#browse-search').fill('zzzz no such dataset')
+      await page.locator('#browse-grid .browse-no-results').waitFor()
+      assert(
+        (await page.locator('.browse-docent-hint').count()) === 0,
+        'an empty search must not render the Orbit hint',
+      )
+    },
+  },
+  {
     name: 'view-mode navigation mounts each surface',
     async run(page) {
       await gotoApp(page, '/?catalog=true')

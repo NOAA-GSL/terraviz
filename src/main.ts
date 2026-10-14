@@ -37,7 +37,8 @@ import { updateMapControlsPosition } from './ui/mapControlsUI'
 import { initToolsMenu, syncToolsMenuState, syncToolsMenuLayout, pulseBrowseButton } from './ui/toolsMenuUI'
 import { closeOutputUI, initOutputUI, openOutputUI } from './ui/outputUI'
 import { openCreditsPanel } from './ui/creditsPanel'
-import { initChatUI, openChat, openChatSettings, notifyDatasetChanged, showChatTrigger, hideChatTrigger, closeChat, flushPendingGlobeActions } from './ui/chatUI'
+import { initChatUI, openChat, openChatSettings, notifyDatasetChanged, showChatTrigger, hideChatTrigger, closeChat, flushPendingGlobeActions, isOrbitAvailable, setOrbitAvailable } from './ui/chatUI'
+import { startNodeFeaturesRead, watchForOrbitWithdrawal } from './services/nodeFeatures'
 import { loadViewPreferences, saveViewPreferences, type ViewPreferences } from './utils/viewPreferences'
 import { renderColorbar, openDisplayControls, closeDisplayControls } from './ui/colorbarUI'
 import {
@@ -437,6 +438,14 @@ class InteractiveSphere {
    * Earth with the browse panel.
    */
   async initialize(): Promise<void> {
+    // This node's feature toggles, of which boot needs one: whether
+    // Orbit is offered at all. Started first so it overlaps everything
+    // below, and outside the `try` because both outcomes of it need
+    // the answer: the chat is set up inside, and the deep links after
+    // the `catch` can open the panel even when boot failed. `settle`
+    // never rejects and bounds its own wait (all-enabled past it).
+    const nodeFeatures = startNodeFeaturesRead()
+
     try {
       this.setLoading(true)
       this.setLoadingStatus('Starting up\u2026', 5)
@@ -682,8 +691,10 @@ class InteractiveSphere {
       this.setLoadingStatus('Loading datasets\u2026', 30)
       await this.loadDatasets()
 
-      // Initialize digital docent chat (available on all views)
-      this.initChat()
+      // Initialize digital docent chat (available on all views) —
+      // unless this node turned Orbit off, decided here, before
+      // anything below can show the trigger or open the panel.
+      this.initChat((await nodeFeatures.settle()).orbit)
 
       // Tour-authoring dock — mounts only when the URL carries
       // `?tourEdit=<id>`. Phase 3pt/A. Idempotent; the dock owns
@@ -767,7 +778,7 @@ class InteractiveSphere {
             onSelectDataset: (id) => this.selectDatasetFromBrowse(id),
             announce: (msg) => this.announce(msg),
             isMobile: this.isMobile,
-            onOpenChat: (query) => this.openChatWithQuery(query),
+            onOpenChat: this.browseOpenChat(),
           })
           collapseBrowseUI()
           if (!catalogModeActive) pulseBrowseButton()
@@ -797,7 +808,7 @@ class InteractiveSphere {
           onSelectDataset: (id) => this.selectDatasetFromBrowse(id),
           announce: (msg) => this.announce(msg),
           isMobile: this.isMobile,
-          onOpenChat: (query) => this.openChatWithQuery(query),
+          onOpenChat: this.browseOpenChat(),
         })
         // No collapse, no hide, no pulse \u2014 the browse panel is
         // the visible surface, not an overlay competing with the
@@ -859,7 +870,7 @@ class InteractiveSphere {
           onSelectDataset: (id) => this.selectDatasetFromBrowse(id),
           announce: (msg) => this.announce(msg),
           isMobile: this.isMobile,
-          onOpenChat: (query) => this.openChatWithQuery(query),
+          onOpenChat: this.browseOpenChat(),
         })
         if (this.viewports.getPanelCount() > 1) {
           collapseBrowseUI()
@@ -872,6 +883,11 @@ class InteractiveSphere {
       this.setLoading(false)
       this.setError(error instanceof Error ? error.message : 'Unknown error')
     }
+
+    // A boot that failed before `initChat` still owes the Orbit
+    // decision: the deep links below can open the panel or show the
+    // trigger. Idempotent when `initChat` already applied it.
+    if (!(await nodeFeatures.settle()).orbit) setOrbitAvailable(false)
 
     // Phase 5: listen for deep links unconditionally so the app can
     // load a dataset when opened from an external URL at any time,
@@ -1247,7 +1263,7 @@ class InteractiveSphere {
     }
 
     // Fetch and cache the legend image; generate a text description for non-vision mode.
-    initLegendForDataset(dataset, loadConfig())
+    this.primeOrbitLegend(dataset)
 
     // Auto-start a tour if the dataset has one associated via runTourOnLoad.
     // Skip if a tour is already running (the tour engine triggered this load).
@@ -1460,7 +1476,7 @@ class InteractiveSphere {
     }
 
     this.viewports.setPanelLoading(targetSlot, false)
-    initLegendForDataset(dataset, loadConfig())
+    this.primeOrbitLegend(dataset)
     // No runTourOnLoad check — the tour engine is in control
   }
 
@@ -2092,7 +2108,7 @@ class InteractiveSphere {
         onSelectDataset: (id) => this.selectDatasetFromBrowse(id),
         announce: (msg) => this.announce(msg),
         isMobile: this.isMobile,
-        onOpenChat: (query) => this.openChatWithQuery(query),
+        onOpenChat: this.browseOpenChat(),
       })
       // Mark as initialized so subsequent opens skip showBrowseUI.
       const el = overlay ?? document.getElementById('browse-overlay')
@@ -2680,9 +2696,23 @@ class InteractiveSphere {
     })
   }
 
-  /** Initialize the Orbit chat panel and wire playback positioning observers. */
-  private initChat(): void {
+  /**
+   * Wire playback positioning observers and, when this node offers
+   * Orbit, initialize the chat panel. With Orbit off the chat is never
+   * initialized — not merely hidden — because initialization restores
+   * the session and can start hands-free voice, which opens the
+   * microphone; `setOrbitAvailable(false)` hides the static chrome and
+   * refuses every programmatic open instead.
+   */
+  private initChat(orbitEnabled: boolean): void {
     initPlaybackPositioning()
+    if (!orbitEnabled) {
+      setOrbitAvailable(false)
+      return
+    }
+    // The node can turn Orbit off after this page booted; a kiosk tab
+    // never reloads to find out. Re-read periodically and withdraw.
+    watchForOrbitWithdrawal()
     initChatUI({
       onLoadDataset: (id) => { void this.selectDatasetFromChat(id) },
       onLoadFrame: (id, frameQuery) => { void this.loadFrameFromChat(id, frameQuery) },
@@ -2808,8 +2838,34 @@ class InteractiveSphere {
     this.runTourFromFile(tourFile, window.location.href)
   }
 
+  /**
+   * The browse panel's "ask Orbit" hook, or `undefined` when this node
+   * has Orbit off — browse then offers no docent hint under an empty
+   * search rather than a button that does nothing. Browse keeps the
+   * callbacks of its *first* `showBrowseUI` call, and every boot path
+   * makes that call after `initChat` decided. A page that loses Orbit
+   * mid-session keeps the captured hook; `body.orbit-disabled` hides
+   * the hint it renders, and `openChatWithQuery` refuses the click.
+   */
+  private browseOpenChat(): ((query?: string) => void) | undefined {
+    return isOrbitAvailable() ? (query) => this.openChatWithQuery(query) : undefined
+  }
+
+  /**
+   * Fetch the dataset's legend and have the vision model describe it
+   * for Orbit's context. This runs on every load, chat open or not, so
+   * it is skipped outright when the node has Orbit off — the
+   * description has no other reader, and the call would only meet the
+   * chat endpoint's `feature_disabled` refusal.
+   */
+  private primeOrbitLegend(dataset: Dataset): void {
+    if (!isOrbitAvailable()) return
+    initLegendForDataset(dataset, loadConfig())
+  }
+
   /** Open the chat panel and optionally pre-fill the input with a query string. */
   private openChatWithQuery(query?: string): void {
+    if (!isOrbitAvailable()) return
     openChat()
     if (query) {
       const input = document.getElementById('chat-input') as HTMLTextAreaElement | null
@@ -4160,7 +4216,7 @@ class InteractiveSphere {
       onSelectDataset: (id) => this.selectDatasetFromBrowse(id),
       announce: (msg) => this.announce(msg),
       isMobile: this.isMobile,
-      onOpenChat: (query) => this.openChatWithQuery(query),
+      onOpenChat: this.browseOpenChat(),
     })
     this.renderer?.setCanvasDescription('Interactive 3D globe showing Earth')
     notifyDatasetChanged(null)

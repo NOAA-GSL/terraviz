@@ -482,7 +482,7 @@
       "id": 9,
       "type": "table",
       "title": "Orbit response timing per model",
-      "description": "End-to-end response latency for Orbit. duration_ms is nullable on orbit_interaction — the WHERE clause filters out skipped rows so the average is meaningful.",
+      "description": "End-to-end response latency for Orbit. duration_ms is nullable on orbit_interaction — the WHERE clause filters out skipped rows so the average is meaningful, and keeps to completed replies (subtype stop): an error response stopped early, from an exception or Orbit withdrawn mid-turn. Local-engine fallback answers are still stop and still counted, under the configured model.",
       "gridPos": {
         "x": 0,
         "y": 44,
@@ -506,7 +506,7 @@
           "url": "/sql",
           "url_options": {
             "method": "POST",
-            "data": "SELECT blob6 AS model, count() AS responses, quantile(0.50)(double2) AS p50_response_ms, quantile(0.95)(double2) AS p95_response_ms FROM terraviz_events WHERE blob1 = 'orbit_interaction' AND blob5 = 'response_complete' AND blob2 = '$environment' AND blob4 = 'false' AND double2 > 0 AND timestamp > toDateTime(intDiv($__from, 1000)) GROUP BY model ORDER BY responses DESC",
+            "data": "SELECT blob6 AS model, count() AS responses, quantile(0.50)(double2) AS p50_response_ms, quantile(0.95)(double2) AS p95_response_ms FROM terraviz_events WHERE blob1 = 'orbit_interaction' AND blob5 = 'response_complete' AND blob7 = 'stop' AND blob2 = '$environment' AND blob4 = 'false' AND double2 > 0 AND timestamp > toDateTime(intDiv($__from, 1000)) GROUP BY model ORDER BY responses DESC",
             "headers": [
               {
                 "key": "Content-Type",
@@ -545,7 +545,7 @@
       "id": 10,
       "type": "table",
       "title": "Orbit turn outcome mix (assistant side)",
-      "description": "How LLM turns end. `length` truncations and `error` finishes are quality red flags worth investigating; `tool_calls` indicates the model is exercising the load_dataset tool path.",
+      "description": "How LLM turns end. `length` truncations and `error` finishes are quality red flags worth investigating, except that `error` also counts turns cut off because the node turned Orbit off (Node profile → Features) — check for a toggle change before blaming a model. `tool_calls` indicates the model is exercising the load_dataset tool path.",
       "gridPos": {
         "x": 12,
         "y": 44,

@@ -450,6 +450,8 @@ function featureDescription(key: FeatureKey): string {
       return t('publisher.nodeProfile.features.desc.feedback')
     case 'datasets':
       return t('publisher.nodeProfile.features.desc.datasets')
+    case 'orbit':
+      return t('publisher.nodeProfile.features.desc.orbit')
   }
 }
 
