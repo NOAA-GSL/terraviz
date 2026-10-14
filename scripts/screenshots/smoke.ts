@@ -352,6 +352,16 @@ const checks: Check[] = [
       // The status filter row lets a curator reach reviewed events.
       const filters = page.locator('.publisher-events-filters button')
       assert((await filters.count()) >= 5, 'queue header should expose the status filter (incl. All)')
+      // Search narrows the loaded queue client-side and the count says
+      // so; Clear brings the whole bucket back.
+      await page.locator('.publisher-events-query-input').fill('hurricane')
+      await page.locator('.publisher-events-query-count', { hasText: '1 of 2' }).waitFor({ timeout: 5_000 })
+      assert(
+        (await page.locator('.publisher-events-queue-row').count()) === 1,
+        'search should narrow the queue to the one matching event',
+      )
+      await page.locator('.publisher-events-query-clear').click()
+      await page.locator('.publisher-events-query-count', { hasText: '2 events' }).waitFor({ timeout: 5_000 })
       // The authoring toolbar exposes Refresh + New event; clicking New
       // opens the Direction-D drawer (compose + search/pair datasets).
       const toolbarButtons = page.locator('.publisher-events-toolbar button')
