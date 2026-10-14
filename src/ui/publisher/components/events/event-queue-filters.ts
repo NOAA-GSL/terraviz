@@ -16,11 +16,19 @@
  *
  * The controls keep their own DOM between changes rather than being
  * rebuilt, so the search box keeps focus and caret while the list under
- * it changes. Framework-free.
+ * it changes.
+ *
+ * The visible count follows every change; what a screen reader hears
+ * does not. Someone typing with a screen reader pauses longer than the
+ * search debounce between keys, so a live count would speak after
+ * nearly every letter. The count is announced through the app-wide
+ * announcer once input has been idle for `ANNOUNCE_IDLE_MS`, and only
+ * when its text changed. Framework-free.
  */
 
 import { plural, t } from '../../../../i18n'
 import { debounce } from '../../../../utils/debounce'
+import { announcePolite } from '../../../domUtils'
 import {
   QUEUE_SORTS,
   emptyQueueQuery,
@@ -33,6 +41,11 @@ import {
 /** How long typing must pause before the search applies. */
 export const SEARCH_DEBOUNCE_MS = 200
 
+/** How long the count must hold still before a screen reader hears it. */
+export const ANNOUNCE_IDLE_MS = 800
+
+const NOTE_ID = 'publisher-events-query-note'
+
 export interface QueueFiltersOptions {
   query: QueueQuery
   sources: readonly FacetOption[]
@@ -42,6 +55,11 @@ export interface QueueFiltersOptions {
   /** Events the status bucket holds on the server — more than `loaded`
    *  when the server stopped at its cap. */
   total: number
+  /** Every edit, synchronously — the page keeps it so a re-render inside
+   *  the debounce window does not lose what was typed. */
+  onDraft?: (query: QueueQuery) => void
+  /** An edit to apply: at once for the dropdowns, after a pause in
+   *  typing for the search box. */
   onChange: (query: QueueQuery) => void
 }
 
@@ -50,8 +68,13 @@ export interface QueueFilters {
   /** Drop the search and both filters (the sort stays), tell the page,
    *  and put focus in the search box. */
   clear(): void
-  /** Show how many events the query keeps. */
-  setCount(shown: number): void
+  /** Show how many events the query keeps, and queue it for a screen
+   *  reader. `nowShowing` names the event that took over the detail pane
+   *  because the query hid the one being read. */
+  setCount(shown: number, nowShowing?: string | null): void
+  /** Announce the current count now — after a reload, when the query
+   *  carried over is filtering a list nobody has heard about yet. */
+  announceCount(): void
 }
 
 function sortLabel(sort: QueueSort): string {
@@ -104,12 +127,16 @@ export function renderQueueFilters(opts: QueueFiltersOptions): QueueFilters {
   root.className = 'publisher-events-query'
   root.setAttribute('role', 'search')
   root.setAttribute('aria-label', t('publisher.events.query.aria'))
+  const truncated = opts.total > opts.loaded
 
   const search = document.createElement('input')
   search.type = 'search'
   search.className = 'publisher-events-query-input'
   search.placeholder = t('publisher.events.query.searchPlaceholder')
   search.value = current.text
+  // The partial-load note explains an empty result for an older event;
+  // tie it to the box so it is heard there, not only seen.
+  if (truncated) search.setAttribute('aria-describedby', NOTE_ID)
 
   const source = facetSelect(t('publisher.events.query.allSources'), opts.sources, current.source)
 
@@ -135,12 +162,9 @@ export function renderQueueFilters(opts: QueueFiltersOptions): QueueFilters {
   clearBtn.className = 'publisher-events-query-clear'
   clearBtn.textContent = t('publisher.events.query.clear')
 
-  // Announced politely after each change, so a screen-reader user hears
-  // what the search did without leaving the box. The Clear button sits
-  // beside it, not inside, so it is not read out with every count.
+  // Visible only; screen readers hear it through `announce` below.
   const count = document.createElement('p')
   count.className = 'publisher-events-query-count'
-  count.setAttribute('role', 'status')
   const statusRow = document.createElement('div')
   statusRow.className = 'publisher-events-query-status'
   statusRow.append(count, clearBtn)
@@ -155,8 +179,9 @@ export function renderQueueFilters(opts: QueueFiltersOptions): QueueFilters {
   controls.append(field(t('publisher.events.query.sort'), sort))
   root.append(controls, statusRow)
 
-  if (opts.total > opts.loaded) {
+  if (truncated) {
     const note = document.createElement('p')
+    note.id = NOTE_ID
     note.className = 'publisher-events-query-note'
     note.textContent = t('publisher.events.query.truncated', {
       loaded: String(opts.loaded),
@@ -177,32 +202,55 @@ export function renderQueueFilters(opts: QueueFiltersOptions): QueueFilters {
     if (root.isConnected) opts.onChange({ ...current })
   }
   const emitSoon = debounce(emit, SEARCH_DEBOUNCE_MS)
+  const edit = (next: QueueQuery): void => {
+    current = next
+    if (root.isConnected) opts.onDraft?.({ ...current })
+  }
 
   search.addEventListener('input', () => {
-    current = { ...current, text: search.value }
+    edit({ ...current, text: search.value })
     emitSoon()
   })
   source.addEventListener('change', () => {
-    current = { ...current, source: source.value === '' ? null : source.value }
+    edit({ ...current, source: source.value === '' ? null : source.value })
     emit()
   })
   category?.addEventListener('change', () => {
-    current = { ...current, category: category.value === '' ? null : category.value }
+    edit({ ...current, category: category.value === '' ? null : category.value })
     emit()
   })
   sort.addEventListener('change', () => {
-    current = { ...current, sort: sort.value as QueueSort }
+    edit({ ...current, sort: sort.value as QueueSort })
     emit()
   })
 
   const clear = (): void => {
-    current = { ...emptyQueueQuery(), sort: current.sort }
+    edit({ ...emptyQueueQuery(), sort: current.sort })
     search.value = ''
     source.value = ''
     if (category) category.value = ''
     emit()
     search.focus()
   }
+
+  // What a screen reader last heard, and a title waiting to be told.
+  // The title survives later keystrokes until it is announced: the
+  // detail pane changed even if the next letter did not change it again.
+  // The first count is the page arriving, not a change, and is not
+  // announced; it is only the baseline later counts are compared with.
+  let lastAnnounced: string | null = null
+  let pendingTitle: string | null = null
+  const announce = (force = false): void => {
+    if (!root.isConnected) return
+    const message = pendingTitle
+      ? `${count.textContent ?? ''} ${t('publisher.events.query.nowShowing', { title: pendingTitle })}`
+      : count.textContent ?? ''
+    pendingTitle = null
+    if (message === '' || (!force && message === lastAnnounced)) return
+    lastAnnounced = message
+    announcePolite(message)
+  }
+  const announceSoon = debounce(() => announce(), ANNOUNCE_IDLE_MS)
   clearBtn.addEventListener('click', clear)
 
   syncClear()
@@ -210,7 +258,8 @@ export function renderQueueFilters(opts: QueueFiltersOptions): QueueFilters {
   return {
     element: root,
     clear,
-    setCount(shown: number): void {
+    announceCount: () => announce(true),
+    setCount(shown: number, nowShowing?: string | null): void {
       count.textContent = isQueueFiltered(current)
         ? t('publisher.events.query.count.filtered', { shown: String(shown), total: String(opts.loaded) })
         : plural(
@@ -218,6 +267,12 @@ export function renderQueueFilters(opts: QueueFiltersOptions): QueueFilters {
             { one: 'publisher.events.query.count.one', other: 'publisher.events.query.count.other' },
             { count: opts.loaded },
           )
+      if (lastAnnounced === null) {
+        lastAnnounced = count.textContent
+        return
+      }
+      if (nowShowing) pendingTitle = nowShowing
+      announceSoon()
     },
   }
 }

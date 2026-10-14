@@ -1637,7 +1637,7 @@
 }
 .publisher-row-action:not(.publisher-button):hover,
 .publisher-row-action:not(.publisher-button):focus-visible {
-  background: var(--white-o05, rgba(255, 255, 255, 0.05));
+  background: var(--white-o06, rgba(255, 255, 255, 0.06));
   border-color: var(--white-o24, rgba(255, 255, 255, 0.24));
   text-decoration: none;
 }
@@ -2723,6 +2723,10 @@
      below does not shift when filtering starts. */
   min-block-size: 24px;
 }
+/* A text button, underlined at rest so it does not rely on colour alone
+   (forced-colors flattens the colour away). `background: none` again on
+   hover, because base.css's `button:hover` out-ranks a lone class and
+   would paint a dark-blue pill under blue text. */
 .publisher-events-query-clear {
   min-block-size: 24px; /* WCAG 2.5.8 target size */
   padding: 0 calc(0.25rem * var(--ui-scale));
@@ -2730,10 +2734,13 @@
   border: none;
   color: var(--color-accent, #4da6ff);
   font-size: calc(0.8rem * var(--ui-scale));
+  text-decoration: underline;
+  text-underline-offset: 2px;
   cursor: pointer;
 }
 .publisher-events-query-clear:hover {
-  text-decoration: underline;
+  background: none;
+  text-decoration-thickness: 2px;
 }
 .publisher-events-query-clear:focus-visible {
   outline: 2px solid var(--color-accent, #4da6ff);
@@ -2788,6 +2795,16 @@
   display: flex;
   flex-direction: column;
   gap: calc(0.15rem * var(--ui-scale));
+  /* A few hundred rows scroll inside the queue, so the detail pane stays
+     beside (or, on a phone, just below) the row that was picked. */
+  max-block-size: 70vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+@media (max-width: 768px) {
+  .publisher-events-queue-list {
+    max-block-size: 45vh;
+  }
 }
 .publisher-events-queue-row {
   display: flex;

@@ -304,8 +304,9 @@ export function matchesQueueQuery(event: ReviewEvent, query: QueueQuery): boolea
 
 /**
  * The events the query keeps, in the order it asks for. `events` must be
- * in the server's order (newest first). Every sort breaks ties on that
- * order, so equal-scoring events never shuffle between renders.
+ * in the server's order (newest first). `oldest` is that order reversed;
+ * the score sorts break ties on it, newest first, so equal-scoring events
+ * never shuffle between renders.
  */
 export function applyQueueQuery(events: readonly ReviewEvent[], query: QueueQuery): ReviewEvent[] {
   const kept = events.filter(e => matchesQueueQuery(e, query))

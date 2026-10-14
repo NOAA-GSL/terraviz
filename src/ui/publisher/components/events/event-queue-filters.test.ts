@@ -8,6 +8,7 @@ import { until } from '../../../../test-utils'
 
 function render(over: Partial<QueueFiltersOptions> = {}) {
   const onChange = vi.fn<(q: QueueQuery) => void>()
+  const onDraft = vi.fn<(q: QueueQuery) => void>()
   const filters = renderQueueFilters({
     query: emptyQueueQuery(),
     sources: [
@@ -18,14 +19,20 @@ function render(over: Partial<QueueFiltersOptions> = {}) {
     loaded: 96,
     total: 96,
     onChange,
+    onDraft,
     ...over,
   })
-  // Attached, as on the page: a detached control never reports.
-  document.body.replaceChildren(filters.element)
+  // Attached, as on the page: a detached control never reports. The
+  // app-wide announcer is part of every page the portal runs in.
+  const announcer = document.createElement('div')
+  announcer.id = 'a11y-announcer'
+  document.body.replaceChildren(filters.element, announcer)
   const selects = filters.element.querySelectorAll<HTMLSelectElement>('select')
   return {
     filters,
     onChange,
+    onDraft,
+    announcer,
     search: filters.element.querySelector<HTMLInputElement>('input[type="search"]')!,
     source: selects[0],
     category: selects.length === 3 ? selects[1] : null,
@@ -138,17 +145,58 @@ describe('renderQueueFilters', () => {
     const plain = render()
     plain.filters.setCount(96)
     expect(plain.count.textContent).toBe('96 events')
-    expect(plain.count.getAttribute('role')).toBe('status')
+    // Not a live region: it would speak after nearly every keystroke.
+    expect(plain.count.getAttribute('role')).toBeNull()
+    expect(plain.count.getAttribute('aria-live')).toBeNull()
 
     const filtered = render({ query: { ...emptyQueueQuery(), text: 'fire' } })
     filtered.filters.setCount(12)
     expect(filtered.count.textContent).toBe('12 of 96 shown')
   })
 
-  it('notes when the server loaded only part of the bucket', () => {
+  it('hands every edit to the page at once, before the search applies', () => {
+    const { onDraft, onChange, search } = render()
+    type(search, 'fl')
+    expect(onDraft).toHaveBeenLastCalledWith({ ...emptyQueueQuery(), text: 'fl' })
+    expect(onChange).not.toHaveBeenCalled()
+  })
+
+  it('announces a changed count once input goes quiet, and not the first one', async () => {
+    const { filters, search, announcer } = render()
+    filters.setCount(96) // the page arriving: the baseline, not news
+    type(search, 'fire')
+    filters.setCount(12, 'Wildfire near Boise')
+    await until(() => announcer.textContent !== '', 'the count announcement')
+    expect(announcer.textContent).toBe('12 of 96 shown Now showing Wildfire near Boise.')
+  })
+
+  it('does not repeat an unchanged count', async () => {
+    const { filters, sort, announcer } = render({ query: { ...emptyQueueQuery(), text: 'fire' } })
+    filters.setCount(12)
+    choose(sort, 'oldest')
+    filters.setCount(12)
+    // A positive anchor: a different count afterwards is announced, so
+    // the quiet window has passed and the repeat above was skipped.
+    filters.setCount(11)
+    await until(() => announcer.textContent !== '', 'the changed count')
+    expect(announcer.textContent).toBe('11 of 96 shown')
+  })
+
+  it('announces the count on request, whatever was said before', async () => {
+    const { filters, announcer } = render({ query: { ...emptyQueueQuery(), source: 'NOAA News' } })
+    filters.setCount(12)
+    filters.announceCount()
+    await until(() => announcer.textContent !== '', 'the forced announcement')
+    expect(announcer.textContent).toBe('12 of 96 shown')
+  })
+
+  it('notes when the server loaded only part of the bucket, and ties the note to the search box', () => {
     const capped = render({ loaded: 500, total: 734 })
-    expect(capped.filters.element.querySelector('.publisher-events-query-note')?.textContent).toContain('500 of 734')
+    const note = capped.filters.element.querySelector('.publisher-events-query-note')
+    expect(note?.textContent).toContain('500 of 734')
+    expect(capped.search.getAttribute('aria-describedby')).toBe(note?.id)
     const whole = render()
     expect(whole.filters.element.querySelector('.publisher-events-query-note')).toBeNull()
+    expect(whole.search.hasAttribute('aria-describedby')).toBe(false)
   })
 })

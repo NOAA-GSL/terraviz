@@ -395,7 +395,9 @@ describe('renderEventsPage — search, filter and sort', () => {
     r['POST /api/v1/publish/events'] = { status: 201, body: { created: true, event: { id: EVT, status: 'proposed' }, links: [] } }
     await renderEventsPage(mount, { fetchFn: mockFetch(r) })
     const sort = selects()[selects().length - 1]
-    choose(sort, 'oldest')
+    // Under strongest-match the new event (no pairings) sorts last, so
+    // only the page honouring the created id can select it.
+    choose(sort, 'bestMatch')
     typeSearch('flood')
     await until(() => queueTitles().length === 1, 'the search to apply')
 
@@ -412,6 +414,67 @@ describe('renderEventsPage — search, filter and sort', () => {
     expect(searchBox().value).toBe('')
     expect(queueTitles()).toHaveLength(4)
     // The sort hides nothing, so it stays.
-    expect(selects()[selects().length - 1].value).toBe('oldest')
+    expect(selects()[selects().length - 1].value).toBe('bestMatch')
+  })
+
+  it('keeps the order when a pairing decision changes a sort key', async () => {
+    const r = routes()
+    r['POST /api/v1/publish/events/E2'] = { body: { event: null, links: [] } }
+    await renderEventsPage(mount, { fetchFn: mockFetch(r) })
+    choose(selects()[selects().length - 1], 'mostToReview')
+    const order = ['Flooding in Valencia', 'Wildfire near Boise', 'Wildfire smoke reaches Denver']
+    expect(queueTitles()).toEqual(order)
+
+    mount.querySelectorAll<HTMLButtonElement>('.publisher-events-queue-row')[0].click()
+    mount.querySelector<HTMLButtonElement>('.publisher-events-pairing .publisher-events-icon-btn-approve')!.click()
+    await until(
+      () => mount.querySelector('.publisher-events-queue-sub')?.textContent?.includes('0 datasets') === true,
+      'the queue to reflect the decision',
+    )
+    // Re-sorting now would move Flooding below the tie it just joined.
+    expect(queueTitles()).toEqual(order)
+  })
+
+  it('keeps text typed just before a status switch', async () => {
+    await renderEventsPage(mount, { fetchFn: mockFetch(routes()) })
+    typeSearch('flood')
+    // No wait: the switch lands inside the search's debounce window.
+    ;[...mount.querySelectorAll<HTMLButtonElement>('.publisher-events-filters button')]
+      .find(b => b.textContent === 'Approved')!
+      .click()
+    await until(
+      () => mount.querySelector('.publisher-events-filter-active')?.textContent === 'Approved',
+      'the Approved bucket to render',
+    )
+    expect(searchBox().value).toBe('flood')
+    expect(queueTitles()).toEqual(['Flooding in Valencia'])
+  })
+
+  it('puts focus back on the pill or row that replaced the one clicked', async () => {
+    await renderEventsPage(mount, { fetchFn: mockFetch(routes()) })
+    mount.querySelectorAll<HTMLButtonElement>('.publisher-events-queue-row')[1].click()
+    expect(document.activeElement?.classList.contains('publisher-events-queue-row-selected')).toBe(true)
+    expect(document.activeElement?.textContent).toContain('Flooding in Valencia')
+
+    ;[...mount.querySelectorAll<HTMLButtonElement>('.publisher-events-filters button')]
+      .find(b => b.textContent === 'All')!
+      .click()
+    await until(
+      () => document.activeElement?.classList.contains('publisher-events-filter-active') === true,
+      'focus on the new active pill',
+    )
+    expect(document.activeElement?.textContent).toBe('All')
+  })
+
+  it('announces a carried-over filter after a status switch', async () => {
+    const announcer = document.createElement('div')
+    announcer.id = 'a11y-announcer'
+    document.body.append(announcer)
+    await renderEventsPage(mount, { fetchFn: mockFetch(routes()) })
+    choose(selects()[0], 'BBC Science')
+    ;[...mount.querySelectorAll<HTMLButtonElement>('.publisher-events-filters button')]
+      .find(b => b.textContent === 'Approved')!
+      .click()
+    await until(() => announcer.textContent === '1 of 3 shown', 'the carried-over count to be announced')
   })
 })

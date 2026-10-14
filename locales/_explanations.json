@@ -190,7 +190,7 @@
   "publisher.events.match.topicAbbr": "Very short visible abbreviation for the Topic match facet (English 'T') shown on a compact badge tag. Keep it 1–2 characters.",
   "publisher.events.pairing.approveAria": "Screen-reader label for the ✓ button that confirms one dataset pairing. Preserve {title} (the dataset name).",
   "publisher.events.pairing.rejectAria": "Screen-reader label for the ✕ button that rejects one dataset pairing. Preserve {title} (the dataset name).",
-  "publisher.events.queue.rowAria": "Screen-reader label for an event row in the queue. Preserve {title}, {category}, and {count}.",
+  "publisher.events.queue.rowAria": "Screen-reader label for an event row in the queue. Preserve {title}, {source} (the feed or outlet shown on the row, e.g. \"NASA EONET\"), {category}, and {count}.",
   "publisher.events.queue.toReview": "Sub-line counting an event's dataset pairings to review. Preserve {count}.",
   "publisher.feature.hero": "Display name of the \"Right now\" hero feature (the featured-dataset spotlight on the catalog landing surface) in the feature-toggles UI.",
   "publisher.featureDisabled.body": "Body of the card a portal page shows when its feature is toggled off. Preserve {feature} (a localized feature name, e.g. 'Blog').",
@@ -315,5 +315,6 @@
   "publisher.events.query.searchPlaceholder": "Placeholder in the Events tab's search box, listing what the search looks at. Keep it short; the field is narrow on mobile.",
   "publisher.events.query.sort.newest": "Sort option. \"Newest\" means when the event happened (else when its source published it, else when it was imported) — not when it arrived in the queue. Same sense as \"newest\" in publisher.events.query.truncated.",
   "publisher.events.query.sort.oldest": "Sort option, the reverse of publisher.events.query.sort.newest: by when the event happened, oldest first.",
-  "publisher.events.query.sort.mostToReview": "Sort option: events with the most dataset pairings still awaiting a curator's decision come first. \"Most datasets\" is a count, not dataset size. Same sense as publisher.events.queue.toReview."
+  "publisher.events.query.sort.mostToReview": "Sort option: events with the most dataset pairings still awaiting a curator's decision come first. \"Most datasets\" is a count, not dataset size. Same sense as publisher.events.queue.toReview.",
+  "publisher.events.query.nowShowing": "Screen-reader announcement appended to the match count when a search or filter hid the event being reviewed and another took its place in the detail pane. {title} is the new event's headline; preserve it."
 }

@@ -36,6 +36,7 @@ import {
   applyQueueQuery,
   categoryOptions,
   emptyQueueQuery,
+  isQueueFiltered,
   matchesQueueQuery,
   sourceOptions,
   type EventStatus,
@@ -89,6 +90,10 @@ type TriageState = EventsPageOptions & {
   isAdmin: boolean
   canCreate: boolean
   query: QueueQuery
+  /** Bumped by every load. A render, or a response, from an older
+   *  generation has been replaced and must not touch the page — the
+   *  locator above belongs to whichever render is current. */
+  renderGen: number
 }
 
 function clientIsPrivileged(me: MeResponse): boolean {
@@ -141,6 +146,7 @@ export async function renderEventsPage(mount: HTMLElement, options: EventsPageOp
     // the `me` read the page already made (no extra request).
     canCreate: roleCan(meRes.data.role, 'content.create'),
     query: emptyQueueQuery(),
+    renderGen: 0,
   })
 }
 
@@ -154,6 +160,9 @@ async function loadAndRenderQueue(
   status: QueueFilter = 'proposed',
   selectId?: string,
 ): Promise<void> {
+  // From here on, anything the previous render still has in flight (a
+  // review POST, a pending search) is stale.
+  const gen = ++state.renderGen
   // Tear down any live locator before this render replaces the DOM, so a
   // filter/refresh/reload can't orphan its WebGL context.
   state.locator.dispose?.()
@@ -162,6 +171,9 @@ async function loadAndRenderQueue(
     `${EVENTS_ENDPOINT}?status=${status}&limit=${QUEUE_LIMIT}`,
     { fetchFn: state.fetchFn },
   )
+  // A later load (another status pill) has started; its answer wins
+  // whichever of the two arrives first.
+  if (gen !== state.renderGen) return
   if (!res.ok) {
     if (res.kind === 'session') {
       if (handleSessionError({ navigate: state.navigate }) === 'navigating') return
@@ -175,7 +187,7 @@ async function loadAndRenderQueue(
   const { events } = res.data
   // An older server sends no total; then what arrived is all there is.
   const total = Math.max(res.data.total ?? events.length, events.length)
-  renderTriage(mount, events, total, state, notice, status, selectId)
+  renderTriage(mount, events, total, state, notice, status, gen, selectId)
 }
 
 /** The master–detail triage view: top bar + (queue | detail). */
@@ -186,8 +198,11 @@ function renderTriage(
   state: TriageState,
   notice: string | undefined,
   filter: QueueFilter,
+  gen: number,
   selectId?: string,
 ): void {
+  const live = (): boolean => state.renderGen === gen
+
   // A just-created event the query would hide is the one event the
   // curator certainly wants to see, so drop the search and filters for
   // it (the sort is kept — it hides nothing).
@@ -207,11 +222,21 @@ function renderTriage(
   const body = el('div', 'publisher-events-body')
   const eyebrow = filter === 'all' ? t('publisher.events.filter.all') : statusLabel(filter)
   let queue: HTMLElement | null = null
+  // Declared before the closures that read it; assigned once the body
+  // exists (nothing reads it before then).
+  let filters: QueueFilters | null = null
+
+  const queueList = (): HTMLElement | null =>
+    queue?.querySelector<HTMLElement>('.publisher-events-queue-list') ?? null
   const buildQueue = (): HTMLElement =>
     renderEventQueue(visible, selectedId, {
       onSelect: id => {
+        if (!live()) return
         selectedId = id
         rebuildBody()
+        // The row that was clicked was replaced with the queue; put focus
+        // back on its successor rather than dropping it to <body>.
+        queue?.querySelector<HTMLElement>('.publisher-events-queue-row-selected')?.focus({ preventScroll: true })
       },
     }, eyebrow)
   // Re-render just the queue node in place (keeps queue | detail as the
@@ -219,14 +244,20 @@ function renderTriage(
   // the "N datasets to review" count without rebuilding the detail pane.
   // It does not re-sort: an event jumping out from under the pointer
   // because the curator just ruled on one of its pairings is worse than
-  // an order that goes stale until the next query change.
-  const refreshQueue = (): void => {
-    if (!queue) return
+  // an order that goes stale until the next query change. The list's
+  // scroll position is carried over for the same reason.
+  const refreshQueue = (keepScroll = true): void => {
+    if (!live() || !queue) return
+    const scrollTop = keepScroll ? (queueList()?.scrollTop ?? 0) : 0
     const next = buildQueue()
     queue.replaceWith(next)
     queue = next
+    const list = queueList()
+    if (list) list.scrollTop = scrollTop
   }
-  const rebuildBody = (): void => {
+  const rebuildBody = (keepScroll = true): void => {
+    if (!live()) return
+    const scrollTop = keepScroll ? (queueList()?.scrollTop ?? 0) : 0
     state.locator.dispose?.()
     state.locator.dispose = null
     body.replaceChildren()
@@ -245,9 +276,13 @@ function renderTriage(
       fetchFn: state.fetchFn,
       navigate: state.navigate,
       mountLocator: (slot, point) => {
-        state.locator.dispose = mountEventLocator(slot, point)
+        const dispose = mountEventLocator(slot, point)
+        // A replaced render must not overwrite the live page's handle.
+        if (live()) state.locator.dispose = dispose
+        else dispose()
       },
       onEventStatusChange: (_id, next) => {
+        if (!live()) return
         // If the event no longer matches the active filter, reload so it
         // leaves the queue; otherwise just refresh the body so the queue
         // dot reflects the new status.
@@ -257,40 +292,52 @@ function renderTriage(
         }
         rebuildBody()
       },
-      onLinksChanged: refreshQueue,
+      onLinksChanged: () => refreshQueue(),
     })
     body.append(queue, detail)
+    const list = queueList()
+    if (list) list.scrollTop = scrollTop
   }
 
   // Nothing loaded means nothing to search; the empty state says so.
-  const filters: QueueFilters | null = events.length === 0
-    ? null
-    : renderQueueFilters({
-        query: state.query,
-        sources: sourceOptions(events),
-        categories: categoryOptions(events),
-        loaded: events.length,
-        total,
-        onChange: next => {
-          state.query = next
-          visible = applyQueueQuery(events, next)
+  if (events.length > 0) {
+    filters = renderQueueFilters({
+      query: state.query,
+      sources: sourceOptions(events),
+      categories: categoryOptions(events),
+      loaded: events.length,
+      total,
+      // Typed text is the page's as soon as it is typed, so a status
+      // switch inside the debounce window keeps it.
+      onDraft: next => {
+        if (live()) state.query = next
+      },
+      onChange: next => {
+        if (!live()) return
+        state.query = next
+        visible = applyQueueQuery(events, next)
+        // Keep the detail pane (and its map) when the selected event
+        // survives the change; otherwise the first match takes over.
+        if (queue && selectedId !== null && visible.some(e => e.id === selectedId)) {
           filters?.setCount(visible.length)
-          // Keep the detail pane (and its map) when the selected event
-          // survives the change; otherwise the first match takes over.
-          if (queue && selectedId !== null && visible.some(e => e.id === selectedId)) {
-            refreshQueue()
-            return
-          }
-          selectedId = visible[0]?.id ?? null
-          rebuildBody()
-        },
-      })
-  filters?.setCount(visible.length)
+          refreshQueue(false)
+          return
+        }
+        selectedId = visible[0]?.id ?? null
+        filters?.setCount(visible.length, visible[0]?.title ?? null)
+        rebuildBody(false)
+      },
+    })
+    filters.setCount(visible.length)
+  }
 
   rebuildBody()
 
   const topbar = renderTopbar(mount, state, notice, filter, filters?.element ?? null)
   mount.replaceChildren(shell(topbar, card(body)))
+  // A query carried over from before this load is filtering a list the
+  // curator has not seen yet; say so, since nothing else will.
+  if (filters && isQueueFiltered(state.query)) filters.announceCount()
 }
 
 /** The body when the query hides every loaded event: say so, and offer
@@ -375,7 +422,11 @@ function renderTopbar(
     btn.textContent = f === 'all' ? t('publisher.events.filter.all') : statusLabel(f)
     btn.setAttribute('aria-pressed', f === filter ? 'true' : 'false')
     btn.addEventListener('click', () => {
-      if (f !== filter) void loadAndRenderQueue(mount, state, undefined, f)
+      if (f === filter) return
+      // The pill is replaced with the page; land focus on its successor.
+      void loadAndRenderQueue(mount, state, undefined, f).then(() => {
+        mount.querySelector<HTMLElement>('.publisher-events-filter-active')?.focus()
+      })
     })
     filters.append(btn)
   }

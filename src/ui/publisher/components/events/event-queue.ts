@@ -48,6 +48,9 @@ function renderRow(event: ReviewEvent, selected: boolean, cb: EventQueueCallback
     'aria-label',
     t('publisher.events.queue.rowAria', {
       title: event.title,
+      // The row shows its source; its name says it too (label in name),
+      // and it is what the Source filter narrows by.
+      source: sourceLabel(event),
       category: cat ?? t('publisher.events.queue.uncategorized'),
       count: String(count),
     }),

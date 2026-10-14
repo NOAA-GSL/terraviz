@@ -156,8 +156,11 @@ export const onRequestGet: PagesFunction<CatalogEnv> = async context => {
   // not with event count: about 8 at the default limit and about 26 at
   // the maximum, which stays under D1's per-invocation query limit.
   const eventIds = eventRows.map(e => e.id)
-  const linksByEvent = await listLinksForEvents(db, eventIds)
-  const decorationsByEvent = await getDecorationsForEvents(db, eventIds)
+  // Independent reads, so neither waits on the other's round trips.
+  const [linksByEvent, decorationsByEvent] = await Promise.all([
+    listLinksForEvents(db, eventIds),
+    getDecorationsForEvents(db, eventIds),
+  ])
   const datasetIds = [...new Set([...linksByEvent.values()].flat().map(l => l.dataset_id))]
   const titles = await fetchDatasetTitles(db, datasetIds)
 

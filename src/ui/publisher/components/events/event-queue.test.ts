@@ -29,6 +29,13 @@ describe('renderEventQueue', () => {
     expect(nav.querySelector('.publisher-events-queue-sub')?.textContent).not.toContain('3')
   })
 
+  it('names each row with the source it shows', () => {
+    const nav = renderEventQueue([event()], 'EVT1', { onSelect: vi.fn() })
+    const row = nav.querySelector('.publisher-events-queue-row')!
+    expect(row.getAttribute('aria-label')).toContain('NOAA')
+    expect(row.textContent).toContain('NOAA')
+  })
+
   it('uses the supplied eyebrow label for the active filter', () => {
     const nav = renderEventQueue([event()], 'EVT1', { onSelect: vi.fn() }, 'Approved')
     expect(nav.querySelector('.publisher-events-eyebrow')?.textContent).toBe('Approved')
