@@ -117,6 +117,32 @@ describe('streamChat', () => {
     expect(chunks.some(c => c.type === 'error')).toBe(true)
   })
 
+  it("classifies the node's orbit refusal as feature_disabled", async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 403,
+      text: vi.fn().mockResolvedValue(JSON.stringify({
+        error: 'feature_disabled', code: 'feature_disabled', feature: 'orbit', message: 'off',
+      })),
+    }))
+    const chunks: StreamChunk[] = []
+    for await (const chunk of streamChat([{ role: 'user', content: 'hi' }], [], testConfig)) chunks.push(chunk)
+    expect(chunks).toContainEqual(expect.objectContaining({ type: 'error', code: 'feature_disabled' }))
+  })
+
+  it('leaves any other 403 unclassified — Orbit may point at another provider', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 403,
+      text: vi.fn().mockResolvedValue(JSON.stringify({ error: 'forbidden' })),
+    }))
+    const chunks: StreamChunk[] = []
+    for await (const chunk of streamChat([{ role: 'user', content: 'hi' }], [], testConfig)) chunks.push(chunk)
+    const error = chunks.find(c => c.type === 'error') as { code?: string } | undefined
+    expect(error).toBeTruthy()
+    expect(error?.code).toBeUndefined()
+  })
+
   it('sends Authorization header when API key is set', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,

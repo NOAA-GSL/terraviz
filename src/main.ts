@@ -38,7 +38,7 @@ import { initToolsMenu, syncToolsMenuState, syncToolsMenuLayout, pulseBrowseButt
 import { closeOutputUI, initOutputUI, openOutputUI } from './ui/outputUI'
 import { openCreditsPanel } from './ui/creditsPanel'
 import { initChatUI, openChat, openChatSettings, notifyDatasetChanged, showChatTrigger, hideChatTrigger, closeChat, flushPendingGlobeActions, isOrbitAvailable, setOrbitAvailable } from './ui/chatUI'
-import { fetchNodeFeatures } from './services/nodeFeatures'
+import { startNodeFeaturesRead, watchForOrbitWithdrawal } from './services/nodeFeatures'
 import { loadViewPreferences, saveViewPreferences, type ViewPreferences } from './utils/viewPreferences'
 import { renderColorbar, openDisplayControls, closeDisplayControls } from './ui/colorbarUI'
 import {
@@ -438,6 +438,14 @@ class InteractiveSphere {
    * Earth with the browse panel.
    */
   async initialize(): Promise<void> {
+    // This node's feature toggles, of which boot needs one: whether
+    // Orbit is offered at all. Started first so it overlaps everything
+    // below, and outside the `try` because both outcomes of it need
+    // the answer: the chat is set up inside, and the deep links after
+    // the `catch` can open the panel even when boot failed. `settle`
+    // never rejects and bounds its own wait (all-enabled past it).
+    const nodeFeatures = startNodeFeaturesRead()
+
     try {
       this.setLoading(true)
       this.setLoadingStatus('Starting up\u2026', 5)
@@ -460,13 +468,6 @@ class InteractiveSphere {
       const embedModeActive = applyEmbedMode()
 
       if (!this.checkWebGLSupport()) return
-
-      // This node's feature toggles, of which boot needs one: whether
-      // Orbit is offered at all. Started here so it overlaps the
-      // renderer and catalog work below, and awaited only where the
-      // chat is set up. Never rejects, and gives up (all-enabled)
-      // after a few seconds, so a slow endpoint cannot hold boot.
-      const nodeFeaturesReady = fetchNodeFeatures()
 
       const container = document.getElementById('container')
       if (!container) throw new Error('Container element not found')
@@ -693,7 +694,7 @@ class InteractiveSphere {
       // Initialize digital docent chat (available on all views) —
       // unless this node turned Orbit off, decided here, before
       // anything below can show the trigger or open the panel.
-      this.initChat((await nodeFeaturesReady).orbit)
+      this.initChat((await nodeFeatures.settle()).orbit)
 
       // Tour-authoring dock — mounts only when the URL carries
       // `?tourEdit=<id>`. Phase 3pt/A. Idempotent; the dock owns
@@ -882,6 +883,11 @@ class InteractiveSphere {
       this.setLoading(false)
       this.setError(error instanceof Error ? error.message : 'Unknown error')
     }
+
+    // A boot that failed before `initChat` still owes the Orbit
+    // decision: the deep links below can open the panel or show the
+    // trigger. Idempotent when `initChat` already applied it.
+    if (!(await nodeFeatures.settle()).orbit) setOrbitAvailable(false)
 
     // Phase 5: listen for deep links unconditionally so the app can
     // load a dataset when opened from an external URL at any time,
@@ -2704,6 +2710,9 @@ class InteractiveSphere {
       setOrbitAvailable(false)
       return
     }
+    // The node can turn Orbit off after this page booted; a kiosk tab
+    // never reloads to find out. Re-read periodically and withdraw.
+    watchForOrbitWithdrawal()
     initChatUI({
       onLoadDataset: (id) => { void this.selectDatasetFromChat(id) },
       onLoadFrame: (id, frameQuery) => { void this.loadFrameFromChat(id, frameQuery) },
@@ -2832,8 +2841,11 @@ class InteractiveSphere {
   /**
    * The browse panel's "ask Orbit" hook, or `undefined` when this node
    * has Orbit off — browse then offers no docent hint under an empty
-   * search rather than a button that does nothing. Read at each
-   * `showBrowseUI` call, all of which run after `initChat` decided.
+   * search rather than a button that does nothing. Browse keeps the
+   * callbacks of its *first* `showBrowseUI` call, and every boot path
+   * makes that call after `initChat` decided. A page that loses Orbit
+   * mid-session keeps the captured hook; `body.orbit-disabled` hides
+   * the hint it renders, and `openChatWithQuery` refuses the click.
    */
   private browseOpenChat(): ((query?: string) => void) | undefined {
     return isOrbitAvailable() ? (query) => this.openChatWithQuery(query) : undefined

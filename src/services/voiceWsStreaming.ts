@@ -24,6 +24,7 @@ import {
 } from './voiceService'
 import { downsampleTo16kHz, floatToLinear16, parseDeepgramMessage, parseStreamErrorFrame } from './voicePcm'
 import { baseLanguage, CLOUD_STT_LANGUAGES } from './voiceService'
+import { withdrawOrbit } from './orbitAvailability'
 import { logger } from '../utils/logger'
 
 /**
@@ -180,6 +181,8 @@ export function createWsStreamingSttEngine(deps: WsStreamingEngineDeps = {}): St
             logger.info(`[voice] ws streaming disabled by server (${code})`)
             onError(new Error(`voice stream ${code}`))
             end()
+            // The node turned Orbit off since this page booted.
+            if (code === 'feature_disabled') withdrawOrbit('voice')
             return
           }
           const msg = parseDeepgramMessage(ev.data)

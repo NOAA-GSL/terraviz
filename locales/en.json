@@ -253,6 +253,7 @@
   "chat.announce.voiceListening": "Listening",
   "chat.announce.voiceMuted": "Microphone muted",
   "chat.announce.voiceStopped": "Stopped speaking",
+  "chat.announce.withdrawn": "Orbit has been turned off on this site",
   "chat.autoLoad.altHint": " Here are some alternatives if this isn't quite right:",
   "chat.autoLoad.message": "I've loaded **{title}** — that's your closest match.{altHint}",
   "chat.clear.aria": "Clear chat history",

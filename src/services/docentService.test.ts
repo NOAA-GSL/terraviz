@@ -339,6 +339,40 @@ describe('processMessage — LLM path', () => {
   })
 })
 
+describe('processMessage — the node turned Orbit off mid-session', () => {
+  // The chat endpoint refuses with `feature_disabled` once the
+  // operator turns Orbit off. The docent must neither retry nor answer
+  // from the local engine — that keyword-only docent is what the toggle
+  // exists to remove — but withdraw Orbit from the page.
+  const config: DocentConfig = {
+    apiUrl: '/api',
+    apiKey: '',
+    model: 'test',
+    enabled: true,
+    readingLevel: 'general',
+    visionEnabled: false,
+  }
+
+  it('withdraws Orbit instead of retrying or answering from keywords', async () => {
+    const { resetOrbitAvailabilityForTests, isOrbitWithdrawn } = await import('./orbitAvailability')
+    resetOrbitAvailabilityForTests()
+    const { streamChat } = await import('./llmProvider')
+    const mockedStream = vi.mocked(streamChat)
+    mockedStream.mockImplementation(async function* () {
+      yield { type: 'error' as const, message: 'API error 403: feature_disabled', code: 'feature_disabled' as const }
+    })
+    mockedStream.mockClear()
+
+    const chunks: DocentStreamChunk[] = []
+    for await (const chunk of processMessage('hello', [], datasets, null, config)) chunks.push(chunk)
+
+    expect(mockedStream).toHaveBeenCalledTimes(1)
+    expect(isOrbitWithdrawn()).toBe(true)
+    expect(chunks.some(c => c.type === 'delta')).toBe(false)
+    resetOrbitAvailabilityForTests()
+  })
+})
+
 describe('processMessage — quota-exhausted LLM errors', () => {
   // A spent Workers AI budget comes back as an error chunk with
   // `code: 'quota_exhausted'`. It is not transient, so the retry that

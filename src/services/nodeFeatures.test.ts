@@ -3,14 +3,24 @@
 
 /**
  * The SPA's read of the node's feature toggles. One case reads an
- * answer; every other case is a way to fail, and each must come back
+ * answer; most of the rest are ways to fail, and each must come back
  * all-enabled — a node whose profile endpoint is slow, down, or not
- * there at all must not lose Orbit.
+ * there at all must not lose Orbit — and none may hold boot past the
+ * wait's deadline.
  */
 
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { defaultFeatures } from '../types/node-features'
-import { fetchNodeFeatures } from './nodeFeatures'
+import {
+  fetchNodeFeatures,
+  startNodeFeaturesRead,
+  watchForOrbitWithdrawal,
+} from './nodeFeatures'
+import {
+  isOrbitWithdrawn,
+  resetOrbitAvailabilityForTests,
+  withdrawOrbit,
+} from './orbitAvailability'
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -19,13 +29,18 @@ function jsonResponse(body: unknown, status = 200): Response {
   })
 }
 
+const ORBIT_OFF = { profile: null, features: { ...defaultFeatures(), orbit: false } }
+
+afterEach(() => {
+  vi.useRealTimers()
+  resetOrbitAvailabilityForTests()
+})
+
 describe('fetchNodeFeatures', () => {
-  it('reads the toggles off the public node profile', async () => {
-    const fetchFn = vi.fn(async () =>
-      jsonResponse({ profile: null, features: { ...defaultFeatures(), orbit: false } }),
-    )
+  it('reads the toggles off the public node profile, bypassing the browser cache', async () => {
+    const fetchFn = vi.fn(async (_path: string, _init?: RequestInit) => jsonResponse(ORBIT_OFF))
     const features = await fetchNodeFeatures({ fetchFn })
-    expect(fetchFn).toHaveBeenCalledWith('/api/v1/node-profile', expect.anything())
+    expect(fetchFn).toHaveBeenCalledWith('/api/v1/node-profile', expect.objectContaining({ cache: 'no-store' }))
     expect(features.orbit).toBe(false)
     expect(features.blog).toBe(true)
   })
@@ -42,7 +57,7 @@ describe('fetchNodeFeatures', () => {
     expect(features).toEqual(defaultFeatures())
   })
 
-  it('treats an HTML body (a dev server with no functions) as all-enabled', async () => {
+  it('treats an HTML body as all-enabled', async () => {
     const features = await fetchNodeFeatures({
       fetchFn: async () => new Response('<!doctype html><html></html>', { status: 200 }),
     })
@@ -57,18 +72,85 @@ describe('fetchNodeFeatures', () => {
     })
     expect(features).toEqual(defaultFeatures())
   })
+})
 
-  it('gives up after the timeout, aborts the request, and answers all-enabled', async () => {
+describe('startNodeFeaturesRead().settle', () => {
+  it('gives up at the deadline, aborts the request, and answers all-enabled', async () => {
     let signal: AbortSignal | undefined
-    const fetchFn = vi.fn((_path: string, init?: RequestInit) => {
-      signal = init?.signal ?? undefined
-      // Never answers on its own — only the abort ends it.
-      return new Promise<Response>((_resolve, reject) => {
-        signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')))
-      })
+    const read = startNodeFeaturesRead({
+      fetchFn: (_path, init) => {
+        signal = init?.signal ?? undefined
+        return new Promise<Response>(() => {})
+      },
     })
-    const features = await fetchNodeFeatures({ fetchFn, timeoutMs: 5 })
-    expect(features).toEqual(defaultFeatures())
+    expect(await read.settle(5)).toEqual(defaultFeatures())
     expect(signal?.aborted).toBe(true)
+  })
+
+  it('is bounded by its own timer when a body stalls after the headers', async () => {
+    // Headers arrive, the body never finishes, and nothing honours the
+    // abort — the wait must still end.
+    const stalled = new Response(new ReadableStream({ start() {} }), { status: 200 })
+    const read = startNodeFeaturesRead({ fetchFn: async () => stalled })
+    expect(await read.settle(5)).toEqual(defaultFeatures())
+  })
+
+  it("measures the deadline from the wait, not from the request", async () => {
+    vi.useFakeTimers()
+    let answer!: (res: Response) => void
+    const read = startNodeFeaturesRead({
+      fetchFn: () => new Promise<Response>(resolve => {
+        answer = resolve
+      }),
+    })
+    // The catalog load takes longer than the deadline...
+    await vi.advanceTimersByTimeAsync(10_000)
+    const settled = read.settle(3_000)
+    // ...and the node answers inside the deadline counted from here.
+    await vi.advanceTimersByTimeAsync(1_000)
+    answer(jsonResponse(ORBIT_OFF))
+    expect((await settled).orbit).toBe(false)
+  })
+
+  it('gives every waiter the first answer', async () => {
+    const read = startNodeFeaturesRead({ fetchFn: async () => jsonResponse(ORBIT_OFF) })
+    const first = await read.settle()
+    expect(await read.settle()).toBe(first)
+  })
+})
+
+describe('watchForOrbitWithdrawal', () => {
+  it('withdraws Orbit when a re-read says off, and then stops reading', async () => {
+    vi.useFakeTimers()
+    const fetchFn = vi.fn(async () => jsonResponse(ORBIT_OFF))
+    watchForOrbitWithdrawal({ fetchFn, intervalMs: 1_000 })
+    expect(isOrbitWithdrawn()).toBe(false)
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(isOrbitWithdrawn()).toBe(true)
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(fetchFn).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not withdraw on a failed or all-on re-read', async () => {
+    vi.useFakeTimers()
+    let call = 0
+    const fetchFn = vi.fn(async () => {
+      call++
+      if (call === 1) throw new TypeError('Failed to fetch')
+      return jsonResponse({ profile: null, features: defaultFeatures() })
+    })
+    watchForOrbitWithdrawal({ fetchFn, intervalMs: 1_000 })
+    await vi.advanceTimersByTimeAsync(2_000)
+    expect(fetchFn).toHaveBeenCalledTimes(2)
+    expect(isOrbitWithdrawn()).toBe(false)
+  })
+
+  it('stops when Orbit is withdrawn by another path', async () => {
+    vi.useFakeTimers()
+    const fetchFn = vi.fn(async () => jsonResponse({ profile: null, features: defaultFeatures() }))
+    watchForOrbitWithdrawal({ fetchFn, intervalMs: 1_000 })
+    withdrawOrbit('chat')
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(fetchFn).not.toHaveBeenCalled()
   })
 })

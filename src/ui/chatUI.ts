@@ -12,6 +12,7 @@
 import type { ChatMessage, ChatAction, ChatSession, DocentConfig, MapViewContext, ReadingLevel, FeedbackRating, FeedbackPayload } from '../types'
 import type { Dataset } from '../types'
 import { escapeHtml, escapeAttr } from './domUtils'
+import { onOrbitWithdrawn } from '../services/orbitAvailability'
 import { createMessageId } from '../services/docentEngine'
 import { processMessage, loadConfig, loadConfigWithKey, saveConfig, testConnection, getDefaultConfig, isLocalDev, IS_TAURI, captureViewContext } from '../services/docentService'
 import {
@@ -131,10 +132,29 @@ const actionClickMap = new Map<string, string[]>()
 let degradedUnsubscribe: (() => void) | null = null
 
 /** False when this node's operator turned Orbit off (Node profile →
- * Features, `features.orbit`). Starts true: boot decides once, before
+ * Features, `features.orbit`). Starts true: boot decides before
  * anything can open the panel, and calls {@link setOrbitAvailable}
- * instead of {@link initChatUI} when the answer is no. */
+ * instead of {@link initChatUI} when the answer is no. A page that
+ * outlives that decision is withdrawn later through
+ * `orbitAvailability`, which {@link initChatUI} subscribes to. */
 let orbitAvailable = true
+
+/** Released on re-init, like {@link degradedUnsubscribe}. */
+let orbitWithdrawalUnsubscribe: (() => void) | null = null
+
+/**
+ * Every element `body.orbit-disabled` hides (`src/styles/chat.css`).
+ * Kept here because focus has to leave all of them before they vanish,
+ * and pinned to the stylesheet by a test so the two lists cannot drift.
+ */
+export const ORBIT_CHROME_SELECTOR = [
+  '#chat-trigger',
+  '#chat-panel',
+  '#browse-chat-btn',
+  '.browse-docent-hint',
+  '.tools-menu-section-orbit',
+  '.help-guide-section-orbit',
+].join(', ')
 
 /** Whether this node offers Orbit at all. */
 export function isOrbitAvailable(): boolean {
@@ -147,18 +167,24 @@ export function isOrbitAvailable(): boolean {
  * generative AI off is deciding visitors are not offered a chat, and
  * a keyword-only docent still looks like the AI one.
  *
- * Two halves, because Orbit is reached two ways. Static chrome — the
- * floating trigger, the panel, the browse panel's speech-bubble
- * button, the Tools-menu section, the Help guide's Orbit section — is
- * hidden by `body.orbit-disabled` in `chat.css`, which holds whenever
- * it was rendered. Programmatic ways in (`?orbit=open`, the browse
- * no-results hint, Tools → Orbit settings, a dataset load's "ask about
- * this" nudge) go through {@link openChat} / {@link showChatTrigger} /
- * {@link notifyDatasetChanged}, which return early here. Withdrawing
- * also closes anything already open and stops hands-free voice, so no
- * microphone stays live for a chat nobody can see.
+ * Two halves, because Orbit is reached two ways. Static chrome is
+ * hidden by `body.orbit-disabled` ({@link ORBIT_CHROME_SELECTOR}),
+ * which holds whenever it was rendered. Programmatic ways in
+ * (`?orbit=open`, Tools → Orbit settings, a dataset load's "ask about
+ * this" nudge, a transcript auto-sending) go through functions that
+ * return early here.
+ *
+ * Withdrawing mid-session stops everything that could still be
+ * listening or talking — hands-free voice, a single-tap capture, a
+ * reply being spoken — not just the panel, because a microphone left
+ * running for a chat nobody can see is the failure that matters most.
+ * Focus is moved out first, so a keyboard or screen-reader user is not
+ * dropped to the top of the page, and the change is announced, since a
+ * panel that vanishes mid-conversation is otherwise silent.
  */
 export function setOrbitAvailable(available: boolean): void {
+  if (!available) rescueFocusFromOrbit()
+  const wasAvailable = orbitAvailable
   orbitAvailable = available
   document.body.classList.toggle('orbit-disabled', !available)
   if (available) return
@@ -167,6 +193,41 @@ export function setOrbitAvailable(available: boolean): void {
   dismissDatasetPrompt()
   handsFree?.teardown()
   handsFree = null
+  sttSuppressAutoSend = true
+  // Stopped and forgotten here, not left for the engine's `onEnd`: a
+  // capture must not survive the withdrawal on an engine slow to say so.
+  sttSession?.stop()
+  sttSession = null
+  stopSpeaking()
+  setVoiceAudioFocus(false)
+  setMicListening(false)
+  // Only a chat that was running has anyone to tell: boot withdrawing
+  // Orbit before initialising it removed nothing a visitor had seen.
+  if (wasAvailable && callbacks) callbacks.announce(t('chat.announce.withdrawn'))
+}
+
+/** Move focus off any Orbit control about to be hidden, to the nearest
+ *  surviving control: the open Tools popover's close button, the Tools
+ *  toggle, then browse search. A candidate that cannot take focus —
+ *  hidden in this layout — is skipped by checking where focus landed. */
+function rescueFocusFromOrbit(): void {
+  const active = document.activeElement
+  const onOrbit = active instanceof HTMLElement && !!active.closest(ORBIT_CHROME_SELECTOR)
+  // A reply in progress disables the chat input, which drops focus to
+  // the body before anything here runs — and a refused reply is the
+  // usual way a page learns Orbit was withdrawn. A visitor in the open
+  // panel is still in Orbit for this purpose.
+  const strandedInChat = isOpen && (!active || active === document.body)
+  if (!onOrbit && !strandedInChat) return
+  const popoverOpen = !document.getElementById('tools-menu-popover')?.classList.contains('hidden')
+  const candidates = [popoverOpen ? 'tools-menu-close' : null, 'tools-menu-toggle', 'browse-search']
+  for (const id of candidates) {
+    const el = id ? document.getElementById(id) : null
+    if (!el) continue
+    el.focus()
+    if (document.activeElement === el) return
+  }
+  if (onOrbit) (active as HTMLElement).blur()
 }
 
 /**
@@ -197,6 +258,10 @@ export function initChatUI(cb: ChatCallbacks): void {
   degradedUnsubscribe = subscribeDegraded(state =>
     renderDegradedBadge(state.reason),
   )
+  // The node turning Orbit off after boot (a re-read, or an endpoint
+  // refusing a turn or audio) withdraws it from this page.
+  orbitWithdrawalUnsubscribe?.()
+  orbitWithdrawalUnsubscribe = onOrbitWithdrawn(() => setOrbitAvailable(false))
 }
 
 /**
@@ -849,6 +914,7 @@ function populateVoiceLanguageOptions(): void {
 }
 
 function toggleListening(): void {
+  if (!orbitAvailable) return
   // The mic tap is a user gesture — prime iOS TTS now so a
   // voice-initiated reply (which auto-sends later, off-gesture) can
   // still be spoken aloud.
@@ -875,7 +941,7 @@ function toggleListening(): void {
 
 function startListening(): void {
   const input = document.getElementById('chat-input') as HTMLTextAreaElement | null
-  if (!input || isStreaming) return
+  if (!input || isStreaming || !orbitAvailable) return
   // Barge-in: never capture while Orbit is speaking, or the mic would
   // transcribe its own TTS (echo / self-trigger). (§9.1)
   stopSpeaking()
@@ -1325,7 +1391,8 @@ async function handleSettingsTest(): Promise<void> {
 
 async function handleSend(): Promise<void> {
   const input = document.getElementById('chat-input') as HTMLTextAreaElement | null
-  if (!input || !callbacks || isStreaming) return
+  // A transcript finishing after Orbit was withdrawn must not send.
+  if (!input || !callbacks || isStreaming || !orbitAvailable) return
 
   // Terminate any active listening first (regardless of how send was
   // triggered) so recognition can't keep mutating the input after we
@@ -1659,6 +1726,12 @@ async function handleSend(): Promise<void> {
     // with a tool-calling path that can take 2+ rounds.
     turn_rounds: docentMsg.llmContext?.roundsCount ?? 0,
   })
+
+  // Orbit was withdrawn during this turn (the endpoint refused it):
+  // the panel is gone and the withdrawal has been announced. Rendering,
+  // saving an empty reply, or announcing "responded" over that would
+  // each be wrong.
+  if (!orbitAvailable) return
 
   // Re-render fully to wire action button events
   renderMessages()

@@ -872,10 +872,10 @@
  * `src/ui/chatUI.ts` when the node's `orbit` feature is off. Orbit is
  * then absent, not degraded: every static way in is hidden here,
  * whenever it was rendered — the Tools menu and the Help guide can be
- * built before boot hears the node's answer — while programmatic
- * opens are refused in `chatUI.ts`. The trigger and panel never get
- * shown on that path; they are listed so nothing that later toggles
- * `.hidden` directly can bring them back.
+ * built before boot hears the node's answer, and a page can lose Orbit
+ * mid-session, after browse captured its "ask Orbit" hint — while
+ * programmatic opens are refused in `chatUI.ts`. The selector list is
+ * `ORBIT_CHROME_SELECTOR` there, and a test holds the two together.
  *
  * `!important` for `embed.css`'s reason: these elements are toggled
  * through the `.hidden` utility (`display: none !important`), and
@@ -884,6 +884,7 @@
 body.orbit-disabled #chat-trigger,
 body.orbit-disabled #chat-panel,
 body.orbit-disabled #browse-chat-btn,
+body.orbit-disabled .browse-docent-hint,
 body.orbit-disabled .tools-menu-section-orbit,
 body.orbit-disabled .help-guide-section-orbit {
     display: none !important;
