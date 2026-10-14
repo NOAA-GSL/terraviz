@@ -191,6 +191,9 @@ export function setOrbitAvailable(available: boolean): void {
   if (isOpen) closeChat()
   hideChatTrigger()
   dismissDatasetPrompt()
+  // A reply's fly-to or set-time waiting on its Load button would
+  // otherwise run when a load already under way finishes.
+  pendingGlobeActions = []
   handsFree?.teardown()
   handsFree = null
   sttSuppressAutoSend = true
@@ -1493,6 +1496,16 @@ async function handleSend(): Promise<void> {
     let firstChunk = true
     pendingGlobeActions = [] // Clear any stale pending actions
     for await (const chunk of stream) {
+      // Withdrawn mid-reply: a refused TTS sentence or the periodic
+      // re-read can land while a turn the chat endpoint accepted is
+      // still streaming. None of the rest may reach the globe (an
+      // auto-load, a deferred fly-to at `done`) or count as a reply.
+      // Leaving the loop stops reading the stream; the request itself
+      // is not aborted, so the endpoint finishes that one reply.
+      if (!orbitAvailable) {
+        streamFinishReason = 'error'
+        break
+      }
       if (firstChunk && chunk.type !== 'done') {
         hideTyping()
         firstChunk = false
@@ -1727,7 +1740,7 @@ async function handleSend(): Promise<void> {
     turn_rounds: docentMsg.llmContext?.roundsCount ?? 0,
   })
 
-  // Orbit was withdrawn during this turn (the endpoint refused it):
+  // Orbit was withdrawn during this turn (a refusal, or the re-read):
   // the panel is gone and the withdrawal has been announced. Rendering,
   // saving an empty reply, or announcing "responded" over that would
   // each be wrong.

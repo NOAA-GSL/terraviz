@@ -30,7 +30,19 @@ vi.mock('../services/voiceService', async (importOriginal) => {
   }
 })
 
-const { initChatUI, openChat, setOrbitAvailable, ORBIT_CHROME_SELECTOR } = await import('./chatUI')
+vi.mock('../services/docentService', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../services/docentService')>()
+  return { ...actual, processMessage: vi.fn() }
+})
+
+vi.mock('../analytics', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../analytics')>()
+  return { ...actual, emit: vi.fn() }
+})
+
+const { initChatUI, openChat, setOrbitAvailable, flushPendingGlobeActions, ORBIT_CHROME_SELECTOR } = await import('./chatUI')
+const { processMessage } = await import('../services/docentService')
+const { emit } = await import('../analytics')
 const { HandsFreeController } = await import('./voiceHandsFree')
 const { withdrawOrbit, resetOrbitAvailabilityForTests } = await import('../services/orbitAvailability')
 
@@ -55,14 +67,30 @@ function setupDOM(): void {
 }
 
 const announce = vi.fn()
+const onLoadDataset = vi.fn()
+const onFlyTo = vi.fn()
 
 function startChat(): void {
   initChatUI({
-    onLoadDataset: vi.fn(),
+    onLoadDataset,
+    onFlyTo,
     getDatasets: () => [],
     getCurrentDataset: () => null,
     announce,
   } as unknown as Parameters<typeof initChatUI>[0])
+}
+
+function send(text: string): void {
+  const input = document.getElementById('chat-input') as HTMLTextAreaElement
+  input.value = text
+  document.getElementById('chat-send')!.click()
+}
+
+/** The stream-end telemetry for the turn, once it has been emitted. */
+function responseComplete(): Record<string, unknown> | undefined {
+  return vi.mocked(emit).mock.calls
+    .map(([event]) => event as unknown as Record<string, unknown>)
+    .find(event => event.interaction === 'response_complete')
 }
 
 beforeEach(() => {
@@ -72,6 +100,9 @@ beforeEach(() => {
   resetOrbitAvailabilityForTests()
   engineStop.mockClear()
   announce.mockClear()
+  onLoadDataset.mockClear()
+  onFlyTo.mockClear()
+  vi.mocked(emit).mockClear()
 })
 
 afterEach(() => {
@@ -108,6 +139,51 @@ describe('Orbit withdrawn mid-session', () => {
     expect(document.getElementById('chat-mic')!.getAttribute('aria-pressed')).not.toBe('true')
   })
 
+  it('stops acting on a reply that was still streaming', async () => {
+    // The chat endpoint accepted the turn; a TTS sentence or the
+    // re-read then reported Orbit off while the reply was arriving.
+    vi.mocked(processMessage).mockImplementation(async function* () {
+      yield { type: 'delta' as const, text: 'Here is sea level rise. ' }
+      withdrawOrbit('voice')
+      yield {
+        type: 'auto-load' as const,
+        action: { type: 'load-dataset' as const, datasetId: 'DS_SEA', datasetTitle: 'Sea Level' },
+        alternatives: [],
+      }
+      yield { type: 'action' as const, action: { type: 'fly-to' as const, lat: 10, lon: 20 } }
+      yield { type: 'done' as const, fallback: false }
+    })
+    startChat()
+    openChat()
+    send('show me sea level')
+
+    await vi.waitFor(() => expect(responseComplete()).toBeDefined())
+    expect(onLoadDataset).not.toHaveBeenCalled()
+    expect(onFlyTo).not.toHaveBeenCalled()
+    expect(responseComplete()).toMatchObject({ subtype: 'error' })
+  })
+
+  it('drops a finished reply\'s globe actions still waiting on its Load button', async () => {
+    // A load the visitor started just before the withdrawal flushes
+    // the queue when it lands (main.ts selectDatasetFromChat).
+    vi.mocked(processMessage).mockImplementation(async function* () {
+      yield { type: 'action' as const, action: { type: 'fly-to' as const, lat: 10, lon: 20 } }
+      yield {
+        type: 'action' as const,
+        action: { type: 'load-dataset' as const, datasetId: 'DS_SEA', datasetTitle: 'Sea Level' },
+      }
+      yield { type: 'done' as const, fallback: false }
+    })
+    startChat()
+    openChat()
+    send('where is it')
+    await vi.waitFor(() => expect(responseComplete()).toBeDefined())
+    expect(responseComplete()).toMatchObject({ subtype: 'stop' })
+
+    withdrawOrbit('recheck')
+    flushPendingGlobeActions()
+    expect(onFlyTo).not.toHaveBeenCalled()
+  })
 })
 
 describe('focus when Orbit is withdrawn', () => {
