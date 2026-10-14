@@ -130,6 +130,45 @@ const actionClickMap = new Map<string, string[]>()
  * boot, so this is purely defensive. */
 let degradedUnsubscribe: (() => void) | null = null
 
+/** False when this node's operator turned Orbit off (Node profile →
+ * Features, `features.orbit`). Starts true: boot decides once, before
+ * anything can open the panel, and calls {@link setOrbitAvailable}
+ * instead of {@link initChatUI} when the answer is no. */
+let orbitAvailable = true
+
+/** Whether this node offers Orbit at all. */
+export function isOrbitAvailable(): boolean {
+  return orbitAvailable
+}
+
+/**
+ * Offer or withdraw Orbit on this page. Withdrawn means *absent*, not
+ * degraded to the local keyword engine: an operator who turns
+ * generative AI off is deciding visitors are not offered a chat, and
+ * a keyword-only docent still looks like the AI one.
+ *
+ * Two halves, because Orbit is reached two ways. Static chrome — the
+ * floating trigger, the panel, the browse panel's speech-bubble
+ * button, the Tools-menu section, the Help guide's Orbit section — is
+ * hidden by `body.orbit-disabled` in `chat.css`, which holds whenever
+ * it was rendered. Programmatic ways in (`?orbit=open`, the browse
+ * no-results hint, Tools → Orbit settings, a dataset load's "ask about
+ * this" nudge) go through {@link openChat} / {@link showChatTrigger} /
+ * {@link notifyDatasetChanged}, which return early here. Withdrawing
+ * also closes anything already open and stops hands-free voice, so no
+ * microphone stays live for a chat nobody can see.
+ */
+export function setOrbitAvailable(available: boolean): void {
+  orbitAvailable = available
+  document.body.classList.toggle('orbit-disabled', !available)
+  if (available) return
+  if (isOpen) closeChat()
+  hideChatTrigger()
+  dismissDatasetPrompt()
+  handsFree?.teardown()
+  handsFree = null
+}
+
 /**
  * Initialize the chat UI with callbacks and restore session.
  */
@@ -200,6 +239,7 @@ function degradedBadgeText(reason: DegradedReason): string {
  * Open the chat panel.
  */
 export function openChat(): void {
+  if (!orbitAvailable) return
   const panel = document.getElementById('chat-panel')
   const trigger = document.getElementById('chat-trigger')
   const browseChatBtn = document.getElementById('browse-chat-btn')
@@ -239,6 +279,7 @@ export function openChat(): void {
  * expanded, this just ensures the chat panel is visible.
  */
 export function openChatSettings(): void {
+  if (!orbitAvailable) return
   openChat()
   if (!settingsOpen) {
     toggleSettings()
@@ -283,6 +324,10 @@ export function toggleChat(): void {
  * Notify the chat that the current dataset changed.
  */
 export function notifyDatasetChanged(dataset: Dataset | null): void {
+  // Nothing to nudge toward, and no session to save: with Orbit off
+  // the chat never restored one, so saving would overwrite the
+  // visitor's stored conversation with an empty one.
+  if (!orbitAvailable) return
   saveSession()
   if (dataset && !isOpen) {
     showDatasetPrompt(dataset)
@@ -433,6 +478,7 @@ function restoreSession(): void {
  * Show the standalone floating chat trigger (used when a dataset is loaded).
  */
 export function showChatTrigger(): void {
+  if (!orbitAvailable) return
   const trigger = document.getElementById('chat-trigger')
   trigger?.classList.add('visible')
   // One-time pulse on first ever appearance to draw attention
