@@ -1648,7 +1648,7 @@
   "publisher.nodeProfile.features.desc.events": "The current-events pipeline: feeds, the review queue, and the public events overlays and \"In the news\" panels.",
   "publisher.nodeProfile.features.desc.feedback": "The feedback review tab. While off, in-app feedback submissions are accepted but not stored.",
   "publisher.nodeProfile.features.desc.hero": "The \"Right now\" hero spotlight on the catalog landing surface.",
-  "publisher.nodeProfile.features.desc.orbit": "Orbit, the chat assistant that uses generative AI to answer visitors' questions about datasets. While off, Orbit's chat and voice are removed from the public site. AI drafting in Blog and Events is unaffected.",
+  "publisher.nodeProfile.features.desc.orbit": "Orbit, the chat assistant that uses generative AI to answer visitors' questions about datasets. While off, Orbit's chat and voice are removed from the public site and the desktop app. AI drafting in Blog and Events is unaffected.",
   "publisher.nodeProfile.features.desc.tours": "Tour authoring and the public tour cards in Browse.",
   "publisher.nodeProfile.features.desc.workflows": "Zyra data-pipeline workflows and their scheduler.",
   "publisher.nodeProfile.features.heading": "Features",

@@ -48,6 +48,17 @@
  *                 features. The `/orbit` character page carries no
  *                 model and is not gated either; only its Tools-menu
  *                 link is hidden.
+ *
+ *                 **Desktop follows the toggle, deliberately.** A
+ *                 desktop build reads the node its `VITE_API_ORIGIN`
+ *                 names (default: the flagship node), and hides Orbit
+ *                 when that node says off — even though desktop Orbit
+ *                 by default runs on the user's own provider (Ollama,
+ *                 their own key, Apple Intelligence) rather than the
+ *                 node's Workers AI. The desktop app is how a Science
+ *                 On a Sphere kiosk runs, and that is where an
+ *                 operator's "off" most needs to hold; a quota-only
+ *                 reading of the toggle would leave it running there.
  */
 export const FEATURE_KEYS = [
   'events',

@@ -307,5 +307,5 @@
   "outputs.warp.framebufferStretched.one": "{solvedWidth}×{solvedHeight} is the display size the calibration was made for; {width}×{height} is this display's. Keep the × sign. {percent} is a whole number. Used when the bundle has one projector.",
   "outputs.warp.framebufferStretched.other": "As outputs.warp.framebufferStretched.one, for a bundle with several projectors, all stretched by the same amount.",
   "publisher.feature.orbit": "Label for the Orbit toggle on the operator's Node profile → Features card. \"Orbit\" is the assistant's name (keep it). \"Docent\" means a museum or science-center guide, not a university lecturer.",
-  "publisher.nodeProfile.features.desc.orbit": "Description under the Orbit toggle, read by a node operator deciding whether to allow generative AI. \"Blog\" and \"Events\" are the names of other toggles on the same card; translate them exactly as those labels are translated."
+  "publisher.nodeProfile.features.desc.orbit": "Description under the Orbit toggle, read by a node operator deciding whether to allow generative AI. \"The desktop app\" is TerraViz's installable app (Windows, macOS, Linux), which follows this node's setting. \"Blog\" and \"Events\" are the names of other toggles on the same card; translate them exactly as those labels are translated."
 }
