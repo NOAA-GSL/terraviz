@@ -13,6 +13,7 @@
  * See docs/ORBIT_VOICE_PLAN.md §3 (models), §7 (Phase 2).
  */
 
+import { isOrbitEnabled, orbitDisabledResponse } from '../_lib/orbit-gate'
 import { isWorkersAiQuotaError } from '../_lib/workers-ai-error'
 import {
   type VoiceEnv,
@@ -50,6 +51,8 @@ export const onRequestPost: PagesFunction<VoiceEnv> = async (context) => {
   if (isVoiceKilled(env)) {
     return voiceError('voice disabled', 503, { ...cors, 'Retry-After': '300' }, 'voice_disabled')
   }
+  // Orbit turned off for this node — voice only exists to talk to it.
+  if (!(await isOrbitEnabled(env))) return orbitDisabledResponse(cors)
   if (!env.AI) return voiceError('voice unavailable', 503, cors, 'voice_unavailable')
 
   const ip = request.headers.get('CF-Connecting-IP') ?? 'anon'

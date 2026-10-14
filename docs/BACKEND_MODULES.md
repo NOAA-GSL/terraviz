@@ -96,7 +96,7 @@ Phase 2 opt-in public projection:
 | `functions/.well-known/terraviz.json.ts` | Route: GET /.well-known/terraviz.json |
 | `functions/api/_feedback-helpers.ts` | Cloudflare Pages Function helpers — feedback admin data layer |
 | `functions/api/_standalone-feedback.ts` | Standalone-widget feedback handler — validates the `terraviz-standalone` POST shape (bug/idea/content + rating + meta snapshot), stores PNG screenshots as binaries in `CATALOG_R2`, inserts into `general_feedback` with `status: 'new'`; wildcard-CORS, per-IP rate-limited |
-| `functions/api/chat/completions.ts` | Route: /api/chat/completions |
+| `functions/api/chat/completions.ts` | Route: /api/chat/completions — 403 `feature_disabled` while the node's `orbit` feature is off (`_lib/orbit-gate.ts`), checked after the origin and before any model work |
 | `functions/api/feedback-admin.ts` | Route: /api/feedback-admin |
 | `functions/api/feedback-dashboard.ts` | Route: /api/feedback-dashboard |
 | `functions/api/feedback-export.ts` | Route: /api/feedback-export |
@@ -107,11 +107,11 @@ Phase 2 opt-in public projection:
 | `functions/api/general-feedback.ts` | Route: /api/general-feedback |
 | `functions/api/ingest.ts` | Route: /api/ingest |
 | `functions/api/legend.ts` | Route: /api/legend |
-| `functions/api/models.ts` | Route: /api/models |
-| `functions/api/voice/_voice-lib.ts` | Shared helpers for the voice Pages Functions — Workers AI model IDs, `KILL_VOICE` kill switch, CORS/origin, per-IP rate limiter, base64 (`docs/ORBIT_VOICE_PLAN.md` §7) |
+| `functions/api/models.ts` | Route: /api/models — 403 `feature_disabled` while `orbit` is off |
+| `functions/api/voice/_voice-lib.ts` | Shared helpers for the voice Pages Functions — Workers AI model IDs, `KILL_VOICE` kill switch, CORS/origin, per-IP rate limiter, base64 (`docs/ORBIT_VOICE_PLAN.md` §7). `VoiceEnv` carries the catalog bindings so every voice route can apply the `orbit` gate after `KILL_VOICE` |
 | `functions/api/voice/synthesize.ts` | Route: POST /api/voice/synthesize — text-to-speech via Workers AI (MeloTTS default, Aura opt-in) |
 | `functions/api/voice/transcribe.ts` | Route: POST /api/voice/transcribe — speech-to-text via Workers AI (Whisper large v3 turbo) |
-| `functions/api/voice/stream.ts` | Route: WS /api/voice/stream — realtime STT proxy; pipes linear16 PCM to Cloudflare's AI Gateway realtime endpoint (Deepgram Nova-3/Flux) with the `cf-aig-authorization` secret, JSON transcripts back. Config: `CF_ACCOUNT_ID` / `CF_AI_GATEWAY` / `CF_AIG_TOKEN`. When unset, `KILL_VOICE` is on, or over the per-IP cap, it accepts the socket and sends a JSON error frame (`{type:"error",code}`) before closing — a browser WS can't read an HTTP status — so the client cools down and the streaming resolver falls back to batch Whisper (`docs/ORBIT_VOICE_PLAN.md` §3) |
+| `functions/api/voice/stream.ts` | Route: WS /api/voice/stream — realtime STT proxy; pipes linear16 PCM to Cloudflare's AI Gateway realtime endpoint (Deepgram Nova-3/Flux) with the `cf-aig-authorization` secret, JSON transcripts back. Config: `CF_ACCOUNT_ID` / `CF_AI_GATEWAY` / `CF_AIG_TOKEN`. When unset, `KILL_VOICE` is on, the node's `orbit` feature is off (`feature_disabled`), or over the per-IP cap, it accepts the socket and sends a JSON error frame (`{type:"error",code}`) before closing — a browser WS can't read an HTTP status — so the client cools down and the streaming resolver falls back to batch Whisper (`docs/ORBIT_VOICE_PLAN.md` §3) |
 | `functions/api/tile/[[path]].ts` | Route: /api/tile/[...path] |
 
 ## Catalog read API (`functions/api/v1/`)
@@ -210,6 +210,7 @@ Phase 2 opt-in public projection:
 
 | File | Responsibility |
 |---|---|
+| `functions/api/_lib/orbit-gate.ts` | The per-node `orbit` feature gate for the endpoints only Orbit calls (`chat/completions`, `models`, `voice/*`) — `isOrbitEnabled` (fail-open over `getEffectiveFeatures`) and the 403 `feature_disabled` envelope, which carries `code` too because the voice clients read their reason from it. The backstop behind the SPA hiding Orbit: a stale tab or a hand-written request cannot keep spending Workers AI on a node that turned it off |
 | `functions/api/_lib/workers-ai-error.ts` | Workers AI error classification helper for Phase 1f/D's quota guard rail |
 | `functions/api/_lib/workers-ai-text.ts` | Workers AI reply-envelope extraction shared by every server-side `env.AI.run()` consumer (Orbit chat proxy, events enrichment, event-tour captions) — `extractModelText` / `extractModelToolCalls` tolerate both the classic `{ response, tool_calls }` shape and the OpenAI-compatible `{ choices: [{ message }] }` envelope newer models emit |
 | `functions/api/v1/_lib/access-auth.ts` | Cloudflare Access JWT verification |

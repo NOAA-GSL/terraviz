@@ -14,7 +14,8 @@
  * Config (Pages → Settings → Variables; the token as an encrypted
  * secret): `CF_ACCOUNT_ID`, `CF_AI_GATEWAY` (gateway name),
  * `CF_AIG_TOKEN` (AI Gateway authorization). Absent any of them — or
- * with `KILL_VOICE` set, or over the per-IP rate cap — the proxy
+ * with `KILL_VOICE` set, the node's `orbit` feature off, or over the
+ * per-IP rate cap — the proxy
  * accepts the socket and sends a JSON error frame
  * (`{ type: 'error', code }`) before closing, since a browser
  * WebSocket can't read an HTTP status. The client cools down on that
@@ -25,6 +26,7 @@
  * https://developers.cloudflare.com/ai-gateway/usage/websockets-api/realtime-api/
  */
 
+import { isOrbitEnabled } from '../_lib/orbit-gate'
 import { type VoiceEnv, isVoiceKilled, isAllowedOrigin, makeRateLimiter } from './_voice-lib'
 
 export interface StreamEnv extends VoiceEnv {
@@ -120,6 +122,8 @@ export const onRequest: PagesFunction<StreamEnv> = async (context) => {
   // unconfigured / rate-limited cases are reported as a readable error
   // frame (not an unreadable HTTP status) so the client can fall back.
   if (isVoiceKilled(env)) return wsError('voice_disabled')
+  // Orbit turned off for this node — voice only exists to talk to it.
+  if (!(await isOrbitEnabled(env))) return wsError('feature_disabled')
   if (!streamConfigured(env)) return wsError('voice_unavailable')
   const ip = request.headers.get('CF-Connecting-IP') ?? 'anon'
   if (isRateLimited(ip)) return wsError('rate_limited')
