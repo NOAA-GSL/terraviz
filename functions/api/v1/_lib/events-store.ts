@@ -855,28 +855,47 @@ export async function listLinksForEvent(
   return res.results ?? []
 }
 
+/** A link row with its dataset's title, or null when the dataset row is
+ *  gone. */
+export type EventDatasetLinkWithTitle = EventDatasetLinkRow & { dataset_title: string | null }
+
+/** {@link LINK_COLUMNS} qualified for a query that joins another table. */
+const LINK_COLUMNS_QUALIFIED = LINK_COLUMNS.split(',')
+  .map(c => `l.${c.trim()}`)
+  .join(', ')
+
 /**
  * Bulk version of {@link listLinksForEvent} for the review queue: fetch
  * the links for many events in a few chunked `IN (…)` queries instead of
  * one per event (avoids an N+1 over the queue). Returns a map keyed by
  * event id; each list is score-ordered.
+ *
+ * Each row carries its dataset's title, joined here rather than looked up
+ * afterwards. A separate lookup bound the distinct dataset ids, so its
+ * statement count grew with the catalogue (one per 80 datasets), and the
+ * queue's total is held under D1's per-invocation query limit. With the
+ * join the count depends only on how many events are listed. No
+ * visibility filter, as before: every publisher can already read the
+ * whole catalogue through `/publish/datasets`.
  */
 export async function listLinksForEvents(
   db: D1Database,
   eventIds: readonly string[],
-): Promise<Map<string, EventDatasetLinkRow[]>> {
-  const out = new Map<string, EventDatasetLinkRow[]>()
+): Promise<Map<string, EventDatasetLinkWithTitle[]>> {
+  const out = new Map<string, EventDatasetLinkWithTitle[]>()
   for (const id of eventIds) out.set(id, [])
   for (let i = 0; i < eventIds.length; i += EVENT_BIND_BATCH) {
     const chunk = eventIds.slice(i, i + EVENT_BIND_BATCH)
     const ph = chunk.map(() => '?').join(', ')
     const res = await db
       .prepare(
-        `SELECT ${LINK_COLUMNS} FROM event_dataset_links
-          WHERE event_id IN (${ph}) ORDER BY match_score DESC`,
+        `SELECT ${LINK_COLUMNS_QUALIFIED}, d.title AS dataset_title
+           FROM event_dataset_links l
+           LEFT JOIN datasets d ON d.id = l.dataset_id
+          WHERE l.event_id IN (${ph}) ORDER BY l.match_score DESC`,
       )
       .bind(...chunk)
-      .all<EventDatasetLinkRow>()
+      .all<EventDatasetLinkWithTitle>()
     for (const row of res.results ?? []) out.get(row.event_id)?.push(row)
   }
   return out

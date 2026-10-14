@@ -73,8 +73,10 @@ export interface QueueFilters {
    *  because the query hid the one being read. */
   setCount(shown: number, nowShowing?: string | null): void
   /** Announce the current count now — after a reload, when the query
-   *  carried over is filtering a list nobody has heard about yet. */
-  announceCount(): void
+   *  carried over is filtering a list nobody has heard about yet. `lead`
+   *  goes first in the same utterance (the reload's own notice), because
+   *  the announcer keeps only the last thing written to it. */
+  announceCount(lead?: string): void
 }
 
 function sortLabel(sort: QueueSort): string {
@@ -240,11 +242,12 @@ export function renderQueueFilters(opts: QueueFiltersOptions): QueueFilters {
   // announced; it is only the baseline later counts are compared with.
   let lastAnnounced: string | null = null
   let pendingTitle: string | null = null
-  const announce = (force = false): void => {
+  const announce = (force = false, lead?: string): void => {
     if (!root.isConnected) return
-    const message = pendingTitle
+    const counted = pendingTitle
       ? `${count.textContent ?? ''} ${t('publisher.events.query.nowShowing', { title: pendingTitle })}`
       : count.textContent ?? ''
+    const message = lead ? `${lead} ${counted}` : counted
     pendingTitle = null
     if (message === '' || (!force && message === lastAnnounced)) return
     lastAnnounced = message
@@ -258,7 +261,7 @@ export function renderQueueFilters(opts: QueueFiltersOptions): QueueFilters {
   return {
     element: root,
     clear,
-    announceCount: () => announce(true),
+    announceCount: (lead?: string) => announce(true, lead),
     setCount(shown: number, nowShowing?: string | null): void {
       count.textContent = isQueueFiltered(current)
         ? t('publisher.events.query.count.filtered', { shown: String(shown), total: String(opts.loaded) })

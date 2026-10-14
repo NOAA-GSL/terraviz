@@ -316,5 +316,6 @@
   "publisher.events.query.sort.newest": "Sort option. \"Newest\" means when the event happened (else when its source published it, else when it was imported) — not when it arrived in the queue. Same sense as \"newest\" in publisher.events.query.truncated.",
   "publisher.events.query.sort.oldest": "Sort option, the reverse of publisher.events.query.sort.newest: by when the event happened, oldest first.",
   "publisher.events.query.sort.mostToReview": "Sort option: events with the most dataset pairings still awaiting a curator's decision come first. \"Most datasets\" is a count, not dataset size. Same sense as publisher.events.queue.toReview.",
-  "publisher.events.query.nowShowing": "Screen-reader announcement appended to the match count when a search or filter hid the event being reviewed and another took its place in the detail pane. {title} is the new event's headline; preserve it."
+  "publisher.events.query.nowShowing": "Screen-reader announcement appended to the match count when a search or filter hid the event being reviewed and another took its place in the detail pane. {title} is the new event's headline; preserve it.",
+  "publisher.events.form.createdIn": "Shown and announced after creating an event while viewing another status: the page switches to the status the new event is in. {bucket} is that status's label, e.g. \"Proposed\" (publisher.events.status.proposed); preserve it."
 }

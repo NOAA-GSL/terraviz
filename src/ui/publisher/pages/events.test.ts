@@ -200,6 +200,20 @@ describe('renderEventsPage', () => {
     expect(mount.querySelector('.publisher-events-actions-status')?.textContent).toContain('2')
   })
 
+  it('announces a reload notice, which its status paragraph cannot', async () => {
+    // The paragraph arrives already holding its text, which screen
+    // readers do not reliably speak, so the notice goes to the announcer.
+    const announcer = document.createElement('div')
+    announcer.id = 'a11y-announcer'
+    document.body.append(announcer)
+    const routes = baseRoutes()
+    routes['POST /api/v1/publish/events/refresh'] = { body: { created: 2, refreshed: 1, failed: 0 } }
+    await renderEventsPage(mount, { fetchFn: mockFetch(routes) })
+    mount.querySelectorAll<HTMLButtonElement>('.publisher-events-toolbar button')[0].click()
+    await until(() => announcer.textContent !== '', 'the refresh result to be announced')
+    expect(announcer.textContent).toBe('Imported 2 new · 1 refreshed · 0 skipped.')
+  })
+
   it('opens the new-event drawer and creates a manual event via POST', async () => {
     const routes = baseRoutes()
     routes['/api/v1/publish/datasets'] = { body: { datasets: [], next_cursor: null } }
@@ -415,6 +429,50 @@ describe('renderEventsPage — search, filter and sort', () => {
     expect(queueTitles()).toHaveLength(4)
     // The sort hides nothing, so it stays.
     expect(selects()[selects().length - 1].value).toBe('bestMatch')
+  })
+
+  it('lands on Proposed with the new event selected when it is created from another bucket', async () => {
+    const announcer = document.createElement('div')
+    announcer.id = 'a11y-announcer'
+    document.body.append(announcer)
+    const r = routes()
+    const body = queueBody()
+    body.events.push(ev(EVT, 'Manual storm', 'NOAA'))
+    r['/api/v1/publish/events'] = { body }
+    r['/api/v1/publish/datasets'] = { body: { datasets: [], next_cursor: null } }
+    r['POST /api/v1/publish/events'] = { status: 201, body: { created: true, event: { id: EVT, status: 'proposed' }, links: [] } }
+    const fetchFn = mockFetch(r)
+    await renderEventsPage(mount, { fetchFn })
+    ;[...mount.querySelectorAll<HTMLButtonElement>('.publisher-events-filters button')]
+      .find(b => b.textContent === 'Approved')!
+      .click()
+    await until(
+      () => mount.querySelector('.publisher-events-filter-active')?.textContent === 'Approved',
+      'the Approved bucket to render',
+    )
+
+    mount.querySelectorAll<HTMLButtonElement>('.publisher-events-toolbar button')[1].click()
+    const inputs = document.querySelectorAll<HTMLInputElement>('.publisher-events-drawer-compose input')
+    inputs[0].value = 'Manual storm'
+    inputs[1].value = 'NOAA'
+    inputs[2].value = 'https://example.gov/manual'
+    ;[...document.querySelectorAll<HTMLButtonElement>('.publisher-events-drawer-actions button')]
+      .find(b => b.classList.contains('publisher-button-primary'))!
+      .click()
+
+    await until(() => detailTitle() === 'Manual storm', 'the new event to be selected')
+    expect(mount.querySelector('.publisher-events-filter-active')?.textContent).toBe('Proposed')
+    // Focus is on the new row (the button that had it was replaced), and
+    // the switch of bucket is said, not only shown.
+    await until(() => document.activeElement?.classList.contains('publisher-events-queue-row-selected') === true, 'focus on the new row')
+    expect(document.activeElement?.textContent).toContain('Manual storm')
+    await until(() => announcer.textContent !== '', 'the created notice')
+    expect(announcer.textContent).toBe('Event created. Showing Proposed.')
+    const lastGet = fetchFn.mock.calls
+      .map(c => String(c[0]))
+      .filter(u => u.startsWith('/api/v1/publish/events?'))
+      .at(-1)
+    expect(lastGet).toContain('status=proposed')
   })
 
   it('keeps the order when a pairing decision changes a sort key', async () => {

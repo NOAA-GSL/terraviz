@@ -32,7 +32,6 @@ import type { PublisherData } from './_middleware'
 import { writeAuditEvent } from '../_lib/audit-store'
 import { parseCreate, resolveOriginNode, ingestEvent, type FieldError } from '../_lib/events-ingest'
 import { can } from '../_lib/capabilities'
-import { D1_BIND_BATCH } from '../_lib/catalog-store'
 import {
   canMutateEvent,
   listCurrentEvents,
@@ -89,26 +88,6 @@ function parseSignals(json: string | null): unknown {
   }
 }
 
-/** Fetch the titles for a set of dataset ids, chunked — D1 refuses a
- *  statement with more than 100 bound parameters, and a queue of a few
- *  hundred events can reference more distinct datasets than that. */
-async function fetchDatasetTitles(
-  db: D1Database,
-  ids: readonly string[],
-): Promise<Map<string, string>> {
-  const titles = new Map<string, string>()
-  for (let i = 0; i < ids.length; i += D1_BIND_BATCH) {
-    const chunk = ids.slice(i, i + D1_BIND_BATCH)
-    const placeholders = chunk.map(() => '?').join(', ')
-    const res = await db
-      .prepare(`SELECT id, title FROM datasets WHERE id IN (${placeholders})`)
-      .bind(...chunk)
-      .all<{ id: string; title: string }>()
-    for (const row of res.results ?? []) titles.set(row.id, row.title)
-  }
-  return titles
-}
-
 export const onRequestGet: PagesFunction<CatalogEnv> = async context => {
   if (!context.env.CATALOG_DB) {
     return jsonError(503, 'binding_missing', 'CATALOG_DB binding is not configured on this deployment.')
@@ -131,13 +110,16 @@ export const onRequestGet: PagesFunction<CatalogEnv> = async context => {
   // The review page asks for the most it may have, because it searches
   // client-side and cannot find an event it did not load; a reader that
   // only needs a count asks for 1 and reads `total`. Anything above the
-  // maximum is clamped, as the store does.
-  const limitRaw = params.get('limit')
-  const limitParsed = limitRaw ? Number(limitRaw) : DEFAULT_EVENT_LIST_LIMIT
-  if (!Number.isInteger(limitParsed) || limitParsed < 1) {
+  // maximum is clamped, as the store does. An empty `?limit=` means
+  // omitted, by the same rule as an empty `?status=` above.
+  // Plain digits only: `Number()` alone also takes `1e3`, `0x10`, `5.0`
+  // and padded values, which a contract that says "positive integer"
+  // should refuse rather than quietly reinterpret.
+  const limitRaw = params.get('limit') || null
+  if (limitRaw !== null && !/^[1-9]\d*$/.test(limitRaw)) {
     return jsonError(400, 'invalid_limit', '`limit` must be a positive integer.')
   }
-  const limit = Math.min(limitParsed, MAX_EVENT_LIST_LIMIT)
+  const limit = limitRaw === null ? DEFAULT_EVENT_LIST_LIMIT : Math.min(Number(limitRaw), MAX_EVENT_LIST_LIMIT)
 
   const db = context.env.CATALOG_DB
   const statusFilter = statusParam === 'all' ? {} : { status: (statusParam as CurrentEventStatus | null) ?? 'proposed' }
@@ -150,19 +132,17 @@ export const onRequestGet: PagesFunction<CatalogEnv> = async context => {
     ? eventRows.length
     : Math.max(await countCurrentEvents(db, statusFilter), eventRows.length)
 
-  // Bulk-fetch links + decorations for the whole page in chunked IN
-  // queries rather than two per event, then resolve the referenced
-  // dataset titles the same way. Statements grow with page size / 80,
-  // not with event count: about 8 at the default limit and about 26 at
-  // the maximum, which stays under D1's per-invocation query limit.
+  // Bulk-fetch links (with their dataset titles, joined) and decorations
+  // in chunked IN queries rather than per event: three statements per 80
+  // events, plus the list and the count. That is 8 at the default limit
+  // and 23 at the maximum, whatever the links point at, which keeps the
+  // request under D1's per-invocation query limit.
   const eventIds = eventRows.map(e => e.id)
   // Independent reads, so neither waits on the other's round trips.
   const [linksByEvent, decorationsByEvent] = await Promise.all([
     listLinksForEvents(db, eventIds),
     getDecorationsForEvents(db, eventIds),
   ])
-  const datasetIds = [...new Set([...linksByEvent.values()].flat().map(l => l.dataset_id))]
-  const titles = await fetchDatasetTitles(db, datasetIds)
 
   const events = eventRows.map(row => {
     const links = linksByEvent.get(row.id) ?? []
@@ -170,7 +150,7 @@ export const onRequestGet: PagesFunction<CatalogEnv> = async context => {
     return {
       ...toPublicEvent(row, decorations),
       can_edit: canMutateEvent(publisher, row),
-      links: links.map(l => toPublicLink(l, titles.get(l.dataset_id) ?? null)),
+      links: links.map(l => toPublicLink(l, l.dataset_title)),
     }
   })
 

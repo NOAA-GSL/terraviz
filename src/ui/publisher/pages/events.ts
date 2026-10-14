@@ -27,6 +27,7 @@ import { roleCan } from '../../../types/publisher-roles'
 import { t } from '../../../i18n'
 import { publisherGet, publisherSend, handleSessionError } from '../api'
 import { buildErrorCard } from '../components/error-card'
+import { announcePolite } from '../../domUtils'
 import { renderEventQueue } from '../components/events/event-queue'
 import { renderEventDetail } from '../components/events/event-detail'
 import { mountEventLocator } from '../components/events/event-locator-map'
@@ -152,14 +153,17 @@ export async function renderEventsPage(mount: HTMLElement, options: EventsPageOp
 
 /** Fetch the queue at `status` and render the triage view. `selectId`
  *  prefers a specific event for the initial selection (e.g. a just-created
- *  one) when it's present in the returned list. */
+ *  one) when it's present in the returned list. Resolves true when the
+ *  queue was rendered — false for an error card, a session redirect, or
+ *  a load a newer one overtook — so a caller placing focus knows whether
+ *  there is anything to place it on. */
 async function loadAndRenderQueue(
   mount: HTMLElement,
   state: TriageState,
   notice?: string,
   status: QueueFilter = 'proposed',
   selectId?: string,
-): Promise<void> {
+): Promise<boolean> {
   // From here on, anything the previous render still has in flight (a
   // review POST, a pending search) is stale.
   const gen = ++state.renderGen
@@ -173,21 +177,22 @@ async function loadAndRenderQueue(
   )
   // A later load (another status pill) has started; its answer wins
   // whichever of the two arrives first.
-  if (gen !== state.renderGen) return
+  if (gen !== state.renderGen) return false
   if (!res.ok) {
     if (res.kind === 'session') {
-      if (handleSessionError({ navigate: state.navigate }) === 'navigating') return
+      if (handleSessionError({ navigate: state.navigate }) === 'navigating') return false
       mount.replaceChildren(shell(buildErrorCard('session')))
-      return
+      return false
     }
     const details = res.kind === 'server' ? { status: res.status, body: res.body } : {}
     mount.replaceChildren(shell(buildErrorCard(res.kind, details)))
-    return
+    return false
   }
   const { events } = res.data
   // An older server sends no total; then what arrived is all there is.
   const total = Math.max(res.data.total ?? events.length, events.length)
   renderTriage(mount, events, total, state, notice, status, gen, selectId)
+  return true
 }
 
 /** The master–detail triage view: top bar + (queue | detail). */
@@ -335,9 +340,13 @@ function renderTriage(
 
   const topbar = renderTopbar(mount, state, notice, filter, filters?.element ?? null)
   mount.replaceChildren(shell(topbar, card(body)))
-  // A query carried over from before this load is filtering a list the
-  // curator has not seen yet; say so, since nothing else will.
-  if (filters && isQueueFiltered(state.query)) filters.announceCount()
+  // The notice ("Saved.", a refresh result, "Event created.") sits in a
+  // status paragraph that arrives already holding its text, which screen
+  // readers do not reliably speak; and a query carried over from before
+  // this load is filtering a list the curator has not heard about. Say
+  // both, as one utterance, since the announcer keeps only the last.
+  if (filters && isQueueFiltered(state.query)) filters.announceCount(notice)
+  else if (notice) announcePolite(notice)
 }
 
 /** The body when the query hides every loaded event: say so, and offer
@@ -404,10 +413,25 @@ function renderTopbar(
     openNewEventDrawer({
       fetchFn: state.fetchFn,
       navigate: state.navigate,
-      // Reload preserving the active filter; prefer-select the new event
-      // (lands `proposed`) so its manual + matched links are ready to vet.
+      // Prefer-select the new event so its manual + matched links are
+      // ready to vet. It lands `proposed`, so reload a bucket that can
+      // hold it: Proposed, or All if that is the view. Reloading Approved,
+      // Rejected or Expired would leave it nowhere on the page. (It can
+      // still miss the page in one case: an old occurred date in a bucket
+      // past the server's 500, where it sorts below the cut.)
       onCreated: newId => {
-        void loadAndRenderQueue(mount, state, t('publisher.events.form.created'), filter, newId)
+        const into: QueueFilter = filter === 'all' ? 'all' : 'proposed'
+        // Say so when the bucket changed, or nothing tells a screen-reader
+        // user the list under them is a different one.
+        const notice = into === filter
+          ? t('publisher.events.form.created')
+          : t('publisher.events.form.createdIn', { bucket: statusLabel('proposed') })
+        // The drawer handed focus back to New event, which the reload
+        // replaces; put it on the new event's row instead, one Tab from the
+        // detail pane where its pairings are vetted next.
+        void loadAndRenderQueue(mount, state, notice, into, newId).then(rendered => {
+          if (rendered) mount.querySelector<HTMLElement>('.publisher-events-queue-row-selected')?.focus()
+        })
       },
     })
   })
@@ -424,8 +448,8 @@ function renderTopbar(
     btn.addEventListener('click', () => {
       if (f === filter) return
       // The pill is replaced with the page; land focus on its successor.
-      void loadAndRenderQueue(mount, state, undefined, f).then(() => {
-        mount.querySelector<HTMLElement>('.publisher-events-filter-active')?.focus()
+      void loadAndRenderQueue(mount, state, undefined, f).then(rendered => {
+        if (rendered) mount.querySelector<HTMLElement>('.publisher-events-filter-active')?.focus()
       })
     })
     filters.append(btn)

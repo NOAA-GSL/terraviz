@@ -1250,6 +1250,7 @@
   "publisher.events.filter.label": "Filter by status",
   "publisher.events.form.cancel": "Cancel",
   "publisher.events.form.created": "Event created.",
+  "publisher.events.form.createdIn": "Event created. Showing {bucket}.",
   "publisher.events.form.error": "Couldn't create the event. Check the fields and try again.",
   "publisher.events.form.heading": "Create an event by hand",
   "publisher.events.form.keywords": "Keywords (comma-separated, optional)",

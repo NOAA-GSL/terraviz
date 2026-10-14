@@ -231,6 +231,14 @@ describe('GET /api/v1/publish/events', () => {
     expect(body.total).toBe(140)
   })
 
+  it('clamps a ?limit= of any length to the maximum', async () => {
+    const { env, sqlite } = setupEnv()
+    insertBareEvents(sqlite, 3)
+    const { status, body } = await getBody(env, '?limit=99999999999999999999')
+    expect(status).toBe(200)
+    expect(body.events).toHaveLength(3)
+  })
+
   it('clamps ?limit= to the maximum and counts the rest', async () => {
     const { env, sqlite } = setupEnv()
     insertBareEvents(sqlite, MAX_EVENT_LIST_LIMIT + 7)
@@ -252,9 +260,46 @@ describe('GET /api/v1/publish/events', () => {
     expect(body.total).toBe(42)
   })
 
+  it('treats an empty ?limit= as omitted, like an empty ?status=', async () => {
+    const { env, sqlite } = setupEnv()
+    insertBareEvents(sqlite, 140)
+    const { status, body } = await getBody(env, '?limit=')
+    expect(status).toBe(200)
+    expect(body.events).toHaveLength(DEFAULT_EVENT_LIST_LIMIT)
+  })
+
+  it('issues the same number of statements however many datasets the links reach', async () => {
+    // The statement count must not grow with the catalogue, or a large
+    // node's queue crosses D1's per-invocation query limit.
+    async function statementsFor(linked: number): Promise<number> {
+      const sqlite = seedFixtures({ count: linked })
+      const db = asD1(sqlite)
+      const { id } = await insertCurrentEvent(db, SAMPLE)
+      for (let i = 0; i < linked; i++) {
+        await upsertEventDatasetLink(db, {
+          eventId: id,
+          datasetId: `DS${String(i).padStart(3, '0')}` + 'A'.repeat(21),
+          matchScore: 0.5,
+          signals: null,
+          source: 'matcher',
+        })
+      }
+      let prepared = 0
+      const prepare = db.prepare.bind(db)
+      db.prepare = (sql: string) => {
+        prepared++
+        return prepare(sql)
+      }
+      const res = await eventsGet(ctx({ env: { CATALOG_DB: db } }))
+      expect(res.status).toBe(200)
+      return prepared
+    }
+    expect(await statementsFor(200)).toBe(await statementsFor(1))
+  })
+
   it('400 for a ?limit= that is not a positive integer', async () => {
     const { env } = setupEnv()
-    for (const bad of ['0', '-3', '2.5', 'abc']) {
+    for (const bad of ['0', '-3', '2.5', 'abc', '1e3', '0x10', '5.0', ' 5', '+5', '05']) {
       expect((await getBody(env, `?limit=${bad}`)).status, bad).toBe(400)
     }
   })
