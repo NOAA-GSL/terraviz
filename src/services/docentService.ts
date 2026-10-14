@@ -25,6 +25,7 @@ import {
 import { fetchApprovedEvents, type PublicEvent } from './eventsService'
 import { parseIntent, generateResponse, searchDatasets, evaluateAutoLoad } from './docentEngine'
 import { clearDegraded as clearDegradedState, markDegraded as markDegradedState } from './docentDegradedState'
+import { withdrawOrbit } from './orbitAvailability'
 import { apiFetch } from './catalogSource'
 import { ensureLoaded as ensureQALoaded, getRelevantQA } from './qaService'
 import { resolveRegion, boundsToGeoJSON } from '../data/regions'
@@ -195,6 +196,12 @@ async function describeLegendAsync(dataset: Dataset, config: DocentConfig): Prom
     for await (const chunk of stream) {
       if (controller.signal.aborted) return
       if (chunk.type === 'delta') description += chunk.text
+      // The node turned Orbit off since this page booted. This call
+      // runs on every dataset load, so it is often the first to hear.
+      if (chunk.type === 'error' && chunk.code === 'feature_disabled') {
+        withdrawOrbit('chat')
+        return
+      }
       if (chunk.type === 'done' || chunk.type === 'error') break
     }
 
@@ -1917,6 +1924,11 @@ export async function* processMessage(
     // Set by a `quota_exhausted` error chunk — not a transient failure,
     // so it ends the attempts rather than retrying.
     let quotaExhausted = false
+    // Set when the node's orbit gate refuses the turn: Orbit was turned
+    // off after this page booted. Neither retried nor answered from the
+    // local engine — that keyword-only docent is what the toggle exists
+    // to remove — but withdrawn (`orbitAvailability`).
+    let orbitRefused = false
     for (let attempt = 1; attempt <= MAX_LLM_ATTEMPTS; attempt++) {
       let llmProducedText = false
       let accumulatedText = ''
@@ -2154,6 +2166,7 @@ export async function* processMessage(
                   markDegradedState('quota_exhausted')
                   quotaExhausted = true
                 }
+                if (chunk.code === 'feature_disabled') orbitRefused = true
                 break toolLoop
 
               case 'done':
@@ -2389,6 +2402,12 @@ export async function* processMessage(
         }
       } catch (err) {
         logger.warn(`[Docent] LLM stream failed (attempt ${attempt}):`, err)
+      }
+
+      if (orbitRefused) {
+        withdrawOrbit('chat')
+        yield { type: 'done', fallback: true }
+        return
       }
 
       // A spent budget is not transient: the retry would spend another

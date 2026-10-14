@@ -5,12 +5,19 @@
  * /api/v1/publish/events — the current-events review queue + ingestion
  * sink (`docs/CURRENT_EVENTS_PLAN.md` §5, §9).
  *
- * GET  — Privileged-only review queue: events for a curator to vet, each
- *        with its proposed event→dataset links (score + per-signal
- *        breakdown + the linked dataset's title). Defaults to
- *        `status=proposed`; `?status=` narrows to another bucket.
- * POST — Privileged-only create (the ingestion path, typically a service
- *        token from the import-events CLI). Idempotent on
+ * GET  — Review queue, readable by any active publisher: events for a
+ *        curator to vet, each with its proposed event→dataset links
+ *        (score + per-signal breakdown + the linked dataset's title).
+ *        Defaults to `status=proposed`; `?status=` narrows to another
+ *        bucket. Returns the newest `?limit=` events by occurrence time
+ *        (default `DEFAULT_EVENT_LIST_LIMIT`, at most
+ *        `MAX_EVENT_LIST_LIMIT`) plus `total`: how many events match the
+ *        request's filters regardless of the limit — today, the status
+ *        bucket's size. Never less than `events.length`. `?limit=1`
+ *        makes it a cheap count.
+ * POST — Create / ingest, open to any `content.create` role (the
+ *        ingestion path is typically a service token from the
+ *        import-events CLI). Idempotent on
  *        `(feed_id, external_id)`: a re-ingest refreshes the existing
  *        event's content instead of duplicating it. On create/refresh the
  *        matcher runs to (re)propose dataset links, so the queue arrives
@@ -28,6 +35,9 @@ import { can } from '../_lib/capabilities'
 import {
   canMutateEvent,
   listCurrentEvents,
+  countCurrentEvents,
+  DEFAULT_EVENT_LIST_LIMIT,
+  MAX_EVENT_LIST_LIMIT,
   listLinksForEvent,
   listLinksForEvents,
   getEventDecorations,
@@ -62,25 +72,20 @@ function toPublicLink(row: EventDatasetLinkRow, datasetTitle: string | null) {
     datasetId: row.dataset_id,
     datasetTitle,
     score: row.match_score,
-    signals: row.signals_json ? (JSON.parse(row.signals_json) as unknown) : null,
+    signals: parseSignals(row.signals_json),
     status: row.status,
   }
 }
 
-/** Fetch the titles for a set of dataset ids in one query. */
-async function fetchDatasetTitles(
-  db: D1Database,
-  ids: readonly string[],
-): Promise<Map<string, string>> {
-  const titles = new Map<string, string>()
-  if (ids.length === 0) return titles
-  const placeholders = ids.map(() => '?').join(', ')
-  const res = await db
-    .prepare(`SELECT id, title FROM datasets WHERE id IN (${placeholders})`)
-    .bind(...ids)
-    .all<{ id: string; title: string }>()
-  for (const row of res.results ?? []) titles.set(row.id, row.title)
-  return titles
+/** A link's stored signal breakdown, or null. Only the server writes this
+ *  column, but one unreadable row must not fail the whole queue. */
+function parseSignals(json: string | null): unknown {
+  if (!json) return null
+  try {
+    return JSON.parse(json) as unknown
+  } catch {
+    return null
+  }
 }
 
 export const onRequestGet: PagesFunction<CatalogEnv> = async context => {
@@ -96,26 +101,48 @@ export const onRequestGet: PagesFunction<CatalogEnv> = async context => {
   // `?status=` narrows to one bucket; `?status=all` lists every status
   // (so a curator can find + manage already-reviewed events); omitted
   // defaults to the `proposed` review queue.
-  const statusParam = new URL(context.request.url).searchParams.get('status')
+  const params = new URL(context.request.url).searchParams
+  // An empty `?status=` means omitted, not "every status".
+  const statusParam = params.get('status') || null
   if (statusParam && statusParam !== 'all' && !VALID_STATUSES.includes(statusParam as CurrentEventStatus)) {
     return jsonError(400, 'invalid_status', `\`status\` must be one of: ${VALID_STATUSES.join(', ')}, or \`all\`.`)
   }
+  // The review page asks for the most it may have, because it searches
+  // client-side and cannot find an event it did not load; a reader that
+  // only needs a count asks for 1 and reads `total`. Anything above the
+  // maximum is clamped, as the store does. An empty `?limit=` means
+  // omitted, by the same rule as an empty `?status=` above.
+  // Plain digits only: `Number()` alone also takes `1e3`, `0x10`, `5.0`
+  // and padded values, which a contract that says "positive integer"
+  // should refuse rather than quietly reinterpret.
+  const limitRaw = params.get('limit') || null
+  if (limitRaw !== null && !/^[1-9]\d*$/.test(limitRaw)) {
+    return jsonError(400, 'invalid_limit', '`limit` must be a positive integer.')
+  }
+  const limit = limitRaw === null ? DEFAULT_EVENT_LIST_LIMIT : Math.min(Number(limitRaw), MAX_EVENT_LIST_LIMIT)
 
   const db = context.env.CATALOG_DB
-  const eventRows = await listCurrentEvents(
-    db,
-    statusParam === 'all' ? {} : { status: (statusParam as CurrentEventStatus | null) ?? 'proposed' },
-  )
+  const statusFilter = statusParam === 'all' ? {} : { status: (statusParam as CurrentEventStatus | null) ?? 'proposed' }
+  const eventRows = await listCurrentEvents(db, { ...statusFilter, limit })
+  // A short page is the whole bucket; only a full one needs counting.
+  // The two reads are separate, so rows can leave the bucket between
+  // them (a review, the refresh's expiry); never report fewer than were
+  // just returned.
+  const total = eventRows.length < limit
+    ? eventRows.length
+    : Math.max(await countCurrentEvents(db, statusFilter), eventRows.length)
 
-  // Bulk-fetch links + decorations for the whole page (chunked IN
-  // queries) rather than two per event, then resolve all referenced
-  // dataset titles in one more query — keeps the queue O(1) round-trips
-  // as events accumulate, not O(N).
+  // Bulk-fetch links (with their dataset titles, joined) and decorations
+  // in chunked IN queries rather than per event: three statements per 80
+  // events, plus the list and the count. That is 8 at the default limit
+  // and 23 at the maximum, whatever the links point at, which keeps the
+  // request under D1's per-invocation query limit.
   const eventIds = eventRows.map(e => e.id)
-  const linksByEvent = await listLinksForEvents(db, eventIds)
-  const decorationsByEvent = await getDecorationsForEvents(db, eventIds)
-  const datasetIds = [...new Set([...linksByEvent.values()].flat().map(l => l.dataset_id))]
-  const titles = await fetchDatasetTitles(db, datasetIds)
+  // Independent reads, so neither waits on the other's round trips.
+  const [linksByEvent, decorationsByEvent] = await Promise.all([
+    listLinksForEvents(db, eventIds),
+    getDecorationsForEvents(db, eventIds),
+  ])
 
   const events = eventRows.map(row => {
     const links = linksByEvent.get(row.id) ?? []
@@ -123,11 +150,11 @@ export const onRequestGet: PagesFunction<CatalogEnv> = async context => {
     return {
       ...toPublicEvent(row, decorations),
       can_edit: canMutateEvent(publisher, row),
-      links: links.map(l => toPublicLink(l, titles.get(l.dataset_id) ?? null)),
+      links: links.map(l => toPublicLink(l, l.dataset_title)),
     }
   })
 
-  return new Response(JSON.stringify({ events }), {
+  return new Response(JSON.stringify({ events, total }), {
     status: 200,
     headers: { 'Content-Type': CONTENT_TYPE, 'Cache-Control': 'private, no-store' },
   })

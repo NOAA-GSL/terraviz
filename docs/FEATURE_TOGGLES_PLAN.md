@@ -8,6 +8,13 @@
 > design rationale, the resolved decisions, and the phase breakdown
 > match what landed. For current behaviour, the code and its module
 > maps are the source of truth.
+>
+> **Since then:** a ninth key, `orbit` (2026-10), turns off Orbit, the
+> generative-AI docent. Unlike the eight below, it is read by the
+> public SPA at boot so Orbit can be *hidden* rather than degraded, and
+> it gates `/api/chat/completions`, `/api/models` and `/api/voice/*`,
+> which the "Never gated" list below predates. See the `orbit` entry in
+> `src/types/node-features.ts` and `functions/api/_lib/orbit-gate.ts`.
 
 
 ## Context

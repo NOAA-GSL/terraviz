@@ -12,8 +12,11 @@
  * uses — no external key. See docs/ORBIT_VOICE_PLAN.md §3, §7.
  */
 
-/** Workers AI binding (subset we use). */
-export interface VoiceEnv {
+import type { OrbitGateEnv } from '../_lib/orbit-gate'
+
+/** Workers AI binding (subset we use), plus the catalog bindings the
+ *  per-node `orbit` gate reads (`_lib/orbit-gate.ts`). */
+export interface VoiceEnv extends OrbitGateEnv {
   AI?: {
     run(
       model: string,

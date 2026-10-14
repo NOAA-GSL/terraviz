@@ -13,12 +13,19 @@
  * All paths now go through the shared `workers-ai-text` extractor.
  */
 
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { defaultFeatures } from '../../../src/types/node-features'
+import { NODE_FEATURES_CACHE_KEY } from '../v1/_lib/node-settings-store'
+import { makeKV } from '../v1/_lib/test-helpers'
 import { EMPTY_STREAM_PROBE_TIMEOUT_MS, onRequestPost } from './completions'
+import { resetOrbitGateForTests } from '../_lib/orbit-gate'
+
+// The gate memoises per module instance; each case starts cold.
+beforeEach(resetOrbitGateForTests)
 
 type AiRun = (model: string, inputs: Record<string, unknown>, options?: unknown) => Promise<unknown>
 
-function ctx(opts: { body: unknown; run: AiRun }) {
+function ctx(opts: { body: unknown; run: AiRun; env?: Record<string, unknown> }) {
   const url = 'https://localhost/api/chat/completions'
   // A stub rather than a real Request: happy-dom emulates the browser's
   // forbidden-header rules and silently strips `Origin`, which the route
@@ -33,7 +40,7 @@ function ctx(opts: { body: unknown; run: AiRun }) {
   } as unknown as Request
   return {
     request,
-    env: { AI: { run: opts.run } },
+    env: { AI: { run: opts.run }, ...opts.env },
     params: {},
     data: {},
     waitUntil: () => {},
@@ -44,6 +51,28 @@ function ctx(opts: { body: unknown; run: AiRun }) {
 }
 
 const MESSAGES = [{ role: 'user', content: 'hi' }]
+
+describe('POST /api/chat/completions — the node orbit feature gate', () => {
+  it('answers 403 feature_disabled and never runs the model while Orbit is off', async () => {
+    const kv = makeKV()
+    kv._store.set(NODE_FEATURES_CACHE_KEY, JSON.stringify({ ...defaultFeatures(), orbit: false }))
+    const run = vi.fn(async () => ({ response: 'should not happen' }))
+    const res = await onRequestPost(ctx({ body: { messages: MESSAGES }, run, env: { CATALOG_KV: kv } }))
+    expect(res.status).toBe(403)
+    expect(await res.json()).toMatchObject({ error: 'feature_disabled', feature: 'orbit' })
+    expect(res.headers.get('Access-Control-Allow-Origin')).toBe('http://localhost:5173')
+    expect(run).not.toHaveBeenCalled()
+  })
+
+  it('serves normally while Orbit is on', async () => {
+    const kv = makeKV()
+    kv._store.set(NODE_FEATURES_CACHE_KEY, JSON.stringify({ ...defaultFeatures(), blog: false }))
+    const run = vi.fn(async () => ({ response: 'on reply' }))
+    const res = await onRequestPost(ctx({ body: { messages: MESSAGES }, run, env: { CATALOG_KV: kv } }))
+    expect(res.status).toBe(200)
+    expect(run).toHaveBeenCalledTimes(1)
+  })
+})
 
 describe('POST /api/chat/completions — non-streaming envelope handling', () => {
   it('reads the classic { response } envelope', async () => {

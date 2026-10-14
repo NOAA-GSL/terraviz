@@ -96,7 +96,7 @@ Phase 2 opt-in public projection:
 | `functions/.well-known/terraviz.json.ts` | Route: GET /.well-known/terraviz.json |
 | `functions/api/_feedback-helpers.ts` | Cloudflare Pages Function helpers — feedback admin data layer |
 | `functions/api/_standalone-feedback.ts` | Standalone-widget feedback handler — validates the `terraviz-standalone` POST shape (bug/idea/content + rating + meta snapshot), stores PNG screenshots as binaries in `CATALOG_R2`, inserts into `general_feedback` with `status: 'new'`; wildcard-CORS, per-IP rate-limited |
-| `functions/api/chat/completions.ts` | Route: /api/chat/completions |
+| `functions/api/chat/completions.ts` | Route: /api/chat/completions — 403 `feature_disabled` while the node's `orbit` feature is off (`_lib/orbit-gate.ts`), checked after the origin and before any model work |
 | `functions/api/feedback-admin.ts` | Route: /api/feedback-admin |
 | `functions/api/feedback-dashboard.ts` | Route: /api/feedback-dashboard |
 | `functions/api/feedback-export.ts` | Route: /api/feedback-export |
@@ -107,11 +107,11 @@ Phase 2 opt-in public projection:
 | `functions/api/general-feedback.ts` | Route: /api/general-feedback |
 | `functions/api/ingest.ts` | Route: /api/ingest |
 | `functions/api/legend.ts` | Route: /api/legend |
-| `functions/api/models.ts` | Route: /api/models |
-| `functions/api/voice/_voice-lib.ts` | Shared helpers for the voice Pages Functions — Workers AI model IDs, `KILL_VOICE` kill switch, CORS/origin, per-IP rate limiter, base64 (`docs/ORBIT_VOICE_PLAN.md` §7) |
+| `functions/api/models.ts` | Route: /api/models — 403 `feature_disabled` while `orbit` is off |
+| `functions/api/voice/_voice-lib.ts` | Shared helpers for the voice Pages Functions — Workers AI model IDs, `KILL_VOICE` kill switch, CORS/origin, per-IP rate limiter, base64 (`docs/ORBIT_VOICE_PLAN.md` §7). `VoiceEnv` carries the catalog bindings so every voice route can apply the `orbit` gate after `KILL_VOICE` |
 | `functions/api/voice/synthesize.ts` | Route: POST /api/voice/synthesize — text-to-speech via Workers AI (MeloTTS default, Aura opt-in) |
 | `functions/api/voice/transcribe.ts` | Route: POST /api/voice/transcribe — speech-to-text via Workers AI (Whisper large v3 turbo) |
-| `functions/api/voice/stream.ts` | Route: WS /api/voice/stream — realtime STT proxy; pipes linear16 PCM to Cloudflare's AI Gateway realtime endpoint (Deepgram Nova-3/Flux) with the `cf-aig-authorization` secret, JSON transcripts back. Config: `CF_ACCOUNT_ID` / `CF_AI_GATEWAY` / `CF_AIG_TOKEN`. When unset, `KILL_VOICE` is on, or over the per-IP cap, it accepts the socket and sends a JSON error frame (`{type:"error",code}`) before closing — a browser WS can't read an HTTP status — so the client cools down and the streaming resolver falls back to batch Whisper (`docs/ORBIT_VOICE_PLAN.md` §3) |
+| `functions/api/voice/stream.ts` | Route: WS /api/voice/stream — realtime STT proxy; pipes linear16 PCM to Cloudflare's AI Gateway realtime endpoint (Deepgram Nova-3/Flux) with the `cf-aig-authorization` secret, JSON transcripts back. Config: `CF_ACCOUNT_ID` / `CF_AI_GATEWAY` / `CF_AIG_TOKEN`. When unset, `KILL_VOICE` is on, the node's `orbit` feature is off (`feature_disabled`), or over the per-IP cap, it accepts the socket and sends a JSON error frame (`{type:"error",code}`) before closing — a browser WS can't read an HTTP status — so the client cools down and the streaming resolver falls back to batch Whisper (`docs/ORBIT_VOICE_PLAN.md` §3) |
 | `functions/api/tile/[[path]].ts` | Route: /api/tile/[...path] |
 
 ## Catalog read API (`functions/api/v1/`)
@@ -131,7 +131,7 @@ Phase 2 opt-in public projection:
 | `functions/api/v1/events.ts` | GET /api/v1/events — public list of approved current events (geometry + time + visible linked dataset ids) for the catalog Map/Timeline overlays; KV-cached, `{ events: [] }` graceful degradation (`docs/CURRENT_EVENTS_PLAN.md` §6.3) |
 | `functions/api/v1/blog.ts` | GET /api/v1/blog — public list of published blog posts (lean card shape, KV-cached `blog:list:v1` 60 s, degrades to an empty list) (`docs/CURRENT_EVENTS_PLAN.md` §7) |
 | `functions/api/v1/blog/[slug].ts` | GET /api/v1/blog/{slug} — one published post hydrated for the public page: full markdown body + visibility-filtered cited-dataset titles + the cited event's citation ONLY while approved; 404 for drafts and unknown slugs alike; KV-cached per slug |
-| `functions/api/v1/node-profile.ts` | GET /api/v1/node-profile — lean public host-organization identity (`orgName` + resolved `logoUrl`) for the blog header and future about/footer surfaces; KV-cached `node-profile:v1` 300 s, degrades to `{ profile: null }` |
+| `functions/api/v1/node-profile.ts` | GET /api/v1/node-profile — lean public host-organization identity (`orgName` + resolved `logoUrl`) plus the node's feature toggles, read by the blog boot, the portal chrome, and the public SPA's boot (which decides from it whether to offer Orbit at all); KV-cached `node-profile:v2` 300 s, degrades to `{ profile: null, features: all-enabled }`. A settings read that fails answers the profile with all-enabled features **uncached** (`no-store`, no KV fill), so an assumed map cannot outlive the blip behind it |
 | `functions/api/v1/featured-hero.ts` | Route: GET /api/v1/featured-hero |
 | `functions/api/v1/featured.ts` | Route: GET /api/v1/featured |
 | `functions/api/v1/logout.ts` | GET /api/v1/logout |
@@ -155,7 +155,7 @@ Phase 2 opt-in public projection:
 | `functions/api/v1/publish/datasets/[id]/retract.ts` | POST /api/v1/publish/datasets/{id}/retract |
 | `functions/api/v1/publish/datasets/[id]/transcode-complete.ts` | POST /api/v1/publish/datasets/{id}/transcode-complete |
 | `functions/api/v1/publish/datasets/[id]/transcode-failed.ts` | POST /api/v1/publish/datasets/{id}/transcode-failed — failure counterpart; releases the `transcoding` lock (leaves `data_ref` on the prior bundle) when the transcode job errors or times out |
-| `functions/api/v1/publish/events.ts` | GET (privileged current-events review queue) + POST (privileged create / ingest: idempotent on `(feed_id, external_id)`, runs the matcher on create; `docs/CURRENT_EVENTS_PLAN.md` §5, §9) |
+| `functions/api/v1/publish/events.ts` | GET (current-events review queue, readable by any active publisher: the newest `?limit=` events by occurrence time — default 100, at most `MAX_EVENT_LIST_LIMIT` (500), ties broken on id — plus `total`, the bucket's size whatever the limit; the review page asks for the maximum because it searches client-side, the sidebar badge asks for 1 and reads `total`) + POST (create / ingest, any `content.create` role: idempotent on `(feed_id, external_id)`, runs the matcher on create; `docs/CURRENT_EVENTS_PLAN.md` §5, §9) |
 | `functions/api/v1/publish/events/[id].ts` | POST /api/v1/publish/events/{id} — curator review-submit (event + per-link approve/reject) |
 | `functions/api/v1/publish/events/[id]/image.ts` | POST /api/v1/publish/events/{id}/image — privileged upload of the publisher's own photo as the event's story image (task: media suggestion engine): base64-in-JSON through the shared `image-upload.ts` validator (raster only, 4 MB cap, magic-byte check), content-addressed into CATALOG_R2, `image_url` set to the resolved public URL + optional curator `altText` → `image_alt`; audit-logged (`event.image_upload`), busts the public event caches |
 | `functions/api/v1/_lib/youtube-channels.ts` | Vetted agency-YouTube channel allowlist (channelId → name; NASA/USGS/NOAA family — verified by id, operator-extensible) + `isAllowlistedChannel` / `channelName` / the `isNocookieEmbedUrl` embed-host guard (write + read validation) / `nocookieEmbedUrl` builder for the agency-YouTube media source |
@@ -210,6 +210,7 @@ Phase 2 opt-in public projection:
 
 | File | Responsibility |
 |---|---|
+| `functions/api/_lib/orbit-gate.ts` | The per-node `orbit` feature gate for Orbit's chat and voice endpoints (`chat/completions`, `models`, `voice/*`; `/api/legend` is a plain image proxy and is not gated) — `isOrbitEnabled` and the 403 `feature_disabled` envelope, which carries `code` too because the voice clients read their reason from it. The backstop behind the SPA hiding Orbit: a stale tab or a hand-written request cannot keep spending Workers AI on a node that turned it off. **Memoised per isolate for `ORBIT_GATE_MEMO_MS`**, so a hands-free session's one-TTS-request-per-sentence costs no KV read per sentence, and an isolate that has read the map keeps that answer through a storage failure — fail-open narrowed to a cold isolate. A failed read is memoised too, so an outage does not cost a storage attempt per request; reads that start together are not merged, because sharing one request's pending storage I/O with another is the cross-request hazard Workers warn against |
 | `functions/api/_lib/workers-ai-error.ts` | Workers AI error classification helper for Phase 1f/D's quota guard rail |
 | `functions/api/_lib/workers-ai-text.ts` | Workers AI reply-envelope extraction shared by every server-side `env.AI.run()` consumer (Orbit chat proxy, events enrichment, event-tour captions) — `extractModelText` / `extractModelToolCalls` tolerate both the classic `{ response, tool_calls }` shape and the OpenAI-compatible `{ choices: [{ message }] }` envelope newer models emit |
 | `functions/api/v1/_lib/access-auth.ts` | Cloudflare Access JWT verification |
@@ -245,7 +246,7 @@ Phase 2 opt-in public projection:
 | `functions/api/v1/_lib/blog-store.ts` | `blog_posts` data access (Phase 3d) — draft-born rows, stable slugs (allocated once, dataset-slug rules with a `post` fallback), publish/unpublish transitions keeping the first publish time, body validation with bounded fields, and the public KV cache keys + bust helper |
 | `functions/api/v1/_lib/blog-generate.ts` | AI blog-draft generation (Phase 3d) — grounded prompt builder over the node profile + cited event + dataset facts ('invent nothing beyond them'), Workers AI call with a 30 s timeout race via the shared reply-envelope extractor, JSON draft parsing with bounded fields; unbound AI / unusable replies are typed failures, not silent fallbacks |
 | `functions/api/v1/_lib/node-profile-store.ts` | `node_profile` singleton row helpers — read/upsert + body validation (bounded prose fields, http(s)-only links) for the host-organization profile (Phase 3d) |
-| `functions/api/v1/_lib/node-settings-store.ts` | `node_settings` singleton row helpers — the per-node feature toggles (`src/types/node-features.ts`): read/upsert + body validation, and the fail-open KV-cached `getEffectiveFeatures` hot-path read the `/publish` middleware gate and gated public handlers consume |
+| `functions/api/v1/_lib/node-settings-store.ts` | `node_settings` singleton row helpers — the per-node feature toggles (`src/types/node-features.ts`): read/upsert + body validation, and the fail-open KV-cached `getEffectiveFeatures` hot-path read the `/publish` middleware gate and gated public handlers consume. `readEffectiveFeatures` is the same read plus `authoritative: false` when a storage error forced the default, for a caller that keeps its own last-known-good value |
 | `functions/api/v1/_lib/iso-duration.ts` | Minimal ISO 8601 duration parser scoped to the shapes the catalog's `period` column carries |
 | `functions/api/v1/_lib/job-queue.ts` | Asynchronous job queue interface — Phase 1b |
 | `functions/api/v1/_lib/loopback.ts` | Loopback hostname check — shared by the publish middleware's `DEV_BYPASS_ACCESS=true` gate and the asset-complete handler's `MOCK_R2=true` gate |

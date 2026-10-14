@@ -130,6 +130,12 @@ export function catalogFixtures(): FixtureRule[] {
   return [
     { url: '/api/v1/catalog', json: { datasets: DATASETS } },
     { url: '/api/v1/tours', json: { tours: [] } },
+    // Boot reads the node's feature toggles to decide whether Orbit is
+    // offered. Pinned all-enabled (`features: {}` normalizes to every
+    // feature on) so the live node's toggle — reached through the dev
+    // server's `/api` proxy — cannot change what a scene or smoke test
+    // sees. The `orbit-disabled` scene overrides it.
+    { url: '/api/v1/node-profile', json: { profile: null, features: {} } },
   ]
 }
 

@@ -393,7 +393,7 @@ export function initToolsMenu(
           <span class="tools-menu-item-label">${tHtml('tools.actions.outputs')}</span>
         </button>
       </section>` : ''}
-      <section class="tools-menu-section" aria-label="${tAttr('tools.section.orbit.aria')}">
+      <section class="tools-menu-section tools-menu-section-orbit" aria-label="${tAttr('tools.section.orbit.aria')}">
         <h4 class="tools-menu-section-title">${tHtml('tools.section.orbit')}</h4>
         <button type="button" class="tools-menu-item" id="tools-menu-orbit-settings">
           <span class="tools-menu-item-check" aria-hidden="true"></span>
