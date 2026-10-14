@@ -447,6 +447,11 @@ export async function updateCurrentEventContent(
   await writeEventDecorations(db, id, input.categories, input.keywords)
 }
 
+/** The most rows {@link listCurrentEvents} returns in one call, whatever
+ *  the caller asks for. Exported so a caller that wants "as many as
+ *  allowed" names this rather than restating it. */
+export const MAX_EVENT_LIST_LIMIT = 500
+
 /** List events, newest first by the event's *own* time — when it
  *  occurred, else when its source published it, else when we ingested
  *  it. Ordering by `created_at` alone made one refresh run's batch come
@@ -457,7 +462,7 @@ export async function listCurrentEvents(
   db: D1Database,
   opts: { status?: CurrentEventStatus; limit?: number } = {},
 ): Promise<CurrentEventRow[]> {
-  const limit = Math.max(1, Math.min(opts.limit ?? 100, 500))
+  const limit = Math.max(1, Math.min(opts.limit ?? 100, MAX_EVENT_LIST_LIMIT))
   const where = opts.status ? `WHERE status = ?` : ''
   const stmt = db.prepare(
     `SELECT ${EVENT_COLUMNS} FROM current_events
@@ -468,6 +473,21 @@ export async function listCurrentEvents(
   const bound = opts.status ? stmt.bind(opts.status, limit) : stmt.bind(limit)
   const res = await bound.all<CurrentEventRow>()
   return res.results ?? []
+}
+
+/** How many events {@link listCurrentEvents} would list with no limit —
+ *  one status, or every status when `status` is omitted. Lets the review
+ *  queue say "the newest 500 of 734" instead of silently dropping the
+ *  rest. */
+export async function countCurrentEvents(
+  db: D1Database,
+  opts: { status?: CurrentEventStatus } = {},
+): Promise<number> {
+  const stmt = opts.status
+    ? db.prepare(`SELECT COUNT(*) AS n FROM current_events WHERE status = ?`).bind(opts.status)
+    : db.prepare(`SELECT COUNT(*) AS n FROM current_events`)
+  const row = await stmt.first<{ n: number }>()
+  return row?.n ?? 0
 }
 
 /**

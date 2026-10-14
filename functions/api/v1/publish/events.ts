@@ -5,10 +5,13 @@
  * /api/v1/publish/events — the current-events review queue + ingestion
  * sink (`docs/CURRENT_EVENTS_PLAN.md` §5, §9).
  *
- * GET  — Privileged-only review queue: events for a curator to vet, each
- *        with its proposed event→dataset links (score + per-signal
- *        breakdown + the linked dataset's title). Defaults to
- *        `status=proposed`; `?status=` narrows to another bucket.
+ * GET  — Review queue, readable by any active publisher: events for a
+ *        curator to vet, each with its proposed event→dataset links
+ *        (score + per-signal breakdown + the linked dataset's title).
+ *        Defaults to `status=proposed`; `?status=` narrows to another
+ *        bucket. Returns up to `MAX_EVENT_LIST_LIMIT` events, newest
+ *        first, plus `total` — how many the bucket holds — so the portal
+ *        can say when the list it searches is not the whole bucket.
  * POST — Privileged-only create (the ingestion path, typically a service
  *        token from the import-events CLI). Idempotent on
  *        `(feed_id, external_id)`: a re-ingest refreshes the existing
@@ -25,9 +28,12 @@ import type { PublisherData } from './_middleware'
 import { writeAuditEvent } from '../_lib/audit-store'
 import { parseCreate, resolveOriginNode, ingestEvent, type FieldError } from '../_lib/events-ingest'
 import { can } from '../_lib/capabilities'
+import { D1_BIND_BATCH } from '../_lib/catalog-store'
 import {
   canMutateEvent,
   listCurrentEvents,
+  countCurrentEvents,
+  MAX_EVENT_LIST_LIMIT,
   listLinksForEvent,
   listLinksForEvents,
   getEventDecorations,
@@ -67,19 +73,23 @@ function toPublicLink(row: EventDatasetLinkRow, datasetTitle: string | null) {
   }
 }
 
-/** Fetch the titles for a set of dataset ids in one query. */
+/** Fetch the titles for a set of dataset ids, chunked — D1 refuses a
+ *  statement with more than 100 bound parameters, and a queue of a few
+ *  hundred events can reference more distinct datasets than that. */
 async function fetchDatasetTitles(
   db: D1Database,
   ids: readonly string[],
 ): Promise<Map<string, string>> {
   const titles = new Map<string, string>()
-  if (ids.length === 0) return titles
-  const placeholders = ids.map(() => '?').join(', ')
-  const res = await db
-    .prepare(`SELECT id, title FROM datasets WHERE id IN (${placeholders})`)
-    .bind(...ids)
-    .all<{ id: string; title: string }>()
-  for (const row of res.results ?? []) titles.set(row.id, row.title)
+  for (let i = 0; i < ids.length; i += D1_BIND_BATCH) {
+    const chunk = ids.slice(i, i + D1_BIND_BATCH)
+    const placeholders = chunk.map(() => '?').join(', ')
+    const res = await db
+      .prepare(`SELECT id, title FROM datasets WHERE id IN (${placeholders})`)
+      .bind(...chunk)
+      .all<{ id: string; title: string }>()
+    for (const row of res.results ?? []) titles.set(row.id, row.title)
+  }
   return titles
 }
 
@@ -102,10 +112,15 @@ export const onRequestGet: PagesFunction<CatalogEnv> = async context => {
   }
 
   const db = context.env.CATALOG_DB
-  const eventRows = await listCurrentEvents(
-    db,
-    statusParam === 'all' ? {} : { status: (statusParam as CurrentEventStatus | null) ?? 'proposed' },
-  )
+  const statusFilter = statusParam === 'all' ? {} : { status: (statusParam as CurrentEventStatus | null) ?? 'proposed' }
+  // As many as the store allows: the portal searches, filters and sorts
+  // this list client-side, so an event left off it cannot be found at
+  // all. The old default of 100 hid the rest of a busy queue silently.
+  const eventRows = await listCurrentEvents(db, { ...statusFilter, limit: MAX_EVENT_LIST_LIMIT })
+  // A short page is the whole bucket; only a full one needs counting.
+  const total = eventRows.length < MAX_EVENT_LIST_LIMIT
+    ? eventRows.length
+    : await countCurrentEvents(db, statusFilter)
 
   // Bulk-fetch links + decorations for the whole page (chunked IN
   // queries) rather than two per event, then resolve all referenced
@@ -127,7 +142,7 @@ export const onRequestGet: PagesFunction<CatalogEnv> = async context => {
     }
   })
 
-  return new Response(JSON.stringify({ events }), {
+  return new Response(JSON.stringify({ events, total }), {
     status: 200,
     headers: { 'Content-Type': CONTENT_TYPE, 'Cache-Control': 'private, no-store' },
   })
