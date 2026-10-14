@@ -14,6 +14,6 @@
 # in its chain. file: admits demo pages opened from disk (Chrome and
 # Firefox only; Safari still refuses). Host-scoped so production stays
 # open to any embedder (docs/WORDPRESS_INTEGRATION_PLAN.md).
+# Claude origins cover previewing the demo deck in Claude Design
 https://terraviz.test.gsl.noaa.gov/*
-  Content-Security-Policy: frame-ancestors 'self' https://gsl.noaa.gov file:
-https://*.claudeusercontent.com https://claude.ai
+  Content-Security-Policy: frame-ancestors 'self' https://gsl.noaa.gov file: https://*.claudeusercontent.com https://claude.ai
