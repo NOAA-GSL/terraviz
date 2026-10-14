@@ -142,7 +142,7 @@ describe('renderQueueFilters', () => {
 
     const filtered = render({ query: { ...emptyQueueQuery(), text: 'fire' } })
     filtered.filters.setCount(12)
-    expect(filtered.count.textContent).toBe('12 of 96 match')
+    expect(filtered.count.textContent).toBe('12 of 96 shown')
   })
 
   it('notes when the server loaded only part of the bucket', () => {

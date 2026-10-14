@@ -298,7 +298,7 @@ describe('renderEventsPage — search, filter and sort', () => {
     await until(() => queueTitles().length === 1, 'the search to apply')
     expect(queueTitles()).toEqual(['Flooding in Valencia'])
     expect(detailTitle()).toBe('Flooding in Valencia')
-    expect(mount.querySelector('.publisher-events-query-count')?.textContent).toBe('1 of 3 match')
+    expect(mount.querySelector('.publisher-events-query-count')?.textContent).toBe('1 of 3 shown')
   })
 
   it('keeps the detail pane when the selected event still matches', async () => {
