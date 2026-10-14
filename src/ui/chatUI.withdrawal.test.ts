@@ -86,11 +86,27 @@ function send(text: string): void {
   document.getElementById('chat-send')!.click()
 }
 
-/** The stream-end telemetry for the turn, once it has been emitted. */
-function responseComplete(): Record<string, unknown> | undefined {
-  return vi.mocked(emit).mock.calls
-    .map(([event]) => event as unknown as Record<string, unknown>)
-    .find(event => event.interaction === 'response_complete')
+/** The turn's stream-end telemetry: both events, every copy, so a
+ *  turn reported twice fails rather than passing on the first. */
+function streamEnd(): { responses: Record<string, unknown>[]; turns: Record<string, unknown>[] } {
+  const events = vi.mocked(emit).mock.calls.map(([event]) => event as unknown as Record<string, unknown>)
+  return {
+    responses: events.filter(event => event.interaction === 'response_complete'),
+    turns: events.filter(event => event.event_type === 'orbit_turn'),
+  }
+}
+
+/** Wait for the turn to finish — `orbit_turn` is its last emit. */
+async function turnEnded(): Promise<void> {
+  await vi.waitFor(() => expect(streamEnd().turns.length).toBeGreaterThan(0))
+}
+
+function expectOneTurnEndingIn(reason: string): void {
+  const { responses, turns } = streamEnd()
+  expect(responses).toHaveLength(1)
+  expect(turns).toHaveLength(1)
+  expect(responses[0]).toMatchObject({ subtype: reason })
+  expect(turns[0]).toMatchObject({ finish_reason: reason })
 }
 
 beforeEach(() => {
@@ -157,10 +173,24 @@ describe('Orbit withdrawn mid-session', () => {
     openChat()
     send('show me sea level')
 
-    await vi.waitFor(() => expect(responseComplete()).toBeDefined())
+    await turnEnded()
     expect(onLoadDataset).not.toHaveBeenCalled()
     expect(onFlyTo).not.toHaveBeenCalled()
-    expect(responseComplete()).toMatchObject({ subtype: 'error' })
+    expectOneTurnEndingIn('error')
+  })
+
+  it('reports a turn the chat endpoint refused as an error, not a reply', async () => {
+    // docentService's refusal path: withdraw, then end the stream.
+    vi.mocked(processMessage).mockImplementation(async function* () {
+      withdrawOrbit('chat')
+      yield { type: 'done' as const, fallback: true }
+    })
+    startChat()
+    openChat()
+    send('hello')
+
+    await turnEnded()
+    expectOneTurnEndingIn('error')
   })
 
   it('drops a finished reply\'s globe actions still waiting on its Load button', async () => {
@@ -177,8 +207,8 @@ describe('Orbit withdrawn mid-session', () => {
     startChat()
     openChat()
     send('where is it')
-    await vi.waitFor(() => expect(responseComplete()).toBeDefined())
-    expect(responseComplete()).toMatchObject({ subtype: 'stop' })
+    await turnEnded()
+    expectOneTurnEndingIn('stop')
 
     withdrawOrbit('recheck')
     flushPendingGlobeActions()
