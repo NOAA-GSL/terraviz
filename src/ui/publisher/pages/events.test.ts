@@ -3,6 +3,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { renderEventsPage } from './events'
+import { until } from '../../../test-utils'
 
 const DS = 'DS000' + 'A'.repeat(21)
 const EVT = '01HEVENT00000000000000000A'
@@ -247,5 +248,155 @@ describe('renderEventsPage', () => {
     expect(JSON.parse((post![1] as RequestInit).body as string)).toEqual({
       links: [{ datasetId: DS, decision: 'approve' }],
     })
+  })
+})
+
+describe('renderEventsPage — search, filter and sort', () => {
+  const ev = (id: string, title: string, source: string, extra: Record<string, unknown> = {}) => ({
+    id,
+    title,
+    source: { name: source, url: `https://example.gov/${id}` },
+    status: 'proposed',
+    links: [],
+    ...extra,
+  })
+  const queueBody = () => ({
+    total: 3,
+    events: [
+      ev('E1', 'Wildfire near Boise', 'NASA EONET', { categories: { EONET: ['Wildfires'] } }),
+      ev('E2', 'Flooding in Valencia', 'BBC Science', {
+        links: [{ datasetId: DS, datasetTitle: 'Rain', score: 0.9, signals: null, status: 'proposed' }],
+      }),
+      ev('E3', 'Wildfire smoke reaches Denver', 'NASA EONET', { categories: { EONET: ['Wildfires'] } }),
+    ],
+  })
+  const routes = (): Record<string, RouteSpec> => ({
+    '/api/v1/publish/me': { body: { role: 'admin', is_admin: true } },
+    '/api/v1/publish/events': { body: queueBody() },
+  })
+
+  const queueTitles = () => [...mount.querySelectorAll('.publisher-events-queue-title')].map(n => n.textContent)
+  const detailTitle = () => mount.querySelector('.publisher-events-detail-title')?.textContent
+  const searchBox = () => mount.querySelector<HTMLInputElement>('.publisher-events-query-input')!
+  const selects = () => mount.querySelectorAll<HTMLSelectElement>('.publisher-events-query-select')
+  const typeSearch = (text: string) => {
+    searchBox().value = text
+    searchBox().dispatchEvent(new Event('input'))
+  }
+  const choose = (select: HTMLSelectElement, value: string) => {
+    select.value = value
+    select.dispatchEvent(new Event('change'))
+  }
+
+  it('narrows the queue, and the first match takes over a filtered-out selection', async () => {
+    await renderEventsPage(mount, { fetchFn: mockFetch(routes()) })
+    expect(queueTitles()).toHaveLength(3)
+    expect(detailTitle()).toBe('Wildfire near Boise')
+    expect(mount.querySelector('.publisher-events-query-count')?.textContent).toBe('3 events')
+
+    typeSearch('flood')
+    await until(() => queueTitles().length === 1, 'the search to apply')
+    expect(queueTitles()).toEqual(['Flooding in Valencia'])
+    expect(detailTitle()).toBe('Flooding in Valencia')
+    expect(mount.querySelector('.publisher-events-query-count')?.textContent).toBe('1 of 3 match')
+  })
+
+  it('keeps the detail pane when the selected event still matches', async () => {
+    await renderEventsPage(mount, { fetchFn: mockFetch(routes()) })
+    ;(mount.querySelectorAll<HTMLButtonElement>('.publisher-events-queue-row')[2]).click()
+    const detail = mount.querySelector('.publisher-events-detail')!
+    expect(detailTitle()).toBe('Wildfire smoke reaches Denver')
+
+    typeSearch('wildfire')
+    await until(() => queueTitles().length === 2, 'the search to apply')
+    // Same node: the pane (and the map it mounts) was not rebuilt.
+    expect(mount.contains(detail)).toBe(true)
+    expect(detailTitle()).toBe('Wildfire smoke reaches Denver')
+  })
+
+  it('says when nothing matches and clears from there', async () => {
+    await renderEventsPage(mount, { fetchFn: mockFetch(routes()) })
+    const [source, category] = selects()
+    choose(source, 'BBC Science')
+    expect(queueTitles()).toEqual(['Flooding in Valencia'])
+    choose(category, 'Wildfires')
+
+    expect(mount.querySelector('.publisher-events-nomatch')).not.toBeNull()
+    expect(mount.querySelector('.publisher-events-detail')).toBeNull()
+    mount.querySelector<HTMLButtonElement>('.publisher-events-nomatch button')!.click()
+
+    expect(queueTitles()).toHaveLength(3)
+    expect(source.value).toBe('')
+    expect(category.value).toBe('')
+    expect(document.activeElement).toBe(searchBox())
+  })
+
+  it('sorts by strongest dataset match', async () => {
+    await renderEventsPage(mount, { fetchFn: mockFetch(routes()) })
+    const sort = selects()[selects().length - 1]
+    choose(sort, 'bestMatch')
+    expect(queueTitles()).toEqual(['Flooding in Valencia', 'Wildfire near Boise', 'Wildfire smoke reaches Denver'])
+    choose(sort, 'oldest')
+    expect(queueTitles()).toEqual(['Wildfire smoke reaches Denver', 'Flooding in Valencia', 'Wildfire near Boise'])
+  })
+
+  it('keeps the query across a status switch', async () => {
+    const fetchFn = mockFetch(routes())
+    await renderEventsPage(mount, { fetchFn })
+    typeSearch('flood')
+    await until(() => queueTitles().length === 1, 'the search to apply')
+
+    const approved = [...mount.querySelectorAll<HTMLButtonElement>('.publisher-events-filters button')]
+      .find(b => b.textContent === 'Approved')!
+    approved.click()
+    await until(
+      () => mount.querySelector('.publisher-events-filter-active')?.textContent === 'Approved',
+      'the Approved bucket to render',
+    )
+    expect(searchBox().value).toBe('flood')
+    expect(queueTitles()).toEqual(['Flooding in Valencia'])
+  })
+
+  it('notes when the server loaded only the newest part of the bucket', async () => {
+    const r = routes()
+    r['/api/v1/publish/events'] = { body: { ...queueBody(), total: 734 } }
+    await renderEventsPage(mount, { fetchFn: mockFetch(r) })
+    expect(mount.querySelector('.publisher-events-query-note')?.textContent).toContain('3 of 734')
+  })
+
+  it('shows no controls for an empty bucket', async () => {
+    const r = routes()
+    r['/api/v1/publish/events'] = { body: { events: [], total: 0 } }
+    await renderEventsPage(mount, { fetchFn: mockFetch(r) })
+    expect(mount.querySelector('.publisher-events-query')).toBeNull()
+  })
+
+  it('drops a search that would hide the event just created', async () => {
+    const r = routes()
+    const body = queueBody()
+    body.events.push(ev(EVT, 'Manual storm', 'NOAA'))
+    r['/api/v1/publish/events'] = { body }
+    r['/api/v1/publish/datasets'] = { body: { datasets: [], next_cursor: null } }
+    r['POST /api/v1/publish/events'] = { status: 201, body: { created: true, event: { id: EVT, status: 'proposed' }, links: [] } }
+    await renderEventsPage(mount, { fetchFn: mockFetch(r) })
+    const sort = selects()[selects().length - 1]
+    choose(sort, 'oldest')
+    typeSearch('flood')
+    await until(() => queueTitles().length === 1, 'the search to apply')
+
+    mount.querySelectorAll<HTMLButtonElement>('.publisher-events-toolbar button')[1].click()
+    const inputs = document.querySelectorAll<HTMLInputElement>('.publisher-events-drawer-compose input')
+    inputs[0].value = 'Manual storm'
+    inputs[1].value = 'NOAA'
+    inputs[2].value = 'https://example.gov/manual'
+    ;[...document.querySelectorAll<HTMLButtonElement>('.publisher-events-drawer-actions button')]
+      .find(b => b.classList.contains('publisher-button-primary'))!
+      .click()
+
+    await until(() => detailTitle() === 'Manual storm', 'the new event to be selected')
+    expect(searchBox().value).toBe('')
+    expect(queueTitles()).toHaveLength(4)
+    // The sort hides nothing, so it stays.
+    expect(selects()[selects().length - 1].value).toBe('oldest')
   })
 })

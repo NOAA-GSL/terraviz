@@ -9,11 +9,16 @@
  * Privileged-only (admin / service). Fetches the caller's role
  * (`/api/v1/publish/me`) and the events queue (`GET
  * /api/v1/publish/events`), then renders a top bar (heading + status
- * filter pills + Refresh / New-event actions) over a two-pane body: the
- * **event queue** on the left (`event-queue.ts`) and the selected
- * event's **detail** on the right (`event-detail.ts`) with the two-level
- * approval model. Both review actions post to
- * `POST /api/v1/publish/events/:id`.
+ * filter pills + Refresh / New-event actions + the search / source /
+ * category / sort controls) over a two-pane body: the **event queue** on
+ * the left (`event-queue.ts`) and the selected event's **detail** on the
+ * right (`event-detail.ts`) with the two-level approval model. Both
+ * review actions post to `POST /api/v1/publish/events/:id`.
+ *
+ * Search, filters and sort run client-side over the loaded bucket
+ * (`event-queue-filters.ts`, matching in `events-model.ts`). The query
+ * lives on the page state, so it survives a status switch, a feed
+ * refresh and the reload that follows a review decision.
  *
  * Non-privileged callers get a restricted card (the API also enforces
  * 403; gating here avoids a fetch-then-reject round-trip).
@@ -28,7 +33,18 @@ import { renderEventQueue } from '../components/events/event-queue'
 import { renderEventDetail } from '../components/events/event-detail'
 import { mountEventLocator } from '../components/events/event-locator-map'
 import { openNewEventDrawer } from '../components/events/new-event-drawer'
-import type { EventStatus, EventsResponse, ReviewEvent } from '../components/events/events-model'
+import { renderQueueFilters, type QueueFilters } from '../components/events/event-queue-filters'
+import {
+  applyQueueQuery,
+  categoryOptions,
+  emptyQueueQuery,
+  matchesQueueQuery,
+  sourceOptions,
+  type EventStatus,
+  type EventsResponse,
+  type QueueQuery,
+  type ReviewEvent,
+} from '../components/events/events-model'
 
 interface MeResponse {
   role: string
@@ -63,10 +79,16 @@ interface LocatorHolder {
 }
 
 /** Internal page state: the public options plus the locator holder that
- *  survives across re-renders within one page session, and whether the
+ *  survives across re-renders within one page session, whether the
  *  caller is an admin (gates the feed-Refresh action; the review
- *  controls themselves gate per-event on `can_edit`). */
-type TriageState = EventsPageOptions & { locator: LocatorHolder; isAdmin: boolean; canCreate: boolean }
+ *  controls themselves gate per-event on `can_edit`), and the curator's
+ *  search / filter / sort, which outlives every reload in the session. */
+type TriageState = EventsPageOptions & {
+  locator: LocatorHolder
+  isAdmin: boolean
+  canCreate: boolean
+  query: QueueQuery
+}
 
 function clientIsPrivileged(me: MeResponse): boolean {
   return me.is_admin === true || me.role === 'admin' || me.role === 'service'
@@ -117,6 +139,7 @@ export async function renderEventsPage(mount: HTMLElement, options: EventsPageOp
     // Composing a manual event needs an authoring role — derived from
     // the `me` read the page already made (no extra request).
     canCreate: roleCan(meRes.data.role, 'content.create'),
+    query: emptyQueueQuery(),
   })
 }
 
@@ -145,54 +168,75 @@ async function loadAndRenderQueue(
     mount.replaceChildren(shell(buildErrorCard(res.kind, details)))
     return
   }
-  renderTriage(mount, res.data.events, state, notice, status, selectId)
+  const { events } = res.data
+  // An older server sends no total; then what arrived is all there is.
+  const total = Math.max(res.data.total ?? events.length, events.length)
+  renderTriage(mount, events, total, state, notice, status, selectId)
 }
 
 /** The master–detail triage view: top bar + (queue | detail). */
 function renderTriage(
   mount: HTMLElement,
   events: ReviewEvent[],
+  total: number,
   state: TriageState,
   notice: string | undefined,
   filter: QueueFilter,
   selectId?: string,
 ): void {
-  let selectedId: string | null =
-    (selectId && events.some(e => e.id === selectId) ? selectId : events[0]?.id) ?? null
+  // A just-created event the query would hide is the one event the
+  // curator certainly wants to see, so drop the search and filters for
+  // it (the sort is kept — it hides nothing).
+  const wanted = selectId ? events.find(e => e.id === selectId) : undefined
+  if (wanted && !matchesQueueQuery(wanted, state.query)) {
+    state.query = { ...emptyQueueQuery(), sort: state.query.sort }
+  }
 
-  const topbar = renderTopbar(mount, state, notice, filter)
+  let visible = applyQueueQuery(events, state.query)
+  let selectedId: string | null =
+    (selectId && visible.some(e => e.id === selectId) ? selectId : visible[0]?.id) ?? null
 
   // The body rebuilds queue + detail together so selection + in-place
   // status changes (which mutate `events`) stay in sync. The active
   // locator map is disposed before each rebuild so its WebGL context
   // doesn't leak across selections.
   const body = el('div', 'publisher-events-body')
+  const eyebrow = filter === 'all' ? t('publisher.events.filter.all') : statusLabel(filter)
+  let queue: HTMLElement | null = null
+  const buildQueue = (): HTMLElement =>
+    renderEventQueue(visible, selectedId, {
+      onSelect: id => {
+        selectedId = id
+        rebuildBody()
+      },
+    }, eyebrow)
+  // Re-render just the queue node in place (keeps queue | detail as the
+  // grid's two direct children) so a per-link / bulk decision refreshes
+  // the "N datasets to review" count without rebuilding the detail pane.
+  // It does not re-sort: an event jumping out from under the pointer
+  // because the curator just ruled on one of its pairings is worse than
+  // an order that goes stale until the next query change.
+  const refreshQueue = (): void => {
+    if (!queue) return
+    const next = buildQueue()
+    queue.replaceWith(next)
+    queue = next
+  }
   const rebuildBody = (): void => {
     state.locator.dispose?.()
     state.locator.dispose = null
     body.replaceChildren()
+    queue = null
     if (events.length === 0) {
       body.append(el('p', 'publisher-empty-message', [t('publisher.events.empty')]))
       return
     }
-    const eyebrow = filter === 'all' ? t('publisher.events.filter.all') : statusLabel(filter)
-    const buildQueue = (): HTMLElement =>
-      renderEventQueue(events, selectedId, {
-        onSelect: id => {
-          selectedId = id
-          rebuildBody()
-        },
-      }, eyebrow)
-    // Re-render just the queue node in place (keeps queue | detail as the
-    // grid's two direct children) so a per-link / bulk decision refreshes
-    // the "N datasets to review" count without rebuilding the detail pane.
-    let queue = buildQueue()
-    const refreshQueue = (): void => {
-      const next = buildQueue()
-      queue.replaceWith(next)
-      queue = next
+    if (visible.length === 0) {
+      body.append(renderNoMatch(() => filters?.clear()))
+      return
     }
-    const selected = events.find(e => e.id === selectedId) ?? events[0]
+    queue = buildQueue()
+    const selected = visible.find(e => e.id === selectedId) ?? visible[0]
     const detail = renderEventDetail(selected, {
       fetchFn: state.fetchFn,
       navigate: state.navigate,
@@ -213,18 +257,61 @@ function renderTriage(
     })
     body.append(queue, detail)
   }
+
+  // Nothing loaded means nothing to search; the empty state says so.
+  const filters: QueueFilters | null = events.length === 0
+    ? null
+    : renderQueueFilters({
+        query: state.query,
+        sources: sourceOptions(events),
+        categories: categoryOptions(events),
+        loaded: events.length,
+        total,
+        onChange: next => {
+          state.query = next
+          visible = applyQueueQuery(events, next)
+          filters?.setCount(visible.length)
+          // Keep the detail pane (and its map) when the selected event
+          // survives the change; otherwise the first match takes over.
+          if (queue && selectedId !== null && visible.some(e => e.id === selectedId)) {
+            refreshQueue()
+            return
+          }
+          selectedId = visible[0]?.id ?? null
+          rebuildBody()
+        },
+      })
+  filters?.setCount(visible.length)
+
   rebuildBody()
 
+  const topbar = renderTopbar(mount, state, notice, filter, filters?.element ?? null)
   mount.replaceChildren(shell(topbar, card(body)))
 }
 
+/** The body when the query hides every loaded event: say so, and offer
+ *  the way back beside the message rather than only up in the toolbar. */
+function renderNoMatch(onClear: () => void): HTMLElement {
+  const clear = document.createElement('button')
+  clear.type = 'button'
+  clear.className = 'publisher-button'
+  clear.textContent = t('publisher.events.query.clear')
+  clear.addEventListener('click', onClear)
+  return el('div', 'publisher-events-nomatch', [
+    el('p', 'publisher-empty-message', [t('publisher.events.query.noMatch')]),
+    clear,
+  ])
+}
+
 /** Top bar: heading, status-filter pills, Refresh / New-event actions
- *  (New event opens the slide-in drawer), and a status line. */
+ *  (New event opens the slide-in drawer), the search / filter / sort
+ *  controls when there is anything to search, and a status line. */
 function renderTopbar(
   mount: HTMLElement,
   state: TriageState,
   notice: string | undefined,
   filter: QueueFilter,
+  queryControls: HTMLElement | null,
 ): HTMLElement {
   const status = el('p', 'publisher-events-actions-status', notice ? [notice] : [])
   status.setAttribute('role', 'status')
@@ -302,6 +389,7 @@ function renderTopbar(
     ]),
     el('p', 'publisher-events-intro', [t('publisher.events.subtitle')]),
     filters,
+    ...(queryControls ? [queryControls] : []),
     status,
   ])
   return card(bar)

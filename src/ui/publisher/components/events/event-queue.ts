@@ -11,7 +11,7 @@
  */
 
 import { t } from '../../../../i18n'
-import { primaryCategory, type ReviewEvent } from './events-model'
+import { pendingLinkCount, primaryCategory, type ReviewEvent } from './events-model'
 
 export interface EventQueueCallbacks {
   onSelect: (eventId: string) => void
@@ -36,7 +36,7 @@ function renderRow(event: ReviewEvent, selected: boolean, cb: EventQueueCallback
   sub.className = 'publisher-events-queue-sub'
   // "…datasets to review" counts only the pairings still awaiting a
   // decision, so it shrinks as the curator resolves them.
-  const count = event.links.filter(l => l.status === 'proposed').length
+  const count = pendingLinkCount(event)
   sub.textContent = `${sourceLabel(event)} · ${t('publisher.events.queue.toReview', { count: String(count) })}`
 
   const row = document.createElement('button')

@@ -305,5 +305,12 @@
   "outputs.warp.aspectMismatch.other": "As outputs.warp.aspectMismatch.one, for several projectors stretched by the same amount. {ids} is a comma-separated list of projector ids such as \"P1, P2, P3\" (do not translate).",
   "outputs.warp.framebufferDifferentShape": "{solvedWidth}×{solvedHeight} is the display size the calibration was made for; {width}×{height} is this display's. Keep the × sign. A warning for each affected projector follows it.",
   "outputs.warp.framebufferStretched.one": "{solvedWidth}×{solvedHeight} is the display size the calibration was made for; {width}×{height} is this display's. Keep the × sign. {percent} is a whole number. Used when the bundle has one projector.",
-  "outputs.warp.framebufferStretched.other": "As outputs.warp.framebufferStretched.one, for a bundle with several projectors, all stretched by the same amount."
+  "outputs.warp.framebufferStretched.other": "As outputs.warp.framebufferStretched.one, for a bundle with several projectors, all stretched by the same amount.",
+  "publisher.events.query.option": "One choice in the Events tab's Source or Category dropdown. {name} is a feed or category name (e.g. \"NASA EONET\", \"Wildfires\"); {count} is how many loaded events carry it. Preserve both.",
+  "publisher.events.query.count.filtered": "Status line under the Events tab's search box while a search or filter is active, e.g. \"12 of 140 match\". Preserve {shown} and {total}; announced to screen readers.",
+  "publisher.events.query.count.one": "Status line under the Events tab's search box when nothing is filtered and exactly one event is loaded. Preserve {count}. CLDR-aware via plural().",
+  "publisher.events.query.count.other": "Status line under the Events tab's search box when nothing is filtered. Preserve {count}. CLDR-aware via plural().",
+  "publisher.events.query.truncated": "Note under the Events tab's filters when the server returned only its newest {loaded} events out of {total} in this status. Tells the curator older events are not searchable from here. Preserve both placeholders.",
+  "publisher.events.query.sort.bestMatch": "Sort option: events whose best-scoring paired dataset scores highest come first. \"Match\" is the event-to-dataset match score shown elsewhere on the tab.",
+  "publisher.events.query.searchPlaceholder": "Placeholder in the Events tab's search box, listing what the search looks at. Keep it short; the field is narrow on mobile."
 }

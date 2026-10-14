@@ -82,6 +82,10 @@ export interface ReviewEvent {
 
 export interface EventsResponse {
   events: ReviewEvent[]
+  /** How many events the requested status bucket holds. More than
+   *  `events.length` when the server stopped at its cap; absent from a
+   *  server that predates the field, which means "assume all loaded". */
+  total?: number
 }
 
 /**
@@ -211,4 +215,142 @@ export function primaryCategory(event: Pick<ReviewEvent, 'categories'>): string 
     if (values && values.length > 0) return values[0]
   }
   return null
+}
+
+/** How many of an event's dataset pairings still await a decision —
+ *  the queue row's "N datasets to review", and one of its sort keys. */
+export function pendingLinkCount(event: Pick<ReviewEvent, 'links'>): number {
+  return event.links.filter(l => l.status === 'proposed').length
+}
+
+/**
+ * The event's strongest dataset pairing as a raw 0–1 score, or null when
+ * nothing is scored. Rejected pairings are left out: a curator who has
+ * already said "not this dataset" should not see the event ranked on it.
+ */
+export function bestMatchScore(event: Pick<ReviewEvent, 'links'>): number | null {
+  let best: number | null = null
+  for (const link of event.links) {
+    if (link.status === 'rejected' || link.score == null || !Number.isFinite(link.score)) continue
+    if (best === null || link.score > best) best = link.score
+  }
+  return best
+}
+
+/** How the queue is ordered. `newest` / `oldest` follow the server's own
+ *  ordering (the event's occurred time, else its publish date, else
+ *  ingest) rather than re-deriving it, so the two cannot disagree. */
+export type QueueSort = 'newest' | 'oldest' | 'bestMatch' | 'mostToReview'
+export const QUEUE_SORTS: readonly QueueSort[] = ['newest', 'oldest', 'bestMatch', 'mostToReview']
+
+/** The curator's search, filters and sort over one loaded status bucket. */
+export interface QueueQuery {
+  /** Free text; every whitespace-separated term must appear. */
+  text: string
+  /** Exact `source.name`, or null for every source. */
+  source: string | null
+  /** A category value from any facet group, or null for every category. */
+  category: string | null
+  sort: QueueSort
+}
+
+export function emptyQueueQuery(): QueueQuery {
+  return { text: '', source: null, category: null, sort: 'newest' }
+}
+
+/** Whether the query hides anything. Sort alone never does. */
+export function isQueueFiltered(query: QueueQuery): boolean {
+  return query.text.trim() !== '' || query.source !== null || query.category !== null
+}
+
+/** Lower-case and strip diacritics, so "sao paulo" finds "São Paulo". */
+function fold(text: string): string {
+  return text.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase()
+}
+
+/** Every category value on the event, across facet groups. The group
+ *  key is left out: for EONET it is the word "EONET" on every row. */
+function categoryValues(event: Pick<ReviewEvent, 'categories'>): string[] {
+  return Object.values(event.categories ?? {}).flat()
+}
+
+/**
+ * The text a search runs against: the event's own words — title, summary,
+ * source, keywords, categories and place name. Linked dataset titles are
+ * deliberately not in it: the matcher pairs datasets broadly, so a search
+ * for "temperature" would otherwise return most of the queue.
+ */
+export function eventSearchText(event: ReviewEvent): string {
+  return fold(
+    [
+      event.title,
+      event.summary ?? '',
+      event.source.name,
+      ...(event.keywords ?? []),
+      ...categoryValues(event),
+      event.geometry?.regionName ?? '',
+    ].join('\n'),
+  )
+}
+
+export function matchesQueueQuery(event: ReviewEvent, query: QueueQuery): boolean {
+  if (query.source !== null && event.source.name !== query.source) return false
+  if (query.category !== null && !categoryValues(event).includes(query.category)) return false
+  const terms = fold(query.text).split(/\s+/).filter(Boolean)
+  if (terms.length === 0) return true
+  const haystack = eventSearchText(event)
+  return terms.every(term => haystack.includes(term))
+}
+
+/**
+ * The events the query keeps, in the order it asks for. `events` must be
+ * in the server's order (newest first). Every sort breaks ties on that
+ * order, so equal-scoring events never shuffle between renders.
+ */
+export function applyQueueQuery(events: readonly ReviewEvent[], query: QueueQuery): ReviewEvent[] {
+  const kept = events.filter(e => matchesQueueQuery(e, query))
+  switch (query.sort) {
+    case 'newest':
+      return kept
+    case 'oldest':
+      return kept.reverse()
+    case 'bestMatch':
+      return stableSortDesc(kept, e => bestMatchScore(e) ?? -Infinity)
+    case 'mostToReview':
+      return stableSortDesc(kept, pendingLinkCount)
+  }
+}
+
+function stableSortDesc(events: ReviewEvent[], key: (e: ReviewEvent) => number): ReviewEvent[] {
+  return events
+    .map((event, index) => ({ event, index, k: key(event) }))
+    .sort((a, b) => b.k - a.k || a.index - b.index)
+    .map(x => x.event)
+}
+
+/** One choice in a source / category dropdown, with how many loaded
+ *  events carry it. */
+export interface FacetOption {
+  value: string
+  count: number
+}
+
+function facetOptions(events: readonly ReviewEvent[], valuesOf: (e: ReviewEvent) => string[]): FacetOption[] {
+  const counts = new Map<string, number>()
+  for (const event of events) {
+    for (const value of new Set(valuesOf(event))) counts.set(value, (counts.get(value) ?? 0) + 1)
+  }
+  return [...counts]
+    .map(([value, count]) => ({ value, count }))
+    .sort((a, b) => b.count - a.count || a.value.localeCompare(b.value))
+}
+
+/** The sources present in the loaded events, most common first. */
+export function sourceOptions(events: readonly ReviewEvent[]): FacetOption[] {
+  return facetOptions(events, e => [e.source.name])
+}
+
+/** The category values present in the loaded events, most common first. */
+export function categoryOptions(events: readonly ReviewEvent[]): FacetOption[] {
+  return facetOptions(events, categoryValues)
 }
