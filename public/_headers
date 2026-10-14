@@ -5,3 +5,14 @@
 
 /sw.js
   Cache-Control: no-cache
+
+# GSL test node only. Its Cloudflare zone adds X-Frame-Options: SAMEORIGIN
+# to every response, which blanks any cross-origin embed. Browsers ignore
+# X-Frame-Options when a CSP frame-ancestors directive is present, so this
+# re-opens embedding for the listed origins. frame-ancestors checks every
+# ancestor, not just the parent, so a nested embed must list each origin
+# in its chain. file: admits demo pages opened from disk (Chrome and
+# Firefox only; Safari still refuses). Host-scoped so production stays
+# open to any embedder (docs/WORDPRESS_INTEGRATION_PLAN.md).
+https://terraviz.test.gsl.noaa.gov/*
+  Content-Security-Policy: frame-ancestors 'self' https://gsl.noaa.gov file:
