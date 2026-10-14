@@ -177,6 +177,10 @@ describe('Orbit withdrawn mid-session', () => {
     expect(onLoadDataset).not.toHaveBeenCalled()
     expect(onFlyTo).not.toHaveBeenCalled()
     expectOneTurnEndingIn('error')
+    // Nothing the turn did afterwards spoke over the withdrawal, or
+    // took focus back into the hidden panel by re-enabling its input.
+    expect(announce).toHaveBeenLastCalledWith('Orbit has been turned off on this site')
+    expect(document.activeElement?.id).toBe('tools-menu-toggle')
   })
 
   it('reports a turn the chat endpoint refused as an error, not a reply', async () => {
