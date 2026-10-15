@@ -60,6 +60,32 @@ describe('createSignalCollector', () => {
     ])
   })
 
+  it("drops Chromium's ERR_ABORTED for a HEAD that was already answered, and keeps every other failure", () => {
+    const c = createSignalCollector()
+    const head = (url: string, status: number): ResponseLike => ({
+      url: () => url,
+      status: () => status,
+      request: () => ({ method: () => 'HEAD' }),
+    })
+    // Answered: the headers arrived, then Chromium reports the end.
+    c.handleResponse(head('https://x/', 200))
+    c.handleRequestFailed(request('https://x/', 'HEAD', 'net::ERR_ABORTED'))
+    // Never answered: a real failure.
+    c.handleRequestFailed(request('https://x/other', 'HEAD', 'net::ERR_ABORTED'))
+    // Answered with an error status: the 4xx is reported, so is the end.
+    c.handleResponse(head('https://x/gone', 404))
+    c.handleRequestFailed(request('https://x/gone', 'HEAD', 'net::ERR_ABORTED'))
+    // A GET is never excused.
+    c.handleResponse(response('https://x/page', 200))
+    c.handleRequestFailed(request('https://x/page', 'GET', 'net::ERR_ABORTED'))
+
+    expect(c.signals.failedRequests).toEqual([
+      { url: 'https://x/other', method: 'HEAD', failure: 'net::ERR_ABORTED' },
+      { url: 'https://x/gone', method: 'HEAD', failure: 'net::ERR_ABORTED' },
+      { url: 'https://x/page', method: 'GET', failure: 'net::ERR_ABORTED' },
+    ])
+  })
+
   it('records only 4xx/5xx responses as bad', () => {
     const c = createSignalCollector()
     c.handleResponse(response('https://x/ok', 200))
