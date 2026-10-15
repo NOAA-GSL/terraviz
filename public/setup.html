@@ -316,7 +316,7 @@ code{overflow-wrap:anywhere}
 <!--
   GENERATED FILE — do not edit.
 
-  Produced by scripts/build-setup-page.ts on 2026-09-14.
+  Produced by scripts/build-setup-page.ts on 2026-10-15.
   Prose lives in scripts/setup-page/content.ts; every binding,
   prerequisite and validator is imported from the modules the setup
   tool itself uses, so this page cannot disagree with `npm run setup`.
@@ -1937,8 +1937,15 @@ npm run terraviz -- import-snapshot \
       <h2 style="font:700 24px/1.25 var(--tv-font-sans);letter-spacing:-.01em;color:var(--tv-text);margin:0">Content-Security-Policy</h2>
     </div>
   </div>
-  <p style="margin:0 0 16px;max-width:64ch;color:var(--tv-text-muted);text-wrap:pretty"><b style="font-weight:600;color:var(--tv-text)">The repo ships no CSP.</b> Upstream enforces one at the Cloudflare edge, and edge rules do not travel with a fork — so every fork is unprotected until its operator adds one. Your node works without it; do it anyway before the node faces the public.</p>
+  <p style="margin:0 0 16px;max-width:64ch;color:var(--tv-text-muted);text-wrap:pretty"><b style="font-weight:600;color:var(--tv-text)">The repo ships no CSP for the app.</b> Its one CSP is <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">frame-ancestors 'self'</code> on <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">/publish</code>, so no other site can frame the portal. Upstream enforces an app policy at the Cloudflare edge, and edge rules do not travel with a fork. Every fork is unprotected until its operator adds one. Your node works without it; do it anyway before the node faces the public.</p>
   <p style="margin:0 0 16px;max-width:64ch;color:var(--tv-text-muted);text-wrap:pretty">Remember <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">blob:</code> — the app uses it for preview tours and screenshots, and omitting it reproduces the &quot;may not load data from blob:&quot; failure. Test playback, VR and a tour before locking it down.</p>
+  <div style="background:var(--tv-warn-bg);border:1px solid var(--tv-warn-border);border-left:3px solid var(--tv-warn);border-radius:6px;padding:15px 17px;margin:0 0 16px">
+  <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-warn);margin:0 0 8px">Worth knowing · If other sites embed the node</div>
+  <p style="margin:0 0 10px;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">By default any site may show the node in an iframe, as the WordPress plugin does. To limit that, sign in as an admin and open <b style="font-weight:600;color:var(--tv-text)">Node profile → Embedding</b>. Choose <b style="font-weight:600;color:var(--tv-text)">Only sites I list</b> or <b style="font-weight:600;color:var(--tv-text)">No other site</b>. It takes effect within a few minutes, with no redeploy.</p>
+  <p style="margin:0 0 10px;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">The card shows the headers a visitor gets, and warns when something else blocks embeds. Cloudflare's <b style="font-weight:600;color:var(--tv-text)">Add security headers</b> transform sends <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">X-Frame-Options: SAMEORIGIN</code>, which blocks every other site. Cloudflare Access blocks embeds too.</p>
+  <p style="margin:0 0 10px;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">You can use <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">public/_headers</code> or an edge rule instead, with the setting left on <b style="font-weight:600;color:var(--tv-text)">Any site</b>. An edge rule that <i>Sets</i> a CSP replaces the node's own; use <b style="font-weight:600;color:var(--tv-text)">Add</b>, so the portal keeps its <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">frame-ancestors 'self'</code>.</p>
+  
+</div>
   <div style="display:flex;flex-direction:column;gap:10px;margin:0 0 16px"><div style="border:1px solid var(--tv-border);border-radius:6px;padding:15px 17px">
         <div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin:0 0 6px">
           <div style="font:500 15px/1.3 var(--tv-font-sans);color:var(--tv-text)">14.1 · Standalone feedback widget</div>
@@ -2117,7 +2124,7 @@ npm run terraviz -- import-snapshot \
     </div>
     <div style="background:var(--tv-surface-2);border:1px solid var(--tv-border);border-radius:8px;padding:16px 18px;grid-column:1 / -1">
       <div style="font:500 14px/1.3 var(--tv-font-sans);color:var(--tv-text);margin:0 0 6px">Add a Content-Security-Policy</div>
-      <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">The repo ships none, and upstream's edge policy does not travel with a fork. See Phase 13.7 — and test playback, VR and a tour before you lock it down.</p>
+      <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">The repo ships none for the app, and upstream's edge policy does not travel with a fork. See Phase 13 — and test playback, VR and a tour before you lock it down.</p>
     </div>
   </div>
 </section>

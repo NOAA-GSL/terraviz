@@ -416,7 +416,8 @@ Recorded here because the choice is not obvious and someone will ask.
 
 **Embed gate (condition 8):**
 
-- [ ] CSP set at the edge for the new deployment, with `frame-ancestors` naming the GSL WordPress origin, on paths outside `/publish`. A Transform Rule that *Sets* a CSP on `/publish` replaces the portal's `frame-ancestors 'self'`, and then the WordPress origin can frame the admin portal: use Add, or exclude `/publish` and `/publish/*`
+- [ ] Embedding allowed for the GSL WordPress origin. The node's default (**Node profile → Embedding: Any site can embed**) already allows it. To restrict embedding to that site, choose **Only sites I list** and add its `https://` origin. An edge CSP with `frame-ancestors` also works, on paths outside `/publish`. A Transform Rule that *Sets* a CSP on `/publish` replaces the portal's `frame-ancestors 'self'`, and then the WordPress origin can frame the admin portal: use Add, or exclude `/publish` and `/publish/*`
+- [ ] The Embedding card's **What this node sends now** readout shows no warning (an `X-Frame-Options`, or a stricter `frame-ancestors` from the edge)
 - [ ] No `X-Frame-Options: DENY` or `SAMEORIGIN` on the public app's paths from `_headers`, Cloudflare, or a NOAA security baseline. `_headers` sends `SAMEORIGIN` on `/publish` and `/publish/*` deliberately; leave those
 - [ ] Node **not** behind Cloudflare Access, or embed path explicitly exempted
 - [ ] Node serves `/schema/v1/*.schema.json` (the plugin generates its PHP wire types from it)

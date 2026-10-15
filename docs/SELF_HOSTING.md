@@ -537,6 +537,7 @@ provisions the whole stack and serves real traffic.
 | **Vectorize** (semantic search) | 30M queried + 5M stored vector dimensions/month | At 768 dimensions that is ~6,500 stored datasets |
 | **D1** (catalog) | 5 GB total | A hard cap on Free, not an overage — writes start failing. Paid includes the same 5 GB, then $0.75/GB-month |
 | **R2** (assets) | 10 GB-month | Billed at $0.015/GB-month past it, on either plan |
+| **Workers requests** (Pages Functions) | 100,000 requests/day, reset at midnight UTC | By default the project fails open: Functions are skipped until the reset. The API stops answering, and the embedding setting stops being sent |
 | **KV**, **Pages** | Ample for a single node | — |
 
 The practical reading: Orbit is the reason to pay $5. Roughly 200
@@ -544,6 +545,14 @@ conversations a day exhausts the Neuron allocation, and a kiosk in a
 museum lobby will pass that before lunch. Everything else on this
 list either has room to spare at node scale, or is billed the same
 whichever plan you are on.
+
+Workers requests are the other one to watch. Every API call is a
+Functions request, and so is every page a visitor opens, because the
+root middleware enforces the embedding setting (Phase 13). Images,
+scripts and tiles are static and free. A node with heavy page traffic
+can reach 100,000 a day. To fail visibly instead, switch the project
+to fail closed: visitors then get an error page rather than a quiet
+loss of the API.
 
 > **Checked against Cloudflare's published pricing on 2026-08-03.**
 > These allocations move, so re-read the
@@ -1749,7 +1758,54 @@ If it has one, browsers ignore `X-Frame-Options`, so any site that
 policy names can frame the portal. If you must use Set, give
 `/publish` and `/publish/*` a rule of their own that includes
 `frame-ancestors 'self'`. Do not add it to a rule for every path:
-that stops every other site embedding the public app.
+that stops every other site embedding the public app. A Set rule
+also replaces the policy the Embedding setting below sends.
+
+## If other sites embed the node
+
+The Terraviz WordPress plugin, and anything else that embeds a node,
+loads `https://<your-node>/?dataset=…&embed=1` in an iframe on
+another site. By default any site may do that. The public app sends
+no `frame-ancestors` and no `X-Frame-Options`.
+
+**To limit it, use the portal.** Sign in as an admin and open
+**Node profile → Embedding**:
+
+- **Any site can embed** is the default, and how every node starts.
+- **Only sites I list** allows this node and the sites you name. Name
+  each one as `https://` and its host, with no path.
+  `www.example.org` and `example.org` are different sites, so list
+  both if your pages use both. `https://*.example.org` covers
+  subdomains but not `example.org` itself.
+- **No other site** allows only the node's own pages.
+
+The change reaches visitors within a few minutes, with no redeploy.
+The card's **What this node sends now** readout shows the headers a
+visitor gets. It warns when something else is blocking embeds.
+
+Three things block an embed whatever the setting says:
+
+- **An `X-Frame-Options` header.** Cloudflare's **Add security
+  headers** managed transform sends `SAMEORIGIN`. Turn it off if
+  other sites need to embed the node.
+- **A `frame-ancestors` you set elsewhere**, at the edge or in
+  `public/_headers`. Browsers enforce every policy they receive, so
+  the stricter one wins.
+- **Cloudflare Access.** An embed cannot load a page Access
+  protects, so keep Access off the public app.
+
+**Static config still works.** Put `frame-ancestors` in
+`public/_headers` or an edge Transform Rule, and leave the portal
+setting on **Any site**. Either way, the portal under `/publish`
+refuses every framer but the node itself, from its own `_headers`
+rule.
+
+A small root middleware (`functions/_middleware.ts`) enforces the
+setting. It runs once for each page a visitor opens, never for an
+image or script. §0.6 says what that costs. If storage fails, it
+keeps the last policy it read, or sends none if it has none yet.
+An outage can briefly lift a restriction, but never blanks every
+embed.
 
 ---
 

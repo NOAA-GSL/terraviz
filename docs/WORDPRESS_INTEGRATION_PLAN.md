@@ -385,6 +385,31 @@ operator lever for nodes that want to restrict embedding, and have
 the plugin detect a framing refusal and show a helpful message
 rather than a blank box.
 
+**Status (2026-10): the lever exists, and the default is unchanged.**
+A node admin now sets it in the portal, under **Node profile →
+Embedding**, with no `_headers` edit and no redeploy:
+**Any site can embed** (the default, which sends no header),
+**Only sites I list** (`frame-ancestors 'self'` plus the listed
+`https://` origins) or **No other site** (`'self'` only). It is
+stored on the `node_settings` singleton (migration 0057), validated
+by `src/types/node-embedding.ts`, and enforced by a root middleware
+(`functions/_middleware.ts`) that appends the header to the public
+app's HTML. `public/_routes.json` keeps that middleware to page
+navigations. The card also reads back what the node actually sends,
+because the usual reason an embed fails is something else: Cloudflare's
+"Add security headers" transform (`X-Frame-Options: SAMEORIGIN`), an
+edge CSP, or Access in front of the app. `docs/SELF_HOSTING.md`
+Phase 13 is the operator-facing guide. Separately, the publisher
+portal under `/publish` refuses every framer but the node itself
+whatever the setting says (`public/_headers`), so the plugin can
+embed the public app but never the portal.
+
+For the plugin, nothing changes on a node left at the default. On a
+node that restricts embedding, a WordPress site not on its list gets
+a blocked frame, which is the refusal the recommendation above asks
+the plugin to detect and explain. Its `docs/EMBEDDING_YOUR_OWN_NODE.md`
+should name the setting as the way to allow a site.
+
 ---
 
 ## 5. Authentication — the crux (Integration F)
