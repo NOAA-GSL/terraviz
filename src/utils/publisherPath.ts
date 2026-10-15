@@ -21,8 +21,8 @@
  * loaded at `/publisher` could reach every portal page without the
  * browser ever fetching a protected URL.
  *
- * Imports nothing, so the root middleware can share it later without
- * pulling the SPA in.
+ * Imports nothing, so server code can share it without pulling the
+ * SPA in.
  */
 export function isPublisherPortalPath(pathname: string): boolean {
   return pathname === '/publish' || pathname.startsWith('/publish/')

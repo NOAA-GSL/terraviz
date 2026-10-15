@@ -218,17 +218,21 @@ describe('hasForeignAncestor', () => {
 describe('initTourAuthoring inside another site', () => {
   it('mounts no dock when a foreign page frames the app', () => {
     window.history.replaceState({}, '', '/?tourEdit=01HXAAAAAAAAAAAAAAAAAAAAAA')
-    const realTop = Object.getOwnPropertyDescriptor(window, 'top')
-    Object.defineProperty(window, 'top', {
-      configurable: true,
-      get() {
-        return {
-          get location(): never {
-            throw new DOMException('Blocked', 'SecurityError')
-          },
-        }
+    // A foreign parent that is also the top: reading its location
+    // throws, as it does across origins. Both properties are replaced,
+    // so the guard reaches its cross-origin check rather than stopping
+    // at happy-dom's `parent === window`.
+    const foreign = {
+      get location(): never {
+        throw new DOMException('Blocked', 'SecurityError')
       },
-    })
+    }
+    const saved = {
+      top: Object.getOwnPropertyDescriptor(window, 'top'),
+      parent: Object.getOwnPropertyDescriptor(window, 'parent'),
+    }
+    Object.defineProperty(window, 'top', { configurable: true, get: () => foreign })
+    Object.defineProperty(window, 'parent', { configurable: true, get: () => foreign })
     try {
       const handle = initTourAuthoring({
         getMapView: () => null,
@@ -239,9 +243,13 @@ describe('initTourAuthoring inside another site', () => {
       expect(document.querySelector('.tour-authoring-dock')).toBeNull()
       expect(document.body.classList.contains('tour-authoring-open')).toBe(false)
     } finally {
-      if (realTop) Object.defineProperty(window, 'top', realTop)
-      else delete (window as { top?: unknown }).top
+      for (const key of ['top', 'parent'] as const) {
+        const descriptor = saved[key]
+        if (descriptor) Object.defineProperty(window, key, descriptor)
+        else delete (window as { top?: unknown; parent?: unknown })[key]
+      }
     }
     expect(window.top).toBe(window)
+    expect(window.parent).toBe(window)
   })
 })

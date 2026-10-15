@@ -24,8 +24,20 @@ const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
  * header with a comma. That makes two edits silently dangerous: a
  * second `X-Frame-Options` value (a conflicting pair blocks framing
  * outright, even same-origin), and a widened `frame-ancestors` on the
- * portal rule itself. The parser below applies the file the way Pages
- * does, so the assertions are about what a browser receives.
+ * portal rule itself. The parser below follows Pages' own (shipped in
+ * wrangler as `parseHeaders`, and applied by the asset server's
+ * `attachHeaders`), so the assertions are about what a browser
+ * receives. Three of its rules are easy to get wrong, and each let an
+ * unsafe edit pass an earlier version of this test:
+ *
+ * - a line is a pattern because of what it starts with (`/` or a
+ *   scheme), not because it is unindented, so a header written at
+ *   column 0 still belongs to the pattern above it;
+ * - a repeated pattern replaces the earlier block outright, so a
+ *   second `/publish/*` block would silently drop the portal's
+ *   headers. This test refuses repeats rather than allowing them;
+ * - a block's `! Name` lines apply before its headers, whatever
+ *   order they are written in.
  *
  * Which paths are "the portal" is not written down here: it is
  * `isPublisherPortalPath`, the predicate `src/main.ts` boots the portal
@@ -36,34 +48,65 @@ const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 
 interface HeaderRule {
   pattern: string
-  /** `Name: value` lines, and `! Name` detach lines (value `null`). */
-  headers: Array<[name: string, value: string | null]>
+  /** Lowercased name → value. A name repeated inside one block is
+   *  joined with ", ", as Pages does. */
+  set: Map<string, string>
+  /** `! Name` lines, lowercased. Applied before `set`. */
+  unset: string[]
 }
 
-/** Parse `_headers`: unindented lines are URL patterns, indented
- *  `Name: value` lines belong to the pattern above, an indented
- *  `! Name` removes that header, `#` starts a comment. Patterns that
- *  name a host are kept, and the matcher decides whether they apply. */
-function parseHeadersFile(text: string): HeaderRule[] {
+interface ParsedHeaders {
+  rules: HeaderRule[]
+  /** Lines Pages would warn about and ignore. Any of these in the
+   *  real file is a mistake, so the test fails on them. */
+  problems: string[]
+}
+
+/** Pages' test for "this line starts a new rule". */
+const LINE_IS_A_PATTERN = /^([^\s]+:\/\/|\/)/
+
+/** Parse `_headers` the way Pages does. Whitespace around a line is
+ *  ignored, `#` starts a comment, a line starting with `/` or a scheme
+ *  opens a rule, `Name: value` and `! Name` lines belong to it. */
+function parseHeadersFile(text: string): ParsedHeaders {
   const rules: HeaderRule[] = []
-  for (const raw of text.split('\n')) {
-    if (raw.trim() === '' || raw.trim().startsWith('#')) continue
-    if (!/^\s/.test(raw)) {
-      rules.push({ pattern: raw.trim(), headers: [] })
-      continue
-    }
-    const rule = rules[rules.length - 1]
-    if (!rule) throw new Error(`header line before any pattern: ${raw}`)
+  const problems: string[] = []
+  let rule: HeaderRule | null = null
+  text.split('\n').forEach((raw, index) => {
     const line = raw.trim()
-    if (line.startsWith('!')) {
-      rule.headers.push([line.slice(1).trim(), null])
-      continue
+    const where = `line ${index + 1}`
+    if (line === '' || line.startsWith('#')) return
+    if (LINE_IS_A_PATTERN.test(line)) {
+      rule = { pattern: line, set: new Map(), unset: [] }
+      rules.push(rule)
+      return
+    }
+    if (!rule) {
+      problems.push(`${where}: a header before any pattern`)
+      return
     }
     const colon = line.indexOf(':')
-    if (colon < 0) throw new Error(`header line is neither "Name: value" nor "! Name": ${raw}`)
-    rule.headers.push([line.slice(0, colon).trim(), line.slice(colon + 1).trim()])
+    if (colon < 0) {
+      if (line.startsWith('!')) rule.unset.push(line.slice(1).trim().toLowerCase())
+      else problems.push(`${where}: neither "Name: value" nor "! Name"`)
+      return
+    }
+    const name = line.slice(0, colon).trim().toLowerCase()
+    const value = line.slice(colon + 1).trim()
+    if (name === '' || name.includes(' ') || value === '') {
+      problems.push(`${where}: not a valid "Name: value" pair`)
+      return
+    }
+    const existing = rule.set.get(name)
+    rule.set.set(name, existing ? `${existing}, ${value}` : value)
+  })
+  const seen = new Set<string>()
+  for (const { pattern, set, unset } of rules) {
+    if (set.size === 0 && unset.length === 0) problems.push(`${pattern}: a pattern with no headers`)
+    if (seen.has(pattern)) problems.push(`${pattern}: repeated, so it replaces the earlier block`)
+    seen.add(pattern)
   }
-  return rules
+  return { rules, problems }
 }
 
 /** Pages' pattern grammar: `*` is a greedy splat, `:name` one segment.
@@ -85,16 +128,17 @@ function matches(pattern: string, path: string): boolean {
   return new RegExp(`^${source}$`).test(path)
 }
 
-/** Every value each header receives on `path`, in file order. */
-function headersFor(rules: HeaderRule[], path: string): Map<string, string[]> {
+/** Every value each header receives on `path`, in the order Pages
+ *  attaches them. A repeated pattern keeps its first position and its
+ *  last block, as a keyed object does in Pages. */
+function headersFor(parsed: ParsedHeaders, path: string): Map<string, string[]> {
+  const effective = new Map<string, HeaderRule>()
+  for (const rule of parsed.rules) effective.set(rule.pattern, rule)
   const out = new Map<string, string[]>()
-  for (const rule of rules) {
+  for (const rule of effective.values()) {
     if (!matches(rule.pattern, path)) continue
-    for (const [name, value] of rule.headers) {
-      const key = name.toLowerCase()
-      if (value === null) out.delete(key)
-      else out.set(key, [...(out.get(key) ?? []), value])
-    }
+    for (const name of rule.unset) out.delete(name)
+    for (const [name, value] of rule.set) out.set(name, [...(out.get(name) ?? []), value])
   }
   return out
 }
@@ -114,6 +158,12 @@ function frameAncestorsLists(cspValues: string[]): string[][] {
 }
 
 const rules = parseHeadersFile(readFileSync(resolve(REPO_ROOT, 'public/_headers'), 'utf8'))
+
+describe('public/_headers parses cleanly', () => {
+  it('has no line Pages would ignore, and no repeated pattern', () => {
+    expect(rules.problems).toEqual([])
+  })
+})
 
 /** Path shapes worth asking the gate about: real portal routes,
  *  near-misses that share the prefix, and the ordinary public routes. */
@@ -165,14 +215,15 @@ describe('the portal gate', () => {
 describe('public/_headers: the publisher portal refuses to be framed', () => {
   it.each(PORTAL_PATHS)('%s carries frame-ancestors limited to the node itself', path => {
     const csp = headersFor(rules, path).get('content-security-policy') ?? []
-    const lists = frameAncestorsLists(csp)
-    expect(lists.length).toBeGreaterThan(0)
-    // Every policy is enforced, so one 'self' (or 'none') policy is
-    // what blocks other sites. None may name a broader source either:
-    // that would be the portal rule being loosened in place.
-    for (const sources of lists) {
-      for (const source of sources) expect(["'self'", "'none'"]).toContain(source.toLowerCase())
-    }
+    // Every policy is enforced, so one policy limited to 'self' (or
+    // 'none') is what blocks other sites; a second, broader one cannot
+    // widen it. Loosening the portal rule in place leaves no such
+    // policy, and fails here.
+    const limited = frameAncestorsLists(csp).filter(
+      sources =>
+        sources.length > 0 && sources.every(source => ["'self'", "'none'"].includes(source.toLowerCase())),
+    )
+    expect(limited.length).toBeGreaterThan(0)
   })
 
   it.each(PORTAL_PATHS)('%s carries exactly one X-Frame-Options value', path => {
@@ -220,6 +271,30 @@ describe('the _headers parser', () => {
     const parsed = parseHeadersFile('/*\n  X-A: one\n/p/*\n  ! X-A\n  X-B: two\n')
     expect(headersFor(parsed, '/p/q').get('x-a')).toBeUndefined()
     expect(headersFor(parsed, '/p/q').get('x-b')).toEqual(['two'])
+  })
+
+  it("applies a block's detach lines before its headers, in any written order", () => {
+    const parsed = parseHeadersFile('/*\n  X-A: one\n/p/*\n  X-A: two\n  ! X-A\n')
+    expect(headersFor(parsed, '/p/q').get('x-a')).toEqual(['two'])
+  })
+
+  it('reads a header at column 0 as a header, not a pattern', () => {
+    const parsed = parseHeadersFile('/*\nX-Frame-Options: DENY\n')
+    expect(parsed.problems).toEqual([])
+    expect(headersFor(parsed, '/anything').get('x-frame-options')).toEqual(['DENY'])
+  })
+
+  it('lets a repeated pattern replace the earlier block, and reports it', () => {
+    const parsed = parseHeadersFile('/p/*\n  X-A: one\n/q\n  X-B: two\n/p/*\n  X-C: three\n')
+    expect(headersFor(parsed, '/p/x').get('x-a')).toBeUndefined()
+    expect(headersFor(parsed, '/p/x').get('x-c')).toEqual(['three'])
+    expect(parsed.problems).toEqual(['/p/*: repeated, so it replaces the earlier block'])
+  })
+
+  it('reports lines Pages would ignore', () => {
+    expect(parseHeadersFile('X-A: one\n').problems).toHaveLength(1)
+    expect(parseHeadersFile('/p\n  nonsense\n').problems).toHaveLength(2)
+    expect(parseHeadersFile('/p\n  X-A:\n').problems).toHaveLength(2)
   })
 
   it('checks a rule scoped to a host against the path', () => {

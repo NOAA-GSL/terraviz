@@ -373,7 +373,11 @@ permissive-by-default. Two postures:
   operator decision, not a plugin feature, and it *gates* the
   plugin — a NOAA site not on the allow-list would break. If a node
   operator wants this, the plugin's settings page should surface a
-  clear error when the node refuses to frame.
+  clear error when the node refuses to frame. Scope it to paths
+  outside `/publish`: the portal carries its own
+  `frame-ancestors 'self'`, and an edge rule that *Sets* a CSP there
+  would replace it with one that lets the listed sites frame the
+  admin portal.
 
 **Recommendation:** stay open by default (it is the current, mission-
 aligned behaviour); document `frame-ancestors` as an opt-in

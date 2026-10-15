@@ -7,20 +7,22 @@
   Cache-Control: no-cache
 
 # The publisher portal is never framed by another site, whatever the
-# node's embedding setting says. It is the same index.html as the
+# node allows for the public app. It is the same index.html as the
 # public app (see _redirects), and the SPA boots the portal on exactly
-# these two patterns (src/utils/publisherPath.ts), so these rules are
-# what keep it apart:
-# clickjacking protection on an admin surface must not rest on
-# Cloudflare Access alone. `X-Frame-Options` is for browsers without
-# CSP frame-ancestors; current ones ignore it when both are present.
+# these two patterns (src/utils/publisherPath.ts). These rules are
+# what keep the two apart: clickjacking protection on an admin surface
+# must not rest on Cloudflare Access alone. `X-Frame-Options` covers
+# browsers without CSP frame-ancestors, and is the fallback if an edge
+# rule replaces this CSP with one that has no frame-ancestors.
 #
 # `/*` matches these paths too, and Pages joins a repeated header
 # with a comma. A second CSP becomes a second policy, which can only
 # tighten, but a conflicting X-Frame-Options value blocks framing
 # outright, even by the node itself. So no other rule may set
 # X-Frame-Options for these paths, and none may allow more than
-# 'self'. scripts/pages-headers.test.ts holds both.
+# 'self'. Add any other portal header to these blocks: a second
+# `/publish/*` block would replace this one, not add to it.
+# scripts/pages-headers.test.ts holds all of that.
 /publish
   Content-Security-Policy: frame-ancestors 'self'
   X-Frame-Options: SAMEORIGIN
