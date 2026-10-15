@@ -435,4 +435,23 @@ describe('buildEmbeddingCard: what this node sends now', () => {
       "Couldn't check what this node sends.",
     )
   })
+
+  it('treats an error status as a failed check, not as a page with no framing headers', async () => {
+    // A 503 error page sends neither header, which under "any" would
+    // otherwise read as "This matches the saved setting."
+    for (const status of [403, 503]) {
+      const card = buildEmbeddingCard({
+        policy: ANY,
+        canEdit: true,
+        fetchFn: vi.fn(
+          async () => ({ ok: false, status, type: 'basic', headers: new Headers() }) as unknown as Response,
+        ) as unknown as typeof fetch,
+      })
+      document.body.replaceChildren(card)
+      await until(() => card.querySelector('.publisher-nodeprofile-embed-finding') !== null, `the readout for ${status}`)
+      const findings = [...card.querySelectorAll('.publisher-nodeprofile-embed-finding')].map(li => li.textContent)
+      expect(findings).toEqual(["Couldn't check what this node sends."])
+      expect(card.querySelectorAll('.publisher-nodeprofile-embed-live-values dd')).toHaveLength(0)
+    }
+  })
 })

@@ -117,7 +117,9 @@ export interface RequestLike {
 export interface ResponseLike {
   url(): string
   status(): number
-  /** Present on Playwright's Response; optional so a fake can omit it. */
+  /** Present on Playwright's Response; optional so a fake can omit it.
+   *  Playwright hands back the same object here as in `requestfailed`,
+   *  which is what lets an answer be matched to its own request. */
   request?(): { method(): string }
 }
 
@@ -157,7 +159,9 @@ export function createSignalCollector(
   // node-profile Embedding card does) is "a scene with problems" on
   // every run. Only a HEAD whose response already arrived with a
   // non-error status is dropped; one that never got an answer is kept.
-  const answeredHeads = new Set<string>()
+  // Keyed by the request itself, not its URL: two HEADs to one URL are
+  // two answers, and an unanswered one must not spend another's.
+  const answeredHeads = new WeakSet<object>()
 
   const signals: SceneSignals = {
     get consoleErrors(): string[] {
@@ -187,9 +191,8 @@ export function createSignalCollector(
     },
     handleRequestFailed(req) {
       const failure = req.failure()?.errorText ?? 'unknown'
-      // Each answer excuses one ending: a later HEAD to the same URL
-      // that is genuinely aborted is still reported.
-      if (req.method() === 'HEAD' && failure === 'net::ERR_ABORTED' && answeredHeads.delete(req.url())) return
+      // An answer excuses its own request's ending and no other.
+      if (req.method() === 'HEAD' && failure === 'net::ERR_ABORTED' && answeredHeads.delete(req)) return
       signals.failedRequests.push({
         url: req.url(),
         method: req.method(),
@@ -200,7 +203,8 @@ export function createSignalCollector(
       const status = res.status()
       // Only client/server errors are problems; 2xx/3xx are normal.
       if (status < 400) {
-        if (res.request?.().method() === 'HEAD') answeredHeads.add(res.url())
+        const req = res.request?.()
+        if (req?.method() === 'HEAD') answeredHeads.add(req)
         return
       }
       const url = res.url()

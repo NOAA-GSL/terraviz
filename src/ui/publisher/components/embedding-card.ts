@@ -138,9 +138,12 @@ export function analyzeLivePolicy(policy: EmbedPolicy, live: LiveHeaders, previo
   return findings.length > 0 ? findings : [{ kind: 'ok' }]
 }
 
-/** Ask the node what a visitor's browser receives on `/`. */
+/** Ask the node what a visitor's browser receives on `/`. Throws on an
+ *  error status: an error page's headers are not the app's, and reading
+ *  them would report a verdict on a page no visitor is meant to see. */
 export async function readLiveHeaders(fetchFn: typeof fetch = fetch): Promise<LiveHeaders> {
   const res = await fetchFn('/', { method: 'HEAD', cache: 'no-store', credentials: 'same-origin' })
+  if (!res.ok) throw new Error(`HEAD / answered ${res.status}`)
   return {
     csp: res.headers.get('Content-Security-Policy'),
     xfo: res.headers.get('X-Frame-Options'),
