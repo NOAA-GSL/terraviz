@@ -1718,12 +1718,14 @@ It sits ahead of the optional phase deliberately. Everything from
 here to Phase 13 is work every node does; Phase 14 is the first
 thing you may genuinely skip.
 
-**The repo ships no CSP.** `src/index.html` has no `<meta>` policy,
-and `public/_headers` sets `X-Content-Type-Options`,
-`Referrer-Policy` and `Permissions-Policy` but no CSP. Upstream's
-production deploy enforces a strict `connect-src` policy **at the
-Cloudflare edge** via Transform Rules — which a fork does **not**
-inherit. Your node works without one; you should still add your
+**The repo ships no CSP for the app.** `src/index.html` has no
+`<meta>` policy, and `public/_headers` sets `X-Content-Type-Options`,
+`Referrer-Policy` and `Permissions-Policy` everywhere. Its only CSP
+is `frame-ancestors 'self'` on `/publish`, so no other site can
+frame the publisher portal. Keep that rule if you edit the file.
+Upstream's production deploy enforces a strict `connect-src` policy
+**at the Cloudflare edge** via Transform Rules — which a fork does
+**not** inherit. Your node works without one; you should still add your
 own, as an edge rule or a `Content-Security-Policy` line in
 `public/_headers`:
 
@@ -1738,6 +1740,16 @@ own, as an edge rule or a `Content-Security-Policy` line in
 The app uses `blob:` for preview tours and screenshots — omitting
 it reproduces the "may not load data from blob:" failure. Test
 playback, VR and a tour before locking it down.
+
+If you add the policy with an edge Transform Rule, use **Add**, not
+**Set**. A Set replaces the header the node sent, which strips the
+portal's `frame-ancestors 'self'`. If your replacement has no
+`frame-ancestors`, the portal's `X-Frame-Options` still protects it.
+If it has one, browsers ignore `X-Frame-Options`, so any site that
+policy names can frame the portal. If you must use Set, give
+`/publish` and `/publish/*` a rule of their own that includes
+`frame-ancestors 'self'`. Do not add it to a rule for every path:
+that stops every other site embedding the public app.
 
 ---
 

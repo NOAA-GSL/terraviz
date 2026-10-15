@@ -95,10 +95,12 @@ three load-bearing facts:
 - **The web app already iframes cross-origin in production.** The
   poster site embeds the live app and deep-links it via URL params
   (`poster/index.html:6090-6117`). Nothing in the repo sets
-  `X-Frame-Options` or a `frame-ancestors` CSP —
-  `public/_headers:1-7` sets only `X-Content-Type-Options`,
-  `Referrer-Policy`, and a `Permissions-Policy`. So a WordPress
-  page can embed Terraviz today.
+  `X-Frame-Options` or a `frame-ancestors` CSP on the public app —
+  `public/_headers` sets only `X-Content-Type-Options`,
+  `Referrer-Policy`, and a `Permissions-Policy` there. (The
+  publisher portal under `/publish` is the exception: it carries
+  `frame-ancestors 'self'`, so no other site can frame it.) So a
+  WordPress page can embed Terraviz today.
 - **Single dataset, single tour, and full catalog are already
   URL-addressable.** `?dataset=<id>` (`src/main.ts:503-538`),
   `/dataset/:id` (`src/services/deepLinkService.ts:72-77`),
@@ -176,7 +178,7 @@ abstract, thumbnail, and a link — the interactive globe is
 
 | Capability | Status | Evidence |
 |---|---|---|
-| Cross-origin iframe embedding of the web app | **Works in prod** | `poster/index.html:6090-6117`; no `X-Frame-Options`/`frame-ancestors` anywhere shipped (`public/_headers:1-7`) |
+| Cross-origin iframe embedding of the web app | **Works in prod** | `poster/index.html:6090-6117`; no `X-Frame-Options`/`frame-ancestors` shipped on the public app (`public/_headers`; only `/publish` is limited to `'self'`) |
 | Boot into a single dataset | **Live** | `?dataset=<id>` `src/main.ts:503-538`; `/dataset/:id` `src/services/deepLinkService.ts:72-77` |
 | Boot into a tour | **Live** | `?tour=<slug>` `src/utils/posterDeepLinks.ts:34-37,111-137` |
 | Boot into the full catalog browser | **Live** | `?catalog=true` `src/utils/catalogMode.ts:21-28`, `src/main.ts:335-336,539-566` |
@@ -371,7 +373,11 @@ permissive-by-default. Two postures:
   operator decision, not a plugin feature, and it *gates* the
   plugin — a NOAA site not on the allow-list would break. If a node
   operator wants this, the plugin's settings page should surface a
-  clear error when the node refuses to frame.
+  clear error when the node refuses to frame. Scope it to paths
+  outside `/publish`: the portal carries its own
+  `frame-ancestors 'self'`, and an edge rule that *Sets* a CSP there
+  would replace it with one that lets the listed sites frame the
+  admin portal.
 
 **Recommendation:** stay open by default (it is the current, mission-
 aligned behaviour); document `frame-ancestors` as an opt-in
@@ -844,7 +850,7 @@ exploration on the branch tip):
 
 **Embed / front-end**
 - `poster/index.html:6090-6117` — production cross-origin iframe embed
-- `public/_headers:1-7` — shipped headers (no `X-Frame-Options`/CSP framing)
+- `public/_headers` — shipped headers (no `X-Frame-Options`/CSP framing on the public app; `frame-ancestors 'self'` on `/publish`)
 - `src/main.ts:503-618,3318-3335,714-717` — boot seam, deep-link routing, blog/publish gates
 - `src/services/deepLinkService.ts:72-77` — `/dataset/:id` parsing
 - `src/utils/catalogMode.ts:21-28` — `?catalog=true`
