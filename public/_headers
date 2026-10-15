@@ -8,7 +8,9 @@
 
 # The publisher portal is never framed by another site, whatever the
 # node's embedding setting says. It is the same index.html as the
-# public app (see _redirects), so these rules are what keep it apart:
+# public app (see _redirects), and the SPA boots the portal on exactly
+# these two patterns (src/utils/publisherPath.ts), so these rules are
+# what keep it apart:
 # clickjacking protection on an admin surface must not rest on
 # Cloudflare Access alone. `X-Frame-Options` is for browsers without
 # CSP frame-ancestors; current ones ignore it when both are present.

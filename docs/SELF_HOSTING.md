@@ -1723,10 +1723,9 @@ thing you may genuinely skip.
 `Referrer-Policy` and `Permissions-Policy` everywhere. Its only CSP
 is `frame-ancestors 'self'` on `/publish`, so no other site can
 frame the publisher portal. Keep that rule if you edit the file.
-Upstream's
-production deploy enforces a strict `connect-src` policy **at the
-Cloudflare edge** via Transform Rules — which a fork does **not**
-inherit. Your node works without one; you should still add your
+Upstream's production deploy enforces a strict `connect-src` policy
+**at the Cloudflare edge** via Transform Rules — which a fork does
+**not** inherit. Your node works without one; you should still add your
 own, as an edge rule or a `Content-Security-Policy` line in
 `public/_headers`:
 
@@ -1741,6 +1740,11 @@ own, as an edge rule or a `Content-Security-Policy` line in
 The app uses `blob:` for preview tours and screenshots — omitting
 it reproduces the "may not load data from blob:" failure. Test
 playback, VR and a tour before locking it down.
+
+If you add the policy with an edge Transform Rule, use **Add**, not
+**Set**. A Set replaces the header the node sent, which strips the
+portal's `frame-ancestors 'self'`. If you must use Set, put
+`frame-ancestors 'self'` in the policy for `/publish` paths yourself.
 
 ---
 

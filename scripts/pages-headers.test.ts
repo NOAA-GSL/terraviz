@@ -6,6 +6,8 @@ import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { isPublisherPortalPath } from '../src/utils/publisherPath'
+
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 
 /**
@@ -24,17 +26,24 @@ const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
  * outright, even same-origin), and a widened `frame-ancestors` on the
  * portal rule itself. The parser below applies the file the way Pages
  * does, so the assertions are about what a browser receives.
+ *
+ * Which paths are "the portal" is not written down here: it is
+ * `isPublisherPortalPath`, the predicate `src/main.ts` boots the portal
+ * on. The corpus is a spread of path shapes, and each one the gate
+ * accepts must be one the rules protect. A hand-kept list let the gate
+ * accept `/publisher` while the test called it a public path.
  */
 
 interface HeaderRule {
   pattern: string
-  headers: Array<[name: string, value: string]>
+  /** `Name: value` lines, and `! Name` detach lines (value `null`). */
+  headers: Array<[name: string, value: string | null]>
 }
 
 /** Parse `_headers`: unindented lines are URL patterns, indented
- *  `Name: value` lines belong to the pattern above, `#` starts a
- *  comment. Absolute-URL patterns (a host) are kept but never match a
- *  bare path, which is all these tests ask about. */
+ *  `Name: value` lines belong to the pattern above, an indented
+ *  `! Name` removes that header, `#` starts a comment. Patterns that
+ *  name a host are kept, and the matcher decides whether they apply. */
 function parseHeadersFile(text: string): HeaderRule[] {
   const rules: HeaderRule[] = []
   for (const raw of text.split('\n')) {
@@ -45,15 +54,25 @@ function parseHeadersFile(text: string): HeaderRule[] {
     }
     const rule = rules[rules.length - 1]
     if (!rule) throw new Error(`header line before any pattern: ${raw}`)
-    const colon = raw.indexOf(':')
-    if (colon < 0) throw new Error(`header line without a colon: ${raw}`)
-    rule.headers.push([raw.slice(0, colon).trim(), raw.slice(colon + 1).trim()])
+    const line = raw.trim()
+    if (line.startsWith('!')) {
+      rule.headers.push([line.slice(1).trim(), null])
+      continue
+    }
+    const colon = line.indexOf(':')
+    if (colon < 0) throw new Error(`header line is neither "Name: value" nor "! Name": ${raw}`)
+    rule.headers.push([line.slice(0, colon).trim(), line.slice(colon + 1).trim()])
   }
   return rules
 }
 
-/** Pages' pattern grammar: `*` is a greedy splat, `:name` one segment. */
+/** Pages' pattern grammar: `*` is a greedy splat, `:name` one segment.
+ *  A pattern naming a host (`https://:project.pages.dev/*`) is treated
+ *  as matching every host, so a rule scoped to the preview hostname is
+ *  still checked: the portal there is the same portal. */
 function matches(pattern: string, path: string): boolean {
+  const hostScoped = /^https?:\/\/[^/]+(\/.*)$/.exec(pattern)
+  if (hostScoped) pattern = hostScoped[1]
   if (!pattern.startsWith('/')) return false
   const source = pattern
     .split(/(\*|:[A-Za-z]\w*)/)
@@ -73,7 +92,8 @@ function headersFor(rules: HeaderRule[], path: string): Map<string, string[]> {
     if (!matches(rule.pattern, path)) continue
     for (const [name, value] of rule.headers) {
       const key = name.toLowerCase()
-      out.set(key, [...(out.get(key) ?? []), value])
+      if (value === null) out.delete(key)
+      else out.set(key, [...(out.get(key) ?? []), value])
     }
   }
   return out
@@ -95,13 +115,43 @@ function frameAncestorsLists(cspValues: string[]): string[][] {
 
 const rules = parseHeadersFile(readFileSync(resolve(REPO_ROOT, 'public/_headers'), 'utf8'))
 
-const PORTAL_PATHS = [
+/** Path shapes worth asking the gate about: real portal routes,
+ *  near-misses that share the prefix, and the ordinary public routes. */
+const PATH_CORPUS = [
   '/publish',
   '/publish/',
+  '/publish//x',
   '/publish/overview',
+  '/publish/users',
   '/publish/datasets/01HXYZ/edit',
   '/publish/node-profile',
+  '/publisher',
+  '/publishing',
+  '/publish.',
+  '/publish-x',
+  '/publish;x',
+  '/publish%20',
+  '/publish%2Fusers',
+  '/Publish',
+  '/%70ublish',
+  '//publish',
+  '/',
+  '/dataset/sea-surface-temperature',
+  '/blog',
+  '/orbit',
 ]
+
+const PORTAL_PATHS = PATH_CORPUS.filter(isPublisherPortalPath)
+const PUBLIC_PATHS = PATH_CORPUS.filter(path => !isPublisherPortalPath(path))
+
+describe('the portal gate', () => {
+  it('accepts the portal and nothing that merely shares its prefix', () => {
+    expect(PORTAL_PATHS).toEqual(expect.arrayContaining(['/publish', '/publish/', '/publish/users']))
+    expect(PUBLIC_PATHS).toEqual(
+      expect.arrayContaining(['/publisher', '/publishing', '/publish-x', '/publish%2Fusers', '/']),
+    )
+  })
+})
 
 describe('public/_headers: the publisher portal refuses to be framed', () => {
   it.each(PORTAL_PATHS)('%s carries frame-ancestors limited to the node itself', path => {
@@ -135,7 +185,7 @@ describe('public/_headers: the public app stays embeddable by default', () => {
   // The default posture (docs/WORDPRESS_INTEGRATION_PLAN.md §4): any
   // site may embed the app. A static framing rule here would override
   // that for every node, whatever its operator chose.
-  it.each(['/', '/dataset/sea-surface-temperature', '/blog', '/publisher', '/publishing'])(
+  it.each(PUBLIC_PATHS)(
     '%s gets no framing restriction from _headers',
     path => {
       const headers = headersFor(rules, path)
@@ -153,7 +203,19 @@ describe('the _headers parser', () => {
     expect(matches('/publish', '/publisher')).toBe(false)
     expect(matches('/a/:id/b', '/a/1/b')).toBe(true)
     expect(matches('/a/:id/b', '/a/1/2/b')).toBe(false)
-    expect(matches('https://example.org/*', '/x')).toBe(false)
+    expect(matches('https://example.org/*', '/x')).toBe(true)
+    expect(matches('https://example.org/a', '/x')).toBe(false)
+  })
+
+  it('applies a detach line to the headers set before it', () => {
+    const parsed = parseHeadersFile('/*\n  X-A: one\n/p/*\n  ! X-A\n  X-B: two\n')
+    expect(headersFor(parsed, '/p/q').get('x-a')).toBeUndefined()
+    expect(headersFor(parsed, '/p/q').get('x-b')).toEqual(['two'])
+  })
+
+  it('checks a rule scoped to a host against the path', () => {
+    const parsed = parseHeadersFile('https://:project.pages.dev/*\n  X-A: one\n')
+    expect(headersFor(parsed, '/publish').get('x-a')).toEqual(['one'])
   })
 
   it('joins repeated headers across matching rules', () => {

@@ -85,6 +85,7 @@ import { showTourControls, hideTourControls, hideAllTourTextBoxes, hideAllTourIm
 import { initLegendForDataset, clearLegendCache, loadConfig, readCurrentTime } from './services/docentService'
 import { isMobile, IS_MOBILE_NATIVE, getCloudTextureUrl } from './utils/deviceCapability'
 import { hasWebGL2 } from './utils/webglSupport'
+import { isPublisherPortalPath } from './utils/publisherPath'
 import { initDeepLinks } from './services/deepLinkService'
 import {
   buildDatasetPath,
@@ -4353,8 +4354,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   // portal chunk is fetched only when this branch fires, so
   // non-publisher visitors never pay its bundle cost. See
   // docs/CATALOG_PUBLISHING_TOOLS.md §"Phase 3 implementation
-  // conventions" → "Lazy-load shape".
-  if (location.pathname.startsWith('/publish')) {
+  // conventions" → "Lazy-load shape". The predicate is shared with
+  // the `_headers` test, so the portal only boots on paths the
+  // framing rules protect.
+  if (isPublisherPortalPath(location.pathname)) {
     const { bootPublisherPortal } = await import('./ui/publisher')
     await bootPublisherPortal()
     return
