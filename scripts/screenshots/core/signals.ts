@@ -187,7 +187,9 @@ export function createSignalCollector(
     },
     handleRequestFailed(req) {
       const failure = req.failure()?.errorText ?? 'unknown'
-      if (req.method() === 'HEAD' && failure === 'net::ERR_ABORTED' && answeredHeads.has(req.url())) return
+      // Each answer excuses one ending: a later HEAD to the same URL
+      // that is genuinely aborted is still reported.
+      if (req.method() === 'HEAD' && failure === 'net::ERR_ABORTED' && answeredHeads.delete(req.url())) return
       signals.failedRequests.push({
         url: req.url(),
         method: req.method(),
