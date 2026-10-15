@@ -1,16 +1,24 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 The Zyra Project
+// @vitest-environment node
 
 /**
+ * Node, not the default happy-dom: happy-dom's `Request` drops
+ * `Sec-Fetch-Dest` as a browser-forbidden header, and Workers keep it.
+ *
  * The root middleware: which responses get the embedding policy, what
  * the header says for each mode, and what it must never do — touch a
- * Function route, the portal, a non-HTML response or an operator's
- * own CSP, or let a storage failure turn into an error page.
+ * Function's own response, the portal, a non-HTML response or an
+ * operator's own CSP, or let a storage failure turn into an error
+ * page. And the two places it must act although the path suggests
+ * otherwise: the app's index.html served under a Function prefix, and
+ * the tour-authoring page, locked whatever the setting.
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   EMBED_POLICY_MEMO_MS,
+  EMBED_POLICY_READ_TIMEOUT_MS,
   embedPolicyFor,
   isHtmlResponse,
   isPublicAppPath,
@@ -117,16 +125,27 @@ describe('the header each mode sends', () => {
   })
 })
 
-describe('what it leaves alone', () => {
+describe('what it leaves alone, and what it does not', () => {
   it.each(['/api/v1/catalog', '/api/v1/publish/node-settings', '/schema/stac/x.json', '/.well-known/terraviz.json'])(
-    '%s: a Function route, untouched and never read for',
+    '%s: a Function route answering JSON, untouched and never read for',
     async path => {
       const { env, get } = envWith(SELF)
-      const downstream = html()
+      const downstream = new Response('{}', { headers: { 'Content-Type': 'application/json' } })
       const { response, next } = run({ path, env, downstream })
       expect(await response).toBe(downstream)
       expect(get).not.toHaveBeenCalled()
       expect(next).toHaveBeenCalledWith()
+    },
+  )
+
+  it.each(['/api/nope?embed=1&dataset=x', '/schema/missing?embed=1', '/.well-known/x?embed=1'])(
+    "%s: the app's index.html served under a Function prefix still gets the policy",
+    async path => {
+      // `_redirects` answers any unmatched path with index.html, so the
+      // full app boots here; gating on the path would let it frame.
+      const { env } = envWith(SELF)
+      const res = await run({ path, env, downstream: html() }).response
+      expect(res.headers.get('Content-Security-Policy')).toBe("frame-ancestors 'self'")
     },
   )
 
@@ -181,6 +200,41 @@ describe('conditional requests', () => {
     await response
     expect(next).toHaveBeenCalledWith()
   })
+
+  it('makes a document or frame navigation under a Function prefix unconditional too', async () => {
+    const { env } = envWith(SELF)
+    for (const dest of ['document', 'iframe']) {
+      const { response, next } = run({
+        path: '/api/nope',
+        env,
+        requestHeaders: { 'If-None-Match': '"abc"', 'Sec-Fetch-Dest': dest },
+      })
+      await response
+      expect((next.mock.calls[0][0] as Request).headers.get('If-None-Match')).toBeNull()
+    }
+  })
+})
+
+describe('the tour-authoring page', () => {
+  it("is locked to 'self' whatever the setting, as a policy of its own", async () => {
+    const { env } = envWith(ANY)
+    const res = await run({ path: '/?tourEdit=01HXAAAAAAAAAAAAAAAAAAAAAA', env }).response
+    expect(res.headers.get('Content-Security-Policy')).toBe("frame-ancestors 'self'")
+  })
+
+  it('keeps the setting beside the lock, so the stricter wins', async () => {
+    const { env } = envWith(LIST)
+    const res = await run({ path: '/?tourEdit=new', env }).response
+    expect(res.headers.get('Content-Security-Policy')).toBe(
+      "frame-ancestors 'self' https://www.example.org https://*.example.net, frame-ancestors 'self'",
+    )
+  })
+
+  it('sends one lock, not two, when the setting is already self', async () => {
+    const { env } = envWith(SELF)
+    const res = await run({ path: '/?tourEdit=new', env }).response
+    expect(res.headers.get('Content-Security-Policy')).toBe("frame-ancestors 'self'")
+  })
 })
 
 describe('failures', () => {
@@ -194,6 +248,39 @@ describe('failures', () => {
     const res = await run({ path: '/', env: { CATALOG_DB: throwingDb }, downstream }).response
     expect(res).toBe(downstream)
     expect(res.headers.get('Content-Security-Policy')).toBeNull()
+  })
+})
+
+describe('embedPolicyFor: a read that does not answer', () => {
+  it('gives up after the timeout and takes the fallback', async () => {
+    vi.useFakeTimers()
+    try {
+      const hanging = {
+        CATALOG_KV: {
+          get: () => new Promise<string | null>(() => {}),
+        } as unknown as KVNamespace,
+      }
+      const answer = embedPolicyFor(hanging, 0)
+      await vi.advanceTimersByTimeAsync(EMBED_POLICY_READ_TIMEOUT_MS)
+      expect(await answer).toEqual(ANY)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('a timed-out read keeps a known restriction, like any failed read', async () => {
+    expect(await embedPolicyFor(envWith(LIST).env, 0)).toEqual(LIST)
+    vi.useFakeTimers()
+    try {
+      const hanging = {
+        CATALOG_KV: { get: () => new Promise<string | null>(() => {}) } as unknown as KVNamespace,
+      }
+      const answer = embedPolicyFor(hanging, EMBED_POLICY_MEMO_MS)
+      await vi.advanceTimersByTimeAsync(EMBED_POLICY_READ_TIMEOUT_MS)
+      expect(await answer).toEqual(LIST)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 

@@ -13,12 +13,23 @@
  *
  * **What it touches, and what it leaves alone.**
  *
- * - Only HTML responses, on paths that are neither a Function route
- *   ({@link FUNCTION_ROUTE_PREFIXES}) nor the publisher portal. The
- *   portal is `public/_headers`' job, and stays `frame-ancestors
- *   'self'` whatever the setting says; `public/_routes.json` keeps it
- *   from reaching this Function at all, and the check here holds if
- *   that file is ever widened.
+ * - Every HTML response except the publisher portal's, whatever the
+ *   path. Not only the app's own paths: `_redirects` serves the app's
+ *   `index.html` for any path nothing else answers, so `/api/nope?embed=1`
+ *   boots the full app from under a Function prefix. Gating on the
+ *   path let that frame freely; gating on the response cannot. No
+ *   Function returns HTML today, and one that did would only be
+ *   tightened. The portal is `public/_headers`' job, and stays
+ *   `frame-ancestors 'self'` whatever the setting says;
+ *   `public/_routes.json` keeps it from reaching this Function at
+ *   all, and the check here holds if that file is ever widened. The
+ *   directories `_routes.json` keeps away from this Function have the
+ *   same fallback, so `_headers` locks those statically.
+ * - A page opened with `?tourEdit=` always gets `frame-ancestors
+ *   'self'`, whatever the setting. That is the tour-authoring dock, a
+ *   publisher write surface on the public document; its own check
+ *   refuses to mount under a foreign frame (`src/ui/tourAuthoring/`),
+ *   and this makes the browser refuse first.
  * - It **appends** a separate `Content-Security-Policy` rather than
  *   editing one. An operator's own CSP, from `_headers` or the edge,
  *   stays exactly as they wrote it, and since every policy a browser
@@ -34,7 +45,8 @@
  *   policy serves byte-for-byte what it served before this existed.
  *
  * **Conditional requests are made unconditional** on the pages it
- * governs. Production Pages sends no `ETag` or `Last-Modified` on
+ * governs: the app's paths, and anything a browser fetches as a
+ * document or a frame (`Sec-Fetch-Dest`). Production Pages sends no `ETag` or `Last-Modified` on
  * HTML today, but `wrangler pages dev` does. A 304 carries no body
  * and, from the asset handler, no policy. A browser keeps the
  * headers it stored with the 200 unless the 304 replaces them, so a
@@ -62,6 +74,11 @@
  * Pages Functions requests count against the Workers request quota.
  * `docs/SELF_HOSTING.md` §0.6 says so where it lists plan limits.
  *
+ * **The read is bounded** at {@link EMBED_POLICY_READ_TIMEOUT_MS}. It
+ * runs after `next()` has answered, so a slow D1 on a cold memo would
+ * otherwise hold the page. A read that runs out counts as a failed one:
+ * the isolate's last real answer, or `any`.
+ *
  * Never throws past `next()`: a failure to apply the policy serves the
  * page without it rather than an error page.
  */
@@ -73,6 +90,11 @@ import { isPublisherPortalPath } from '../src/utils/publisherPath'
 /** How long one isolate reuses an answer — one read from storage, or
  *  the fallback a failed read left. */
 export const EMBED_POLICY_MEMO_MS = 60_000
+
+/** How long a page waits for the policy before taking the fallback. A
+ *  warm KV read takes a few milliseconds and a D1 read tens to a few
+ *  hundred; this is for the tail, not the common case. */
+export const EMBED_POLICY_READ_TIMEOUT_MS = 1_000
 
 /**
  * Path prefixes that belong to Function routes rather than the app.
@@ -96,7 +118,11 @@ export async function embedPolicyFor(env: EmbedPolicyEnv, nowMs: number = Date.n
   if (lastRead && nowMs - lastRead.atMs < EMBED_POLICY_MEMO_MS) return lastRead.policy
   let policy: EmbedPolicy
   try {
-    const read = await readEffectiveEmbedPolicy(env)
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const timedOut = new Promise<{ policy: EmbedPolicy; authoritative: false }>(resolve => {
+      timer = setTimeout(() => resolve({ policy: defaultEmbedPolicy(), authoritative: false }), EMBED_POLICY_READ_TIMEOUT_MS)
+    })
+    const read = await Promise.race([readEffectiveEmbedPolicy(env), timedOut]).finally(() => clearTimeout(timer))
     // Storage failed: the last real answer if this isolate has one,
     // else `any`. Memoised like a real read, or every page during an
     // outage would retry storage.
@@ -126,6 +152,15 @@ export function isHtmlResponse(response: Response): boolean {
   return /^\s*text\/html\b/i.test(type)
 }
 
+/** Will this response be used as a page, in a tab or a frame? The
+ *  app's own paths always are; elsewhere, only a fetch the browser
+ *  marks as a document or a frame. */
+function isNavigation(request: Request, pathname: string): boolean {
+  if (isPublicAppPath(pathname)) return true
+  const dest = request.headers.get('Sec-Fetch-Dest')
+  return dest === 'document' || dest === 'iframe' || dest === 'frame'
+}
+
 /** The request to forward: the same, minus the headers that would let
  *  the asset handler answer 304 with a stale policy. */
 function unconditional(request: Request): Request {
@@ -136,23 +171,32 @@ function unconditional(request: Request): Request {
   return new Request(request, { headers })
 }
 
-/** Add the policy's header to an HTML response, as its own policy. */
-export function withEmbedPolicy(response: Response, policy: EmbedPolicy): Response {
-  const header = frameAncestorsHeader(policy)
-  if (!header) return response
+/** Add each policy's header to an HTML response, each as its own
+ *  policy, so the stricter one wins. */
+export function withEmbedPolicy(response: Response, ...policies: EmbedPolicy[]): Response {
+  const headers = policies.map(frameAncestorsHeader).filter((h): h is string => h !== null)
+  if (headers.length === 0) return response
   const out = new Response(response.body, response)
-  out.headers.append('Content-Security-Policy', header)
+  for (const header of new Set(headers)) out.headers.append('Content-Security-Policy', header)
   return out
 }
 
-export const onRequest: PagesFunction<EmbedPolicyEnv> = async context => {
-  const { pathname } = new URL(context.request.url)
-  if (!isPublicAppPath(pathname)) return context.next()
+/** The tour-authoring dock's page: locked to this node whatever the
+ *  setting says. */
+const TOUR_AUTHORING_LOCK: EmbedPolicy = { mode: 'self', origins: [] }
 
-  const response = await context.next(unconditional(context.request))
+export const onRequest: PagesFunction<EmbedPolicyEnv> = async context => {
+  const url = new URL(context.request.url)
+  if (isPublisherPortalPath(url.pathname)) return context.next()
+
+  const forwarded = isNavigation(context.request, url.pathname) ? unconditional(context.request) : undefined
+  const response = await (forwarded ? context.next(forwarded) : context.next())
   try {
     if (!isHtmlResponse(response)) return response
-    return withEmbedPolicy(response, await embedPolicyFor(context.env))
+    const policy = await embedPolicyFor(context.env)
+    return url.searchParams.has('tourEdit')
+      ? withEmbedPolicy(response, policy, TOUR_AUTHORING_LOCK)
+      : withEmbedPolicy(response, policy)
   } catch {
     return response
   }
