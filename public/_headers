@@ -7,7 +7,9 @@
   Cache-Control: no-cache
 
 # The publisher portal is never framed by another site, whatever the
-# node allows for the public app. It is the same index.html as the
+# node allows for the public app (the admin setting that
+# functions/_middleware.ts enforces; public/_routes.json keeps that
+# middleware off these paths). It is the same index.html as the
 # public app (see _redirects), and the SPA boots the portal on exactly
 # these two patterns (src/utils/publisherPath.ts). These rules are
 # what keep the two apart: clickjacking protection on an admin surface

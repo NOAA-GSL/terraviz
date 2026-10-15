@@ -93,6 +93,7 @@ Phase 2 opt-in public projection:
 
 | File | Responsibility |
 |---|---|
+| `functions/_middleware.ts` | Root middleware: the node's embedding policy (`src/types/node-embedding.ts`) as an appended `Content-Security-Policy: frame-ancestors …` on the public app's HTML. Leaves Function routes (`FUNCTION_ROUTE_PREFIXES`, one per top-level `functions/` directory), the portal (`isPublisherPortalPath`, and excluded by `public/_routes.json` besides) and non-HTML responses untouched; `any` adds nothing. Passes `next()`'s response through so `_headers` rules survive (verified with `wrangler pages dev`), appends rather than edits so an operator's own CSP composes with it, drops conditional request headers so a 304 can never keep a stale policy, and memoises the read per isolate for 60 s with orbit-gate's last-known-good rule, so a storage blip keeps a known restriction while a cold isolate fails open. One invocation per HTML navigation, never per asset (`public/_routes.json`) |
 | `functions/.well-known/terraviz.json.ts` | Route: GET /.well-known/terraviz.json |
 | `functions/api/_feedback-helpers.ts` | Cloudflare Pages Function helpers — feedback admin data layer |
 | `functions/api/_standalone-feedback.ts` | Standalone-widget feedback handler — validates the `terraviz-standalone` POST shape (bug/idea/content + rating + meta snapshot), stores PNG screenshots as binaries in `CATALOG_R2`, inserts into `general_feedback` with `status: 'new'`; wildcard-CORS, per-IP rate-limited |
