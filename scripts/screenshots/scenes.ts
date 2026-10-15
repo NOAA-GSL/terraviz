@@ -789,12 +789,35 @@ export const scenes: Scene[] = [
   },
   {
     name: 'publish-node-profile',
-    description: 'Publisher portal — node / host-organization profile form + the admin Features toggles card (Phase 3d)',
+    description:
+      'Publisher portal — node / host-organization profile form, the admin Features toggles card (Phase 3d) and the Embedding card (who may frame the public app)',
     fixtures: publisherFixtures({ admin: true }),
     async setup(page) {
+      // The Embedding card reads the node's own headers with `HEAD /`.
+      // The dev server sends none, so answer it with the policy the
+      // fixture saved: the capture then shows the readout's settled
+      // state rather than whatever the dev server happens to send.
+      await page.route(
+        url => url.pathname === '/',
+        async route => {
+          if (route.request().method() !== 'HEAD') return route.fallback()
+          await route.fulfill({
+            status: 200,
+            headers: {
+              'Content-Type': 'text/html',
+              'Content-Security-Policy':
+                "frame-ancestors 'self' https://www.coastal.example.org https://coastal.example.org",
+            },
+          })
+        },
+      )
       await openPublish(page, '/publish/node-profile')
       await page.locator('#nodeprofile-org').waitFor()
       await page.locator('.publisher-nodeprofile-feature-toggle').first().waitFor()
+      await page.locator('.publisher-nodeprofile-embed-input').first().waitFor()
+      // The readout is filled after a HEAD of `/`; wait for it so the
+      // capture does not race a half-drawn card.
+      await page.locator('.publisher-nodeprofile-embed-finding').first().waitFor()
     },
   },
   {

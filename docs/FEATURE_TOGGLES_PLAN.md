@@ -15,6 +15,13 @@
 > it gates `/api/chat/completions`, `/api/models` and `/api/voice/*`,
 > which the "Never gated" list below predates. See the `orbit` entry in
 > `src/types/node-features.ts` and `functions/api/_lib/orbit-gate.ts`.
+>
+> **Since then, too:** `node-settings` carries the node's embedding
+> policy (migration 0057). GET adds `embedding: { mode, origins }`;
+> a PUT may send `features`, `embedding` or both. Each section sent is
+> replaced whole and one left out is untouched, so a `features` map
+> must be complete: an omitted key is written as `true`. See
+> `src/types/node-embedding.ts` and `docs/SELF_HOSTING.md` Phase 13.
 
 
 ## Context

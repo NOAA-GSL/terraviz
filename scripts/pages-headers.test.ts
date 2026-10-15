@@ -247,6 +247,32 @@ describe('public/_headers: the publisher portal refuses to be framed', () => {
   })
 })
 
+describe('public/_headers: what public/_routes.json keeps from the middleware is locked statically', () => {
+  // The middleware enforces the node's embedding setting, but only on
+  // requests that reach Functions. A directory `_routes.json` excludes
+  // still answers a missing file with the app's index.html, and the app
+  // boots from any path, so each one needs its own static lock.
+  const routes = JSON.parse(readFileSync(resolve(REPO_ROOT, 'public/_routes.json'), 'utf8')) as {
+    exclude: string[]
+  }
+  const directories = routes.exclude.filter(rule => rule.endsWith('/*'))
+
+  it('finds the excluded directories', () => {
+    expect(directories).toEqual(expect.arrayContaining(['/assets/*', '/publish/*']))
+  })
+
+  it.each(directories)('%s falls back to a locked page', rule => {
+    const path = `${rule.slice(0, -1)}no-such-file?embed=1`.split('?')[0]
+    const headers = headersFor(rules, path)
+    const limited = frameAncestorsLists(headers.get('content-security-policy') ?? []).filter(
+      sources => sources.length > 0 && sources.every(source => ["'self'", "'none'"].includes(source.toLowerCase())),
+    )
+    expect(limited.length).toBeGreaterThan(0)
+    const xfo = new Set((headers.get('x-frame-options') ?? []).join(',').split(',').map(v => v.trim().toLowerCase()))
+    expect([...xfo]).toEqual(['sameorigin'])
+  })
+})
+
 describe('public/_headers: the public app stays embeddable by default', () => {
   // The default posture (docs/WORDPRESS_INTEGRATION_PLAN.md §4): any
   // site may embed the app. A static framing rule here would override

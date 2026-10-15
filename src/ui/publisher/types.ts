@@ -193,3 +193,20 @@ export interface UpdatePublisherPayload {
   display_name?: string
   affiliation?: string | null
 }
+
+/** Why the embedding policy a node enforces differs from what was
+ *  saved (`functions/api/v1/publish/node-settings.ts`). */
+export type EmbedPolicyProblem = 'unreadable' | 'refused'
+
+/** GET / PUT `/api/v1/publish/node-settings`. `embedding` is absent on
+ *  a node whose database predates migration 0057, and on a deploy from
+ *  before the setting existed; the portal hides the Embedding card
+ *  then. `updatedBy` / `updatedAt` describe whichever section was
+ *  saved last. */
+export interface NodeSettingsResponse {
+  features: Record<string, boolean>
+  embedding?: { mode: 'any' | 'list' | 'self'; origins: string[] }
+  embeddingProblem?: EmbedPolicyProblem
+  updatedBy: string | null
+  updatedAt: string | null
+}

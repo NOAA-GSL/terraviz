@@ -11,7 +11,10 @@
  * gating here avoids a fill-then-reject round-trip. Renders a single
  * form (org name, mission, about markdown, region focus, default
  * tone, outbound links) backed by `GET`/`PUT
- * /api/v1/publish/node-profile`. Mirrors `featured-hero.ts`.
+ * /api/v1/publish/node-profile`. Mirrors `featured-hero.ts`. Below it,
+ * two node-settings cards with their own Saves: Features (admins
+ * only) and Embedding (`components/embedding-card.ts`, read-only for
+ * a caller who is not an admin).
  */
 
 import { t } from '../../../i18n'
@@ -20,6 +23,9 @@ import { publisherGet, publisherSend, handleSessionError } from '../api'
 import { buildErrorCard } from '../components/error-card'
 import { attachToolbar, renderMarkdownToolbar } from '../components/markdown-toolbar'
 import { FEATURES_CHANGE_EVENT, featureLabel, resetFeaturesCache } from '../features'
+import { buildEmbeddingCard, embedPolicyFromSettings, embedProblemFromSettings } from '../components/embedding-card'
+import type { EmbedPolicyProblem, NodeSettingsResponse } from '../types'
+import type { EmbedPolicy } from '../../../types/node-embedding'
 import { renderMarkdown } from '../../../services/markdownRenderer'
 
 /** Keep in sync with the backend store bounds
@@ -96,8 +102,9 @@ export async function renderNodeProfilePage(
     publisherGet<MeResponse>(ME_ENDPOINT, { fetchFn }),
     publisherGet<ProfileResponse>(PROFILE_ENDPOINT, { fetchFn }),
     // Best-effort — an older deploy without the route (404) just
-    // hides the Features card rather than failing the page.
-    publisherGet<{ features: unknown }>(SETTINGS_ENDPOINT, { fetchFn }),
+    // hides the Features and Embedding cards rather than failing the
+    // page.
+    publisherGet<NodeSettingsResponse>(SETTINGS_ENDPOINT, { fetchFn }),
   ])
 
   for (const res of [meRes, profileRes]) {
@@ -125,15 +132,19 @@ export async function renderNodeProfilePage(
     return
   }
 
+  const isAdmin = meRes.data.is_admin === true || meRes.data.role === 'admin'
   renderForm(mount, {
     profile: profileRes.data.profile,
     // Toggle writes are admin-only (stricter than this page's
     // privileged gate) — a service caller sees the profile form but
     // not the Features card.
-    features:
-      settingsRes.ok && (meRes.data.is_admin === true || meRes.data.role === 'admin')
-        ? normalizeFeatures(settingsRes.data.features)
-        : null,
+    features: settingsRes.ok && isAdmin ? normalizeFeatures(settingsRes.data.features) : null,
+    // The embedding policy is shown to every caller who reaches this
+    // page, editable only by an admin (the API enforces the same).
+    // Hidden when the response carries no policy: an older deploy.
+    embedding: settingsRes.ok ? embedPolicyFromSettings(settingsRes.data) : null,
+    embeddingProblem: settingsRes.ok ? embedProblemFromSettings(settingsRes.data) : undefined,
+    canEditEmbedding: isAdmin,
     fetchFn,
     navigate: options.navigate,
   })
@@ -150,6 +161,11 @@ interface FormState {
   /** Current toggle set, or null to hide the Features card (older
    *  deploy, or a non-admin caller). */
   features: FeatureMap | null
+  /** Current embedding policy, or null to hide the Embedding card
+   *  (an older deploy). */
+  embedding: EmbedPolicy | null
+  embeddingProblem?: EmbedPolicyProblem
+  canEditEmbedding: boolean
   fetchFn?: typeof fetch
   navigate?: (url: string) => void
 }
@@ -359,6 +375,17 @@ function renderForm(mount: HTMLElement, state: FormState): void {
 
   const sections: HTMLElement[] = [header, callout, organization, missionAbout, links, actions]
   if (state.features) sections.push(buildFeaturesCard(state.features, state))
+  if (state.embedding) {
+    sections.push(
+      buildEmbeddingCard({
+        policy: state.embedding,
+        problem: state.embeddingProblem,
+        canEdit: state.canEditEmbedding,
+        fetchFn: state.fetchFn,
+        navigate: state.navigate,
+      }),
+    )
+  }
   mount.replaceChildren(shell(...sections))
 }
 

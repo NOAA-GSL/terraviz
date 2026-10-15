@@ -4,7 +4,9 @@
 /**
  * Tests for the /publish/node-profile page — form rendering from the
  * stored profile, the privileged gate, and the PUT body the Save
- * button composes (incl. link rows).
+ * button composes (incl. link rows). The Embedding card's own
+ * behaviour is in `components/embedding-card.test.ts`; here, only
+ * who sees it and how.
  */
 
 import { describe, it, expect, vi } from 'vitest'
@@ -118,6 +120,59 @@ describe('renderNodeProfilePage', () => {
     })
     expect(mount.querySelector('#nodeprofile-org')).toBeTruthy()
     expect(mount.querySelector('.publisher-nodeprofile-feature-toggle')).toBeNull()
+  })
+
+  it('renders the Embedding card for an admin, editable, from the stored policy', async () => {
+    const mount = document.createElement('div')
+    await renderNodeProfilePage(mount, {
+      fetchFn: mockFetch({
+        '/publish/me': ADMIN_ME,
+        '/publish/node-profile': PROFILE,
+        '/publish/node-settings': {
+          features: {},
+          embedding: { mode: 'list', origins: ['https://www.example.org'] },
+        },
+      }),
+    })
+    const card = mount.querySelector('.publisher-nodeprofile-embedding')
+    expect(card).toBeTruthy()
+    expect(card!.querySelector<HTMLInputElement>('input[value="list"]')?.checked).toBe(true)
+    expect(card!.querySelector<HTMLInputElement>('.publisher-nodeprofile-embed-input')?.value).toBe(
+      'https://www.example.org',
+    )
+    const buttons = Array.from(card!.querySelectorAll('button')).map(b => b.textContent)
+    expect(buttons).toContain('Save embedding')
+  })
+
+  it('shows the Embedding card read-only to a service caller', async () => {
+    const mount = document.createElement('div')
+    await renderNodeProfilePage(mount, {
+      fetchFn: mockFetch({
+        '/publish/me': { role: 'service', is_admin: false },
+        '/publish/node-profile': PROFILE,
+        '/publish/node-settings': { features: {}, embedding: { mode: 'self', origins: [] } },
+      }),
+    })
+    const card = mount.querySelector('.publisher-nodeprofile-embedding')
+    expect(card).toBeTruthy()
+    expect(card!.querySelectorAll('input[type="radio"]')).toHaveLength(0)
+    expect(card!.querySelector('.publisher-nodeprofile-embed-modes .publisher-nodeprofile-feature-name')?.textContent).toBe(
+      'No other site',
+    )
+    expect(Array.from(card!.querySelectorAll('button')).map(b => b.textContent)).not.toContain('Save embedding')
+  })
+
+  it('hides the Embedding card when the settings response carries no policy (an older deploy)', async () => {
+    const mount = document.createElement('div')
+    await renderNodeProfilePage(mount, {
+      fetchFn: mockFetch({
+        '/publish/me': ADMIN_ME,
+        '/publish/node-profile': PROFILE,
+        '/publish/node-settings': { features: {} },
+      }),
+    })
+    expect(mount.querySelector('.publisher-nodeprofile-feature-toggle')).toBeTruthy()
+    expect(mount.querySelector('.publisher-nodeprofile-embedding')).toBeNull()
   })
 
   it('Save features PUTs the full toggle map and fires the change event', async () => {

@@ -94,11 +94,12 @@ three load-bearing facts:
 
 - **The web app already iframes cross-origin in production.** The
   poster site embeds the live app and deep-links it via URL params
-  (`poster/index.html:6090-6117`). Nothing in the repo sets
+  (`poster/index.html:6090-6117`). By default nothing sets
   `X-Frame-Options` or a `frame-ancestors` CSP on the public app —
   `public/_headers` sets only `X-Content-Type-Options`,
-  `Referrer-Policy`, and a `Permissions-Policy` there. (The
-  publisher portal under `/publish` is the exception: it carries
+  `Referrer-Policy`, and a `Permissions-Policy` there, and the
+  embedding setting (§4) sends nothing until an admin restricts it.
+  (The publisher portal under `/publish` is the exception: it carries
   `frame-ancestors 'self'`, so no other site can frame it.) So a
   WordPress page can embed Terraviz today.
 - **Single dataset, single tour, and full catalog are already
@@ -178,7 +179,7 @@ abstract, thumbnail, and a link — the interactive globe is
 
 | Capability | Status | Evidence |
 |---|---|---|
-| Cross-origin iframe embedding of the web app | **Works in prod** | `poster/index.html:6090-6117`; no `X-Frame-Options`/`frame-ancestors` shipped on the public app (`public/_headers`; only `/publish` is limited to `'self'`) |
+| Cross-origin iframe embedding of the web app | **Works in prod** | `poster/index.html:6090-6117`; no `X-Frame-Options`/`frame-ancestors` on the public app by default (`public/_headers` limits only `/publish` and a few static folders to `'self'`; an admin can restrict the app with the §4 setting) |
 | Boot into a single dataset | **Live** | `?dataset=<id>` `src/main.ts:503-538`; `/dataset/:id` `src/services/deepLinkService.ts:72-77` |
 | Boot into a tour | **Live** | `?tour=<slug>` `src/utils/posterDeepLinks.ts:34-37,111-137` |
 | Boot into the full catalog browser | **Live** | `?catalog=true` `src/utils/catalogMode.ts:21-28`, `src/main.ts:335-336,539-566` |
@@ -384,6 +385,48 @@ aligned behaviour); document `frame-ancestors` as an opt-in
 operator lever for nodes that want to restrict embedding, and have
 the plugin detect a framing refusal and show a helpful message
 rather than a blank box.
+
+**Status (2026-10): the lever exists, and the default is unchanged.**
+A node admin now sets it in the portal, on the **Embedding** card of
+**Settings → Node profile**, with no `_headers` edit and no redeploy:
+**Any site can embed** (the default, which sends no header),
+**Only sites I list** (`frame-ancestors 'self'` plus the listed
+`https://` origins) or **No other site** (`'self'` only). It is
+stored on the `node_settings` singleton (migration 0057), validated
+by `src/types/node-embedding.ts`, and enforced by a root middleware
+(`functions/_middleware.ts`) that appends the header to every HTML
+page the app serves. `public/_routes.json` keeps the middleware off
+static files, and `public/_headers` locks the static folders it skips,
+since the app's fallback page would otherwise boot from under them.
+The card also reads back what the node actually sends, because the
+usual reason an embed fails is something else: Cloudflare's "Add
+security headers" transform (`X-Frame-Options: SAMEORIGIN`), an edge
+CSP, or Access in front of the app. `docs/SELF_HOSTING.md` Phase 13
+is the operator-facing guide. Separately, the publisher portal under
+`/publish` refuses every framer but the node itself whatever the
+setting says (`public/_headers`), so the plugin can embed the public
+app but never the portal.
+
+The trade-offs, stated where the decision was made. The middleware
+runs on every page load, so each page view is now a Pages Functions
+request against the free plan's 100,000 a day, on every node and
+whatever the setting. A restriction is best-effort in two ways: a
+storage outage lifts it on any server that has not read it yet, for
+as long as the outage lasts, and a free-plan node that runs out of
+Functions requests drops it until midnight UTC. For
+a branding and embed-placement control that is acceptable. A node that
+needs embedding blocked for compliance should also set it at the edge.
+
+For the plugin, nothing changes on a node left at the default. On a
+node that restricts embedding, a WordPress site not on its list gets
+a blocked frame, which is the refusal the recommendation above asks
+the plugin to detect and explain. Its `docs/EMBEDDING_YOUR_OWN_NODE.md`
+should name the setting as the way to allow a site. Its service
+token can read the policy (`GET /api/v1/publish/node-settings`
+returns `embedding: { mode, origins }`; older nodes omit it) to check
+its own origin before embedding, but cannot change it: the PUT is
+admin-only. A plain-`http://` WordPress site can never be listed, so
+it can embed only a node left on **Any site can embed**.
 
 ---
 
@@ -786,7 +829,8 @@ the federation pilot answers.
    build it.
 5. **Embedding openness** (§4): keep framing open (mission-aligned,
    current behaviour), or does any node need a `frame-ancestors`
-   allow-list?
+   allow-list? *Resolved (2026-10):* open by default, with a
+   per-node admin setting for nodes that need a list (§4 Status).
 6. **Directory / distribution:** public WordPress.org plugin
    directory, or an internal NOAA plugin registry only? (Affects
    licensing posture, review process, and update mechanism.)
@@ -850,7 +894,8 @@ exploration on the branch tip):
 
 **Embed / front-end**
 - `poster/index.html:6090-6117` — production cross-origin iframe embed
-- `public/_headers` — shipped headers (no `X-Frame-Options`/CSP framing on the public app; `frame-ancestors 'self'` on `/publish`)
+- `public/_headers` — shipped headers (no `X-Frame-Options`/CSP framing on the public app; `frame-ancestors 'self'` on `/publish` and the static folders `_routes.json` excludes)
+- `functions/_middleware.ts`, `src/types/node-embedding.ts` — the embedding setting (§4 Status)
 - `src/main.ts:503-618,3318-3335,714-717` — boot seam, deep-link routing, blog/publish gates
 - `src/services/deepLinkService.ts:72-77` — `/dataset/:id` parsing
 - `src/utils/catalogMode.ts:21-28` — `?catalog=true`

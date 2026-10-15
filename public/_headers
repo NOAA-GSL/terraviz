@@ -7,7 +7,9 @@
   Cache-Control: no-cache
 
 # The publisher portal is never framed by another site, whatever the
-# node allows for the public app. It is the same index.html as the
+# node allows for the public app (the admin setting that
+# functions/_middleware.ts enforces; public/_routes.json keeps that
+# middleware off these paths). It is the same index.html as the
 # public app (see _redirects), and the SPA boots the portal on exactly
 # these two patterns (src/utils/publisherPath.ts). These rules are
 # what keep the two apart: clickjacking protection on an admin surface
@@ -28,5 +30,35 @@
   X-Frame-Options: SAMEORIGIN
 
 /publish/*
+  Content-Security-Policy: frame-ancestors 'self'
+  X-Frame-Options: SAMEORIGIN
+
+# Directories public/_routes.json keeps away from Functions, so the root
+# middleware never sees them. A missing file under one still gets the
+# app's index.html (the SPA fallback), and the app boots from any path,
+# so without these a site the node never listed could frame
+# `/assets/x?embed=1` whatever the embedding setting says. Browsers
+# ignore framing headers on scripts and images, so the real files lose
+# nothing. scripts/pages-headers.test.ts requires a block here for
+# every directory _routes.json excludes.
+/assets/*
+  Content-Security-Policy: frame-ancestors 'self'
+  X-Frame-Options: SAMEORIGIN
+
+/docs/*
+  Content-Security-Policy: frame-ancestors 'self'
+  X-Frame-Options: SAMEORIGIN
+
+/luma-check/*
+  Content-Security-Policy: frame-ancestors 'self'
+  X-Frame-Options: SAMEORIGIN
+
+# The operator console. Static, also kept from Functions, and a page of
+# account IDs and tokens nobody needs to frame from another site.
+/setup
+  Content-Security-Policy: frame-ancestors 'self'
+  X-Frame-Options: SAMEORIGIN
+
+/setup.html
   Content-Security-Policy: frame-ancestors 'self'
   X-Frame-Options: SAMEORIGIN
