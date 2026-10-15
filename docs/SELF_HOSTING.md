@@ -1743,8 +1743,11 @@ playback, VR and a tour before locking it down.
 
 If you add the policy with an edge Transform Rule, use **Add**, not
 **Set**. A Set replaces the header the node sent, which strips the
-portal's `frame-ancestors 'self'`. If you must use Set, put
-`frame-ancestors 'self'` in the policy for `/publish` paths yourself.
+portal's `frame-ancestors 'self'`. Its `X-Frame-Options` still
+protects it, but only that one header is left. If you must use Set,
+give `/publish` and `/publish/*` a rule of their own that includes
+`frame-ancestors 'self'`. Do not add it to a rule for every path:
+that stops every other site embedding the public app.
 
 ---
 

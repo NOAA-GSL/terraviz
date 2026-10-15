@@ -143,73 +143,75 @@ describe('initTourAuthoring (tour/A)', () => {
   })
 })
 
-/** A window-shaped stand-in: which origin it is on, which origins
- *  sit above it, and whether reading the top's origin throws. */
+/** A window-shaped stand-in for one frame tree. `chain` lists the
+ *  ancestors' origins from the parent up to the top; `undefined` is a
+ *  frame whose origin cannot be read (another origin's). */
 function fakeWindow(opts: {
   origin: string
-  framed: boolean
+  chain: Array<string | undefined>
   ancestorOrigins?: string[]
-  topOrigin?: string
 }): Window {
-  const win: { location: unknown; top: unknown } = {
-    location: {
-      origin: opts.origin,
-      ancestorOrigins: opts.ancestorOrigins,
-    },
+  type Fake = { location: unknown; parent: Fake | null; top: Fake | null }
+  const self: Fake = {
+    location: { origin: opts.origin, ancestorOrigins: opts.ancestorOrigins },
+    parent: null,
     top: null,
   }
-  if (!opts.framed) {
-    win.top = win
-  } else {
-    win.top = {
+  let child = self
+  for (const ancestorOrigin of opts.chain) {
+    const frame: Fake = {
       get location(): { origin: string } {
-        if (opts.topOrigin === undefined) throw new DOMException('Blocked', 'SecurityError')
-        return { origin: opts.topOrigin }
+        if (ancestorOrigin === undefined) throw new DOMException('Blocked', 'SecurityError')
+        return { origin: ancestorOrigin }
       },
+      parent: null,
+      top: null,
     }
+    child.parent = frame
+    child = frame
   }
-  return win as unknown as Window
+  const top = child
+  top.parent = top
+  for (let frame: Fake | null = self; frame; frame = frame === top ? null : frame.parent) frame.top = top
+  return self as unknown as Window
 }
 
 describe('hasForeignAncestor', () => {
   const NODE = 'https://node.example'
+  const EVIL = 'https://evil.example'
 
   it('is false for a top-level page', () => {
-    expect(hasForeignAncestor(fakeWindow({ origin: NODE, framed: false }))).toBe(false)
+    expect(hasForeignAncestor(fakeWindow({ origin: NODE, chain: [] }))).toBe(false)
   })
 
   it('is false when every ancestor is this origin', () => {
     expect(
-      hasForeignAncestor(
-        fakeWindow({ origin: NODE, framed: true, ancestorOrigins: [NODE, NODE], topOrigin: NODE }),
-      ),
+      hasForeignAncestor(fakeWindow({ origin: NODE, chain: [NODE, NODE], ancestorOrigins: [NODE, NODE] })),
     ).toBe(false)
+    expect(hasForeignAncestor(fakeWindow({ origin: NODE, chain: [NODE, NODE] }))).toBe(false)
   })
 
-  it('is true when any listed ancestor is another origin, top included or not', () => {
-    // A foreign page in the middle, under a same-origin top.
+  it('is true when ancestorOrigins lists another origin', () => {
     expect(
-      hasForeignAncestor(
-        fakeWindow({
-          origin: NODE,
-          framed: true,
-          ancestorOrigins: ['https://evil.example', NODE],
-          topOrigin: NODE,
-        }),
-      ),
+      hasForeignAncestor(fakeWindow({ origin: NODE, chain: [NODE, NODE], ancestorOrigins: [EVIL, NODE] })),
     ).toBe(true)
   })
 
   it('treats a sandboxed ancestor ("null") as foreign', () => {
     expect(
-      hasForeignAncestor(fakeWindow({ origin: NODE, framed: true, ancestorOrigins: ['null'] })),
+      hasForeignAncestor(fakeWindow({ origin: NODE, chain: [NODE], ancestorOrigins: ['null'] })),
     ).toBe(true)
   })
 
-  it('falls back to the top window when ancestorOrigins is missing (Firefox)', () => {
-    // Cross-origin: reading top.location throws.
-    expect(hasForeignAncestor(fakeWindow({ origin: NODE, framed: true }))).toBe(true)
-    expect(hasForeignAncestor(fakeWindow({ origin: NODE, framed: true, topOrigin: NODE }))).toBe(false)
+  it('without ancestorOrigins, finds a foreign top (Firefox)', () => {
+    expect(hasForeignAncestor(fakeWindow({ origin: NODE, chain: [undefined] }))).toBe(true)
+  })
+
+  it('without ancestorOrigins, finds a foreign frame under a same-origin top', () => {
+    // node page (top) → foreign frame → this page. Reading only `top`
+    // would answer "same origin" here.
+    expect(hasForeignAncestor(fakeWindow({ origin: NODE, chain: [undefined, NODE] }))).toBe(true)
+    expect(hasForeignAncestor(fakeWindow({ origin: NODE, chain: [EVIL, NODE] }))).toBe(true)
   })
 })
 

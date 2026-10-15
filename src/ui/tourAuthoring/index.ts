@@ -46,23 +46,35 @@ export function readTourEditParam(url: URL = new URL(window.location.href)): str
  *
  * `location.ancestorOrigins` names every ancestor where the browser
  * offers it (Chromium, WebKit); a sandboxed one reads `"null"`, which
- * counts as foreign. Elsewhere, reading the top window's origin throws
- * across origins, which also counts as foreign.
+ * counts as foreign. Every browser also gets the walk up `parent`:
+ * reading a frame's origin throws when it is another origin's, which
+ * counts as foreign too. Walking every level rather than reading only
+ * `top` is what catches a foreign frame between two of this node's
+ * own pages, where `ancestorOrigins` is missing (Firefox).
  */
 export function hasForeignAncestor(win: Window = window): boolean {
   if (win.top === win) return false
   const own = win.location.origin
   const ancestors = win.location.ancestorOrigins
-  if (ancestors && ancestors.length > 0) {
+  if (ancestors) {
     for (let i = 0; i < ancestors.length; i++) {
       if (ancestors[i] !== own) return true
     }
   }
-  try {
-    return win.top?.location.origin !== own
-  } catch {
-    return true
+  let frame: Window = win
+  // A frame tree is finite, but bound the walk anyway: a fake or
+  // detached window whose `parent` never reaches `top` must not spin.
+  for (let depth = 0; depth < 64 && frame !== frame.top; depth++) {
+    const parent: Window | null = frame.parent
+    if (!parent || parent === frame) return true
+    try {
+      if (parent.location.origin !== own) return true
+    } catch {
+      return true
+    }
+    frame = parent
   }
+  return frame !== frame.top
 }
 
 /**

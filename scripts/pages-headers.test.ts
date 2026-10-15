@@ -145,6 +145,15 @@ const PORTAL_PATHS = PATH_CORPUS.filter(isPublisherPortalPath)
 const PUBLIC_PATHS = PATH_CORPUS.filter(path => !isPublisherPortalPath(path))
 
 describe('the portal gate', () => {
+  it('is the predicate src/main.ts boots the portal on', () => {
+    // The tests below hold the predicate to _headers. That only
+    // protects anything while the boot gate is that predicate, so a
+    // return to a hand-written prefix test fails here.
+    const main = readFileSync(resolve(REPO_ROOT, 'src/main.ts'), 'utf8')
+    expect(main).toMatch(/if \(isPublisherPortalPath\(location\.pathname\)\)/)
+    expect(main).not.toMatch(/pathname\.startsWith\(\s*['"`]\/publish/)
+  })
+
   it('accepts the portal and nothing that merely shares its prefix', () => {
     expect(PORTAL_PATHS).toEqual(expect.arrayContaining(['/publish', '/publish/', '/publish/users']))
     expect(PUBLIC_PATHS).toEqual(
