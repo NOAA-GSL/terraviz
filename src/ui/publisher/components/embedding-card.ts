@@ -1,0 +1,544 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 The Zyra Project
+
+/**
+ * The Embedding card on /publish/node-profile: which other sites may
+ * show this node's public app in an iframe (`src/types/node-embedding.ts`).
+ *
+ * Three postures in a radio group, a list editor for `list`, its own
+ * Save (`PUT /api/v1/publish/node-settings` with `{ embedding }` only,
+ * so it never touches the Features card's toggles), and a readout of
+ * what the node is actually sending.
+ *
+ * **The readout is the part that earns the card.** The setting is one
+ * of several things that decide whether a frame loads: an edge rule,
+ * Cloudflare's "Add security headers" managed transform (which sends
+ * `X-Frame-Options: SAMEORIGIN`), or a line in `public/_headers` can
+ * each block an embed this setting allows, and none of them shows up
+ * here. So the card asks the node: a same-origin `HEAD /` reads the
+ * `Content-Security-Policy` and `X-Frame-Options` a visitor gets, and
+ * {@link analyzeLivePolicy} says where they disagree with the saved
+ * setting. It runs once on render, quietly, and again on request,
+ * when its verdict is announced.
+ *
+ * **Validation runs here and on the server with the same function.**
+ * The client check is for inline errors before a round trip; the API
+ * is the boundary, and its field errors (`embedding.origins.<n>`) are
+ * mapped back to the row that sent them. Leading and trailing spaces
+ * are trimmed and empty rows skipped before either runs. Anything else
+ * the validator refuses is shown, never repaired.
+ *
+ * **No presets for Facebook or Claude**, and the card says why: social
+ * feeds show a preview card and open the link full-page rather than
+ * framing it, so `frame-ancestors` never applies there; and AI apps
+ * frame embeds through hosts they do not promise to keep. A preset
+ * would be wrong on day one or break silently later.
+ *
+ * Admins edit; any other caller who can open the page sees the policy
+ * read-only. The API enforces that (`isAdmin` on the PUT), so the
+ * read-only view is a courtesy rather than the control.
+ */
+
+import { t } from '../../../i18n'
+import {
+  EMBED_MODES,
+  MAX_EMBED_ORIGINS,
+  defaultEmbedPolicy,
+  frameAncestorsHeader,
+  validateEmbedOrigin,
+  type EmbedMode,
+  type EmbedOriginErrorCode,
+  type EmbedPolicy,
+} from '../../../types/node-embedding'
+import { handleSessionError, publisherSend } from '../api'
+
+const SETTINGS_ENDPOINT = '/api/v1/publish/node-settings'
+
+export interface EmbeddingCardOptions {
+  policy: EmbedPolicy
+  /** Admins edit; everyone else gets the read-only view. */
+  canEdit: boolean
+  fetchFn?: typeof fetch
+  navigate?: (url: string) => void
+}
+
+// ----- The live-policy readout (pure) -----
+
+/** What `HEAD /` came back with. `null` means the header was absent. */
+export interface LiveHeaders {
+  csp: string | null
+  xfo: string | null
+}
+
+/** One thing the readout says. `ok` is the all-clear; the rest are
+ *  findings, which can stack. */
+export type LiveFinding =
+  | { kind: 'ok' }
+  | { kind: 'pending' }
+  | { kind: 'xfo'; value: string }
+  | { kind: 'extra'; value: string }
+
+/** Every `frame-ancestors` directive across the policies in a CSP
+ *  value, as written (sources lowercased for comparison). A comma
+ *  separates policies; a semicolon separates directives. */
+export function frameAncestorsDirectives(csp: string | null): string[] {
+  if (!csp) return []
+  const out: string[] = []
+  for (const policy of csp.split(',')) {
+    for (const directive of policy.split(';')) {
+      const tokens = directive.trim().split(/\s+/)
+      if (tokens[0]?.toLowerCase() === 'frame-ancestors') out.push(tokens.join(' ').toLowerCase())
+    }
+  }
+  return out
+}
+
+/**
+ * Compare what the node sends with what it was set to send.
+ *
+ * - `xfo`: any `X-Frame-Options`. With no `frame-ancestors` (the `any`
+ *   setting) it blocks every other site in every browser; with one,
+ *   current browsers ignore it but older ones still block.
+ * - `extra`: a `frame-ancestors` directive this setting did not
+ *   produce. Every policy is enforced, so it narrows what the setting
+ *   allows; it comes from an edge rule or `_headers`.
+ * - `pending`: the setting's own directive is missing, or present when
+ *   the setting is `any`. A save takes a few minutes to reach every
+ *   server, so this is usually just early.
+ * - `ok`: none of the above.
+ */
+export function analyzeLivePolicy(policy: EmbedPolicy, live: LiveHeaders): LiveFinding[] {
+  const expected = frameAncestorsHeader(policy)?.toLowerCase() ?? null
+  const directives = frameAncestorsDirectives(live.csp)
+  const findings: LiveFinding[] = []
+  if (live.xfo) findings.push({ kind: 'xfo', value: live.xfo })
+
+  const ours = expected !== null && directives.includes(expected)
+  const others = directives.filter(directive => directive !== expected)
+  // Under `any` the node sends no directive of its own, so any
+  // directive at all is someone else's; under `list` or `self`, one
+  // that differs from ours is.
+  if (expected === null) {
+    for (const directive of others) findings.push({ kind: 'extra', value: directive })
+  } else {
+    if (!ours) findings.push({ kind: 'pending' })
+    // Before a save has propagated, the old setting's directive is
+    // still live; that is the same "pending", not a second policy.
+    if (ours) for (const directive of others) findings.push({ kind: 'extra', value: directive })
+  }
+  return findings.length > 0 ? findings : [{ kind: 'ok' }]
+}
+
+/** Ask the node what a visitor's browser receives on `/`. */
+export async function readLiveHeaders(fetchFn: typeof fetch = fetch): Promise<LiveHeaders> {
+  const res = await fetchFn('/', { method: 'HEAD', cache: 'no-store', credentials: 'same-origin' })
+  return {
+    csp: res.headers.get('Content-Security-Policy'),
+    xfo: res.headers.get('X-Frame-Options'),
+  }
+}
+
+// ----- Wording -----
+
+function modeLabel(mode: EmbedMode): string {
+  switch (mode) {
+    case 'any':
+      return t('publisher.nodeProfile.embedding.mode.any')
+    case 'list':
+      return t('publisher.nodeProfile.embedding.mode.list')
+    case 'self':
+      return t('publisher.nodeProfile.embedding.mode.self')
+  }
+}
+
+function modeDescription(mode: EmbedMode): string {
+  switch (mode) {
+    case 'any':
+      return t('publisher.nodeProfile.embedding.mode.any.desc')
+    case 'list':
+      return t('publisher.nodeProfile.embedding.mode.list.desc')
+    case 'self':
+      return t('publisher.nodeProfile.embedding.mode.self.desc')
+  }
+}
+
+/** The portal's wording for each refusal, keyed so a code added to
+ *  the validator fails to compile here rather than showing English. */
+const ORIGIN_ERROR_KEYS = {
+  empty: 'publisher.nodeProfile.embedding.error.empty',
+  too_long: 'publisher.nodeProfile.embedding.error.tooLong',
+  whitespace: 'publisher.nodeProfile.embedding.error.whitespace',
+  forbidden_char: 'publisher.nodeProfile.embedding.error.forbiddenChar',
+  keyword: 'publisher.nodeProfile.embedding.error.keyword',
+  not_ascii: 'publisher.nodeProfile.embedding.error.notAscii',
+  not_https: 'publisher.nodeProfile.embedding.error.notHttps',
+  has_userinfo: 'publisher.nodeProfile.embedding.error.userinfo',
+  has_path: 'publisher.nodeProfile.embedding.error.path',
+  bad_port: 'publisher.nodeProfile.embedding.error.port',
+  bad_host: 'publisher.nodeProfile.embedding.error.host',
+  wildcard_too_broad: 'publisher.nodeProfile.embedding.error.wildcard',
+} as const satisfies Record<EmbedOriginErrorCode, string>
+
+function originErrorText(code: string, fallback: string): string {
+  if (code in ORIGIN_ERROR_KEYS) return t(ORIGIN_ERROR_KEYS[code as EmbedOriginErrorCode])
+  return fallback
+}
+
+function findingText(finding: LiveFinding): string {
+  switch (finding.kind) {
+    case 'ok':
+      return t('publisher.nodeProfile.embedding.live.ok')
+    case 'pending':
+      return t('publisher.nodeProfile.embedding.live.pending')
+    case 'xfo':
+      return t('publisher.nodeProfile.embedding.live.xfo', { value: finding.value })
+    case 'extra':
+      return t('publisher.nodeProfile.embedding.live.extra', { value: finding.value })
+  }
+}
+
+// ----- DOM -----
+
+function el<K extends keyof HTMLElementTagNameMap>(
+  tag: K,
+  props: Partial<HTMLElementTagNameMap[K]> & { className?: string } = {},
+  children: (HTMLElement | string)[] = [],
+): HTMLElementTagNameMap[K] {
+  const node = document.createElement(tag)
+  Object.assign(node, props)
+  for (const c of children) node.append(c)
+  return node
+}
+
+let cardCount = 0
+
+/** Build the card. Its state lives in the closure; the saved policy
+ *  it compares the live headers against moves only on a good save. */
+export function buildEmbeddingCard(options: EmbeddingCardOptions): HTMLElement {
+  const id = `nodeprofile-embed-${++cardCount}`
+  let saved: EmbedPolicy = options.policy
+  const fetchFn = options.fetchFn
+
+  const card = el('section', { className: 'publisher-card publisher-glass publisher-nodeprofile-embedding' })
+  card.append(
+    el('h2', { className: 'publisher-card-heading', textContent: t('publisher.nodeProfile.embedding.heading') }),
+    el('p', { className: 'publisher-nodeprofile-hint', textContent: t('publisher.nodeProfile.embedding.intro') }),
+  )
+
+  // ----- Posture -----
+  const fieldset = el('fieldset', { className: 'publisher-nodeprofile-embed-modes' })
+  fieldset.append(el('legend', { className: 'publisher-field-label', textContent: t('publisher.nodeProfile.embedding.legend') }))
+  const radios = new Map<EmbedMode, HTMLInputElement>()
+  for (const mode of EMBED_MODES) {
+    const radio = el('input', {
+      type: 'radio',
+      name: `${id}-mode`,
+      value: mode,
+      id: `${id}-mode-${mode}`,
+      className: 'publisher-nodeprofile-embed-radio',
+      checked: saved.mode === mode,
+      disabled: !options.canEdit,
+    })
+    radio.setAttribute('aria-describedby', `${id}-mode-${mode}-desc`)
+    radios.set(mode, radio)
+    fieldset.append(
+      el('label', { className: 'publisher-nodeprofile-feature-row', htmlFor: radio.id }, [
+        radio,
+        el('span', { className: 'publisher-nodeprofile-feature-text' }, [
+          el('span', { className: 'publisher-nodeprofile-feature-name', textContent: modeLabel(mode) }),
+          el('span', {
+            className: 'publisher-nodeprofile-feature-desc',
+            id: `${id}-mode-${mode}-desc`,
+            textContent: modeDescription(mode),
+          }),
+        ]),
+      ]),
+    )
+  }
+  card.append(fieldset)
+  const selectedMode = (): EmbedMode => EMBED_MODES.find(mode => radios.get(mode)?.checked) ?? 'any'
+
+  // ----- Origins -----
+  const originsBlock = el('div', { className: 'publisher-nodeprofile-embed-origins' })
+  const originsLabelId = `${id}-origins-label`
+  const originsHintId = `${id}-origins-hint`
+  originsBlock.append(
+    el('span', { className: 'publisher-field-label', id: originsLabelId, textContent: t('publisher.nodeProfile.embedding.origins.label') }),
+    el('p', { className: 'publisher-nodeprofile-hint', id: originsHintId, textContent: t('publisher.nodeProfile.embedding.origins.hint') }),
+  )
+
+  interface OriginRow {
+    row: HTMLElement
+    input: HTMLInputElement
+    error: HTMLElement
+  }
+  const rows: OriginRow[] = []
+  const list = el('div', { className: 'publisher-nodeprofile-embed-list' })
+  list.setAttribute('role', 'group')
+  list.setAttribute('aria-labelledby', originsLabelId)
+
+  const addButton = el('button', {
+    type: 'button',
+    className: 'publisher-button publisher-button-small',
+    textContent: t('publisher.nodeProfile.embedding.origins.add'),
+  })
+
+  /** Re-number rows after a removal, so each input's name says which
+   *  site it is and every error points at the right one. */
+  const relabel = (): void => {
+    rows.forEach(({ input }, index) => {
+      input.setAttribute('aria-label', t('publisher.nodeProfile.embedding.origins.inputAria', { n: index + 1 }))
+      const remove = input.parentElement?.querySelector<HTMLButtonElement>('.publisher-nodeprofile-embed-remove')
+      remove?.setAttribute('aria-label', t('publisher.nodeProfile.embedding.origins.removeAria', { n: index + 1 }))
+    })
+    addButton.disabled = rows.length >= MAX_EMBED_ORIGINS
+  }
+
+  const setRowError = (entry: OriginRow, message: string | null): void => {
+    entry.error.textContent = message ?? ''
+    entry.error.hidden = message === null
+    if (message === null) entry.input.removeAttribute('aria-invalid')
+    else entry.input.setAttribute('aria-invalid', 'true')
+  }
+
+  const addRow = (value = ''): OriginRow => {
+    const n = rows.length
+    const errorId = `${id}-origin-${n}-${Math.random().toString(36).slice(2, 8)}-error`
+    const input = el('input', {
+      type: 'text',
+      className: 'publisher-nodeprofile-input publisher-nodeprofile-embed-input',
+      value,
+      placeholder: 'https://www.example.org', // i18n-exempt: an origin, not prose
+      spellcheck: false,
+      autocomplete: 'off',
+    })
+    input.setAttribute('inputmode', 'url')
+    input.setAttribute('aria-describedby', `${errorId} ${originsHintId}`)
+    const error = el('p', { className: 'publisher-nodeprofile-status-error publisher-nodeprofile-embed-error', id: errorId })
+    error.hidden = true
+    const remove = el('button', {
+      type: 'button',
+      className: 'publisher-events-icon-btn publisher-events-icon-btn-reject publisher-nodeprofile-embed-remove',
+      textContent: '✕', // i18n-exempt: glyph; the aria-label carries the meaning
+    })
+    const row = el('div', { className: 'publisher-nodeprofile-embed-row' }, [input, remove, error])
+    const entry: OriginRow = { row, input, error }
+    remove.addEventListener('click', () => {
+      const index = rows.indexOf(entry)
+      rows.splice(index, 1)
+      row.remove()
+      relabel()
+      // Keep focus in the list rather than dropping it on the body.
+      ;(rows[index]?.input ?? rows[index - 1]?.input ?? addButton).focus()
+    })
+    input.addEventListener('input', () => setRowError(entry, null))
+    rows.push(entry)
+    list.append(row)
+    relabel()
+    return entry
+  }
+
+  for (const origin of saved.origins) addRow(origin)
+  addButton.addEventListener('click', () => {
+    if (rows.length >= MAX_EMBED_ORIGINS) return
+    addRow().input.focus()
+  })
+
+  if (options.canEdit) {
+    originsBlock.append(list, addButton)
+  } else {
+    // Read-only: the list as text, so it reads as a list rather than a
+    // run of disabled inputs.
+    const readOnly = el('ul', { className: 'publisher-nodeprofile-embed-readonly' })
+    readOnly.setAttribute('aria-labelledby', originsLabelId)
+    for (const origin of saved.origins) readOnly.append(el('li', { textContent: origin }))
+    originsBlock.append(readOnly)
+  }
+  card.append(originsBlock)
+
+  const syncOriginsVisibility = (): void => {
+    const listing = selectedMode() === 'list'
+    originsBlock.hidden = !listing
+    if (listing && options.canEdit && rows.length === 0) addRow()
+  }
+  for (const radio of radios.values()) radio.addEventListener('change', syncOriginsVisibility)
+  syncOriginsVisibility()
+
+  // ----- Save -----
+  const status = el('div', { className: 'publisher-nodeprofile-status', role: 'status' })
+  if (options.canEdit) {
+    const saveBtn = el('button', {
+      type: 'button',
+      className: 'publisher-button publisher-button-primary',
+      textContent: t('publisher.nodeProfile.embedding.save'),
+    })
+    saveBtn.addEventListener('click', () => {
+      status.textContent = ''
+      status.classList.remove('publisher-nodeprofile-status-error')
+      const mode = selectedMode()
+
+      // The rows that will be sent, in order, so a server error naming
+      // `embedding.origins.<n>` lands on the row that sent entry n.
+      const sent: Array<{ entry: OriginRow; value: string }> = []
+      let firstInvalid: OriginRow | null = null
+      if (mode === 'list') {
+        const seen = new Map<string, number>()
+        for (const entry of rows) {
+          const value = entry.input.value.trim()
+          if (value === '') {
+            setRowError(entry, null)
+            continue
+          }
+          const result = validateEmbedOrigin(value)
+          let message: string | null = null
+          // "Site n" is the row's number as its label reads, empty rows
+          // included, so the message points where the reader looks.
+          if (!result.ok) message = originErrorText(result.code, result.message)
+          else if (seen.has(result.value)) {
+            message = t('publisher.nodeProfile.embedding.error.duplicate', { n: (seen.get(result.value) ?? 0) + 1 })
+          } else seen.set(result.value, rows.indexOf(entry))
+          setRowError(entry, message)
+          if (message !== null) firstInvalid ??= entry
+          sent.push({ entry, value })
+        }
+        if (!firstInvalid && sent.length === 0) {
+          status.textContent = t('publisher.nodeProfile.embedding.error.required')
+          status.classList.add('publisher-nodeprofile-status-error')
+          ;(rows[0]?.input ?? addButton).focus()
+          return
+        }
+        if (firstInvalid) {
+          status.textContent = t('publisher.nodeProfile.embedding.error.summary')
+          status.classList.add('publisher-nodeprofile-status-error')
+          firstInvalid.input.focus()
+          return
+        }
+      }
+
+      const body = { embedding: { mode, origins: mode === 'list' ? sent.map(s => s.value) : [] } }
+      saveBtn.disabled = true
+      void publisherSend<{ embedding?: unknown }>(SETTINGS_ENDPOINT, body, { method: 'PUT', fetchFn })
+        .then(res => {
+          if (res.ok) {
+            // The server's canonical form (lowercased) is what it stored
+            // and what the live check compares against.
+            saved = embedPolicyFromSettings(res.data) ?? {
+              mode,
+              origins: body.embedding.origins.map(origin => origin.toLowerCase()),
+            }
+            sent.forEach(({ entry }, index) => {
+              entry.input.value = saved.origins[index] ?? entry.input.value
+            })
+            status.textContent = t('publisher.nodeProfile.embedding.saved')
+            return
+          }
+          if (res.kind === 'session') {
+            if (handleSessionError({ navigate: options.navigate }) === 'navigating') return
+            status.textContent = t('publisher.nodeProfile.error.session')
+          } else if (res.kind === 'validation' && res.errors.length > 0) {
+            let placed = false
+            for (const error of res.errors) {
+              const match = /^embedding\.origins\.(\d+)$/.exec(error.field)
+              const target = match ? sent[Number(match[1])]?.entry : undefined
+              if (!target) continue
+              setRowError(target, originErrorText(error.code, error.message))
+              if (!placed) target.input.focus()
+              placed = true
+            }
+            status.textContent = placed
+              ? t('publisher.nodeProfile.embedding.error.summary')
+              : res.errors[0].message
+          } else {
+            status.textContent = t('publisher.nodeProfile.error.generic')
+          }
+          status.classList.add('publisher-nodeprofile-status-error')
+        })
+        .finally(() => {
+          saveBtn.disabled = false
+        })
+    })
+    card.append(el('div', { className: 'publisher-nodeprofile-actions' }, [saveBtn, status]))
+  } else {
+    card.append(el('p', { className: 'publisher-nodeprofile-hint', textContent: t('publisher.nodeProfile.embedding.readOnly') }))
+  }
+
+  // ----- Live policy -----
+  const live = el('div', { className: 'publisher-nodeprofile-embed-live' })
+  live.append(el('h3', { className: 'publisher-nodeprofile-embed-subheading', textContent: t('publisher.nodeProfile.embedding.live.heading') }))
+  const liveValues = el('dl', { className: 'publisher-nodeprofile-embed-live-values' })
+  const liveFindings = el('ul', { className: 'publisher-nodeprofile-embed-findings' })
+  const liveStatus = el('div', { className: 'publisher-nodeprofile-status', role: 'status' })
+  const checkBtn = el('button', {
+    type: 'button',
+    className: 'publisher-button publisher-button-small',
+    textContent: t('publisher.nodeProfile.embedding.live.check'),
+  })
+  live.append(liveValues, liveFindings, el('div', { className: 'publisher-nodeprofile-actions' }, [checkBtn, liveStatus]))
+  card.append(live)
+
+  const showValue = (name: string, value: string | null): HTMLElement[] => [
+    el('dt', { textContent: name }),
+    el('dd', {}, [el('code', { textContent: value ?? t('publisher.nodeProfile.embedding.live.notSent') })]),
+  ]
+
+  /** Fill the readout. `announce` puts the verdict in the status region
+   *  too, for a check the user asked for; the one on render is quiet. */
+  const runCheck = async (announce: boolean): Promise<void> => {
+    checkBtn.disabled = true
+    if (announce) liveStatus.textContent = t('publisher.nodeProfile.embedding.live.checking')
+    try {
+      const headers = await readLiveHeaders(fetchFn)
+      const findings = analyzeLivePolicy(saved, headers)
+      liveValues.replaceChildren(
+        ...showValue('Content-Security-Policy', headers.csp), // i18n-exempt: an HTTP header name
+        ...showValue('X-Frame-Options', headers.xfo), // i18n-exempt: an HTTP header name
+      )
+      liveFindings.replaceChildren(
+        ...findings.map(finding =>
+          el('li', {
+            className: finding.kind === 'ok' ? 'publisher-nodeprofile-embed-finding' : 'publisher-nodeprofile-embed-finding publisher-nodeprofile-embed-finding-warn',
+            textContent: findingText(finding),
+          }),
+        ),
+      )
+      if (announce) liveStatus.textContent = findings.map(findingText).join(' ')
+    } catch {
+      liveValues.replaceChildren()
+      liveFindings.replaceChildren(
+        el('li', { className: 'publisher-nodeprofile-embed-finding publisher-nodeprofile-embed-finding-warn', textContent: t('publisher.nodeProfile.embedding.live.error') }),
+      )
+      if (announce) liveStatus.textContent = t('publisher.nodeProfile.embedding.live.error')
+    } finally {
+      checkBtn.disabled = false
+    }
+  }
+  checkBtn.addEventListener('click', () => void runCheck(true))
+  void runCheck(false)
+
+  // ----- What this cannot do -----
+  card.append(
+    el('p', { className: 'publisher-nodeprofile-hint', textContent: t('publisher.nodeProfile.embedding.access') }),
+    el('details', { className: 'publisher-nodeprofile-embed-presets' }, [
+      el('summary', { textContent: t('publisher.nodeProfile.embedding.presets.summary') }),
+      el('p', { className: 'publisher-nodeprofile-hint', textContent: t('publisher.nodeProfile.embedding.presets.social') }),
+      el('p', { className: 'publisher-nodeprofile-hint', textContent: t('publisher.nodeProfile.embedding.presets.ai') }),
+      el('p', { className: 'publisher-nodeprofile-hint', textContent: t('publisher.nodeProfile.embedding.presets.test') }),
+    ]),
+  )
+  return card
+}
+
+/** The card's policy from a node-settings response, or `null` when the
+ *  response carries none (a deploy from before the setting existed),
+ *  which hides the card rather than showing a setting it cannot save. */
+export function embedPolicyFromSettings(raw: unknown): EmbedPolicy | null {
+  if (raw == null || typeof raw !== 'object' || !('embedding' in raw)) return null
+  const embedding = (raw as { embedding: unknown }).embedding
+  if (embedding == null || typeof embedding !== 'object') return defaultEmbedPolicy()
+  const rec = embedding as { mode?: unknown; origins?: unknown }
+  const mode = EMBED_MODES.find(m => m === rec.mode) ?? 'any'
+  const origins = mode === 'list' && Array.isArray(rec.origins)
+    ? rec.origins.filter((o): o is string => typeof o === 'string')
+    : []
+  return { mode, origins }
+}

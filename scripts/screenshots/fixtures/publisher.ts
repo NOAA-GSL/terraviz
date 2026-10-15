@@ -579,8 +579,17 @@ export function publisherFixtures(
     // AND the gated pages' fetchFeatures(); the public node-profile
     // rule backs the chrome's org-name read (the `/api/v1/node-profile`
     // path is NOT a substring of the publish one, so both rules are
-    // needed).
-    { url: '/api/v1/publish/node-settings', json: { features: {}, updatedBy: null, updatedAt: null } },
+    // needed). The embedding policy is a short `list`, so the capture
+    // shows the Embedding card's row editor rather than an empty card.
+    {
+      url: '/api/v1/publish/node-settings',
+      json: {
+        features: {},
+        embedding: { mode: 'list', origins: ['https://www.coastal.example.org', 'https://coastal.example.org'] },
+        updatedBy: null,
+        updatedAt: null,
+      },
+    },
     { url: '/api/v1/node-profile', json: { profile: { orgName: 'Coastal Science Center', logoUrl: null }, features: {} } },
     { url: '/api/v1/publish/blog', json: blogAuthoring },
   ]
