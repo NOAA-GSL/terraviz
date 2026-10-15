@@ -1718,9 +1718,12 @@ It sits ahead of the optional phase deliberately. Everything from
 here to Phase 13 is work every node does; Phase 14 is the first
 thing you may genuinely skip.
 
-**The repo ships no CSP.** `src/index.html` has no `<meta>` policy,
-and `public/_headers` sets `X-Content-Type-Options`,
-`Referrer-Policy` and `Permissions-Policy` but no CSP. Upstream's
+**The repo ships no CSP for the app.** `src/index.html` has no
+`<meta>` policy, and `public/_headers` sets `X-Content-Type-Options`,
+`Referrer-Policy` and `Permissions-Policy` everywhere. Its only CSP
+is `frame-ancestors 'self'` on `/publish`, so no other site can
+frame the publisher portal. Keep that rule if you edit the file.
+Upstream's
 production deploy enforces a strict `connect-src` policy **at the
 Cloudflare edge** via Transform Rules — which a fork does **not**
 inherit. Your node works without one; you should still add your
