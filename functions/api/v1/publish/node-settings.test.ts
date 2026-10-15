@@ -12,14 +12,20 @@
  * non-boolean, missing features), the `node_settings.update` audit
  * row, and the double cache bust (node-features:v1 + the public
  * node-profile key).
+ *
+ * The embedding policy: `any` before any write, the same admin-only
+ * gate, a round-trip, the two sections saving independently, origins
+ * refused by index (header-injection shapes included), and the bust
+ * of node-embedding:v1 on every write.
  */
 
 import { describe, expect, it } from 'vitest'
 import { onRequestGet, onRequestPut } from './node-settings'
 import { asD1, makeKV, seedFixtures } from '../_lib/test-helpers'
-import { NODE_FEATURES_CACHE_KEY } from '../_lib/node-settings-store'
+import { NODE_EMBEDDING_CACHE_KEY, NODE_FEATURES_CACHE_KEY } from '../_lib/node-settings-store'
 import { NODE_PROFILE_CACHE_KEY } from '../_lib/node-profile-store'
 import { defaultFeatures, type FeatureMap } from '../../../../src/types/node-features'
+import type { EmbedPolicy } from '../../../../src/types/node-embedding'
 import type { PublisherRow } from '../_lib/publisher-store'
 
 const ADMIN: PublisherRow = {
@@ -76,6 +82,7 @@ async function readJson<T>(res: Response): Promise<T> {
 
 interface SettingsResponse {
   features: FeatureMap
+  embedding: EmbedPolicy
   updatedBy: string | null
   updatedAt: string | null
 }
@@ -167,8 +174,134 @@ describe('/api/v1/publish/node-settings', () => {
     expect(kv._store.has(NODE_PROFILE_CACHE_KEY)).toBe(false)
   })
 
+  it('PUT with neither section is a field error', async () => {
+    const { env } = setupEnv()
+    const res = await onRequestPut(ctx({ env, method: 'PUT', body: { other: true } }))
+    expect(res.status).toBe(400)
+    const { errors } = await readJson<{ errors: Array<{ field: string; code: string }> }>(res)
+    expect(errors).toEqual([expect.objectContaining({ field: 'body', code: 'required' })])
+  })
+
   it('returns 503 when CATALOG_DB is missing', async () => {
     const res = await onRequestGet(ctx({ env: {}, method: 'GET' }))
     expect(res.status).toBe(503)
+  })
+})
+
+describe('/api/v1/publish/node-settings — embedding policy', () => {
+  const LIST: EmbedPolicy = { mode: 'list', origins: ['https://www.example.org', 'https://example.org'] }
+
+  it('GET returns any before any write', async () => {
+    const { env } = setupEnv()
+    const body = await readJson<SettingsResponse>(await onRequestGet(ctx({ env, method: 'GET' })))
+    expect(body.embedding).toEqual({ mode: 'any', origins: [] })
+  })
+
+  it('GET shows the policy to a non-admin publisher too', async () => {
+    const { env } = setupEnv()
+    await onRequestPut(ctx({ env, method: 'PUT', body: { embedding: LIST } }))
+    const res = await onRequestGet(ctx({ env, method: 'GET', publisher: PUBLISHER }))
+    expect((await readJson<SettingsResponse>(res)).embedding).toEqual(LIST)
+  })
+
+  it('PUT is admin-only: a privileged service token and a publisher get 403', async () => {
+    const { env, kv } = setupEnv()
+    kv._store.set(NODE_EMBEDDING_CACHE_KEY, JSON.stringify({ mode: 'any', origins: [] }))
+    for (const caller of [SERVICE, PUBLISHER]) {
+      const res = await onRequestPut(
+        ctx({ env, method: 'PUT', publisher: caller, body: { embedding: { mode: 'self', origins: [] } } }),
+      )
+      expect(res.status).toBe(403)
+    }
+    // Nothing written, nothing busted.
+    const body = await readJson<SettingsResponse>(await onRequestGet(ctx({ env, method: 'GET' })))
+    expect(body.embedding).toEqual({ mode: 'any', origins: [] })
+    expect(kv._store.has(NODE_EMBEDDING_CACHE_KEY)).toBe(true)
+  })
+
+  it('PUT round-trips a policy, lowercased, and leaves the features alone', async () => {
+    const { env } = setupEnv()
+    await onRequestPut(ctx({ env, method: 'PUT', body: { features: { blog: false } } }))
+    const put = await onRequestPut(
+      ctx({
+        env,
+        method: 'PUT',
+        body: { embedding: { mode: 'list', origins: ['https://WWW.Example.org', 'https://example.org'] } },
+      }),
+    )
+    expect(put.status).toBe(200)
+    const putBody = await readJson<SettingsResponse>(put)
+    expect(putBody.embedding).toEqual(LIST)
+    expect(putBody.features.blog).toBe(false)
+
+    const featuresAgain = await onRequestPut(ctx({ env, method: 'PUT', body: { features: { blog: true } } }))
+    expect((await readJson<SettingsResponse>(featuresAgain)).embedding).toEqual(LIST)
+  })
+
+  it('PUT refuses each bad origin by its index, and writes nothing', async () => {
+    const { env } = setupEnv()
+    const res = await onRequestPut(
+      ctx({
+        env,
+        method: 'PUT',
+        body: {
+          embedding: {
+            mode: 'list',
+            origins: [
+              'https://ok.example.org',
+              "https://a.org; script-src 'unsafe-inline'",
+              'https://a.org,https://b.org',
+              'https://a.org\r\nX-Injected: 1',
+              "'unsafe-inline'",
+              '*',
+              'http://example.org',
+              'https://example.org/embed',
+            ],
+          },
+        },
+      }),
+    )
+    expect(res.status).toBe(400)
+    const { errors } = await readJson<{ errors: Array<{ field: string }> }>(res)
+    expect(errors.map(e => e.field)).toEqual([
+      'embedding.origins.1',
+      'embedding.origins.2',
+      'embedding.origins.3',
+      'embedding.origins.4',
+      'embedding.origins.5',
+      'embedding.origins.6',
+      'embedding.origins.7',
+    ])
+    const body = await readJson<SettingsResponse>(await onRequestGet(ctx({ env, method: 'GET' })))
+    expect(body.embedding).toEqual({ mode: 'any', origins: [] })
+  })
+
+  it('PUT reports errors in both sections at once', async () => {
+    const { env } = setupEnv()
+    const res = await onRequestPut(
+      ctx({ env, method: 'PUT', body: { features: { mystery: false }, embedding: { mode: 'sometimes' } } }),
+    )
+    expect(res.status).toBe(400)
+    const { errors } = await readJson<{ errors: Array<{ field: string }> }>(res)
+    expect(errors.map(e => e.field)).toEqual(['features.mystery', 'embedding.mode'])
+  })
+
+  it('PUT audits the policy it saved, and only the sections it replaced', async () => {
+    const { env, sqlite } = setupEnv()
+    await onRequestPut(ctx({ env, method: 'PUT', body: { embedding: LIST } }))
+    const row = sqlite
+      .prepare(`SELECT action, metadata_json FROM audit_events ORDER BY id DESC LIMIT 1`)
+      .get() as { action: string; metadata_json: string }
+    expect(row.action).toBe('node_settings.update')
+    expect(JSON.parse(row.metadata_json)).toEqual({ embedding: LIST })
+  })
+
+  it('every PUT busts the embedding cache, whichever section it carries', async () => {
+    const { env, kv } = setupEnv()
+    for (const body of [{ embedding: LIST }, { features: { hero: false } }]) {
+      kv._store.set(NODE_EMBEDDING_CACHE_KEY, JSON.stringify({ mode: 'any', origins: [] }))
+      await onRequestPut(ctx({ env, method: 'PUT', body }))
+      expect(kv._store.has(NODE_EMBEDDING_CACHE_KEY)).toBe(false)
+    }
   })
 })

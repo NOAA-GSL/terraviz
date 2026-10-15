@@ -13,6 +13,12 @@
  *   - getEffectiveFeatures: KV hit, KV miss + fill, fail-open on every
  *     failure mode (no bindings, D1 throw, KV throw, corrupt cache).
  *   - bustNodeFeaturesCache deletes the key, best-effort on error.
+ *   - setNodeSettings replaces only the sections it is given, so the
+ *     Features and Embedding cards cannot overwrite each other.
+ *   - embedPolicyFromRow / readEffectiveEmbedPolicy: never-set reads
+ *     `any`, a saved policy round-trips through KV, and every failure
+ *     (no bindings, D1 throw, KV throw, corrupt row, unsafe cached
+ *     value) fails open to `any` and says it was not authoritative.
  */
 
 import { describe, expect, it } from 'vitest'
@@ -20,8 +26,13 @@ import { freshMigratedDb } from '../../../../scripts/lib/catalog-migrations'
 import { defaultFeatures } from '../../../../src/types/node-features'
 import { asD1, makeKV } from './test-helpers'
 import {
+  NODE_EMBEDDING_CACHE_KEY,
   NODE_FEATURES_CACHE_KEY,
+  bustNodeEmbeddingCache,
   bustNodeFeaturesCache,
+  embedPolicyFromRow,
+  readEffectiveEmbedPolicy,
+  setNodeSettings,
   disabledKeys,
   featuresFromRow,
   getEffectiveFeatures,
@@ -88,13 +99,14 @@ describe('featuresFromRow', () => {
 
   it('corrupt JSON degrades to all enabled', () => {
     expect(
-      featuresFromRow({ features_json: '{not json', updated_by: 'x', updated_at: TS }),
+      featuresFromRow({ features_json: '{not json', embed_policy_json: null, updated_by: 'x', updated_at: TS }),
     ).toEqual(defaultFeatures())
   })
 
   it('partial map fills missing keys as enabled and drops unknown keys', () => {
     const map = featuresFromRow({
       features_json: JSON.stringify({ events: false, mystery: false, blog: true }),
+      embed_policy_json: null,
       updated_by: 'x',
       updated_at: TS,
     })
@@ -240,5 +252,155 @@ describe('bustNodeFeaturesCache', () => {
       },
     } as unknown as KVNamespace
     await expect(bustNodeFeaturesCache(brokenKv)).resolves.toBeUndefined()
+  })
+})
+
+const LIST = { mode: 'list' as const, origins: ['https://www.example.org', 'https://*.example.net'] }
+
+function throwingDb(): D1Database {
+  return {
+    prepare() {
+      throw new Error('boom')
+    },
+  } as unknown as D1Database
+}
+
+describe('setNodeSettings', () => {
+  it('a first embedding-only write leaves every feature on', async () => {
+    const db = setupDb()
+    const row = await setNodeSettings(db, ADMIN, { embedding: LIST }, TS)
+    expect(featuresFromRow(row)).toEqual(defaultFeatures())
+    expect(embedPolicyFromRow(row)).toEqual(LIST)
+  })
+
+  it('a features write leaves the policy, and a policy write leaves the features', async () => {
+    const db = setupDb()
+    await setNodeSettings(db, ADMIN, { embedding: LIST }, TS)
+    const afterFeatures = await setNodeFeatures(db, ADMIN, { ...defaultFeatures(), blog: false }, TS)
+    expect(embedPolicyFromRow(afterFeatures)).toEqual(LIST)
+    const afterPolicy = await setNodeSettings(db, ADMIN, { embedding: { mode: 'self', origins: [] } }, TS)
+    expect(featuresFromRow(afterPolicy).blog).toBe(false)
+    expect(embedPolicyFromRow(afterPolicy)).toEqual({ mode: 'self', origins: [] })
+  })
+
+  it('writes both sections in one statement when given both', async () => {
+    const db = setupDb()
+    const row = await setNodeSettings(
+      db,
+      ADMIN,
+      { features: { ...defaultFeatures(), hero: false }, embedding: LIST },
+      TS,
+    )
+    expect(featuresFromRow(row).hero).toBe(false)
+    expect(embedPolicyFromRow(row)).toEqual(LIST)
+  })
+})
+
+describe('embedPolicyFromRow', () => {
+  const row = (embed_policy_json: string | null) => ({
+    features_json: '{}',
+    embed_policy_json,
+    updated_by: 'x',
+    updated_at: TS,
+  })
+
+  it('never configured, or never set, means any', () => {
+    expect(embedPolicyFromRow(null)).toEqual({ mode: 'any', origins: [] })
+    expect(embedPolicyFromRow(row(null))).toEqual({ mode: 'any', origins: [] })
+  })
+
+  it('shows unusable stored data as any, which is what is enforced for it', () => {
+    expect(embedPolicyFromRow(row('{not json'))).toEqual({ mode: 'any', origins: [] })
+    expect(embedPolicyFromRow(row('{"mode":"list","origins":["*"]}'))).toEqual({ mode: 'any', origins: [] })
+  })
+})
+
+describe('readEffectiveEmbedPolicy', () => {
+  it('serves the KV cache when warm without touching D1', async () => {
+    const kv = makeKV()
+    kv._store.set(NODE_EMBEDDING_CACHE_KEY, JSON.stringify(LIST))
+    const read = await readEffectiveEmbedPolicy({ CATALOG_DB: throwingDb(), CATALOG_KV: kv })
+    expect(read).toEqual({ policy: LIST, authoritative: true })
+  })
+
+  it('re-validates a cached value, so an unsafe entry is never served', async () => {
+    const db = setupDb()
+    await setNodeSettings(db, ADMIN, { embedding: { mode: 'self', origins: [] } }, TS)
+    const kv = makeKV()
+    kv._store.set(NODE_EMBEDDING_CACHE_KEY, JSON.stringify({ mode: 'list', origins: ["'unsafe-inline' *"] }))
+    const read = await readEffectiveEmbedPolicy({ CATALOG_DB: db, CATALOG_KV: kv })
+    expect(read).toEqual({ policy: { mode: 'self', origins: [] }, authoritative: true })
+  })
+
+  it('reads D1 on a miss and fills the cache', async () => {
+    const db = setupDb()
+    await setNodeSettings(db, ADMIN, { embedding: LIST }, TS)
+    const kv = makeKV()
+    expect(await readEffectiveEmbedPolicy({ CATALOG_DB: db, CATALOG_KV: kv })).toEqual({
+      policy: LIST,
+      authoritative: true,
+    })
+    expect(JSON.parse(kv._store.get(NODE_EMBEDDING_CACHE_KEY) as string)).toEqual(LIST)
+  })
+
+  it('a node with no catalog, or no row, is authoritatively any', async () => {
+    expect(await readEffectiveEmbedPolicy({})).toEqual({ policy: { mode: 'any', origins: [] }, authoritative: true })
+    expect(await readEffectiveEmbedPolicy({ CATALOG_DB: setupDb() })).toEqual({
+      policy: { mode: 'any', origins: [] },
+      authoritative: true,
+    })
+  })
+
+  it('fails open: D1 throws → any, not authoritative', async () => {
+    expect(await readEffectiveEmbedPolicy({ CATALOG_DB: throwingDb() })).toEqual({
+      policy: { mode: 'any', origins: [] },
+      authoritative: false,
+    })
+  })
+
+  it('fails open: a corrupt row → any, not authoritative, and nothing cached', async () => {
+    const db = setupDb()
+    await setNodeSettings(db, ADMIN, { embedding: LIST }, TS)
+    // Bypass the validator, as a hand edit or an older build would.
+    await db.prepare(`UPDATE node_settings SET embed_policy_json = ? WHERE id = 1`).bind('{not json').run()
+    const kv = makeKV()
+    expect(await readEffectiveEmbedPolicy({ CATALOG_DB: db, CATALOG_KV: kv })).toEqual({
+      policy: { mode: 'any', origins: [] },
+      authoritative: false,
+    })
+    expect(kv._store.has(NODE_EMBEDDING_CACHE_KEY)).toBe(false)
+  })
+
+  it('fails open: KV throws → falls through to D1', async () => {
+    const db = setupDb()
+    await setNodeSettings(db, ADMIN, { embedding: LIST }, TS)
+    const brokenKv = {
+      get() {
+        throw new Error('kv down')
+      },
+      put() {
+        throw new Error('kv down')
+      },
+    } as unknown as KVNamespace
+    expect(await readEffectiveEmbedPolicy({ CATALOG_DB: db, CATALOG_KV: brokenKv })).toEqual({
+      policy: LIST,
+      authoritative: true,
+    })
+  })
+})
+
+describe('bustNodeEmbeddingCache', () => {
+  it('deletes the key, and swallows a KV error', async () => {
+    const kv = makeKV()
+    kv._store.set(NODE_EMBEDDING_CACHE_KEY, JSON.stringify(LIST))
+    await bustNodeEmbeddingCache(kv)
+    expect(kv._store.has(NODE_EMBEDDING_CACHE_KEY)).toBe(false)
+    const brokenKv = {
+      delete() {
+        throw new Error('kv down')
+      },
+    } as unknown as KVNamespace
+    await expect(bustNodeEmbeddingCache(brokenKv)).resolves.toBeUndefined()
+    await expect(bustNodeEmbeddingCache(undefined)).resolves.toBeUndefined()
   })
 })
