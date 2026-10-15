@@ -510,7 +510,7 @@ npm run terraviz -- import-snapshot \\
     duration: '≈20 min',
     aside: 'all tiers · before you go public',
     intro: [
-      '**The repo ships no CSP for the app.** Its one CSP is `frame-ancestors \'self\'` on `/publish`, so no other site can frame the portal. Upstream enforces an app policy at the Cloudflare edge, and edge rules do not travel with a fork. Every fork is unprotected until its operator adds one. Your node works without it; do it anyway before the node faces the public.',
+      '**`public/_headers` ships no CSP for the app.** Its CSPs only stop other sites framing the portal and a few static folders. Upstream enforces an app policy at the Cloudflare edge, and edge rules do not travel with a fork. Every fork is unprotected until its operator adds one. Your node works without it; do it anyway before the node faces the public.',
       'Remember `blob:` — the app uses it for preview tours and screenshots, and omitting it reproduces the "may not load data from blob:" failure. Test playback, VR and a tour before locking it down.',
     ],
     body: [
@@ -518,9 +518,9 @@ npm run terraviz -- import-snapshot \\
         kind: 'note',
         title: 'If other sites embed the node',
         body: [
-          'By default any site may show the node in an iframe, as the WordPress plugin does. To limit that, sign in as an admin and open **Node profile → Embedding**. Choose **Only sites I list** or **No other site**. It takes effect within a few minutes, with no redeploy.',
-          "The card shows the headers a visitor gets, and warns when something else blocks embeds. Cloudflare's **Add security headers** transform sends `X-Frame-Options: SAMEORIGIN`, which blocks every other site. Cloudflare Access blocks embeds too.",
-          'You can use `public/_headers` or an edge rule instead, with the setting left on **Any site**. An edge rule that *Sets* a CSP replaces the node\'s own; use **Add**, so the portal keeps its `frame-ancestors \'self\'`.',
+          'By default any site may show the node in an iframe, as the WordPress plugin does. To limit that, sign in as an admin and open **Settings → Node profile**, then the **Embedding** card. Choose **Only sites I list** or **No other site**. It takes effect within a few minutes, with no redeploy.',
+          "The card shows the headers a visitor gets on `/`, and warns about an `X-Frame-Options` header or another `frame-ancestors`. Cloudflare's **Add security headers** transform sends `X-Frame-Options: SAMEORIGIN`. With **Any site can embed** it blocks every other site. Cloudflare Access blocks embeds too, and the card cannot see it.",
+          'You can use an edge rule instead, with the setting left on **Any site can embed**. An edge rule that *Sets* a CSP replaces the node\'s own; use **Add**, so the portal keeps its `frame-ancestors \'self\'`.',
         ],
       },
     ],

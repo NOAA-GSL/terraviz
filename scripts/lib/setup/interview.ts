@@ -359,7 +359,9 @@ export const MANUAL_STEPS: ManualStep[] = [
       'is headroom. Workers AI stops at 10,000 Neurons a day, roughly 200 ' +
       'Orbit turns, and that ceiling cannot be raised without upgrading. ' +
       'It fails soft, which is worse than failing loudly: Orbit quietly ' +
-      'degrades to its keyword engine mid-demo.',
+      'degrades to its keyword engine mid-demo. Pages Functions are capped ' +
+      'too, at 100,000 requests a day for the account: every page view, ' +
+      'API call and map tile counts, and Paid removes the limit.',
     url: 'https://dash.cloudflare.com/?to=/:account/workers/plans',
     docsUrl: 'https://developers.cloudflare.com/workers/platform/pricing/',
     steps: [

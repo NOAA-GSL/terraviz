@@ -15,6 +15,13 @@
 > it gates `/api/chat/completions`, `/api/models` and `/api/voice/*`,
 > which the "Never gated" list below predates. See the `orbit` entry in
 > `src/types/node-features.ts` and `functions/api/_lib/orbit-gate.ts`.
+>
+> **Since then, too:** `node-settings` carries the node's embedding
+> policy (migration 0057). GET adds `embedding: { mode, origins }`;
+> a PUT may send `features`, `embedding` or both. Each section sent is
+> replaced whole and one left out is untouched, so a `features` map
+> must be complete: an omitted key is written as `true`. See
+> `src/types/node-embedding.ts` and `docs/SELF_HOSTING.md` Phase 13.
 
 
 ## Context
@@ -68,7 +75,6 @@ Blast-radius analysis (Explore agents + graphify structural graph) found the key
 - **New `functions/api/v1/publish/node-settings.ts`**:
   - `GET` — any signed-in publisher: `{ features, updatedBy, updatedAt }`, `private, no-store`.
   - `PUT` — **`isAdmin`-gated**; body `{ features: Partial<Record<FeatureKey, boolean>> }`; audits, busts `node-features:v1` **and** the public node-profile cache; returns the effective map.
-  - *Later (migration 0057):* the same endpoint carries the node's embedding policy, `embedding: { mode, origins }`. A PUT may send `features`, `embedding` or both, and a section left out is untouched. See `src/types/node-embedding.ts` and `docs/SELF_HOSTING.md` Phase 13.
 - **Extend public `GET /api/v1/node-profile`** (`functions/api/v1/node-profile.ts`) payload to `{ profile, features }`. **Bump `NODE_PROFILE_CACHE_KEY` to `'node-profile:v2'`** in `node-profile-store.ts` so stale v1 bodies (no `features`) never serve; v1 entries expire via TTL. Both existing call sites (`resolvePortalChrome()` in `src/ui/publisher/index.ts`, blog boot in `src/ui/blog/index.ts`) get features for free.
 
 ### Server enforcement
