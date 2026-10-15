@@ -26,8 +26,8 @@ describe('validateEmbedOrigin', () => {
     ['https://news.noaa.gov:8443', 'https://news.noaa.gov:8443'],
     ['https://*.example.org', 'https://*.example.org'],
     ['https://*.sites.example.org', 'https://*.sites.example.org'],
-    ['https://localhost', 'https://localhost'],
-    ['https://192.168.1.10', 'https://192.168.1.10'],
+    ['https://*.my-site.wordpress.example.org', 'https://*.my-site.wordpress.example.org'],
+    ['https://news.wordpress.com', 'https://news.wordpress.com'],
     ['https://xn--bcher-kva.example', 'https://xn--bcher-kva.example'],
   ])('accepts %s as %s', (raw, value) => {
     expect(validateEmbedOrigin(raw)).toEqual({ ok: true, value })
@@ -90,9 +90,19 @@ describe('validateEmbedOrigin', () => {
     ['https://exa%20mple.org', 'bad_host'],
     ['https://[::1]', 'bad_host'],
     ['https://*.org', 'wildcard_too_broad'],
+    // A machine on the visitor's side, not a site.
+    ['https://localhost', 'ip_or_single_label'],
+    ['https://localhost:8443', 'ip_or_single_label'],
+    ['https://intranet', 'ip_or_single_label'],
+    ['https://127.0.0.1', 'ip_or_single_label'],
+    ['https://10.0.0.1:8080', 'ip_or_single_label'],
+    // Hosting where anyone can create a subdomain.
+    ['https://*.wordpress.com', 'shared_host'],
+    ['https://*.github.io', 'shared_host'],
+    ['https://*.pages.dev', 'shared_host'],
     ['https://*.com', 'wildcard_too_broad'],
     ['https://bücher.example', 'not_ascii'],
-    ['', 'empty'],
+    ['', 'required'],
   ])('rejects %j as %s', (raw, code) => {
     const result = validateEmbedOrigin(raw)
     expect(result.ok).toBe(false)
@@ -147,7 +157,7 @@ describe('validateEmbedPolicyInput', () => {
     expect(result.ok).toBe(false)
     if (!result.ok) {
       expect(result.errors).toEqual([
-        { field: 'embedding.origins.1', code: 'duplicate', message: 'This repeats site 1.' },
+        { field: 'embedding.origins[1]', code: 'duplicate', message: 'This repeats site 1.' },
       ])
     }
   })
@@ -160,8 +170,8 @@ describe('validateEmbedPolicyInput', () => {
     expect(result.ok).toBe(false)
     if (!result.ok) {
       expect(result.errors.map(e => [e.field, e.code])).toEqual([
-        ['embedding.origins.1', 'not_https'],
-        ['embedding.origins.2', 'keyword'],
+        ['embedding.origins[1]', 'not_https'],
+        ['embedding.origins[2]', 'keyword'],
       ])
     }
   })
@@ -202,33 +212,34 @@ describe('validateEmbedPolicyInput', () => {
 
 describe('parseStoredEmbedPolicy', () => {
   it('reads each mode back', () => {
-    expect(parseStoredEmbedPolicy({ mode: 'any', origins: [] })).toEqual(defaultEmbedPolicy())
-    expect(parseStoredEmbedPolicy({ mode: 'self' })).toEqual({ mode: 'self', origins: [] })
+    expect(parseStoredEmbedPolicy({ mode: 'any', origins: [] })).toEqual({ policy: defaultEmbedPolicy() })
+    expect(parseStoredEmbedPolicy({ mode: 'self' })).toEqual({ policy: { mode: 'self', origins: [] } })
     expect(parseStoredEmbedPolicy({ mode: 'list', origins: ['https://a.example.org'] })).toEqual({
-      mode: 'list',
-      origins: ['https://a.example.org'],
+      policy: { mode: 'list', origins: ['https://a.example.org'] },
     })
   })
 
-  it('re-validates stored origins and drops a bad one, keeping the rest', () => {
+  it('re-validates stored origins: drops a bad one, keeps the rest, and flags it', () => {
     expect(
       parseStoredEmbedPolicy({
         mode: 'list',
         origins: ['https://a.example.org', 'https://b.org *', 'https://A.example.org', 'https://c.example.org'],
       }),
-    ).toEqual({ mode: 'list', origins: ['https://a.example.org', 'https://c.example.org'] })
+    ).toEqual({ policy: { mode: 'list', origins: ['https://a.example.org', 'https://c.example.org'] }, problem: 'refused' })
   })
 
-  it('is null when the value cannot be used at all', () => {
-    for (const raw of [
-      null,
-      'list',
-      [],
-      { mode: 'some' },
-      { mode: 'list' },
-      { mode: 'list', origins: [] },
-      { mode: 'list', origins: ['*', "'unsafe-inline'"] },
-    ]) {
+  it('narrows to self, never opens, when a restriction no longer validates', () => {
+    const selfOnly = { policy: { mode: 'self', origins: [] }, problem: 'refused' }
+    // A list a tighter validator emptied, a list with no list, and a
+    // mode only a newer build knows.
+    expect(parseStoredEmbedPolicy({ mode: 'list', origins: ['*', "'unsafe-inline'", 'https://localhost'] })).toEqual(selfOnly)
+    expect(parseStoredEmbedPolicy({ mode: 'list', origins: [] })).toEqual(selfOnly)
+    expect(parseStoredEmbedPolicy({ mode: 'list' })).toEqual(selfOnly)
+    expect(parseStoredEmbedPolicy({ mode: 'allowlist-v2', origins: ['https://a.example.org'] })).toEqual(selfOnly)
+  })
+
+  it('is null for a value that is not a policy at all, which the store treats as a failed read', () => {
+    for (const raw of [null, 'list', [], 42]) {
       expect(parseStoredEmbedPolicy(raw)).toBeNull()
     }
   })

@@ -15,10 +15,12 @@
  *   - bustNodeFeaturesCache deletes the key, best-effort on error.
  *   - setNodeSettings replaces only the sections it is given, so the
  *     Features and Embedding cards cannot overwrite each other.
- *   - embedPolicyFromRow / readEffectiveEmbedPolicy: never-set reads
+ *   - embedPolicyFromStored / readEffectiveEmbedPolicy: never-set reads
  *     `any`, a saved policy round-trips through KV, and every failure
  *     (no bindings, D1 throw, KV throw, corrupt row, unsafe cached
  *     value) fails open to `any` and says it was not authoritative.
+ *   - A database that has not applied 0057: the feature toggles still
+ *     read and write, and only the embedding read fails, to `any`.
  */
 
 import { describe, expect, it } from 'vitest'
@@ -30,7 +32,8 @@ import {
   NODE_FEATURES_CACHE_KEY,
   bustNodeEmbeddingCache,
   bustNodeFeaturesCache,
-  embedPolicyFromRow,
+  embedPolicyFromStored,
+  getStoredEmbedPolicyJson,
   readEffectiveEmbedPolicy,
   setNodeSettings,
   disabledKeys,
@@ -57,8 +60,11 @@ const ADMIN: PublisherRow = {
   created_at: TS,
 }
 
-function setupDb() {
+function setupDb(opts: { before0057?: boolean } = {}) {
   const sqlite = freshMigratedDb()
+  // The schema a fork has when it deploys this code before applying
+  // migration 0057.
+  if (opts.before0057) sqlite.exec('ALTER TABLE node_settings DROP COLUMN embed_policy_json')
   sqlite
     .prepare(
       `INSERT INTO publishers (id, email, display_name, role, is_admin, status, created_at)
@@ -99,14 +105,13 @@ describe('featuresFromRow', () => {
 
   it('corrupt JSON degrades to all enabled', () => {
     expect(
-      featuresFromRow({ features_json: '{not json', embed_policy_json: null, updated_by: 'x', updated_at: TS }),
+      featuresFromRow({ features_json: '{not json', updated_by: 'x', updated_at: TS }),
     ).toEqual(defaultFeatures())
   })
 
   it('partial map fills missing keys as enabled and drops unknown keys', () => {
     const map = featuresFromRow({
       features_json: JSON.stringify({ events: false, mystery: false, blog: true }),
-      embed_policy_json: null,
       updated_by: 'x',
       updated_at: TS,
     })
@@ -265,22 +270,27 @@ function throwingDb(): D1Database {
   } as unknown as D1Database
 }
 
+/** The policy currently stored, as the route and middleware read it. */
+async function storedPolicy(db: D1Database) {
+  return embedPolicyFromStored(await getStoredEmbedPolicyJson(db)).policy
+}
+
 describe('setNodeSettings', () => {
   it('a first embedding-only write leaves every feature on', async () => {
     const db = setupDb()
     const row = await setNodeSettings(db, ADMIN, { embedding: LIST }, TS)
     expect(featuresFromRow(row)).toEqual(defaultFeatures())
-    expect(embedPolicyFromRow(row)).toEqual(LIST)
+    expect(await storedPolicy(db)).toEqual(LIST)
   })
 
   it('a features write leaves the policy, and a policy write leaves the features', async () => {
     const db = setupDb()
     await setNodeSettings(db, ADMIN, { embedding: LIST }, TS)
-    const afterFeatures = await setNodeFeatures(db, ADMIN, { ...defaultFeatures(), blog: false }, TS)
-    expect(embedPolicyFromRow(afterFeatures)).toEqual(LIST)
+    await setNodeFeatures(db, ADMIN, { ...defaultFeatures(), blog: false }, TS)
+    expect(await storedPolicy(db)).toEqual(LIST)
     const afterPolicy = await setNodeSettings(db, ADMIN, { embedding: { mode: 'self', origins: [] } }, TS)
     expect(featuresFromRow(afterPolicy).blog).toBe(false)
-    expect(embedPolicyFromRow(afterPolicy)).toEqual({ mode: 'self', origins: [] })
+    expect(await storedPolicy(db)).toEqual({ mode: 'self', origins: [] })
   })
 
   it('writes both sections in one statement when given both', async () => {
@@ -292,26 +302,44 @@ describe('setNodeSettings', () => {
       TS,
     )
     expect(featuresFromRow(row).hero).toBe(false)
-    expect(embedPolicyFromRow(row)).toEqual(LIST)
+    expect(await storedPolicy(db)).toEqual(LIST)
   })
 })
 
-describe('embedPolicyFromRow', () => {
-  const row = (embed_policy_json: string | null) => ({
-    features_json: '{}',
-    embed_policy_json,
-    updated_by: 'x',
-    updated_at: TS,
+describe('embedPolicyFromStored', () => {
+  it('never set means any, with no problem to report', () => {
+    expect(embedPolicyFromStored(null)).toEqual({ policy: { mode: 'any', origins: [] } })
   })
 
-  it('never configured, or never set, means any', () => {
-    expect(embedPolicyFromRow(null)).toEqual({ mode: 'any', origins: [] })
-    expect(embedPolicyFromRow(row(null))).toEqual({ mode: 'any', origins: [] })
+  it('corrupt JSON shows as any, which is what is enforced for it, and says so', () => {
+    expect(embedPolicyFromStored('{not json')).toEqual({ policy: { mode: 'any', origins: [] }, problem: 'unreadable' })
   })
 
-  it('shows unusable stored data as any, which is what is enforced for it', () => {
-    expect(embedPolicyFromRow(row('{not json'))).toEqual({ mode: 'any', origins: [] })
-    expect(embedPolicyFromRow(row('{"mode":"list","origins":["*"]}'))).toEqual({ mode: 'any', origins: [] })
+  it('a restriction that no longer validates shows narrowed, and says so', () => {
+    expect(embedPolicyFromStored('{"mode":"list","origins":["*"]}')).toEqual({
+      policy: { mode: 'self', origins: [] },
+      problem: 'refused',
+    })
+  })
+})
+
+describe('a database that has not applied 0057', () => {
+  const preMigrationDb = () => setupDb({ before0057: true })
+
+  it('still reads and writes the feature toggles, so no off feature comes back on', async () => {
+    const db = preMigrationDb()
+    await setNodeFeatures(db, ADMIN, { ...defaultFeatures(), orbit: false }, TS)
+    const read = await readEffectiveFeatures({ CATALOG_DB: db })
+    expect(read).toEqual({ features: { ...defaultFeatures(), orbit: false }, authoritative: true })
+  })
+
+  it('fails only the embedding read, open to any and not authoritative', async () => {
+    const db = preMigrationDb()
+    await expect(getStoredEmbedPolicyJson(db)).rejects.toThrow()
+    expect(await readEffectiveEmbedPolicy({ CATALOG_DB: db })).toEqual({
+      policy: { mode: 'any', origins: [] },
+      authoritative: false,
+    })
   })
 })
 
@@ -355,6 +383,19 @@ describe('readEffectiveEmbedPolicy', () => {
     expect(await readEffectiveEmbedPolicy({ CATALOG_DB: throwingDb() })).toEqual({
       policy: { mode: 'any', origins: [] },
       authoritative: false,
+    })
+  })
+
+  it('narrows, authoritatively, a stored restriction the validator now refuses', async () => {
+    const db = setupDb()
+    await setNodeSettings(db, ADMIN, { embedding: LIST }, TS)
+    await db
+      .prepare(`UPDATE node_settings SET embed_policy_json = ? WHERE id = 1`)
+      .bind(JSON.stringify({ mode: 'list', origins: ['https://localhost'] }))
+      .run()
+    expect(await readEffectiveEmbedPolicy({ CATALOG_DB: db })).toEqual({
+      policy: { mode: 'self', origins: [] },
+      authoritative: true,
     })
   })
 

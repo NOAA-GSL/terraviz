@@ -24,11 +24,11 @@
  * `functions/api/ingest.ts`).
  *
  * `readEffectiveEmbedPolicy` is the same shape for the embedding
- * policy, read by the root middleware on every HTML page. It fails
- * open to `any` — no framing header — for the same reason, and the
- * trade-off is sharper here, so it is stated: a storage outage can
- * briefly lift a node's restriction, so a site the node did not list
- * could frame it for that long. The alternative is worse. Failing
+ * policy, read by the root middleware on every HTML page. A storage
+ * failure fails open to `any` — no framing header — for the same
+ * reason, and the trade-off is sharper here, so it is stated: an
+ * outage can briefly lift a node's restriction, so a site the node did
+ * not list could frame it for that long. The alternative is worse. Failing
  * closed would send `frame-ancestors 'self'` on every page during an
  * outage, blanking every legitimate embed on every site at once, for
  * a node that may never have restricted anything. The middleware
@@ -47,6 +47,7 @@ import {
   defaultEmbedPolicy,
   parseStoredEmbedPolicy,
   type EmbedPolicy,
+  type StoredEmbedPolicy,
 } from '../../../../src/types/node-embedding'
 import type { CatalogEnv } from './env'
 import type { FieldError } from './node-profile-store'
@@ -71,6 +72,20 @@ export async function bustNodeFeaturesCache(kv: KVNamespace | undefined): Promis
 /** KV key for the effective embedding policy. Bump on shape changes. */
 export const NODE_EMBEDDING_CACHE_KEY = 'node-embedding:v1'
 
+/**
+ * An hour, not the features cache's five minutes. The middleware reads
+ * this on every page an isolate serves after its 60 s memo lapses, so
+ * the KV entry expires and is refilled far more often than the toggle
+ * map's, and every refill is a KV write: the free plan allows 1,000 a
+ * day for the whole account, and a five-minute TTL alone costs about
+ * 288 of them. Freshness does not depend on the TTL, because every
+ * save busts the entry. What a long TTL does stretch is the rare race
+ * where a refill that read D1 just before a save lands just after it,
+ * re-caching the previous policy until expiry; saving again clears it,
+ * and the portal's readout shows when it has happened.
+ */
+const EMBEDDING_CACHE_TTL_SECONDS = 3600
+
 /** Best-effort bust of the effective-embedding-policy cache. */
 export async function bustNodeEmbeddingCache(kv: KVNamespace | undefined): Promise<void> {
   if (!kv) return
@@ -81,11 +96,10 @@ export async function bustNodeEmbeddingCache(kv: KVNamespace | undefined): Promi
   }
 }
 
-/** The `node_settings` row as stored. */
+/** The `node_settings` row as stored, less the embedding policy
+ *  (see {@link getStoredEmbedPolicyJson} for why that is read apart). */
 export interface NodeSettingsRow {
   features_json: string
-  /** NULL until an admin saves a policy (0057), which reads as `any`. */
-  embed_policy_json: string | null
   updated_by: string
   updated_at: string
 }
@@ -94,13 +108,40 @@ export interface NodeSettingsRow {
 export async function getNodeSettings(db: D1Database): Promise<NodeSettingsRow | null> {
   const row = await db
     .prepare(
-      `SELECT features_json, embed_policy_json, updated_by, updated_at
+      `SELECT features_json, updated_by, updated_at
          FROM node_settings
         WHERE id = 1
         LIMIT 1`,
     )
     .first<NodeSettingsRow>()
   return row ?? null
+}
+
+/**
+ * The stored embedding policy's JSON, or null when never set (0057's
+ * NULL, or no row at all).
+ *
+ * Its own query, and the feature reads never name the column, because
+ * a fork can deploy this code before it applies migration 0057: CI
+ * applies migrations before deploying on `main`, but a fork has that
+ * step off by default (`docs/SELF_HOSTING.md` §14.3). Selecting the
+ * column alongside `features_json` would make the toggles' hot path
+ * fail on such a node, and that path fails open, so every feature an
+ * operator turned off, Orbit included, would quietly come back. Kept
+ * apart, only the embedding read fails there, and it fails to `any`,
+ * which is what that node sent before. Throws on a missing column;
+ * callers decide what that means.
+ */
+export async function getStoredEmbedPolicyJson(db: D1Database): Promise<string | null> {
+  const row = await db
+    .prepare(
+      `SELECT embed_policy_json
+         FROM node_settings
+        WHERE id = 1
+        LIMIT 1`,
+    )
+    .first<{ embed_policy_json: string | null }>()
+  return row?.embed_policy_json ?? null
 }
 
 /** Parse a stored row's `features_json` into a complete map.
@@ -115,27 +156,37 @@ export function featuresFromRow(row: NodeSettingsRow | null): FeatureMap {
 }
 
 /**
- * Read a row's stored policy. `null` means it cannot be used at all
- * (corrupt JSON, or a value {@link parseStoredEmbedPolicy} refuses);
- * a row or column that was never written is `any`, authoritatively.
+ * Read a stored policy. `null` means the value is not a policy at all
+ * (corrupt JSON), which callers treat as a failed read; a policy that
+ * was never written is `any`, authoritatively; one that no longer
+ * validates comes back narrowed and flagged ({@link parseStoredEmbedPolicy}).
  */
-function storedEmbedPolicy(row: NodeSettingsRow | null): EmbedPolicy | null {
-  if (!row || row.embed_policy_json == null) return defaultEmbedPolicy()
+function storedEmbedPolicy(json: string | null): StoredEmbedPolicy | null {
+  if (json == null) return { policy: defaultEmbedPolicy() }
   try {
-    return parseStoredEmbedPolicy(JSON.parse(row.embed_policy_json))
+    return parseStoredEmbedPolicy(JSON.parse(json))
   } catch {
     return null
   }
 }
 
-/** A row's embedding policy for display. Unusable stored data shows
- *  as `any`, which is what the middleware enforces for it. */
-export function embedPolicyFromRow(row: NodeSettingsRow | null): EmbedPolicy {
-  return storedEmbedPolicy(row) ?? defaultEmbedPolicy()
+/** Why the enforced policy differs from what was saved, for the
+ *  portal: `unreadable` (corrupt, so `any` is enforced) or `refused`
+ *  (it no longer validates, so a narrower policy is enforced). */
+export type EmbedPolicyProblem = 'unreadable' | 'refused'
+
+/** A stored policy for display: what the middleware enforces for it,
+ *  and why that differs from what was saved, if it does. */
+export function embedPolicyFromStored(json: string | null): {
+  policy: EmbedPolicy
+  problem?: EmbedPolicyProblem
+} {
+  return storedEmbedPolicy(json) ?? { policy: defaultEmbedPolicy(), problem: 'unreadable' }
 }
 
-/** The sections one write replaces. A section left out is untouched,
- *  so the Features and Embedding cards save independently. */
+/** The sections one write replaces. Each section given is replaced
+ *  whole and a section left out is untouched, so the Features and
+ *  Embedding cards save independently. */
 export interface NodeSettingsUpdate {
   features?: FeatureMap
   embedding?: EmbedPolicy
@@ -148,6 +199,12 @@ export interface NodeSettingsUpdate {
  * policy as the validated `{mode, origins}`. Audit trail is written by
  * the route handler (`node_settings.update`), matching the
  * node-profile split of concerns.
+ *
+ * Only the columns of the sections given are named, in the INSERT as
+ * well as the UPDATE, so a features-only write never touches the
+ * 0057 column and keeps working on a node that has not applied it
+ * ({@link getStoredEmbedPolicyJson}). The column names are fixed
+ * strings chosen here, never input; every value is bound.
  */
 export async function setNodeSettings(
   db: D1Database,
@@ -155,20 +212,27 @@ export async function setNodeSettings(
   update: NodeSettingsUpdate,
   now: string = new Date().toISOString(),
 ): Promise<NodeSettingsRow> {
-  const features = update.features ? JSON.stringify(update.features) : null
-  const embedding = update.embedding ? JSON.stringify(update.embedding) : null
   // A first write that names one section leaves the other at its
-  // never-configured value: every feature on, embedding `any`.
-  const sets = ['updated_by = excluded.updated_by', 'updated_at = excluded.updated_at']
-  if (features !== null) sets.unshift('features_json = excluded.features_json')
-  if (embedding !== null) sets.unshift('embed_policy_json = excluded.embed_policy_json')
+  // never-configured value: every feature on (the column's '{}'
+  // default), embedding NULL, which reads as `any`.
+  const columns: string[] = []
+  const values: string[] = []
+  if (update.features) {
+    columns.push('features_json')
+    values.push(JSON.stringify(update.features))
+  }
+  if (update.embedding) {
+    columns.push('embed_policy_json')
+    values.push(JSON.stringify(update.embedding))
+  }
+  const sets = [...columns, 'updated_by', 'updated_at'].map(column => `${column} = excluded.${column}`)
   await db
     .prepare(
-      `INSERT INTO node_settings (id, features_json, embed_policy_json, updated_by, updated_at)
-       VALUES (1, ?, ?, ?, ?)
+      `INSERT INTO node_settings (id, ${[...columns, 'updated_by', 'updated_at'].join(', ')})
+       VALUES (1, ${[...columns, 'updated_by', 'updated_at'].map(() => '?').join(', ')})
        ON CONFLICT(id) DO UPDATE SET ${sets.join(', ')}`,
     )
-    .bind(features ?? '{}', embedding, publisher.id, now)
+    .bind(...values, publisher.id, now)
     .run()
   const row = await getNodeSettings(db)
   if (!row) throw new Error('node_settings upsert did not persist')
@@ -302,9 +366,11 @@ export interface EffectiveEmbedPolicyRead {
 /**
  * The hot-path read for the root middleware: this node's embedding
  * policy. One KV hit when warm; on a miss, reads D1 and fills the
- * cache. FAIL-OPEN — any D1/KV error or unusable stored value returns
+ * cache. FAIL-OPEN — any D1/KV error or corrupt stored value returns
  * `any` with `authoritative: false` (see this module's header for why
- * open rather than closed). Never throws. A cached value is re-parsed
+ * open rather than closed). A stored policy that no longer validates
+ * is not a failed read: it comes back narrowed, as
+ * `parseStoredEmbedPolicy` explains. Never throws. A cached value is re-parsed
  * through the same validator as a stored one, so nothing in KV reaches
  * a header unchecked either.
  */
@@ -314,20 +380,23 @@ export async function readEffectiveEmbedPolicy(env: CatalogEnv): Promise<Effecti
       try {
         const cached = await env.CATALOG_KV.get(NODE_EMBEDDING_CACHE_KEY)
         if (cached) {
-          const policy = parseStoredEmbedPolicy(JSON.parse(cached))
-          if (policy) return { policy, authoritative: true }
+          const stored = parseStoredEmbedPolicy(JSON.parse(cached))
+          if (stored) return { policy: stored.policy, authoritative: true }
         }
       } catch {
         // KV failure or a bad entry = cache miss; D1 is the source of truth.
       }
     }
     if (!env.CATALOG_DB) return { policy: defaultEmbedPolicy(), authoritative: true }
-    const policy = storedEmbedPolicy(await getNodeSettings(env.CATALOG_DB))
-    if (!policy) return { policy: defaultEmbedPolicy(), authoritative: false }
+    // Throws on a node that has not applied 0057; caught below as a
+    // failed read, so such a node sends nothing, as it did before.
+    const stored = storedEmbedPolicy(await getStoredEmbedPolicyJson(env.CATALOG_DB))
+    if (!stored) return { policy: defaultEmbedPolicy(), authoritative: false }
+    const policy = stored.policy
     if (env.CATALOG_KV) {
       try {
         await env.CATALOG_KV.put(NODE_EMBEDDING_CACHE_KEY, JSON.stringify(policy), {
-          expirationTtl: CACHE_TTL_SECONDS,
+          expirationTtl: EMBEDDING_CACHE_TTL_SECONDS,
         })
       } catch {
         // Best-effort fill.

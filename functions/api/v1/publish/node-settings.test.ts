@@ -42,8 +42,10 @@ const ADMIN: PublisherRow = {
 const PUBLISHER: PublisherRow = { ...ADMIN, id: 'PUB-PUB', email: 'p@e', role: 'publisher', is_admin: 0 }
 const SERVICE: PublisherRow = { ...ADMIN, id: 'PUB-SVC', email: 's@e', role: 'service', is_admin: 0 }
 
-function setupEnv() {
+function setupEnv(opts: { before0057?: boolean } = {}) {
   const sqlite = seedFixtures({ count: 0 })
+  // A fork that deployed this code before applying migration 0057.
+  if (opts.before0057) sqlite.exec('ALTER TABLE node_settings DROP COLUMN embed_policy_json')
   sqlite
     .prepare(
       `INSERT INTO publishers (id, email, display_name, role, is_admin, status, created_at)
@@ -264,13 +266,13 @@ describe('/api/v1/publish/node-settings — embedding policy', () => {
     expect(res.status).toBe(400)
     const { errors } = await readJson<{ errors: Array<{ field: string }> }>(res)
     expect(errors.map(e => e.field)).toEqual([
-      'embedding.origins.1',
-      'embedding.origins.2',
-      'embedding.origins.3',
-      'embedding.origins.4',
-      'embedding.origins.5',
-      'embedding.origins.6',
-      'embedding.origins.7',
+      'embedding.origins[1]',
+      'embedding.origins[2]',
+      'embedding.origins[3]',
+      'embedding.origins[4]',
+      'embedding.origins[5]',
+      'embedding.origins[6]',
+      'embedding.origins[7]',
     ])
     const body = await readJson<SettingsResponse>(await onRequestGet(ctx({ env, method: 'GET' })))
     expect(body.embedding).toEqual({ mode: 'any', origins: [] })
@@ -296,6 +298,24 @@ describe('/api/v1/publish/node-settings — embedding policy', () => {
     expect(JSON.parse(row.metadata_json)).toEqual({ embedding: LIST })
   })
 
+  it('GET says when the enforced policy is not what was saved', async () => {
+    const { env, sqlite } = setupEnv()
+    await onRequestPut(ctx({ env, method: 'PUT', body: { embedding: LIST } }))
+    sqlite.prepare(`UPDATE node_settings SET embed_policy_json = ? WHERE id = 1`).run('{"mode":"list","origins":["*"]}')
+    const refused = await readJson<Record<string, unknown>>(await onRequestGet(ctx({ env, method: 'GET' })))
+    expect(refused.embedding).toEqual({ mode: 'self', origins: [] })
+    expect(refused.embeddingProblem).toBe('refused')
+
+    sqlite.prepare(`UPDATE node_settings SET embed_policy_json = ? WHERE id = 1`).run('{not json')
+    const unreadable = await readJson<Record<string, unknown>>(await onRequestGet(ctx({ env, method: 'GET' })))
+    expect(unreadable.embedding).toEqual({ mode: 'any', origins: [] })
+    expect(unreadable.embeddingProblem).toBe('unreadable')
+
+    await onRequestPut(ctx({ env, method: 'PUT', body: { embedding: LIST } }))
+    const fixed = await readJson<Record<string, unknown>>(await onRequestGet(ctx({ env, method: 'GET' })))
+    expect('embeddingProblem' in fixed).toBe(false)
+  })
+
   it('every PUT busts the embedding cache, whichever section it carries', async () => {
     const { env, kv } = setupEnv()
     for (const body of [{ embedding: LIST }, { features: { hero: false } }]) {
@@ -303,5 +323,31 @@ describe('/api/v1/publish/node-settings — embedding policy', () => {
       await onRequestPut(ctx({ env, method: 'PUT', body }))
       expect(kv._store.has(NODE_EMBEDDING_CACHE_KEY)).toBe(false)
     }
+  })
+})
+
+describe('/api/v1/publish/node-settings — before migration 0057', () => {
+  it('GET still answers, with no embedding key, so the portal hides the card', async () => {
+    const { env } = setupEnv({ before0057: true })
+    const res = await onRequestGet(ctx({ env, method: 'GET' }))
+    expect(res.status).toBe(200)
+    const body = await readJson<Record<string, unknown>>(res)
+    expect(body.features).toEqual(defaultFeatures())
+    expect('embedding' in body).toBe(false)
+  })
+
+  it('a features-only PUT still works', async () => {
+    const { env } = setupEnv({ before0057: true })
+    const res = await onRequestPut(ctx({ env, method: 'PUT', body: { features: { orbit: false } } }))
+    expect(res.status).toBe(200)
+    expect((await readJson<SettingsResponse>(res)).features.orbit).toBe(false)
+  })
+
+  it('an embedding PUT says the migration is missing, and writes nothing', async () => {
+    const { env, sqlite } = setupEnv({ before0057: true })
+    const res = await onRequestPut(ctx({ env, method: 'PUT', body: { embedding: { mode: 'self', origins: [] } } }))
+    expect(res.status).toBe(503)
+    expect((await readJson<{ error: string }>(res)).error).toBe('migration_missing')
+    expect(sqlite.prepare('SELECT COUNT(*) AS n FROM audit_events').get()).toEqual({ n: 0 })
   })
 })

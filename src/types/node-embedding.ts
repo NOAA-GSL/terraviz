@@ -36,10 +36,19 @@
  *   locally can point it at a node left on `any` or at a dev server.
  *   Listing `http://localhost:<port>` on a public node would let any
  *   page served from that port on a visitor's machine frame it.
+ * - Single-label hosts and IPv4 literals (`https://localhost`,
+ *   `https://intranet`, `https://10.0.0.1`), for the same reason: each
+ *   names a machine on the visitor's side, not a site the operator
+ *   embeds into.
  * - A wildcard over a single label (`https://*.org`). That would admit
  *   every site under a top-level domain. Two labels after `*.` are
  *   required. This cannot catch a public suffix such as `*.co.uk`
  *   without a suffix list, which is too heavy to ship for this check.
+ * - A wildcard over a hosting service where anyone can create a
+ *   subdomain ({@link SHARED_HOST_SUFFIXES}): `*.wordpress.com` would
+ *   admit every WordPress.com site, not the operator's. The list is
+ *   short and deliberately incomplete; it catches the likely mistakes
+ *   for a WordPress-embedding node rather than every multi-tenant host.
  * - Non-ASCII hosts. CSP matches the ASCII (punycode) form, so the
  *   operator is asked for the `xn--` form rather than having it
  *   converted behind their back.
@@ -72,8 +81,29 @@ export function defaultEmbedPolicy(): EmbedPolicy {
 
 /** Why an origin was refused. The portal words each one; the API
  *  sends the code in its field-error envelope. */
+/** Hosting services where anyone can create a subdomain, so a
+ *  wildcard over one admits strangers' sites. */
+export const SHARED_HOST_SUFFIXES = [
+  'wordpress.com',
+  'github.io',
+  'pages.dev',
+  'workers.dev',
+  'netlify.app',
+  'vercel.app',
+  'herokuapp.com',
+  'blogspot.com',
+  'web.app',
+  'firebaseapp.com',
+  'azurewebsites.net',
+  'cloudfront.net',
+  'appspot.com',
+  'wixsite.com',
+  'squarespace.com',
+  'weebly.com',
+] as const
+
 export type EmbedOriginErrorCode =
-  | 'empty'
+  | 'required'
   | 'too_long'
   | 'whitespace'
   | 'forbidden_char'
@@ -85,6 +115,8 @@ export type EmbedOriginErrorCode =
   | 'bad_port'
   | 'bad_host'
   | 'wildcard_too_broad'
+  | 'ip_or_single_label'
+  | 'shared_host'
 
 export type EmbedOriginResult =
   | { ok: true; value: string }
@@ -109,7 +141,7 @@ function fail(code: EmbedOriginErrorCode, message: string): EmbedOriginResult {
  */
 export function validateEmbedOrigin(raw: unknown): EmbedOriginResult {
   if (typeof raw !== 'string' || raw.length === 0) {
-    return fail('empty', 'Enter a site, such as https://www.example.org.')
+    return fail('required', 'Enter a site, such as https://www.example.org.')
   }
   if (raw.length > MAX_EMBED_ORIGIN_LENGTH) {
     return fail('too_long', `A site can be at most ${MAX_EMBED_ORIGIN_LENGTH} characters.`)
@@ -166,6 +198,12 @@ export function validateEmbedOrigin(raw: unknown): EmbedOriginResult {
   }
   if (wildcard && labels.length < 2) {
     return fail('wildcard_too_broad', 'A wildcard must name a domain, such as https://*.example.org.')
+  }
+  if (labels.length < 2 || labels.every(label => /^[0-9]+$/.test(label))) {
+    return fail('ip_or_single_label', 'Enter a full domain name, such as www.example.org.')
+  }
+  if (wildcard && (SHARED_HOST_SUFFIXES as readonly string[]).includes(host)) {
+    return fail('shared_host', 'This wildcard covers sites anyone can create. List your own sites instead.')
   }
   return { ok: true, value }
 }
@@ -232,7 +270,7 @@ export function validateEmbedPolicyInput(
   const origins: string[] = []
   const seen = new Map<string, number>()
   originsRaw.slice(0, MAX_EMBED_ORIGINS).forEach((entry, index) => {
-    const field = `embedding.origins.${index}`
+    const field = `embedding.origins[${index}]`
     const result = validateEmbedOrigin(entry)
     if (!result.ok) {
       errors.push({ field, code: result.code, message: result.message })
@@ -266,32 +304,50 @@ export function validateEmbedPolicyInput(
   return { ok: true, value: { mode: mode as EmbedMode, origins } }
 }
 
+/** What a stored value turned out to be. `problem` is set when it
+ *  cannot be enforced exactly as saved, and says which way it went. */
+export interface StoredEmbedPolicy {
+  policy: EmbedPolicy
+  problem?: 'refused'
+}
+
 /**
  * Read a stored policy back. Storage is trusted less than a request
  * is: a row written by a build with a looser validator, or edited by
  * hand, must still never put an unchecked value into a header. So
  * every origin is re-validated and the canonical form kept.
  *
- * Returns `null` when the value is unusable as a whole: corrupt JSON,
- * an unknown mode, or a `list` with no valid origin left. The caller
- * decides what that means, and the store treats it as a failed read,
- * which fails open to `any`. A single bad origin among good ones is
- * dropped and the rest kept, so one stale entry cannot lift a whole
- * restriction.
+ * Returns `null` when the value is not a policy at all (not an
+ * object): corruption, which the store treats as a failed read and
+ * fails open to `any`, as it does for a storage error.
+ *
+ * A value that *is* a policy but no longer validates is not a failed
+ * read. Its mode records that the operator chose a restriction, so it
+ * narrows rather than lifts: a `list` keeps the origins that still
+ * pass and drops the rest, and a `list` left with none, or a mode this
+ * build does not know (a newer build's, after a rollback), becomes
+ * `self`. Each is flagged `refused` so the portal can say the enforced
+ * policy is not what was saved. The likeliest cause is a later build
+ * tightening the validator, and failing open there would quietly open
+ * every node whose list it emptied.
  */
-export function parseStoredEmbedPolicy(raw: unknown): EmbedPolicy | null {
+export function parseStoredEmbedPolicy(raw: unknown): StoredEmbedPolicy | null {
   if (raw == null || typeof raw !== 'object' || Array.isArray(raw)) return null
   const rec = raw as Record<string, unknown>
   const mode = rec.mode
-  if (mode === 'any') return defaultEmbedPolicy()
-  if (mode === 'self') return { mode: 'self', origins: [] }
-  if (mode !== 'list' || !Array.isArray(rec.origins)) return null
+  if (mode === 'any') return { policy: defaultEmbedPolicy() }
+  if (mode === 'self') return { policy: { mode: 'self', origins: [] } }
+  const selfOnly: StoredEmbedPolicy = { policy: { mode: 'self', origins: [] }, problem: 'refused' }
+  if (mode !== 'list' || !Array.isArray(rec.origins)) return selfOnly
   const origins: string[] = []
+  let dropped = rec.origins.length > MAX_EMBED_ORIGINS
   for (const entry of rec.origins.slice(0, MAX_EMBED_ORIGINS)) {
     const result = validateEmbedOrigin(entry)
     if (result.ok && !origins.includes(result.value)) origins.push(result.value)
+    else dropped = true
   }
-  return origins.length > 0 ? { mode: 'list', origins } : null
+  if (origins.length === 0) return selfOnly
+  return dropped ? { policy: { mode: 'list', origins }, problem: 'refused' } : { policy: { mode: 'list', origins } }
 }
 
 /**
@@ -299,8 +355,8 @@ export function parseStoredEmbedPolicy(raw: unknown): EmbedPolicy | null {
  * for `any` (send nothing). Built only from {@link parseStoredEmbedPolicy}
  * or {@link validateEmbedPolicyInput} output, so every origin in it
  * has passed the validator. `'self'` is always first: a node that
- * restricts embedding still frames itself (the app embeds Orbit's
- * page, `/orbit`, in an iframe).
+ * restricts embedding still frames its own pages (tour popups frame
+ * URLs, `src/ui/tourUI.ts`).
  */
 export function frameAncestorsHeader(policy: EmbedPolicy): string | null {
   if (policy.mode === 'any') return null
