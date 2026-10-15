@@ -3641,13 +3641,47 @@
 }
 .publisher-nodeprofile-embed-row {
   display: grid;
-  grid-template-columns: 1fr auto;
+  grid-template-columns: auto 1fr auto;
   gap: calc(0.25rem * var(--ui-scale)) calc(0.4rem * var(--ui-scale));
   align-items: center;
+}
+/* The row's number, as its "Site N" name reads, so a sighted or
+   voice-control user can say which row an error or a name means. */
+.publisher-nodeprofile-embed-num {
+  min-inline-size: 1.6em;
+  text-align: end;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-muted, #aab2c0);
+  font-size: calc(0.8rem * var(--ui-scale));
 }
 .publisher-nodeprofile-embed-input {
   min-inline-size: 0;
   font-family: var(--font-family-mono, ui-monospace, SFMono-Regular, monospace);
+}
+/* An error is marked on the field as well as in words under it, at
+   well over 3:1 against the card. */
+.publisher-nodeprofile-embed-input[aria-invalid='true'] {
+  border-color: var(--color-error-soft, #ff6b6b);
+  border-width: 2px;
+}
+/* A button whose action is running stays focusable (aria-disabled,
+   not disabled), so it says so by look instead. */
+.publisher-nodeprofile-embedding .publisher-button[aria-disabled='true'] {
+  opacity: 0.6;
+  cursor: progress;
+}
+.publisher-nodeprofile-embed-mode {
+  cursor: default;
+}
+.publisher-nodeprofile-embed-mode label {
+  cursor: pointer;
+}
+.publisher-nodeprofile-embed-problem {
+  margin-block: calc(0.5rem * var(--ui-scale)) 0;
+  padding: calc(0.5rem * var(--ui-scale)) calc(0.75rem * var(--ui-scale));
+  border-inline-start: 3px solid var(--color-warning, #ffcc66);
+  color: var(--color-warning, #ffcc66);
+  font-size: calc(0.82rem * var(--ui-scale));
 }
 .publisher-nodeprofile-embed-error {
   grid-column: 1 / -1;

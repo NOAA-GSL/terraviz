@@ -23,7 +23,7 @@
  *
  * **Validation runs here and on the server with the same function.**
  * The client check is for inline errors before a round trip; the API
- * is the boundary, and its field errors (`embedding.origins.<n>`) are
+ * is the boundary, and its field errors (`embedding.origins[<n>]`) are
  * mapped back to the row that sent them. Leading and trailing spaces
  * are trimmed and empty rows skipped before either runs. Anything else
  * the validator refuses is shown, never repaired.
@@ -51,11 +51,15 @@ import {
   type EmbedPolicy,
 } from '../../../types/node-embedding'
 import { handleSessionError, publisherSend } from '../api'
+import type { EmbedPolicyProblem, NodeSettingsResponse } from '../types'
 
 const SETTINGS_ENDPOINT = '/api/v1/publish/node-settings'
 
 export interface EmbeddingCardOptions {
   policy: EmbedPolicy
+  /** Set when the enforced policy is not what was saved
+   *  (`embeddingProblem` on the node-settings response). */
+  problem?: EmbedPolicyProblem
   /** Admins edit; everyone else gets the read-only view. */
   canEdit: boolean
   fetchFn?: typeof fetch
@@ -102,13 +106,14 @@ export function frameAncestorsDirectives(csp: string | null): string[] {
  * - `extra`: a `frame-ancestors` directive this setting did not
  *   produce. Every policy is enforced, so it narrows what the setting
  *   allows; it comes from an edge rule or `_headers`.
- * - `pending`: the setting's own directive is missing, or present when
- *   the setting is `any`. A save takes a few minutes to reach every
- *   server, so this is usually just early.
+ * - `pending`: the setting's own directive is missing, or the one the
+ *   setting replaced (`previous`) is still being sent. A save takes a
+ *   few minutes to reach every server, so this is usually just early.
  * - `ok`: none of the above.
  */
-export function analyzeLivePolicy(policy: EmbedPolicy, live: LiveHeaders): LiveFinding[] {
+export function analyzeLivePolicy(policy: EmbedPolicy, live: LiveHeaders, previous?: EmbedPolicy): LiveFinding[] {
   const expected = frameAncestorsHeader(policy)?.toLowerCase() ?? null
+  const replaced = previous ? (frameAncestorsHeader(previous)?.toLowerCase() ?? null) : null
   const directives = frameAncestorsDirectives(live.csp)
   const findings: LiveFinding[] = []
   if (live.xfo) findings.push({ kind: 'xfo', value: live.xfo })
@@ -116,10 +121,14 @@ export function analyzeLivePolicy(policy: EmbedPolicy, live: LiveHeaders): LiveF
   const ours = expected !== null && directives.includes(expected)
   const others = directives.filter(directive => directive !== expected)
   // Under `any` the node sends no directive of its own, so any
-  // directive at all is someone else's; under `list` or `self`, one
-  // that differs from ours is.
+  // directive at all is someone else's, except the one a save just
+  // replaced, which is still on its way out; under `list` or `self`,
+  // one that differs from ours is.
   if (expected === null) {
-    for (const directive of others) findings.push({ kind: 'extra', value: directive })
+    if (replaced !== null && others.includes(replaced)) findings.push({ kind: 'pending' })
+    for (const directive of others) {
+      if (directive !== replaced) findings.push({ kind: 'extra', value: directive })
+    }
   } else {
     if (!ours) findings.push({ kind: 'pending' })
     // Before a save has propagated, the old setting's directive is
@@ -165,7 +174,7 @@ function modeDescription(mode: EmbedMode): string {
 /** The portal's wording for each refusal, keyed so a code added to
  *  the validator fails to compile here rather than showing English. */
 const ORIGIN_ERROR_KEYS = {
-  empty: 'publisher.nodeProfile.embedding.error.empty',
+  required: 'publisher.nodeProfile.embedding.error.empty',
   too_long: 'publisher.nodeProfile.embedding.error.tooLong',
   whitespace: 'publisher.nodeProfile.embedding.error.whitespace',
   forbidden_char: 'publisher.nodeProfile.embedding.error.forbiddenChar',
@@ -177,6 +186,8 @@ const ORIGIN_ERROR_KEYS = {
   bad_port: 'publisher.nodeProfile.embedding.error.port',
   bad_host: 'publisher.nodeProfile.embedding.error.host',
   wildcard_too_broad: 'publisher.nodeProfile.embedding.error.wildcard',
+  ip_or_single_label: 'publisher.nodeProfile.embedding.error.ipOrSingleLabel',
+  shared_host: 'publisher.nodeProfile.embedding.error.sharedHost',
 } as const satisfies Record<EmbedOriginErrorCode, string>
 
 function originErrorText(code: string, fallback: string): string {
@@ -191,9 +202,9 @@ function findingText(finding: LiveFinding): string {
     case 'pending':
       return t('publisher.nodeProfile.embedding.live.pending')
     case 'xfo':
-      return t('publisher.nodeProfile.embedding.live.xfo', { value: finding.value })
+      return t('publisher.nodeProfile.embedding.live.xfo', { value: isolate(finding.value) })
     case 'extra':
-      return t('publisher.nodeProfile.embedding.live.extra', { value: finding.value })
+      return t('publisher.nodeProfile.embedding.live.extra', { value: isolate(finding.value) })
   }
 }
 
@@ -212,11 +223,38 @@ function el<K extends keyof HTMLElementTagNameMap>(
 
 let cardCount = 0
 
+/** Unicode first-strong isolate: a header value or a URL keeps its own
+ *  left-to-right order inside a translated right-to-left sentence. */
+function isolate(value: string): string {
+  return `\u2068${value}\u2069`
+}
+
+/** A button that stays focusable while its action runs. Setting
+ *  `disabled` on the focused button sends focus to `<body>`, which
+ *  loses a keyboard or screen-reader user's place; `aria-disabled`
+ *  says the same thing and keeps focus where it was. */
+function busyButton(button: HTMLButtonElement) {
+  let busy = false
+  return {
+    get busy(): boolean {
+      return busy
+    },
+    set(next: boolean): void {
+      busy = next
+      if (next) button.setAttribute('aria-disabled', 'true')
+      else button.removeAttribute('aria-disabled')
+    },
+  }
+}
+
 /** Build the card. Its state lives in the closure; the saved policy
  *  it compares the live headers against moves only on a good save. */
 export function buildEmbeddingCard(options: EmbeddingCardOptions): HTMLElement {
   const id = `nodeprofile-embed-${++cardCount}`
   let saved: EmbedPolicy = options.policy
+  // The policy a save in this session replaced, so the readout can
+  // tell its lingering directive from someone else's.
+  let previous: EmbedPolicy | undefined
   const fetchFn = options.fetchFn
 
   const card = el('section', { className: 'publisher-card publisher-glass publisher-nodeprofile-embedding' })
@@ -224,39 +262,73 @@ export function buildEmbeddingCard(options: EmbeddingCardOptions): HTMLElement {
     el('h2', { className: 'publisher-card-heading', textContent: t('publisher.nodeProfile.embedding.heading') }),
     el('p', { className: 'publisher-nodeprofile-hint', textContent: t('publisher.nodeProfile.embedding.intro') }),
   )
+  // What was saved is not what is enforced: said first, because the
+  // controls below show the enforced policy.
+  const problem = options.problem
+    ? el('p', {
+        className: 'publisher-nodeprofile-embed-problem',
+        textContent:
+          options.problem === 'unreadable'
+            ? t('publisher.nodeProfile.embedding.storedUnreadable')
+            : t('publisher.nodeProfile.embedding.storedRefused'),
+      })
+    : null
+  if (problem) card.append(problem)
+  // Said before the setting, so a caller who cannot change it knows
+  // why there is nothing to operate before reaching it.
+  if (!options.canEdit) {
+    card.append(el('p', { className: 'publisher-nodeprofile-hint', textContent: t('publisher.nodeProfile.embedding.readOnly') }))
+  }
 
   // ----- Posture -----
-  const fieldset = el('fieldset', { className: 'publisher-nodeprofile-embed-modes' })
-  fieldset.append(el('legend', { className: 'publisher-field-label', textContent: t('publisher.nodeProfile.embedding.legend') }))
+  // Editable: radios. Each label holds only the name, and the
+  // description is tied by `aria-describedby`; inside the label it
+  // would be read twice, once in the name and once as the description.
+  // Read-only: the posture as text, as the list is below, rather than
+  // a group of disabled radios that Tab skips.
   const radios = new Map<EmbedMode, HTMLInputElement>()
-  for (const mode of EMBED_MODES) {
-    const radio = el('input', {
-      type: 'radio',
-      name: `${id}-mode`,
-      value: mode,
-      id: `${id}-mode-${mode}`,
-      className: 'publisher-nodeprofile-embed-radio',
-      checked: saved.mode === mode,
-      disabled: !options.canEdit,
-    })
-    radio.setAttribute('aria-describedby', `${id}-mode-${mode}-desc`)
-    radios.set(mode, radio)
-    fieldset.append(
-      el('label', { className: 'publisher-nodeprofile-feature-row', htmlFor: radio.id }, [
-        radio,
+  if (options.canEdit) {
+    const fieldset = el('fieldset', { className: 'publisher-nodeprofile-embed-modes' })
+    fieldset.append(el('legend', { className: 'publisher-field-label', textContent: t('publisher.nodeProfile.embedding.legend') }))
+    for (const mode of EMBED_MODES) {
+      const radio = el('input', {
+        type: 'radio',
+        name: `${id}-mode`,
+        value: mode,
+        id: `${id}-mode-${mode}`,
+        className: 'publisher-nodeprofile-embed-radio',
+        checked: saved.mode === mode,
+      })
+      radio.setAttribute('aria-describedby', `${id}-mode-${mode}-desc`)
+      radios.set(mode, radio)
+      fieldset.append(
+        el('div', { className: 'publisher-nodeprofile-feature-row publisher-nodeprofile-embed-mode' }, [
+          radio,
+          el('span', { className: 'publisher-nodeprofile-feature-text' }, [
+            el('label', { className: 'publisher-nodeprofile-feature-name', htmlFor: radio.id, textContent: modeLabel(mode) }),
+            el('span', {
+              className: 'publisher-nodeprofile-feature-desc',
+              id: `${id}-mode-${mode}-desc`,
+              textContent: modeDescription(mode),
+            }),
+          ]),
+        ]),
+      )
+    }
+    card.append(fieldset)
+  } else {
+    card.append(
+      el('div', { className: 'publisher-nodeprofile-embed-modes' }, [
+        el('span', { className: 'publisher-field-label', textContent: t('publisher.nodeProfile.embedding.legend') }),
         el('span', { className: 'publisher-nodeprofile-feature-text' }, [
-          el('span', { className: 'publisher-nodeprofile-feature-name', textContent: modeLabel(mode) }),
-          el('span', {
-            className: 'publisher-nodeprofile-feature-desc',
-            id: `${id}-mode-${mode}-desc`,
-            textContent: modeDescription(mode),
-          }),
+          el('span', { className: 'publisher-nodeprofile-feature-name', textContent: modeLabel(saved.mode) }),
+          el('span', { className: 'publisher-nodeprofile-feature-desc', textContent: modeDescription(saved.mode) }),
         ]),
       ]),
     )
   }
-  card.append(fieldset)
-  const selectedMode = (): EmbedMode => EMBED_MODES.find(mode => radios.get(mode)?.checked) ?? 'any'
+  const selectedMode = (): EmbedMode =>
+    options.canEdit ? (EMBED_MODES.find(mode => radios.get(mode)?.checked) ?? 'any') : saved.mode
 
   // ----- Origins -----
   const originsBlock = el('div', { className: 'publisher-nodeprofile-embed-origins' })
@@ -264,34 +336,52 @@ export function buildEmbeddingCard(options: EmbeddingCardOptions): HTMLElement {
   const originsHintId = `${id}-origins-hint`
   originsBlock.append(
     el('span', { className: 'publisher-field-label', id: originsLabelId, textContent: t('publisher.nodeProfile.embedding.origins.label') }),
-    el('p', { className: 'publisher-nodeprofile-hint', id: originsHintId, textContent: t('publisher.nodeProfile.embedding.origins.hint') }),
   )
+  if (options.canEdit) {
+    originsBlock.append(
+      el('p', { className: 'publisher-nodeprofile-hint', id: originsHintId, textContent: t('publisher.nodeProfile.embedding.origins.hint') }),
+    )
+  }
 
   interface OriginRow {
     row: HTMLElement
+    number: HTMLElement
     input: HTMLInputElement
     error: HTMLElement
   }
   const rows: OriginRow[] = []
+  // The hint is tied to the group once, not repeated on every field.
   const list = el('div', { className: 'publisher-nodeprofile-embed-list' })
   list.setAttribute('role', 'group')
   list.setAttribute('aria-labelledby', originsLabelId)
+  list.setAttribute('aria-describedby', originsHintId)
 
   const addButton = el('button', {
     type: 'button',
     className: 'publisher-button publisher-button-small',
     textContent: t('publisher.nodeProfile.embedding.origins.add'),
   })
+  const atMax = el('p', {
+    className: 'publisher-nodeprofile-hint',
+    id: `${id}-origins-max`,
+    textContent: t('publisher.nodeProfile.embedding.origins.max', { max: MAX_EMBED_ORIGINS }),
+  })
+  atMax.hidden = true
+  addButton.setAttribute('aria-describedby', atMax.id)
 
-  /** Re-number rows after a removal, so each input's name says which
-   *  site it is and every error points at the right one. */
+  /** Number every row as it reads, visibly and in its name, so "Site
+   *  3" in a name or a voice command is the row marked 3. */
   const relabel = (): void => {
-    rows.forEach(({ input }, index) => {
+    rows.forEach(({ input, number, row }, index) => {
+      number.textContent = `${index + 1}.`
       input.setAttribute('aria-label', t('publisher.nodeProfile.embedding.origins.inputAria', { n: index + 1 }))
-      const remove = input.parentElement?.querySelector<HTMLButtonElement>('.publisher-nodeprofile-embed-remove')
-      remove?.setAttribute('aria-label', t('publisher.nodeProfile.embedding.origins.removeAria', { n: index + 1 }))
+      row
+        .querySelector('.publisher-nodeprofile-embed-remove')
+        ?.setAttribute('aria-label', t('publisher.nodeProfile.embedding.origins.removeAria', { n: index + 1 }))
     })
-    addButton.disabled = rows.length >= MAX_EMBED_ORIGINS
+    const full = rows.length >= MAX_EMBED_ORIGINS
+    addButton.disabled = full
+    atMax.hidden = !full
   }
 
   const setRowError = (entry: OriginRow, message: string | null): void => {
@@ -302,8 +392,9 @@ export function buildEmbeddingCard(options: EmbeddingCardOptions): HTMLElement {
   }
 
   const addRow = (value = ''): OriginRow => {
-    const n = rows.length
-    const errorId = `${id}-origin-${n}-${Math.random().toString(36).slice(2, 8)}-error`
+    const errorId = `${id}-origin-${Math.random().toString(36).slice(2, 10)}-error`
+    const number = el('span', { className: 'publisher-nodeprofile-embed-num' })
+    number.setAttribute('aria-hidden', 'true')
     const input = el('input', {
       type: 'text',
       className: 'publisher-nodeprofile-input publisher-nodeprofile-embed-input',
@@ -311,9 +402,10 @@ export function buildEmbeddingCard(options: EmbeddingCardOptions): HTMLElement {
       placeholder: 'https://www.example.org', // i18n-exempt: an origin, not prose
       spellcheck: false,
       autocomplete: 'off',
+      dir: 'ltr',
     })
     input.setAttribute('inputmode', 'url')
-    input.setAttribute('aria-describedby', `${errorId} ${originsHintId}`)
+    input.setAttribute('aria-describedby', errorId)
     const error = el('p', { className: 'publisher-nodeprofile-status-error publisher-nodeprofile-embed-error', id: errorId })
     error.hidden = true
     const remove = el('button', {
@@ -321,8 +413,8 @@ export function buildEmbeddingCard(options: EmbeddingCardOptions): HTMLElement {
       className: 'publisher-events-icon-btn publisher-events-icon-btn-reject publisher-nodeprofile-embed-remove',
       textContent: '✕', // i18n-exempt: glyph; the aria-label carries the meaning
     })
-    const row = el('div', { className: 'publisher-nodeprofile-embed-row' }, [input, remove, error])
-    const entry: OriginRow = { row, input, error }
+    const row = el('div', { className: 'publisher-nodeprofile-embed-row' }, [number, input, remove, error])
+    const entry: OriginRow = { row, number, input, error }
     remove.addEventListener('click', () => {
       const index = rows.indexOf(entry)
       rows.splice(index, 1)
@@ -338,20 +430,20 @@ export function buildEmbeddingCard(options: EmbeddingCardOptions): HTMLElement {
     return entry
   }
 
-  for (const origin of saved.origins) addRow(origin)
+  for (const origin of saved.origins) if (options.canEdit) addRow(origin)
   addButton.addEventListener('click', () => {
     if (rows.length >= MAX_EMBED_ORIGINS) return
     addRow().input.focus()
   })
 
   if (options.canEdit) {
-    originsBlock.append(list, addButton)
+    originsBlock.append(list, addButton, atMax)
   } else {
     // Read-only: the list as text, so it reads as a list rather than a
     // run of disabled inputs.
     const readOnly = el('ul', { className: 'publisher-nodeprofile-embed-readonly' })
     readOnly.setAttribute('aria-labelledby', originsLabelId)
-    for (const origin of saved.origins) readOnly.append(el('li', { textContent: origin }))
+    for (const origin of saved.origins) readOnly.append(el('li', { textContent: origin, dir: 'ltr' }))
     originsBlock.append(readOnly)
   }
   card.append(originsBlock)
@@ -364,131 +456,40 @@ export function buildEmbeddingCard(options: EmbeddingCardOptions): HTMLElement {
   for (const radio of radios.values()) radio.addEventListener('change', syncOriginsVisibility)
   syncOriginsVisibility()
 
-  // ----- Save -----
-  const status = el('div', { className: 'publisher-nodeprofile-status', role: 'status' })
-  if (options.canEdit) {
-    const saveBtn = el('button', {
-      type: 'button',
-      className: 'publisher-button publisher-button-primary',
-      textContent: t('publisher.nodeProfile.embedding.save'),
-    })
-    saveBtn.addEventListener('click', () => {
-      status.textContent = ''
-      status.classList.remove('publisher-nodeprofile-status-error')
-      const mode = selectedMode()
-
-      // The rows that will be sent, in order, so a server error naming
-      // `embedding.origins.<n>` lands on the row that sent entry n.
-      const sent: Array<{ entry: OriginRow; value: string }> = []
-      let firstInvalid: OriginRow | null = null
-      if (mode === 'list') {
-        const seen = new Map<string, number>()
-        for (const entry of rows) {
-          const value = entry.input.value.trim()
-          if (value === '') {
-            setRowError(entry, null)
-            continue
-          }
-          const result = validateEmbedOrigin(value)
-          let message: string | null = null
-          // "Site n" is the row's number as its label reads, empty rows
-          // included, so the message points where the reader looks.
-          if (!result.ok) message = originErrorText(result.code, result.message)
-          else if (seen.has(result.value)) {
-            message = t('publisher.nodeProfile.embedding.error.duplicate', { n: (seen.get(result.value) ?? 0) + 1 })
-          } else seen.set(result.value, rows.indexOf(entry))
-          setRowError(entry, message)
-          if (message !== null) firstInvalid ??= entry
-          sent.push({ entry, value })
-        }
-        if (!firstInvalid && sent.length === 0) {
-          status.textContent = t('publisher.nodeProfile.embedding.error.required')
-          status.classList.add('publisher-nodeprofile-status-error')
-          ;(rows[0]?.input ?? addButton).focus()
-          return
-        }
-        if (firstInvalid) {
-          status.textContent = t('publisher.nodeProfile.embedding.error.summary')
-          status.classList.add('publisher-nodeprofile-status-error')
-          firstInvalid.input.focus()
-          return
-        }
-      }
-
-      const body = { embedding: { mode, origins: mode === 'list' ? sent.map(s => s.value) : [] } }
-      saveBtn.disabled = true
-      void publisherSend<{ embedding?: unknown }>(SETTINGS_ENDPOINT, body, { method: 'PUT', fetchFn })
-        .then(res => {
-          if (res.ok) {
-            // The server's canonical form (lowercased) is what it stored
-            // and what the live check compares against.
-            saved = embedPolicyFromSettings(res.data) ?? {
-              mode,
-              origins: body.embedding.origins.map(origin => origin.toLowerCase()),
-            }
-            sent.forEach(({ entry }, index) => {
-              entry.input.value = saved.origins[index] ?? entry.input.value
-            })
-            status.textContent = t('publisher.nodeProfile.embedding.saved')
-            return
-          }
-          if (res.kind === 'session') {
-            if (handleSessionError({ navigate: options.navigate }) === 'navigating') return
-            status.textContent = t('publisher.nodeProfile.error.session')
-          } else if (res.kind === 'validation' && res.errors.length > 0) {
-            let placed = false
-            for (const error of res.errors) {
-              const match = /^embedding\.origins\.(\d+)$/.exec(error.field)
-              const target = match ? sent[Number(match[1])]?.entry : undefined
-              if (!target) continue
-              setRowError(target, originErrorText(error.code, error.message))
-              if (!placed) target.input.focus()
-              placed = true
-            }
-            status.textContent = placed
-              ? t('publisher.nodeProfile.embedding.error.summary')
-              : res.errors[0].message
-          } else {
-            status.textContent = t('publisher.nodeProfile.error.generic')
-          }
-          status.classList.add('publisher-nodeprofile-status-error')
-        })
-        .finally(() => {
-          saveBtn.disabled = false
-        })
-    })
-    card.append(el('div', { className: 'publisher-nodeprofile-actions' }, [saveBtn, status]))
-  } else {
-    card.append(el('p', { className: 'publisher-nodeprofile-hint', textContent: t('publisher.nodeProfile.embedding.readOnly') }))
-  }
-
-  // ----- Live policy -----
+  // ----- Live policy (declared before Save, which refreshes it) -----
   const live = el('div', { className: 'publisher-nodeprofile-embed-live' })
   live.append(el('h3', { className: 'publisher-nodeprofile-embed-subheading', textContent: t('publisher.nodeProfile.embedding.live.heading') }))
   const liveValues = el('dl', { className: 'publisher-nodeprofile-embed-live-values' })
   const liveFindings = el('ul', { className: 'publisher-nodeprofile-embed-findings' })
-  const liveStatus = el('div', { className: 'publisher-nodeprofile-status', role: 'status' })
+  // Visually hidden: the verdict is already on screen in the findings
+  // list, and this region only speaks it when a check was asked for.
+  const liveStatus = el('div', { className: 'sr-only', role: 'status' })
   const checkBtn = el('button', {
     type: 'button',
     className: 'publisher-button publisher-button-small',
     textContent: t('publisher.nodeProfile.embedding.live.check'),
   })
+  const checking = busyButton(checkBtn)
   live.append(liveValues, liveFindings, el('div', { className: 'publisher-nodeprofile-actions' }, [checkBtn, liveStatus]))
-  card.append(live)
 
   const showValue = (name: string, value: string | null): HTMLElement[] => [
     el('dt', { textContent: name }),
-    el('dd', {}, [el('code', { textContent: value ?? t('publisher.nodeProfile.embedding.live.notSent') })]),
+    el('dd', {}, [
+      value === null
+        ? el('span', { textContent: t('publisher.nodeProfile.embedding.live.notSent') })
+        : el('code', { textContent: value, dir: 'ltr' }),
+    ]),
   ]
 
   /** Fill the readout. `announce` puts the verdict in the status region
    *  too, for a check the user asked for; the one on render is quiet. */
   const runCheck = async (announce: boolean): Promise<void> => {
-    checkBtn.disabled = true
+    if (checking.busy) return
+    checking.set(true)
     if (announce) liveStatus.textContent = t('publisher.nodeProfile.embedding.live.checking')
     try {
       const headers = await readLiveHeaders(fetchFn)
-      const findings = analyzeLivePolicy(saved, headers)
+      const findings = analyzeLivePolicy(saved, headers, previous)
       liveValues.replaceChildren(
         ...showValue('Content-Security-Policy', headers.csp), // i18n-exempt: an HTTP header name
         ...showValue('X-Frame-Options', headers.xfo), // i18n-exempt: an HTTP header name
@@ -509,10 +510,119 @@ export function buildEmbeddingCard(options: EmbeddingCardOptions): HTMLElement {
       )
       if (announce) liveStatus.textContent = t('publisher.nodeProfile.embedding.live.error')
     } finally {
-      checkBtn.disabled = false
+      checking.set(false)
     }
   }
   checkBtn.addEventListener('click', () => void runCheck(true))
+
+  // ----- Save -----
+  const status = el('div', { className: 'publisher-nodeprofile-status', role: 'status' })
+  if (options.canEdit) {
+    const saveBtn = el('button', {
+      type: 'button',
+      className: 'publisher-button publisher-button-primary',
+      textContent: t('publisher.nodeProfile.embedding.save'),
+    })
+    const saving = busyButton(saveBtn)
+    const fail = (message: string): void => {
+      status.textContent = message
+      status.classList.add('publisher-nodeprofile-status-error')
+    }
+    saveBtn.addEventListener('click', () => {
+      if (saving.busy) return
+      status.textContent = ''
+      status.classList.remove('publisher-nodeprofile-status-error')
+      const mode = selectedMode()
+
+      // The rows that will be sent, in order, so a server error naming
+      // `embedding.origins[<n>]` lands on the row that sent entry n.
+      const sent: Array<{ entry: OriginRow; value: string }> = []
+      let firstInvalid: OriginRow | null = null
+      if (mode === 'list') {
+        const seen = new Set<string>()
+        for (const entry of rows) {
+          const value = entry.input.value.trim()
+          if (value === '') {
+            setRowError(entry, null)
+            continue
+          }
+          const result = validateEmbedOrigin(value)
+          let message: string | null = null
+          // A duplicate quotes the site it repeats rather than a row
+          // number, which a removal above would make wrong.
+          if (!result.ok) message = originErrorText(result.code, result.message)
+          else if (seen.has(result.value)) {
+            message = t('publisher.nodeProfile.embedding.error.duplicate', { site: isolate(result.value) })
+          } else seen.add(result.value)
+          setRowError(entry, message)
+          if (message !== null) firstInvalid ??= entry
+          sent.push({ entry, value })
+        }
+        if (!firstInvalid && sent.length === 0) {
+          // Tied to the first field as well, so moving focus there reads
+          // it, every time Save is pressed.
+          const required = t('publisher.nodeProfile.embedding.error.required')
+          const first = rows[0] ?? addRow()
+          setRowError(first, required)
+          fail(required)
+          first.input.focus()
+          return
+        }
+        if (firstInvalid) {
+          fail(t('publisher.nodeProfile.embedding.error.summary'))
+          firstInvalid.input.focus()
+          return
+        }
+      }
+
+      const body = { embedding: { mode, origins: mode === 'list' ? sent.map(s => s.value) : [] } }
+      saving.set(true)
+      void publisherSend<NodeSettingsResponse>(SETTINGS_ENDPOINT, body, { method: 'PUT', fetchFn })
+        .then(res => {
+          if (res.ok) {
+            // The server's canonical form (lowercased) is what it stored
+            // and what the live check compares against.
+            previous = saved
+            problem?.remove()
+            saved = embedPolicyFromSettings(res.data) ?? {
+              mode,
+              origins: body.embedding.origins.map(origin => origin.toLowerCase()),
+            }
+            sent.forEach(({ entry }, index) => {
+              entry.input.value = saved.origins[index] ?? entry.input.value
+            })
+            status.textContent = t('publisher.nodeProfile.embedding.saved')
+            // Compare the readout against the new setting, quietly; it
+            // will usually say the change is still on its way.
+            void runCheck(false)
+            return
+          }
+          if (res.kind === 'session') {
+            if (handleSessionError({ navigate: options.navigate }) === 'navigating') return
+            fail(t('publisher.nodeProfile.error.session'))
+          } else if (res.kind === 'validation' && res.errors.length > 0) {
+            let placed = false
+            for (const error of res.errors) {
+              const match = /^embedding\.origins\[(\d+)\]$/.exec(error.field)
+              const target = match ? sent[Number(match[1])]?.entry : undefined
+              if (!target) continue
+              setRowError(target, originErrorText(error.code, error.message))
+              if (!placed) target.input.focus()
+              placed = true
+            }
+            fail(placed ? t('publisher.nodeProfile.embedding.error.summary') : listErrorText(res.errors[0]))
+          } else {
+            fail(t('publisher.nodeProfile.error.generic'))
+          }
+        })
+        .finally(() => {
+          saving.set(false)
+        })
+    })
+    card.append(el('div', { className: 'publisher-nodeprofile-actions' }, [saveBtn, status]))
+  }
+
+  card.append(live)
   void runCheck(false)
 
   // ----- What this cannot do -----
@@ -526,6 +636,27 @@ export function buildEmbeddingCard(options: EmbeddingCardOptions): HTMLElement {
     ]),
   )
   return card
+}
+
+/** A server error that names no row, in the portal's words. Only the
+ *  list-level refusals have their own; anything else is the generic
+ *  failure rather than the API's English. */
+function listErrorText(error: { field: string; code: string }): string {
+  if (error.field === 'embedding.origins' && error.code === 'required') {
+    return t('publisher.nodeProfile.embedding.error.required')
+  }
+  if (error.field === 'embedding.origins' && error.code === 'too_many') {
+    return t('publisher.nodeProfile.embedding.error.tooMany', { max: MAX_EMBED_ORIGINS })
+  }
+  return t('publisher.nodeProfile.error.generic')
+}
+
+/** The problem a node-settings response reports with its policy, if
+ *  any. Anything but the two known values is ignored. */
+export function embedProblemFromSettings(raw: unknown): EmbedPolicyProblem | undefined {
+  if (raw == null || typeof raw !== 'object') return undefined
+  const problem = (raw as { embeddingProblem?: unknown }).embeddingProblem
+  return problem === 'unreadable' || problem === 'refused' ? problem : undefined
 }
 
 /** The card's policy from a node-settings response, or `null` when the

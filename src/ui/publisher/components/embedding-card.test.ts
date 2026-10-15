@@ -60,6 +60,14 @@ describe('analyzeLivePolicy', () => {
     ).toEqual([{ kind: 'extra', value: "frame-ancestors 'self'" }])
   })
 
+  it("reports the directive a save to any just replaced as pending, not as someone else's", () => {
+    expect(analyzeLivePolicy(ANY, { csp: "frame-ancestors 'self'", xfo: null }, SELF)).toEqual([{ kind: 'pending' }])
+    // A different directive is still someone else's.
+    expect(analyzeLivePolicy(ANY, { csp: "frame-ancestors 'none'", xfo: null }, SELF)).toEqual([
+      { kind: 'extra', value: "frame-ancestors 'none'" },
+    ])
+  })
+
   it('says a save is still propagating when its own directive is missing', () => {
     expect(analyzeLivePolicy(SELF, { csp: null, xfo: null })).toEqual([{ kind: 'pending' }])
     // The old setting's directive is still live: one "pending", not an
@@ -149,9 +157,13 @@ describe('buildEmbeddingCard', () => {
     expect(radio('any').checked).toBe(true)
     for (const mode of ['any', 'list', 'self']) {
       const r = radio(mode)
-      expect(r.closest('label')).toBeTruthy()
-      const desc = document.getElementById(r.getAttribute('aria-describedby')!)
-      expect(desc?.textContent?.length).toBeGreaterThan(0)
+      // The label carries the name only; the description is tied once,
+      // by aria-describedby, not read again inside the name.
+      const label = document.querySelector<HTMLLabelElement>(`label[for="${r.id}"]`)!
+      const desc = document.getElementById(r.getAttribute('aria-describedby')!)!
+      expect(desc.textContent!.length).toBeGreaterThan(0)
+      expect(label.contains(desc)).toBe(false)
+      expect(label.textContent).not.toContain(desc.textContent)
     }
   })
 
@@ -217,7 +229,8 @@ describe('buildEmbeddingCard', () => {
     view.save()!.click()
     expect(view.inputs()[1].getAttribute('aria-invalid')).toBe('true')
     const error = document.getElementById(view.inputs()[1].getAttribute('aria-describedby')!.split(' ')[0])!
-    expect(error.textContent).toBe('This repeats site 1.')
+    // It quotes the site, which stays right if rows above are removed.
+    expect(error.textContent).toBe('This repeats \u2068https://www.example.org\u2069, listed above.')
     expect(view.puts()).toHaveLength(0)
   })
 
@@ -237,7 +250,7 @@ describe('buildEmbeddingCard', () => {
       {
         put: {
           status: 400,
-          body: { errors: [{ field: 'embedding.origins.1', code: 'bad_host', message: 'Bad host.' }] },
+          body: { errors: [{ field: 'embedding.origins[1]', code: 'bad_host', message: 'Bad host.' }] },
         },
       },
     )
@@ -265,13 +278,90 @@ describe('buildEmbeddingCard', () => {
     expect(document.activeElement).toBe(view.inputs()[0])
   })
 
-  it('read-only for a caller who is not an admin: no editing, no Save, the list as text', () => {
+  it('read-only for a caller who is not an admin: the setting as text, said to be read-only first', () => {
     const view = mount(LIST, { canEdit: false })
-    expect(view.qa<HTMLInputElement>('input[type="radio"]').every(r => r.disabled)).toBe(true)
+    // No disabled radios for Tab to skip: the posture is text.
+    expect(view.qa('input[type="radio"]')).toHaveLength(0)
+    expect(view.q('.publisher-nodeprofile-embed-modes .publisher-nodeprofile-feature-name')?.textContent).toBe(
+      'Only sites I list',
+    )
     expect(view.save()).toBeUndefined()
     expect(view.inputs()).toHaveLength(0)
     expect(view.qa('.publisher-nodeprofile-embed-readonly li').map(li => li.textContent)).toEqual(LIST.origins)
+    expect(view.qa('.publisher-nodeprofile-embed-readonly li').every(li => li.getAttribute('dir') === 'ltr')).toBe(true)
     expect(view.q('.publisher-nodeprofile-embed-origins')?.hasAttribute('hidden')).toBe(false)
+    // The read-only note comes before the setting it explains.
+    const note = view.qa('p').find(p => p.textContent === 'Only an admin can change who may embed this node.')!
+    const modes = view.q('.publisher-nodeprofile-embed-modes')!
+    expect(note.compareDocumentPosition(modes) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('numbers each row visibly, as its name reads, and keeps URLs left-to-right', () => {
+    const view = mount({ mode: 'list', origins: ['https://a.example.org', 'https://b.example.org'] })
+    expect(view.qa('.publisher-nodeprofile-embed-num').map(n => n.textContent)).toEqual(['1.', '2.'])
+    expect(view.inputs().every(input => input.getAttribute('dir') === 'ltr')).toBe(true)
+    view.qa<HTMLButtonElement>('.publisher-nodeprofile-embed-remove')[0].click()
+    expect(view.qa('.publisher-nodeprofile-embed-num').map(n => n.textContent)).toEqual(['1.'])
+  })
+
+  it('keeps focus on Save while the request runs, marking it busy rather than disabled', async () => {
+    let release: () => void = () => {}
+    const gate = new Promise<void>(resolve => {
+      release = resolve
+    })
+    const { fetchFn } = makeFetch({ live: {} })
+    const slow = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === 'PUT') await gate
+      return fetchFn(input, init)
+    }) as unknown as typeof fetch
+    const card = buildEmbeddingCard({ policy: SELF, canEdit: true, fetchFn: slow })
+    document.body.replaceChildren(card)
+    const save = Array.from(card.querySelectorAll('button')).find(b => b.textContent === 'Save embedding')!
+    save.focus()
+    save.click()
+    expect(save.disabled).toBe(false)
+    expect(save.getAttribute('aria-disabled')).toBe('true')
+    expect(document.activeElement).toBe(save)
+    // A second press while busy sends nothing more.
+    save.click()
+    release()
+    await until(() => !save.hasAttribute('aria-disabled'), 'the save to finish')
+    expect((slow as unknown as ReturnType<typeof vi.fn>).mock.calls.filter(c => c[1]?.method === 'PUT')).toHaveLength(1)
+    expect(document.activeElement).toBe(save)
+  })
+
+  it('ties "list at least one site" to the first field, so moving there reads it', () => {
+    const view = mount(ANY)
+    choose(view.radio('list'))
+    view.save()!.click()
+    const first = view.inputs()[0]
+    expect(first.getAttribute('aria-invalid')).toBe('true')
+    expect(document.getElementById(first.getAttribute('aria-describedby')!)?.textContent).toBe(
+      'List at least one site, or choose "No other site".',
+    )
+    expect(document.activeElement).toBe(first)
+  })
+
+  it('refuses a wildcard over shared hosting in the portal\'s words', () => {
+    const view = mount(LIST)
+    view.inputs()[1].value = 'https://*.wordpress.com'
+    view.save()!.click()
+    const error = document.getElementById(view.inputs()[1].getAttribute('aria-describedby')!)!
+    expect(error.textContent).toBe(
+      'This wildcard covers sites anyone can create on that service. List your own sites one by one instead.',
+    )
+  })
+
+  it('says first when the enforced policy is not what was saved, and drops it after a good save', async () => {
+    const { fetchFn, calls } = makeFetch({ live: {} })
+    const card = buildEmbeddingCard({ policy: SELF, problem: 'refused', canEdit: true, fetchFn })
+    document.body.replaceChildren(card)
+    const problem = card.querySelector('.publisher-nodeprofile-embed-problem')!
+    expect(problem.textContent).toMatch(/no longer accepted/)
+    expect(card.querySelector('h2')!.nextElementSibling!.nextElementSibling).toBe(problem)
+    Array.from(card.querySelectorAll('button')).find(b => b.textContent === 'Save embedding')!.click()
+    await until(() => calls.some(c => c.method === 'PUT'), 'the save')
+    await until(() => card.querySelector('.publisher-nodeprofile-embed-problem') === null, 'the warning to go')
   })
 })
 
@@ -288,10 +378,27 @@ describe('buildEmbeddingCard: what this node sends now', () => {
     expect(view.q('.publisher-nodeprofile-embed-live [role="status"]')?.textContent).toBe('')
   })
 
+  it('announces through a visually hidden region, since the verdict is already on screen', () => {
+    const view = mount(SELF, { live: {} })
+    expect(view.q('.publisher-nodeprofile-embed-live [role="status"]')?.classList.contains('sr-only')).toBe(true)
+  })
+
+  it('shows header values left-to-right, and "not sent" as prose rather than code', async () => {
+    const view = mount(SELF, { live: { csp: "frame-ancestors 'self'" } })
+    await until(() => view.qa('.publisher-nodeprofile-embed-live-values dd').length === 2, 'the readout')
+    const [csp, xfo] = view.qa('.publisher-nodeprofile-embed-live-values dd')
+    expect(csp.querySelector('code')?.getAttribute('dir')).toBe('ltr')
+    expect(xfo.querySelector('code')).toBeNull()
+  })
+
   it('warns about X-Frame-Options, and announces a check the user asked for', async () => {
     const view = mount(ANY, { live: { xfo: 'SAMEORIGIN' } })
     await until(() => view.qa('.publisher-nodeprofile-embed-finding-warn').length === 1, 'the warning')
-    expect(view.q('.publisher-nodeprofile-embed-finding-warn')?.textContent).toContain('X-Frame-Options: SAMEORIGIN')
+    // The header value is isolated, so it keeps its order in a
+    // right-to-left sentence.
+    expect(view.q('.publisher-nodeprofile-embed-finding-warn')?.textContent).toContain(
+      'X-Frame-Options: \u2068SAMEORIGIN\u2069',
+    )
     view.qa<HTMLButtonElement>('button').find(b => b.textContent === 'Check again')!.click()
     const liveStatus = view.q('.publisher-nodeprofile-embed-live [role="status"]')!
     await until(() => (liveStatus.textContent ?? '').includes('SAMEORIGIN'), 'the announced verdict')

@@ -23,7 +23,8 @@ import { publisherGet, publisherSend, handleSessionError } from '../api'
 import { buildErrorCard } from '../components/error-card'
 import { attachToolbar, renderMarkdownToolbar } from '../components/markdown-toolbar'
 import { FEATURES_CHANGE_EVENT, featureLabel, resetFeaturesCache } from '../features'
-import { buildEmbeddingCard, embedPolicyFromSettings } from '../components/embedding-card'
+import { buildEmbeddingCard, embedPolicyFromSettings, embedProblemFromSettings } from '../components/embedding-card'
+import type { EmbedPolicyProblem, NodeSettingsResponse } from '../types'
 import type { EmbedPolicy } from '../../../types/node-embedding'
 import { renderMarkdown } from '../../../services/markdownRenderer'
 
@@ -103,7 +104,7 @@ export async function renderNodeProfilePage(
     // Best-effort — an older deploy without the route (404) just
     // hides the Features and Embedding cards rather than failing the
     // page.
-    publisherGet<{ features: unknown; embedding?: unknown }>(SETTINGS_ENDPOINT, { fetchFn }),
+    publisherGet<NodeSettingsResponse>(SETTINGS_ENDPOINT, { fetchFn }),
   ])
 
   for (const res of [meRes, profileRes]) {
@@ -142,6 +143,7 @@ export async function renderNodeProfilePage(
     // page, editable only by an admin (the API enforces the same).
     // Hidden when the response carries no policy: an older deploy.
     embedding: settingsRes.ok ? embedPolicyFromSettings(settingsRes.data) : null,
+    embeddingProblem: settingsRes.ok ? embedProblemFromSettings(settingsRes.data) : undefined,
     canEditEmbedding: isAdmin,
     fetchFn,
     navigate: options.navigate,
@@ -162,6 +164,7 @@ interface FormState {
   /** Current embedding policy, or null to hide the Embedding card
    *  (an older deploy). */
   embedding: EmbedPolicy | null
+  embeddingProblem?: EmbedPolicyProblem
   canEditEmbedding: boolean
   fetchFn?: typeof fetch
   navigate?: (url: string) => void
@@ -376,6 +379,7 @@ function renderForm(mount: HTMLElement, state: FormState): void {
     sections.push(
       buildEmbeddingCard({
         policy: state.embedding,
+        problem: state.embeddingProblem,
         canEdit: state.canEditEmbedding,
         fetchFn: state.fetchFn,
         navigate: state.navigate,

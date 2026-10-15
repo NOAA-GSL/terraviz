@@ -155,7 +155,10 @@ describe('renderNodeProfilePage', () => {
     })
     const card = mount.querySelector('.publisher-nodeprofile-embedding')
     expect(card).toBeTruthy()
-    expect(card!.querySelector<HTMLInputElement>('input[value="self"]')?.disabled).toBe(true)
+    expect(card!.querySelectorAll('input[type="radio"]')).toHaveLength(0)
+    expect(card!.querySelector('.publisher-nodeprofile-embed-modes .publisher-nodeprofile-feature-name')?.textContent).toBe(
+      'No other site',
+    )
     expect(Array.from(card!.querySelectorAll('button')).map(b => b.textContent)).not.toContain('Save embedding')
   })
 
