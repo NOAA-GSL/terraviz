@@ -3,6 +3,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
+  hasForeignAncestor,
   initTourAuthoring,
   readTourEditParam,
   teardownTourAuthoring,
@@ -139,5 +140,106 @@ describe('initTourAuthoring (tour/A)', () => {
     expect(overlay.classList.contains('collapsed')).toBe(true)
     expect(document.body.classList.contains('browse-open')).toBe(false)
     overlay.remove()
+  })
+})
+
+/** A window-shaped stand-in: which origin it is on, which origins
+ *  sit above it, and whether reading the top's origin throws. */
+function fakeWindow(opts: {
+  origin: string
+  framed: boolean
+  ancestorOrigins?: string[]
+  topOrigin?: string
+}): Window {
+  const win: { location: unknown; top: unknown } = {
+    location: {
+      origin: opts.origin,
+      ancestorOrigins: opts.ancestorOrigins,
+    },
+    top: null,
+  }
+  if (!opts.framed) {
+    win.top = win
+  } else {
+    win.top = {
+      get location(): { origin: string } {
+        if (opts.topOrigin === undefined) throw new DOMException('Blocked', 'SecurityError')
+        return { origin: opts.topOrigin }
+      },
+    }
+  }
+  return win as unknown as Window
+}
+
+describe('hasForeignAncestor', () => {
+  const NODE = 'https://node.example'
+
+  it('is false for a top-level page', () => {
+    expect(hasForeignAncestor(fakeWindow({ origin: NODE, framed: false }))).toBe(false)
+  })
+
+  it('is false when every ancestor is this origin', () => {
+    expect(
+      hasForeignAncestor(
+        fakeWindow({ origin: NODE, framed: true, ancestorOrigins: [NODE, NODE], topOrigin: NODE }),
+      ),
+    ).toBe(false)
+  })
+
+  it('is true when any listed ancestor is another origin, top included or not', () => {
+    // A foreign page in the middle, under a same-origin top.
+    expect(
+      hasForeignAncestor(
+        fakeWindow({
+          origin: NODE,
+          framed: true,
+          ancestorOrigins: ['https://evil.example', NODE],
+          topOrigin: NODE,
+        }),
+      ),
+    ).toBe(true)
+  })
+
+  it('treats a sandboxed ancestor ("null") as foreign', () => {
+    expect(
+      hasForeignAncestor(fakeWindow({ origin: NODE, framed: true, ancestorOrigins: ['null'] })),
+    ).toBe(true)
+  })
+
+  it('falls back to the top window when ancestorOrigins is missing (Firefox)', () => {
+    // Cross-origin: reading top.location throws.
+    expect(hasForeignAncestor(fakeWindow({ origin: NODE, framed: true }))).toBe(true)
+    expect(hasForeignAncestor(fakeWindow({ origin: NODE, framed: true, topOrigin: NODE }))).toBe(false)
+  })
+})
+
+describe('initTourAuthoring inside another site', () => {
+  it('mounts no dock when a foreign page frames the app', () => {
+    window.history.replaceState({}, '', '/?tourEdit=01HXAAAAAAAAAAAAAAAAAAAAAA')
+    const realTop = Object.getOwnPropertyDescriptor(window, 'top')
+    Object.defineProperty(window, 'top', {
+      configurable: true,
+      get() {
+        return {
+          get location(): never {
+            throw new DOMException('Blocked', 'SecurityError')
+          },
+        }
+      },
+    })
+    try {
+      const handle = initTourAuthoring({
+        getMapView: () => null,
+        getCurrentDataset: () => null,
+        onDiscard: () => {},
+      })
+      expect(handle).toBeNull()
+      expect(document.querySelector('.tour-authoring-dock')).toBeNull()
+      expect(document.body.classList.contains('tour-authoring-open')).toBe(false)
+    } finally {
+      if (realTop) Object.defineProperty(window, 'top', realTop)
+      else delete (window as { top?: unknown }).top
+    }
+    expect(window.top).toBe(window)
   })
 })

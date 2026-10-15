@@ -32,6 +32,40 @@ export function readTourEditParam(url: URL = new URL(window.location.href)): str
 }
 
 /**
+ * True when any page above this one in the frame tree is on another
+ * origin.
+ *
+ * The dock is a publisher write surface: it saves, uploads media and
+ * publishes with the signed-in publisher's credentials. It lives on
+ * the public document (`/?tourEdit=<id>`), which any site may embed by
+ * default, so it cannot lean on `frame-ancestors` the way `/publish`
+ * does. A foreign page could frame it and trick a publisher into
+ * clicking through to Publish. Refusing to mount there closes that
+ * without restricting the public app. The portal opens the dock as a
+ * top-level navigation, so no real use is framed.
+ *
+ * `location.ancestorOrigins` names every ancestor where the browser
+ * offers it (Chromium, WebKit); a sandboxed one reads `"null"`, which
+ * counts as foreign. Elsewhere, reading the top window's origin throws
+ * across origins, which also counts as foreign.
+ */
+export function hasForeignAncestor(win: Window = window): boolean {
+  if (win.top === win) return false
+  const own = win.location.origin
+  const ancestors = win.location.ancestorOrigins
+  if (ancestors && ancestors.length > 0) {
+    for (let i = 0; i < ancestors.length; i++) {
+      if (ancestors[i] !== own) return true
+    }
+  }
+  try {
+    return win.top?.location.origin !== own
+  } catch {
+    return true
+  }
+}
+
+/**
  * Mount the dock if the URL signals tour-authoring mode. Idempotent
  * — the host calls this once per boot; re-calling without a prior
  * `dispose()` is a no-op (logs a warning so a buggy host doesn't
@@ -45,6 +79,10 @@ export function initTourAuthoring(
 ): TourAuthoringHandle | null {
   const id = readTourEditParam()
   if (id === null) return null
+  if (hasForeignAncestor()) {
+    logger.warn('[tourAuthoring] Not mounting the authoring dock inside a page from another site.')
+    return null
+  }
   if (activeHandle) {
     logger.warn('[tourAuthoring] initTourAuthoring called while a dock is already mounted; ignoring.')
     return activeHandle
