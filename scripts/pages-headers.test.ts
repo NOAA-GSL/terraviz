@@ -143,15 +143,21 @@ function headersFor(parsed: ParsedHeaders, path: string): Map<string, string[]> 
   return out
 }
 
-/** Each `frame-ancestors` source list across every CSP policy. A
+/** The `frame-ancestors` source list each CSP policy enforces. A
  *  comma separates policies, both inside one value and between the
- *  values Pages joins. */
+ *  values Pages joins. Within one policy a browser uses the **first**
+ *  `frame-ancestors` and ignores any repeat, so only the first is
+ *  read: `frame-ancestors *; frame-ancestors 'self'` allows every
+ *  site, and must not count as limited. */
 function frameAncestorsLists(cspValues: string[]): string[][] {
   const lists: string[][] = []
   for (const policy of cspValues.join(',').split(',')) {
     for (const directive of policy.split(';')) {
       const [name, ...sources] = directive.trim().split(/\s+/)
-      if (name?.toLowerCase() === 'frame-ancestors') lists.push(sources)
+      if (name?.toLowerCase() === 'frame-ancestors') {
+        lists.push(sources)
+        break
+      }
     }
   }
   return lists
@@ -253,6 +259,29 @@ describe('public/_headers: the public app stays embeddable by default', () => {
       expect(frameAncestorsLists(headers.get('content-security-policy') ?? [])).toEqual([])
     },
   )
+})
+
+describe('reading frame-ancestors the way a browser does', () => {
+  it('takes the first directive in a policy and ignores a repeat', () => {
+    // Permissive first, restrictive second: the browser allows anyone.
+    expect(frameAncestorsLists(["frame-ancestors *; frame-ancestors 'self'"])).toEqual([['*']])
+    expect(frameAncestorsLists(["frame-ancestors 'self'; frame-ancestors *"])).toEqual([["'self'"]])
+  })
+
+  it('reads one list per policy, whether policies arrive joined or apart', () => {
+    expect(frameAncestorsLists(["frame-ancestors *, frame-ancestors 'self'"])).toEqual([['*'], ["'self'"]])
+    expect(frameAncestorsLists(['frame-ancestors *', "frame-ancestors 'self'"])).toEqual([['*'], ["'self'"]])
+    expect(frameAncestorsLists(["connect-src 'self'"])).toEqual([])
+  })
+
+  it('would fail the portal check on a permissive-first duplicate', () => {
+    const parsed = parseHeadersFile("/publish\n  Content-Security-Policy: frame-ancestors *; frame-ancestors 'self'\n")
+    const lists = frameAncestorsLists(headersFor(parsed, '/publish').get('content-security-policy') ?? [])
+    const limited = lists.filter(
+      sources => sources.length > 0 && sources.every(source => ["'self'", "'none'"].includes(source.toLowerCase())),
+    )
+    expect(limited).toEqual([])
+  })
 })
 
 describe('the _headers parser', () => {
