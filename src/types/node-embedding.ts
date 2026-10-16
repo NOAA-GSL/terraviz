@@ -59,17 +59,26 @@
  * The one accepted scheme-source is {@link FILE_SOURCE}, `file:`,
  * for a page opened from a file (a standalone HTML page an operator
  * keeps for a kiosk or an offline demo). Such a page has no web
- * origin, so no `https://` entry can name it: in Chromium `file:` is
- * the only source that matches it, while `*`, `'self'` and `file://`
- * do not. It admits every file a visitor opens in their browser, not
- * only the operator's, and an attacker who wants one to frame the app
- * has to get a visitor to download and open it, since a web page
- * cannot navigate a frame to a `file:` URL. That is narrower than
- * `any`, the default, and the portal stays locked to `'self'` under
- * every policy. It is accepted as that exact token: `file://`, a
- * `file:///…` path and a bare `file` are refused rather than
- * shortened, with their own code, since none of them matches what
- * the operator meant.
+ * origin, so no `https://` entry can name it. In Chromium `file:`
+ * matches it, while `*`, `'self'`, `file://` and a path do not.
+ * (`file://*` also matches, and is refused below so there is one
+ * spelling to compare and deduplicate.) It admits every file a
+ * visitor opens in their browser, not only the operator's.
+ *
+ * The premise is that a web page cannot make a `file:` ancestor. It
+ * cannot navigate a frame to a `file:` URL, and a frame it builds
+ * from `data:`, `blob:` or a sandboxed `srcdoc` is not one: under
+ * `'self' file:` Chromium refused all four. So an attacker who wants
+ * a file to frame the app has to get a visitor to download and open
+ * it. That is narrower than `any`, the default, and the portal stays
+ * locked to `'self'` under every policy. Revisit this if an engine
+ * ever counts a frame a web page made as `file:`. Read to the letter,
+ * CSP3 serialises a file page's opaque origin as `null`, so an engine
+ * that does so matches nothing here, which fails closed.
+ *
+ * It is accepted as that exact token: `file://`, a `file:///…` path,
+ * a bare `file` and anything else starting `file:` are refused with
+ * their own code rather than shortened.
  */
 
 /** The three postures, in the order the portal offers them. */
@@ -191,7 +200,7 @@ export function validateEmbedOrigin(raw: unknown): EmbedOriginResult {
   if (value === FILE_SOURCE) return { ok: true, value }
   const scheme = /^([a-z][a-z0-9+.-]*):(\/\/)?/.exec(value)
   if (value === 'file' || scheme?.[1] === 'file') {
-    return fail('file_form', 'To allow pages opened from a file, enter file: on its own.')
+    return fail('file_form', 'Enter only file: (the word file followed by a colon) to allow pages opened from a file.')
   }
   if (!scheme || scheme[1] !== 'https' || !scheme[2]) {
     return fail('not_https', 'A site must start with https://.')

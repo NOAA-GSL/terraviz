@@ -1829,9 +1829,9 @@ path. For `https://www.example.org/2026/10/post/`, list
   `file:` on its own row for it, not `file://` or a path. Any page
   opened from a file can then embed the node, not only yours. A
   stranger's file can do that only if a visitor downloads and opens
-  it, so this is still narrower than **Any site can embed**. Chrome
-  and Edge honour it. Firefox and Safari have not been tested, so try
-  the kiosk's browser before you rely on it.
+  it, so this is still narrower than **Any site can embed**. Chrome,
+  Edge and other Chromium browsers honour it. Firefox and Safari have
+  not been tested, so try the kiosk's browser before you rely on it.
 
 **The card checks what the node sends.** Its **What this node sends
 now** readout shows the headers a visitor gets on `/`. It warns about
