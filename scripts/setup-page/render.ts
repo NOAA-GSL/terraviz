@@ -426,7 +426,7 @@ function costPanel(): string {
   return `<section id="cost" data-noprint="1" style="${CARD};padding:28px 30px;margin:0 0 44px;scroll-margin-top:20px">
   <div style="${EYEBROW};margin:0 0 12px">What it costs</div>
   <h2 style="font:700 27px/1.2 var(--tv-font-sans);letter-spacing:-.01em;color:var(--tv-text);margin:0 0 12px">You can run this on the free plan</h2>
-  <p style="margin:0 0 22px;max-width:64ch;color:var(--tv-text-muted);text-wrap:pretty">Nothing in the install requires a paid Cloudflare account, and nothing is switched off without one. What you get on the free plan is a smaller daily allowance of each thing. Orbit is the one that runs out first. Pick the plan you are on and the rest of the page adjusts to it.</p>
+  <p style="margin:0 0 22px;max-width:64ch;color:var(--tv-text-muted);text-wrap:pretty">Nothing in the install requires a paid Cloudflare account, and nothing is switched off without one. What you get on the free plan is a smaller daily allowance of each thing. Orbit is the one that runs out first, and a busy node can also reach the daily limit on Functions requests. Pick the plan you are on and the rest of the page adjusts to it.</p>
   <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px;margin:0 0 16px">
     ${col('free', 'Free plan', '$0', 'var(--tv-warn)', [
       [
@@ -436,6 +436,10 @@ function costPanel(): string {
       [
         'Telemetry and search have room, but a lower ceiling',
         'Analytics Engine allows 100,000 data points a day, Vectorize 5 million stored vector dimensions — roughly 6,500 datasets. Both are generous at node scale. D1 stops at 5 GB, and on the free plan that is a hard cap rather than an overage.',
+      ],
+      [
+        'Functions stop at 100,000 requests a day',
+        'Every page view, API call and map tile is one, shared across the account. Past it the API and tiles stop until midnight UTC, or the whole site shows an error, depending on the fail mode. Paid has no daily limit.',
       ],
     ])}
     ${col('paid', 'Workers Paid', '$5/mo', 'var(--tv-accent)', [

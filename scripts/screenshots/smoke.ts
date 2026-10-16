@@ -390,6 +390,32 @@ const checks: Check[] = [
     },
   },
   {
+    name: 'publisher Embedding card: the list posture edits sites and refuses a bad one inline',
+    fixtures: publisherFixtures({ admin: true }),
+    async run(page) {
+      await gotoApp(page, '/publish/node-profile')
+      const card = page.locator('.publisher-nodeprofile-embedding')
+      await card.waitFor({ timeout: 15_000 })
+      const inputs = card.locator('.publisher-nodeprofile-embed-input')
+      assert((await inputs.count()) === 2, 'the stored list should pre-fill one row per site')
+      assert(
+        await card.locator('input[type="radio"][value="list"]').isChecked(),
+        'the stored posture should be selected',
+      )
+      // A bad site is refused inline before any request.
+      await inputs.nth(1).fill('http://coastal.example.org/')
+      await card.getByRole('button', { name: 'Save embedding' }).click()
+      await card.locator('.publisher-nodeprofile-embed-error:not([hidden])').first().waitFor({ timeout: 5_000 })
+      assert(
+        (await inputs.nth(1).getAttribute('aria-invalid')) === 'true',
+        'the refused row should be marked invalid',
+      )
+      // Choosing "No other site" hides the list.
+      await card.locator('input[type="radio"][value="self"]').check()
+      await card.locator('.publisher-nodeprofile-embed-origins').waitFor({ state: 'hidden', timeout: 5_000 })
+    },
+  },
+  {
     name: 'blog editor renders grounding pickers + Generate; public post renders sanitized markdown',
     fixtures: [...publisherFixtures({ admin: true }), ...blogPublicFixtures()],
     async run(page) {

@@ -60,6 +60,62 @@ describe('createSignalCollector', () => {
     ])
   })
 
+  // Playwright passes the same Request object to `response.request()`
+  // and to `requestfailed`, so the fakes share one too.
+  const answer = (req: RequestLike, status: number): ResponseLike => ({
+    url: () => req.url(),
+    status: () => status,
+    request: () => req,
+  })
+
+  it("drops Chromium's ERR_ABORTED for a HEAD that was already answered, and keeps every other failure", () => {
+    const c = createSignalCollector()
+    // Answered: the headers arrived, then Chromium reports the end.
+    const answered = request('https://x/', 'HEAD', 'net::ERR_ABORTED')
+    c.handleResponse(answer(answered, 200))
+    c.handleRequestFailed(answered)
+    // Never answered: a real failure.
+    c.handleRequestFailed(request('https://x/other', 'HEAD', 'net::ERR_ABORTED'))
+    // Answered with an error status: the 4xx is reported, so is the end.
+    const gone = request('https://x/gone', 'HEAD', 'net::ERR_ABORTED')
+    c.handleResponse(answer(gone, 404))
+    c.handleRequestFailed(gone)
+    // A GET is never excused.
+    const page = request('https://x/page', 'GET', 'net::ERR_ABORTED')
+    c.handleResponse(answer(page, 200))
+    c.handleRequestFailed(page)
+
+    expect(c.signals.failedRequests).toEqual([
+      { url: 'https://x/other', method: 'HEAD', failure: 'net::ERR_ABORTED' },
+      { url: 'https://x/gone', method: 'HEAD', failure: 'net::ERR_ABORTED' },
+      { url: 'https://x/page', method: 'GET', failure: 'net::ERR_ABORTED' },
+    ])
+  })
+
+  it('matches each answer to its own request when two HEADs share a URL', () => {
+    // Both answered, as when the Embedding card checks twice: both excused.
+    const both = createSignalCollector()
+    const first = request('https://x/', 'HEAD', 'net::ERR_ABORTED')
+    const second = request('https://x/', 'HEAD', 'net::ERR_ABORTED')
+    both.handleResponse(answer(first, 200))
+    both.handleResponse(answer(second, 200))
+    both.handleRequestFailed(first)
+    both.handleRequestFailed(second)
+    expect(both.signals.failedRequests).toEqual([])
+
+    // One answered, one not: the unanswered one is reported, and it
+    // does not use up the answered one's excuse.
+    const one = createSignalCollector()
+    const lost = request('https://x/', 'HEAD', 'net::ERR_ABORTED')
+    const kept = request('https://x/', 'HEAD', 'net::ERR_ABORTED')
+    one.handleResponse(answer(kept, 200))
+    one.handleRequestFailed(lost)
+    one.handleRequestFailed(kept)
+    expect(one.signals.failedRequests).toEqual([
+      { url: 'https://x/', method: 'HEAD', failure: 'net::ERR_ABORTED' },
+    ])
+  })
+
   it('records only 4xx/5xx responses as bad', () => {
     const c = createSignalCollector()
     c.handleResponse(response('https://x/ok', 200))

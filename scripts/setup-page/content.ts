@@ -510,8 +510,19 @@ npm run terraviz -- import-snapshot \\
     duration: '≈20 min',
     aside: 'all tiers · before you go public',
     intro: [
-      '**The repo ships no CSP.** Upstream enforces one at the Cloudflare edge, and edge rules do not travel with a fork — so every fork is unprotected until its operator adds one. Your node works without it; do it anyway before the node faces the public.',
+      '**`public/_headers` ships no CSP for the app.** Its CSPs only stop other sites framing the portal and a few static folders. Upstream enforces an app policy at the Cloudflare edge, and edge rules do not travel with a fork. Every fork is unprotected until its operator adds one. Your node works without it; do it anyway before the node faces the public.',
       'Remember `blob:` — the app uses it for preview tours and screenshots, and omitting it reproduces the "may not load data from blob:" failure. Test playback, VR and a tour before locking it down.',
+    ],
+    body: [
+      {
+        kind: 'note',
+        title: 'If other sites embed the node',
+        body: [
+          'By default any site may show the node in an iframe, as the WordPress plugin does. To limit that, sign in as an admin and open **Settings → Node profile**, then the **Embedding** card. Choose **Only sites I list** or **No other site**. It takes effect within a few minutes, with no redeploy.',
+          "The card shows the headers a visitor gets on `/`, and warns about an `X-Frame-Options` header or another `frame-ancestors`. Cloudflare's **Add security headers** transform sends `X-Frame-Options: SAMEORIGIN`. With **Any site can embed** it blocks every other site. Cloudflare Access blocks embeds too, and the card cannot see it.",
+          'You can use an edge rule instead, with the setting left on **Any site can embed**. An edge rule that *Sets* a CSP replaces the node\'s own; use **Add**, so the portal keeps its `frame-ancestors \'self\'`.',
+        ],
+      },
     ],
     gate: 'Playback, VR and a tour all still work with the policy live.',
     gateShort: 'A CSP is in place and nothing broke.',
@@ -701,7 +712,7 @@ export const WEEK_ONE = [
   },
   {
     title: 'Add a Content-Security-Policy',
-    body: "The repo ships none, and upstream's edge policy does not travel with a fork. See Phase 13.7 — and test playback, VR and a tour before you lock it down.",
+    body: "The repo ships none for the app, and upstream's edge policy does not travel with a fork. See Phase 13 — and test playback, VR and a tour before you lock it down.",
     wide: true,
   },
 ]

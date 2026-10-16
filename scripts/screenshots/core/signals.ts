@@ -117,6 +117,10 @@ export interface RequestLike {
 export interface ResponseLike {
   url(): string
   status(): number
+  /** Present on Playwright's Response; optional so a fake can omit it.
+   *  Playwright hands back the same object here as in `requestfailed`,
+   *  which is what lets an answer be matched to its own request. */
+  request?(): { method(): string }
 }
 
 export interface SignalCollector {
@@ -148,6 +152,17 @@ export function createSignalCollector(
   const expectedStatuses = new Set(expected.map(e => e.status))
   const RESOURCE_ERROR = /^Failed to load resource: the server responded with a status of (\d+)/
 
+  // Chromium reports a HEAD that got its answer as a failed request
+  // (`net::ERR_ABORTED`) once it ends, because there is no body to
+  // read: the fetch resolved and the page has its headers. Without
+  // this, a page that checks its own headers with `HEAD` (the
+  // node-profile Embedding card does) is "a scene with problems" on
+  // every run. Only a HEAD whose response already arrived with a
+  // non-error status is dropped; one that never got an answer is kept.
+  // Keyed by the request itself, not its URL: two HEADs to one URL are
+  // two answers, and an unanswered one must not spend another's.
+  const answeredHeads = new WeakSet<object>()
+
   const signals: SceneSignals = {
     get consoleErrors(): string[] {
       const unexplained = new Set(signals.badResponses.map(b => b.status))
@@ -175,16 +190,23 @@ export function createSignalCollector(
       signals.pageErrors.push(err.message)
     },
     handleRequestFailed(req) {
+      const failure = req.failure()?.errorText ?? 'unknown'
+      // An answer excuses its own request's ending and no other.
+      if (req.method() === 'HEAD' && failure === 'net::ERR_ABORTED' && answeredHeads.delete(req)) return
       signals.failedRequests.push({
         url: req.url(),
         method: req.method(),
-        failure: req.failure()?.errorText ?? 'unknown',
+        failure,
       })
     },
     handleResponse(res) {
       const status = res.status()
       // Only client/server errors are problems; 2xx/3xx are normal.
-      if (status < 400) return
+      if (status < 400) {
+        const req = res.request?.()
+        if (req?.method() === 'HEAD') answeredHeads.add(req)
+        return
+      }
       const url = res.url()
       if (expected.some(e => e.status === status && matchesUrl(e.url, url))) return
       signals.badResponses.push({ url, status })
