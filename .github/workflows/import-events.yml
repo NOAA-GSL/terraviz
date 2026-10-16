@@ -16,6 +16,12 @@
 #   TERRAVIZ_SERVER, CF_ACCESS_CLIENT_ID, CF_ACCESS_CLIENT_SECRET
 # When TERRAVIZ_SERVER is unset the run exits quietly — a fork without
 # publisher infrastructure shouldn't collect red runs.
+#
+# Any failed item fails the run, and the log names it: the title and
+# guid of up to five failed items per feed, with the error. That is
+# third-party feed text, unreviewed, in a log that is public on a public
+# repository. The CLI escapes workflow commands in it (both syntaxes)
+# and switches them off around the summary.
 name: Import Current Events
 
 on:

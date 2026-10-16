@@ -37,7 +37,7 @@ import type { PublisherData } from '../_middleware'
 import { getEffectiveFeatures } from '../../_lib/node-settings-store'
 import { isPrivileged } from '../../_lib/publisher-store'
 import { writeAuditEvent } from '../../_lib/audit-store'
-import { parseCreate, resolveOriginNode, ingestEvent } from '../../_lib/events-ingest'
+import { parseCreate, resolveOriginNode, ingestEvent, type FieldError } from '../../_lib/events-ingest'
 import { bustFeaturedEventCache, expireStaleProposedEvents } from '../../_lib/events-store'
 import {
   feedRequestHeaders,
@@ -80,13 +80,27 @@ const MAX_REPORTED_FAILURES = 5
  *  and none needs more than this to say what went wrong. */
 const MAX_FAILURE_MESSAGE_CHARS = 300
 
+/** A failed item's id and title are cut much later — the id is what an
+ *  operator looks the row up by, so a long link used as a guid must
+ *  survive whole. This is only a bound against a pathological feed. */
+const MAX_FAILURE_ID_CHARS = 2048
+
 /** One item that did not ingest, and why. Without this the summary
  *  could only count failures, and a red cron run said "failed: 1"
- *  about an item nobody could identify. */
+ *  about an item nobody could identify.
+ *
+ *  `code` separates the two stages, because they call for different
+ *  responses: `invalid_item` is the mapped body failing validation, so
+ *  it will fail again every run until the feed or the mapper changes;
+ *  `ingest_failed` is the write path throwing, which may be transient.
+ *  `errors` carries the validation's own field errors, on
+ *  `invalid_item` only. */
 interface ItemFailure {
   externalId: string | null
   title: string | null
-  error: string
+  code: 'invalid_item' | 'ingest_failed'
+  message: string
+  errors?: FieldError[]
 }
 
 /** Per-connector outcome reported in the response + run bookkeeping. */
@@ -109,27 +123,36 @@ interface ConnectorSummary {
   failures?: ItemFailure[]
 }
 
-/** One line of plain text: control characters (newlines included) become
- *  spaces, then the length is capped. The message reaches a CI log, where
- *  a line break would let feed text start a line of its own. */
-function oneLine(text: string): string {
+/** One line of plain text, length-capped: control characters (newlines
+ *  included) become spaces. Feed text is untrusted and these fields are
+ *  stored and logged; the CLI does its own escaping for the CI log. */
+function oneLine(value: unknown, max: number): string {
   // eslint-disable-next-line no-control-regex
-  const flat = text.replace(/[\u0000-\u001f\u007f]+/g, ' ').trim()
-  return flat.length > MAX_FAILURE_MESSAGE_CHARS ? `${flat.slice(0, MAX_FAILURE_MESSAGE_CHARS - 1)}…` : flat
+  const flat = String(value ?? '').replace(/[\u0000-\u001f\u007f-\u009f]+/g, ' ').trim()
+  // Cut by code point, so the cut cannot split a surrogate pair.
+  const chars = Array.from(flat)
+  return chars.length > max ? `${chars.slice(0, max - 1).join('')}…` : flat
 }
 
 /** Count a failed item on its connector, and describe it while there is
  *  room. Also logged, so the deployment's real-time logs carry every
  *  failure, not just the first few. */
-function recordItemFailure(summary: ConnectorSummary, body: EventCreateBody, error: string): void {
+function recordItemFailure(
+  summary: ConnectorSummary,
+  body: EventCreateBody,
+  failed: Pick<ItemFailure, 'code' | 'message' | 'errors'>,
+): void {
   summary.failed++
   const failure: ItemFailure = {
-    externalId: body.externalId ? oneLine(body.externalId) : null,
-    title: body.title ? oneLine(body.title) : null,
-    error: oneLine(error),
+    externalId: body.externalId ? oneLine(body.externalId, MAX_FAILURE_ID_CHARS) : null,
+    title: body.title ? oneLine(body.title, MAX_FAILURE_ID_CHARS) : null,
+    code: failed.code,
+    message: oneLine(failed.message, MAX_FAILURE_MESSAGE_CHARS),
   }
+  if (failed.errors) failure.errors = failed.errors
   console.error(
-    `[events-refresh] ${summary.id}: item ${failure.externalId ?? '(no id)'} failed: ${failure.error}`,
+    `[events-refresh] ${oneLine(summary.id, MAX_FAILURE_ID_CHARS)}: item ${failure.externalId ?? '(no id)'} ` +
+      `${failure.code}: ${failure.message}`,
   )
   const failures = (summary.failures ??= [])
   if (failures.length < MAX_REPORTED_FAILURES) failures.push(failure)
@@ -289,7 +312,11 @@ export const onRequestPost: PagesFunction<CatalogEnv> = async context => {
     for (const body of result.bodies.slice(0, budget)) {
       const parsed = parseCreate(body)
       if (!parsed.ok) {
-        recordItemFailure(summary, body, parsed.errors.map(e => `${e.field}: ${e.code}`).join(', '))
+        recordItemFailure(summary, body, {
+          code: 'invalid_item',
+          message: parsed.errors.map(e => `${e.field}: ${e.code}`).join(', '),
+          errors: parsed.errors,
+        })
         continue
       }
       try {
@@ -306,7 +333,10 @@ export const onRequestPost: PagesFunction<CatalogEnv> = async context => {
         else summary.refreshed++
         if (outcome.enriched) summary.enriched++
       } catch (e) {
-        recordItemFailure(summary, body, e instanceof Error ? e.message : String(e))
+        recordItemFailure(summary, body, {
+          code: 'ingest_failed',
+          message: e instanceof Error ? e.message : String(e),
+        })
       }
     }
     budget -= Math.min(summary.mappable, budget)

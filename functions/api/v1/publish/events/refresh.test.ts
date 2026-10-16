@@ -324,7 +324,7 @@ describe('POST /api/v1/publish/events/refresh', () => {
       const body = JSON.parse(await res.text()) as {
         created: number
         failed: number
-        feeds: Array<{ failed: number; failures?: Array<{ externalId: string; title: string; error: string }> }>
+        feeds: Array<{ failed: number; failures?: Array<Record<string, unknown>> }>
       }
       expect(body.created).toBe(1)
       expect(body.failed).toBe(1)
@@ -332,7 +332,8 @@ describe('POST /api/v1/publish/events/refresh', () => {
         {
           externalId: 'bad-1',
           title: 'There are no tropical cyclones at this time.',
-          error: expect.stringContaining('simulated insert failure'),
+          code: 'ingest_failed',
+          message: expect.stringContaining('simulated insert failure'),
         },
       ])
       // The deployment's own logs carry it too.
@@ -350,6 +351,57 @@ describe('POST /api/v1/publish/events/refresh', () => {
         feeds: Array<Record<string, unknown>>
       }
       expect(body.feeds[0]).not.toHaveProperty('failures')
+    })
+
+    it('says a body that fails validation is `invalid_item`, with its field errors', async () => {
+      // `https://` passes the RSS mapper's scheme test but is not a URL,
+      // so the create validation refuses it: a failure that repeats every
+      // run, unlike a write that throws.
+      const { env } = rssEnv([{ guid: 'ok-1', title: 'Storm batters the coast' }])
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async () => ({
+          ok: true,
+          status: 200,
+          text: async () =>
+            `<rss version="2.0"><channel><item><title>Bad link</title><link>https://</link>` +
+            `<guid>bad-link</guid></item></channel></rss>`,
+        }) as unknown as Response),
+      )
+      const body = JSON.parse(await (await refreshPost(ctx({ env }))).text()) as {
+        failed: number
+        feeds: Array<{ failures: Array<Record<string, unknown>> }>
+      }
+      expect(body.failed).toBe(1)
+      expect(body.feeds[0].failures).toEqual([
+        {
+          externalId: 'bad-link',
+          title: 'Bad link',
+          code: 'invalid_item',
+          message: 'source.url: invalid',
+          errors: [expect.objectContaining({ field: 'source.url', code: 'invalid' })],
+        },
+      ])
+    })
+
+    it('puts a hostile error message on one line and cuts it short', async () => {
+      const { env, sqlite } = rssEnv([{ guid: 'bad-1', title: 'Item' }])
+      // A message with a line break in it, and far longer than the cap.
+      sqlite
+        .prepare(
+          `CREATE TRIGGER fail_long BEFORE INSERT ON current_events
+           BEGIN SELECT RAISE(ABORT, 'first line
+::error::second line ${'x'.repeat(400)}'); END`,
+        )
+        .run()
+      const body = JSON.parse(await (await refreshPost(ctx({ env }))).text()) as {
+        feeds: Array<{ failures: Array<{ message: string }> }>
+      }
+      const { message } = body.feeds[0].failures[0]
+      expect(message).not.toMatch(/[\r\n]/)
+      expect(message).toContain('first line ::error::second line')
+      expect(Array.from(message)).toHaveLength(300)
+      expect(message.endsWith('…')).toBe(true)
     })
 
     it('describes at most five per connector but counts them all', async () => {
@@ -372,6 +424,40 @@ describe('POST /api/v1/publish/events/refresh', () => {
       // Every one is still logged, not just the five described.
       expect(console.error).toHaveBeenCalledTimes(7)
     })
+  })
+
+  it('ingests an item that repeats a category, and refreshes it again', async () => {
+    // Decorations are sets. A repeat used to throw on the primary key
+    // after the event row was written, and the refresh, which rewrites
+    // the decorations, then threw on every later run too.
+    const { env, sqlite } = setupEnv()
+    sqlite.prepare(`UPDATE feed_connectors SET enabled = 0 WHERE id = 'FEED_EONET_DEFAULT'`).run()
+    sqlite
+      .prepare(
+        `INSERT INTO feed_connectors (id, kind, label, url, category, enabled, created_at, updated_at)
+         VALUES ('FEED_RSS_01', 'rss', 'Example Environment', 'https://news.example.org/rss', 'news', 1,
+                 '2026-07-01T00:00:00.000Z', '2026-07-01T00:00:00.000Z')`,
+      )
+      .run()
+    const rssXml = `<rss version="2.0"><channel><item>
+        <title>Storm batters the coast</title>
+        <link>https://news.example.org/storm</link>
+        <guid>storm-1</guid>
+        <category>Environment</category>
+        <category>Environment</category>
+      </item></channel></rss>`
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: true, status: 200, text: async () => rssXml }) as unknown as Response),
+    )
+
+    const first = JSON.parse(await (await refreshPost(ctx({ env }))).text()) as { created: number; failed: number }
+    expect(first).toMatchObject({ created: 1, failed: 0 })
+    const second = JSON.parse(await (await refreshPost(ctx({ env }))).text()) as { refreshed: number; failed: number }
+    expect(second).toMatchObject({ refreshed: 1, failed: 0 })
+
+    const keywords = sqlite.prepare(`SELECT keyword FROM event_keywords`).all() as Array<{ keyword: string }>
+    expect(keywords).toEqual([{ keyword: 'Environment' }])
   })
 
   it('is idempotent — a second pull refreshes instead of duplicating', async () => {

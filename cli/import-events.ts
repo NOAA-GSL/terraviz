@@ -27,6 +27,7 @@
  * without writing.
  */
 
+import { randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import type { CommandContext } from './commands'
 import { getString, getBool, getNumber } from './lib/args'
@@ -58,16 +59,48 @@ interface RefreshEnvelope {
     error?: string
     /** The first few failed items, and why. Absent from a server that
      *  predates it, and when nothing failed. */
-    failures?: Array<{ externalId: string | null; title: string | null; error: string }>
+    failures?: Array<{
+      externalId: string | null
+      title: string | null
+      /** `invalid_item` fails again every run; `ingest_failed` may not. */
+      code: string
+      message: string
+    }>
   }>
 }
 
-/** Server-supplied text on one line. The server flattens these already;
- *  this keeps an older or misbehaving one from starting a line in the
- *  CI log, where a line beginning `::` is a workflow command. */
-function oneLine(text: string): string {
-  // eslint-disable-next-line no-control-regex
-  return text.replace(/[\u0000-\u001f\u007f]+/g, ' ').trim()
+/** Server- or feed-supplied text, made safe to print into a CI log.
+ *
+ *  The failure lines put third-party feed titles and guids into a public
+ *  GitHub Actions log, and the runner reads two workflow-command syntaxes
+ *  from output: `::name::` at the start of a line, and the legacy
+ *  `##[name]` *anywhere* in one. So control characters (line breaks
+ *  included) and the Unicode line-separator and bidi controls become
+ *  spaces, and every `##[` is broken so the runner cannot find it. A
+ *  non-string from a misbehaving server is stringified, not thrown on. */
+function forLog(value: unknown): string {
+  return (
+    String(value ?? '')
+      // eslint-disable-next-line no-control-regex
+      .replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069]+/g, ' ')
+      .replace(/##\[/g, '##\\[')
+      .trim()
+  )
+}
+
+/** Under GitHub Actions, print with workflow commands switched off,
+ *  behind a resume token nobody can predict. That is the runner's own
+ *  guard for printing untrusted text, and it covers both syntaxes and
+ *  any field `forLog` is not applied to. Elsewhere, just print. */
+function withoutWorkflowCommands(ctx: CommandContext, print: () => void): void {
+  if (process.env.GITHUB_ACTIONS !== 'true') return print()
+  const token = randomUUID()
+  ctx.stdout.write(`::stop-commands::${token}\n`)
+  try {
+    print()
+  } finally {
+    ctx.stdout.write(`::${token}::\n`)
+  }
 }
 
 function sleep(ms: number): Promise<void> {
@@ -97,38 +130,42 @@ async function runRefreshMode(ctx: CommandContext, dryRun: boolean): Promise<num
   }
   const result = await ctx.client.refreshEvents<RefreshEnvelope>()
   if (!result.ok) {
+    // A non-JSON answer carries the start of the body here (an Access
+    // login page, say), line breaks and all.
     ctx.stderr.write(
-      `refresh failed (${result.status}): ${result.error}` +
-        (result.message ? ` — ${result.message}` : '') +
+      `refresh failed (${result.status}): ${forLog(result.error)}` +
+        (result.message ? ` — ${forLog(result.message)}` : '') +
         '\n',
     )
     return 1
   }
   const r = result.body
-  ctx.stdout.write(
-    `Registry refresh complete (${r.feeds.length} enabled connector(s)):\n` +
-      `  fetched:               ${r.fetched}\n` +
-      `  mappable:              ${r.mappable}\n` +
-      `  created:               ${r.created}\n` +
-      `  refreshed (existing):  ${r.refreshed}\n` +
-      `  failed:                ${r.failed}\n`,
-  )
-  for (const f of r.feeds) {
+  withoutWorkflowCommands(ctx, () => {
     ctx.stdout.write(
-      `  - ${oneLine(f.label)} [${oneLine(f.kind)}]: +${f.created} / ~${f.refreshed} / !${f.failed}` +
-        (f.error ? ` — ${oneLine(f.error)}` : '') +
-        '\n',
+      `Registry refresh complete (${r.feeds.length} enabled connector(s)):\n` +
+        `  fetched:               ${r.fetched}\n` +
+        `  mappable:              ${r.mappable}\n` +
+        `  created:               ${r.created}\n` +
+        `  refreshed (existing):  ${r.refreshed}\n` +
+        `  failed:                ${r.failed}\n`,
     )
-    const failures = f.failures ?? []
-    for (const item of failures) {
-      const what = item.title ? `"${oneLine(item.title)}"` : '(untitled)'
-      const id = item.externalId ? ` [${oneLine(item.externalId)}]` : ''
-      ctx.stdout.write(`      ! ${what}${id}: ${oneLine(item.error)}\n`)
+    for (const f of r.feeds) {
+      ctx.stdout.write(
+        `  - ${forLog(f.label)} [${forLog(f.kind)}]: +${f.created} / ~${f.refreshed} / !${f.failed}` +
+          (f.error ? ` — ${forLog(f.error)}` : '') +
+          '\n',
+      )
+      const failures = f.failures ?? []
+      for (const item of failures) {
+        const what = item.title ? `"${forLog(item.title)}"` : '(untitled)'
+        const id = item.externalId ? ` [${forLog(item.externalId)}]` : ''
+        ctx.stdout.write(`      ! ${what}${id}: ${forLog(item.code)} — ${forLog(item.message)}\n`)
+      }
+      if (f.failed > failures.length && failures.length > 0) {
+        ctx.stdout.write(`      … and ${f.failed - failures.length} more\n`)
+      }
     }
-    if (f.failed > failures.length && failures.length > 0) {
-      ctx.stdout.write(`      … and ${f.failed - failures.length} more\n`)
-    }
-  }
+  })
   return r.failed > 0 || r.feeds.some(f => f.error) ? 1 : 0
 }
 
@@ -172,12 +209,14 @@ export async function runImportEvents(ctx: CommandContext): Promise<number> {
     if (!result.ok) {
       failed++
       ctx.stderr.write(
-        `[${body.externalId}] ingest failed (${result.status}): ${result.error}` +
-          (result.message ? ` — ${result.message}` : '') +
+        `[${forLog(body.externalId)}] ingest failed (${result.status}): ${forLog(result.error)}` +
+          (result.message ? ` — ${forLog(result.message)}` : '') +
           '\n',
       )
       if (result.errors?.length) {
-        for (const e of result.errors) ctx.stderr.write(`    ${e.field}: ${e.code} — ${e.message}\n`)
+        for (const e of result.errors) {
+          ctx.stderr.write(`    ${forLog(e.field)}: ${forLog(e.code)} — ${forLog(e.message)}\n`)
+        }
       }
       continue
     }
