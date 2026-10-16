@@ -48,7 +48,26 @@ interface RefreshEnvelope {
   created: number
   refreshed: number
   failed: number
-  feeds: Array<{ id: string; kind: string; label: string; created: number; refreshed: number; failed: number; error?: string }>
+  feeds: Array<{
+    id: string
+    kind: string
+    label: string
+    created: number
+    refreshed: number
+    failed: number
+    error?: string
+    /** The first few failed items, and why. Absent from a server that
+     *  predates it, and when nothing failed. */
+    failures?: Array<{ externalId: string | null; title: string | null; error: string }>
+  }>
+}
+
+/** Server-supplied text on one line. The server flattens these already;
+ *  this keeps an older or misbehaving one from starting a line in the
+ *  CI log, where a line beginning `::` is a workflow command. */
+function oneLine(text: string): string {
+  // eslint-disable-next-line no-control-regex
+  return text.replace(/[\u0000-\u001f\u007f]+/g, ' ').trim()
 }
 
 function sleep(ms: number): Promise<void> {
@@ -96,10 +115,19 @@ async function runRefreshMode(ctx: CommandContext, dryRun: boolean): Promise<num
   )
   for (const f of r.feeds) {
     ctx.stdout.write(
-      `  - ${f.label} [${f.kind}]: +${f.created} / ~${f.refreshed} / !${f.failed}` +
-        (f.error ? ` — ${f.error}` : '') +
+      `  - ${oneLine(f.label)} [${oneLine(f.kind)}]: +${f.created} / ~${f.refreshed} / !${f.failed}` +
+        (f.error ? ` — ${oneLine(f.error)}` : '') +
         '\n',
     )
+    const failures = f.failures ?? []
+    for (const item of failures) {
+      const what = item.title ? `"${oneLine(item.title)}"` : '(untitled)'
+      const id = item.externalId ? ` [${oneLine(item.externalId)}]` : ''
+      ctx.stdout.write(`      ! ${what}${id}: ${oneLine(item.error)}\n`)
+    }
+    if (f.failed > failures.length && failures.length > 0) {
+      ctx.stdout.write(`      … and ${f.failed - failures.length} more\n`)
+    }
   }
   return r.failed > 0 || r.feeds.some(f => f.error) ? 1 : 0
 }

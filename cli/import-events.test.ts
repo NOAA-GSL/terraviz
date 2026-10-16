@@ -140,4 +140,47 @@ describe('runImportEvents — registry-driven refresh (default mode)', () => {
     }))
     expect(await runImportEvents(makeRefreshCtx({ refreshEvents: connectorError }).ctx)).toBe(1)
   })
+
+  it('names each failed item the server describes, and how many it did not', async () => {
+    const withFailures = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      body: {
+        fetched: 9, mappable: 9, created: 1, refreshed: 0, failed: 8,
+        feeds: [{
+          id: 'F1', kind: 'rss', label: 'NHC Atlantic', created: 1, refreshed: 0, failed: 8,
+          failures: [
+            { externalId: 'https://www.nhc.noaa.gov/', title: 'There are no tropical cyclones at this time.', error: 'D1_ERROR: boom' },
+            { externalId: null, title: null, error: 'source.url: invalid' },
+          ],
+        }],
+      },
+    }))
+    const { ctx, out } = makeRefreshCtx({ refreshEvents: withFailures })
+    expect(await runImportEvents(ctx)).toBe(1)
+    const text = out.join('')
+    expect(text).toContain(
+      '      ! "There are no tropical cyclones at this time." [https://www.nhc.noaa.gov/]: D1_ERROR: boom\n',
+    )
+    expect(text).toContain('      ! (untitled): source.url: invalid\n')
+    expect(text).toContain('      … and 6 more\n')
+  })
+
+  it('cannot be made to start a line of its own by server text', async () => {
+    const hostile = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      body: {
+        fetched: 1, mappable: 1, created: 0, refreshed: 0, failed: 1,
+        feeds: [{
+          id: 'F1', kind: 'rss', label: 'Feed\n::error::label', created: 0, refreshed: 0, failed: 1,
+          error: 'down\n::error::connector',
+          failures: [{ externalId: 'x\r\n::error::forged', title: 'T\n::add-mask::y', error: 'e\n::warning::z' }],
+        }],
+      },
+    }))
+    const { ctx, out } = makeRefreshCtx({ refreshEvents: hostile })
+    await runImportEvents(ctx)
+    for (const line of out.join('').split('\n')) expect(line.startsWith('::')).toBe(false)
+  })
 })

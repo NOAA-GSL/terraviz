@@ -71,6 +71,24 @@ const PROPOSED_EXPIRY_DAYS = 14
  *  for the next cycle. */
 const MAX_ENRICH_CALLS = 25
 
+/** Failed items named per connector. `failed` stays the full count;
+ *  this caps only how many are described, so a feed whose every item
+ *  fails cannot bloat the response or the `event.refreshed` audit row. */
+const MAX_REPORTED_FAILURES = 5
+
+/** A failure's message is cut to this length. D1 errors can quote SQL,
+ *  and none needs more than this to say what went wrong. */
+const MAX_FAILURE_MESSAGE_CHARS = 300
+
+/** One item that did not ingest, and why. Without this the summary
+ *  could only count failures, and a red cron run said "failed: 1"
+ *  about an item nobody could identify. */
+interface ItemFailure {
+  externalId: string | null
+  title: string | null
+  error: string
+}
+
 /** Per-connector outcome reported in the response + run bookkeeping. */
 interface ConnectorSummary {
   id: string
@@ -86,6 +104,35 @@ interface ConnectorSummary {
    *  (or every item already carried date + location). */
   enriched: number
   error?: string
+  /** The first {@link MAX_REPORTED_FAILURES} failed items; absent when
+   *  none failed. */
+  failures?: ItemFailure[]
+}
+
+/** One line of plain text: control characters (newlines included) become
+ *  spaces, then the length is capped. The message reaches a CI log, where
+ *  a line break would let feed text start a line of its own. */
+function oneLine(text: string): string {
+  // eslint-disable-next-line no-control-regex
+  const flat = text.replace(/[\u0000-\u001f\u007f]+/g, ' ').trim()
+  return flat.length > MAX_FAILURE_MESSAGE_CHARS ? `${flat.slice(0, MAX_FAILURE_MESSAGE_CHARS - 1)}…` : flat
+}
+
+/** Count a failed item on its connector, and describe it while there is
+ *  room. Also logged, so the deployment's real-time logs carry every
+ *  failure, not just the first few. */
+function recordItemFailure(summary: ConnectorSummary, body: EventCreateBody, error: string): void {
+  summary.failed++
+  const failure: ItemFailure = {
+    externalId: body.externalId ? oneLine(body.externalId) : null,
+    title: body.title ? oneLine(body.title) : null,
+    error: oneLine(error),
+  }
+  console.error(
+    `[events-refresh] ${summary.id}: item ${failure.externalId ?? '(no id)'} failed: ${failure.error}`,
+  )
+  const failures = (summary.failures ??= [])
+  if (failures.length < MAX_REPORTED_FAILURES) failures.push(failure)
 }
 
 function jsonError(status: number, error: string, message: string): Response {
@@ -242,7 +289,7 @@ export const onRequestPost: PagesFunction<CatalogEnv> = async context => {
     for (const body of result.bodies.slice(0, budget)) {
       const parsed = parseCreate(body)
       if (!parsed.ok) {
-        summary.failed++
+        recordItemFailure(summary, body, parsed.errors.map(e => `${e.field}: ${e.code}`).join(', '))
         continue
       }
       try {
@@ -258,8 +305,8 @@ export const onRequestPost: PagesFunction<CatalogEnv> = async context => {
         if (outcome.created) summary.created++
         else summary.refreshed++
         if (outcome.enriched) summary.enriched++
-      } catch {
-        summary.failed++
+      } catch (e) {
+        recordItemFailure(summary, body, e instanceof Error ? e.message : String(e))
       }
     }
     budget -= Math.min(summary.mappable, budget)

@@ -277,6 +277,103 @@ describe('POST /api/v1/publish/events/refresh', () => {
     })
   })
 
+  describe('a failed item', () => {
+    function rssEnv(items: Array<{ guid: string; title: string }>) {
+      const setup = setupEnv()
+      setup.sqlite.prepare(`UPDATE feed_connectors SET enabled = 0 WHERE id = 'FEED_EONET_DEFAULT'`).run()
+      setup.sqlite
+        .prepare(
+          `INSERT INTO feed_connectors (id, kind, label, url, category, enabled, created_at, updated_at)
+           VALUES ('FEED_RSS_01', 'rss', 'Example Environment', 'https://news.example.org/rss', 'news', 1,
+                   '2026-07-01T00:00:00.000Z', '2026-07-01T00:00:00.000Z')`,
+        )
+        .run()
+      const rssXml = `<rss version="2.0"><channel>${items
+        .map(
+          i => `<item><title>${i.title}</title><link>https://news.example.org/${i.guid}</link>` +
+            `<guid>${i.guid}</guid></item>`,
+        )
+        .join('')}</channel></rss>`
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async () => ({ ok: true, status: 200, text: async () => rssXml }) as unknown as Response),
+      )
+      vi.spyOn(console, 'error').mockImplementation(() => {})
+      return setup
+    }
+
+    afterEach(() => {
+      vi.restoreAllMocks()
+    })
+
+    it('is named in the summary with its error, and the rest still ingest', async () => {
+      const { env, sqlite } = rssEnv([
+        { guid: 'ok-1', title: 'Storm batters the coast' },
+        { guid: 'bad-1', title: 'There are no tropical cyclones at this time.' },
+      ])
+      // A real insert failure for one item, as D1 would raise it.
+      sqlite
+        .prepare(
+          `CREATE TRIGGER fail_one BEFORE INSERT ON current_events
+           WHEN NEW.external_id = 'bad-1' BEGIN SELECT RAISE(ABORT, 'simulated insert failure'); END`,
+        )
+        .run()
+
+      const res = await refreshPost(ctx({ env }))
+      expect(res.status).toBe(200)
+      const body = JSON.parse(await res.text()) as {
+        created: number
+        failed: number
+        feeds: Array<{ failed: number; failures?: Array<{ externalId: string; title: string; error: string }> }>
+      }
+      expect(body.created).toBe(1)
+      expect(body.failed).toBe(1)
+      expect(body.feeds[0].failures).toEqual([
+        {
+          externalId: 'bad-1',
+          title: 'There are no tropical cyclones at this time.',
+          error: expect.stringContaining('simulated insert failure'),
+        },
+      ])
+      // The deployment's own logs carry it too.
+      expect(console.error).toHaveBeenCalledWith(expect.stringContaining('bad-1'))
+      // And the audit row, which stores the summary, keeps the reason.
+      const audit = sqlite
+        .prepare(`SELECT metadata_json FROM audit_events WHERE action = 'event.refreshed'`)
+        .get() as { metadata_json: string }
+      expect(audit.metadata_json).toContain('simulated insert failure')
+    })
+
+    it('leaves `failures` off a connector where nothing failed', async () => {
+      const { env } = rssEnv([{ guid: 'ok-1', title: 'Storm batters the coast' }])
+      const body = JSON.parse(await (await refreshPost(ctx({ env }))).text()) as {
+        feeds: Array<Record<string, unknown>>
+      }
+      expect(body.feeds[0]).not.toHaveProperty('failures')
+    })
+
+    it('describes at most five per connector but counts them all', async () => {
+      const items = Array.from({ length: 7 }, (_, n) => ({ guid: `bad-${n}`, title: `Item ${n}` }))
+      const { env, sqlite } = rssEnv(items)
+      sqlite
+        .prepare(
+          `CREATE TRIGGER fail_all BEFORE INSERT ON current_events
+           BEGIN SELECT RAISE(ABORT, 'simulated insert failure'); END`,
+        )
+        .run()
+
+      const body = JSON.parse(await (await refreshPost(ctx({ env }))).text()) as {
+        failed: number
+        feeds: Array<{ failed: number; failures: unknown[] }>
+      }
+      expect(body.failed).toBe(7)
+      expect(body.feeds[0].failed).toBe(7)
+      expect(body.feeds[0].failures).toHaveLength(5)
+      // Every one is still logged, not just the five described.
+      expect(console.error).toHaveBeenCalledTimes(7)
+    })
+  })
+
   it('is idempotent — a second pull refreshes instead of duplicating', async () => {
     const { env } = setupEnv()
     stubFeed(EONET_FEED)
