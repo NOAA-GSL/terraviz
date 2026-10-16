@@ -404,6 +404,22 @@ describe('POST /api/v1/publish/events/refresh', () => {
       expect(message.endsWith('…')).toBe(true)
     })
 
+    it('cuts a long message on a whole character, never inside one', async () => {
+      const { env, sqlite } = rssEnv([{ guid: 'bad-1', title: 'Item' }])
+      // An astral character straddles UTF-16 units 299 and 300, where a
+      // plain .slice would leave half a surrogate pair.
+      sqlite
+        .prepare(
+          `CREATE TRIGGER fail_astral BEFORE INSERT ON current_events
+           BEGIN SELECT RAISE(ABORT, '${'x'.repeat(298)}🌀🌀🌀'); END`,
+        )
+        .run()
+      const body = JSON.parse(await (await refreshPost(ctx({ env }))).text()) as {
+        feeds: Array<{ failures: Array<{ message: string }> }>
+      }
+      expect(body.feeds[0].failures[0].message).toBe(`${'x'.repeat(298)}🌀…`)
+    })
+
     it('describes at most five per connector but counts them all', async () => {
       const items = Array.from({ length: 7 }, (_, n) => ({ guid: `bad-${n}`, title: `Item ${n}` }))
       const { env, sqlite } = rssEnv(items)
@@ -458,6 +474,30 @@ describe('POST /api/v1/publish/events/refresh', () => {
 
     const keywords = sqlite.prepare(`SELECT keyword FROM event_keywords`).all() as Array<{ keyword: string }>
     expect(keywords).toEqual([{ keyword: 'Environment' }])
+  })
+
+  it('ingests an EONET event that repeats a category title', async () => {
+    // EONET's category titles become `event_categories` rows, the other
+    // decoration set; the RSS case above covers `event_keywords`.
+    const { env, sqlite } = setupEnv()
+    const event = EONET_FEED.events[0]
+    stubFeed({
+      events: [
+        {
+          ...event,
+          categories: [
+            { id: 'wildfires', title: 'Wildfires' },
+            { id: 'wildfires', title: 'Wildfires' },
+          ],
+        },
+      ],
+    })
+    const first = JSON.parse(await (await refreshPost(ctx({ env }))).text()) as { created: number; failed: number }
+    expect(first).toMatchObject({ created: 1, failed: 0 })
+    const second = JSON.parse(await (await refreshPost(ctx({ env }))).text()) as { refreshed: number; failed: number }
+    expect(second).toMatchObject({ refreshed: 1, failed: 0 })
+    const rows = sqlite.prepare(`SELECT facet, value FROM event_categories`).all()
+    expect(rows).toEqual([{ facet: 'EONET', value: 'Wildfires' }])
   })
 
   it('is idempotent — a second pull refreshes instead of duplicating', async () => {

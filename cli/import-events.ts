@@ -76,8 +76,9 @@ interface RefreshEnvelope {
  *  from output: `::name::` at the start of a line, and the legacy
  *  `##[name]` *anywhere* in one. So control characters (line breaks
  *  included) and the Unicode line-separator and bidi controls become
- *  spaces, and every `##[` is broken so the runner cannot find it. A
- *  non-string from a misbehaving server is stringified, not thrown on. */
+ *  spaces, every `##[` is broken so the runner cannot find it, and a
+ *  leading `::` is broken too. A non-string from a misbehaving server is
+ *  stringified, not thrown on. */
 function forLog(value: unknown): string {
   return (
     String(value ?? '')
@@ -85,6 +86,8 @@ function forLog(value: unknown): string {
       .replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069]+/g, ' ')
       .replace(/##\[/g, '##\\[')
       .trim()
+      // A field printed at the start of a line must not open with `::`.
+      .replace(/^::/, ':\\:')
   )
 }
 
@@ -183,7 +186,8 @@ export async function runImportEvents(ctx: CommandContext): Promise<number> {
   try {
     feed = await loadFeed(ctx, file, sourceUrl)
   } catch (e) {
-    ctx.stderr.write(`Could not load the EONET feed: ${e instanceof Error ? e.message : String(e)}\n`)
+    // A JSON parse error quotes the start of the input.
+    ctx.stderr.write(`Could not load the EONET feed: ${forLog(e instanceof Error ? e.message : e)}\n`)
     return 2
   }
 

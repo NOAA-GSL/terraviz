@@ -75,6 +75,28 @@ describe('runImportEvents', () => {
     const { ctx } = makeCtx({ createEvent })
     expect(await runImportEvents(ctx)).toBe(1)
   })
+
+  it('prints no workflow command from a misbehaving server, even at the start of a line', async () => {
+    const createEvent = vi.fn(async () => ({
+      ok: false,
+      status: 400,
+      error: '##[error]forged',
+      errors: [{ field: '::error::forged', code: 'x\n::warning::y', message: 'm' }],
+    }))
+    const { ctx, err } = makeCtx({ createEvent })
+    await runImportEvents(ctx)
+    for (const line of err.join('').split('\n')) {
+      expect(line.trimStart().startsWith('::')).toBe(false)
+      expect(line).not.toContain('##[')
+    }
+  })
+
+  it('prints a feed that will not load without letting it issue a command', async () => {
+    const { ctx, err } = makeCtx({})
+    ctx.readFile = () => '##[error]not json'
+    expect(await runImportEvents(ctx)).toBe(2)
+    expect(err.join('')).not.toContain('##[')
+  })
 })
 
 describe('runImportEvents — registry-driven refresh (default mode)', () => {
@@ -198,7 +220,7 @@ describe('runImportEvents — registry-driven refresh (default mode)', () => {
             {
               externalId: 'x\r\n::error::forged',
               // The legacy syntax is read anywhere in a line, not just at its start.
-              title: '##[error title=Action required;file=src/main.ts;line=1]Rotate the token',
+              title: '##[error title=Action required;file=src/main.ts;line=1]Rotate the token\u202e',
               code: 'ingest_failed',
               message: 'e\n::warning::z \u0085##[add-mask]y',
             },
@@ -212,6 +234,8 @@ describe('runImportEvents — registry-driven refresh (default mode)', () => {
         expect(line.trimStart().startsWith('::')).toBe(false)
         expect(line).not.toContain('##[')
       }
+      // C1, the Unicode line separators and the bidi controls are flattened too.
+      expect(out.join('')).not.toMatch(/[\u0080-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069]/)
       // Escaped, not dropped: an operator can still read what the feed said.
       expect(out.join('')).toContain('##\\[error title=Action required')
     })
