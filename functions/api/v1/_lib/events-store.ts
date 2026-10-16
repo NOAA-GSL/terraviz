@@ -349,7 +349,14 @@ export async function insertCurrentEvent(
   return row
 }
 
-/** Insert the category/keyword decoration rows for an event. */
+/** Insert the category/keyword decoration rows for an event.
+ *
+ *  A repeat is skipped, not inserted: both tables are sets keyed on the
+ *  value, and feeds do repeat themselves (an RSS item may list the same
+ *  `<category>` twice). A plain INSERT threw on the primary key there,
+ *  after the event row was already written — leaving a half-ingested
+ *  event with no matcher links, which then failed again on every
+ *  refresh, since the refresh deletes and rewrites the same repeats. */
 async function writeEventDecorations(
   db: D1Database,
   eventId: string,
@@ -359,14 +366,20 @@ async function writeEventDecorations(
   for (const [facet, values] of Object.entries(categories ?? {})) {
     for (const value of values) {
       await db
-        .prepare(`INSERT INTO event_categories (event_id, facet, value) VALUES (?, ?, ?)`)
+        .prepare(
+          `INSERT INTO event_categories (event_id, facet, value) VALUES (?, ?, ?)
+           ON CONFLICT (event_id, facet, value) DO NOTHING`,
+        )
         .bind(eventId, facet, value)
         .run()
     }
   }
   for (const keyword of keywords ?? []) {
     await db
-      .prepare(`INSERT INTO event_keywords (event_id, keyword) VALUES (?, ?)`)
+      .prepare(
+        `INSERT INTO event_keywords (event_id, keyword) VALUES (?, ?)
+         ON CONFLICT (event_id, keyword) DO NOTHING`,
+      )
       .bind(eventId, keyword)
       .run()
   }

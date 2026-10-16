@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 The Zyra Project
 
-import { describe, it, expect, vi } from 'vitest'
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest'
 import { runImportEvents } from './import-events'
 import type { CommandContext } from './commands'
 import type { TerravizClient } from './lib/client'
@@ -75,6 +75,28 @@ describe('runImportEvents', () => {
     const { ctx } = makeCtx({ createEvent })
     expect(await runImportEvents(ctx)).toBe(1)
   })
+
+  it('prints no workflow command from a misbehaving server, even at the start of a line', async () => {
+    const createEvent = vi.fn(async () => ({
+      ok: false,
+      status: 400,
+      error: '##[error]forged',
+      errors: [{ field: '::error::forged', code: 'x\n::warning::y', message: 'm' }],
+    }))
+    const { ctx, err } = makeCtx({ createEvent })
+    await runImportEvents(ctx)
+    for (const line of err.join('').split('\n')) {
+      expect(line.trimStart().startsWith('::')).toBe(false)
+      expect(line).not.toContain('##[')
+    }
+  })
+
+  it('prints a feed that will not load without letting it issue a command', async () => {
+    const { ctx, err } = makeCtx({})
+    ctx.readFile = () => '##[error]not json'
+    expect(await runImportEvents(ctx)).toBe(2)
+    expect(err.join('')).not.toContain('##[')
+  })
 })
 
 describe('runImportEvents — registry-driven refresh (default mode)', () => {
@@ -139,5 +161,121 @@ describe('runImportEvents — registry-driven refresh (default mode)', () => {
       },
     }))
     expect(await runImportEvents(makeRefreshCtx({ refreshEvents: connectorError }).ctx)).toBe(1)
+  })
+
+  describe('with failures', () => {
+    // The CI runner sets GITHUB_ACTIONS, which switches on the
+    // stop-commands wrapper; pin it so these tests read the same anywhere.
+    beforeEach(() => {
+      vi.stubEnv('GITHUB_ACTIONS', '')
+    })
+    afterEach(() => {
+      vi.unstubAllEnvs()
+    })
+
+    function failing(feed: Record<string, unknown>, failed: number) {
+      return vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        body: {
+          fetched: failed, mappable: failed, created: 0, refreshed: 0, failed,
+          feeds: [{ id: 'F1', kind: 'rss', label: 'Feed', created: 0, refreshed: 0, failed, ...feed }],
+        },
+      }))
+    }
+
+    it('names each failed item the server describes, and how many it did not', async () => {
+      const refreshEvents = failing(
+        {
+          label: 'NHC Atlantic',
+          failures: [
+            {
+              externalId: 'https://www.nhc.noaa.gov/',
+              title: 'There are no tropical cyclones at this time.',
+              code: 'ingest_failed',
+              message: 'D1_ERROR: boom',
+            },
+            { externalId: null, title: null, code: 'invalid_item', message: 'source.url: invalid' },
+          ],
+        },
+        8,
+      )
+      const { ctx, out } = makeRefreshCtx({ refreshEvents })
+      expect(await runImportEvents(ctx)).toBe(1)
+      const text = out.join('')
+      expect(text).toContain(
+        '      ! "There are no tropical cyclones at this time." [https://www.nhc.noaa.gov/]: ' +
+          'ingest_failed — D1_ERROR: boom\n',
+      )
+      expect(text).toContain('      ! (untitled): invalid_item — source.url: invalid\n')
+      expect(text).toContain('      … and 6 more\n')
+    })
+
+    it('leaves no workflow command in either syntax, wherever the text sits', async () => {
+      const refreshEvents = failing(
+        {
+          label: 'Feed\n::error::label ##[error]label',
+          error: 'down\u2028::error::connector',
+          failures: [
+            {
+              externalId: 'x\r\n::error::forged',
+              // The legacy syntax is read anywhere in a line, not just at its start.
+              title: '##[error title=Action required;file=src/main.ts;line=1]Rotate the token\u202e',
+              code: 'ingest_failed',
+              message: 'e\n::warning::z \u0085##[add-mask]y',
+            },
+          ],
+        },
+        1,
+      )
+      const { ctx, out } = makeRefreshCtx({ refreshEvents })
+      await runImportEvents(ctx)
+      for (const line of out.join('').split('\n')) {
+        expect(line.trimStart().startsWith('::')).toBe(false)
+        expect(line).not.toContain('##[')
+      }
+      // C1, the Unicode line separators and the bidi controls are flattened too.
+      expect(out.join('')).not.toMatch(/[\u0080-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069]/)
+      // Escaped, not dropped: an operator can still read what the feed said.
+      expect(out.join('')).toContain('##\\[error title=Action required')
+    })
+
+    it('prints only the count from a server that names no failures', async () => {
+      const { ctx, out } = makeRefreshCtx({ refreshEvents: failing({}, 2) })
+      expect(await runImportEvents(ctx)).toBe(1)
+      const text = out.join('')
+      expect(text).toContain('  - Feed [rss]: +0 / ~0 / !2\n')
+      expect(text).not.toContain('      !')
+      expect(text).not.toContain('more')
+    })
+
+    it('does not throw on a non-string field from a misbehaving server', async () => {
+      const refreshEvents = failing(
+        { failures: [{ externalId: 42, title: { a: 1 }, code: null, message: undefined }] },
+        1,
+      )
+      const { ctx } = makeRefreshCtx({ refreshEvents })
+      expect(await runImportEvents(ctx)).toBe(1)
+    })
+
+    it('under GitHub Actions, switches workflow commands off behind a fresh token', async () => {
+      vi.stubEnv('GITHUB_ACTIONS', 'true')
+      const tokens: string[] = []
+      for (let run = 0; run < 2; run++) {
+        const { ctx, out } = makeRefreshCtx({ refreshEvents: failing({}, 1) })
+        await runImportEvents(ctx)
+        const lines = out.join('').split('\n').filter(Boolean)
+        const stop = /^::stop-commands::(.+)$/.exec(lines[0])
+        expect(stop).not.toBeNull()
+        const token = stop![1]
+        expect(lines[lines.length - 1]).toBe(`::${token}::`)
+        // Everything the server sent sits between the two.
+        expect(lines.slice(1, -1).join('\n')).toContain('Registry refresh complete')
+        tokens.push(token)
+      }
+      // A token a feed could guess, it could print to switch commands back on.
+      expect(tokens[0]).not.toBe(tokens[1])
+      expect(tokens[0]).toMatch(/^[0-9a-f-]{36}$/)
+    })
   })
 })
