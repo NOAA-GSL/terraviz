@@ -44,8 +44,42 @@ describe('analyzeLivePolicy', () => {
     ).toEqual([{ kind: 'ok' }])
   })
 
-  it('flags X-Frame-Options, which can block every other site', () => {
+  it('flags X-Frame-Options under any, where nothing will override it', () => {
     expect(analyzeLivePolicy(ANY, { csp: null, xfo: 'SAMEORIGIN' })).toEqual([{ kind: 'xfo', value: 'SAMEORIGIN' }])
+    // Just after a save to any, the old directive is still served and
+    // browsers still ignore the header. Minutes from now they follow
+    // it, so it is a warning now, after the "doesn't match yet".
+    expect(analyzeLivePolicy(ANY, { csp: "frame-ancestors 'self'", xfo: 'SAMEORIGIN' }, SELF)).toEqual([
+      { kind: 'pending' },
+      { kind: 'xfo', value: 'SAMEORIGIN' },
+    ])
+  })
+
+  it('notes the header for a restriction still on its way, since that restriction will override it', () => {
+    expect(analyzeLivePolicy(LIST, { csp: null, xfo: 'SAMEORIGIN' })).toEqual([
+      { kind: 'pending' },
+      { kind: 'xfo-ignored', value: 'SAMEORIGIN' },
+    ])
+  })
+
+  it('notes, rather than flags, an X-Frame-Options that a frame-ancestors overrides', () => {
+    // What a node behind a shared Cloudflare zone sees on every check:
+    // the setting matches, and the header is a footnote.
+    const list = "frame-ancestors 'self' https://www.example.org https://example.org"
+    expect(analyzeLivePolicy(LIST, { csp: list, xfo: 'SAMEORIGIN' })).toEqual([
+      { kind: 'ok' },
+      { kind: 'xfo-ignored', value: 'SAMEORIGIN' },
+    ])
+    expect(analyzeLivePolicy(SELF, { csp: "frame-ancestors 'self'", xfo: 'SAMEORIGIN' })).toEqual([
+      { kind: 'ok' },
+      { kind: 'xfo-ignored', value: 'SAMEORIGIN' },
+    ])
+    // Someone else's frame-ancestors overrides it too; that policy is
+    // the problem, and the header stays a note after it.
+    expect(analyzeLivePolicy(ANY, { csp: "frame-ancestors 'self'", xfo: 'DENY' })).toEqual([
+      { kind: 'extra', value: "frame-ancestors 'self'" },
+      { kind: 'xfo-ignored', value: 'DENY' },
+    ])
   })
 
   it('flags a frame-ancestors the setting did not produce', () => {
@@ -402,6 +436,23 @@ describe('buildEmbeddingCard: what this node sends now', () => {
     view.qa<HTMLButtonElement>('button').find(b => b.textContent === 'Check again')!.click()
     const liveStatus = view.q('.publisher-nodeprofile-embed-live [role="status"]')!
     await until(() => (liveStatus.textContent ?? '').includes('SAMEORIGIN'), 'the announced verdict')
+  })
+
+  it('shows an overridden X-Frame-Options as a note under the all-clear, not as a warning', async () => {
+    const view = mount(LIST, {
+      live: { csp: "frame-ancestors 'self' https://www.example.org https://example.org", xfo: 'SAMEORIGIN' },
+    })
+    await until(() => view.qa('.publisher-nodeprofile-embed-finding').length === 2, 'the readout')
+    const findings = view.qa('.publisher-nodeprofile-embed-finding')
+    expect(findings[0].textContent).toBe('This matches the saved setting.')
+    expect(findings[1].textContent).toContain('X-Frame-Options: ⁨SAMEORIGIN⁩')
+    expect(findings[1].textContent).toContain('Current browsers ignore this node')
+    expect(view.qa('.publisher-nodeprofile-embed-finding-warn')).toHaveLength(0)
+    // A check the user asks for announces both, the verdict first.
+    view.qa<HTMLButtonElement>('button').find(b => b.textContent === 'Check again')!.click()
+    const liveStatus = view.q('.publisher-nodeprofile-embed-live [role="status"]')!
+    await until(() => (liveStatus.textContent ?? '').includes('Current browsers ignore this node'), 'the announced verdict')
+    expect(liveStatus.textContent).toMatch(/^This matches the saved setting\. /)
   })
 
   it('compares against the newly saved policy after a save', async () => {
