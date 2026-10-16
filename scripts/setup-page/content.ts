@@ -519,7 +519,7 @@ npm run terraviz -- import-snapshot \\
         title: 'If other sites embed the node',
         body: [
           'By default any site may show the node in an iframe, as the WordPress plugin does. To limit that, sign in as an admin and open **Settings → Node profile**, then the **Embedding** card. Choose **Only sites I list** or **No other site**. It takes effect within a few minutes, with no redeploy.',
-          "The card shows the headers a visitor gets on `/`, and warns about an `X-Frame-Options` header or another `frame-ancestors`. Cloudflare's **Add security headers** transform sends `X-Frame-Options: SAMEORIGIN`. With **Any site can embed** it blocks every other site. Cloudflare Access blocks embeds too, and the card cannot see it.",
+          "The card shows the headers a visitor gets on `/`, and flags an `X-Frame-Options` header or another `frame-ancestors`. Cloudflare's **Add security headers** transform sends `X-Frame-Options: SAMEORIGIN`. With **Any site can embed** it blocks every other site. With a list, current browsers ignore it, so if the zone must keep the transform, list the sites. Cloudflare Access blocks embeds too, and the card cannot see it.",
           'You can use an edge rule instead, with the setting left on **Any site can embed**. An edge rule that *Sets* a CSP replaces the node\'s own; use **Add**, so the portal keeps its `frame-ancestors \'self\'`.',
         ],
       },

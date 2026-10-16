@@ -1827,15 +1827,17 @@ path. For `https://www.example.org/2026/10/post/`, list
 
 **The card checks what the node sends.** Its **What this node sends
 now** readout shows the headers a visitor gets on `/`. It warns about
-an `X-Frame-Options` header, or a `frame-ancestors` the setting did
-not send. It cannot see Cloudflare Access, rules that cover other
-paths only, or the custom domain's rules if you opened the portal on
-`*.pages.dev`. A note that the setting "doesn't match yet" should
-clear within a few minutes. If it stays past ten, look for an edge
-rule that *Sets* a Content-Security-Policy: that replaces the node's
-own.
+a `frame-ancestors` the setting did not send, and about an
+`X-Frame-Options` header that browsers will follow. When the node also
+sends `frame-ancestors`, browsers ignore `X-Frame-Options`, so the
+readout shows it as a note instead. It cannot see Cloudflare Access,
+rules that cover other paths only, or the custom domain's rules if you
+opened the portal on `*.pages.dev`. A note that the setting "doesn't
+match yet" should clear within a few minutes. If it stays past ten,
+look for an edge rule that *Sets* a Content-Security-Policy: that
+replaces the node's own.
 
-Three things block an embed whatever the setting says:
+Three things can block an embed the setting allows:
 
 - **An `X-Frame-Options` header.** Cloudflare's **Add security
   headers** managed transform sends `SAMEORIGIN`. With **Any site can
@@ -1843,6 +1845,10 @@ Three things block an embed whatever the setting says:
   ignore it, but older ones still block. Turn it off under **Rules →
   Settings → Managed Transforms** if other sites need to embed the
   node. `public/_headers` already sends the other headers it adds.
+  If the transform has to stay on, for example because the zone serves
+  other sites, choose **Only sites I list** rather than **Any site can
+  embed**. A list sends `frame-ancestors`, which current browsers
+  follow in place of the header.
 - **A `frame-ancestors` you set elsewhere.** Browsers enforce every
   policy they receive, so the stricter one wins.
 - **Cloudflare Access.** An embed cannot load a page Access

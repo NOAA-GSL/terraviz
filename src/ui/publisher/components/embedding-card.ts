@@ -75,11 +75,13 @@ export interface LiveHeaders {
 }
 
 /** One thing the readout says. `ok` is the all-clear; the rest are
- *  findings, which can stack. */
+ *  findings, which can stack. `xfo-ignored` is a note, not a problem:
+ *  it can sit beside `ok`. */
 export type LiveFinding =
   | { kind: 'ok' }
   | { kind: 'pending' }
   | { kind: 'xfo'; value: string }
+  | { kind: 'xfo-ignored'; value: string }
   | { kind: 'extra'; value: string }
 
 /** Every `frame-ancestors` directive across the policies in a CSP
@@ -100,23 +102,33 @@ export function frameAncestorsDirectives(csp: string | null): string[] {
 /**
  * Compare what the node sends with what it was set to send.
  *
- * - `xfo`: any `X-Frame-Options`. With no `frame-ancestors` (the `any`
- *   setting) it blocks every other site in every browser; with one,
- *   current browsers ignore it but older ones still block.
+ * - `xfo`: an `X-Frame-Options` with no `frame-ancestors` beside it, as
+ *   under `any`. Every browser follows it, so it blocks other sites.
+ * - `xfo-ignored`: an `X-Frame-Options` beside a `frame-ancestors`.
+ *   Current browsers ignore it and only older ones follow it, so it is
+ *   a note rather than a problem: the setting still reads as matching.
+ *   A Cloudflare zone shared with other sites can add it to every
+ *   response with no way for the node to remove it, and a warning on
+ *   every check there would teach an admin to stop reading the readout.
  * - `extra`: a `frame-ancestors` directive this setting did not
  *   produce. Every policy is enforced, so it narrows what the setting
  *   allows; it comes from an edge rule or `_headers`.
  * - `pending`: the setting's own directive is missing, or the one the
  *   setting replaced (`previous`) is still being sent. A save takes a
  *   few minutes to reach every server, so this is usually just early.
- * - `ok`: none of the above.
+ * - `ok`: nothing above but `xfo-ignored`, which follows it.
  */
 export function analyzeLivePolicy(policy: EmbedPolicy, live: LiveHeaders, previous?: EmbedPolicy): LiveFinding[] {
   const expected = frameAncestorsHeader(policy)?.toLowerCase() ?? null
   const replaced = previous ? (frameAncestorsHeader(previous)?.toLowerCase() ?? null) : null
   const directives = frameAncestorsDirectives(live.csp)
   const findings: LiveFinding[] = []
-  if (live.xfo) findings.push({ kind: 'xfo', value: live.xfo })
+  const notes: LiveFinding[] = []
+  // Any `frame-ancestors` at all overrides it, ours or someone else's.
+  if (live.xfo) {
+    if (directives.length > 0) notes.push({ kind: 'xfo-ignored', value: live.xfo })
+    else findings.push({ kind: 'xfo', value: live.xfo })
+  }
 
   const ours = expected !== null && directives.includes(expected)
   const others = directives.filter(directive => directive !== expected)
@@ -135,7 +147,7 @@ export function analyzeLivePolicy(policy: EmbedPolicy, live: LiveHeaders, previo
     // still live; that is the same "pending", not a second policy.
     if (ours) for (const directive of others) findings.push({ kind: 'extra', value: directive })
   }
-  return findings.length > 0 ? findings : [{ kind: 'ok' }]
+  return findings.length > 0 ? [...findings, ...notes] : [{ kind: 'ok' }, ...notes]
 }
 
 /** Ask the node what a visitor's browser receives on `/`. Throws on an
@@ -198,6 +210,16 @@ function originErrorText(code: string, fallback: string): string {
   return fallback
 }
 
+/** Which findings are drawn as warnings: a table rather than a test,
+ *  so a kind added to `LiveFinding` has to take a side. */
+const IS_WARNING = {
+  ok: false,
+  'xfo-ignored': false,
+  pending: true,
+  xfo: true,
+  extra: true,
+} satisfies Record<LiveFinding['kind'], boolean>
+
 function findingText(finding: LiveFinding): string {
   switch (finding.kind) {
     case 'ok':
@@ -206,6 +228,8 @@ function findingText(finding: LiveFinding): string {
       return t('publisher.nodeProfile.embedding.live.pending')
     case 'xfo':
       return t('publisher.nodeProfile.embedding.live.xfo', { value: isolate(finding.value) })
+    case 'xfo-ignored':
+      return t('publisher.nodeProfile.embedding.live.xfoIgnored', { value: isolate(finding.value) })
     case 'extra':
       return t('publisher.nodeProfile.embedding.live.extra', { value: isolate(finding.value) })
   }
@@ -500,7 +524,7 @@ export function buildEmbeddingCard(options: EmbeddingCardOptions): HTMLElement {
       liveFindings.replaceChildren(
         ...findings.map(finding =>
           el('li', {
-            className: finding.kind === 'ok' ? 'publisher-nodeprofile-embed-finding' : 'publisher-nodeprofile-embed-finding publisher-nodeprofile-embed-finding-warn',
+            className: IS_WARNING[finding.kind] ? 'publisher-nodeprofile-embed-finding publisher-nodeprofile-embed-finding-warn' : 'publisher-nodeprofile-embed-finding',
             textContent: findingText(finding),
           }),
         ),
