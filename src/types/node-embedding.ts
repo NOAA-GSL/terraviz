@@ -66,9 +66,10 @@
  * has to get a visitor to download and open it, since a web page
  * cannot navigate a frame to a `file:` URL. That is narrower than
  * `any`, the default, and the portal stays locked to `'self'` under
- * every policy. It is accepted as that exact token: `file://` and a
- * path are refused rather than shortened, with their own code, since
- * neither matches what the operator meant.
+ * every policy. It is accepted as that exact token: `file://`, a
+ * `file:///…` path and a bare `file` are refused rather than
+ * shortened, with their own code, since none of them matches what
+ * the operator meant.
  */
 
 /** The three postures, in the order the portal offers them. */
