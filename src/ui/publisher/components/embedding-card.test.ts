@@ -44,13 +44,21 @@ describe('analyzeLivePolicy', () => {
     ).toEqual([{ kind: 'ok' }])
   })
 
-  it('flags X-Frame-Options when no frame-ancestors overrides it, since browsers then follow it', () => {
+  it('flags X-Frame-Options under any, where nothing will override it', () => {
     expect(analyzeLivePolicy(ANY, { csp: null, xfo: 'SAMEORIGIN' })).toEqual([{ kind: 'xfo', value: 'SAMEORIGIN' }])
-    // A restriction that has not reached this server yet: nothing
-    // overrides the header yet either, so it blocks for now.
-    expect(analyzeLivePolicy(LIST, { csp: null, xfo: 'SAMEORIGIN' })).toEqual([
-      { kind: 'xfo', value: 'SAMEORIGIN' },
+    // Just after a save to any, the old directive is still served and
+    // browsers still ignore the header. Minutes from now they follow
+    // it, so it is a warning now, after the "doesn't match yet".
+    expect(analyzeLivePolicy(ANY, { csp: "frame-ancestors 'self'", xfo: 'SAMEORIGIN' }, SELF)).toEqual([
       { kind: 'pending' },
+      { kind: 'xfo', value: 'SAMEORIGIN' },
+    ])
+  })
+
+  it('notes the header for a restriction still on its way, since that restriction will override it', () => {
+    expect(analyzeLivePolicy(LIST, { csp: null, xfo: 'SAMEORIGIN' })).toEqual([
+      { kind: 'pending' },
+      { kind: 'xfo-ignored', value: 'SAMEORIGIN' },
     ])
   })
 
@@ -438,12 +446,12 @@ describe('buildEmbeddingCard: what this node sends now', () => {
     const findings = view.qa('.publisher-nodeprofile-embed-finding')
     expect(findings[0].textContent).toBe('This matches the saved setting.')
     expect(findings[1].textContent).toContain('X-Frame-Options: ⁨SAMEORIGIN⁩')
-    expect(findings[1].textContent).toContain('Current browsers ignore it')
+    expect(findings[1].textContent).toContain('Current browsers ignore this node')
     expect(view.qa('.publisher-nodeprofile-embed-finding-warn')).toHaveLength(0)
     // A check the user asks for announces both, the verdict first.
     view.qa<HTMLButtonElement>('button').find(b => b.textContent === 'Check again')!.click()
     const liveStatus = view.q('.publisher-nodeprofile-embed-live [role="status"]')!
-    await until(() => (liveStatus.textContent ?? '').includes('Current browsers ignore it'), 'the announced verdict')
+    await until(() => (liveStatus.textContent ?? '').includes('Current browsers ignore this node'), 'the announced verdict')
     expect(liveStatus.textContent).toMatch(/^This matches the saved setting\. /)
   })
 

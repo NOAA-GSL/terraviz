@@ -1829,13 +1829,13 @@ path. For `https://www.example.org/2026/10/post/`, list
 now** readout shows the headers a visitor gets on `/`. It warns about
 a `frame-ancestors` the setting did not send, and about an
 `X-Frame-Options` header that browsers will follow. When the node also
-sends `frame-ancestors`, browsers ignore `X-Frame-Options`, so the
-readout shows it as a note instead. It cannot see Cloudflare Access,
-rules that cover other paths only, or the custom domain's rules if you
-opened the portal on `*.pages.dev`. A note that the setting "doesn't
-match yet" should clear within a few minutes. If it stays past ten,
-look for an edge rule that *Sets* a Content-Security-Policy: that
-replaces the node's own.
+sends `frame-ancestors`, current browsers ignore `X-Frame-Options`, so
+the readout shows it as a note instead. It cannot see Cloudflare
+Access, rules that cover other paths only, or the custom domain's rules
+if you opened the portal on `*.pages.dev`. If it says the node "doesn't
+match the saved setting yet", that should clear within a few minutes.
+If it stays past ten, look for an edge rule that *Sets* a
+Content-Security-Policy: that replaces the node's own.
 
 Three things can block an embed the setting allows:
 
@@ -1847,8 +1847,8 @@ Three things can block an embed the setting allows:
   node. `public/_headers` already sends the other headers it adds.
   If the transform has to stay on, for example because the zone serves
   other sites, choose **Only sites I list** rather than **Any site can
-  embed**. A list sends `frame-ancestors`, which current browsers
-  follow in place of the header.
+  embed**. Current browsers then ignore the header. You will need to
+  name every site that embeds the node.
 - **A `frame-ancestors` you set elsewhere.** Browsers enforce every
   policy they receive, so the stricter one wins.
 - **Cloudflare Access.** An embed cannot load a page Access

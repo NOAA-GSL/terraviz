@@ -102,14 +102,23 @@ export function frameAncestorsDirectives(csp: string | null): string[] {
 /**
  * Compare what the node sends with what it was set to send.
  *
- * - `xfo`: an `X-Frame-Options` with no `frame-ancestors` beside it, as
- *   under `any`. Every browser follows it, so it blocks other sites.
- * - `xfo-ignored`: an `X-Frame-Options` beside a `frame-ancestors`.
- *   Current browsers ignore it and only older ones follow it, so it is
- *   a note rather than a problem: the setting still reads as matching.
- *   A Cloudflare zone shared with other sites can add it to every
- *   response with no way for the node to remove it, and a warning on
- *   every check there would teach an admin to stop reading the readout.
+ * - `xfo`: an `X-Frame-Options` browsers will follow: the setting is
+ *   `any` and no other policy sends `frame-ancestors`, so it blocks
+ *   other sites.
+ * - `xfo-ignored`: an `X-Frame-Options` beside a `frame-ancestors`, the
+ *   setting's own or another policy's. Current browsers ignore it and
+ *   only older ones follow it, so it is a note rather than a problem:
+ *   the setting still reads as matching. A Cloudflare zone shared with
+ *   other sites can add it to every response with no way for the node
+ *   to remove it, and a warning on every check there would teach an
+ *   admin to stop reading the readout.
+ *
+ * The two are told apart by where the saved setting is heading, not by
+ * this instant. Just after a change to `any`, the old directive is
+ * still served and browsers still ignore the header; minutes later
+ * they follow it, so that is when the warning belongs. Likewise a new
+ * `list` or `self` will send a directive, so its header is a note even
+ * before the save arrives (`pending` already says it has not).
  * - `extra`: a `frame-ancestors` directive this setting did not
  *   produce. Every policy is enforced, so it narrows what the setting
  *   allows; it comes from an edge rule or `_headers`.
@@ -123,12 +132,6 @@ export function analyzeLivePolicy(policy: EmbedPolicy, live: LiveHeaders, previo
   const replaced = previous ? (frameAncestorsHeader(previous)?.toLowerCase() ?? null) : null
   const directives = frameAncestorsDirectives(live.csp)
   const findings: LiveFinding[] = []
-  const notes: LiveFinding[] = []
-  // Any `frame-ancestors` at all overrides it, ours or someone else's.
-  if (live.xfo) {
-    if (directives.length > 0) notes.push({ kind: 'xfo-ignored', value: live.xfo })
-    else findings.push({ kind: 'xfo', value: live.xfo })
-  }
 
   const ours = expected !== null && directives.includes(expected)
   const others = directives.filter(directive => directive !== expected)
@@ -146,6 +149,16 @@ export function analyzeLivePolicy(policy: EmbedPolicy, live: LiveHeaders, previo
     // Before a save has propagated, the old setting's directive is
     // still live; that is the same "pending", not a second policy.
     if (ours) for (const directive of others) findings.push({ kind: 'extra', value: directive })
+  }
+
+  // Overridden once the save has landed: by the setting's own
+  // directive, or by another policy's. The one a save to `any` just
+  // replaced is on its way out, so it does not count.
+  const notes: LiveFinding[] = []
+  if (live.xfo) {
+    const overridden = expected !== null || others.some(directive => directive !== replaced)
+    if (overridden) notes.push({ kind: 'xfo-ignored', value: live.xfo })
+    else findings.push({ kind: 'xfo', value: live.xfo })
   }
   return findings.length > 0 ? [...findings, ...notes] : [{ kind: 'ok' }, ...notes]
 }
