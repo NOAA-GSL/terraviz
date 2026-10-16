@@ -441,7 +441,7 @@ CREATE TABLE node_settings (
   -- ISO 8601. No trailing comment here: SQLite's ALTER ... ADD COLUMN
   -- splices new columns onto the last column-def line of the stored
   -- CREATE TABLE text (see 0028's note).
-  updated_at    TEXT NOT NULL,
+  updated_at    TEXT NOT NULL, embed_policy_json TEXT,
   FOREIGN KEY (updated_by) REFERENCES publishers(id)
 );
 

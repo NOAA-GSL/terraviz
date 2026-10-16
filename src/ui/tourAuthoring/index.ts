@@ -32,6 +32,52 @@ export function readTourEditParam(url: URL = new URL(window.location.href)): str
 }
 
 /**
+ * True when any page above this one in the frame tree is on another
+ * origin.
+ *
+ * The dock is a publisher write surface: it saves, uploads media and
+ * publishes with the signed-in publisher's credentials. It lives on
+ * the public document (`/?tourEdit=<id>`), which any site may embed by
+ * default, so it cannot lean on `frame-ancestors` the way `/publish`
+ * does. A foreign page could frame it and trick a publisher into
+ * clicking through to Publish. Refusing to mount there closes that
+ * without restricting the public app. The portal opens the dock as a
+ * top-level navigation, so no real use is framed.
+ *
+ * `location.ancestorOrigins` names every ancestor where the browser
+ * offers it (Chromium, WebKit); a sandboxed one reads `"null"`, which
+ * counts as foreign. Every browser also gets the walk up `parent`:
+ * reading a frame's origin throws when it is another origin's, which
+ * counts as foreign too. Walking every level rather than reading only
+ * `top` is what catches a foreign frame between two of this node's
+ * own pages, where `ancestorOrigins` is missing (Firefox).
+ */
+export function hasForeignAncestor(win: Window = window): boolean {
+  if (win.top === win) return false
+  const own = win.location.origin
+  const ancestors = win.location.ancestorOrigins
+  if (ancestors) {
+    for (let i = 0; i < ancestors.length; i++) {
+      if (ancestors[i] !== own) return true
+    }
+  }
+  let frame: Window = win
+  // A frame tree is finite, but bound the walk anyway: a fake or
+  // detached window whose `parent` never reaches `top` must not spin.
+  for (let depth = 0; depth < 64 && frame !== frame.top; depth++) {
+    const parent: Window | null = frame.parent
+    if (!parent || parent === frame) return true
+    try {
+      if (parent.location.origin !== own) return true
+    } catch {
+      return true
+    }
+    frame = parent
+  }
+  return frame !== frame.top
+}
+
+/**
  * Mount the dock if the URL signals tour-authoring mode. Idempotent
  * — the host calls this once per boot; re-calling without a prior
  * `dispose()` is a no-op (logs a warning so a buggy host doesn't
@@ -45,6 +91,10 @@ export function initTourAuthoring(
 ): TourAuthoringHandle | null {
   const id = readTourEditParam()
   if (id === null) return null
+  if (hasForeignAncestor()) {
+    logger.warn('[tourAuthoring] Not mounting the authoring dock inside a page from another site.')
+    return null
+  }
   if (activeHandle) {
     logger.warn('[tourAuthoring] initTourAuthoring called while a dock is already mounted; ignoring.')
     return activeHandle

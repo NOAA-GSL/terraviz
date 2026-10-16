@@ -349,7 +349,14 @@ export async function insertCurrentEvent(
   return row
 }
 
-/** Insert the category/keyword decoration rows for an event. */
+/** Insert the category/keyword decoration rows for an event.
+ *
+ *  A repeat is skipped, not inserted: both tables are sets keyed on the
+ *  value, and feeds do repeat themselves (an RSS item may list the same
+ *  `<category>` twice). A plain INSERT threw on the primary key there,
+ *  after the event row was already written — leaving a half-ingested
+ *  event with no matcher links, which then failed again on every
+ *  refresh, since the refresh deletes and rewrites the same repeats. */
 async function writeEventDecorations(
   db: D1Database,
   eventId: string,
@@ -359,14 +366,20 @@ async function writeEventDecorations(
   for (const [facet, values] of Object.entries(categories ?? {})) {
     for (const value of values) {
       await db
-        .prepare(`INSERT INTO event_categories (event_id, facet, value) VALUES (?, ?, ?)`)
+        .prepare(
+          `INSERT INTO event_categories (event_id, facet, value) VALUES (?, ?, ?)
+           ON CONFLICT (event_id, facet, value) DO NOTHING`,
+        )
         .bind(eventId, facet, value)
         .run()
     }
   }
   for (const keyword of keywords ?? []) {
     await db
-      .prepare(`INSERT INTO event_keywords (event_id, keyword) VALUES (?, ?)`)
+      .prepare(
+        `INSERT INTO event_keywords (event_id, keyword) VALUES (?, ?)
+         ON CONFLICT (event_id, keyword) DO NOTHING`,
+      )
       .bind(eventId, keyword)
       .run()
   }
@@ -447,27 +460,53 @@ export async function updateCurrentEventContent(
   await writeEventDecorations(db, id, input.categories, input.keywords)
 }
 
+/** How many rows {@link listCurrentEvents} returns when the caller does
+ *  not say. */
+export const DEFAULT_EVENT_LIST_LIMIT = 100
+
+/** The most rows {@link listCurrentEvents} returns in one call, whatever
+ *  the caller asks for. Exported so a caller that wants "as many as
+ *  allowed" names this rather than restating it. */
+export const MAX_EVENT_LIST_LIMIT = 500
+
 /** List events, newest first by the event's *own* time — when it
  *  occurred, else when its source published it, else when we ingested
  *  it. Ordering by `created_at` alone made one refresh run's batch come
  *  out in reverse feed order (feeds list newest articles first, so the
  *  newest got the earliest insert timestamps), which is exactly
- *  backwards for a curator triaging the queue. */
+ *  backwards for a curator triaging the queue. The id breaks ties
+ *  (EONET times often sit on midnight), so which rows fall at a limit
+ *  does not change from one request to the next. */
 export async function listCurrentEvents(
   db: D1Database,
   opts: { status?: CurrentEventStatus; limit?: number } = {},
 ): Promise<CurrentEventRow[]> {
-  const limit = Math.max(1, Math.min(opts.limit ?? 100, 500))
+  const limit = Math.max(1, Math.min(opts.limit ?? DEFAULT_EVENT_LIST_LIMIT, MAX_EVENT_LIST_LIMIT))
   const where = opts.status ? `WHERE status = ?` : ''
   const stmt = db.prepare(
     `SELECT ${EVENT_COLUMNS} FROM current_events
      ${where}
-     ORDER BY COALESCE(occurred_start, published_at, created_at) DESC
+     ORDER BY COALESCE(occurred_start, published_at, created_at) DESC, id DESC
      LIMIT ?`,
   )
   const bound = opts.status ? stmt.bind(opts.status, limit) : stmt.bind(limit)
   const res = await bound.all<CurrentEventRow>()
   return res.results ?? []
+}
+
+/** How many events {@link listCurrentEvents} would list with no limit —
+ *  one status, or every status when `status` is omitted. Lets the review
+ *  queue say "the newest 500 of 734" instead of silently dropping the
+ *  rest. */
+export async function countCurrentEvents(
+  db: D1Database,
+  opts: { status?: CurrentEventStatus } = {},
+): Promise<number> {
+  const stmt = opts.status
+    ? db.prepare(`SELECT COUNT(*) AS n FROM current_events WHERE status = ?`).bind(opts.status)
+    : db.prepare(`SELECT COUNT(*) AS n FROM current_events`)
+  const row = await stmt.first<{ n: number }>()
+  return row?.n ?? 0
 }
 
 /**
@@ -829,28 +868,47 @@ export async function listLinksForEvent(
   return res.results ?? []
 }
 
+/** A link row with its dataset's title, or null when the dataset row is
+ *  gone. */
+export type EventDatasetLinkWithTitle = EventDatasetLinkRow & { dataset_title: string | null }
+
+/** {@link LINK_COLUMNS} qualified for a query that joins another table. */
+const LINK_COLUMNS_QUALIFIED = LINK_COLUMNS.split(',')
+  .map(c => `l.${c.trim()}`)
+  .join(', ')
+
 /**
  * Bulk version of {@link listLinksForEvent} for the review queue: fetch
  * the links for many events in a few chunked `IN (…)` queries instead of
  * one per event (avoids an N+1 over the queue). Returns a map keyed by
  * event id; each list is score-ordered.
+ *
+ * Each row carries its dataset's title, joined here rather than looked up
+ * afterwards. A separate lookup bound the distinct dataset ids, so its
+ * statement count grew with the catalogue (one per 80 datasets), and the
+ * queue's total is held under D1's per-invocation query limit. With the
+ * join the count depends only on how many events are listed. No
+ * visibility filter, as before: every publisher can already read the
+ * whole catalogue through `/publish/datasets`.
  */
 export async function listLinksForEvents(
   db: D1Database,
   eventIds: readonly string[],
-): Promise<Map<string, EventDatasetLinkRow[]>> {
-  const out = new Map<string, EventDatasetLinkRow[]>()
+): Promise<Map<string, EventDatasetLinkWithTitle[]>> {
+  const out = new Map<string, EventDatasetLinkWithTitle[]>()
   for (const id of eventIds) out.set(id, [])
   for (let i = 0; i < eventIds.length; i += EVENT_BIND_BATCH) {
     const chunk = eventIds.slice(i, i + EVENT_BIND_BATCH)
     const ph = chunk.map(() => '?').join(', ')
     const res = await db
       .prepare(
-        `SELECT ${LINK_COLUMNS} FROM event_dataset_links
-          WHERE event_id IN (${ph}) ORDER BY match_score DESC`,
+        `SELECT ${LINK_COLUMNS_QUALIFIED}, d.title AS dataset_title
+           FROM event_dataset_links l
+           LEFT JOIN datasets d ON d.id = l.dataset_id
+          WHERE l.event_id IN (${ph}) ORDER BY l.match_score DESC`,
       )
       .bind(...chunk)
-      .all<EventDatasetLinkRow>()
+      .all<EventDatasetLinkWithTitle>()
     for (const row of res.results ?? []) out.get(row.event_id)?.push(row)
   }
   return out

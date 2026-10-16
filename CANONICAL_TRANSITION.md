@@ -247,7 +247,9 @@ This is a cutover gate rather than a follow-up, because the embed is the
 GSL-visible deliverable and it depends on edge configuration that does not
 travel with the code.
 
-The specific hazard: the repository ships no Content-Security-Policy. Upstream
+The specific hazard: the repository ships no Content-Security-Policy for the
+public app (its only one is `frame-ancestors 'self'` on the `/publish` portal,
+from `public/_headers`). Upstream
 enforces its policy at the Cloudflare edge through Transform Rules, and **edge
 rules do not travel with a fork or a redeploy**. A node standing up at a new
 path inherits none of it, including `frame-ancestors`. Without a policy that
@@ -414,8 +416,9 @@ Recorded here because the choice is not obvious and someone will ask.
 
 **Embed gate (condition 8):**
 
-- [ ] CSP set at the edge for the new deployment, with `frame-ancestors` naming the GSL WordPress origin
-- [ ] No `X-Frame-Options: DENY` or `SAMEORIGIN` on the node from `_headers`, Cloudflare, or a NOAA security baseline
+- [ ] Embedding allowed for the GSL WordPress origin. The node's default (**Settings → Node profile**, Embedding card: **Any site can embed**) already allows it. To restrict embedding to that site, choose **Only sites I list** and add its `https://` origin. An edge CSP with `frame-ancestors` also works, on paths outside `/publish`. A Transform Rule that *Sets* a CSP on `/publish` replaces the portal's `frame-ancestors 'self'`, and then the WordPress origin can frame the admin portal: use Add, or exclude `/publish` and `/publish/*`
+- [ ] The Embedding card's **What this node sends now** readout shows no `X-Frame-Options` warning. (With the edge-CSP route above it will always report another `frame-ancestors` policy; that one is expected.)
+- [ ] No `X-Frame-Options: DENY` or `SAMEORIGIN` on the public app's paths from `_headers`, Cloudflare, or a NOAA security baseline. `_headers` sends `SAMEORIGIN` on `/publish` and `/publish/*` deliberately; leave those
 - [ ] Node **not** behind Cloudflare Access, or embed path explicitly exempted
 - [ ] Node serves `/schema/v1/*.schema.json` (the plugin generates its PHP wire types from it)
 - [ ] Embed URL grammar `v1` resolves at the new origin

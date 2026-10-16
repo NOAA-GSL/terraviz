@@ -866,3 +866,26 @@
     font-size: calc(0.64rem * var(--ui-scale));
     color: var(--color-text-muted);
 }
+
+/* --- Node has Orbit turned off (Node profile → Features) ---
+ * `body.orbit-disabled` is set by `setOrbitAvailable(false)` in
+ * `src/ui/chatUI.ts` when the node's `orbit` feature is off. Orbit is
+ * then absent, not degraded: every static way in is hidden here,
+ * whenever it was rendered — the Tools menu and the Help guide can be
+ * built before boot hears the node's answer, and a page can lose Orbit
+ * mid-session, after browse captured its "ask Orbit" hint — while
+ * programmatic opens are refused in `chatUI.ts`. The selector list is
+ * `ORBIT_CHROME_SELECTOR` there, and a test holds the two together.
+ *
+ * `!important` for `embed.css`'s reason: these elements are toggled
+ * through the `.hidden` utility (`display: none !important`), and
+ * holding one hidden after JS removes `.hidden` needs the same weight.
+ */
+body.orbit-disabled #chat-trigger,
+body.orbit-disabled #chat-panel,
+body.orbit-disabled #browse-chat-btn,
+body.orbit-disabled .browse-docent-hint,
+body.orbit-disabled .tools-menu-section-orbit,
+body.orbit-disabled .help-guide-section-orbit {
+    display: none !important;
+}

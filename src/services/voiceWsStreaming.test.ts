@@ -3,11 +3,12 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createWsStreamingSttEngine, __resetWsStreamingDisabled, type WsLike, type StartPcmCapture } from './voiceWsStreaming'
+import { isOrbitWithdrawn, resetOrbitAvailabilityForTests } from './orbitAvailability'
 
 const ALL_CAPS = { webSpeechStt: true, speechSynthesis: true, mediaRecorder: true, getUserMedia: true }
 
 // The session-scoped cooldown is module state shared across instances.
-beforeEach(() => { __resetWsStreamingDisabled() })
+beforeEach(() => { __resetWsStreamingDisabled(); resetOrbitAvailabilityForTests() })
 
 function makeFakeSocket() {
   const sent: Array<ArrayBuffer | string> = []
@@ -138,6 +139,19 @@ describe('ws streaming engine — transport', () => {
     expect(onEnd).toHaveBeenCalledTimes(1)
     // Session-scoped cooldown → the resolver now falls back to batch.
     expect(engine.isAvailable(ALL_CAPS)).toBe(false)
+    // A kill switch is not the node turning Orbit off.
+    expect(isOrbitWithdrawn()).toBe(false)
+  })
+
+  it('withdraws Orbit on a feature_disabled frame', () => {
+    const fakeSock = makeFakeSocket()
+    const onEnd = vi.fn()
+    const engine = createWsStreamingSttEngine({ createSocket: () => fakeSock.sock, startCapture: makeFakeCapture().startCapture })
+    engine.startStreaming({ lang: 'en', stream: dummyStream, onTurn: () => {}, onError: () => {}, onEnd })
+    fakeSock.sock.onopen?.()
+    fakeSock.sock.onmessage?.({ data: JSON.stringify({ type: 'error', code: 'feature_disabled' }) })
+    expect(onEnd).toHaveBeenCalledTimes(1)
+    expect(isOrbitWithdrawn()).toBe(true)
   })
 
   it('abortTurn reopens a fresh socket without ending the session', () => {

@@ -527,7 +527,7 @@ alphabetical layout. Per-event positions:
 
 | Position | Field |
 |---|---|
-| `blob5` | `finish_reason` (`stop` / `length` / `tool_calls` / `error`) |
+| `blob5` | `finish_reason` (`stop` / `length` / `tool_calls` / `error`). `error` means the turn did not complete on the client: an exception, or Orbit withdrawn mid-turn because the node turned it off |
 | `blob6` | `model` |
 | `blob7` | `reading_level` |
 | `blob8` | `turn_role` (`user` / `assistant`) |
@@ -537,7 +537,7 @@ alphabetical layout. Per-event positions:
 | `double4` | `input_tokens` (when present) |
 | `double5` | `output_tokens` (when present) |
 | `double6` | `turn_index` |
-| `double7` | `turn_rounds` (1 = direct reply, ≥2 = tool-calling turn; Phase 1d/Y) |
+| `double7` | `turn_rounds` (1 = direct reply, ≥2 = tool-calling turn; Phase 1d/Y). 0 on the user-side turn, on a turn the local engine answered, one that ended in a client exception, one cut off by an Orbit withdrawal, and from pre-1d/Y clients |
 
 #### `orbit_tool_call`
 
@@ -1010,6 +1010,12 @@ ORDER BY occurrences DESC
 > `duration_ms` carries `0` on `orbit_interaction` rows that have
 > no measurable timing (e.g. synchronous `action_executed`).
 > Filter `double2 > 0` so the average doesn't include those.
+> `blob7 = 'stop'` keeps it to replies that completed: an `error`
+> response stopped early — an exception, or Orbit withdrawn
+> mid-turn — and its duration measures that, not the model.
+> Local-engine fallback answers are still `stop` and still counted,
+> under the configured model, with any failed LLM attempt in their
+> duration; `orbit_interaction` has no field to separate them.
 
 ```sql
 SELECT
@@ -1020,6 +1026,7 @@ SELECT
 FROM terraviz_events
 WHERE blob1 = 'orbit_interaction'
   AND blob5 = 'response_complete'
+  AND blob7 = 'stop'
   AND blob2 = 'production'
   AND double2 > 0
 GROUP BY model

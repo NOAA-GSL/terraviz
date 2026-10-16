@@ -537,16 +537,55 @@ provisions the whole stack and serves real traffic.
 | **Vectorize** (semantic search) | 30M queried + 5M stored vector dimensions/month | At 768 dimensions that is ~6,500 stored datasets |
 | **D1** (catalog) | 5 GB total | A hard cap on Free, not an overage — writes start failing. Paid includes the same 5 GB, then $0.75/GB-month |
 | **R2** (assets) | 10 GB-month | Billed at $0.015/GB-month past it, on either plan |
+| **Workers requests** (Pages Functions) | 100,000 requests/day for the whole account, shared with any Workers on it, reset at midnight UTC | Depends on the project's fail mode; see below. Paid has no daily limit |
 | **KV**, **Pages** | Ample for a single node | — |
 
 The practical reading: Orbit is the reason to pay $5. Roughly 200
 conversations a day exhausts the Neuron allocation, and a kiosk in a
-museum lobby will pass that before lunch. Everything else on this
-list either has room to spare at node scale, or is billed the same
-whichever plan you are on.
+museum lobby will pass that before lunch. Workers requests are the
+one other ceiling worth watching. Everything else on this list either
+has room to spare at node scale, or is billed the same whichever plan
+you are on.
 
-> **Checked against Cloudflare's published pricing on 2026-08-03.**
-> These allocations move, so re-read the
+**Workers requests.** Every request that reaches a Pages Function
+counts, and on a Terraviz node that is most of them:
+
+- Every API call counts, including Orbit, search and the portal.
+- Every map tile counts, because tiles are proxied through
+  `/api/tile/`.
+- Every page a visitor opens counts. The root middleware that
+  enforces the embedding setting (Phase 13) runs on each one. That
+  is true on every node, including one left on **Any site can
+  embed**, and it includes bots and scanners.
+
+Scripts, styles, images under `/assets/` and the other build output
+are static, and free. A first visit to the globe can spend a hundred
+or more requests on tiles, so a busy free-plan node can reach the
+limit.
+
+What happens then depends on the project's fail mode, under
+**Workers & Pages → your project → Settings → Runtime → Fail open /
+closed**. Pages projects have defaulted to fail open; check yours.
+
+- **Fail open** skips Functions until midnight UTC. The site still
+  loads, but the API and map tiles stop working. Expect a globe
+  without its base imagery, an empty catalog, Orbit on its local
+  engine, and a portal that cannot save. Any embedding restriction
+  lifts too.
+- **Fail closed** shows Cloudflare's error 1027 instead. Every page
+  load is a Functions request, so that takes the whole public app
+  down, not just the API.
+
+Neither is good. The fix is the $5 plan, which has no daily limit.
+If one free account holds both a staging and a production node, they
+share the one allowance.
+
+> **Checked against Cloudflare's published pricing on 2026-08-03**,
+> and the Workers-requests row on 2026-10-15, against the
+> [Pages Functions pricing](https://developers.cloudflare.com/pages/functions/pricing/),
+> [routing](https://developers.cloudflare.com/pages/functions/routing/)
+> and [Workers limits](https://developers.cloudflare.com/workers/platform/limits/)
+> pages. These allocations move, so re-read the
 > [Workers pricing page](https://developers.cloudflare.com/workers/platform/pricing/)
 > before you rely on them.
 >
@@ -1718,12 +1757,14 @@ It sits ahead of the optional phase deliberately. Everything from
 here to Phase 13 is work every node does; Phase 14 is the first
 thing you may genuinely skip.
 
-**The repo ships no CSP.** `src/index.html` has no `<meta>` policy,
-and `public/_headers` sets `X-Content-Type-Options`,
-`Referrer-Policy` and `Permissions-Policy` but no CSP. Upstream's
-production deploy enforces a strict `connect-src` policy **at the
-Cloudflare edge** via Transform Rules — which a fork does **not**
-inherit. Your node works without one; you should still add your
+**The repo ships no CSP for the app.** `src/index.html` has no
+`<meta>` policy, and `public/_headers` sets `X-Content-Type-Options`,
+`Referrer-Policy` and `Permissions-Policy` everywhere. Its only CSP
+is `frame-ancestors 'self'` on `/publish`, so no other site can
+frame the publisher portal. Keep that rule if you edit the file.
+Upstream's production deploy enforces a strict `connect-src` policy
+**at the Cloudflare edge** via Transform Rules — which a fork does
+**not** inherit. Your node works without one; you should still add your
 own, as an edge rule or a `Content-Security-Policy` line in
 `public/_headers`:
 
@@ -1738,6 +1779,122 @@ own, as an edge rule or a `Content-Security-Policy` line in
 The app uses `blob:` for preview tours and screenshots — omitting
 it reproduces the "may not load data from blob:" failure. Test
 playback, VR and a tour before locking it down.
+
+If you add the policy with an edge Transform Rule, use **Add**, not
+**Set**. A Set replaces the header the node sent, which strips the
+portal's `frame-ancestors 'self'`. If your replacement has no
+`frame-ancestors`, the portal's `X-Frame-Options` still protects it.
+If it has one, browsers ignore `X-Frame-Options`, so any site that
+policy names can frame the portal. If you must use Set, give
+`/publish` and `/publish/*` a rule of their own that includes
+`frame-ancestors 'self'`. Do not add it to a rule for every path:
+that stops every other site embedding the public app. A Set rule
+also replaces the policy the Embedding setting below sends.
+
+## If other sites embed the node
+
+The Terraviz WordPress plugin, and anything else that embeds a node,
+loads a URL such as `https://<W2>/?dataset=…&embed=1` in an iframe on
+another site. By default any site may do that. The public app sends
+no `frame-ancestors` and no `X-Frame-Options`.
+
+**To limit it, use the portal.** Sign in as an admin, open
+`https://<W2>/publish/node-profile` (**Settings → Node profile** in
+the sidebar), and find the **Embedding** card:
+
+- **Any site can embed** is the default, and how every node starts.
+- **Only sites I list** allows this node and the sites you name.
+- **No other site** allows only the node's own pages.
+
+The change reaches visitors within a few minutes, with no redeploy.
+
+**Which sites to list.** List the origin of each page that will show
+the embed: `https://` and the host from its address bar, with no
+path. For `https://www.example.org/2026/10/post/`, list
+`https://www.example.org`.
+
+- `www.example.org` and `example.org` are different sites, so list
+  both if your pages use both.
+- `https://*.example.org` covers subdomains, but not `example.org`
+  itself.
+- If anything wraps the page in a frame of its own, list that origin
+  too. A page builder's preview is the usual case, when its editor
+  runs on a different host.
+- The card refuses `http://` sites, single-word hosts such as
+  `localhost`, IP addresses, and wildcards over services where anyone
+  can make a site, such as `*.wordpress.com`. Test a local WordPress
+  against a node left on **Any site can embed**.
+
+**The card checks what the node sends.** Its **What this node sends
+now** readout shows the headers a visitor gets on `/`. It warns about
+a `frame-ancestors` the setting did not send, and about an
+`X-Frame-Options` header that browsers will follow. When the node also
+sends `frame-ancestors`, current browsers ignore `X-Frame-Options`, so
+the readout shows it as a note instead. It cannot see Cloudflare
+Access, rules that cover other paths only, or the custom domain's rules
+if you opened the portal on `*.pages.dev`. If it says the node "doesn't
+match the saved setting yet", that should clear within a few minutes.
+If it stays past ten, look for an edge rule that *Sets* a
+Content-Security-Policy: that replaces the node's own.
+
+Three things can block an embed the setting allows:
+
+- **An `X-Frame-Options` header.** Cloudflare's **Add security
+  headers** managed transform sends `SAMEORIGIN`. With **Any site can
+  embed**, it blocks every other site. With a list, current browsers
+  ignore it, but older ones still block. Turn it off under **Rules →
+  Settings → Managed Transforms** if other sites need to embed the
+  node. `public/_headers` already sends the other headers it adds.
+  If the transform has to stay on, for example because the zone serves
+  other sites, choose **Only sites I list** rather than **Any site can
+  embed**. Current browsers then ignore the header. You will need to
+  name every site that embeds the node.
+- **A `frame-ancestors` you set elsewhere.** Browsers enforce every
+  policy they receive, so the stricter one wins.
+- **Cloudflare Access.** An embed cannot load a page Access
+  protects, so keep Access off the public app.
+
+**If an embed still fails**, open the browser console on the page
+showing it. The message names the cause:
+
+- "Refused to display … X-Frame-Options" is an `X-Frame-Options`
+  header.
+- "… violates the following Content Security Policy directive:
+  frame-ancestors …" is a `frame-ancestors` policy, and it quotes
+  the policy.
+- A sign-in page inside the frame is Access.
+
+From a terminal, this shows the headers an embed gets:
+
+```bash
+curl -sI 'https://<W2>/?embed=1' | grep -iE 'content-security-policy|x-frame-options'
+```
+
+**Static config still works.** Put `frame-ancestors` in an edge
+Transform Rule instead, and leave the setting on **Any site can
+embed**. The readout will then always say another policy applies,
+which is expected. Use **Add**, or skip `/publish` and `/publish/*`,
+so the portal keeps its own `frame-ancestors 'self'`. You can put it
+in `public/_headers` instead, but a test pins the repo's default
+there (`scripts/pages-headers.test.ts`). Change that test too, or CI
+will not deploy.
+
+**How it works.** A small root middleware (`functions/_middleware.ts`)
+adds the header to every page the app serves. `public/_routes.json`
+keeps it off static files, and `public/_headers` locks the folders it
+skips. Each page a visitor opens is therefore a Functions request;
+§0.6 says what that costs. If storage fails, the middleware keeps the
+last policy it read, or sends none if it has none yet. So a storage
+outage can lift a restriction on some servers while it lasts, but
+never blanks every embed.
+Running out of the free plan's daily Functions requests lifts it
+until midnight UTC (§0.6).
+
+**If the card is missing after an upgrade**, apply the pending
+catalog migrations (§14.3, or `wrangler d1 migrations apply`). The
+setting is stored by migration 0057, and the card stays hidden until
+it is applied. Preview deployments without a catalog database always
+behave as **Any site can embed**.
 
 ---
 
@@ -2427,11 +2584,17 @@ Two fixes, and you want the first:
    That is the staging-node case: nobody outside the org should reach
    it, and anonymous visitors get nothing either way.
 
-Do not reach for `credentials: 'include'` inside `sw.js`. It would
-apply to the cross-origin rules too, and both of those origins answer
-with `Access-Control-Allow-Origin: *`, which a browser rejects
-outright on a credentialed request. One of them is the SOS catalog,
-so it trades some missing tiles for an empty dataset list.
+Do not reach for `credentials: 'include'` inside `sw.js`:
+
+- On a same-origin request it changes nothing. `same-origin` already
+  sends the `CF_Authorization` cookie, and fix 2 sets it at each call
+  site.
+- It changes only the worker's cross-origin requests, and there it can
+  only break them. GIBS answers with `Access-Control-Allow-Origin: *`,
+  which a browser rejects outright on a credentialed request.
+- Nothing breaks at once, because the app fetches its tiles through
+  `/api/tile/` today. The next cross-origin rule added to the worker is
+  what breaks, far from the change that caused it.
 
 ### Publisher portal shows `role: service` for a real user
 A pre-3pa middleware bug — the classifier read `claims.type ===

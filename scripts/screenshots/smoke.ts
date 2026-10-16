@@ -118,6 +118,33 @@ const checks: Check[] = [
     },
   },
   {
+    name: 'a node with Orbit turned off offers no Orbit',
+    fixtures: [
+      { url: '/api/v1/node-profile', json: { profile: null, features: { orbit: false } } },
+      ...catalogFixtures(),
+    ],
+    async run(page) {
+      // `?labels=on` is the anchor: the poster deep links click it and
+      // then handle `?orbit=open` in the same synchronous pass, so once
+      // labels read pressed, the request to open Orbit has been made.
+      await gotoApp(page, '/?catalog=true&labels=on&orbit=open')
+      await page.locator('#browse-overlay').waitFor({ state: 'visible' })
+      await page.locator('body.orbit-disabled').waitFor({ state: 'attached' })
+      await page.locator('#tools-menu-labels[aria-pressed="true"]').waitFor({ state: 'attached' })
+      assert(!(await page.locator('#chat-panel').isVisible()), '?orbit=open must not open Orbit on a node that turned it off')
+      assert(!(await page.locator('#browse-chat-btn').isVisible()), 'browse must not offer the Ask-Orbit button')
+
+      // A search with no results offers no "ask Orbit" hint at all —
+      // not one that is merely hidden.
+      await page.locator('#browse-search').fill('zzzz no such dataset')
+      await page.locator('#browse-grid .browse-no-results').waitFor()
+      assert(
+        (await page.locator('.browse-docent-hint').count()) === 0,
+        'an empty search must not render the Orbit hint',
+      )
+    },
+  },
+  {
     name: 'view-mode navigation mounts each surface',
     async run(page) {
       await gotoApp(page, '/?catalog=true')
@@ -325,6 +352,16 @@ const checks: Check[] = [
       // The status filter row lets a curator reach reviewed events.
       const filters = page.locator('.publisher-events-filters button')
       assert((await filters.count()) >= 5, 'queue header should expose the status filter (incl. All)')
+      // Search narrows the loaded queue client-side and the count says
+      // so; Clear brings the whole bucket back.
+      await page.locator('.publisher-events-query-input').fill('hurricane')
+      await page.locator('.publisher-events-query-count', { hasText: '1 of 2' }).waitFor({ timeout: 5_000 })
+      assert(
+        (await page.locator('.publisher-events-queue-row').count()) === 1,
+        'search should narrow the queue to the one matching event',
+      )
+      await page.locator('.publisher-events-query-clear').click()
+      await page.locator('.publisher-events-query-count', { hasText: '2 events' }).waitFor({ timeout: 5_000 })
       // The authoring toolbar exposes Refresh + New event; clicking New
       // opens the Direction-D drawer (compose + search/pair datasets).
       const toolbarButtons = page.locator('.publisher-events-toolbar button')
@@ -350,6 +387,32 @@ const checks: Check[] = [
         (await page.locator('.publisher-nodeprofile-link-row').count()) >= 1,
         'stored links should render as editable rows',
       )
+    },
+  },
+  {
+    name: 'publisher Embedding card: the list posture edits sites and refuses a bad one inline',
+    fixtures: publisherFixtures({ admin: true }),
+    async run(page) {
+      await gotoApp(page, '/publish/node-profile')
+      const card = page.locator('.publisher-nodeprofile-embedding')
+      await card.waitFor({ timeout: 15_000 })
+      const inputs = card.locator('.publisher-nodeprofile-embed-input')
+      assert((await inputs.count()) === 2, 'the stored list should pre-fill one row per site')
+      assert(
+        await card.locator('input[type="radio"][value="list"]').isChecked(),
+        'the stored posture should be selected',
+      )
+      // A bad site is refused inline before any request.
+      await inputs.nth(1).fill('http://coastal.example.org/')
+      await card.getByRole('button', { name: 'Save embedding' }).click()
+      await card.locator('.publisher-nodeprofile-embed-error:not([hidden])').first().waitFor({ timeout: 5_000 })
+      assert(
+        (await inputs.nth(1).getAttribute('aria-invalid')) === 'true',
+        'the refused row should be marked invalid',
+      )
+      // Choosing "No other site" hides the list.
+      await card.locator('input[type="radio"][value="self"]').check()
+      await card.locator('.publisher-nodeprofile-embed-origins').waitFor({ state: 'hidden', timeout: 5_000 })
     },
   },
   {

@@ -431,6 +431,42 @@ export const scenes: Scene[] = [
   },
 
   {
+    name: 'orbit-disabled',
+    description:
+      'A node with Orbit turned off (Node profile → Features) — catalog with no Ask-Orbit button and no Orbit section in Tools',
+    // First match wins, so this rule overrides the all-enabled
+    // node-profile read in the catalog fixtures.
+    fixtures: [
+      { url: '/api/v1/node-profile', json: { profile: null, features: { orbit: false } } },
+      ...catalogReportFixtures(),
+    ],
+    requiresFixtures: true,
+    // Orbit-off renders no strings of its own; Weblate has nothing to gain.
+    skipWeblate: true,
+    // The same landing as `catalog-landing`, whose hero picks a
+    // different dataset on each capture.
+    masks: ['#hero-panel'],
+    async setup(page) {
+      await openCatalog(page)
+      // Set once boot has heard the node's answer and before the browse
+      // panel is shown. Assert the chrome is gone, so a regression that
+      // brings Orbit back fails the capture rather than diffing quietly.
+      // (The floating trigger is not checked: a catalog boot with no
+      // dataset never shows it, Orbit on or off.)
+      await page.locator('body.orbit-disabled').waitFor({ state: 'attached' })
+      await page.locator('#browse-chat-btn').waitFor({ state: 'hidden' })
+      // Catalog mode has no Tools toggle to open, and a section inside a
+      // closed popover reads hidden either way — so ask for the
+      // section's own computed display, which only the Orbit-off rule
+      // sets to none.
+      await page.waitForFunction(() => {
+        const section = document.querySelector('.tools-menu-section-orbit')
+        return !!section && getComputedStyle(section).display === 'none'
+      })
+    },
+  },
+
+  {
     name: 'colorbar-controls',
     description:
       'Colour & range controls for a data-encoded dataset — palette swatches, contrast stretch, and the value threshold, opened from the floating colorbar',
@@ -753,12 +789,35 @@ export const scenes: Scene[] = [
   },
   {
     name: 'publish-node-profile',
-    description: 'Publisher portal — node / host-organization profile form + the admin Features toggles card (Phase 3d)',
+    description:
+      'Publisher portal — node / host-organization profile form, the admin Features toggles card (Phase 3d) and the Embedding card (who may frame the public app)',
     fixtures: publisherFixtures({ admin: true }),
     async setup(page) {
+      // The Embedding card reads the node's own headers with `HEAD /`.
+      // The dev server sends none, so answer it with the policy the
+      // fixture saved: the capture then shows the readout's settled
+      // state rather than whatever the dev server happens to send.
+      await page.route(
+        url => url.pathname === '/',
+        async route => {
+          if (route.request().method() !== 'HEAD') return route.fallback()
+          await route.fulfill({
+            status: 200,
+            headers: {
+              'Content-Type': 'text/html',
+              'Content-Security-Policy':
+                "frame-ancestors 'self' https://www.coastal.example.org https://coastal.example.org",
+            },
+          })
+        },
+      )
       await openPublish(page, '/publish/node-profile')
       await page.locator('#nodeprofile-org').waitFor()
       await page.locator('.publisher-nodeprofile-feature-toggle').first().waitFor()
+      await page.locator('.publisher-nodeprofile-embed-input').first().waitFor()
+      // The readout is filled after a HEAD of `/`; wait for it so the
+      // capture does not race a half-drawn card.
+      await page.locator('.publisher-nodeprofile-embed-finding').first().waitFor()
     },
   },
   {

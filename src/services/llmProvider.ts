@@ -13,6 +13,7 @@
 import type { DocentConfig } from '../types'
 import { logger } from '../utils/logger'
 import { reportError } from '../analytics'
+import { isOrbitRefusal } from './orbitAvailability'
 
 // On Tauri, use the HTTP plugin's fetch to bypass webview CORS restrictions.
 // Local LLM servers (Ollama, LM Studio, etc.) don't set CORS headers for
@@ -120,7 +121,7 @@ export type StreamChunk =
   | { type: 'delta'; text: string }
   | { type: 'tool_call'; call: LLMToolCall }
   | { type: 'done' }
-  | { type: 'error'; message: string; code?: 'quota_exhausted' }
+  | { type: 'error'; message: string; code?: 'quota_exhausted' | 'feature_disabled' }
 
 // --- Constants ---
 const REQUEST_TIMEOUT_MS = 30000
@@ -212,12 +213,14 @@ export async function* streamChat(
     logger.warn(`[LLM] API error ${response.status}:`, text)
     // Extract error detail + structured `type` from JSON body if
     // available. Phase 1f/D — `type: 'quota_exhausted'` (or
-    // `code: 4006`) triggers the SPA's degraded badge; everything
-    // else is a generic error chunk.
+    // `code: 4006`) triggers the SPA's degraded badge; the node's
+    // orbit gate refusing (`feature_disabled`) means Orbit itself is
+    // off; everything else is a generic error chunk.
     let detail = ''
-    let code: 'quota_exhausted' | undefined
+    let code: 'quota_exhausted' | 'feature_disabled' | undefined
     try {
       const parsed = JSON.parse(text)
+      if (isOrbitRefusal(response.status, parsed)) code = 'feature_disabled'
       if (parsed.error) {
         detail = `: ${typeof parsed.error === 'string' ? parsed.error : parsed.error.message ?? ''}`
         if (typeof parsed.error === 'object' && parsed.error !== null) {

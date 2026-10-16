@@ -11,6 +11,10 @@ import {
   clearChat,
   notifyDatasetChanged,
   submitFeedback,
+  openChatSettings,
+  showChatTrigger,
+  isOrbitAvailable,
+  setOrbitAvailable,
 } from './chatUI'
 import type { ChatCallbacks } from './chatUI'
 import { loadConfig } from '../services/docentService'
@@ -386,6 +390,59 @@ describe('notifyDatasetChanged', () => {
     notifyDatasetChanged(dataset)
     const prompt = document.getElementById('chat-dataset-prompt')
     expect(prompt?.classList.contains('hidden')).toBe(true)
+  })
+})
+
+describe('a node with Orbit turned off (setOrbitAvailable)', () => {
+  const SST = { id: 'DS_001', title: 'Sea Surface Temperature' } as Parameters<typeof notifyDatasetChanged>[0]
+  const panel = () => document.getElementById('chat-panel')!
+
+  // Availability is module state; leave the next test an Orbit that is on.
+  afterEach(() => setOrbitAvailable(true))
+
+  it('marks the body so CSS hides the static chrome, and unmarks it when offered again', () => {
+    setOrbitAvailable(false)
+    expect(isOrbitAvailable()).toBe(false)
+    expect(document.body.classList.contains('orbit-disabled')).toBe(true)
+    setOrbitAvailable(true)
+    expect(isOrbitAvailable()).toBe(true)
+    expect(document.body.classList.contains('orbit-disabled')).toBe(false)
+  })
+
+  it('refuses every programmatic way into the panel', () => {
+    // As boot does it: the chat is never initialized.
+    setOrbitAvailable(false)
+    // Checked after each call: toggleChat would close a panel an
+    // earlier call wrongly opened, and hide the leak.
+    for (const enter of [openChat, openChatSettings, toggleChat]) {
+      enter()
+      expect(panel().classList.contains('hidden'), enter.name).toBe(true)
+    }
+    expect(document.getElementById('chat-settings')!.classList.contains('hidden')).toBe(true)
+  })
+
+  it('never shows the floating trigger', () => {
+    setOrbitAvailable(false)
+    showChatTrigger()
+    expect(document.getElementById('chat-trigger')!.classList.contains('visible')).toBe(false)
+  })
+
+  it('closes a panel and trigger that were already showing', () => {
+    initChatUI(makeCallbacks())
+    showChatTrigger()
+    openChat()
+    expect(panel().classList.contains('hidden')).toBe(false)
+    setOrbitAvailable(false)
+    expect(panel().classList.contains('hidden')).toBe(true)
+    expect(document.getElementById('chat-trigger')!.classList.contains('visible')).toBe(false)
+  })
+
+  it('offers no dataset nudge and leaves the stored conversation alone', () => {
+    sessionStorage.setItem('sos-docent-chat', '{"messages":["kept"]}')
+    setOrbitAvailable(false)
+    notifyDatasetChanged(SST)
+    expect(document.getElementById('chat-dataset-prompt')!.classList.contains('hidden')).toBe(true)
+    expect(sessionStorage.getItem('sos-docent-chat')).toBe('{"messages":["kept"]}')
   })
 })
 
