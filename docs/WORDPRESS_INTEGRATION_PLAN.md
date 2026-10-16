@@ -426,7 +426,8 @@ should name the setting as the way to allow a site. Its service
 token can read the policy (`GET /api/v1/publish/node-settings`
 returns `embedding: { mode, origins }`; older nodes omit it) to check
 its own origin before embedding, but cannot change it: the PUT is
-admin-only. A plain-`http://` WordPress site can never be listed, so
+admin-only. A check like that must treat a `file:` entry as matching
+no site: it is a scheme with no host, for pages opened from a file. A plain-`http://` WordPress site can never be listed, so
 it can embed only a node left on **Any site can embed**.
 
 ---

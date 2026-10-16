@@ -52,9 +52,12 @@
  * - Non-ASCII hosts. CSP matches the ASCII (punycode) form, so the
  *   operator is asked for the `xn--` form rather than having it
  *   converted behind their back.
- * - Every scheme-source but one, `data:` and `blob:` above all. Any web
- *   page can make a document of either kind and frame through it, so
- *   listing one would admit every site by a side door.
+ * - Every scheme-source but one, `data:` and `blob:` above all.
+ *   Neither names a document an operator could mean. Chromium matches
+ *   an ancestor's origin, which a web-made `blob:` takes from its
+ *   creator and a `data:` document lacks, so there they would admit
+ *   nothing, but an engine that matched an ancestor's URL instead would
+ *   admit every site through either.
  *
  * The one accepted scheme-source is {@link FILE_SOURCE}, `file:`,
  * for a page opened from a file (a standalone HTML page an operator
@@ -62,13 +65,17 @@
  * origin, so no `https://` entry can name it. In Chromium `file:`
  * matches it, while `*`, `'self'`, `file://` and a path do not.
  * (`file://*` also matches, and is refused below so there is one
- * spelling to compare and deduplicate.) It admits every file a
- * visitor opens in their browser, not only the operator's.
+ * spelling to compare and deduplicate.) It admits every page with a
+ * `file:` origin, not only the operator's: any file a visitor opens
+ * in their browser, and any local page an app shows in a web view.
  *
- * The premise is that a web page cannot make a `file:` ancestor. It
- * cannot navigate a frame to a `file:` URL, and a frame it builds
- * from `data:`, `blob:` or a sandboxed `srcdoc` is not one: under
- * `'self' file:` Chromium refused all four. So an attacker who wants
+ * The premise is that a web page cannot make a `file:` ancestor.
+ * Chromium was tested with the attacker's document as the top
+ * ancestor, so nothing else on the chain could refuse it first.
+ * Under `'self' file:` it refused a top-level `blob:` document the
+ * page made, an `about:blank` popup the page wrote into, a page sent
+ * with `CSP: sandbox` and a top-level `data:` URL, and a page cannot
+ * navigate a frame to a `file:` URL at all. So an attacker who wants
  * a file to frame the app has to get a visitor to download and open
  * it. That is narrower than `any`, the default, and the portal stays
  * locked to `'self'` under every policy. Revisit this if an engine
@@ -77,7 +84,8 @@
  * that does so matches nothing here, which fails closed.
  *
  * It is accepted as that exact token: `file://`, a `file:///…` path,
- * a bare `file` and anything else starting `file:` are refused with
+ * a bare `file`, anything else starting `file:` and a path pasted
+ * from a file page's address bar (`/Users/…`, `C:/…`) are refused with
  * their own code rather than shortened.
  */
 
@@ -199,7 +207,11 @@ export function validateEmbedOrigin(raw: unknown): EmbedOriginResult {
   const value = raw.toLowerCase()
   if (value === FILE_SOURCE) return { ok: true, value }
   const scheme = /^([a-z][a-z0-9+.-]*):(\/\/)?/.exec(value)
-  if (value === 'file' || scheme?.[1] === 'file') {
+  // Chrome's address bar shows a file page as its bare path:
+  // `/Users/…`, or `C:/…`, whose drive letter parses as a scheme.
+  // (`C:\…` stops at the punctuation check above.)
+  const path = /^\/(?!\/)/.test(value) || /^[a-z]:\//.test(value)
+  if (value === 'file' || scheme?.[1] === 'file' || path) {
     return fail('file_form', 'Enter only file: (the word file followed by a colon) to allow pages opened from a file.')
   }
   if (!scheme || scheme[1] !== 'https' || !scheme[2]) {

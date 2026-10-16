@@ -408,7 +408,7 @@ describe('buildEmbeddingCard', () => {
     expect(view.puts()[0].body).toEqual({ embedding: { mode: 'list', origins: ['https://www.example.org', 'file:'] } })
   })
 
-  it.each([['file:///Users/me/embed.html'], ['file://'], ['file']])(
+  it.each([['file:///Users/me/embed.html'], ['file://'], ['file'], ['/Users/me/embed.html']])(
     'points %j at file:, rather than at https://, and says what it admits',
     raw => {
       const view = mount(LIST)

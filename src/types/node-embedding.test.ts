@@ -79,6 +79,10 @@ describe('validateEmbedOrigin', () => {
     ['file://localhost/embed.html', 'file_form'],
     ['file:/embed.html', 'file_form'],
     ['file', 'file_form'],
+    // A path pasted from the address bar, which shows it without the scheme.
+    ['/Users/me/embed.html', 'file_form'],
+    ['C:/kiosk/embed.html', 'file_form'],
+    ['C:\\kiosk\\embed.html', 'forbidden_char'],
     ["'file:'", 'forbidden_char'],
     ['file: https://a.org', 'whitespace'],
     ['file:;script-src', 'forbidden_char'],
