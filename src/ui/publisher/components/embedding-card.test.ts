@@ -376,6 +376,30 @@ describe('buildEmbeddingCard', () => {
     expect(document.activeElement).toBe(first)
   })
 
+  it('accepts file: for pages opened from a file, and says how to allow them', async () => {
+    const view = mount(LIST)
+    // The list's hints are tied to the group once, the file: one included.
+    const group = view.q<HTMLElement>('.publisher-nodeprofile-embed-list')!
+    const hints = group.getAttribute('aria-describedby')!.split(' ').map(id => document.getElementById(id)!.textContent)
+    expect(hints[1]).toBe(
+      'To allow a page opened from a file on a computer (an address starting file://), add file: on its own row. ' +
+        'Any page opened from a file can then embed this node, not only yours.',
+    )
+    view.inputs()[1].value = 'file:'
+    view.save()!.click()
+    await until(() => view.puts().length === 1, 'the PUT')
+    expect(view.puts()[0].body).toEqual({ embedding: { mode: 'list', origins: ['https://www.example.org', 'file:'] } })
+  })
+
+  it('points a file:// address at file:, rather than at https://', () => {
+    const view = mount(LIST)
+    view.inputs()[1].value = 'file:///Users/me/embed.html'
+    view.save()!.click()
+    const error = document.getElementById(view.inputs()[1].getAttribute('aria-describedby')!.split(' ')[0])!
+    expect(error.textContent).toBe('To allow pages opened from a file, enter file: on its own, with nothing after the colon.')
+    expect(view.puts()).toHaveLength(0)
+  })
+
   it('refuses a wildcard over shared hosting in the portal\'s words', () => {
     const view = mount(LIST)
     view.inputs()[1].value = 'https://*.wordpress.com'

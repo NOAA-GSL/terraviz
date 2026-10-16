@@ -52,6 +52,23 @@
  * - Non-ASCII hosts. CSP matches the ASCII (punycode) form, so the
  *   operator is asked for the `xn--` form rather than having it
  *   converted behind their back.
+ * - Every scheme-source but one, `data:` and `blob:` above all. Any web
+ *   page can make a document of either kind and frame through it, so
+ *   listing one would admit every site by a side door.
+ *
+ * The one accepted scheme-source is {@link FILE_SOURCE}, `file:`,
+ * for a page opened from a file (a standalone HTML page an operator
+ * keeps for a kiosk or an offline demo). Such a page has no web
+ * origin, so no `https://` entry can name it: in Chromium `file:` is
+ * the only source that matches it, while `*`, `'self'` and `file://`
+ * do not. It admits every file a visitor opens in their browser, not
+ * only the operator's, and an attacker who wants one to frame the app
+ * has to get a visitor to download and open it, since a web page
+ * cannot navigate a frame to a `file:` URL. That is narrower than
+ * `any`, the default, and the portal stays locked to `'self'` under
+ * every policy. It is accepted as that exact token: `file://` and a
+ * path are refused rather than shortened, with their own code, since
+ * neither matches what the operator meant.
  */
 
 /** The three postures, in the order the portal offers them. */
@@ -74,13 +91,15 @@ export const MAX_EMBED_ORIGINS = 50
  *  this leaves room for `https://`, a port and a `*.` prefix. */
 export const MAX_EMBED_ORIGIN_LENGTH = 280
 
+/** The one scheme-source the list accepts: pages opened from a
+ *  file. See the module comment for why it, and nothing like it. */
+export const FILE_SOURCE = 'file:'
+
 /** Any site may embed — the state of a node that never saved one. */
 export function defaultEmbedPolicy(): EmbedPolicy {
   return { mode: 'any', origins: [] }
 }
 
-/** Why an origin was refused. The portal words each one; the API
- *  sends the code in its field-error envelope. */
 /** Hosting services where anyone can create a subdomain, so a
  *  wildcard over one admits strangers' sites. */
 export const SHARED_HOST_SUFFIXES = [
@@ -102,6 +121,8 @@ export const SHARED_HOST_SUFFIXES = [
   'weebly.com',
 ] as const
 
+/** Why an origin was refused. The portal words each one; the API
+ *  sends the code in its field-error envelope. */
 export type EmbedOriginErrorCode =
   | 'required'
   | 'too_long'
@@ -110,6 +131,7 @@ export type EmbedOriginErrorCode =
   | 'keyword'
   | 'not_ascii'
   | 'not_https'
+  | 'file_form'
   | 'has_userinfo'
   | 'has_path'
   | 'bad_port'
@@ -137,7 +159,8 @@ function fail(code: EmbedOriginErrorCode, message: string): EmbedOriginResult {
 /**
  * Validate one origin and return it in canonical form (lowercased).
  * Never repairs: whitespace, a trailing slash or an `http:` scheme is
- * an error the operator sees, not something silently fixed.
+ * an error the operator sees, not something silently fixed. The one
+ * value that is not an `https://` origin is {@link FILE_SOURCE}.
  */
 export function validateEmbedOrigin(raw: unknown): EmbedOriginResult {
   if (typeof raw !== 'string' || raw.length === 0) {
@@ -164,7 +187,11 @@ export function validateEmbedOrigin(raw: unknown): EmbedOriginResult {
   }
 
   const value = raw.toLowerCase()
+  if (value === FILE_SOURCE) return { ok: true, value }
   const scheme = /^([a-z][a-z0-9+.-]*):(\/\/)?/.exec(value)
+  if (value === 'file' || scheme?.[1] === 'file') {
+    return fail('file_form', 'To allow pages opened from a file, enter file: on its own.')
+  }
   if (!scheme || scheme[1] !== 'https' || !scheme[2]) {
     return fail('not_https', 'A site must start with https://.')
   }

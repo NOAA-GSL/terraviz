@@ -391,7 +391,8 @@ A node admin now sets it in the portal, on the **Embedding** card of
 **Settings → Node profile**, with no `_headers` edit and no redeploy:
 **Any site can embed** (the default, which sends no header),
 **Only sites I list** (`frame-ancestors 'self'` plus the listed
-`https://` origins) or **No other site** (`'self'` only). It is
+`https://` origins, and `file:` for a page opened from a file) or
+**No other site** (`'self'` only). It is
 stored on the `node_settings` singleton (migration 0057), validated
 by `src/types/node-embedding.ts`, and enforced by a root middleware
 (`functions/_middleware.ts`) that appends the header to every HTML

@@ -29,6 +29,9 @@ describe('validateEmbedOrigin', () => {
     ['https://*.my-site.wordpress.example.org', 'https://*.my-site.wordpress.example.org'],
     ['https://news.wordpress.com', 'https://news.wordpress.com'],
     ['https://xn--bcher-kva.example', 'https://xn--bcher-kva.example'],
+    // Pages opened from a file: the one scheme-source, as that token.
+    ['file:', 'file:'],
+    ['FILE:', 'file:'],
   ])('accepts %s as %s', (raw, value) => {
     expect(validateEmbedOrigin(raw)).toEqual({ ok: true, value })
   })
@@ -68,6 +71,17 @@ describe('validateEmbedOrigin', () => {
     ['example.org', 'not_https'],
     ['//example.org', 'not_https'],
     ['javascript:alert(1)', 'not_https'],
+    ['filesystem:', 'not_https'],
+    // A file page, but not in the one form that matches it.
+    ['file://', 'file_form'],
+    ['file:///', 'file_form'],
+    ['file:///Users/me/embed.html', 'file_form'],
+    ['file://localhost/embed.html', 'file_form'],
+    ['file:/embed.html', 'file_form'],
+    ['file', 'file_form'],
+    ["'file:'", 'forbidden_char'],
+    ['file: https://a.org', 'whitespace'],
+    ['file:;script-src', 'forbidden_char'],
     // More than an origin.
     ['https://example.org/', 'has_path'],
     ['https://example.org/embed', 'has_path'],
@@ -123,16 +137,19 @@ describe('validateEmbedOrigin', () => {
 
   it('never accepts a value that could add a CSP token', () => {
     // A property over every accepted case: the value is one token
-    // made of the characters an https origin can hold.
+    // made of the characters an https origin can hold, or the one
+    // scheme-source.
     const accepted = [
       'https://www.example.org',
       'https://*.example.org',
       'https://news.noaa.gov:8443',
+      'file:',
+      'File:',
     ]
     for (const raw of accepted) {
       const result = validateEmbedOrigin(raw)
       expect(result.ok).toBe(true)
-      if (result.ok) expect(result.value).toMatch(/^https:\/\/(\*\.)?[a-z0-9.-]+(:[0-9]+)?$/)
+      if (result.ok) expect(result.value).toMatch(/^(?:https:\/\/(\*\.)?[a-z0-9.-]+(:[0-9]+)?|file:)$/)
     }
   })
 })
@@ -159,6 +176,18 @@ describe('validateEmbedPolicyInput', () => {
       expect(result.errors).toEqual([
         { field: 'embedding.origins[1]', code: 'duplicate', message: 'This repeats site 1.' },
       ])
+    }
+  })
+
+  it('accepts file: beside sites, and refuses it twice in any case', () => {
+    expect(validateEmbedPolicyInput({ mode: 'list', origins: ['https://example.org', 'file:'] })).toEqual({
+      ok: true,
+      value: { mode: 'list', origins: ['https://example.org', 'file:'] },
+    })
+    const twice = validateEmbedPolicyInput({ mode: 'list', origins: ['file:', 'FILE:'] })
+    expect(twice.ok).toBe(false)
+    if (!twice.ok) {
+      expect(twice.errors).toEqual([{ field: 'embedding.origins[1]', code: 'duplicate', message: 'This repeats site 1.' }])
     }
   })
 
@@ -217,6 +246,9 @@ describe('parseStoredEmbedPolicy', () => {
     expect(parseStoredEmbedPolicy({ mode: 'list', origins: ['https://a.example.org'] })).toEqual({
       policy: { mode: 'list', origins: ['https://a.example.org'] },
     })
+    expect(parseStoredEmbedPolicy({ mode: 'list', origins: ['file:'] })).toEqual({
+      policy: { mode: 'list', origins: ['file:'] },
+    })
   })
 
   it('re-validates stored origins: drops a bad one, keeps the rest, and flags it', () => {
@@ -252,5 +284,8 @@ describe('frameAncestorsHeader', () => {
     expect(
       frameAncestorsHeader({ mode: 'list', origins: ['https://www.example.org', 'https://*.example.net'] }),
     ).toBe("frame-ancestors 'self' https://www.example.org https://*.example.net")
+    expect(frameAncestorsHeader({ mode: 'list', origins: ['https://www.example.org', 'file:'] })).toBe(
+      "frame-ancestors 'self' https://www.example.org file:",
+    )
   })
 })

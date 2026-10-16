@@ -209,6 +209,7 @@ const ORIGIN_ERROR_KEYS = {
   keyword: 'publisher.nodeProfile.embedding.error.keyword',
   not_ascii: 'publisher.nodeProfile.embedding.error.notAscii',
   not_https: 'publisher.nodeProfile.embedding.error.notHttps',
+  file_form: 'publisher.nodeProfile.embedding.error.fileForm',
   has_userinfo: 'publisher.nodeProfile.embedding.error.userinfo',
   has_path: 'publisher.nodeProfile.embedding.error.path',
   bad_port: 'publisher.nodeProfile.embedding.error.port',
@@ -374,12 +375,14 @@ export function buildEmbeddingCard(options: EmbeddingCardOptions): HTMLElement {
   const originsBlock = el('div', { className: 'publisher-nodeprofile-embed-origins' })
   const originsLabelId = `${id}-origins-label`
   const originsHintId = `${id}-origins-hint`
+  const originsFileHintId = `${id}-origins-file`
   originsBlock.append(
     el('span', { className: 'publisher-field-label', id: originsLabelId, textContent: t('publisher.nodeProfile.embedding.origins.label') }),
   )
   if (options.canEdit) {
     originsBlock.append(
       el('p', { className: 'publisher-nodeprofile-hint', id: originsHintId, textContent: t('publisher.nodeProfile.embedding.origins.hint') }),
+      el('p', { className: 'publisher-nodeprofile-hint', id: originsFileHintId, textContent: t('publisher.nodeProfile.embedding.origins.file') }),
     )
   }
 
@@ -390,11 +393,11 @@ export function buildEmbeddingCard(options: EmbeddingCardOptions): HTMLElement {
     error: HTMLElement
   }
   const rows: OriginRow[] = []
-  // The hint is tied to the group once, not repeated on every field.
+  // The hints are tied to the group once, not repeated on every field.
   const list = el('div', { className: 'publisher-nodeprofile-embed-list' })
   list.setAttribute('role', 'group')
   list.setAttribute('aria-labelledby', originsLabelId)
-  list.setAttribute('aria-describedby', originsHintId)
+  list.setAttribute('aria-describedby', `${originsHintId} ${originsFileHintId}`)
 
   const addButton = el('button', {
     type: 'button',

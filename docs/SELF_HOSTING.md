@@ -1824,6 +1824,12 @@ path. For `https://www.example.org/2026/10/post/`, list
   `localhost`, IP addresses, and wildcards over services where anyone
   can make a site, such as `*.wordpress.com`. Test a local WordPress
   against a node left on **Any site can embed**.
+- A page opened from a file, such as a standalone HTML page on a
+  kiosk, has no web address to list. Add `file:` on its own row
+  instead, not `file://` or a path. It lets any page opened from a
+  file embed the node, not only yours. That is still narrower than
+  **Any site can embed**. Chrome and Edge honour it; Firefox and
+  Safari have not been tested.
 
 **The card checks what the node sends.** Its **What this node sends
 now** readout shows the headers a visitor gets on `/`. It warns about
