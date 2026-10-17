@@ -52,6 +52,41 @@
  * - Non-ASCII hosts. CSP matches the ASCII (punycode) form, so the
  *   operator is asked for the `xn--` form rather than having it
  *   converted behind their back.
+ * - Every scheme-source but one, `data:` and `blob:` above all.
+ *   Neither names a document an operator could mean. Chromium matches
+ *   an ancestor's origin, which a web-made `blob:` takes from its
+ *   creator and a `data:` document lacks, so there they would admit
+ *   nothing, but an engine that matched an ancestor's URL instead would
+ *   admit every site through either.
+ *
+ * The one accepted scheme-source is {@link FILE_SOURCE}, `file:`,
+ * for a page opened from a file (a standalone HTML page an operator
+ * keeps for a kiosk or an offline demo). Such a page has no web
+ * origin, so no `https://` entry can name it. In Chromium `file:`
+ * matches it, while `*`, `'self'`, `file://` and a path do not.
+ * (`file://*` also matches, and is refused below so there is one
+ * spelling to compare and deduplicate.) It admits every page with a
+ * `file:` origin, not only the operator's: any file a visitor opens
+ * in their browser, and any local page an app shows in a web view.
+ *
+ * The premise is that a web page cannot make a `file:` ancestor.
+ * Chromium was tested with the attacker's document as the top
+ * ancestor, so nothing else on the chain could refuse it first.
+ * Under `'self' file:` it refused a top-level `blob:` document the
+ * page made, an `about:blank` popup the page wrote into, a page sent
+ * with `CSP: sandbox` and a top-level `data:` URL, and a page cannot
+ * navigate a frame to a `file:` URL at all. So an attacker who wants
+ * a file to frame the app has to get a visitor to download and open
+ * it. That is narrower than `any`, the default, and the portal stays
+ * locked to `'self'` under every policy. Revisit this if an engine
+ * ever counts a frame a web page made as `file:`. Read to the letter,
+ * CSP3 serialises a file page's opaque origin as `null`, so an engine
+ * that does so matches nothing here, which fails closed.
+ *
+ * It is accepted as that exact token: `file://`, a `file:///…` path,
+ * a bare `file`, anything else starting `file:` and a path pasted
+ * from a file page's address bar (`/Users/…`, `C:/…`) are refused with
+ * their own code rather than shortened.
  */
 
 /** The three postures, in the order the portal offers them. */
@@ -74,13 +109,15 @@ export const MAX_EMBED_ORIGINS = 50
  *  this leaves room for `https://`, a port and a `*.` prefix. */
 export const MAX_EMBED_ORIGIN_LENGTH = 280
 
+/** The one scheme-source the list accepts: pages opened from a
+ *  file. See the module comment for why it, and nothing like it. */
+export const FILE_SOURCE = 'file:'
+
 /** Any site may embed — the state of a node that never saved one. */
 export function defaultEmbedPolicy(): EmbedPolicy {
   return { mode: 'any', origins: [] }
 }
 
-/** Why an origin was refused. The portal words each one; the API
- *  sends the code in its field-error envelope. */
 /** Hosting services where anyone can create a subdomain, so a
  *  wildcard over one admits strangers' sites. */
 export const SHARED_HOST_SUFFIXES = [
@@ -102,6 +139,8 @@ export const SHARED_HOST_SUFFIXES = [
   'weebly.com',
 ] as const
 
+/** Why an origin was refused. The portal words each one; the API
+ *  sends the code in its field-error envelope. */
 export type EmbedOriginErrorCode =
   | 'required'
   | 'too_long'
@@ -110,6 +149,7 @@ export type EmbedOriginErrorCode =
   | 'keyword'
   | 'not_ascii'
   | 'not_https'
+  | 'file_form'
   | 'has_userinfo'
   | 'has_path'
   | 'bad_port'
@@ -137,7 +177,8 @@ function fail(code: EmbedOriginErrorCode, message: string): EmbedOriginResult {
 /**
  * Validate one origin and return it in canonical form (lowercased).
  * Never repairs: whitespace, a trailing slash or an `http:` scheme is
- * an error the operator sees, not something silently fixed.
+ * an error the operator sees, not something silently fixed. The one
+ * value that is not an `https://` origin is {@link FILE_SOURCE}.
  */
 export function validateEmbedOrigin(raw: unknown): EmbedOriginResult {
   if (typeof raw !== 'string' || raw.length === 0) {
@@ -164,7 +205,15 @@ export function validateEmbedOrigin(raw: unknown): EmbedOriginResult {
   }
 
   const value = raw.toLowerCase()
+  if (value === FILE_SOURCE) return { ok: true, value }
   const scheme = /^([a-z][a-z0-9+.-]*):(\/\/)?/.exec(value)
+  // Chrome's address bar shows a file page as its bare path:
+  // `/Users/…`, or `C:/…`, whose drive letter parses as a scheme.
+  // (`C:\…` stops at the punctuation check above.)
+  const path = /^\/(?!\/)/.test(value) || /^[a-z]:\//.test(value)
+  if (value === 'file' || scheme?.[1] === 'file' || path) {
+    return fail('file_form', 'Enter only file: (the word file followed by a colon) to allow pages opened from a file.')
+  }
   if (!scheme || scheme[1] !== 'https' || !scheme[2]) {
     return fail('not_https', 'A site must start with https://.')
   }

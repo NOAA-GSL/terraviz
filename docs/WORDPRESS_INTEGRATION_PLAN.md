@@ -391,9 +391,10 @@ A node admin now sets it in the portal, on the **Embedding** card of
 **Settings → Node profile**, with no `_headers` edit and no redeploy:
 **Any site can embed** (the default, which sends no header),
 **Only sites I list** (`frame-ancestors 'self'` plus the listed
-`https://` origins) or **No other site** (`'self'` only). It is
-stored on the `node_settings` singleton (migration 0057), validated
-by `src/types/node-embedding.ts`, and enforced by a root middleware
+`https://` origins, and `file:` for pages opened from a file) or
+**No other site** (`'self'` only). It is stored on the
+`node_settings` singleton (migration 0057), validated by
+`src/types/node-embedding.ts`, and enforced by a root middleware
 (`functions/_middleware.ts`) that appends the header to every HTML
 page the app serves. `public/_routes.json` keeps the middleware off
 static files, and `public/_headers` locks the static folders it skips,
@@ -425,7 +426,8 @@ should name the setting as the way to allow a site. Its service
 token can read the policy (`GET /api/v1/publish/node-settings`
 returns `embedding: { mode, origins }`; older nodes omit it) to check
 its own origin before embedding, but cannot change it: the PUT is
-admin-only. A plain-`http://` WordPress site can never be listed, so
+admin-only. A check like that must treat a `file:` entry as matching
+no site: it is a scheme with no host, for pages opened from a file. A plain-`http://` WordPress site can never be listed, so
 it can embed only a node left on **Any site can embed**.
 
 ---

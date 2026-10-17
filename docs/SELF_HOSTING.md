@@ -1824,6 +1824,14 @@ path. For `https://www.example.org/2026/10/post/`, list
   `localhost`, IP addresses, and wildcards over services where anyone
   can make a site, such as `*.wordpress.com`. Test a local WordPress
   against a node left on **Any site can embed**.
+- A page opened from a file, such as a standalone HTML page on a
+  kiosk, has an address starting `file://` and no host to list. List
+  `file:` on its own row for it, not `file://` or a path. Any page
+  opened from a file can then embed the node, not only yours. A
+  stranger's file can do that only if a visitor downloads and opens
+  it, so this is still narrower than **Any site can embed**. Chrome,
+  Edge and other Chromium browsers honour it. Firefox and Safari have
+  not been tested, so try the kiosk's browser before you rely on it.
 
 **The card checks what the node sends.** Its **What this node sends
 now** readout shows the headers a visitor gets on `/`. It warns about
@@ -1841,7 +1849,8 @@ Three things can block an embed the setting allows:
 
 - **An `X-Frame-Options` header.** Cloudflare's **Add security
   headers** managed transform sends `SAMEORIGIN`. With **Any site can
-  embed**, it blocks every other site. With a list, current browsers
+  embed**, it blocks every other site and every page opened from a
+  file. With a list, current browsers
   ignore it, but older ones still block. Turn it off under **Rules →
   Settings → Managed Transforms** if other sites need to embed the
   node. `public/_headers` already sends the other headers it adds.

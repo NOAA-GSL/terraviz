@@ -44,6 +44,13 @@ describe('analyzeLivePolicy', () => {
     ).toEqual([{ kind: 'ok' }])
   })
 
+  it('all clear with file: in the list, compared as the token the middleware sends', () => {
+    const policy: EmbedPolicy = { mode: 'list', origins: ['https://www.example.org', 'file:'] }
+    expect(analyzeLivePolicy(policy, { csp: "frame-ancestors 'self' https://www.example.org file:", xfo: null })).toEqual([
+      { kind: 'ok' },
+    ])
+  })
+
   it('flags X-Frame-Options under any, where nothing will override it', () => {
     expect(analyzeLivePolicy(ANY, { csp: null, xfo: 'SAMEORIGIN' })).toEqual([{ kind: 'xfo', value: 'SAMEORIGIN' }])
     // Just after a save to any, the old directive is still served and
@@ -374,6 +381,61 @@ describe('buildEmbeddingCard', () => {
       'List at least one site, or choose "No other site".',
     )
     expect(document.activeElement).toBe(first)
+  })
+
+  it('accepts file:, explaining it in a disclosure rather than in the list description', async () => {
+    const view = mount(LIST)
+    // The group still carries only the general hint, which a screen
+    // reader repeats after every failed Save.
+    const group = view.q<HTMLElement>('.publisher-nodeprofile-embed-list')!
+    const described = group.getAttribute('aria-describedby')!.split(' ')
+    expect(described).toHaveLength(1)
+    expect(document.getElementById(described[0])!.textContent).toMatch(/^One site per row/)
+    // The disclosure says how, with the colon spelled out, and what it admits.
+    const help = view.q<HTMLDetailsElement>('details.publisher-nodeprofile-embed-file')!
+    expect(help.open).toBe(false)
+    expect(help.querySelector('summary')!.textContent).toBe('Allow a page opened from a file')
+    expect(Array.from(help.querySelectorAll('p'), p => p.textContent)).toEqual([
+      'A page opened from a file has an address starting \u2068file://\u2069 and no site to list. ' +
+        'To allow one, add a row with only \u2068file:\u2069 in it. ' +
+        'That is the word file followed by a colon, not \u2068file://\u2069 or a path.',
+      'Any page opened from a file can then embed this node, not only yours. ' +
+        'Chrome, Edge and other Chromium browsers allow this. Test any other browser before you rely on it.',
+    ])
+    view.inputs()[1].value = 'file:'
+    view.save()!.click()
+    await until(() => view.puts().length === 1, 'the PUT')
+    expect(view.puts()[0].body).toEqual({ embedding: { mode: 'list', origins: ['https://www.example.org', 'file:'] } })
+  })
+
+  it.each([['file:///Users/me/embed.html'], ['file://'], ['file'], ['/Users/me/embed.html']])(
+    'points %j at file:, rather than at https://, and says what it admits',
+    raw => {
+      const view = mount(LIST)
+      view.inputs()[1].value = raw
+      view.save()!.click()
+      const error = document.getElementById(view.inputs()[1].getAttribute('aria-describedby')!.split(' ')[0])!
+      expect(error.textContent).toBe(
+        'Enter only \u2068file:\u2069, the word file followed by a colon, to allow pages opened from a file. ' +
+          'That allows every such page, not only yours.',
+      )
+      expect(view.puts()).toHaveLength(0)
+    },
+  )
+
+  it('read-only: says what a listed file: admits, since it is not a site', () => {
+    const plain = mount(LIST, { canEdit: false })
+    expect(plain.q('details.publisher-nodeprofile-embed-file')).toBeNull()
+    expect(plain.qa('p').some(p => p.textContent?.includes('page opened from a file'))).toBe(false)
+
+    const view = mount({ mode: 'list', origins: ['https://www.example.org', 'file:'] }, { canEdit: false })
+    expect(view.qa('.publisher-nodeprofile-embed-readonly li').map(li => li.textContent)).toEqual([
+      'https://www.example.org',
+      'file:',
+    ])
+    const note = view.qa('p').find(p => p.textContent === '\u2068file:\u2069 in this list lets any page opened from a file embed this node.')
+    expect(note).toBeDefined()
+    expect(view.q('.publisher-nodeprofile-embed-readonly')!.compareDocumentPosition(note!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
   it('refuses a wildcard over shared hosting in the portal\'s words', () => {

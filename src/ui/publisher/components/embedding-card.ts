@@ -42,6 +42,7 @@
 import { t } from '../../../i18n'
 import {
   EMBED_MODES,
+  FILE_SOURCE,
   MAX_EMBED_ORIGINS,
   defaultEmbedPolicy,
   frameAncestorsHeader,
@@ -209,6 +210,7 @@ const ORIGIN_ERROR_KEYS = {
   keyword: 'publisher.nodeProfile.embedding.error.keyword',
   not_ascii: 'publisher.nodeProfile.embedding.error.notAscii',
   not_https: 'publisher.nodeProfile.embedding.error.notHttps',
+  file_form: 'publisher.nodeProfile.embedding.error.fileForm',
   has_userinfo: 'publisher.nodeProfile.embedding.error.userinfo',
   has_path: 'publisher.nodeProfile.embedding.error.path',
   bad_port: 'publisher.nodeProfile.embedding.error.port',
@@ -218,8 +220,13 @@ const ORIGIN_ERROR_KEYS = {
   shared_host: 'publisher.nodeProfile.embedding.error.sharedHost',
 } as const satisfies Record<EmbedOriginErrorCode, string>
 
+/** The tokens the `file:` strings name. Placeholders rather than
+ *  literals, so a translation cannot space the colon (French puts a
+ *  space before one) and an RTL sentence cannot move it. */
+const FILE_TOKENS = { entry: isolate(FILE_SOURCE), scheme: isolate('file://') } // i18n-exempt: literal tokens
+
 function originErrorText(code: string, fallback: string): string {
-  if (code in ORIGIN_ERROR_KEYS) return t(ORIGIN_ERROR_KEYS[code as EmbedOriginErrorCode])
+  if (code in ORIGIN_ERROR_KEYS) return t(ORIGIN_ERROR_KEYS[code as EmbedOriginErrorCode], FILE_TOKENS)
   return fallback
 }
 
@@ -477,7 +484,16 @@ export function buildEmbeddingCard(options: EmbeddingCardOptions): HTMLElement {
   })
 
   if (options.canEdit) {
-    originsBlock.append(list, addButton, atMax)
+    // How to allow a page opened from a file, in a disclosure of its
+    // own rather than in the group's description: a screen reader
+    // reads that on entering the group and again after every failed
+    // Save, and most admins never need `file:`.
+    const fileHelp = el('details', { className: 'publisher-nodeprofile-embed-file' }, [
+      el('summary', { textContent: t('publisher.nodeProfile.embedding.origins.file.summary') }),
+      el('p', { className: 'publisher-nodeprofile-hint', textContent: t('publisher.nodeProfile.embedding.origins.file.how', FILE_TOKENS) }),
+      el('p', { className: 'publisher-nodeprofile-hint', textContent: t('publisher.nodeProfile.embedding.origins.file.risk') }),
+    ])
+    originsBlock.append(list, addButton, atMax, fileHelp)
   } else {
     // Read-only: the list as text, so it reads as a list rather than a
     // run of disabled inputs.
@@ -485,6 +501,12 @@ export function buildEmbeddingCard(options: EmbeddingCardOptions): HTMLElement {
     readOnly.setAttribute('aria-labelledby', originsLabelId)
     for (const origin of saved.origins) readOnly.append(el('li', { textContent: origin, dir: 'ltr' }))
     originsBlock.append(readOnly)
+    // `file:` is not a site, so say what it admits.
+    if (saved.origins.includes(FILE_SOURCE)) {
+      originsBlock.append(
+        el('p', { className: 'publisher-nodeprofile-hint', textContent: t('publisher.nodeProfile.embedding.origins.file.readOnly', FILE_TOKENS) }),
+      )
+    }
   }
   card.append(originsBlock)
 
