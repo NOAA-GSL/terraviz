@@ -3731,11 +3731,13 @@
   display: block;
   margin-block-start: calc(1rem * var(--ui-scale));
 }
-.publisher-nodeprofile-embed-presets {
+.publisher-nodeprofile-embed-presets,
+.publisher-nodeprofile-embed-file {
   margin-block-start: calc(0.75rem * var(--ui-scale));
   font-size: calc(0.8rem * var(--ui-scale));
 }
-.publisher-nodeprofile-embed-presets summary {
+.publisher-nodeprofile-embed-presets summary,
+.publisher-nodeprofile-embed-file summary {
   cursor: pointer;
   color: var(--color-text-muted, #aab2c0);
 }
