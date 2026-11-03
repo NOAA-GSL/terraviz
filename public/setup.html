@@ -316,7 +316,7 @@ code{overflow-wrap:anywhere}
 <!--
   GENERATED FILE — do not edit.
 
-  Produced by scripts/build-setup-page.ts on 2026-10-16.
+  Produced by scripts/build-setup-page.ts on 2026-11-03.
   Prose lives in scripts/setup-page/content.ts; every binding,
   prerequisite and validator is imported from the modules the setup
   tool itself uses, so this page cannot disagree with `npm run setup`.
@@ -856,7 +856,7 @@ export R2_SECRET_ACCESS_KEY=...</div><p style="margin:0 0 6px;padding-inline-sta
   <div data-phase-row="12" style="display:flex;gap:10px;align-items:flex-start">
     <button data-toggle="p12" data-check="1" style="flex:none;margin-top:1px"></button>
     <div style="flex:none;width:22px;font:500 11.5px/1.5 var(--tv-font-mono);color:var(--tv-text-dim)">12</div>
-    <div style="font-size:13.5px;line-height:1.5;color:var(--tv-text-muted);text-wrap:pretty">All six checks pass. Your node is finished.</div>
+    <div style="font-size:13.5px;line-height:1.5;color:var(--tv-text-muted);text-wrap:pretty">All seven checks pass. Your node is finished.</div>
   </div>
   <div data-phase-row="13" style="display:flex;gap:10px;align-items:flex-start">
     <button data-toggle="p13" data-check="1" style="flex:none;margin-top:1px"></button>
@@ -1506,7 +1506,9 @@ wrangler d1 migrations apply FEEDBACK_DB --remote<span style="color:var(--tv-tex
   <pre style="margin:0;background:var(--tv-surface-code);border:1px solid var(--tv-border);color:var(--tv-text-muted);font:400 12.5px/1.8 var(--tv-font-mono);padding:36px 16px 15px;border-radius:6px;overflow-x:auto">npm run setup -- --apply --only=access</pre>
   <button data-copy="1" style="position:absolute;top:7px;right:8px;background:rgba(255,255,255,.07);color:var(--tv-text-dim);border:1px solid var(--tv-border-strong);border-radius:3px;font:500 10px/1 var(--tv-font-sans);letter-spacing:.08em;text-transform:uppercase;padding:5px 8px;cursor:pointer">Copy</button>
 </div>
-  <p style="margin:0 0 16px;max-width:64ch;font-size:13.5px;color:var(--tv-text-muted);text-wrap:pretty">Discovers your team domain, creates the publisher application with all six destinations, creates both policies, mints the service token and attaches it. It records the AUD and prints the token pair <b style="font-weight:600;color:var(--tv-text)">once</b> — have somewhere to put it.</p>
+  <p style="margin:0 0 16px;max-width:64ch;font-size:13.5px;color:var(--tv-text-muted);text-wrap:pretty">Discovers your team domain, creates the publisher application with all six destinations, creates both policies, mints the service token and attaches it. The application's login cookie is set to HTTP Only and SameSite Lax. It records the AUD and prints the token pair <b style="font-weight:600;color:var(--tv-text)">once</b> — have somewhere to put it.</p>
+  <p style="margin:0 0 16px;max-width:64ch;font-size:13.5px;color:var(--tv-text-muted);text-wrap:pretty">If an application named <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">Terraviz Publisher</code> (or <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">TERRAVIZ_ACCESS_APP_NAME</code>) already exists, the run adopts it and leaves its settings alone. If its cookie settings fall short, the run says so, and you change them in the dashboard.</p>
+  <p style="margin:0 0 16px;max-width:64ch;font-size:13.5px;color:var(--tv-text-muted);text-wrap:pretty">Running separate portal and API applications? Set <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">TERRAVIZ_ACCESS_APP_NAME</code> to the API application's name first, or the run adopts or creates the wrong one.</p>
   <div style="background:var(--tv-warn-bg);border:1px solid var(--tv-warn-border);border-left:3px solid var(--tv-warn);border-radius:6px;padding:15px 17px;margin:0 0 16px">
   <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-warn);margin:0 0 8px">Worth knowing · Do this part yourself first</div>
   <p style="margin:0 0 10px;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">Complete <b style="font-weight:600;color:var(--tv-text)">Zero Trust onboarding</b> in the dashboard and add at least one identity provider. One-time PIN over email works and needs no IdP setup; Google, Okta or Entra are better for a real team. You will choose a team name — your team domain becomes <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px"><span data-slot="W12" data-w="W12" style="cursor:pointer;padding:1px 5px;border-radius:3px"></span></code>.</p>
@@ -1535,7 +1537,7 @@ wrangler d1 migrations apply FEEDBACK_DB --remote<span style="color:var(--tv-tex
     </div>
     <input data-field="W13" data-validate="aud" placeholder="64-char hex" spellcheck="false" autocomplete="off" style="width:100%;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:6px;padding:8px 10px;font:400 13px/1.4 var(--tv-font-mono);color:var(--tv-text)"/>
     <div data-error="W13" style="display:none;font:400 11.5px/1.5 var(--tv-font-sans);color:var(--tv-error);margin-top:4px"></div>
-    <div style="font:400 11.5px/1.5 var(--tv-font-sans);color:var(--tv-text-dim);margin-top:4px">Application → Overview → Application Audience Tag.</div>
+    <div style="font:400 11.5px/1.5 var(--tv-font-sans);color:var(--tv-text-dim);margin-top:4px">Application → Additional settings → Application Audience (AUD) Tag. Older dashboards show it on the Overview tab.</div>
   </div>
       <div data-field-row="W14" data-tier="2" style="margin:0 0 14px">
     <div style="display:flex;align-items:center;gap:7px;margin:0 0 5px;flex-wrap:wrap">
@@ -1869,7 +1871,7 @@ npm run terraviz -- verify-deploy --server https://<span data-slot="W2" data-w="
 </div>
   <div style="background:var(--tv-accent-bg);border:1px solid var(--tv-accent-border);border-left:3px solid var(--tv-accent);border-radius:6px;padding:14px 16px;margin:0 0 14px">
     <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-accent);margin:0 0 7px">Gate</div>
-    <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">Bindings audit clean, and five of six deploy checks green.</p>
+    <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">Bindings audit clean, and six of seven deploy checks green.</p>
   </div>
   <p style="margin:0;font-size:12.5px;color:var(--tv-text-dim)"><a data-doc="#phase-10--verify" href="https://github.com/zyra-project/terraviz/blob/main/docs/SELF_HOSTING.md#phase-10--verify">Full detail in SELF_HOSTING.md ↗</a></p>
 </section>
@@ -1889,6 +1891,11 @@ npm run terraviz -- verify-deploy --server https://<span data-slot="W2" data-w="
   <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-accent);margin:0 0 8px">How it works · How the first admin happens</div>
   <p style="margin:0 0 10px;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty"><b style="font-weight:600;color:var(--tv-text)">The first human to sign in on a deploy with no active admin is bootstrapped to admin automatically.</b> Service tokens are excluded — a machine credential never self-elevates. So on a fresh node, you become the admin by signing in.</p>
   <p style="margin:0 0 10px;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">Everyone after you lands as a pending reviewer, and you approve and promote them from the Users tab. Admins cannot demote themselves or remove the last admin, so a node always keeps one operator.</p>
+  
+</div>
+  <div style="background:var(--tv-warn-bg);border:1px solid var(--tv-warn-border);border-left:3px solid var(--tv-warn);border-radius:6px;padding:15px 17px;margin:0 0 16px">
+  <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-warn);margin:0 0 8px">Worth knowing · Name the node</div>
+  <p style="margin:0 0 10px;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">Open <b style="font-weight:600;color:var(--tv-text)">Settings → Node profile</b> (<code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">https://<span data-slot="W2" data-w="W2" style="cursor:pointer;padding:1px 5px;border-radius:3px"></span>/publish/node-profile</code>). Fill in <b style="font-weight:600;color:var(--tv-text)">Organization name</b> and, optionally, <b style="font-weight:600;color:var(--tv-text)">Loading screen tagline</b>: the short line under the Terraviz title while the app loads, such as your organization's name. You can also fill in <b style="font-weight:600;color:var(--tv-text)">Dataset browser subtitle</b>, the sentence under the title in the dataset browser. Save, then upload an <b style="font-weight:600;color:var(--tv-text)">Organization logo</b>. Left empty, each shows the app's own line; the default subtitle says your datasets come from NOAA Science On a Sphere, so set your own if they do not.</p>
   
 </div>
   <div style="background:var(--tv-accent-bg);border:1px solid var(--tv-accent-border);border-left:3px solid var(--tv-accent);border-radius:6px;padding:14px 16px;margin:0 0 14px">
@@ -1926,7 +1933,7 @@ npm run terraviz -- import-snapshot \
 </div>
   <div style="background:var(--tv-accent-bg);border:1px solid var(--tv-accent-border);border-left:3px solid var(--tv-accent);border-radius:6px;padding:14px 16px;margin:0 0 14px">
     <div style="font:600 10.5px/1.35 var(--tv-font-sans);letter-spacing:.13em;text-transform:uppercase;color:var(--tv-accent);margin:0 0 7px">Gate</div>
-    <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">Re-run <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">verify-deploy</code>. <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">catalog-populated</code> now passes and all six checks are green. That is a complete publisher node. Embedding jobs backfill semantic search asynchronously over the next ten minutes or so.</p>
+    <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">Re-run <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">verify-deploy</code>. <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">catalog-populated</code> now passes and all seven checks are green. That is a complete publisher node. Embedding jobs backfill semantic search asynchronously over the next ten minutes or so.</p>
   </div>
   <p style="margin:0;font-size:12.5px;color:var(--tv-text-dim)"><a data-doc="#phase-12--put-content-in" href="https://github.com/zyra-project/terraviz/blob/main/docs/SELF_HOSTING.md#phase-12--put-content-in">Full detail in SELF_HOSTING.md ↗</a></p>
 </section>
@@ -2065,7 +2072,15 @@ npm run terraviz -- import-snapshot \
     </div>
     <div style="background:var(--tv-surface-2);border:1px solid var(--tv-border);border-radius:8px;padding:16px 18px">
       <div style="font:500 14px/1.4 var(--tv-font-mono);color:var(--tv-error);margin:0 0 6px">401 &quot;Invalid or expired Access assertion&quot;</div>
-      <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">Your AUD does not match the application that issued the JWT. Re-copy it from the application's Overview tab. A token minted for a different application in the same team is rejected by design.</p>
+      <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">Your AUD does not match the application that issued the JWT. Re-copy it from the application's Additional settings, or its Overview tab on an older dashboard. A token minted for a different application in the same team is rejected by design.</p>
+    </div>
+    <div style="background:var(--tv-surface-2);border:1px solid var(--tv-border);border-radius:8px;padding:16px 18px">
+      <div style="font:500 14px/1.4 var(--tv-font-mono);color:var(--tv-error);margin:0 0 6px">Feedback exports return 401 &quot;Unauthorized&quot;</div>
+      <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">The feedback admin routes refused the Access token, and no <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">FEEDBACK_ADMIN_TOKEN</code> bearer matched. The portal's Export buttons need an Access app covering <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">/api/feedback-admin</code>; without one, only the bearer works. <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">ACCESS_TEAM_DOMAIN</code> must be set, or every Access header is refused, even on a node that does not publish but fronts these routes with Access. <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">ACCESS_FEEDBACK_AUD</code> must be that app's AUD, or your publisher AUD if the publisher app covers the path; <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">none</code> refuses every token. Redeploy after changing either.</p>
+    </div>
+    <div style="background:var(--tv-surface-2);border:1px solid var(--tv-border);border-radius:8px;padding:16px 18px">
+      <div style="font:500 14px/1.4 var(--tv-font-mono);color:var(--tv-error);margin:0 0 6px">Publisher API returns 403 cross_origin_request or origin_required</div>
+      <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">The publish routes refuse a request that a page on another origin started, and the message names the header they refused. A script or proxy that sends its own <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">Origin</code> must send your node's origin (<code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">https://</code> and your hostname, no path), or none. <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">origin_required</code> means a signed-in user's change carried neither <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">Origin</code> nor <code style="font-family:var(--tv-font-mono);font-size:.92em;background:var(--tv-surface-3);padding:1px 5px;border-radius:3px">Sec-Fetch-Site</code>, as from an old browser or an extension that strips both.</p>
     </div>
     <div style="background:var(--tv-surface-2);border:1px solid var(--tv-border);border-radius:8px;padding:16px 18px">
       <div style="font:500 14px/1.4 var(--tv-font-mono);color:var(--tv-error);margin:0 0 6px">Access blocks your own staff account</div>
@@ -2089,7 +2104,7 @@ npm run terraviz -- import-snapshot \
     </div>
     <div style="background:var(--tv-surface-2);border:1px solid var(--tv-border);border-radius:8px;padding:16px 18px">
       <div style="font:500 14px/1.4 var(--tv-font-mono);color:var(--tv-error);margin:0 0 6px">Portal shows &quot;Your session has expired&quot;</div>
-      <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">Expected before your Access application covers the publish paths. Cloudflare answers with a cross-origin redirect the portal can detect but cannot follow. The Refresh button is the escape hatch — refreshing triggers Access at top-level navigation, you sign in, and the next fetch succeeds.</p>
+      <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tv-text-muted);text-wrap:pretty">Expected before your Access application covers the publish paths. Cloudflare answers with a cross-origin redirect the portal can detect but cannot follow. The card's Sign in button is the escape hatch — it signs you in through a top-level navigation, and the next fetch succeeds.</p>
     </div>
     <div style="background:var(--tv-surface-2);border:1px solid var(--tv-border);border-radius:8px;padding:16px 18px">
       <div style="font:500 14px/1.4 var(--tv-font-mono);color:var(--tv-error);margin:0 0 6px">Zip download shows &quot;size unknown&quot;</div>
@@ -2325,7 +2340,7 @@ npm run terraviz -- import-snapshot \
     </div>
     <input data-field="W13" data-validate="aud" placeholder="64-char hex" spellcheck="false" autocomplete="off" style="width:100%;background:var(--tv-surface-3);border:1px solid var(--tv-border-strong);border-radius:6px;padding:8px 10px;font:400 13px/1.4 var(--tv-font-mono);color:var(--tv-text)"/>
     <div data-error="W13" style="display:none;font:400 11.5px/1.5 var(--tv-font-sans);color:var(--tv-error);margin-top:4px"></div>
-    <div style="font:400 11.5px/1.5 var(--tv-font-sans);color:var(--tv-text-dim);margin-top:4px">Application → Overview → Application Audience Tag.</div>
+    <div style="font:400 11.5px/1.5 var(--tv-font-sans);color:var(--tv-text-dim);margin-top:4px">Application → Additional settings → Application Audience (AUD) Tag. Older dashboards show it on the Overview tab.</div>
   </div>
       <div data-field-row="W14" data-tier="2" style="margin:0 0 14px">
     <div style="display:flex;align-items:center;gap:7px;margin:0 0 5px;flex-wrap:wrap">

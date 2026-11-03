@@ -504,7 +504,12 @@ by WordPress — which does not exist today. Concretely, one of:
   instead of a service token. This attributes actions to the real
   user with no main-repo change — but it constrains the WP
   deployment to live behind the same Access team, which most NOAA
-  sites will not.
+  sites will not. Forward that one header only, never the
+  browser's request headers as a whole. A user's write must also
+  carry an `Origin` naming the node, or the publish middleware
+  refuses it (403 `origin_required`; see
+  [`CATALOG_PUBLISHING_TOOLS.md`](CATALOG_PUBLISHING_TOOLS.md)
+  §Authentication).
 
 **Recommendation:** do *not* build Option 2 speculatively. Ship
 Option 1, and let the publisher-CLI pilot (federation §8 decision
@@ -693,8 +698,8 @@ Phases are ordered by value-over-risk and by the read/publish seam
   at `https://<node>/schema/v1/`. Prose + versioning policy in
   [`protocol/README.md`](protocol/README.md) and
   [`protocol/CHANGELOG.md`](protocol/CHANGELOG.md). The federation
-  `feed.schema.json` remains deferred to Phase 4 because its serializer
-  does not exist yet. STAC uses the separate routes and schemas defined
+  `feed.schema.json` now exists too (metadata Phase 5), but it is a
+  node-to-node contract the plugin does not read. STAC uses the separate routes and schemas defined
   by the [metadata and STAC audit](metadata/README.md).
 
 **Exit:** an embed URL renders a chromeless globe; the embed grammar

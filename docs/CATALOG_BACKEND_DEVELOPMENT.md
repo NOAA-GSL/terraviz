@@ -102,6 +102,7 @@ extra knobs make the browser-from-host story work:
 | Curl times out from inside the container despite "Ready on http://localhost:8788" | `npm run dev:functions` already sets `--ip 0.0.0.0` | scripts |
 | Browser at `http://localhost:5173` spins / can't connect | `VITE_HOST=0.0.0.0` | `.env.local` |
 | HMR WebSocket fails repeatedly with `[vite] connecting...` | `VITE_HMR_CLIENT_PORT=5173` (or the host-side forwarded port) | `.env.local` |
+| Portal changes fail with 403 `cross_origin_request` | Open the page at `http://localhost:5173`, not a LAN address. Browsers send `Sec-Fetch-Site` only to localhost or HTTPS, and the proxy forwards the page's `Origin` to Wrangler's port, so over plain HTTP elsewhere the publish middleware sees another origin | browser |
 
 ### Required dev vars
 
@@ -622,8 +623,9 @@ Access app, the middleware refuses with `503 access_unconfigured`.
 5. **Service Auth → Service Tokens → Create Service Token** named
    `terraviz-cli`. Copy the Client ID + Client Secret immediately
    — the secret is shown once.
-6. From the Access app's Overview tab, copy the **Application
-   Audience (AUD) Tag** (64-char hex).
+6. From the Access app's **Additional settings** (its Overview tab on
+   an older dashboard), copy the **Application Audience (AUD) Tag**
+   (64-char hex).
 
 #### Step 4 — Set Pages env vars and bindings (Production AND Preview)
 

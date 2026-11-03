@@ -154,3 +154,111 @@ describe('watchForOrbitWithdrawal', () => {
     expect(fetchFn).not.toHaveBeenCalled()
   })
 })
+
+describe('startNodeFeaturesRead().tagline', () => {
+  it('reads the splash tagline from the same response as the toggles', async () => {
+    const fetchFn = vi.fn(async () =>
+      jsonResponse({ profile: { orgName: 'GSL', logoUrl: null, tagline: '  Global Systems Laboratory ' }, features: {} }),
+    )
+    const read = startNodeFeaturesRead({ fetchFn })
+    expect(await read.tagline).toBe('Global Systems Laboratory')
+    await read.settle()
+    expect(fetchFn).toHaveBeenCalledTimes(1)
+  })
+
+  it('answers null for no profile, no tagline, or one that is not text', async () => {
+    for (const body of [
+      { profile: null },
+      { profile: { orgName: 'X', logoUrl: null } },
+      { profile: { orgName: 'X', tagline: null } },
+      { profile: { orgName: 'X', tagline: '   ' } },
+      { profile: { orgName: 'X', tagline: 42 } },
+    ]) {
+      expect(await startNodeFeaturesRead({ fetchFn: async () => jsonResponse(body) }).tagline).toBeNull()
+    }
+  })
+
+  it('answers null when a settle deadline aborts the read', async () => {
+    const read = startNodeFeaturesRead({
+      fetchFn: (_path, init) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')))
+        }),
+    })
+    await read.settle(5)
+    expect(await read.tagline).toBeNull()
+  })
+
+  it('stays pending, without rejecting, when a fetch ignores the abort', async () => {
+    const read = startNodeFeaturesRead({ fetchFn: () => new Promise<Response>(() => {}) })
+    await read.settle(5)
+    const outcome = await Promise.race([
+      read.tagline.then(
+        () => 'settled',
+        () => 'rejected',
+      ),
+      new Promise(resolve => setTimeout(() => resolve('pending'), 20)),
+    ])
+    expect(outcome).toBe('pending')
+  })
+
+  it('answers null when the read fails', async () => {
+    const failing = startNodeFeaturesRead({
+      fetchFn: async () => {
+        throw new TypeError('Failed to fetch')
+      },
+    })
+    expect(await failing.tagline).toBeNull()
+    const refused = startNodeFeaturesRead({ fetchFn: async () => jsonResponse({ profile: { tagline: 'X' } }, 500) })
+    expect(await refused.tagline).toBeNull()
+  })
+})
+
+describe('startNodeFeaturesRead().browseSubtitle', () => {
+  it('reads the browse subtitle from the same response', async () => {
+    const fetchFn = vi.fn(async () =>
+      jsonResponse({
+        profile: { orgName: 'GSL', tagline: 'Global Systems Laboratory', browseSubtitle: ' Browse GSL datasets ' },
+        features: {},
+      }),
+    )
+    const read = startNodeFeaturesRead({ fetchFn })
+    expect(await read.browseSubtitle).toBe('Browse GSL datasets')
+    expect(await read.tagline).toBe('Global Systems Laboratory')
+    expect(fetchFn).toHaveBeenCalledTimes(1)
+  })
+
+  it('answers null from an older node, a blank line, or a failed read', async () => {
+    for (const body of [{ profile: { orgName: 'X', tagline: 'T' } }, { profile: { orgName: 'X', browseSubtitle: '  ' } }]) {
+      expect(await startNodeFeaturesRead({ fetchFn: async () => jsonResponse(body) }).browseSubtitle).toBeNull()
+    }
+    const failing = startNodeFeaturesRead({
+      fetchFn: async () => {
+        throw new TypeError('Failed to fetch')
+      },
+    })
+    expect(await failing.browseSubtitle).toBeNull()
+  })
+
+  it('drops a subtitle that lands after a settle deadline, from a fetch that ignored the abort', async () => {
+    // The browse panel is revealed once settle answers, so a late line
+    // would swap the default in front of a visitor. The splash tagline
+    // still takes it: the splash is up for seconds more.
+    let answer: (res: Response) => void = () => {}
+    const read = startNodeFeaturesRead({
+      fetchFn: () => new Promise<Response>(resolve => (answer = resolve)),
+    })
+    await read.settle(5)
+    answer(jsonResponse({ profile: { orgName: 'GSL', tagline: 'Global Systems Laboratory', browseSubtitle: 'Browse GSL datasets' } }))
+    expect(await read.tagline).toBe('Global Systems Laboratory')
+    expect(await read.browseSubtitle).toBeNull()
+  })
+
+  it('keeps a subtitle that arrives before the deadline', async () => {
+    const read = startNodeFeaturesRead({
+      fetchFn: async () => jsonResponse({ profile: { orgName: 'GSL', browseSubtitle: 'Browse GSL datasets' } }),
+    })
+    await read.settle(1_000)
+    expect(await read.browseSubtitle).toBe('Browse GSL datasets')
+  })
+})

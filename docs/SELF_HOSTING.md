@@ -1011,10 +1011,16 @@ middleware fails closed: without `ACCESS_TEAM_DOMAIN` and
 > flow you have to do yourself. Once it is done,
 > `npm run setup -- --apply --only=access` does 6.2 and 6.3. It
 > discovers your team domain, creates the application with all six
-> destinations, creates both policies, mints the service token, and
-> attaches it. It records the AUD and prints the token pair once. The
-> click-by-click below is the reference for what it builds, and the
-> path to take if you would rather do it by hand.
+> destinations and its login cookie set as 6.2 describes, creates both
+> policies, mints the service token, and attaches it. It records the
+> AUD and prints the token pair once. If an application named
+> `Terraviz Publisher` (or the name in `TERRAVIZ_ACCESS_APP_NAME`)
+> already exists, the run adopts it. It leaves that application's
+> settings alone, adding only a `Staff` or `Automation` policy if one
+> by that name is missing. If its cookie settings fall short, the run
+> says so, and you change them by hand. The click-by-click below is
+> the reference for what it builds, and the path to take if you would
+> rather do it by hand.
 
 ## 6.1 Set up Zero Trust
 
@@ -1029,7 +1035,10 @@ setup; Google/Okta/Entra are better for a real team.
 ## 6.2 Create the publisher application
 
 This is the application whose audience tag becomes `ACCESS_AUD`.
-One application covers both the API and the browser portal.
+This guide uses one application for both the API and the browser
+portal, and that is what `npm run setup` builds. To run two, see
+[Two applications instead of one](#two-applications-instead-of-one)
+below.
 
 Zero Trust → **Access → Applications → Add an application →
 Self-hosted**:
@@ -1056,13 +1065,158 @@ Self-hosted**:
   2. **`Automation`** — Action **Service Auth**, Include →
      **Service Token** → *(the token from 6.3; come back and add it)*.
 
+- **Cookie settings** — among the application's advanced settings.
+  On an application that already exists: **Configure → Advanced
+  settings → Cookie settings**.
+  - **HTTP Only:** on.
+  - **Same Site Attribute:** **Lax**.
+  - **Enforce cookie path attribute:** leave off.
+- **App Launcher** — make sure **Show application in App Launcher**
+  is off.
+
 > ⚠️ Use **"Emails ending in"**, not **"Emails"**. The latter is an
 > exact match against one address and is the single most common
 > Access misconfiguration.
 
-After saving, open the application's **Overview** tab and copy the
-**Application Audience (AUD) Tag** — a 64-char hex string.
-**Record it as `W13`.**
+After saving, copy the application's **Application Audience (AUD)
+Tag**, a 64-character hex string. The current dashboard shows it under
+the application's **Additional settings**; older ones showed it on the
+**Overview** tab. **Record it as `W13`.**
+
+**Why the cookie settings.** Access keeps a publisher signed in with
+a `CF_Authorization` cookie, and that cookie is what authorises every
+write under `/api/v1/publish`. Cloudflare's SameSite default is None,
+which lets a browser send the cookie on a form POST that another
+website starts. Lax sends it only on requests from your own site and
+on links into it. That's all the portal needs: the portal and the API
+share a host, and Access's sign-in returns to your site through an
+ordinary redirect. HTTP Only stops scripts on the page from reading
+the token. The app never reads it from JavaScript; the server gets it
+from the request. Neither setting affects the `terraviz` CLI or the
+workflows, which authenticate with the service token's headers.
+
+"Your own site" is wider than one host. A browser counts every host
+under your registrable domain as the same site, so requests from a
+page on another host under `your-org.org` still carry the cookie. On
+a large organisation's domain, that is every host the organisation
+runs. Each `pages.dev` project is a site of its own, but a branch
+preview such as `<branch>.<W10>.pages.dev` shares a site with
+`<W10>.pages.dev`. Lax closes the door to other websites, not to your
+own hosts. So the publish routes also check where a request came
+from, using headers the browser sets and a page cannot. They refuse
+a change that a page on any other origin started, including one on
+another host under your domain or on a branch preview. They also
+refuse a read such a page starts, unless it is a visit to the page.
+If a legitimate client is refused, see
+[Publisher API returns 403 `cross_origin_request` or `origin_required`](#publisher-api-returns-403-cross_origin_request-or-origin_required).
+
+Verified on the project's own node (`terraviz.zyra-project.org`) on
+2026-10-30. Before the change, its cookie went out with SameSite None
+and without HTTP Only. With HTTP Only and Lax on both of its
+applications, the portal signs in and loads its data.
+The node's other cookie settings are **Enable Binding Cookie** off and
+**Eager redirect cookie** on. Strict is stricter, but untested here.
+
+**Why the App Launcher stays off.** The launcher tile is only a
+shortcut, and nothing here needs one. If you turn it on, choose
+**Default (first domain listed)**, or pick a URL from the list.
+**Use custom domain** with no URL selected makes the whole save fail,
+cookie changes in the same edit included. An application that covers
+only `/api/v1/publish` (see the two-application layout below) may
+offer no URL to pick, so choose **Default** there.
+
+### Checking the cookie
+
+`npm run setup` sets the cookie only on an application it creates.
+An application created by hand, or by an earlier version of
+`npm run setup`, keeps the settings it was created with. Check a new
+node too: the setup script's request has not yet been run against a
+live account.
+
+To check:
+1. Sign in at `https://<W2>/publish` and open the **Datasets** page.
+2. In the browser's developer tools, open **Application → Cookies →
+   `https://<W2>`** (Firefox: **Storage → Cookies**) and find
+   `CF_Authorization`.
+3. **HttpOnly** should be ticked and **SameSite** should read **Lax**.
+
+If either is wrong, change the cookie settings above. Then delete
+`CF_Authorization` in the same developer-tools panel, or open a
+private window, and sign in again before you check. Signing out is not
+enough: it ends the Access session, but the cookie on your host can
+outlive it. Re-running `npm run setup -- --apply --only=access` also
+reports any gap in the application it manages.
+
+### Two applications instead of one
+
+One application is simpler, and it's what `npm run setup` builds.
+The project's own node runs two:
+
+| Application | Destinations, on `<W2>` and `<W10>.pages.dev` |
+|---|---|
+| Portal | `/publish`, `/publish/*` |
+| API | `/api/v1/publish` |
+
+It was split when an application was thought to hold only five
+destinations (`functions/api/v1/publish/redirect-back.ts` records
+why). Cloudflare's
+[published limit](https://developers.cloudflare.com/cloudflare-one/account-limits/)
+is now 50 domains per application, so a new node has no reason to
+split.
+
+If you run two, four rules keep them working:
+
+1. **`ACCESS_AUD` (`W13`) is the API application's AUD.** The publish
+   middleware accepts a token from exactly one application, and
+   `/api/v1/publish` is the API application's path. On the project's
+   node, `ACCESS_AUD` holds the API application's AUD, and the portal
+   loads its data.
+2. **Every Access application on the host needs the same cookie
+   settings**, 6.4's included. With **Enforce cookie path attribute**
+   off, each one writes a cookie named `CF_Authorization` for the whole
+   host. Whichever application signed you in last decides its
+   attributes, so hardening one alone can be undone by another.
+3. **The Automation policy belongs on the API application.** The CLI,
+   the transcode runner and the analytics export use the service token
+   only on `/api/v1/publish`. Both applications need the Staff policy.
+   The exception is the live visual report
+   ([Reference B](#reference-b--cicd-workflow-matrix)), which
+   loads portal pages with the same token. If you use it, give the
+   portal application an Automation policy too.
+4. **Tell `npm run setup` which application to manage.** Set
+   `TERRAVIZ_ACCESS_APP_NAME` to the API application's exact name
+   before you run the access step. Otherwise the step looks for an
+   application named `Terraviz Publisher`:
+   - If that is your portal application, the step adopts it and
+     records the portal's AUD. Every request under `/api/v1/publish`
+     then fails with 401.
+   - If neither application has that name, it tries to create a third,
+     with the same six destinations.
+
+   If the step succeeds, the next bindings step writes the wrong
+   `ACCESS_AUD` to both environments. Exporting `ACCESS_AUD` yourself
+   does not prevent this, because the access step overwrites it.
+
+   The step also matches policies and the token by name. If your
+   policies are not named `Staff` and `Automation`, it adds new ones:
+   if `TERRAVIZ_STAFF_EMAIL_DOMAIN` is set, that includes an Allow
+   policy for everyone at that domain. If your token is not named
+   `terraviz-cli`, it mints a second one, unless
+   `TERRAVIZ_SERVICE_TOKEN_NAME` names yours. Rename your policies, or
+   leave the access step out on a node you built by hand. There is no
+   flag to skip a step: list the others with `--only=`, and export
+   `ACCESS_AUD` yourself so the bindings step has it. The portal
+   application is yours to maintain by hand either way.
+
+The project's node runs with **Enforce cookie path attribute** off.
+After a fresh sign-in, the portal's data pages load without the
+"Your session has expired" card. When a data request finds no cookie
+the API application accepts, the portal recovers by navigating once
+through `/api/v1/publish/redirect-back`, which you see as a brief
+reload. Turning the attribute on would give each application a cookie
+scoped to its own paths. That is Cloudflare's design for two
+applications on one host, but it's untested here. If you try it, sign
+in again and check that the portal still loads its data.
 
 ## 6.3 Mint the service token
 
@@ -1091,12 +1245,52 @@ never for user management.
 
 ## 6.4 The other two Access applications (optional)
 
-Independent of the publisher app, and both genuinely optional:
+Independent of the publisher app, and both genuinely optional. Give
+each the cookie settings from 6.2. With the path attribute off, every
+Access application on the host writes the same `CF_Authorization`
+cookie, so one left at Cloudflare's defaults can undo the others.
 
 **Admin dashboard.** One app, name `Terraviz Admin`, destination
 `api/feedback-admin` on both hostnames, one Allow policy on your
-email domain. Without it, those endpoints fall back to a
-`FEEDBACK_ADMIN_TOKEN` bearer.
+email domain. The portal's **Export** buttons use that path, so a
+browser can export only through an app covering it. Without one, the
+buttons don't work, because a link can't carry a bearer. Exports then
+go through a script that sends the `FEEDBACK_ADMIN_TOKEN` bearer.
+
+Then set the plaintext variable `ACCESS_FEEDBACK_AUD` in both
+Production and Preview, and redeploy. `npm run setup` writes it only
+if you export it, and then rewrites that value on every later run. To
+change it, export the new value rather than editing the dashboard.
+- **With this app:** its AUD, from the same place as `W13` (6.2).
+- **If your publisher app covers this path instead:** `W13`.
+- **With no app on this path:** `none`. The routes then refuse every
+  Access token and take only the bearer.
+
+The feedback admin routes check that an Access token was signed by
+your team, which needs `ACCESS_TEAM_DOMAIN`. Without that variable,
+they refuse every Access header and take only the bearer, so a node
+that does not publish but fronts these routes with Access must set it
+too. Once `ACCESS_FEEDBACK_AUD` is set, the token must be for that app.
+
+Until it is set, a token for any of your team's applications is
+accepted. Anyone any of those apps admits can then read feedback by
+sending their own sign-in cookie as the header. A later release
+will refuse such tokens, so set the variable now.
+
+On these routes the Access policy decides who reads feedback, not
+the portal's Users tab. With `W13`, a publisher you suspend there
+keeps their Access sign-in, and with it these routes. That is why
+`none`, not `W13`, is the value for a node with no app on this path.
+
+The older direct routes, such as `/api/feedback-export`, stay
+outside the app. They take the bearer, or an Access token that a
+caller sends itself.
+
+To confirm it, `terraviz verify-deploy` runs a `feedback-guarded`
+check: it sends a forged Access header to the feedback export and
+fails if it reads data. Point `--server` at each deployment's own
+`*.pages.dev` hostname as well, since those are not covered by an
+app listing only your node's hostnames.
 
 **Telemetry staff-tagging.** Lets dashboards filter staff dogfood
 out of metrics. Destinations `<W2>/api/ingest` and
@@ -1192,6 +1386,7 @@ Everything referenced below now exists. Pages → your project →
 |---|---|---|
 | `ACCESS_TEAM_DOMAIN` | `W12` — team domain only, no `https://` | |
 | `ACCESS_AUD` | `W13` | |
+| `ACCESS_FEEDBACK_AUD` | 6.4's admin app AUD, `W13`, or `none` (see 6.4) | |
 | `TRUSTED_PUBLISHER_DOMAINS` | `your-org.org` (comma-separated, optional) | |
 
 ## 8.3 Secrets (encrypted)
@@ -1636,11 +1831,11 @@ TERRAVIZ_ACCESS_CLIENT_SECRET=<W15> \
 npm run terraviz -- verify-deploy --server https://<W2>
 ```
 
-`verify-deploy` runs six checks: node identity advertised, catalog
-reachable, catalog populated, search responsive, Access service
-token round-trips, publisher list reads cleanly. Without a service
-token the last two SKIP rather than fail, so it's useful before
-Phase 6 too.
+`verify-deploy` runs seven checks: node identity advertised, catalog
+reachable, catalog populated, search responsive, the feedback export
+refuses a forged Access header, Access service token round-trips,
+publisher list reads cleanly. Without a service token the last two
+SKIP rather than fail, so it's useful before Phase 6 too.
 
 **Expected results at this point:**
 
@@ -1650,6 +1845,7 @@ Phase 6 too.
 | `catalog-reachable` | PASS |
 | `catalog-populated` | **FAIL** until Phase 12 — the catalog is genuinely empty |
 | `search-reachable` | PASS |
+| `feedback-guarded` | PASS once the node has an Access team domain; see §6.4 |
 | `access-me` | PASS |
 | `publisher-list` | PASS |
 
@@ -1703,6 +1899,34 @@ WHERE email = 'you@your-org.org';
 ```
 </details>
 
+## 11.1 Name the node
+
+Open `https://<W2>/publish/node-profile` (**Settings → Node
+profile** in the sidebar). Fill in **Organization name** and,
+optionally, **Loading screen tagline**: the short line under the
+Terraviz title while the app loads, such as your organization's
+name. You can also fill in **Dataset browser subtitle**: the
+sentence under the same title in the panel the **Browse** button
+opens. It shows in that panel's card view on screens wider than a
+phone. Then
+**Save profile**, and upload an **Organization logo**, which needs
+a saved profile first. The name and logo head the public blog.
+
+Left empty, the tagline reads "Science On a Sphere" and the
+subtitle "Browse environmental datasets from NOAA Science On a
+Sphere", both translated into each visitor's language. The default
+subtitle says your datasets come from NOAA Science On a Sphere, so
+set your own if they do not. A line you set is shown as written in
+every language. A change reaches visitors the next time the app
+loads, within a few minutes of saving, with no redeploy. A page
+left open, such as a kiosk, keeps the old lines until it reloads.
+
+On a node upgraded from an earlier release, the tagline is stored
+by catalog migration 0060 and the subtitle by 0061. Until the
+migration for a line is applied, saving with that line filled in is
+refused and saves nothing; empty the field and save again to keep
+the rest. See §14.3.
+
 ---
 
 # Phase 12 — Put content in
@@ -1741,7 +1965,7 @@ published. Takes a few minutes; embedding jobs backfill Vectorize
 asynchronously over the following ~10 minutes.
 
 **Gate:** re-run `verify-deploy`. `catalog-populated` now PASSes,
-and all six checks are green. **That's a complete Tier 2 node.**
+and all seven checks are green. **That's a complete Tier 2 node.**
 
 ---
 
@@ -1800,7 +2024,7 @@ no `frame-ancestors` and no `X-Frame-Options`.
 
 **To limit it, use the portal.** Sign in as an admin, open
 `https://<W2>/publish/node-profile` (**Settings → Node profile** in
-the sidebar), and find the **Embedding** card:
+the sidebar, the page from §11.1), and find the **Embedding** card:
 
 - **Any site can embed** is the default, and how every node starts.
 - **Only sites I list** allows this node and the sites you name.
@@ -2231,6 +2455,10 @@ there at that path.
 - **New manual steps.** `npm run setup -- --manual` reprints the
   current pre-flight sheet, including any step added since you
   installed. Turning on Analytics Engine arrived this way.
+- **Security notes.** Read [`CHANGELOG.md`](../CHANGELOG.md) for every
+  release since yours. The feedback admin entry asks you to set
+  `ACCESS_FEEDBACK_AUD`, and to protect or delete old deployments,
+  which keep running the code they were built with.
 
 ---
 
@@ -2251,6 +2479,7 @@ is [`scripts/lib/expected-bindings.ts`](../scripts/lib/expected-bindings.ts).
 | `CATALOG_VECTORIZE` | Vectorize | 8 | Semantic search |
 | `ACCESS_TEAM_DOMAIN` | plaintext | 8 | Publisher API |
 | `ACCESS_AUD` | plaintext | 8 | Publisher API |
+| `ACCESS_FEEDBACK_AUD` | plaintext | 6.4 | Feedback admin routes' Access check |
 | `TRUSTED_PUBLISHER_DOMAINS` | plaintext | 8 | Skip approval queue (→ `reviewer`, read-only) |
 | `NODE_ID_PRIVATE_KEY_PEM` | secret | 8 | Federation signing |
 | `PREVIEW_SIGNING_KEY` | secret | 8 | `terraviz preview` |
@@ -2317,9 +2546,10 @@ live site with the a11y scan on. If `/publish/**` is behind Access,
 the headless capture hits the SSO wall. It already reuses
 `CF_ACCESS_CLIENT_ID`/`CF_ACCESS_CLIENT_SECRET`, so there's nothing
 new to set — as long as that token's Service Auth policy covers the
-publisher app. Headers go only to first-party origins, never to
-tile CDNs. The deploy step is `continue-on-error`, so skipping all
-of it breaks nothing. The regression baseline is a GitHub Actions
+publisher app. On a node with two applications, that means the
+portal application too (6.2, rule 3). Headers go only to first-party
+origins, never to tile CDNs. The deploy step is
+`continue-on-error`, so skipping all of it breaks nothing. The regression baseline is a GitHub Actions
 artifact, not a Cloudflare resource; the first `main` run
 bootstraps it.
 
@@ -2451,6 +2681,41 @@ The cross-origin (CORS) gate rejected it, for one of two reasons.
 2. The origin isn't in the allowlist, doesn't match the request URL,
    and doesn't end with `.pages.dev`.
 
+### Publisher API returns 403 `cross_origin_request` or `origin_required`
+The publisher API refuses a request that a page on another origin
+started, and the message names the header and value it refused. Likely
+causes:
+- A script or proxy that sets or forwards an `Origin` header. Send your
+  node's own origin (`https://` + `W2`, no path), or no `Origin` at all.
+- A reverse proxy in front of the node that rewrites the host, seen by a
+  browser that sends no `Sec-Fetch-Site` (Safari before 16.4).
+- A browser extension that sends `Sec-Fetch-Site: none` with its requests.
+- `origin_required`: a signed-in user's change arrived with neither
+  `Sec-Fetch-Site` nor `Origin`. That happens with an old browser, or a
+  client using a copied cookie. Send the node's `Origin`.
+
+### Feedback exports return 401 "Unauthorized"
+The feedback admin routes refused the Access token, and no
+`FEEDBACK_ADMIN_TOKEN` bearer matched. Check, in order:
+
+1. **An Access app covers `/api/feedback-admin`** (6.4). The portal's
+   Export buttons use that path. Without such an app, a browser sends
+   no token, and only the bearer works.
+2. **`ACCESS_TEAM_DOMAIN` is set** in the same environment. Without
+   it, every Access header is refused. A node that does not publish,
+   but puts Access on these routes, must set it too — it is the team
+   subdomain, and setting it does not turn on publishing.
+3. **`ACCESS_FEEDBACK_AUD` is that app's AUD**, or `W13` if your
+   publisher app covers the path. Once it is set, a token for any
+   other app is refused, and `none` refuses every token.
+4. **You redeployed** after changing either variable.
+
+Until `ACCESS_FEEDBACK_AUD` is set, a token for another of your
+team's apps is let in. Each one logs "feedback admin: accepted an
+Access token for an application this node does not name", with its
+audience. `wrangler pages deployment tail` shows these lines. Set the
+variable to refuse such tokens.
+
 ### Publisher API returns 503 `access_unconfigured`
 `ACCESS_TEAM_DOMAIN` or `ACCESS_AUD` is missing — most often set on
 Production but not Preview. Confirm with
@@ -2461,9 +2726,11 @@ Production but not Preview. Confirm with
 Access signs every request with a JSON Web Token (JWT), and the `aud`
 claim inside it names the application. `ACCESS_AUD` has to be that
 same audience tag.
-Re-copy `W13` from the application's Overview tab. A token minted
+Re-copy `W13` from the application's Additional settings (or its
+Overview tab, on an older dashboard). A token minted
 for a *different* application of the same team is rejected by
-design.
+design. On a node with two applications, `W13` is the API
+application's AUD (6.2, rule 1).
 
 ### `/.well-known/terraviz.json` 503s, or publishing fails on `origin_node`
 Remote `node_identity` is empty — Phase 9 wasn't run. The local
@@ -2555,8 +2822,12 @@ Expected before Phase 6.2's application covers `/publish/*`.
 Cloudflare answers unauthenticated requests with a cross-origin 302
 the portal can't follow — it's fetched with `redirect: 'manual'` so
 it can *detect* the redirect, but it can't complete the sign-in.
-The Refresh button is the escape hatch: refreshing triggers Access
-at top-level navigation, you sign in, and the next fetch succeeds.
+The card's **Sign in** button is the escape hatch: it signs you in
+through a top-level navigation, and the next fetch succeeds.
+
+On a node with two applications, also check that the API application
+has the Staff policy (6.2, rule 3), and whether **Enforce cookie path
+attribute** was turned on.
 
 ### Console fills with CORS errors on `/api/tile/`, but the globe still renders
 Your Access application covers the whole hostname instead of the six
@@ -2616,7 +2887,7 @@ it from the Users tab, or by SQL if no admin exists.
 No service token configured. Re-run with
 `TERRAVIZ_ACCESS_CLIENT_ID` / `TERRAVIZ_ACCESS_CLIENT_SECRET`
 (`W14`/`W15`), and confirm the token is attached to a Service Auth
-policy on the publisher app.
+policy on the publisher app (the API application, if you run two).
 
 ### `terraviz import-snapshot` 409s on the second run
 Working as designed — the `legacy_id` idempotency check skips rows

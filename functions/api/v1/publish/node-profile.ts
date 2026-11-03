@@ -10,7 +10,14 @@
  *       generated drafts every author sees), writes are privileged.
  * PUT → Upsert the profile. Body:
  *       `{ orgName, mission?, aboutMd?, regionFocus?, defaultTone?,
- *          links? }` — only `orgName` is mandatory. 400 `{ errors }`
+ *          tagline?, browseSubtitle?, links? }` — only `orgName` is
+ *       mandatory. An omitted `mission` / `aboutMd` / `regionFocus` /
+ *       `defaultTone` / `links` is cleared; an omitted `tagline` or
+ *       `browseSubtitle`, later fields, is kept (null or "" clears
+ *       it), and so is the logo, which has its own route. 409
+ *       `{ errors }` with code `migration_missing` for a non-empty
+ *       `tagline` on a database without migration 0060, or a
+ *       non-empty `browseSubtitle` without 0061. 400 `{ errors }`
  *       for body problems (the publisher-API field-error envelope).
  *
  * Writes require a privileged caller (admin / service) and are
@@ -20,6 +27,8 @@
 import type { CatalogEnv } from '../_lib/env'
 import type { PublisherData } from './_middleware'
 import {
+  ProfileMigrationPendingError,
+  type PendingLine,
   bustNodeProfileCache,
   getNodeProfile,
   setNodeProfile,
@@ -31,6 +40,14 @@ import { resolveHttpAssetUrl } from '../_lib/r2-public-url'
 import { writeAuditEvent } from '../_lib/audit-store'
 
 const CONTENT_TYPE = 'application/json; charset=utf-8'
+
+/** How the 409 names each display line. Typed over every field the
+ *  store can refuse, so a line added there fails to compile here until
+ *  it has its own wording. */
+const LINE_WORDING = {
+  tagline: { what: 'a tagline', the: 'the tagline' },
+  browseSubtitle: { what: 'a dataset browser subtitle', the: 'the subtitle' },
+} satisfies Record<PendingLine['field'], { what: string; the: string }>
 
 function jsonError(status: number, error: string, message: string): Response {
   return new Response(JSON.stringify({ error, message }), {
@@ -76,7 +93,30 @@ export const onRequestPut: PagesFunction<CatalogEnv> = async context => {
     })
   }
 
-  const row = await setNodeProfile(context.env.CATALOG_DB, publisher, validation.value)
+  // The write reports what the display lines replaced, read in the
+  // same transaction: they are the profile's most widely shown text,
+  // so a defaced or cleared one should be traceable, and restorable,
+  // from the audit alone.
+  let row
+  let previous
+  try {
+    ;({ row, previous } = await setNodeProfile(context.env.CATALOG_DB, publisher, validation.value))
+  } catch (err) {
+    if (!(err instanceof ProfileMigrationPendingError)) throw err
+    // Field-shaped 409, as publish-while-transcoding is, so the
+    // portal shows the message rather than a generic failure; one
+    // entry per line refused, so a single save names them all.
+    return new Response(
+      JSON.stringify({
+        errors: err.pending.map(({ field, migration }) => ({
+          field,
+          code: 'migration_missing',
+          message: `This node cannot store ${LINE_WORDING[field].what} until catalog migration ${migration} is applied. Apply pending migrations, or save with ${LINE_WORDING[field].the} empty.`,
+        })),
+      }),
+      { status: 409, headers: { 'Content-Type': CONTENT_TYPE } },
+    )
+  }
 
   await writeAuditEvent(context.env.CATALOG_DB, {
     actor_kind: 'publisher',
@@ -88,9 +128,14 @@ export const onRequestPut: PagesFunction<CatalogEnv> = async context => {
       org_name: row.org_name,
       has_mission: row.mission != null,
       has_about: row.about_md != null,
+      tagline: row.tagline,
+      previous_tagline: previous.tagline,
+      browse_subtitle: row.browse_subtitle,
+      previous_browse_subtitle: previous.browse_subtitle,
     }),
   })
-  // The public identity read serves orgName — keep it fresh.
+  // The public identity read serves orgName and the two display
+  // lines — keep it fresh.
   await bustNodeProfileCache(context.env.CATALOG_KV)
 
   const env = context.env

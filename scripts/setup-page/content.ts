@@ -303,7 +303,9 @@ wrangler d1 migrations apply FEEDBACK_DB --remote   # migrations/`,
     ],
     automated: { code: 'npm run setup -- --apply --only=access' },
     automatedNote: [
-      'Discovers your team domain, creates the publisher application with all six destinations, creates both policies, mints the service token and attaches it. It records the AUD and prints the token pair **once** — have somewhere to put it.',
+      'Discovers your team domain, creates the publisher application with all six destinations, creates both policies, mints the service token and attaches it. The application\'s login cookie is set to HTTP Only and SameSite Lax. It records the AUD and prints the token pair **once** — have somewhere to put it.',
+      'If an application named `Terraviz Publisher` (or `TERRAVIZ_ACCESS_APP_NAME`) already exists, the run adopts it and leaves its settings alone. If its cookie settings fall short, the run says so, and you change them in the dashboard.',
+      'Running separate portal and API applications? Set `TERRAVIZ_ACCESS_APP_NAME` to the API application\'s name first, or the run adopts or creates the wrong one.',
     ],
     gate: "The AUD is copied, the token pair is in your password manager, and the token appears in the Automation policy's include list.",
     gateShort: 'Staff sign-in works, and the token pair is saved somewhere safe.',
@@ -441,7 +443,7 @@ TERRAVIZ_ACCESS_CLIENT_SECRET={{W15}} \\
 npm run terraviz -- verify-deploy --server https://{{W2}}`,
       },
     ],
-    gate: 'Bindings audit clean, and five of six deploy checks green.',
+    gate: 'Bindings audit clean, and six of seven deploy checks green.',
     gateShort: 'Both checks pass, except the empty-catalog one — that is expected here.',
     anchor: 'phase-10--verify',
   },
@@ -462,6 +464,13 @@ npm run terraviz -- verify-deploy --server https://{{W2}}`,
         body: [
           '**The first human to sign in on a deploy with no active admin is bootstrapped to admin automatically.** Service tokens are excluded — a machine credential never self-elevates. So on a fresh node, you become the admin by signing in.',
           'Everyone after you lands as a pending reviewer, and you approve and promote them from the Users tab. Admins cannot demote themselves or remove the last admin, so a node always keeps one operator.',
+        ],
+      },
+      {
+        kind: 'note',
+        title: 'Name the node',
+        body: [
+          "Open **Settings → Node profile** (`https://{{W2}}/publish/node-profile`). Fill in **Organization name** and, optionally, **Loading screen tagline**: the short line under the Terraviz title while the app loads, such as your organization's name. You can also fill in **Dataset browser subtitle**, the sentence under the title in the dataset browser. Save, then upload an **Organization logo**. Left empty, each shows the app's own line; the default subtitle says your datasets come from NOAA Science On a Sphere, so set your own if they do not.",
         ],
       },
     ],
@@ -498,8 +507,8 @@ npm run terraviz -- import-snapshot \\
         ],
       },
     ],
-    gate: 'Re-run `verify-deploy`. `catalog-populated` now passes and all six checks are green. That is a complete publisher node. Embedding jobs backfill semantic search asynchronously over the next ten minutes or so.',
-    gateShort: 'All six checks pass. Your node is finished.',
+    gate: 'Re-run `verify-deploy`. `catalog-populated` now passes and all seven checks are green. That is a complete publisher node. Embedding jobs backfill semantic search asynchronously over the next ten minutes or so.',
+    gateShort: 'All seven checks pass. Your node is finished.',
     anchor: 'phase-12--put-content-in',
   },
   {
@@ -652,7 +661,15 @@ export const TROUBLESHOOTING = [
   },
   {
     symptom: '401 "Invalid or expired Access assertion"',
-    fix: "Your AUD does not match the application that issued the JWT. Re-copy it from the application's Overview tab. A token minted for a different application in the same team is rejected by design.",
+    fix: "Your AUD does not match the application that issued the JWT. Re-copy it from the application's Additional settings, or its Overview tab on an older dashboard. A token minted for a different application in the same team is rejected by design.",
+  },
+  {
+    symptom: 'Feedback exports return 401 "Unauthorized"',
+    fix: 'The feedback admin routes refused the Access token, and no `FEEDBACK_ADMIN_TOKEN` bearer matched. The portal\'s Export buttons need an Access app covering `/api/feedback-admin`; without one, only the bearer works. `ACCESS_TEAM_DOMAIN` must be set, or every Access header is refused, even on a node that does not publish but fronts these routes with Access. `ACCESS_FEEDBACK_AUD` must be that app\'s AUD, or your publisher AUD if the publisher app covers the path; `none` refuses every token. Redeploy after changing either.',
+  },
+  {
+    symptom: 'Publisher API returns 403 cross_origin_request or origin_required',
+    fix: "The publish routes refuse a request that a page on another origin started, and the message names the header they refused. A script or proxy that sends its own `Origin` must send your node's origin (`https://` and your hostname, no path), or none. `origin_required` means a signed-in user's change carried neither `Origin` nor `Sec-Fetch-Site`, as from an old browser or an extension that strips both.",
   },
   {
     symptom: 'Access blocks your own staff account',
@@ -676,7 +693,7 @@ export const TROUBLESHOOTING = [
   },
   {
     symptom: 'Portal shows "Your session has expired"',
-    fix: 'Expected before your Access application covers the publish paths. Cloudflare answers with a cross-origin redirect the portal can detect but cannot follow. The Refresh button is the escape hatch — refreshing triggers Access at top-level navigation, you sign in, and the next fetch succeeds.',
+    fix: 'Expected before your Access application covers the publish paths. Cloudflare answers with a cross-origin redirect the portal can detect but cannot follow. The card\'s Sign in button is the escape hatch — it signs you in through a top-level navigation, and the next fetch succeeds.',
   },
   {
     symptom: 'Zip download shows "size unknown"',
@@ -776,7 +793,7 @@ export const WORKSHEET: WorksheetField[] = [
   { id: 'W10', label: 'Pages project name', phase: 5, token: '‹pages-project›', placeholder: 'terraviz', origin: 'asked', fromTool: 'pagesProject', validator: 'projectName', consumedBy: [6, 8, 10], minTier: 1 },
   { id: 'W11', label: 'CLOUDFLARE_API_TOKEN', phase: 5, token: '‹api-token›', placeholder: 'token value', note: 'Minimum scope: Account → Cloudflare Pages → Edit.', secret: true, origin: 'generated', consumedBy: [10, 13], minTier: 1 },
   { id: 'W12', label: 'Access team domain', phase: 6, token: '‹team›.cloudflareaccess.com', placeholder: 'your-org.cloudflareaccess.com', note: 'Team domain only, no https://. The tool discovers this for you.', origin: 'discovered', consumedBy: [8], minTier: 2 },
-  { id: 'W13', label: 'Access AUD (publisher app)', phase: 6, token: '‹access-aud›', placeholder: '64-char hex', note: 'Application → Overview → Application Audience Tag.', validator: 'aud', origin: 'discovered', consumedBy: [8], minTier: 2 },
+  { id: 'W13', label: 'Access AUD (publisher app)', phase: 6, token: '‹access-aud›', placeholder: '64-char hex', note: 'Application → Additional settings → Application Audience (AUD) Tag. Older dashboards show it on the Overview tab.', validator: 'aud', origin: 'discovered', consumedBy: [8], minTier: 2 },
   { id: 'W14', label: 'CF_ACCESS_CLIENT_ID', phase: 6, token: '‹client-id›', placeholder: '….access', secret: true, origin: 'shown-once', consumedBy: [9, 10, 12, 13], minTier: 2 },
   { id: 'W15', label: 'CF_ACCESS_CLIENT_SECRET', phase: 6, token: '‹client-secret›', placeholder: 'shown once', note: 'Cloudflare shows this exactly once. Save it before closing the dialog.', secret: true, origin: 'shown-once', consumedBy: [9, 10, 12, 13], minTier: 2 },
   { id: 'W16', label: 'NODE_ID_PRIVATE_KEY_PEM', phase: 7, token: '‹node-private-key›', placeholder: 'from .dev.vars', note: 'Back this up. Regenerating it means re-provisioning your identity.', secret: true, origin: 'generated', consumedBy: [8], minTier: 2 },

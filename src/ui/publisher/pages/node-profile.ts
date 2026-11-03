@@ -9,8 +9,9 @@
  *
  * Privileged-only (admin / service) — the API enforces 403 on writes;
  * gating here avoids a fill-then-reject round-trip. Renders a single
- * form (org name, mission, about markdown, region focus, default
- * tone, outbound links) backed by `GET`/`PUT
+ * form (org name, loading-screen tagline, dataset-browser subtitle,
+ * mission, about markdown, region
+ * focus, default tone, outbound links) backed by `GET`/`PUT
  * /api/v1/publish/node-profile`. Mirrors `featured-hero.ts`. Below it,
  * two node-settings cards with their own Saves: Features (admins
  * only) and Embedding (`components/embedding-card.ts`, read-only for
@@ -27,6 +28,7 @@ import { buildEmbeddingCard, embedPolicyFromSettings, embedProblemFromSettings }
 import type { EmbedPolicyProblem, NodeSettingsResponse } from '../types'
 import type { EmbedPolicy } from '../../../types/node-embedding'
 import { renderMarkdown } from '../../../services/markdownRenderer'
+import { BROWSE_SUBTITLE_MAX_LEN, TAGLINE_MAX_LEN, cleanDisplayLineInput } from '../../../types/node-profile-lines'
 
 /** Keep in sync with the backend store bounds
  *  (`functions/api/v1/_lib/node-profile-store.ts`). The API is the
@@ -57,6 +59,10 @@ interface ProfileResponse {
     defaultTone: string | null
     links: ProfileLink[]
     logoUrl: string | null
+    /** Absent from an older deploy's response. */
+    tagline?: string | null
+    /** Absent from an older deploy's response. */
+    browseSubtitle?: string | null
   } | null
 }
 
@@ -179,6 +185,26 @@ function renderForm(mount: HTMLElement, state: FormState): void {
     id: 'nodeprofile-org',
     maxLength: ORG_NAME_MAX_LEN,
     value: profile?.orgName ?? '',
+  })
+  // The public app's two display lines: the loading screen's
+  // (`src/ui/splashTagline.ts`) and the dataset browser's
+  // (`src/ui/browseSubtitle.ts`). Their character rules are shared with
+  // the API (`src/types/node-profile-lines.ts`); Save cleans what was
+  // pasted so a tab or an invisible character cannot draw an error
+  // nobody can see.
+  const tagline = el('input', {
+    type: 'text',
+    className: 'publisher-nodeprofile-input',
+    id: 'nodeprofile-tagline',
+    maxLength: TAGLINE_MAX_LEN,
+    value: profile?.tagline ?? '',
+  })
+  const browseSubtitle = el('input', {
+    type: 'text',
+    className: 'publisher-nodeprofile-input',
+    id: 'nodeprofile-browse-subtitle',
+    maxLength: BROWSE_SUBTITLE_MAX_LEN,
+    value: profile?.browseSubtitle ?? '',
   })
   const mission = el('textarea', {
     className: 'publisher-nodeprofile-textarea',
@@ -303,8 +329,13 @@ function renderForm(mount: HTMLElement, state: FormState): void {
       status.classList.add('publisher-nodeprofile-status-error')
       return
     }
+    // Shown back in the fields, so what they read is what is stored.
+    tagline.value = cleanDisplayLineInput(tagline.value)
+    browseSubtitle.value = cleanDisplayLineInput(browseSubtitle.value)
     const body = {
       orgName: name,
+      tagline: tagline.value || null,
+      browseSubtitle: browseSubtitle.value || null,
       mission: mission.value.trim() || null,
       aboutMd: about.value.trim() || null,
       regionFocus: region.value.trim() || null,
@@ -322,7 +353,11 @@ function renderForm(mount: HTMLElement, state: FormState): void {
           if (handleSessionError({ navigate: state.navigate }) === 'navigating') return
           status.textContent = t('publisher.nodeProfile.error.session')
         } else if (res.kind === 'validation' && res.errors && res.errors.length > 0) {
-          status.textContent = res.errors[0].message
+          // Every refusal at once: a node missing both display-line
+          // migrations refuses both lines, and showing only the first
+          // would make the operator clear one, save, and only then
+          // hear about the other.
+          status.textContent = res.errors.map(e => e.message).join(' ')
         } else {
           status.textContent = t('publisher.nodeProfile.error.generic')
         }
@@ -352,6 +387,19 @@ function renderForm(mount: HTMLElement, state: FormState): void {
     heading(t('publisher.nodeProfile.section.organization')),
     buildLogo(state),
     labelled(t('publisher.nodeProfile.orgName'), orgName),
+    labelledWithHint(
+      t('publisher.nodeProfile.tagline'),
+      tagline,
+      t('publisher.nodeProfile.tagline.hint', { max: TAGLINE_MAX_LEN, default: t('loading.subtitle') }),
+    ),
+    labelledWithHint(
+      t('publisher.nodeProfile.browseSubtitle'),
+      browseSubtitle,
+      t('publisher.nodeProfile.browseSubtitle.hint', {
+        max: BROWSE_SUBTITLE_MAX_LEN,
+        default: t('browse.subtitle'),
+      }),
+    ),
     labelledWithHint(
       t('publisher.nodeProfile.regionFocus'),
       region,
@@ -642,12 +690,20 @@ function labelled(label: string, control: HTMLElement): HTMLElement {
   return wrap
 }
 
-/** `labelled` plus a muted help line under the control (deck fields
- *  like "Geographic focus" carry a one-line hint). */
+/** A label, the control, and a muted help line under it (deck fields
+ *  like "Geographic focus" carry a one-line hint). The hint sits
+ *  outside the `<label>` and is tied to the control by
+ *  `aria-describedby`: inside, it became part of the field's
+ *  accessible name, read in full on every focus and in forms lists.
+ *  The control needs an `id`. */
 function labelledWithHint(label: string, control: HTMLElement, hint: string): HTMLElement {
-  const wrap = labelled(label, control)
-  wrap.append(el('span', { className: 'publisher-nodeprofile-hint', textContent: hint }))
-  return wrap
+  const hintId = `${control.id}-hint`
+  control.setAttribute('aria-describedby', hintId)
+  return el('div', { className: 'publisher-nodeprofile-field' }, [
+    el('label', { className: 'publisher-field-label', htmlFor: control.id, textContent: label }),
+    control,
+    el('span', { className: 'publisher-nodeprofile-hint', id: hintId, textContent: hint }),
+  ])
 }
 
 /** The About field: label + Edit/Preview toggle on one row, then the

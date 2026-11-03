@@ -48,7 +48,7 @@ export const FORMAT_VALUES: ReadonlySet<string> = new Set([
   'tour/json',
 ])
 
-const SLUG_RE = /^[a-z][a-z0-9-]{2,63}$/
+export const SLUG_RE = /^[a-z][a-z0-9-]{2,63}$/
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/
 
 export type BboxProvenance = 'unknown' | 'measured' | 'declared_global' | 'imported' | 'inferred'
@@ -596,6 +596,36 @@ function validateRadiusMi(value: unknown, errors: ValidationError[]): void {
   }
 }
 
+/** Loose bound on `weight`, like `radius_mi`'s: SOS rows use 10. */
+export const MAX_WEIGHT_MAGNITUDE = 1_000_000
+
+/** Whether `value` is a weight the publish API accepts. */
+export function isValidWeight(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && Math.abs(value) <= MAX_WEIGHT_MAGNITUDE
+}
+
+/**
+ * Validate `weight`, the catalog's ordering hint: a whole number in
+ * ±`MAX_WEIGHT_MAGNITUDE`. It was never checked, and a JSON body can
+ * carry `1e999`, which parses to `Infinity`. That was stored as is,
+ * then sorted the catalog by a non-number, broke `exhibit-reads.ts`'s
+ * comparator (`Infinity - Infinity` is `NaN`), and is refused by the
+ * signed feed's canonical JSON. `null` is refused too: the column is
+ * `NOT NULL`, so on an update it surfaced as a D1 error, a 500.
+ */
+function validateWeight(value: unknown, errors: ValidationError[]): void {
+  if (value === undefined) return
+  if (typeof value !== 'number' || !Number.isInteger(value)) {
+    errors.push(err('weight', 'invalid_type', 'weight must be a whole number.'))
+    return
+  }
+  if (Math.abs(value) > MAX_WEIGHT_MAGNITUDE) {
+    errors.push(
+      err('weight', 'invalid_value', `weight must be between -${MAX_WEIGHT_MAGNITUDE} and ${MAX_WEIGHT_MAGNITUDE} (got ${value}).`),
+    )
+  }
+}
+
 function validateIsoDate(field: string, value: unknown, errors: ValidationError[]): void {
   if (value == null || value === '') return
   if (typeof value !== 'string' || !ISO_DATE_RE.test(value)) {
@@ -697,6 +727,10 @@ function validateCategories(value: unknown, errors: ValidationError[]): void {
   }
   let total = 0
   for (const [facet, values] of Object.entries(value as Record<string, unknown>)) {
+    if (facet === '__proto__' || facet === 'constructor') {
+      errors.push(err(`categories.${facet}`, 'reserved', 'This category facet name is reserved.'))
+      continue
+    }
     if (!Array.isArray(values)) {
       errors.push(err(`categories.${facet}`, 'invalid_type', 'Each facet must be an array of strings.'))
       continue
@@ -766,6 +800,7 @@ export function validateDraftCreate(body: DatasetDraftBody): ValidationError[] {
   validateRadiusMi(body.radius_mi, errors)
   validateLonOrigin(body.lon_origin, errors)
   validatePlaybackFps(body.playback_fps, errors)
+  validateWeight(body.weight, errors)
   validateRenderEncoding(body.render_encoding, body.color_scale, errors)
   // null is allowed (clears the column on UPDATE; treated as
   // the column's default "no flip" on INSERT). Anything else
@@ -815,6 +850,7 @@ export function validateDraftUpdate(body: DatasetDraftBody): ValidationError[] {
   validateRadiusMi(body.radius_mi, errors)
   validateLonOrigin(body.lon_origin, errors)
   validatePlaybackFps(body.playback_fps, errors)
+  validateWeight(body.weight, errors)
   validateRenderEncoding(body.render_encoding, body.color_scale, errors)
   // null is allowed (clears the column on UPDATE; treated as
   // the column's default "no flip" on INSERT). Anything else
