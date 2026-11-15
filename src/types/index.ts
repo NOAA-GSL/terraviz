@@ -1179,6 +1179,16 @@ export type ScreenClass = 'mobile' | 'tablet' | '1080p' | '2k' | '4k+'
  * `environment='production'` but `build_channel='internal'`. */
 export type BuildChannel = 'public' | 'internal' | 'canary'
 export type VrCapability = 'none' | 'vr' | 'ar' | 'both'
+/** Where the app is running and whether the page asked for embed
+ * mode — two facts in one bucket. The first half is whether the app
+ * has its own window (`top`) or sits in a frame on another page
+ * (`framed`); the second is whether the address carried `?embed=1`
+ * (`src/utils/embedMode.ts`). `framed` without `-embed` is someone
+ * framing the full app; `top-embed` is the embed address opened on
+ * its own (a kiosk, or a check before pasting it into a page). Never
+ * says *which* page framed it: neither `document.referrer` nor
+ * `location.ancestorOrigins` is read. */
+export type WindowContext = 'top' | 'top-embed' | 'framed' | 'framed-embed'
 export type LayerSource = 'network' | 'cache' | 'hls' | 'image'
 /** `'output'`: shown by the output page because its address named the
  * dataset. Whoever set up the globe chose it, not a visitor. */
@@ -1258,15 +1268,22 @@ export interface SessionStartEvent extends TelemetryEventBase {
    * from viewport because a user on a 4K monitor may resize the
    * browser to a 1080p window. */
   screen_class: ScreenClass
-  /** Build audience — `'public'` unless the bundle was produced
+  /** Build audience — `'public'` for a build unless it was produced
    * with `VITE_BUILD_CHANNEL=internal` (staff dogfood) or
-   * `VITE_BUILD_CHANNEL=canary` (staged rollout). */
+   * `VITE_BUILD_CHANNEL=canary` (staged rollout). The Vite dev server
+   * defaults to `'internal'` (#531); see `resolveBuildChannel` in
+   * `scripts/lib/build-channel.ts`. */
   build_channel: BuildChannel
   vr_capable: VrCapability
   schema_version: string
   /** True when this is a re-start after the user switched telemetry
    * back on mid-app-lifetime (not a fresh app boot). */
   resumed?: boolean
+  /** Own window or another page's frame, and whether `?embed=1` was
+   * set — how embedded views (a StoryMap, a Hub page, a WordPress
+   * post) are counted. Sorts after every other field, so it was
+   * appended without moving one (`docs/ANALYTICS_QUERIES.md`). */
+  window_context: WindowContext
 }
 
 export interface SessionEndEvent extends TelemetryEventBase {

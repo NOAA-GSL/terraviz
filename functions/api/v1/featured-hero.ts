@@ -5,7 +5,8 @@
  * Cloudflare Pages Function — GET /api/v1/featured-hero
  *
  * Public, unauthenticated read of the operator's "Right now" hero
- * override (Phase 7 §9.1; see `docs/HERO_ADMIN_SCOPING.md`). Returns
+ * override (Phase 7 §9.1; see `docs/CATALOG_PUBLISHING_TOOLS.md`
+ * §"Right now" hero override). Returns
  *
  *   { "hero": { "datasetId", "window": { "start", "end" }, "headline"? } }
  *
@@ -60,7 +61,13 @@ export const onRequestGet: PagesFunction<CatalogEnv> = async context => {
   }
 
   if (context.env.CATALOG_KV) {
-    const cached = await context.env.CATALOG_KV.get(HERO_CACHE_KEY)
+    let cached: string | null = null
+    try {
+      cached = await context.env.CATALOG_KV.get(HERO_CACHE_KEY)
+    } catch (err) {
+      // KV failure = cache miss; D1 is the source of truth.
+      console.warn('[featured-hero] KV read failed — reading D1:', err instanceof Error ? err.message : String(err))
+    }
     if (cached) {
       return new Response(cached, {
         status: 200,

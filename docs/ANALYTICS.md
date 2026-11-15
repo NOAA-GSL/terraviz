@@ -47,6 +47,24 @@ authoritative list of which events require Research mode; the runtime
 gate in `src/analytics/emitter.ts:tierGate()` reads it as a Set and
 short-circuits before queueing.
 
+**A page load can cap the tier at Off** (`src/analytics/pageOptOut.ts`),
+for an embedded view, which has no notice and no Privacy panel, and
+whose stored setting a browser partitions per site. `telemetry=` in
+the address with any value but `1`/`true` does it on any page (the
+switch a host's embed code carries, `docs/EMBED_URL_GRAMMAR.md`), and
+Global Privacy Control does it on every page. `main.ts` latches it
+into the emitter (`optOutForPage`) at module evaluation; from then the
+emitter drops every event ahead of `tierGate`, sends nothing on flush
+or unload, and does not hydrate a persisted queue. Nothing is stored,
+so the stored tier is untouched (`docs/PRIVACY_ANALYSIS.md` §9l). An
+opted-out page sends no events at all, `session_start` included, so
+every count is a floor. Shares and mixes computed from those counts are
+not bounded in either direction: GPC applies on every page, and some
+browsers and extensions send it by default, so the pages left out are
+not a random sample, and the OS, locale, viewport and performance
+mixes lean away from those browsers' users. Session counts step down
+on the day a node deploys this, which is not lost traffic.
+
 ## Where the data goes
 
 ```
@@ -130,9 +148,19 @@ or both:
 - **Session id is in-memory only.** Generated at boot, rotated every
   app launch, never persisted. Tier-A telemetry consent does not
   imply persistent identification.
-- **Kill switch.** `/api/ingest` honours a `KILL_TELEMETRY=1` env
-  var; the function returns 410 and the client cools down for the
-  rest of the session.
+- **Kill switch.** `/api/ingest` reads the key `telemetry_enabled`
+  in the `TELEMETRY_KILL_SWITCH` KV namespace on every request. Set
+  to `disabled`, `false`, `off` or `0`, the function returns 410 with
+  `Retry-After: 300` and the client cools down for the rest of the
+  session; clearing the key reaches only new sessions, since a client
+  that got a 410 stays silent until it reloads. Turn it on with `wrangler kv key put telemetry_enabled
+  disabled --namespace-id=<id> --remote` and off with `wrangler kv
+  key delete telemetry_enabled --namespace-id=<id> --remote`; Wrangler
+  4 writes to local storage unless told `--remote`. It takes up to
+  about a minute to reach every location (`SELF_HOSTING.md` has a
+  check). If the binding is missing or the read fails, ingestion
+  carries on (fails open). There
+  is no `KILL_TELEMETRY` environment variable; nothing reads one.
 - **Where a batch goes.** Relative `/api/ingest` on the web — the
   Pages Function answering it belongs to the deploy that served
   the page, so a fork reports to its own node with no
@@ -151,7 +179,7 @@ must be corrected.
 
 | Event | Tier | Where it fires |
 |---|---|---|
-| `session_start` / `session_end` | A | `src/analytics/session.ts`. The output page in web mode (a globe's texture, such as a Second Life prim) sends **neither**: a session start would put a visitor's locale, OS and screen beside the moment they arrived, which a land owner's log of avatar arrivals could be matched against, and a session's length on a globe is how long a passer-by stood near it. A globe's visitors are counted instead as the distinct session ids on its `layer_loaded` rows (the maintainer's decision, 24 October 2026) |
+| `session_start` / `session_end` | A | `src/analytics/session.ts`. The output page in web mode (a globe's texture, such as a Second Life prim) sends **neither**: a session start would put a visitor's locale, OS and screen beside the moment they arrived, which a land owner's log of avatar arrivals could be matched against, and a session's length on a globe is how long a passer-by stood near it. A globe's visitors are counted instead as the distinct session ids on its `layer_loaded` rows (the maintainer's decision, 24 October 2026). `session_start.window_context` says whether the app had its own window or sat in another page's frame, and whether the address carried `?embed=1` — how embedded views (a StoryMap, a Hub page, a WordPress post) are counted. It never names the framing page: neither `document.referrer` nor `location.ancestorOrigins` is read. |
 | `layer_loaded` / `layer_unloaded` | A | `src/services/datasetLoader.ts`. The output page in web mode emits `layer_loaded` alone, with `trigger: 'output'`, when its address's dataset reaches the glass (`src/output/webTelemetry.ts`). It reports **only in the first minute after the page loads** (page time, so a late `#telemetry=1` reports nothing), at most 30 times, and sends nothing after about 66 s even on a retry, with no leave-time beacon, and only when the globe's address says `telemetry=1` and the browser does not set Global Privacy Control: later events would show how long a visitor stood near the globe, and who stood there together. It sends no `layer_unloaded` |
 | `camera_settled` | A | `src/services/mapRenderer.ts` (2D) + `src/services/vrInteraction.ts` (VR/AR) |
 | `map_click` | A | `src/services/mapRenderer.ts` |
@@ -257,10 +285,24 @@ shifts every later position. Rules to keep dashboards stable:
 
 ## Local development
 
-- **Console mode.** Set `VITE_TELEMETRY_CONSOLE=true` (or pass the
-  same to `npm run dev`). Events are logged to the browser console
-  instead of POSTed; useful for verifying call-site behaviour
-  without standing up Cloudflare.
+- **Console mode.** On by default under the dev server (`npm run
+  dev`, `npm run dev:desktop`), off in a build. Events are logged to
+  the browser console (`console.debug`, so the Verbose level) instead
+  of POSTed; useful for verifying call-site behaviour without
+  standing up Cloudflare. The default matters because the dev server
+  proxies `/api` to the production node, which accepts `localhost`
+  origins and would store a contributor's session as a real visitor
+  (#531). `VITE_TELEMETRY_CONSOLE=false` sends from the dev server to
+  test the transport. Those sessions report `build_channel=internal`,
+  the dev server's default, but only on `session_start`: separating
+  their other events takes a join on the session id (`index1`), the
+  D1 rollups drop the field, and the dashboards and rollups filter
+  only on the server's `internal` stamp, which a dev session doesn't
+  get. So `/publish/analytics` counts an opted-in dev session as a
+  visitor. `VITE_TELEMETRY_CONSOLE=true` turns console mode on in a
+  build. Both defaults key on Vite's mode, so a dev server started
+  with a custom one (`vite --mode staging`) counts as a build. It
+  sends, and reports `public`, unless you set both variables.
 - **Disabled mode.** Set `VITE_TELEMETRY_ENABLED=false` to compile
   out the entire emitter (`TELEMETRY_BUILD_ENABLED` becomes a
   const `false` and the call sites tree-shake).

@@ -23,6 +23,7 @@ import type { AppState, VideoTextureHandle, TourFile, Dataset } from './types'
 
 // Extracted modules
 import { showBrowseUI, hideBrowseUI, collapseBrowseUI, notifyBrowseOpened, refreshBrowseNewSinceBadge } from './ui/browseUI'
+import { setHeroEnabled } from './ui/heroPanelUI'
 import { initDownloadUI } from './ui/downloadUI'
 import { initDownloadDialogUI } from './ui/downloadDialogUI'
 import { initPlaylistUI } from './ui/playlistUI'
@@ -60,7 +61,10 @@ import { showDisclosureBannerIfNeeded } from './ui/disclosureBanner'
 import {
   createFetchTransport,
   emit,
+  getPageOptOut,
   initSession,
+  optOutForPage,
+  pageOptOutFromBrowser,
   pauseForVrEntry,
   resumeForVrExit,
   setTransport,
@@ -70,7 +74,7 @@ import {
 } from './analytics'
 import {
   createPlaybackState, startPlaybackLoop, stopPlaybackLoop,
-  togglePlayPause, rewind, fastForward, stepFrame, onScrub,
+  togglePlayPause, rewind, fastForward, stepFrame, onScrub, handlePlaybackKey,
   updatePlayButton, toggleCaptions, resetPlaybackState, initPlaybackPositioning,
   seekToDate,
   checkSeekToDate,
@@ -83,7 +87,7 @@ import {
 import { resolveRegion } from './data/regions'
 import type { PublicEvent } from './services/eventsService'
 import { TourEngine, type TourTelemetryMeta } from './services/tourEngine'
-import { showTourControls, hideTourControls, hideAllTourTextBoxes, hideAllTourImages, hideAllTourVideos, hideAllTourPopups, hideAllTourQuestions } from './ui/tourUI'
+import { showTourControls, hideTourControls, tourRunning, toggleTourPlayback, hideAllTourTextBoxes, hideAllTourImages, hideAllTourVideos, hideAllTourPopups, hideAllTourQuestions } from './ui/tourUI'
 import { initLegendForDataset, clearLegendCache, loadConfig, readCurrentTime } from './services/docentService'
 import { isMobile, IS_MOBILE_NATIVE, getCloudTextureUrl } from './utils/deviceCapability'
 import { hasWebGL2 } from './utils/webglSupport'
@@ -155,6 +159,19 @@ import { maybeInitShaderTuner } from './ui/shaderTunerUI'
 // SSR-safe (the service no-ops when `document` is undefined).
 // See docs/WEB_CATALOG_FEATURES_PLAN.md §7.1.
 initUiScale()
+
+// Whether this page load reports nothing: `telemetry=` in the address
+// (the switch an embed code can carry), or the browser's Global Privacy
+// Control signal (src/analytics/pageOptOut.ts). Latched at module
+// evaluation, like the UI scale above, before any transport exists, so
+// nothing can be sent and anything already queued is dropped; the
+// emitter holds it for the rest of the page's life. The address
+// writers below keep `telemetry=` in both parts of the address anyway,
+// so the key a host set is still there after a reload.
+{
+  const pageOptOut = pageOptOutFromBrowser()
+  if (pageOptOut) optOutForPage(pageOptOut)
+}
 
 // Apply persisted shader settings (§7.2) — currently the specular-
 // strength preset. Contrast / saturation / bump are dev-tuned and
@@ -656,8 +673,14 @@ class InteractiveSphere {
       // after the user dismisses it. Skipped inside an embed — the
       // host page owns consent, and a privacy banner popping up in a
       // third-party iframe is both wrong and intrusive (§J of
-      // `docs/WORDPRESS_INTEGRATION_PLAN.md`).
-      if (!embedModeActive) showDisclosureBannerIfNeeded()
+      // `docs/WORDPRESS_INTEGRATION_PLAN.md`). The host's means of
+      // exercising it is `telemetry=0` in the embed code, and the
+      // visitor's is Global Privacy Control (pageOptOut.ts). Skipped
+      // too on any page that reports nothing for either reason: the
+      // notice describes what is collected, and here nothing is, so it
+      // would mislead. It shows on the next visit without that reason,
+      // since nothing marks it seen.
+      if (!embedModeActive && !getPageOptOut()) showDisclosureBannerIfNeeded()
       // Telemetry transport — skipped entirely when the compile-time
       // flag is off (telemetry-free builds) and when console mode
       // is on (dev convenience: events log locally, no POSTs).
@@ -696,8 +719,13 @@ class InteractiveSphere {
 
       // Initialize digital docent chat (available on all views) —
       // unless this node turned Orbit off, decided here, before
-      // anything below can show the trigger or open the panel.
-      this.initChat((await nodeFeatures.settle()).orbit)
+      // anything below can show the trigger or open the panel. The
+      // "Right now" hero's switch is applied at the same point, for
+      // the same reason: every path below may show the browse panel,
+      // which renders the hero.
+      const features = await nodeFeatures.settle()
+      setHeroEnabled(features.hero)
+      this.initChat(features.orbit)
 
       // Tour-authoring dock — mounts only when the URL carries
       // `?tourEdit=<id>`. Phase 3pt/A. Idempotent; the dock owns
@@ -887,10 +915,13 @@ class InteractiveSphere {
       this.setError(error instanceof Error ? error.message : 'Unknown error')
     }
 
-    // A boot that failed before `initChat` still owes the Orbit
-    // decision: the deep links below can open the panel or show the
-    // trigger. Idempotent when `initChat` already applied it.
-    if (!(await nodeFeatures.settle()).orbit) setOrbitAvailable(false)
+    // A boot that failed before `initChat` still owes the Orbit and
+    // hero decisions: the deep links below can open the panel, show
+    // the trigger or reveal the browse panel. Idempotent when the
+    // try block already applied them.
+    const settledFeatures = await nodeFeatures.settle()
+    setHeroEnabled(settledFeatures.hero)
+    if (!settledFeatures.orbit) setOrbitAvailable(false)
 
     // Phase 5: listen for deep links unconditionally so the app can
     // load a dataset when opened from an external URL at any time,
@@ -1024,8 +1055,9 @@ class InteractiveSphere {
       const previewId = dataService.getDatasetById(previewRef)?.id ?? previewRef
       if (previewId === id) return
     }
-    const next = buildDatasetPath(dataService.getDatasetById(id) ?? { id }, search)
-    if (next === `${window.location.pathname}${search}`) return
+    const hash = window.location.hash
+    const next = buildDatasetPath(dataService.getDatasetById(id) ?? { id }, search, hash)
+    if (next === `${window.location.pathname}${search}${hash}`) return
     if (mode === 'push') {
       window.history.pushState({}, '', next)
     } else {
@@ -1034,9 +1066,10 @@ class InteractiveSphere {
   }
 
   /** Reset the address bar to the no-dataset form, keeping whatever
-   *  mode the visitor arrived in (`?catalog=true`, `?embed=1`). */
+   *  mode the visitor arrived in (`?catalog=true`, `?embed=1`) and the
+   *  part after `#`. */
   private clearDatasetUrl(mode: 'push' | 'replace'): void {
-    const next = buildNoDatasetPath(window.location.pathname, window.location.search)
+    const next = buildNoDatasetPath(window.location.pathname, window.location.search, window.location.hash)
     if (mode === 'push') {
       window.history.pushState({}, '', next)
     } else {
@@ -4068,28 +4101,19 @@ class InteractiveSphere {
       })
     }
 
-    // Keyboard shortcuts
+    // Keyboard shortcuts: which keys are playback's, and what they drive
+    // (the tour while one runs), is `handlePlaybackKey`'s to decide.
     document.addEventListener('keydown', (e) => {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
-      const browseOverlay = document.getElementById('browse-overlay')
-      if (browseOverlay && !browseOverlay.classList.contains('hidden') && browseOverlay.contains(e.target as Node)) return
-
-      if (e.code === 'Space') {
-        e.preventDefault()
-        togglePlayPause(this.hlsService, this.appState, (m) => this.announce(m))
-      } else if (e.code === 'ArrowLeft') {
-        e.preventDefault()
-        stepFrame(-1, this.hlsService, this.appState, this.playback, (m) => this.announce(m))
-      } else if (e.code === 'ArrowRight') {
-        e.preventDefault()
-        stepFrame(1, this.hlsService, this.appState, this.playback, (m) => this.announce(m))
-      } else if (e.code === 'Home') {
-        e.preventDefault()
-        rewind(this.hlsService, this.appState, this.playback, (m) => this.announce(m))
-      } else if (e.code === 'End') {
-        e.preventDefault()
-        fastForward(this.hlsService, this.appState, this.playback, (m) => this.announce(m))
-      }
+      const announce = (m: string): void => this.announce(m)
+      handlePlaybackKey(e, {
+        tourRunning,
+        toggleTour: toggleTourPlayback,
+        hasPlayback: () => this.hlsService !== null,
+        toggle: () => togglePlayPause(this.hlsService, this.appState, announce),
+        step: (direction) => stepFrame(direction, this.hlsService, this.appState, this.playback, announce),
+        rewind: () => rewind(this.hlsService, this.appState, this.playback, announce),
+        fastForward: () => fastForward(this.hlsService, this.appState, this.playback, announce),
+      })
     })
   }
 

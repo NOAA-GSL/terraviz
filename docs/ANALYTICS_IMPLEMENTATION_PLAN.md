@@ -149,7 +149,7 @@ the client validate against the same shape.
 
 | Event | Tier | `blobs[]` (strings) | `doubles[]` (numbers) | `indexes[]` |
 |---|---|---|---|---|
-| `session_start` | A | `event_type`, `app_version`, `platform` (`web`/`desktop`/`mobile`), `os` (`mac`/`windows`/`linux`/`ios`/`android`/`unknown`), `locale`, `viewport_class` (`xs`/`sm`/`md`/`lg`/`xl`), `aspect_class` (`portrait-tall`/`portrait`/`square`/`landscape`/`wide`/`ultrawide`), `screen_class` (`mobile`/`tablet`/`1080p`/`2k`/`4k+`), `build_channel` (`public`/`internal`/`canary`), `vr_capable` (`none`/`vr`/`ar`/`both`), `country` (server-stamped 2-letter ISO) | — | `session_id` |
+| `session_start` | A | `event_type`, `app_version`, `platform` (`web`/`desktop`/`mobile`), `os` (`mac`/`windows`/`linux`/`ios`/`android`/`unknown`), `locale`, `viewport_class` (`xs`/`sm`/`md`/`lg`/`xl`), `aspect_class` (`portrait-tall`/`portrait`/`square`/`landscape`/`wide`/`ultrawide`), `screen_class` (`mobile`/`tablet`/`1080p`/`2k`/`4k+`), `build_channel` (`public`/`internal`/`canary`), `vr_capable` (`none`/`vr`/`ar`/`both`), `schema_version`, `window_context` (`top`/`top-embed`/`framed`/`framed-embed`, added 2026-11-06), `country` (server-stamped 2-letter ISO) | — | `session_id` |
 | `session_end` | A | `event_type`, `exit_reason` (`pagehide`/`visibilitychange`/`clean`) | `duration_ms`, `event_count` | `session_id` |
 | `layer_loaded` | A | `event_type`, `layer_id`, `layer_source` (`network`/`cache`/`hls`/`image`), `slot_index`, `trigger` (`browse`/`orbit`/`tour`/`url`/`default`) | `load_ms` | `session_id` |
 | `layer_unloaded` | A | `event_type`, `layer_id`, `slot_index`, `reason` (`replaced`/`home`/`tour`/`manual`) | `dwell_ms` | `session_id` |
@@ -494,7 +494,7 @@ where individual sessions start to stand out.
 | `viewport_class` | 5 | `window.innerWidth` bucket | Same as today — xs/sm/md/lg/xl |
 | `aspect_class` | 6 | `innerWidth / innerHeight` bucket | Portrait phone / landscape tablet / ultrawide desktop signal for 2D layout decisions |
 | `screen_class` | 5 | `screen.width` bucket | What physical displays do users own (vs the browser viewport). Drives "is anyone actually on 4K?" |
-| `build_channel` | 3 | Vite `__BUILD_CHANNEL__` define | `'public'` / `'internal'` / `'canary'`. Marks bundles that are *meaningfully different* — an internal-only build with dev tools, a canary build staged to 5% of users. Not the right signal for "Alice testing on prod today" (that's `internal` below) |
+| `build_channel` | 3 | Vite `__BUILD_CHANNEL__` define | `'public'` / `'internal'` / `'canary'`. Marks bundles that are *meaningfully different* — an internal-only build with dev tools, a canary build staged to 5% of users. Not the right signal for "Alice testing on prod today" (that's `internal` below). The Vite dev server's bundle counts as an internal build with dev tools and defaults to `'internal'` (#531), which matters only for a contributor who turns console mode off |
 | `country` | ~250 | Server-side `CF-IPCountry` on `/api/ingest` | Country-level heatmaps and latency segmentation. The raw IP is read only by the rate limiter; `country` is the only derived signal written to storage |
 | `internal` | 2 | Server-side presence of Cloudflare Access identity headers | Per-request staff classification. Identity-based (works for WFH / mobile / VPN) and requires no CI/CD plumbing — just a Cloudflare Access policy that optionally attaches an SSO identity to staff requests. The email is read only to check presence; never stored |
 

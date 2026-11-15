@@ -35,9 +35,15 @@ off.
 - A richer "research" mode is available, **opt-in only**, that helps
   us understand how people explore Earth data and improves the Orbit
   AI docent.
+- Talking to Orbit by voice is **optional**. With the default voice
+  setting, your browser's own speech recognition hears you, and some
+  browsers do that on their maker's servers (Chrome sends the audio
+  to Google). See section 4.
 
-All data we collect stays on Cloudflare infrastructure. Nothing is
-sold, shared with advertisers, or used for profiling.
+All data we collect stays on Cloudflare infrastructure. What you send
+to an AI provider, or to your browser's speech service, is covered in
+section 4. Nothing is sold, shared with advertisers, or used for
+profiling.
 
 ---
 
@@ -52,8 +58,16 @@ Contact for privacy questions: *[TBD — populate before release]*.
 
 ## 2. What we collect, in detail
 
-The app has three telemetry modes. You can see which mode is active —
-and change it — under **Tools → Privacy**.
+The app has three telemetry modes. You can see which mode you chose —
+and change it — under **Tools → Privacy**, except in the app's minimal
+embedded view (an address with `embed=1`, which sites embedding the app
+normally use), which has no Tools menu (see "The app inside another
+site's page" under Mode 1). Whatever your mode, a page sends no
+telemetry if your browser sends Global Privacy Control when the page
+opens, or if the address the page was opened with turns telemetry off
+(section 8). Where there is a Privacy panel, it says when either
+applies. An address can turn telemetry off, but `telemetry=1` never
+overrides your mode or Global Privacy Control.
 
 ### Mode 1 — Essential (on by default)
 
@@ -65,12 +79,17 @@ Small, anonymous events about the health of the app:
   browser's language setting, three **bucketed** screen signals
   (browser viewport size class, aspect-ratio class, and physical-
   display class — never your exact resolution), whether your
-  device supports VR or AR, the country your request came from as
+  device supports VR or AR, whether the app is running in its own
+  window or inside a frame on another web page and whether the
+  address asked for the app's minimal embedded view (never *which*
+  page framed it — its address is not read; see "The app inside
+  another site's page" below), the country your request came from as
   a 2-letter code (derived by our Cloudflare edge from your IP
   address and attached server-side; the IP itself is never
   written to analytics storage), and which build of the app you
-  ran (public, internal-staff, or canary — so internal dogfood
-  sessions can be excluded from public dashboards without us
+  ran (public, internal, or canary — internal covers staff test
+  builds and developers running the app on their own computers, so
+  those sessions can be excluded from public dashboards without us
   needing to know your network address), and a `true`/`false`
   flag indicating whether the request carried a valid internal-
   staff single-sign-on header (set by Cloudflare's edge when a
@@ -151,6 +170,39 @@ Small, anonymous events about the health of the app:
   keeps its own browser, so there your control is the viewer's media
   settings, which stop the globe's page from loading at all, picture
   included
+- **The app inside another site's page** — for example a story map,
+  an ArcGIS Hub site or a WordPress post that shows TerraViz in a
+  frame. The app records the events above as it does on its own site,
+  and notes that it is in a frame. It never reads the address of the
+  page around it. Even so, some of what it records says something
+  about that page:
+  - **Which site it was can often be worked out.** An embedded view
+    usually opens one particular dataset or tour, and that is
+    recorded. Where only one site embeds it, the record points to that
+    site. The same is true when this node allows only one site to embed
+    it.
+  - **How long you had that site's page open.** Your browser tells
+    the app it is hidden when the page around it is hidden, so the
+    session length recorded is roughly how long that site's page was
+    open, from when the frame loaded until you first switched away from
+    it or closed it.
+  - **The viewport and aspect-ratio classes describe the frame**, the
+    box the other site gave the app, not your browser window. (The
+    physical-display class is still your screen's.)
+  - If the people who run the other site also run the TerraViz node
+    it reports to, they hold their own records of visits to their page
+    as well as these events, and could match the two by time and
+    country.
+
+  The minimal embedded view (an address with `embed=1`, which sites
+  embedding the app normally use) shows no Tools menu and no first-run
+  notice, so there is no Privacy panel to reach. And in any frame on
+  another site, a mode you chose on this site does not carry over:
+  current browsers keep a framed page's storage separate for each site
+  it appears on. So an embed sends these Essential events unless your
+  browser sends Global Privacy Control when the page opens, or the site
+  embedding the app turns telemetry off. Either one stops all telemetry
+  from that page. Section 8 has the details
 - When something goes wrong — a classification of the error (tile
   fetch, video stream, AI model, uncaught exception, browser-console
   message, native crash on desktop, or a globe's page), a short sanitized summary of
@@ -160,7 +212,7 @@ Small, anonymous events about the health of the app:
   no line numbers** at this level
 - When you submit feedback — that you did, and which category (bug,
   feature, other, thumbs-up, thumbs-down). The *content* of your
-  feedback is stored separately — see section 4
+  feedback is stored separately — see section 5
 
 Every event is tagged with a **session ID** — a random identifier
 generated when you open the app and discarded when you close it. It is
@@ -195,6 +247,13 @@ If you turn Research mode on, we additionally record:
   authored by the tour writer; we identify each one by an
   author-set ID and never transmit the question text or image
   content
+- When you use voice with Orbit: whether it was speech-to-text or a
+  spoken reply, which voice engine handled it, how it started (the
+  microphone button, which hands-free mode, Orbit reading a reply
+  aloud on its own, or you tapping a reply's speaker button), the
+  language, how long listening took, whether it worked (after a wake
+  phrase, whether the 8 seconds ran out), and whether you
+  interrupted a spoken reply. Never the audio, and never the words
 - When something goes wrong: a sanitized stack frame list — function
   names from our own code and from libraries we ship (MapLibre,
   HLS.js, Three.js), with all URLs, file paths, line numbers, and
@@ -230,6 +289,9 @@ covered in sections 4 and 5:
   provider to generate responses, and rating a response explicitly
   submits that conversation for feedback. See sections 4 and 5 for
   the full picture)
+- **Your voice.** Telemetry never contains audio or the words you
+  spoke. (Speaking to Orbit sends audio to a speech service to turn
+  it into text; section 4 says which one)
 - **The text of browse searches.** We hash your query client-side
   before it leaves your device, so telemetry sees typing patterns
   and repeat frequencies but never the words
@@ -248,8 +310,11 @@ covered in sections 4 and 5:
   zone, or user-agent string — these are the classic fingerprinting
   signals, and our environment data is bucketed specifically to
   avoid them
-- **Page URLs from outside the app, referrer chains, or anything about
-  other sites you visit**
+- **Page URLs from outside the app, referrer chains, or the addresses
+  of other sites you visit.** When another web page shows the app
+  inside a frame, telemetry notes that it is framed and never reads
+  the page's address; section 2 says what can still be worked out
+  about that page
 - **Your IP address in the event stream.** Our server sees your IP
   briefly to rate-limit abuse, then discards it — it is never written
   into analytics storage
@@ -304,7 +369,7 @@ leaving your device, by the nature of how AI models work.
   Our proxy forwards the request, streams back the response, and
   holds nothing
 - **Your chat history stays on your device**, in your browser's
-  localStorage (or in the desktop app's local storage). Clearing the
+  session storage, which is cleared when you close the tab. Clearing the
   chat clears the history
 
 ### Vision Mode
@@ -314,6 +379,98 @@ screenshot of your current globe view to each message so the AI can
 describe what you are looking at. The screenshot goes to whichever
 AI provider is configured (see above). We do not store screenshots
 on our servers.
+
+### Talking to Orbit by voice
+
+Voice is optional. Orbit hears nothing until you tap the microphone
+button or turn on a **Hands-free** mode in Orbit settings. The first
+time, Orbit shows where your audio will go and starts nothing until
+you choose **Start listening**; it asks again if you switch voice
+engine, or turn on open mic or wake word, and for push to talk it asks
+at your first press. Your browser also asks your permission before the
+app can use your microphone. Open mic and wake word stay on in this
+browser until you set **Hands-free** back to Off: each time you open
+Terraviz after that, the microphone turns on as the app loads, whether
+or not the Orbit panel is open. Orbit speaks
+its replies only if you turn on **Speak replies aloud** or tap a
+reply's speaker button.
+
+What you say is turned into text, and that text becomes your Orbit
+message, handled like a typed one (see above), except that it is sent
+as soon as Orbit has it, without waiting for you to press Send. In
+open mic, that can include what other people nearby said. **Our
+service does not store recordings of your voice**, and we use audio
+only to produce the text.
+
+Where your voice goes depends on the **Voice engine** setting:
+
+- **Automatic** (the default) and **Browser** use your browser's
+  built-in speech recognition. Most browsers do this on their maker's
+  servers: Chrome sends the audio to Google, Microsoft Edge to
+  Microsoft, and Safari to Apple (some Apple devices recognise speech
+  on the device). On iPhone and iPad every browser is built on Apple's
+  engine, so Chrome there sends the audio to Apple too. Firefox has no
+  built-in speech recognition, so with these settings the microphone
+  button does not appear there. The browser maker's privacy
+  policy applies to the audio, and Terraviz's servers never receive
+  it. For spoken replies, most browser voices are built into your
+  device. Some are produced online, and then the browser maker
+  receives the text of Orbit's reply: in Chrome, the voices named
+  "Google …", and in Edge, those named "… Online". In the desktop
+  app, "your browser" is your operating system's built-in web
+  component (Apple's on macOS, Microsoft's on Windows, WebKitGTK on
+  Linux), and its maker's handling applies
+- **Cloud (Cloudflare)** sends your audio to our voice service on
+  Cloudflare, which has Cloudflare Workers AI turn it into text. For
+  spoken replies, it sends the text of Orbit's reply to Workers AI to
+  make the audio. Cloudflare processes these only to produce the text
+  or the audio, and does not use them to train models; Cloudflare's
+  published policy applies in addition to this one. This engine is not
+  available in the desktop app
+  - A recording made with the microphone button lasts up to 15
+    seconds, and OpenAI's Whisper speech model, running on Workers AI,
+    turns it into text
+  - In a hands-free mode, where this site has live transcription
+    switched on, audio streams through our service and Cloudflare AI
+    Gateway to a Deepgram speech model (Nova-3 by default), which
+    [Cloudflare runs on Workers AI](https://developers.cloudflare.com/changelog/2025-08-27-partner-models),
+    so your words appear as you speak.
+    Our service asks the gateway not to keep a log of these streams,
+    and each stream ends after at most 60 seconds. Without live
+    transcription, each thing you say is sent as one recording, as
+    above
+
+The **Hands-free** setting decides when the microphone is on:
+
+- **Off** (the default): only while you are using the microphone
+  button
+- **Push to talk**: Orbit takes in audio only while you hold the
+  microphone button down. After your first press, your browser may
+  keep showing the microphone as in use until you change this setting
+  or close the page; nothing is sent between presses
+- **Open mic**: the microphone stays on while the app is open. The
+  microphone button mutes it until you reload the page or change a
+  voice setting; set
+  **Hands-free** to Off to stop it for good. A detector on your device
+  listens for sound loud enough to be speech, and sends audio to the
+  voice engine only while it hears it and for about half a second
+  after. That can include other people nearby, sound from the app, or
+  noise in the room
+- **Wake word** (only where this site has set it up; not in the
+  desktop app): the microphone stays on, but the wake phrase is
+  recognised entirely on your device, and no audio leaves your device
+  until Orbit hears the phrase, from you or anyone nearby. Then the
+  microphone's audio goes to the voice engine, as
+  above, until Orbit has your question, for at most 8 seconds, and
+  Orbit goes back to listening for the wake phrase. (With **Cloud
+  (Cloudflare)** and no live transcription, it records the whole 8
+  seconds.) The microphone button mutes it until you reload the page
+  or change a voice setting.
+  The wake-phrase detector is downloaded each time this mode starts:
+  its model files from a location this site's operator chooses, and
+  the code that runs it, unless the operator hosts that too, from the
+  jsDelivr content network. Each sees your IP address and this site's
+  address
 
 ### If you rate an Orbit reply (thumbs up / thumbs down)
 
@@ -394,6 +551,14 @@ Everything we store runs on **Cloudflare**:
   reply back. The proxy does not log or store message contents. If
   you configure a different AI provider in Orbit settings, messages
   bypass our proxy entirely and go directly to that provider
+- **Orbit voice service** (only with the **Cloud (Cloudflare)** voice
+  engine): our Cloudflare Workers endpoints pass your audio to Workers
+  AI to turn it into text, and Orbit's reply text to Workers AI to
+  make spoken audio. Live transcription goes through Cloudflare AI
+  Gateway, which our service asks not to log the stream. Our endpoints
+  store none of the audio, the text, or the spoken reply. With the
+  default voice engine, audio goes to your browser's speech service
+  instead (section 4)
 - Served by **Cloudflare Pages**
 
 We do not use Google Analytics, PostHog, Segment, Amplitude,
@@ -409,10 +574,12 @@ profiling.
 
 ### What stays only on your device
 
-- Your chat history with Orbit (in browser localStorage or the
-  desktop app's local data folder)
+- Your chat history with Orbit (in the browser's session storage,
+  cleared when the tab closes)
 - Your Orbit settings — API URL, model, reading level, Vision Mode
-  preference
+  preference, and the voice settings (voice engine, hands-free mode,
+  recognition language, voice, speaking rate, and whether replies are
+  spoken), and which voice notices you have agreed to
 - On desktop, any AI provider API key you enter (stored in the
   operating system keychain, not in plaintext)
 - On desktop, any offline datasets you download (kept in the app's
@@ -456,14 +623,54 @@ profiles, or sell to third parties.
 ## 8. Your choices
 
 - **Change telemetry mode** at any time: **Tools → Privacy**. Changes
-  take effect immediately — no restart required
+  take effect immediately — no restart required — except on a page
+  that sends no telemetry because of Global Privacy Control or because
+  its address turns telemetry off (both below). There the panel says
+  so, and the mode you pick is saved for the next page you open where
+  neither applies
+- **Your browser's Global Privacy Control setting**, a setting in some
+  browsers that asks websites not to sell or share your data. If it is
+  on when a page of the app opens, that page sends no telemetry,
+  embedded or not, whatever your mode. Some browsers and privacy
+  extensions turn it on by default. The app checks it only as a page
+  opens, so turning the setting on or off takes effect the next time
+  you open or reload a page of the app; moving around inside the app,
+  such as opening another dataset, doesn't count. On such a page the
+  app doesn't show its first-run privacy notice, since nothing it
+  describes is collected; the notice appears on the first page you
+  open without the signal, and your chosen mode applies again there.
+  The desktop app runs in its own window, not in your browser, so your
+  browser's setting does not reach it; use the Privacy panel there
+- **Inside another site's page** a mode you chose on this site does
+  not reach the frame, and the minimal embedded view has no Privacy
+  panel at all (section 2). Three things stop an embedded view from
+  sending telemetry instead:
+  - **Your browser's Global Privacy Control setting**, as above.
+  - **The site embedding the app.** It can turn telemetry off for
+    everyone who sees its embed, by adding `telemetry=0` to the
+    address it embeds.
+  - **A browser content blocker** that blocks requests to this site's
+    `/api/ingest`.
+- **The same `telemetry=0` works on any address of the app**, not only
+  an embed: a page opened with it sends no telemetry, the first-run
+  notice isn't shown, and the Privacy panel says so. Your own setting
+  stays as you left it for pages opened without it. `telemetry=1` never
+  overrides your choice: your mode stays as you set it, and Global
+  Privacy Control still applies. (The desktop app has no address you
+  can change; use the Privacy panel there.)
 - **Disable telemetry entirely**: pick "Off" in the same panel
 - **Run a telemetry-free build**: the source code is public; you or
   someone you trust can build the app with the compile-time
   telemetry flag disabled. Those builds emit nothing
 - **Use Orbit with a self-hosted AI** (for example, Ollama on your
   own computer) so chat messages never leave your network. Configure
-  this under Orbit settings
+  this under Orbit settings. (If you speak your messages, the voice
+  engine hears them first; see section 4)
+- **Choose where your voice goes, or don't use it.** Type instead of
+  speaking, keep **Hands-free** set to Off, and pick the **Voice
+  engine** whose handling you prefer (section 4). In open-mic and
+  wake-word modes, the microphone button mutes the microphone until
+  you reload the page or change a voice setting
 - **Avoid rating Orbit replies** if you do not want the conversation
   stored for feedback. Ratings are opt-in — nothing is sent unless
   you click thumbs-up or thumbs-down
@@ -473,7 +680,7 @@ profiles, or sell to third parties.
   (section 1)
 - **Use the app completely offline**: the desktop build supports
   offline dataset caching. With offline-only use and a self-hosted
-  or disabled Orbit, no data leaves your machine
+  or disabled Orbit, and no voice input, no data leaves your machine
 
 You do not need to accept any analytics, any Orbit rating, or any
 crash report to use the app. Turning everything off does not disable
@@ -493,6 +700,18 @@ whether their policies permit them. The Orbit AI docent sends
 messages to a third-party AI provider to generate replies; school
 administrators should evaluate that too.
 
+Voice needs the same care. With the default voice engine, a browser
+such as Chrome sends what a student says to its maker's servers
+(section 4), and a hands-free mode keeps the microphone on in a room
+full of people. We ask anyone running Terraviz as a public exhibit or
+kiosk with a hands-free mode to post signs saying the microphone is
+on, since an in-app notice cannot reach everyone within range of it,
+and to set the **Voice engine** to **Cloud (Cloudflare)**, so that
+visitors' voices do not go to a browser maker (the desktop app has no
+Cloud engine). At an exhibit, its operator may already have chosen
+**Start listening**, so you may not see Orbit's notice; the sign is
+how you are told.
+
 ---
 
 ## 10. International users
@@ -507,7 +726,7 @@ or delete personal data — are available on request. Because the
 telemetry we collect is anonymous and carries no identifier linked
 to you, "access" and "deletion" mostly apply to feedback submissions,
 Orbit ratings, and crash reports (section 5 and the Crash reports
-subsection in section 2).
+subsection in section 3).
 
 *[To be refined by legal review before release — this section
 intentionally hand-wavy in the draft.]*
